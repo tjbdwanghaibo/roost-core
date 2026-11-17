@@ -1,6 +1,6 @@
 # 方案：大厅服（lobby）与 relay 服——房主做 host 的开房间场景；account 同时支持多个服务（2026-11-16）
 
-**状态**：**已定，实施中**（维护者 2026-11-17：v1.53.0 发版后实施）。第 6 节是维护者的全部决定（2026-11-16、11-17），第 7 节的 A～H 都已答复。历次补充：account 加游戏账号 token、支持多个游戏（§4.1）；换 host（§4.6）；Web 端房主，包括 relay 的 WebSocket 接入、逻辑只跑在客户端（§4.7）；房间通道与游戏通道（§4.4）；Gate 加 WebSocket 接入层（§4.7.1）。
+**状态**：**已实施（2026-11-17），未发版**（维护者 2026-11-17：v1.53.0 发版后实施；变化见 CHANGELOG `[Unreleased]`，现行契约见 `docs/framework/{LOBBY,RELAY,GATEWAY}.md`，未解决的边界见 KNOWN-LIMITS“大厅 lobby 与转发 relay”）。第 6 节是维护者的全部决定（2026-11-16、11-17），第 7 节的 A～H 都已答复。历次补充：account 加游戏账号 token、支持多个游戏（§4.1）；换 host（§4.6）；Web 端房主，包括 relay 的 WebSocket 接入、逻辑只跑在客户端（§4.7）；房间通道与游戏通道（§4.4）；Gate 加 WebSocket 接入层（§4.7.1）。
 
 ## 1. 场景与目标
 
@@ -61,12 +61,12 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
 - **配置**：`account.games` 列出这套 account 服务的游戏；不在列表里的游戏不签发。
   ```yaml
   account:
-    games:
-      - {name: party,  token_ttl: 2h}   # 开房间类游戏 A
-      - {name: brawl,  token_ttl: 2h}   # 开房间类游戏 B
+    games:                     # map：键是游戏名；条目至少写一个键，所以 token_ttl 必填（至多 24h）
+      party: {token_ttl: 2h}   # 开房间类游戏 A
+      brawl: {token_ttl: 2h}   # 开房间类游戏 B
   ```
 - **怎么拿**（两条路，都只是新增）：
-  - 已登录的客户端：portal 新增 `POST /game-token`，参数 `{game}`，请求头带账号票据 `at1`，答 `{token, expires_at_unix}`；
+  - 已登录的客户端：portal 新增 `POST /portal/game-token`（实施后：请求体 `{account_ticket, game}`，答 `{ok, game, game_token, expires_at}`，见 `modules/portal/README.md`）；
   - 一步到位：登录接口新增可选参数 `game`，登录成功时在原有答复里多带一张 `gt1`。
 - **account 新增 RPC**：
   - `IssueGameToken(ctx, accountTicket, game) (GameToken, error)`：校验 at1、检查账号状态与 `game` 在 `account.games` 里，再签发；
@@ -80,10 +80,10 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
 - **新增配置 `account.services`**：列出接受本账号体系的服务及其类型：
   ```yaml
   account:
-    services:
-      - {name: lobby, kind: lobby}   # 无区服，凭账号票据进入
-      - {name: relay, kind: relay}   # 无区服，凭 lobby 签的房间令牌进入
-      - {name: slg,   kind: game}    # 传统区服（可选；没有就不写）
+    services:                  # map：键是服务名
+      lobby: {kind: lobby}     # 无区服，凭游戏账号 token 进入
+      relay: {kind: relay}     # 无区服，凭 lobby 签的房间令牌进入
+      slg:   {kind: game}      # 传统区服（可选；没有就不写）
   ```
 - **区服号**：所有 `kind: game` 的服务共用一个全局号段（问题 1），区服表每一行加 `service` 字段，现有的 256 上限放宽。这个场景下不涉及区服。
 - **portal**：登录后返回的清单按服务列出（大厅地址、各游戏的区服），`/servers?service=` 按服务筛选。

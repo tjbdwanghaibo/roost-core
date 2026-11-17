@@ -118,7 +118,7 @@ bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$
 | 心跳 ≤ 20Hz | 档位固定 50ms～60s 十档，最短 50ms；本心跳调度器没有更高频档位，不代表 on_change Sync 有 20Hz 硬上限 | PARTY §8 第 1 行；`gameplay/heartbeat/tier.go` `Periods`；guide/10-time.md §4A |
 | 可变步长 | 上一拍没跑完就跳拍、不补发、不追帧，`Elapsed` 夹在 `[0, max(1s, 档位)]`；规则按时间戳与事件顺序写，不按“第几拍”累加 | PARTY §8 第 2 行；KNOWN-LIMITS“实体心跳（D20 第 1 期）” |
 | 心跳不持久 | 重启 / 卸载后要在 `onHeartbeatInit` 按持久阶段重新启动（REAL 用例去掉这行即失败）；心跳缺省 `async`，丢最后几拍由下一拍按时间重算 | PARTY §4、§13 |
-| 只有 TCP | 玩家接入层（嵌入 TCP、独立 Gate）只提供 TCP；KCP / UDP 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写 | PARTY §8 第 3 行；GATEWAY.md；SKILL.md §5 #10 |
+| 只有 TCP / WebSocket | 玩家接入层（嵌入 TCP、独立 Gate）只提供 TCP，2026-11-17 起（未发版）另有 WebSocket 接入层（同一套 RS v2 帧，可靠有序，[GATEWAY §6](../../../framework/GATEWAY.md#6-websocket-接入)）；KCP / UDP 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写 | PARTY §8 第 3 行；GATEWAY.md；SKILL.md §5 #10 |
 | 房间无跨机接管 | 房间是开房进程的本地实体，崩溃后只能同一份 WAL / Mongo 冷加载恢复，没有自动迁机；本纵切的 Player 绑定固定 sid，rehome 的断线改绑不是房间 HA | PARTY §8 第 4 行；guide/09-services.md §4 |
 | SyncBus 可丢 | 至多一次 / 有限重投；房间内同步不走 SyncBus，跨服务房间事件（大厅、好友在玩）要业务对账 | PARTY §8 第 6 行；guide/04-sync.md §5 |
 | 房间同步：**v1.34.0 起已提供正式入口**，剩余边界 | `access.player.sync_groups` + `wiring/selfsync.Groups`（§2）。剩余：**要求 self_sync**（会话归自身视图；不开 self_sync 的进程仍用 `policy.Group` 并自己开关会话）；**成员关系不持久**，重启后靠玩家重连的 `PartyConnect` 再 `Join`；离线成员每个政策阶段复查一次，成本与有离线成员的组的人数成正比，无房间数 / 成员数容量数据；**已有组同步自己的真实 TCP 与独立 Gate 用例**（`TestGroupsOverTCPCloseAStalledMemberOnlyAndTheReconnectGetsTheGroupFull`、`TestGroupsOverGateRecoverAfterEveryRefusedPush`）；它们验证组视图重连/慢消费者，不是本派对玩法的真实账号/存储联合链；掉线出局的人宽限期满不自动退组 | PARTY §5、§6A 局限、§8 第 5 行；ENTITY_SYNC.md“Groups”限制；KNOWN-LIMITS“游戏接入验收”表下房间内同步一条 |
