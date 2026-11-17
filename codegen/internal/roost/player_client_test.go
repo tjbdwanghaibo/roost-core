@@ -424,7 +424,11 @@ func TestClientSDKAgainstGeneratedPlayerTCP(t *testing.T) {
 		t.Skip("builds C# SDK and executes generated TCP server")
 	}
 	if _, err := exec.LookPath("dotnet"); err != nil {
-		t.Skip(".NET SDK unavailable; Go tests do not prove C# consumption")
+		// 与 TestClientConfigCSharpRuntime 同一开关：pretag 带 ROOST_REQUIRE_DOTNET=1，缺 dotnet 直接失败而不是静默跳过。
+		if os.Getenv("ROOST_REQUIRE_DOTNET") == "1" {
+			t.Fatalf("ROOST_REQUIRE_DOTNET=1 but dotnet is not on PATH: %v", err)
+		}
+		t.Skip(".NET SDK unavailable; Go tests do not prove C# consumption (set ROOST_REQUIRE_DOTNET=1 to fail instead)")
 	}
 	t.Parallel()
 	repo, err := filepath.Abs("../../..")

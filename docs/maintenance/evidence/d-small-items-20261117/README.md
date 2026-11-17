@@ -84,3 +84,7 @@ M4 是三条失败分支共用的一行；原有的 `TestCellworldFailedStartLea
 
 - **scripts**：pretag 的 `go test ./...` 与 C# 金样步骤带 `ROOST_REQUIRE_DOTNET=1`：发版机器缺 .NET SDK 时 pretag 失败，不再让 `TestClientConfigCSharpRuntime` 静默 SKIP。
 - **cellworld 模块**（只对新安装的工程）：新增场景 `TestCellworldStartAfterInputsClosedTakesTheNodeDown`（Node 就绪后 AddIngress 失败时 Start 停下 Node、从 Host 拿下、回到未启动），`roost module verify cellworld` 9 → 10 条。
+
+## 协调者补充（2026-11-17）
+
+`TestClientSDKAgainstGeneratedPlayerTCP`（`codegen/internal/roost/player_client_test.go`）也认 `ROOST_REQUIRE_DOTNET=1`：把 dotnet 所在目录从 PATH 去掉后，带开关直接失败（`ROOST_REQUIRE_DOTNET=1 but dotnet is not on PATH`），不带开关仍 SKIP；有 dotnet 时带开关通过（154s）。KNOWN-LIMITS 二的“C# 运行时用例依赖本机 dotnet”因此删去（发版机器要装 .NET 10 SDK 写在维护手册与 CHANGELOG）。

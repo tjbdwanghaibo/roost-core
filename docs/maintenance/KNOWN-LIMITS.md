@@ -889,7 +889,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 配置表导出：遗留
 
-- **C# 运行时用例依赖本机 dotnet**：`TestClientConfigCSharpRuntime`（netstandard2.1 编译导出的 C#、`Load` 读回、改 JSON 报表名、规则违反报行与字段）有 dotnet 就跑，没有就 Skip 并写明原因；设了 `ROOST_REQUIRE_DOTNET=1` 时没有 dotnet 就失败（d2db29a8）。没有 .NET SDK 的机器上跑全量或 pretag 时这条是 Skip，不能算覆盖；要保证它跑，带上 `ROOST_REQUIRE_DOTNET=1`。
 - **Unity 里没有跑过**：导出的 C# 只在 .NET 上编译和运行，IL2CPP 裁剪安全是按“不用反射、不用 JsonUtility / UnityEngine”推断的，没有实跑，见[客户端：遗留](#客户端遗留)。
 
 <a id="生成工程目录遗留"></a>
@@ -919,7 +918,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 设计边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)。
 
 - **多进程演练没有做**：方案 §5 的 lobby + relay 真实进程演练（kill -9 房主客户端与 relay 进程、两个 relay 实例分布、吞吐基线）没有做。已有的是进程内真实 NATS + etcd + Redis 的集成用例（`wiring/relay` 的 `TestRealRelay*`：转发、报告、leave 命令、etcd 广播、换 host、踢人、验权、开局后回座），以及生成器组 `make dev-run` 起 account、lobby、relay 三个进程的冒烟（全部 ready、lobby 拒绝伪造的 gt1、relay 在 etcd 广播 tcp 与 ws 地址，[证据](evidence/lobby-relay-gen-20261117/README.md)），以及 2026-11-17 在 `-template lobby` + `roost module add portal` 工程上三个真实进程（单个 relay）的正常路径演练：经 portal 拿 gt1、建房加入、两个通道收发、主动转交、lobby 房主跟随、踢人后再 join 与旧令牌都被拒（[证据](evidence/lobby-relay-portal-20261117/README.md)）。跨机、容量未验。
-- **account 新用例没在真实 Redis 上跑**：游戏账号 token 与多服务的新用例只跑了内存存储；`ROOST_REVIEW3_BACKEND=redis` 走真实 Redis 的那一遍这一轮没跑（[证据](evidence/lobby-relay-account-20261117/README.md)）。
 
 ### 地形与无缝世界（遗留）
 
@@ -928,7 +926,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 - **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
 - **登录潮里 account CreateRole 超时，尚未确认**（2026-11-15）：在 chat 抢写风暴条件下可复现（2 轮中 1 轮，53 次，同一秒内），无风暴的 21 轮都没有；“Redis 被拖慢到 3 秒”的推测已排除（Redis CPU ≤ 0.3 核，PING 最长约 0.18s，同批机器人前一步 Login 未超时）；account 的 Redis 连接池（缺省 10，一次 CreateRole 十几次往返）、NATS 排队、整机 CPU 未排除，要给 account 加 RPC 处理时长与连接池等待的指标再复现。风暴条件已由 chat 写排队与公告合并去掉。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
-- **CellWorld Runtime**：六条模块场景含 Start / Stop 与失败复位已验；AddIngress 失败分支仍缺场景，业务 Entity 适配仍只在 demo。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
+- **CellWorld Runtime**：模块场景 10 条已验，含 Start / Stop、三种失败复位（就绪前退出、ctx 先到、就绪后 AddIngress 失败，2026-11-17 补，[证据](evidence/d-small-items-20261117/README.md)）与 manager 托管；业务 Entity 适配仍只在 demo（D21 后半，维护者 2026-11-17 说先不做）。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 
 ### 玩法组件与物理房间（遗留）
 
