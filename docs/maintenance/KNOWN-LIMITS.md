@@ -917,7 +917,8 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 设计边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)。
 
-- **多进程演练没有做**：方案 §5 的 lobby + relay 真实进程演练（kill -9 房主客户端与 relay 进程、两个 relay 实例分布、吞吐基线）没有做。已有的是进程内真实 NATS + etcd + Redis 的集成用例（`wiring/relay` 的 `TestRealRelay*`：转发、报告、leave 命令、etcd 广播、换 host、踢人、验权、开局后回座），以及生成器组 `make dev-run` 起 account、lobby、relay 三个进程的冒烟（全部 ready、lobby 拒绝伪造的 gt1、relay 在 etcd 广播 tcp 与 ws 地址，[证据](evidence/lobby-relay-gen-20261117/README.md)），以及 2026-11-17 在 `-template lobby` + `roost module add portal` 工程上三个真实进程（单个 relay）的正常路径演练：经 portal 拿 gt1、建房加入、两个通道收发、主动转交、lobby 房主跟随、踢人后再 join 与旧令牌都被拒（[证据](evidence/lobby-relay-portal-20261117/README.md)）。跨机、容量未验。
+- **多进程演练只做了单机（2026-11-17）**：`-template lobby` + portal 工程上 account、lobby、两个 relay 真实进程，Go SDK 驱动每个玩家一个进程：两个 relay 的房间分布、kill -9 房主客户端（宽限期后按槽位换 host、新房主拿到快照、lobby 房主跟随）、kill -9 relay（另一个 relay 不受影响；查出并修复“重连 join 给崩溃 relay 的房间续命”）、吞吐基线（一个 relay，100 房 × 8 人 60Hz 交付 84k 帧/s 约 1.3 核，p99 5.9ms，驱动与 relay 同机、每档一次，不作容量结论），[证据](evidence/lobby-relay-multiprocess-20261117/README.md)。没做：跨机、两个 lobby 实例、同一套 account 两个游戏 / 两个 lobby 互拒、容量上限。
+- **relay 在 room_ttl 内重启会重建房间，待维护者定**（2026-11-17 演练）：房主重连在新进程上重建同一房间号；比房主早到的成员收到 `Closed{room_not_found}`、SDK 不再重连；新进程的报告 seq 从 1 重数，lobby 在追上旧 seq 之前不改在线名单（演练里 52 秒）；epoch 从 0 重来时 lobby 可能不认之后的换房主（尚未确认）。选项 A（推荐：验权只在 relay 从没报告过时放行建房，relay 重启即丢房）/ B（报告带进程代号，lobby 重置 seq / epoch）/ C（只写文档），见[证据](evidence/lobby-relay-multiprocess-20261117/README.md)“要维护者定”。
 
 ### 地形与无缝世界（遗留）
 
