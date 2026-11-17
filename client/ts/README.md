@@ -24,6 +24,7 @@ client.setForeground(false);         // 成员：告诉房主自己切到后台�
 client.onMemberPresence((p) => {});  // 房主：p.slot、p.foreground
 await client.transfer(3, handoff);   // 房主：主动转交，交接数据压缩后随帧带走
 await client.pushSnapshot();         // 房主：手动推一份快照（关键时刻）
+await client.leave();                // 经 lobby 离开、close；房间已关（lobby 答 room_not_found）也算离开成功
 ```
 
 ## 帧、心跳与重连
@@ -127,7 +128,7 @@ cd client/ts && npm ci && npm test
 - 假 relay 下的换 host（`YouAreHost` → `HostReady` → `HostChanged`、转交、候选、快照间隔与 seq 接续、房主心跳、收帧上限、`lobby_rejected` / `lobby_unavailable` / 403 `kicked` 的重连）；
 - Web 辅助（补帧与上限、真实 `MessageChannel` 上的 Worker 代理、假 `document` 下的让出、假 `sessionStorage` 下的刷新恢复）；
 - 与 Go 互通：测试临时编一个只用 `compress/flate` 的小程序，TS 压的 Go 解得开、Go 压的 TS 解得开；
-- 真实对端：`go test -c ./client/relay` 并以 `ROOST_RELAYPEER_SERVE=1` 起 relay 与 lobby（`ROOST_RELAYPEER_BIN` 指向事先编好的对端时直接用它），经 `ws` 包跑 lobby 错误、房间生命周期、断线重连、心跳，以及主动转交、房主断线后按候选换 host 并交出快照、宽限期内刷新回来仍是房主、空闲房主 5s 内不被换掉、被踢与离开后的旧令牌、开局后掉线重连回原座与踢离线座位、验权故障注入（`/harness/admission` 的 down 退避重试、reject 停止）。
+- 真实对端：`go test -c ./client/relay` 并以 `ROOST_RELAYPEER_SERVE=1` 起 relay 与 lobby（`ROOST_RELAYPEER_BIN` 指向事先编好的对端时直接用它），经 `ws` 包跑 lobby 错误、房间生命周期、断线重连、心跳，以及主动转交、房主断线后按候选换 host 并交出快照、宽限期内刷新回来仍是房主、空闲房主 5s 内不被换掉、被踢与离开后的旧令牌、最后一人离开（房间已关时离开算成功）、开局后掉线重连回原座与踢离线座位、验权故障注入（`/harness/admission` 的 down 退避重试、reject 停止）。
 
 需要本机 Go 工具链。没有在真实浏览器里跑过。
 

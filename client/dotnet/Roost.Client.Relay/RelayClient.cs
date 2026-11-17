@@ -583,6 +583,8 @@ namespace Roost.Client.Relay
         /// <summary>
         /// 离开房间，然后 Dispose：先在 relay 连接上发 Leave（房主离开时 relay 不等宽限期，立即用存着的快照换 host；不经 lobby 也能离开），
         /// 再经 lobby 离开（让出席位）。没有连接时只经 lobby 离开。
+        /// lobby 答 room_not_found 算离开成功：房间已关或过了寿命，人已经不在里面。最常见的是房间里最后一个人离开——relay 收到 Leave
+        /// 随即关房并报给 lobby，lobby 的 leave 晚到一步就答 room_not_found。其余 lobby 错误照常抛出。
         /// </summary>
         public async Task LeaveAsync(CancellationToken cancellation = default)
         {
@@ -592,6 +594,7 @@ namespace Roost.Client.Relay
             {
                 if (lobby != null && room != null) await lobby.LeaveRoomAsync(room, options.Game, cancellation).ConfigureAwait(false);
             }
+            catch (LobbyException error) when (error.Code == LobbyErrorCode.RoomNotFound) { }
             finally { Dispose(); }
         }
 

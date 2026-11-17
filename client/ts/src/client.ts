@@ -714,10 +714,16 @@ export class RelayClient {
     return this.current?.send(data) ?? false;
   }
 
-  /** 经 lobby 离开房间（让出席位；房主离开由 relay 走换 host），然后 close。 */
+  /**
+   * 经 lobby 离开房间（让出席位；房主离开由 relay 走换 host），然后 close。
+   * lobby 答 room_not_found 算离开成功：房间已关或过了寿命（例如先用 sendLeave 在 relay 上离开、自己又是最后一个人，relay
+   * 随即关房），人已经不在里面。其余 lobby 错误照常抛出。
+   */
   async leave(): Promise<void> {
     try {
       if (this.lobby && this.roomId) await this.lobby.leaveRoom(this.roomId, this.opts.game);
+    } catch (error) {
+      if (!(error instanceof LobbyError && error.code === "room_not_found")) throw error;
     } finally {
       this.close();
     }

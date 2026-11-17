@@ -328,6 +328,59 @@ func TestRoomLifecycleAgainstRealRelayAndLobby(t *testing.T) {
 	}
 }
 
+// 房间里最后一个人 Leave：relay 收到 Leave 帧随即关房并报 room.closed，lobby 的 leave 可能答 room_not_found。
+// 房间已经不在，“我要离开”的目的已达到，Leave 不报错。第二个房间把这个先后定下来：最后一人先只在 relay 上发
+// Leave 帧，等 lobby 确认房间已关，再调 Leave。
+func TestLeaveByTheLastMemberSucceedsAfterTheRoomCloses(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{})
+	openRoom := func(suffix string) (*player, *player, string) {
+		host := newPlayer(t, peer, "host-"+suffix, relay.Options{})
+		ticket, err := host.lobby.CreateRoom(context.Background(), relay.CreateRoomRequest{Game: game, Mode: "duel-" + suffix, MaxMembers: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		host.connect(ticket)
+		member := newPlayer(t, peer, "member-"+suffix, relay.Options{})
+		member.join(ticket.Room.ID, "")
+		recv(t, host.joined, suffix+" member joined")
+		if err := member.client.Leave(context.Background()); err != nil {
+			t.Fatalf("%s: first leave: %v", suffix, err)
+		}
+		if m := recv(t, host.left, suffix+" member left"); m.Reason != wire.RelayReasonLeft {
+			t.Fatalf("%s: left %+v", suffix, m)
+		}
+		return host, member, ticket.Room.ID
+	}
+	roomGone := func(host *player, roomID string) bool {
+		_, err := host.lobby.SetRoomState(context.Background(), roomID, relay.SetRoomStateRequest{Game: game, State: relay.StateOpen})
+		return errors.Is(err, relay.ErrRoomNotFound)
+	}
+
+	// 自然先后：最后一人直接 Leave。
+	host, _, roomID := openRoom("a")
+	if err := host.client.Leave(context.Background()); err != nil {
+		t.Fatalf("last member leave: %v", err)
+	}
+	waitFor(t, "room a closed in the lobby", func() bool { return roomGone(host, roomID) })
+
+	// 定下先后：relay 已关房、lobby 已记下关闭，再 Leave。
+	host, _, roomID = openRoom("b")
+	if err := host.client.SendControl(wire.RelayOpLeave, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if d := recv(t, host.disconnected, "host left on the relay"); d.Reconnecting {
+		t.Fatalf("host disconnect %+v", d)
+	}
+	waitFor(t, "room b closed in the lobby", func() bool { return roomGone(host, roomID) })
+	if err := host.client.Leave(context.Background()); err != nil {
+		t.Fatalf("leave a room that already closed: %v", err)
+	}
+	// 只放过房间不在这一种：别的 lobby 错误照常返回（这里拿一个从没有过的房间号经 lobby 直接离开）。
+	if _, err := host.lobby.LeaveRoom(context.Background(), "0000000000000000", game); !errors.Is(err, relay.ErrRoomNotFound) {
+		t.Fatalf("raw lobby leave of an unknown room: %v", err)
+	}
+}
+
 // 断线重连：连接自己断掉（模拟断网，relay 没发 Closed）时，Client 重新调 lobby 的 join 要令牌、再连 relay，
 // 之后游戏通道照常往返。房主断开后宽限期满，唯一的成员被选为候选；它不回 HostReady，超时后收到 YouAreMember，
 // 没有别的候选就关房：成员收到 Closed{room_closed}，即使开着自动重连也不重连。

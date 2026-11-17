@@ -73,6 +73,7 @@ internal static class Program
             ("host loss → snapshot to the declared successor", HostLoss),
             ("host resumed within the grace period", HostResumed),
             ("host leave uses the successor order", LeaveWithSuccessors),
+            ("the last member's leave succeeds after the room closes", LastMemberLeave),
             ("snapshot pacing and rejections", SnapshotPacing),
             ("automatic snapshots", AutoSnapshot),
             ("host heartbeat under host_idle_timeout", HostHeartbeat),
@@ -882,6 +883,37 @@ internal static class Program
         Check(offer.Epoch == 1 && offer.Source == RelayStateSource.None && offer.State == null && offer.Members.Count == 4, "leave offer");
         Check(members[0].YouAreHost.IsEmpty, "slot 2 was not offered");
         Dispose(host, members);
+    }
+
+    // 房间里最后一个人 LeaveAsync：relay 收到 Leave 帧随即关房并报 room.closed，lobby 的 leave 可能答 room_not_found。房间已经不在，
+    // “我要离开”的目的已达到，LeaveAsync 不抛。第二个房间把先后定下来：最后一人先只在 relay 上发 Leave 帧，等 lobby 确认房间已关，
+    // 再 LeaveAsync。别的 lobby 错误照常抛（这里拿一个从没有过的房间号经 lobby 直接离开）。
+    private static async Task LastMemberLeave(Peer peer)
+    {
+        async Task<(Player host, Player member, string room)> TwoAndOneLeft(string prefix)
+        {
+            var (host, members, room) = await OpenRoom(peer, prefix, Opts(), Opts());
+            await members[0].Client.LeaveAsync();
+            Check((await host.Next(host.Left, prefix + " member left")).Reason == RelayReason.Left, prefix + " member left with reason left");
+            return (host, members[0], room);
+        }
+        async Task<bool> Gone(Player host, string room)
+        {
+            try { await host.Lobby.SetRoomStateAsync(room, new SetRoomStateRequest { Game = Game, State = RoomState.Open }); return false; }
+            catch (LobbyException error) when (error.Code == LobbyErrorCode.RoomNotFound) { return true; }
+        }
+
+        var (hostA, memberA, roomA) = await TwoAndOneLeft("cs-last-a");
+        await hostA.Client.LeaveAsync(); // 自然先后
+        await Until("room a closed in the lobby", () => Gone(hostA, roomA));
+
+        var (hostB, memberB, roomB) = await TwoAndOneLeft("cs-last-b");
+        Check(hostB.Client.SendControl(RelayOps.Leave, 0, ReadOnlyMemory<byte>.Empty), "leave frame sent on the relay");
+        Check(!(await hostB.Next(hostB.Disconnected, "host left on the relay")).Reconnecting, "no reconnect after leaving on the relay");
+        await Until("room b closed in the lobby", () => Gone(hostB, roomB));
+        await hostB.Client.LeaveAsync();
+        Check((await Throws<LobbyException>(() => hostB.Lobby.LeaveRoomAsync("0000000000000000", Game))).Code == LobbyErrorCode.RoomNotFound, "raw lobby leave of an unknown room still throws");
+        foreach (var p in new[] { hostA, memberA, hostB, memberB }) p.Dispose();
     }
 
     // 快照节奏：SDK 不发太密的（TooSoon）；SDK 的最小间隔比 relay 小时 relay 回 Rejected{TooSoon, seq}；转交给不在线的槽位回

@@ -408,6 +408,9 @@ func (c *Client) Close() error {
 
 // Leave 离开房间，然后 Close：先在 relay 连接上发 RelayOpLeave（房主离开时 relay 不等宽限期，立即用存着的快照换 host；
 // 不经 lobby 也能离开），再经 lobby 离开（让出席位）。返回 lobby 的错误；没有连接时只经 lobby 离开。
+//
+// lobby 答 room_not_found 算离开成功：房间已关或过了寿命，人已经不在里面。最常见的是房间里最后一个人离开——relay
+// 收到 Leave 帧随即关房并报给 lobby，lobby 的 leave 晚到一步就答 room_not_found。
 func (c *Client) Leave(ctx context.Context) error {
 	c.mu.Lock()
 	room := c.roomID
@@ -415,7 +418,9 @@ func (c *Client) Leave(ctx context.Context) error {
 	_ = c.SendControl(wire.RelayOpLeave, 0, nil) // relay 回 Closed{left} 后断开
 	var err error
 	if c.lobby != nil && room != "" {
-		_, err = c.lobby.LeaveRoom(ctx, room, c.opts.Game)
+		if _, err = c.lobby.LeaveRoom(ctx, room, c.opts.Game); errors.Is(err, ErrRoomNotFound) {
+			err = nil
+		}
 	}
 	_ = c.Close()
 	return err

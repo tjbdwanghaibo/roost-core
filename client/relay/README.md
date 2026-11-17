@@ -90,7 +90,7 @@ client.OnMemberPresence(func(m relay.MemberPresence) {})   // 房主：成员的
 
   要不要换：快照每秒至多一份、通常几十到几百 KB，deflate 与 zstd 在真实状态上的耗时与大小差距**没有测过**；先量自己的状态再决定。
 - **收帧上限**：取 `MaxPayloadBytes` 与 `SnapshotMaxBytes + 16 KiB` 的大值，装得下带满快照的 `YouAreHost`。
-- **离开**：`Leave(ctx)` 先在 relay 上发 `Leave`（房主离开不等宽限期，立即换 host），再经 lobby 让出席位，最后 `Close`。
+- **离开**：`Leave(ctx)` 先在 relay 上发 `Leave`（房主离开不等宽限期，立即换 host），再经 lobby 让出席位，最后 `Close`。lobby 答 `room_not_found`（房间已关或过了寿命，例如自己是最后一个人、relay 收到 `Leave` 随即关了房）算离开成功，返回 nil；其余 lobby 错误照常返回。直接调 `Lobby.LeaveRoom` 的仍拿到 `ErrRoomNotFound`。
 - **只连 TCP**：ticket 的 `RelayAddr` 是 `ws://` 时 Connect 直接报错；向 lobby 要 `transport: tcp`（缺省）。Go SDK 不加 WebSocket（维护者 2026-11-17 定：Go 客户端是原生程序与测试工具，用 TCP）。
 - **扩展点**：`OnControl(op, fn)` 收任意控制帧操作码（内置处理过的也交给它）；不认识又没注册的丢弃；发控制帧用 `SendControl`。
 

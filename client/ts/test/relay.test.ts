@@ -529,6 +529,35 @@ test("kick: the lobby answers 403 kicked and an unused old token is refused; a l
   host.client.close();
 });
 
+// 房间里最后一个人 leave：房间已被 relay 关掉（例如他先在 relay 上发了 Leave 帧，或房间因别的原因关了）时 lobby 答
+// room_not_found。房间已经不在，“我要离开”的目的已达到，leave 不报错；别的 lobby 错误照常抛。
+test("the last member's leave succeeds after the room closes", async () => {
+  const gone = async (host: Player, roomId: string): Promise<boolean> => {
+    try {
+      await host.lobby.setRoomState(roomId, { game: GAME, state: "open" });
+      return false;
+    } catch (error) {
+      return error instanceof LobbyError && error.code === "room_not_found";
+    }
+  };
+  // 自然先后：成员走后，最后一人直接 leave。
+  const a = await room("ts-last-a", "ts-last-a-m1");
+  await a.others[0].client.leave();
+  await a.host.left.next("a: member left");
+  await a.host.client.leave();
+  await until("room a closed in the lobby", () => gone(a.host, a.roomId));
+
+  // 定下先后：最后一人先只在 relay 上发 Leave 帧，等 lobby 确认房间已关，再 leave。
+  const b = await room("ts-last-b", "ts-last-b-m1");
+  await b.others[0].client.leave();
+  await b.host.left.next("b: member left");
+  assert.ok(b.host.client.sendLeave());
+  assert.equal((await b.host.disconnected.next("b: host left on the relay")).reconnecting, false);
+  await until("room b closed in the lobby", () => gone(b.host, b.roomId));
+  await b.host.client.leave();
+  assert.equal((await rejects(b.host.lobby.leaveRoom("0000000000000000", GAME), LobbyError)).code, "room_not_found");
+});
+
 test("after the start: a dropped member auto-reconnects to its seat; the host kicks an offline seat and the lobby bars it", async () => {
   const host = await Player.create("ts-start-host");
   const ticket = await host.lobby.createRoom({ game: GAME, mode: "ts-start", maxMembers: 3 });
