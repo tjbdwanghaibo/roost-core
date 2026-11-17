@@ -61,7 +61,7 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 - **卸载后重载（unload_resync）**：常驻实体只会经上面三处有意离开内存。强制刷新后有 Sync 订阅者时，订阅者的重载与刷新的重新载入走同一次共享冷加载，得到同一个新实例；新实例同样是常驻的，再卸载照样被拒绝。
 - **意外离开内存**：不另做自动重载。除事务内新建被撤销（从未提交过）之外，所有移出内存的路径都经 `EntityManager.Destroy`，没带框架许可的一律拒绝，所以“漏拦”只可能来自带许可的三处，它们各自处理（交出、删档本来就该离开；刷新立刻载回）。框架的许可（`entity.WithResidentRelease`）只给这三处用，业务代码不要用它绕过常驻。
 
-**DAO 选 `dbscope=sid` 还是 global**：本地实体的 DAO 默认 `dbscope=sid`（`add dao --entity` 生成的骨架、demo 的 Player / World、模块里的本地实体）——实体归一个服，换服（rehome 模块搬档）与合服（sidmerge）按 sid 库搬它。各服共享、不归某一个服的数据才用 `dbscope=global`：Remote 托管实体（alliance、team 等，按 owner 路由而不是按 sid）、跨服共享的地形数据。按服分库的物理库名加上 `_<sid>` 后不能超过 63 字节（D9 校验，起服时拒绝）。v1.47.0 起存储位置改变，旧数据不迁移（见 CHANGELOG）。
+**DAO 选 `dbscope=sid` 还是 global**：本地实体的 DAO 默认 `dbscope=sid`（`add dao --entity` 生成的骨架、demo 的 Player / World、模块里的本地实体）——实体归一个服，换服（rehome 模块搬档）与合服（sidmerge）按 sid 库搬它。各服共享、不归某一个服的数据才用 `dbscope=global`：Remote 托管实体（alliance、team 等，按 owner 路由而不是按 sid）、跨服共享的地形数据。同一个 DAO 在不同部署里归属不同时写 `dbscope=boot`：缺省按服分库，起服装配在本进程第一次读写它之前调用生成的 `db.Set<Dao>DbScope(dataengine.DatabaseGlobal)` 改成共用（运行中不改；已提交的写在 WAL 里记着当时的范围）。例子是 game-demo 的地形块、建筑与玩家编辑账本：按地图归属（维护者 2026-11-14 D11 Q17 A），`terrainmap.Open` 按 `Region.Shared` 选——普通场景的图归本服（sid），分区场景跨服共享的图各服共用（global）。按服分库的物理库名加上 `_<sid>` 后不能超过 63 字节（D9 校验，起服时拒绝）。v1.47.0 起存储位置改变，旧数据不迁移（见 CHANGELOG）。
 
 **组件 DAO 跟随宿主实体的范围**（维护者 2026-11-13）：一个本地实体的全部 DAO 与主 DAO 同一个 dbscope，文档要么都在本服库、要么都在共用库。手写的组件 DAO（战斗状态 `combatcomponent.CombatDao`、关卡状态 `level.LevelDAO`）用 `NewCombatDaoIn` / `NewLevelDAOIn` 带上宿主主 DAO 的 `DbScope()` 构造，提交的写入键带同一个范围；生成工程的 `registry.RegisterAll`（`entity.ValidateEntityRegistry`）在起服时拒绝范围不一致的组合（`entity.ErrMixedDaoScope`），否则这个实体不能预加载、换服也只搬走一部分。
 

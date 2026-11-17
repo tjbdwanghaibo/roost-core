@@ -17,7 +17,10 @@ package dbdef
 // 改为配置 ID（键 9 的 ConfigID），加 Params（键 10）与锚点 GX / GY（键 11、12），同步字段打开；键 3 弃用，不得复用。
 // 项目未上线，不迁移旧文档，旧 schema 的记录按 ErrSchemaMismatch 拒绝（升级须清空 buildings 与 terrain_chunks）。
 //
-//roost:dao coll=buildings db=main schema=2
+// 库范围与它所在的地形块相同（dbscope=boot，按地图归属，见 TerrainChunkDao）：普通场景按服分库，分区场景各服共用。建筑归
+// 地图所在的服：属主换服（rehome）时建筑留在原地图、原服的库里，不随玩家搬（维护者 2026-11-14 D11 N3 A）。
+//
+//roost:dao coll=buildings db=main dbscope=boot schema=2
 type BuildingDao struct {
 	// State：0 = 空地（从没放过或已拆除），1 = 站着。
 	State int32 `dao:"persist,sync" store:"1"`

@@ -5,6 +5,9 @@ package {{.Package}}
 
 import (
 	"fmt"
+{{- if eq .Dao.DbScope "boot"}}
+	"sync/atomic"
+{{- end}}
 {{- if not .Dao.NoCollection}}
 	"sort"
 {{- if persistFields .Dao.Fields}}
@@ -76,6 +79,30 @@ type {{persistDocName .Dao.Name}} struct {
 // {{storedKeysName .Dao.Name}} is the key set {{persistDocName .Dao.Name}} declares, nested types
 // included; RestorePersisted reports stored keys outside it.
 var {{storedKeysName .Dao.Name}} = dataengine.NewStoredKeySet[{{persistDocName .Dao.Name}}]("{{.Dao.Name}}")
+{{- if eq .Dao.DbScope "boot"}}
+
+// {{bootScopeVar .Dao.Name}}Global 记 {{.Dao.Name}}（dbscope=boot）在本进程的库范围：false 是缺省的按服分库（sid，
+// 物理库 <库>_<sid>），true 是各服共用（global）。由 Set{{.Dao.Name}}DbScope 设置。
+var {{bootScopeVar .Dao.Name}}Global atomic.Bool
+
+// Set{{.Dao.Name}}DbScope 定下本进程 {{.Dao.Name}} 的库范围（dbscope=boot：同一个 DAO 在不同进程可以按服分库或
+// 各服共用，由起服装配按业务规则选，例如地形按地图归属）：dataengine.DatabaseGlobal 是共用，别的值是按服分库（缺省）。
+//
+// 在本进程第一次读写这个 DAO 的文档之前调用（起服装配，DataEngine 冷加载、提交它之前）。已提交的写在 WAL 里记着
+// 当时的范围，投影照记录走；之后的读写按新范围找库，所以进程运行中不要改：改了就是把数据留在了另一个库里。
+// 改范围（同一份部署从按服换成共用或反过来）等于搬数据，与改逻辑库映射相同。
+func Set{{.Dao.Name}}DbScope(scope dataengine.DatabaseScope) {
+	{{bootScopeVar .Dao.Name}}Global.Store(scope == dataengine.DatabaseGlobal)
+}
+
+// {{bootScopeVar .Dao.Name}} 是 {{.Dao.Name}} 在本进程的库范围（见 Set{{.Dao.Name}}DbScope）。
+func {{bootScopeVar .Dao.Name}}() dataengine.DatabaseScope {
+	if {{bootScopeVar .Dao.Name}}Global.Load() {
+		return dataengine.DatabaseGlobal
+	}
+	return dataengine.DatabaseServer
+}
+{{- end}}
 {{- end}}
 
 // New{{.Dao.Name}} creates a new {{.Dao.Name}} instance with initialized maps/slices.

@@ -36,7 +36,7 @@ type DaoDef struct {
 	Name    string // struct name, e.g. "PlayerDao"
 	Coll    string // collection name, e.g. "players"
 	Db      string // logical database name, e.g. "game"
-	DbScope string // global or sid
+	DbScope string // global, sid, or boot (chosen by the process at startup, sid unless set)
 	// Schema is the DAO's schema version, from `schema=` (1 when omitted).
 	// 加载时必须与持久 schema 相等；框架不转换旧文档。
 	Schema uint32

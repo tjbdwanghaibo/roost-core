@@ -325,6 +325,18 @@ next.Value.Value=ApplyPatch(update.Patch,next.Value.Value);
 next.Patch=null;return next;
 }
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
+public static SyncRealmDao Apply(this SyncRealmDao patch,SyncRealmDao previous){
+ if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncRealmDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
+if(patch.Owner!=null)next.Owner=ApplyField(patch.Owner,previous==null?null:previous.Owner);
+return next;}
+private static SyncRealmDaoOwnerField ApplyField(SyncRealmDaoOwnerField patch,SyncRealmDaoOwnerField previous){
+var update=patch.Clone();
+return update;
+}
+// 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncShortKeysDao Apply(this SyncShortKeysDao patch,SyncShortKeysDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
  // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。

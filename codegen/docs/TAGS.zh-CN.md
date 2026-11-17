@@ -68,7 +68,7 @@ type AllianceDao struct {
 | --- | --- |
 | `coll` | 持久集合名，与 Entity 的 DAO 成员 tag 对应 |
 | `db` | 逻辑数据库名，例如 `main`；不是 Mongo 物理库名 |
-| `dbscope` | `global`（默认）或 `sid`（按服分库） |
+| `dbscope` | `global`（默认）、`sid`（按服分库）或 `boot`（进程起服时选：缺省按服分库，起服装配调用生成的 `Set<Dao>DbScope(dataengine.DatabaseGlobal)` 改成共用；用于同一个 DAO 在不同部署里归属不同的数据，例如 game-demo 的地形按地图归属——单服的图 sid、跨服分区的图 global。要在本进程第一次读写它之前设，运行中不改） |
 | `schema` | 正整数，默认 1；持久文档须匹配当前版本，不自动迁移 |
 | `nocoll` | 无集合 DAO；不能同时写上述存储参数，字段必须明确非持久 |
 

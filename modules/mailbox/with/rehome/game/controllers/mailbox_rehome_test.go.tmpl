@@ -1,0 +1,156 @@
+package controllers
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	gamerehome "{{MODULE}}/game/modules/rehome"
+)
+
+// mailboxRehomeEnvelopes 是 mail 服务的信封存储替身（进程内的一张表，只插入不改写）。
+type mailboxRehomeEnvelopes struct {
+	mu   sync.Mutex
+	byID map[string]svcmail.Envelope
+}
+
+func (s *mailboxRehomeEnvelopes) Create(_ context.Context, envelope svcmail.Envelope) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, taken := s.byID[envelope.ID]; taken {
+		return false, nil
+	}
+	s.byID[envelope.ID] = envelope
+	return true, nil
+}
+
+func (s *mailboxRehomeEnvelopes) Get(_ context.Context, id string) (svcmail.Envelope, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	envelope, ok := s.byID[id]
+	return envelope, ok, nil
+}
+
+func (s *mailboxRehomeEnvelopes) GetMany(_ context.Context, ids []string) (map[string]svcmail.Envelope, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]svcmail.Envelope, len(ids))
+	for _, id := range ids {
+		if envelope, ok := s.byID[id]; ok {
+			out[id] = envelope
+		}
+	}
+	return out, nil
+}
+
+// mailboxRehomeService 是带 LazyBroadcast（内存索引与存储）的真实 mail 服务。
+func mailboxRehomeService(t *testing.T) *svcmail.Service {
+	t.Helper()
+	service, err := svcmail.New(svcmail.Config{
+		Envelopes: &mailboxRehomeEnvelopes{byID: map[string]svcmail.Envelope{}},
+		Mailboxes: versionstore.NewMemoryStore[int64, svcmail.Mailbox](),
+		Sends:     versionstore.NewMemoryStore[string, svcmail.SentRecord](),
+		Broadcast: svcmail.NewLazyBroadcast(svcmail.LazyBroadcastConfig{Index: svcmail.NewMemoryBroadcastIndex()}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// 换服 A → B 前后的全服邮件归属（D11 N3 A），用真实的 mail 服务：玩家在 A 进入时按 A 的范围拉过一次；之后发给 A 的
+// 一封在离开时由离开钩子合并进来；离开之后才发给 A 的不属于他；离开之前就发给 B 的也不属于他（那时他还不是 B 的人）；
+// 到了 B 按 B 的范围拉，之后发给 B 的照常收到。没有离开钩子时，离开前发给 A 的那封会丢，离开前发给 B 的会多出来。
+func TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving(t *testing.T) {
+	const playerID, from, to = int64(94301), int32(3), int32(4)
+	ctx := context.Background()
+	mail := mailboxRehomeService(t)
+	registered := time.Now().Add(-24 * time.Hour).Unix()
+	pull := func(server int32) {
+		t.Helper()
+		if _, err := mail.PullBroadcasts(ctx, playerID, svcmail.BroadcastProfile{Scopes: []string{svcmail.ServerScope(server)}, RegisteredAtUnix: registered}); err != nil {
+			t.Fatalf("pull with server %d's scope: %v", server, err)
+		}
+	}
+	send := func(server int32, name string) string {
+		t.Helper()
+		envelope, err := mail.Send(ctx, svcmail.SendRequest{
+			Audience: svcmail.AudienceBroadcast, Scope: svcmail.ServerScope(server),
+			Subject: name, Body: name, ExpiresInSeconds: 7 * 24 * 3600, RequestID: name,
+		})
+		if err != nil {
+			t.Fatalf("send %s: %v", name, err)
+		}
+		return envelope.ID
+	}
+
+	pull(from) // 在 A 进入
+	oldBeforeLeaving := send(from, "a-before-leaving")
+	newBeforeLeaving := send(to, "b-before-leaving")
+	move := gamerehome.Move{PlayerID: playerID, ID: "transfer-94301", From: from, To: to}
+	if err := mailboxPullBroadcastsOnLeave(ctx, mail, move); err != nil {
+		t.Fatalf("leave hook: %v", err)
+	}
+	oldAfterLeaving := send(from, "a-after-leaving")
+	newAfterLeaving := send(to, "b-after-leaving")
+	pull(to) // 到 B 进入
+
+	page, err := mail.List(ctx, playerID, "", svcmail.MaxPageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, item := range page.Items {
+		got[item.Envelope.ID] = true
+	}
+	for _, c := range []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{"sent to the old server while he was there", oldBeforeLeaving, true},
+		{"sent to the new server before he left", newBeforeLeaving, false},
+		{"sent to the old server after he left", oldAfterLeaving, false},
+		{"sent to the new server after he left", newAfterLeaving, true},
+	} {
+		if got[c.id] != c.want {
+			t.Errorf("%s: in the mailbox = %v, want %v", c.name, got[c.id], c.want)
+		}
+	}
+}
+
+// mailboxRehomeSummarizer 记下离开钩子发出的汇总请求。
+type mailboxRehomeSummarizer struct {
+	calls    int
+	playerID int64
+	err      error
+}
+
+func (s *mailboxRehomeSummarizer) Summary(_ context.Context, playerID int64) (svcmail.Summary, error) {
+	s.calls++
+	s.playerID = playerID
+	return svcmail.Summary{PlayerID: playerID}, s.err
+}
+
+// mail 服务不可用时离开钩子返回错误（带着 mail 的错误），换服因此中止；钩子登记在 rehome 的离开登记点上，名字是模块名。
+func TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails(t *testing.T) {
+	away := errors.New("mail service is away")
+	summarizer := &mailboxRehomeSummarizer{err: away}
+	err := mailboxPullBroadcastsOnLeave(context.Background(), summarizer, gamerehome.Move{PlayerID: 94302, From: 3, To: 4})
+	if !errors.Is(err, away) || summarizer.calls != 1 || summarizer.playerID != 94302 {
+		t.Fatalf("err = %v after %d calls for player %d; want the mail service's error after one call for 94302", err, summarizer.calls, summarizer.playerID)
+	}
+	defer func() {
+		recovered := recover()
+		if message, _ := recovered.(string); !strings.Contains(message, `leave hook "mailbox" is registered twice`) {
+			t.Fatalf("registering the mailbox leave hook again: %v; want the duplicate-registration panic (the hook must already be registered)", recovered)
+		}
+	}()
+	gamerehome.OnLeaving("mailbox", func(context.Context, *app.Registry, gamerehome.Move) error { return nil })
+}

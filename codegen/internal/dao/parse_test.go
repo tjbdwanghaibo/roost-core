@@ -43,9 +43,12 @@ func TestParseDefDir(t *testing.T) {
 		t.Fatalf("parseDefDir: %v", err)
 	}
 
-	// HeroDao、两种存储键夹具、VarietyDao 与 nocoll WraithDao。
-	if len(defs.Daos) != 5 {
-		t.Fatalf("expected 5 daos, got %d", len(defs.Daos))
+	// HeroDao、dbscope=boot 的 RealmDao、两种存储键夹具、VarietyDao 与 nocoll WraithDao。
+	if len(defs.Daos) != 6 {
+		t.Fatalf("expected 6 daos, got %d", len(defs.Daos))
+	}
+	if realm := defs.Daos[1]; realm.Name != "RealmDao" || realm.DbScope != "boot" {
+		t.Fatalf("expected RealmDao with dbscope=boot second, got %+v", realm)
 	}
 	if wraith := defs.Daos[len(defs.Daos)-1]; wraith.Name != "WraithDao" || !wraith.NoCollection || wraith.Coll != "" || wraith.Db != "" {
 		t.Fatalf("expected the nocoll WraithDao last, got %+v", wraith)
@@ -606,6 +609,11 @@ func TestDatabaseMarkerIsALogicalNameAndGeneratesOneConstantPerDatabase(t *testi
 	if len(databases) != 2 || databases[0].Const != "DatabaseAuditLog" || databases[1].Const != "DatabaseMain" || !databases[1].ServerScoped ||
 		strings.Join(databases[1].Daos, ",") != "GuildDao,PlayerDao" {
 		t.Fatalf("databases = %+v", databases)
+	}
+	// dbscope=boot 的 DAO 可能在某些进程按服分库：库名长度按带 _<sid> 的算（ServerScoped）。
+	boot, err := collectDatabases([]DaoDef{{Name: "RealmDao", Db: "realm", DbScope: "boot"}, {Name: "LogDao", Db: "log"}})
+	if err != nil || len(boot) != 2 || boot[0].Name != "log" || boot[0].ServerScoped || boot[1].Name != "realm" || !boot[1].ServerScoped {
+		t.Fatalf("boot databases = %+v, %v", boot, err)
 	}
 	if _, err := collectDatabases([]DaoDef{{Name: "A", Db: "a_1"}, {Name: "B", Db: "a1"}}); err == nil || !strings.Contains(err.Error(), "both generate the constant DatabaseA1") {
 		t.Fatalf("colliding constants: %v", err)

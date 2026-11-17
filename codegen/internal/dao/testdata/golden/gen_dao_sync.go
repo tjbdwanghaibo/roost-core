@@ -241,6 +241,16 @@ type SyncHeroDao struct {
 	Mount      *SyncHeroDaoMountField   `json:"mount,omitempty"`
 }
 
+type SyncRealmDaoOwnerField struct {
+	Value int64 `json:"value,omitempty"`
+}
+
+type SyncRealmDao struct {
+	EntityID   int64                   `json:"entity_id,omitempty"`
+	SyncFormat uint32                  `json:"sync_format,omitempty"`
+	Owner      *SyncRealmDaoOwnerField `json:"owner,omitempty"`
+}
+
 type SyncShortKeysDaoExperienceField struct {
 	Value int64 `json:"value,omitempty"`
 }
@@ -4386,6 +4396,128 @@ func UnmarshalSyncHeroDao(data []byte) (*SyncHeroDao, error) {
 				return nil, err
 			}
 			m.Mount = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncRealmDaoOwnerField(m *SyncRealmDaoOwnerField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncRealmDaoOwnerField(data []byte) (*SyncRealmDaoOwnerField, error) {
+	m := &SyncRealmDaoOwnerField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int64(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncRealmDao(m *SyncRealmDao) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.EntityID != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.EntityID))
+	}
+	if m.SyncFormat != 0 {
+		b = protowire.AppendTag(b, 2047, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.SyncFormat))
+	}
+	if m.Owner != nil {
+		{
+			payload, err := MarshalSyncRealmDaoOwnerField(m.Owner)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncRealmDao(data []byte) (*SyncRealmDao, error) {
+	m := &SyncRealmDao{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.EntityID = int64(v)
+			data = data[n:]
+		case 2047:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.SyncFormat = uint32(v)
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncRealmDaoOwnerField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Owner = msg
 			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
@@ -8594,6 +8726,131 @@ func ApplySyncHeroDao(patch, previous *SyncHeroDao) (*SyncHeroDao, error) {
 			return nil, err
 		}
 		next.Mount = &SyncHeroDaoMountField{Value: value}
+	}
+	return next, nil
+}
+
+// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。
+func (patch *SyncRealmDao) Values() (map[string]any, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	out := map[string]any{}
+	// 增量补丁不带实体 ID（沿用基线的），这时没有 _id。
+	if patch.EntityID != 0 {
+		out["_id"] = patch.EntityID
+	}
+	if patch.Owner != nil {
+		out["1"] = patch.Owner.Value
+	}
+	return out, nil
+}
+func (d *RealmDao) marshalSyncPB(mask uint64) []byte { return d.marshalSyncPatch(mask, d.id) }
+
+// marshalSyncPatch 编码字段替换补丁；id 为 0 时不带实体 ID（增量：接收端沿用基线的）。
+func (d *RealmDao) marshalSyncPatch(mask uint64, id int64) []byte {
+	patch := &SyncRealmDao{EntityID: id, SyncFormat: 3}
+	changed := false
+	if mask&realmDaoFieldOwner != 0 {
+		patch.Owner = &SyncRealmDaoOwnerField{Value: d.owner}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	raw, err := MarshalSyncRealmDao(patch)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+func (d *RealmDao) applySyncPB(raw []byte) error {
+	patch, err := UnmarshalSyncRealmDao(raw)
+	if err != nil {
+		return err
+	}
+	// 增量补丁不带实体 ID，沿用这份 DAO 的。
+	if patch.EntityID == 0 {
+		patch.EntityID = d.id
+	}
+	if d.id != 0 && d.id != patch.EntityID {
+		return fmt.Errorf("DAO identity changed")
+	}
+	previous, err := UnmarshalSyncRealmDao(d.marshalSyncPB(^uint64(0)))
+	if err != nil {
+		return err
+	}
+	previous.EntityID = patch.EntityID
+	merged, err := ApplySyncRealmDao(patch, previous)
+	if err != nil {
+		return err
+	}
+	if patch.Owner != nil {
+		d.owner = merged.Owner.Value
+	}
+	d.id = patch.EntityID
+	d.Init()
+	return nil
+}
+func captureSyncRealmDaoOwnerField(value *RealmDao, change *dataengine.SyncChange) *SyncRealmDaoOwnerField {
+	full := func() *SyncRealmDaoOwnerField { return &SyncRealmDaoOwnerField{Value: value.owner} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncRealmDaoOwnerField(patch *SyncRealmDaoOwnerField, previous int64, exists bool) (int64, error) {
+	return patch.Value, nil
+}
+
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。它产出增量补丁：
+// 不带实体 ID，接收端沿用基线的（Apply 时 previous 的 EntityID）。
+func (d *RealmDao) MarshalSyncChanges(mask uint64) []byte {
+	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
+		if change.Full() {
+			return d.marshalSyncPatch(mask, 0)
+		}
+		patch := &SyncRealmDao{SyncFormat: 3}
+		changed := false
+		if mask&realmDaoFieldOwner != 0 {
+			patch.Owner = captureSyncRealmDaoOwnerField(d, change.Child(dataengine.SyncStep{Field: 2}))
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		raw, err := MarshalSyncRealmDao(patch)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	})
+}
+
+// ApplySyncRealmDao 验证整个补丁后发布新快照，previous 与 patch 均按只读使用。
+func ApplySyncRealmDao(patch, previous *SyncRealmDao) (*SyncRealmDao, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	// 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+	if previous != nil && (previous.SyncFormat != 3 || patch.EntityID != 0 && previous.EntityID != patch.EntityID) {
+		return nil, fmt.Errorf("sync baseline identity or format mismatch")
+	}
+	next := &SyncRealmDao{EntityID: patch.EntityID, SyncFormat: 3}
+	if previous != nil {
+		*next = *previous
+	}
+	if patch.Owner != nil {
+		var old int64
+		exists := previous != nil && previous.Owner != nil
+		if exists {
+			old = previous.Owner.Value
+		}
+		value, err := applySyncRealmDaoOwnerField(patch.Owner, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Owner = &SyncRealmDaoOwnerField{Value: value}
 	}
 	return next, nil
 }

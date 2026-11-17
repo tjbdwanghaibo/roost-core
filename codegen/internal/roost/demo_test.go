@@ -742,6 +742,10 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if glue := read("game/controllers/mailbox_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
 		t.Errorf("the mailbox+enter glue was not written into the demo:\n%s", glue)
 	}
+	// 换服离开前按旧范围合并全服邮件是 mailbox 与 rehome 的联动（离开钩子，D11 N3 A）。
+	if glue := read("game/controllers/mailbox_rehome.go"); !strings.Contains(glue, `gamerehome.OnLeaving("mailbox"`) || !strings.Contains(glue, "mailer.Summary(ctx, move.PlayerID)") {
+		t.Errorf("the mailbox+rehome glue was not written into the demo:\n%s", glue)
+	}
 	if login := read("game/controllers/player_enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "claims := context.Session.Principal().Claims") || !strings.Contains(login, "InitResult: entered, Claims: claims,") {
 		t.Errorf("the demo's enter flow still pulls server-wide mail by hand, or does not hand the session claims to the enter hooks:\n%s", login)
 	}

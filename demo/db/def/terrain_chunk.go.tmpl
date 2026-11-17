@@ -17,7 +17,12 @@ package dbdef
 // ErrSchemaMismatch 拒绝（升级须清空 terrain_chunks）。schema 4（可编辑地形 P4）：加 Lots / LotRevision（store 键 6、7），
 // 本块上站着的建筑的占地；同样不迁移，旧 schema 的记录拒绝（升级须清空 terrain_chunks 与新集合 buildings）。
 //
-//roost:dao coll=terrain_chunks db=main schema=4
+// 库范围按地图归属（dbscope=boot，维护者 2026-11-14 D11 Q17 A）：不分区的普通场景是本服自己的图，按服分库（缺省，物理库
+// <库>_<sid>，与 terrain 模块的 terrain_chunk 相同），几个服各开一张同样坐标的图互不相干；分区场景的图跨多个 game 服共享
+// （邻格的 Ghost 带按库里的记录装入，格到服的映射可以改），各服共用（global）。由 game/terrainmap.Open 按 Region.Shared
+// 在本进程第一次读写之前选定（与 BuildingDao、TerrainEditorDao 一起）。
+//
+//roost:dao coll=terrain_chunks db=main dbscope=boot schema=4
 type TerrainChunkDao struct {
 	// BaseRevision 是这块基于的原始地形版本（包头的 BaseRevision）。与当前包不同的记录不装入（ErrBaseRevision）。
 	BaseRevision int64 `dao:"persist,sync" store:"1"`

@@ -542,7 +542,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 搬机搬的是 sid，玩家与 sid 的绑定不变（单个玩家换到另一个 sid 是下一节）：旧进程正常停机（断开玩家、WAL 全部投影、释放单实例锁），新机器上同一 sid 的进程用空 WAL 目录接管。`cmd/sidmove` 只做步骤之间的检查：`wal-drained`（旧 WAL 已全部确认，进程还在跑就拒绝）、`singleton`（锁现在被谁持有）、`players`（停旧进程后与新进程写入前的玩家文档是否一致）。步骤、所用能力与本机演练见[参考流程](../docs/framework/PLAYER-MIGRATION.md)。
 
-把一个服并入另一个服（别名合服）用 `cmd/sidmerge` 与 `cmd/accountctl merge-server`：角色身份不变，account 记录“A 并入 B”后会话的承载服是 B，认证器按承载服写 `server_id`、原服写 `origin_server_id`；`sidmerge` 做合服前的检查（两侧 WAL、共享库同处、outbox、saga 终态、持久总线清单）并搬按 sid 分库的数据（game-demo 的 Player、World 与地形格编辑器是 `dbscope=sid`，随 `<库>_<A>` 拷进 B 的库；地形块、建筑与地形编辑器在共享库，不用搬）；装配了 account 的 game 进程启动时自检，本服已被并入就拒绝启动。步骤与回退见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)。
+把一个服并入另一个服（别名合服）用 `cmd/sidmerge` 与 `cmd/accountctl merge-server`：角色身份不变，account 记录“A 并入 B”后会话的承载服是 B，认证器按承载服写 `server_id`、原服写 `origin_server_id`；`sidmerge` 做合服前的检查（两侧 WAL、共享库同处、outbox、saga 终态、持久总线清单）并搬按 sid 分库的数据（game-demo 的 Player、World 与地形格编辑器是 `dbscope=sid`，随 `<库>_<A>` 拷进 B 的库；地形块、建筑与玩家编辑账本按地图归属（`dbscope=boot`）：普通场景的也在 `<库>_<A>` 里、同样被拷进 B 的库——两个服的图坐标相同、实体 ID 相同，合服前要先定 A 的图怎么处理，见 KNOWN-LIMITS“合服时普通场景的地形”；分区场景的在共享库，不用搬）；装配了 account 的 game 进程启动时自检，本服已被并入就拒绝启动。步骤与回退见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)。
 
 ## 把一名玩家换到另一个服（rehome 模块）
 
@@ -550,11 +550,12 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 demo 在模块之上接的线：
 
-- **交出带上只由他所在进程写的实体**（`playerEvictor.DepartPlayer`）：开了地形时，玩家面向客户端的编辑账本 `TerrainEditor`（全局库）与 Player 一起交出、一起撤屏障（`terrainEditorOf`）。不带它时源服内存里留着旧账本，玩家换回来按旧 `LastSeq` 判号、写回旧版本，投影版本冲突致命（`TestTerrainEditLedgerRealMongo` 的换进程子用例，真实 Mongo）。
+- **地形归地图，交出只交 Player**（`playerEvictor.DepartPlayer`；维护者 2026-11-14 D11 Q17 A + N3 A）：地形块、建筑与玩家编辑账本 `TerrainEditor` 的库范围按地图归属（`dbscope=boot`，`terrainmap.Open` 按 `Region.Shared` 选）——普通场景是本服的图，三者都在 `<库>_<sid>` 里，换服时留在原服：建筑仍是他的、站在原地图上，账本记的是他在这张图上的编辑与建筑数；到了新服用新服库里他自己的那份（第一次编辑时建出），换回来时原服的账本与建筑原样都在。两个服各开一张同样坐标的图也互不相干（修前三者在共享库，两个服写同一份块文档，投影版本冲突致命）。用例：`TestTerrainDocumentsFollowTheMapOwnership`（离线，提交记录的文档键）、`TestTerrainMapOwnershipRealMongo`（真实 Mongo，sid 1 → 2 → 1）。
+- **全服邮件离开前按旧范围合并一次**（mailbox 与 rehome 的联动 `game/controllers/mailbox_rehome.go`，D11 N3 A）：离开钩子让 mail 服务按他在本服进入时给的画像合并（`Summary`），在本服期间发给本服的都进邮箱、水位推进到此刻；到了新服由进入钩子按会话里新的承载服拉。离开之后才发给旧服的、离开之前就发给新服的都不再合并。mail 服务不可用时中止换服。
 - **驻留表就是模块的 Residency**（`internal/service/game/playerowner.go`）：`PlayerOwners` 带迁出表（玩家 → 去了哪、是否还在换服中），以 `gamerehome.ResidencyCapability` 再发布一次。迁出表与驻留表同一把锁：表里有他，`Serve` 与 `AdmitBound` 都不给他建驻留记录；交出实体成功时驻留记录被删，写闸门（`Admit`）从此拒绝他。迁出表不持久，进程重启后他归谁问 account。
 - **登录**（`game/controllers/player_enter_game.go`）：在把玩家接入服务、装载实体之前跑 enter 模块的进入前检查（`gamelogin.RunEntering`，rehome 与 enter 的联动登记在上面）——正在换服答 `rehome_moving`，已经绑定到别的服答 `rehome_elsewhere`（应答的 `OwnerSID` 是他现在的服）；握手在换服之前的旧会话（`server_id` 仍是本服）也在这里被拒。到达与意图对账是进入钩子（`gamelogin.RunEntered`，首次初始化之后）。认证器（`auth.go`）写 `bind_epoch` 与在途换服的 `transfer` 两个 claim。源服在受理之后重启的，这名玩家再来登录时源服把那一次换服接着做完。
 - **saga 步骤按当前绑定准入**（`gift_saga.go` 与 `game/modules/alliance/runtime`）：载荷里的 sid 只是发起时的服、用于最初的路由；准入问 `PlayerOwners.AdmitBound`——有驻留记录就在本服执行，迁出表里的答“换服中”或他去的服，都没有就问 account（`gamerehome.Binding`）。换服中退回协调器不带路由（不耗尝试，稍后重投），绑定在别处退回并给出当前 sid，问不到 account 则在本服重投。
-- **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：开着分区场景的服拒绝（SceneActor 还不能交接），非法分区配置也拒绝迁服；坐在本进程某一局对战里的玩家申请时与离开时各拒一次（lockstep 房间在本进程内存里，`battleManager.Seated`）。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。匹配票据不拦：离开中的玩家不再是本进程撮合的候选（`PlayerOwners.Resident` 不认迁出表里的玩家），票据在全服共用的 match 服务里，换走之后由所在服处理或到期。副本不拦：session 服务的 run 与领奖账本都跟着玩家走。地形编辑账本随玩家交出（见下面“交出带上只由他所在进程写的实体”）。名下建筑留在地图上（建筑是地图的实体、不是玩家的档，按地形 DAO 的库范围归属，待维护者决定），全服邮件的服范围不随换服迁移，也待维护者决定。
+- **demo 自己的换服检查**（`internal/service/game/rehome_checks.go`）：开着分区场景的服拒绝（SceneActor 还不能交接），非法分区配置也拒绝迁服；坐在本进程某一局对战里的玩家申请时与离开时各拒一次（lockstep 房间在本进程内存里，`battleManager.Seated`）。队伍互斥由 team/rehome 联动在同一 Player 事务内执行；联盟成员可以换服，按上面的绑定准入与进入对账处理。匹配票据不拦：离开中的玩家不再是本进程撮合的候选（`PlayerOwners.Resident` 不认迁出表里的玩家），票据在全服共用的 match 服务里，换走之后由所在服处理或到期。副本不拦：session 服务的 run 与领奖账本都跟着玩家走。地形编辑账本与名下建筑留在原服的地图上、全服邮件离开前按旧范围合并一次（见上面两条）。
 - **联盟消费者启动**（`internal/service/game/alliance.go`）：Service.Init 先创建 PlayerOwners，再发布模块 PlayerBinding 适配并启动联盟 runtime。demo 在 manifest 关闭该 runtime 的自动接线，业务逻辑仍全部来自模块。App 先排空 Saga ingress，再关闭业务服务。
 
 用例：`internal/service/game/gift_route_test.go` 用真实的 `account.Service`（内存存储）与两张 `PlayerOwners`（1000、1001）钉住“Begin 之后步骤在 1000 被退回、不带地址、不建驻留记录；Commit 之后 1000 退回并给出 1001，同一命令在 1001 被接入”，公会步骤同规则，以及换服前的旧 claims 在换服后登录被拒；模块自带的场景在 `game/modules/rehome`、`game/handler/rehome_test.go`、`game/controllers/rehome_test.go`。这些都是离线的（替身提交器、交出实体是替身）：两个真实 game 进程加 account 的演练还没有做。

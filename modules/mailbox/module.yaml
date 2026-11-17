@@ -37,6 +37,12 @@ with:
       packages: [./game/modules/mailbox, ./game/handler, ./game/controllers]
       run: ^TestWithMailboxBag
       pass: 9
+  rehome:
+    summary: 换服离开前按旧范围合并一次全服邮件（rehome 的离开钩子，拉不成中止换服）；到新服由进入钩子按新的承载服范围拉
+    verify:
+      packages: [./game/controllers]
+      run: ^TestWithMailboxRehome
+      pass: 2
   gm:
     summary: 经 GM 审计入口调用本模块正式事务或服务入口
     verify:

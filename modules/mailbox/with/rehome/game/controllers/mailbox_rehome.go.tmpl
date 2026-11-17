@@ -1,0 +1,48 @@
+package controllers
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	gamerehome "{{MODULE}}/game/modules/rehome"
+)
+
+// 这个文件是 mailbox 与 rehome 两个模块的联动：两个都装着时才有。
+//
+// 换服时的全服邮件（AudienceBroadcast，mail 服务的 LazyBroadcast；维护者 2026-11-14 D11 N3 A）：离开前按旧范围拉一次，
+// 到了新服按新范围拉。mail 服务按“最近一次 PullBroadcasts 给的画像”合并全服邮件，水位是一个全局邮件号：
+//
+//   - 离开时（rehome 的离开钩子：会话已断、标记之前准入的请求都执行完了、实体还没交出）让 mail 服务按记着的画像合并一次
+//     （Summary 按记着的画像补齐）。记着的画像是他在本服进入时给的，范围是本服：在本服期间发给本服、还没合并的邮件进邮箱，
+//     水位推进到此刻；
+//   - 到了新服，进入钩子（mailbox 与 enter 的联动）按会话里新的承载服重新拉：之后发给新服的照常合并；离开之后才发给旧服的、
+//     离开之前就发给新服的都在水位以下，不再合并——那一段时间他不属于那个范围。
+//
+// 拉不成（mail 服务不可用）就返回错误、中止这一次换服：宁可留在本服，也不带着没合并的邮件走（离开钩子的约定，
+// 见 game/modules/rehome/rehome_hooks.go）。可以重复：源服重启后接着做换服时会再调一次，已合并的不会再合并。
+// 没有配置 LazyBroadcast 的工程，或从没拉过（没有画像）的玩家，这一步只是问一次汇总。
+func init() {
+	gamerehome.OnLeaving("mailbox", func(ctx context.Context, registry *app.Registry, move gamerehome.Move) error {
+		mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+		if !ok || mailer == nil {
+			// 起来的 game 进程里它一定在：mailbox 的启动检查（mailbox.go 的 requireAtStart）没有 mail 服务就拒绝启动。
+			// 取不到只会是没装配 mail 的 Registry（别的模块只装换服那几样的场景），那里没有全服邮件可合并。
+			return nil
+		}
+		return mailboxPullBroadcastsOnLeave(ctx, mailer, move)
+	})
+}
+
+// mailboxBroadcastSummarizer 是离开钩子用到的 mail 客户端的那一个方法。
+type mailboxBroadcastSummarizer interface {
+	Summary(ctx context.Context, playerID int64) (svcmail.Summary, error)
+}
+
+func mailboxPullBroadcastsOnLeave(ctx context.Context, mailer mailboxBroadcastSummarizer, move gamerehome.Move) error {
+	if _, err := mailer.Summary(ctx, move.PlayerID); err != nil {
+		return fmt.Errorf("mailbox: merge player %d's server-wide mail of server %d before moving to server %d: %w", move.PlayerID, move.From, move.To, err)
+	}
+	return nil
+}

@@ -279,6 +279,18 @@ message SyncHeroDao {
 }
 
 // roost:source=go_def
+message SyncRealmDaoOwnerField {
+  int64 value = 1;
+}
+
+// roost:source=go_def
+message SyncRealmDao {
+  int64 entity_id = 1;
+  uint32 sync_format = 2047;
+  SyncRealmDaoOwnerField owner = 2;
+}
+
+// roost:source=go_def
 message SyncShortKeysDaoExperienceField {
   int64 value = 1;
 }

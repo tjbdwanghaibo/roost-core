@@ -126,7 +126,7 @@ decisions.md 的 Q1～Q17、#154、#37、CellWorld B / C / E、self_sync RetryLa
 v1.47.0 发版之后仍要做的：
 
 1. **R2**（D7、D8）：源服预加载核对 account 绑定并带版本守护删旧档；account 在途换服索引、按期限自动向前恢复或中止、`accountctl` 列出。
-2. **R3**（D11 = Q17 A + N3 A）：地形 DAO 按地图归属选库范围（demo 与 terrain 模块一致）；换服时建筑留在原地图，全服邮件离开前按旧范围拉一次。
+2. **R3**（D11 = Q17 A + N3 A）：地形 DAO 按地图归属选库范围（demo 与 terrain 模块一致）；换服时建筑留在原地图，全服邮件离开前按旧范围拉一次。**2026-11-17 已实施**（`dbscope=boot` + mailbox `with/rehome`，见 KNOWN-LIMITS 三、[证据](evidence/r3-terrain-scope-20261117/README.md)）。
 3. **R4 剩余**（D17）：“删空认领”运维入口（所有权代际守护）+ 累积计数指标。
 4. **R5**（D19 B）：模块清单声明配置结构、安装器接入 Mod 配置声明。
 5. **R6**（D22）：后台循环改成 `game/managers` 里的 manager。cellworldhost 现在特意不做成 manager（Node 要在实体心跳装好之后启动），实施时先解决启动先后。

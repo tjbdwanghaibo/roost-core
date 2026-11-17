@@ -97,6 +97,16 @@ func buildingProcess(t *testing.T, pack string, store *memoryChunkStore, edit fu
 	})
 }
 
+// buildingProcessIn 与 buildingProcess 相同（缺省规则、不限频），地图范围由 region 给出。
+func buildingProcessIn(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store *memoryChunkStore) *terrainProcess {
+	t.Helper()
+	return startTerrainProcessWith(t, pack, region, store, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	})
+}
+
 // hut、hall、tower 是 demo 配置表（configs/table/building.csv）的 1、2、3 号建筑：4 × 4、8 × 6、3 × 3。
 func hut(gx, gy int64) buildingsite.Placement { return buildingsite.Placement{ConfigID: 1, GX: gx, GY: gy} }
 func hall(gx, gy int64, level bool) buildingsite.Placement {
@@ -729,7 +739,7 @@ func TestBuildingRestartRealMongo(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close(context.Background()) })
 	physical := fmt.Sprintf("terrain_building_it_%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+	t.Cleanup(func() { dropTerrainDB(client, physical) })
 	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
 		Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
 	})
@@ -759,7 +769,7 @@ func TestBuildingRestartRealMongo(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.stop(t)
-	count, err := client.Database(physical).Collection(db.BuildingDaoCollection).CountDocuments(ctx, map[string]any{})
+	count, err := terrainDB(client, physical).Collection(db.BuildingDaoCollection).CountDocuments(ctx, map[string]any{})
 	if err != nil || count != 2 {
 		t.Fatalf("%d building documents in Mongo (%v), want 2", count, err)
 	}

@@ -79,7 +79,7 @@ func summarizeMergeChecklist(raw []byte) (string, error) {
 		return "", errors.New("the checklist names no logical database; does cmd/sidmerge import the project's db package?")
 	}
 	// 按 sid 分库的逻辑库里也可能有不按 sid 的 DAO（混合库，例如 game-demo 的 main：Player、World、地形格账本按 sid，
-	// 地形块、建筑、地形编辑账本与 Remote 托管的联盟仍是 global）：
+	// 地形块、建筑、地形编辑账本按地图归属（dbscope=boot：普通场景按 sid、分区场景共用），Remote 托管的联盟是 global）：
 	// sidmerge 对每个逻辑库都做 co-location 检查，所以每个逻辑库都列进“两侧同址”，按 sid 的再列进 migrate。
 	var colocated, scoped, addressed []string
 	for _, database := range list.Databases {

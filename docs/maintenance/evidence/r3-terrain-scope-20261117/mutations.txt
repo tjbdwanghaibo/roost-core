@@ -1,0 +1,77 @@
+### M0 修前：三种地形 DAO 的 DbScope 回到 global（改动前的库范围）
+$ env ROOST_TERRAIN_IT_MONGO_URI=mongodb://127.0.0.1:28117,127.0.0.1:28118,127.0.0.1:28119/?replicaSet=roost-it go test -count=1 -run TestTerrainDocumentsFollowTheMapOwnership|TestTerrainMapOwnershipRealMongo ./internal/service/game/
+--- FAIL: TestTerrainDocumentsFollowTheMapOwnership (0.04s)
+    --- FAIL: TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene (0.01s)
+        terrain_test.go:700: *db.TerrainChunkDao scope 0, want 1
+    --- FAIL: TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene_again (0.01s)
+        terrain_test.go:700: *db.TerrainChunkDao scope 0, want 1
+--- FAIL: TestTerrainMapOwnershipRealMongo (1.43s)
+    --- FAIL: TestTerrainMapOwnershipRealMongo/the_map_keeps_its_ledger_and_buildings_when_the_player_changes_servers (0.76s)
+        terrain_test.go:941: dataengine shutdown: transaction 42e119baa616904a0000000000000003: dataengine mongo: fatal projection version conflict: main/terrain_chunks/1070 (physical database terrain_ledger_move_it_1794877096442541000) expected=0 next=1 stored=3
+        terrain_test.go:952: dataengine fatal: transaction 42e119baa616904a0000000000000003: dataengine mongo: fatal projection version conflict: main/terrain_chunks/1070 (physical database terrain_ledger_move_it_1794877096442541000) expected=0 next=1 stored=3
+        terrain_test.go:1276: server 1's ledger {LastSeq:0 Buildings:0}, want LastSeq 7 and the hall
+FAIL
+FAIL	example.com/planet/internal/service/game	2.174s
+FAIL
+### M1 terrainmap.Open 不按 Region.Shared 选范围（缺省 sid）
+$ go test -count=1 -run TestTerrainDocumentsFollowTheMapOwnership ./internal/service/game/
+--- FAIL: TestTerrainDocumentsFollowTheMapOwnership (0.05s)
+    --- FAIL: TestTerrainDocumentsFollowTheMapOwnership/partitioned_scene (0.01s)
+        terrain_test.go:700: *db.TerrainChunkDao scope 1, want 0
+FAIL
+FAIL	example.com/planet/internal/service/game	0.794s
+FAIL
+### M2 terrainRegion：分区格不标 Shared
+$ go test -count=1 -run TestTerrainDocumentsFollowTheMapOwnership ./internal/service/game/
+--- FAIL: TestTerrainDocumentsFollowTheMapOwnership (0.04s)
+    --- FAIL: TestTerrainDocumentsFollowTheMapOwnership/partitioned_scene (0.01s)
+        terrain_test.go:700: *db.TerrainChunkDao scope 1, want 0
+FAIL
+FAIL	example.com/planet/internal/service/game	0.754s
+FAIL
+### M3 DatabaseScope 恒为 global（普通场景也共用）
+$ env ROOST_TERRAIN_IT_MONGO_URI=mongodb://127.0.0.1:28117,127.0.0.1:28118,127.0.0.1:28119/?replicaSet=roost-it go test -count=1 -run TestTerrainDocumentsFollowTheMapOwnership|TestTerrainMapOwnershipRealMongo ./internal/service/game/
+--- FAIL: TestTerrainDocumentsFollowTheMapOwnership (0.03s)
+    --- FAIL: TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene (0.02s)
+        terrain_test.go:700: *db.TerrainChunkDao scope 0, want 1
+    --- FAIL: TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene_again (0.01s)
+        terrain_test.go:700: *db.TerrainChunkDao scope 0, want 1
+--- FAIL: TestTerrainMapOwnershipRealMongo (1.42s)
+    --- FAIL: TestTerrainMapOwnershipRealMongo/the_map_keeps_its_ledger_and_buildings_when_the_player_changes_servers (0.76s)
+        terrain_test.go:941: dataengine shutdown: transaction 48b583df3106faf70000000000000003: dataengine mongo: fatal projection version conflict: main/terrain_chunks/1070 (physical database terrain_ledger_move_it_1794877106616327000) expected=0 next=1 stored=3
+        terrain_test.go:952: dataengine fatal: transaction 48b583df3106faf70000000000000003: dataengine mongo: fatal projection version conflict: main/terrain_chunks/1070 (physical database terrain_ledger_move_it_1794877106616327000) expected=0 next=1 stored=3
+        terrain_test.go:1276: server 1's ledger {LastSeq:0 Buildings:0}, want LastSeq 7 and the hall
+FAIL
+FAIL	example.com/planet/internal/service/game	2.171s
+FAIL
+### M4 离开钩子不合并（不调 Summary）
+$ go test -count=1 -run TestWithMailboxRehome ./game/controllers/
+--- FAIL: TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving (0.00s)
+    mailbox_rehome_test.go:123: sent to the old server while he was there: in the mailbox = false, want true
+    mailbox_rehome_test.go:123: sent to the new server before he left: in the mailbox = true, want false
+--- FAIL: TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails (0.00s)
+    mailbox_rehome_test.go:147: err = <nil> after 0 calls for player 0; want the mail service's error after one call for 94302
+FAIL
+FAIL	example.com/planet/game/controllers	0.406s
+FAIL
+### M5 离开钩子没有登记
+$ go test -count=1 -run TestWithMailboxRehome ./game/controllers/
+--- FAIL: TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails (0.00s)
+    mailbox_rehome_test.go:152: registering the mailbox leave hook again: <nil>; want the duplicate-registration panic (the hook must already be registered)
+FAIL
+FAIL	example.com/planet/game/controllers	0.411s
+FAIL
+### M6 生成器：dbscope=boot 的 DbScope 写成常量 sid（gen.go databaseScopeExpr）
+$ go test -count=1 -run TestGoldenGeneratedOutput ./internal/dao
+--- FAIL: TestGoldenGeneratedOutput (0.06s)
+    golden_test.go:62: <roost-core>/codegen/internal/dao/testdata/golden/gen_realm_dao.go differs from generated output; run with -update if the template change is intentional
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/dao	1.210s
+FAIL
+### M7 运行档：golden 里 RealmDao.DbScope 恒为 sid（scripts/dao-golden-runtime.sh）
+$ ROOST_CORE_REPLACE=<checkout> sh scripts/dao-golden-runtime.sh
+--- FAIL: TestBootScopedDaoFollowsTheProcessChoice (0.00s)
+    boot_scope_test.go:45: after SetRealmDaoDbScope(global): scope 1
+FAIL
+FAIL	daogoldenruntime/gen	0.670s
+FAIL

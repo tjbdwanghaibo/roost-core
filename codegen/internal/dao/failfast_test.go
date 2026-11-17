@@ -382,7 +382,7 @@ func TestGenerateDaoRefusesUnknownDatabaseScope(t *testing.T) {
 	if _, err := generateDao(dao, defs, "testdata", outFile, true); err == nil || !strings.Contains(err.Error(), `unsupported dbscope "region"`) {
 		t.Fatalf("error = %v", err)
 	}
-	for _, ok := range []string{"", "global", "sid"} {
+	for _, ok := range []string{"", "global", "sid", "boot"} {
 		dao.DbScope = ok
 		if _, err := generateDao(dao, defs, "testdata", filepath.Join(t.TempDir(), "gen_dao.go"), true); err != nil {
 			t.Fatalf("dbscope %q rejected: %v", ok, err)

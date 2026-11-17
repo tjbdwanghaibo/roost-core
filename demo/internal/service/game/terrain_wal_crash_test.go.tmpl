@@ -74,7 +74,7 @@ func TestTerrainWALCrashRealMongo(t *testing.T) {
 	for _, mode := range []string{"brush", "building"} {
 		t.Run(mode, func(t *testing.T) {
 			physical := fmt.Sprintf("terrain_wal_crash_%s_%d", mode, time.Now().UnixNano())
-			t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+			t.Cleanup(func() { dropTerrainDB(client, physical) })
 			dir := t.TempDir()
 			pack := buildingPack(t, dir, 1)
 			read, write, err := os.Pipe()
@@ -184,7 +184,7 @@ func TestTerrainWALCrashRealMongo(t *testing.T) {
 				LastSeq   int64 `bson:"1"`
 				Buildings int64 `bson:"3"`
 			}
-			if err := client.Database(physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &ledger); err != nil {
+			if err := terrainDB(client, physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &ledger); err != nil {
 				t.Fatal(err)
 			}
 			wantBuildings := int64(0)
@@ -214,7 +214,7 @@ func terrainCrashDatabases(t *testing.T, physical string) *coredata.DatabaseMap 
 func assertTerrainCrashMongoEmpty(t *testing.T, ctx context.Context, client fmongo.IMongo, physical string) {
 	t.Helper()
 	for _, name := range []string{db.TerrainChunkDaoCollection, db.TerrainEditorDaoCollection, db.BuildingDaoCollection} {
-		count, err := client.Database(physical).Collection(name).CountDocuments(ctx, map[string]any{})
+		count, err := terrainDB(client, physical).Collection(name).CountDocuments(ctx, map[string]any{})
 		if err != nil || count != 0 {
 			t.Fatalf("%s has %d documents (%v), want WAL-only with zero projected documents", name, count, err)
 		}

@@ -67,7 +67,8 @@ func collectDatabases(daos []DaoDef) ([]databaseDecl, error) {
 			decl = &databaseDecl{Const: databaseConstName(dao.Db), Name: dao.Db}
 			byName[dao.Db] = decl
 		}
-		decl.ServerScoped = decl.ServerScoped || dao.DbScope == "sid"
+		// dbscope=boot 的 DAO 可能在某些进程按服分库：库名长度按带 _<sid> 的算。
+		decl.ServerScoped = decl.ServerScoped || dao.DbScope == "sid" || dao.DbScope == "boot"
 		decl.Daos = append(decl.Daos, dao.Name)
 	}
 	out := make([]databaseDecl, 0, len(byName))

@@ -100,9 +100,33 @@ const recordBatch = 256
 // Region 是本进程在地图上的范围（世界坐标，半开矩形）。Own 是本进程写的块所在的区域（分区场景里是本格），
 // 必须对齐块边界（原点与边长都是 terrain.ChunkSize 的整数倍：块不跨格）；Load 是要装入视图的区域（Own 外扩
 // Ghost 带），不必对齐，与它相交的块都装。两者都会被裁到地图范围内。
+//
+// Shared 表示这张图跨多个 game 服（分区场景：格分给不同的服，邻格的 Ghost 带按库里的记录装入）。它决定本进程地形文档
+// （块、建筑、玩家编辑账本）的库范围（维护者 2026-11-14 D11 Q17 A，按地图归属，见 DatabaseScope）。
 type Region struct {
-	Own  spatial.Rect
-	Load spatial.Rect
+	Own    spatial.Rect
+	Load   spatial.Rect
+	Shared bool
+}
+
+// DatabaseScope 是一张图的地形文档（TerrainChunkDao、BuildingDao、TerrainEditorDao，都是 dbscope=boot）的库范围，按地图
+// 归属（维护者 2026-11-14 D11 Q17 A）：不分区的普通场景是本服自己的图，按服分库（sid，物理库 <库>_<sid>，与 terrain
+// 模块的 terrain_chunk / terrain_building 相同）——几个服各开一张同样坐标的图，块与建筑的实体 ID 相同，按服分库才互不
+// 相干，玩家换服时建筑与账本也就留在原服（N3 A）；跨服共享的分区图各服共用（global）：邻格的块要从库里读，格到服的映射
+// 可以改，块不能只在某一个服的库里。分区场景里玩家的格账本（TerrainCellEditorDao）另按服分库，不在这里选。
+func DatabaseScope(shared bool) coredata.DatabaseScope {
+	if shared {
+		return coredata.DatabaseGlobal
+	}
+	return coredata.DatabaseServer
+}
+
+// useDatabaseScope 定下本进程地形文档的库范围（生成的 Set<Dao>DbScope）。Open 在返回 Map 之前调用：一个进程一张 Map，
+// 这时本进程还没有读写过这三种文档（装入、编辑都在 Open 之后）。
+func useDatabaseScope(scope coredata.DatabaseScope) {
+	db.SetTerrainChunkDaoDbScope(scope)
+	db.SetBuildingDaoDbScope(scope)
+	db.SetTerrainEditorDaoDbScope(scope)
 }
 
 // Chunks 是 TerrainChunk 的 lifecycle（生成的 *lifecycle.TerrainChunkLifecycle）。
@@ -260,7 +284,8 @@ type Map struct {
 	lotsCommitted atomic.Pointer[func(terrain.ChunkKey)]
 }
 
-// Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）。
+// Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）；按 region.Shared
+// 定下本进程地形文档的库范围（DatabaseScope）。
 func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunks, editors Editors, editor Editor) (*Map, error) {
 	if regionOf == nil || chunks == nil || editors == nil || editor == nil {
 		return nil, errors.New("terrain: region, chunk and editor lifecycles and edit sender are required")
@@ -278,6 +303,7 @@ func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunk
 		_ = pack.Close()
 		return nil, err
 	}
+	useDatabaseScope(DatabaseScope(region.Shared))
 	return &Map{
 		pack: pack, view: terrain.NewView(pack), meta: meta, region: region,
 		chunks: chunks, editors: editors, editor: editor, unloadable: map[terrain.ChunkKey]error{}, ownerBase: map[terrain.ChunkKey]struct{}{},
@@ -292,7 +318,7 @@ func clipRegion(r Region, meta terrain.Meta) (Region, error) {
 		return Region{}, fmt.Errorf("terrain: the area this process writes %v is not aligned to chunks of %d: a chunk would straddle two cells", own, terrain.ChunkSize)
 	}
 	bounds := meta.Bounds()
-	return Region{Own: intersect(own, bounds), Load: intersect(spatial.NormalizeRect(r.Load), bounds)}, nil
+	return Region{Own: intersect(own, bounds), Load: intersect(spatial.NormalizeRect(r.Load), bounds), Shared: r.Shared}, nil
 }
 
 func intersect(a, b spatial.Rect) spatial.Rect {

@@ -14,7 +14,12 @@ package dbdef
 // 玩家现有的建筑数（Buildings），放置 / 拆除在同一笔事务里加减，按它限制每个玩家的建筑数。schema 2 加了 Buildings
 // （store 键 3）；不迁移，旧 schema 的记录拒绝（升级须清空 terrain_editors）。
 //
-//roost:dao coll=terrain_editors db=main schema=2
+// 库范围与地形块相同（dbscope=boot，按地图归属，见 TerrainChunkDao）：账本记的是“这个玩家在这张图上应用过哪些编辑、站着
+// 几座建筑”，归地图。普通场景按服分库：玩家换服（rehome）时账本与建筑一起留在原服的库里，不随玩家交出、不搬（D11 N3 A）；
+// 到了新服用新服库里他在那张图上的账本（第一次编辑时建出），建筑数也按那张图算；换回原服时原来的账本仍在。分区场景
+// 各服共用（只由玩家的 Base 进程写；开着分区场景的服不受理换服）。
+//
+//roost:dao coll=terrain_editors db=main dbscope=boot schema=2
 type TerrainEditorDao struct {
 	// LastSeq 是这个玩家在本进程已应用的最大编辑序号；0 表示还没有应用过任何编辑。序号范围 1～MaxInt64。
 	LastSeq int64 `dao:"nosync" store:"1"`

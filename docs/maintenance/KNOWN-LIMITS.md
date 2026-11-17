@@ -552,7 +552,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **没装 enter 的工程要自己接两处**：加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive`，否则换走的玩家仍能进旧服、目标服不做到达。工程改写了进入端点（game-demo 就改写了）时要自己调 `gamelogin.RunEntering`。
 - **费用不在模块里**：模块不依赖货币，没有实现费用；规则文件里写了做法。
 
-- **game-demo 换服前的检查**：队伍经双向事务内准入阻止成员换服，本服开着分区场景时也拒绝；坐在本进程 lockstep 对战座位上的玩家拒绝换服，离开中的玩家不再被撮合；旧 lockstep 匹配票据与副本 run 不拦；新 matchmaking 模块的非空 Phase 会拒绝换服（理由见 `rehome_checks.go`）。联盟成员可以换服，HomeSID 按入盟批次与旧 SID 条件刷新、进入时对账（尽力通知，不是 account 的线性一致副本）。地形编辑账本 `TerrainEditor` 随玩家一起 `HandOffEntity`。
+- **game-demo 换服前的检查**：队伍经双向事务内准入阻止成员换服，本服开着分区场景时也拒绝；坐在本进程 lockstep 对战座位上的玩家拒绝换服，离开中的玩家不再被撮合；旧 lockstep 匹配票据与副本 run 不拦；新 matchmaking 模块的非空 Phase 会拒绝换服（理由见 `rehome_checks.go`）。联盟成员可以换服，HomeSID 按入盟批次与旧 SID 条件刷新、进入时对账（尽力通知，不是 account 的线性一致副本）。地形块、建筑与地形编辑账本 `TerrainEditor` 归地图（普通场景按服分库），换服时留在原服，只交出 Player；全服邮件离开前按旧范围合并一次（mailbox 与 rehome 的联动），见[地形的库范围按地图归属](#地形的库范围按地图归属d11-q17-a--n3-a)。
 
 #### 单个角色换服（account 一侧）
 
@@ -572,6 +572,13 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 ### 地形与无缝世界
 
 - **地形未做与只到算法层的部分**（逐项见 [TERRAIN-STATUS](TERRAIN-STATUS.md)）：T10 可选物理（PhysX 高度场与每格物理世界）没有做，按是否启用地形物理单独验收；C# 岸线与重建调度只到算法层，Unity 表现未做。默认编辑配额与桶容量 270、terrainpack 缺省 HeightBase −100 米，不重写既有资源；历史 270 档临时数据不代替容量验收。
+
+#### 地形的库范围按地图归属（D11 Q17 A + N3 A）
+
+- **按地图归属选库**：game-demo 的地形块（`terrain_chunks`）、建筑（`buildings`）与玩家编辑账本（`terrain_editors`）是 `dbscope=boot`，`terrainmap.Open` 按 `Region.Shared` 选：不分区的普通场景是本服的图，按服分库（`<库>_<sid>`，与 terrain 模块的 `terrain_chunk` / `terrain_building` 相同）；分区场景的图跨服共享，各服共用。分区场景里玩家在格上的账本（`terrain_cell_editors`）始终按服分库。范围在进程第一次读写之前选定、运行中不改；同一份部署从普通场景改成分区（或反过来）等于搬数据，不迁移旧文档。
+- **换服时地形留在原服**：只交出、搬走 Player。建筑仍属于他、站在原地图上，只有回到原服才能拆；demo 的账本（序号窗口与建筑数）是“他在这张图上的”，留在原服，到了新服第一次编辑时建出新的一份，建筑上限按图算，换回来时原来的都在。客户端换服之后按会话开始的规则先查 `last_seq` 再续号；旧服上没确认的编辑拿到新服重发会在新服执行（新服的账本不知道它），客户端不要这样做。terrain 模块的取舍不同：账本 `TerrainLedger` 在 Player 档上、随他搬，序号接着用、站立建筑数仍计入原服那几座（上限按玩家算、不分服）。
+- **全服邮件**：mailbox 与 rehome 的联动在离开钩子里按记着的画像（他在本服进入时给的，范围是本服）合并一次，到了新服由进入钩子按新的承载服拉；离开之后才发给旧服的、离开之前就发给新服的都不再合并。合并不成中止这一次换服。
+- **合服时普通场景的地形**：两个服的普通场景若是同一张图（同样的块坐标与锚点），`sidmerge migrate` 把 A 的 `<库>_<A>` 拷进 B 时块与建筑的 `_id` 相同、内容不同，按 sidmerge 的规则整体停止、逐条报告冲突，由业务先决定 A 的图怎么处理（丢弃、换图号或另开一张图）再重跑；terrain 模块按服分库的块与建筑同样如此。合服演练（`scripts/test-demo-merge.sh`）没有开地形。
 
 #### 地形副本订阅与地图参数（RV-20261110-01～04 修复后）
 
@@ -798,7 +805,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
 
 - **向前恢复只由登录触发**：源服受理后重启、玩家又不再来登录源服的，换服停在在途；account 没有“列出在途换服”的索引，要用 `accountctl transfer-role commit|abort` 人工了结。`rehome.Binding`（saga 准入用）不触发恢复。**已决定（D8 A，2026-11-14），v1.47.0 之后实施**：account 加在途换服索引，按期限自动向前恢复或中止，`accountctl` 能列出，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R2）。
-- **建筑与全服邮件归属（N3）**：名下建筑与全服邮件换服后的归属现在没有处理（地形编辑账本已随玩家交出）。**已决定（D11 N3 A，2026-11-14），v1.47.0 之后实施**：建筑留在原地图（归地图所在的服，跟 Q17），全服邮件离开前按旧范围拉一次、到新服按新范围拉，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R3）。
 - **committed 崩溃窗口（Q4）**：见[起服预加载遗留](#起服预加载与按服分库遗留)。P1 在嵌入式玩家 TCP 上覆盖六个 SIGKILL 点各两次与 checkpoint 负对照（不含独立 Gate），证明 account / 玩家入口唯一归属、资产与 WAL 恢复；不证明旧副本 / 定时器写已全部隔离。committed 明列 `KNOWN_LIMIT`，需人工恢复；脚本退出 0 不表示 Q4 关闭。D7 的实施（已决定，v1.47.0 之后）由这个点验收关闭。
 
 #### 单个角色换服（account 一侧）：遗留
@@ -809,7 +815,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 地形 / 无缝世界：遗留
 
-- **game-demo 自己的地形 DAO 仍是 global**：`terrain_chunks`、`buildings`、`terrain_editors`；terrain 模块的 `terrain_building` / `terrain_chunk` 已改 sid。**已决定（D11 Q17 A，2026-11-14），v1.47.0 之后实施**：按地图归属选库范围——普通场景按 sid，分区场景（跨服共享地图）保持 global，demo 与 terrain 模块一致，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R3）。
 - **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
 - **登录潮里 account CreateRole 超时，尚未确认**（2026-11-15）：在 chat 抢写风暴条件下可复现（2 轮中 1 轮，53 次，同一秒内），无风暴的 21 轮都没有；“Redis 被拖慢到 3 秒”的推测已排除（Redis CPU ≤ 0.3 核，PING 最长约 0.18s，同批机器人前一步 Login 未超时）；account 的 Redis 连接池（缺省 10，一次 CreateRole 十几次往返）、NATS 排队、整机 CPU 未排除，要给 account 加 RPC 处理时长与连接池等待的指标再复现。风暴条件已由 chat 写排队与公告合并去掉。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
@@ -867,6 +872,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-17：地形 DAO 按地图归属选库、换服时建筑与全服邮件的归属**（维护者 2026-11-14 D11 = Q17 A + N3 A，R3；原“二”里“game-demo 自己的地形 DAO 仍是 global”“建筑与全服邮件归属（N3）”两条删除）：生成器加 `dbscope=boot`（起服选定，缺省 sid），demo 的 `terrain_chunks` / `buildings` / `terrain_editors` 按 `Region.Shared` 选（普通场景 sid、分区场景 global），换服只交出 Player；mailbox 加 `with/rehome` 离开前按旧范围合并全服邮件。修前（三者 global）两个服写同一份块文档，真实 Mongo 上投影版本冲突致命。边界见[地形的库范围按地图归属](#地形的库范围按地图归属d11-q17-a--n3-a)，[证据](evidence/r3-terrain-scope-20261117/README.md)。
 - **2026-11-17：game-demo 自有组件迁到组件包写法**（维护者 2026-11-17 决定做；原“一”里“game-demo 自有组件仍是实体包写法”一条删除，那条把组件说成 monster、terrain、world、map、dungeonledger 五个，实际是十个）：mapview、dungeonledger、stats、activityphase、monsterbody、monsteractor、terrainsurface、terrainledger、terraincellledger、buildingsite 的类型号（2004、2103、2002、2102、2100、2101、2011、2012、2014、2013，不变）、`//roost:component` 与工厂登记挪进 `demo/game/components/<包>/`，实体字段写 `comp:"<包>.CompType<X>"`，实体包里的组件文件、别名 `XComponent` 与 `I<X>Entity` 删除，handler 与 game/terrainmap 改收 `view.I<X>Entity` / `view.PlayerEntity`（要组件包类型时经新加的 `terrainsurface.Of` / `buildingsite.Of`）；框架要的 `MapBasic` / `MoveComponent` 留在实体包的 `player/map.go`、`monster/actor.go`。这些组件上现在可以写 `//roost:listen`（本次没加监听，行为不变）。只有 World 的定时器组件（`timer_component.go`，2006）按“实体包只留接线”作为实体定时器宿主留在实体包。守卫 `TestDemoEntityPackagesHoldOnlyComponentWiring`；验证见 [demo-components-20261117](evidence/demo-components-20261117/README.md)。
 - **2026-11-17：RV-20261116-02 自定义 Gate / 玩家服务名握手全被拒**（P2，v1.51.0 起）：wiring/gate 把 gateway 按协议角色 gate / game 发起的单实例身份核对原样交给 App，而 App 按实际服务名持锁（`<key_prefix>:<服务名>:<sid>`），`roost add gate edge` 或玩家服务不叫 game 时查不到持锁实例，`ErrBindingStale`、客户端 EOF，doctor 与 `--check-config` 都放行。改为 `gatewiring.Options.GateService / GameService`（缺省 gate / game）：身份核对、发现登记与 FixedGameResolver 的查找都用实际服务名，incarnation 照常核对；本端锁键与接线名不符时 Provide 拒绝启动；生成器在两端接线里写入实际名字。真实 NATS 四组完整握手修前 3/4 红、修后绿，生成工程真实进程演练（`DRILL_GATE_NAME=edge`）修前 EOF、修后通过，变异见[证据](evidence/gate-identity-20261117/README.md)。
 - **2026-11-17：RV-20261116-01 room 连接登记不随提交可靠、按代际更新**（P2，v1.49.0 起）：登记原来由控制器收到成功回包后做，Track 无代际比较、Leave 的 Forget 无条件撤同玩家全部登记——旧 Join 回包迟到覆盖新 Reconnect、旧 Leave 回包迟到撤掉新 Join、同步等待取消而事务照样提交时漏登记，三条都让关了连接的席位一直在线。改为 Join / Reconnect / Leave / Close 的 handler 经 `nest.AfterCommit` 在提交后更新，登记按（房间, 玩家）代际单调、Leave 只撤它离开的那一代、撤掉留墓碑；三条真实 Nest 回归修前 3/3 红、修后绿，变异见[证据](evidence/room-presence-20261117/README.md)。

@@ -72,14 +72,36 @@ var errInjectedRejection = errors.New("injected commit rejection")
 type terrainCommitter struct {
 	reject  atomic.Bool
 	commits atomic.Int64
+
+	// keys 是被接受的提交里每条改动的文档键（库、范围、集合）：WAL 与投影按它选库。
+	mu   sync.Mutex
+	keys []coredata.DocumentKey
 }
 
-func (c *terrainCommitter) Commit(context.Context, nest.CommitRecord) error {
+func (c *terrainCommitter) Commit(_ context.Context, record nest.CommitRecord) error {
 	if c.reject.CompareAndSwap(true, false) {
 		return errInjectedRejection
 	}
 	c.commits.Add(1)
+	c.mu.Lock()
+	for _, mutation := range record.Mutations {
+		c.keys = append(c.keys, mutation.Key)
+	}
+	c.mu.Unlock()
 	return nil
+}
+
+// scopesByCollection 是被接受的改动按集合归拢的库范围（每个集合出现过的范围，去重）。
+func (c *terrainCommitter) scopesByCollection() map[string][]coredata.DatabaseScope {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string][]coredata.DatabaseScope{}
+	for _, key := range c.keys {
+		if !slices.Contains(out[key.Resource], key.Scope) {
+			out[key.Resource] = append(out[key.Resource], key.Scope)
+		}
+	}
+	return out
 }
 
 // memoryChunkStore 是 coredata.Store 的替身：只答 terrainmap.ReadRecords 发的 `_id $in` 查询。docs 里也有玩家编辑
@@ -87,6 +109,8 @@ func (c *terrainCommitter) Commit(context.Context, nest.CommitRecord) error {
 type memoryChunkStore struct {
 	mu   sync.Mutex
 	docs map[int64]coredata.RawDocument
+	// scopes 是每次查询带的库范围（装入时按块的 DAO 选库）。
+	scopes []coredata.DatabaseScope
 }
 
 func (s *memoryChunkStore) ReadConsistent(ctx context.Context, read func(context.Context) error) error {
@@ -109,6 +133,7 @@ func (s *memoryChunkStore) StreamLoad(_ context.Context, spec coredata.LoadSpec,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.scopes = append(s.scopes, spec.Scope)
 	for _, id := range in {
 		if doc, ok := s.docs[id]; ok && doc.Key.Resource == spec.Resource {
 			if err := consume(doc); err != nil {
@@ -648,6 +673,61 @@ func TestTerrainRegionFollowsThePartition(t *testing.T) {
 	}
 }
 
+// 地形文档的库范围按地图归属（维护者 2026-11-14 D11 Q17 A）：不分区的普通场景是本服的图，块、建筑与玩家编辑账本按服
+// 分库（sid，与 terrain 模块的 terrain_chunk / terrain_building 相同）；分区场景的图跨服共享，各服共用（global）。核对的是
+// 真正决定写到哪个库的东西——被接受的提交里每条改动的文档键（WAL 与投影按它选库）与装入时查库的范围，范围由
+// terrainRegion（startTerrain 用的同一个函数）经 terrainmap.Open 定下。三张图在同一个测试二进制里依次打开（普通 → 分区 →
+// 普通），后开的图重新选，不沿用上一张的范围。
+func TestTerrainDocumentsFollowTheMapOwnership(t *testing.T) {
+	partition := settings.ScenePartition{Enabled: true, CellSize: terrain.ChunkSize, Cols: 2, Rows: 2, Owners: []string{"1001", "1002", "1003", "1004"}, GhostBand: 500, Hysteresis: 50}
+	ordinary := settings.ScenePartition{}
+	for i, c := range []struct {
+		name      string
+		partition settings.ScenePartition
+		want      coredata.DatabaseScope
+	}{
+		{"ordinary scene", ordinary, coredata.DatabaseServer},
+		{"partitioned scene", partition, coredata.DatabaseGlobal},
+		{"ordinary scene again", ordinary, coredata.DatabaseServer},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := &memoryChunkStore{}
+			p := buildingProcessIn(t, buildingPack(t, t.TempDir(), 1), func(meta terrain.Meta) (terrainmap.Region, error) {
+				return terrainRegion(meta, c.partition, 1001)
+			}, store)
+			for _, dao := range []interface{ DbScope() coredata.DatabaseScope }{db.NewTerrainChunkDao(), db.NewBuildingDao(), db.NewTerrainEditorDao()} {
+				if got := dao.DbScope(); got != c.want {
+					t.Fatalf("%T scope %d, want %d", dao, got, c.want)
+				}
+			}
+			if got := db.NewTerrainCellEditorDao().DbScope(); got != coredata.DatabaseServer {
+				t.Fatalf("the cell ledger is always one database per server; scope %d", got)
+			}
+			if len(store.scopes) == 0 || slices.ContainsFunc(store.scopes, func(scope coredata.DatabaseScope) bool { return scope != c.want }) {
+				t.Fatalf("loading the chunks queried scopes %v, want only %d", store.scopes, c.want)
+			}
+			seq := uint64(i + 1)
+			if r, err := p.m.Brush(p.ctx, brushPlayer, seq, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: 9}); err != nil || len(r.Chunks) == 0 {
+				t.Fatalf("brush: %+v, %v", r, err)
+			}
+			collections := []string{db.TerrainChunkDaoCollection, db.TerrainEditorDaoCollection}
+			if !c.partition.Enabled {
+				// 普通场景的进程直接放建筑；分区场景的放置经玩家的 Base 转发给格（relay），这里不走那条路。
+				if _, err := p.m.Place(p.ctx, brushPlayer, seq+10, hut(10, 10)); err != nil {
+					t.Fatalf("place: %v", err)
+				}
+				collections = append(collections, db.BuildingDaoCollection)
+			}
+			scopes := p.committer.scopesByCollection()
+			for _, collection := range collections {
+				if got := scopes[collection]; !slices.Equal(got, []coredata.DatabaseScope{c.want}) {
+					t.Fatalf("%s was committed with scopes %v, want [%d] (all: %v)", collection, got, c.want, scopes)
+				}
+			}
+		})
+	}
+}
+
 // gm.terrain.probe（terrainProbe）：报告的版本与摘要跟着视图走（编辑之后变、与按定义重算的摘要相同），点的高度是视图
 // 里的原始值；不归本进程写、没装着的块与点如实报告；超过上限、地图外的块拒绝。
 func TestTerrainProbeReportsTheView(t *testing.T) {
@@ -746,8 +826,29 @@ func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IM
 	return startRealTerrainProcessWithProjection(t, ctx, client, databases, physical, walDir, pack, engine.ProjectorOptions{})
 }
 
+// realTerrainSid 是真实 Mongo 用例里进程的 sid。不分区的地形图归本服（terrainmap.DatabaseScope），块、建筑与玩家编辑
+// 账本都在 <物理库>_<sid> 里（terrainDB）。
+const realTerrainSid int32 = 7
+
+// terrainDB 是 sid 为 realTerrainSid、不分区的进程的地形文档所在的库。
+func terrainDB(client fmongo.IMongo, physical string) fmongo.IDatabase {
+	return client.DatabaseForSid(physical, realTerrainSid)
+}
+
+// dropTerrainDB 删掉用例建的库：共用库（DataEngine 的基础设施集合）与 realTerrainSid 的按服库。
+func dropTerrainDB(client fmongo.IMongo, physical string) {
+	_ = client.Database(physical).Drop(context.Background())
+	_ = terrainDB(client, physical).Drop(context.Background())
+}
+
 // 崩溃夹具用 ManualReplay 固定“WAL 已确认、投影未开始”的窗口；通常仍使用后台投影。
 func startRealTerrainProcessWithProjection(t *testing.T, ctx context.Context, client fmongo.IMongo, databases *coredata.DatabaseMap, physical, walDir, pack string, projection engine.ProjectorOptions) *realTerrainProcess {
+	t.Helper()
+	return startRealTerrainProcessAt(t, ctx, client, databases, physical, walDir, pack, projection, realTerrainSid, wholeMap)
+}
+
+// startRealTerrainProcessAt 起一个 sid 为 sid、地图范围由 region 给出的真实进程（DataEngine 的 WAL → 投影 → 冷加载）。
+func startRealTerrainProcessAt(t *testing.T, ctx context.Context, client fmongo.IMongo, databases *coredata.DatabaseMap, physical, walDir, pack string, projection engine.ProjectorOptions, sid int32, region func(terrain.Meta) (terrainmap.Region, error)) *realTerrainProcess {
 	t.Helper()
 	useDemoConfig(t)
 	handler.RegisterTerrainEditNestHandlers()
@@ -756,7 +857,7 @@ func startRealTerrainProcessWithProjection(t *testing.T, ctx context.Context, cl
 	terrain_editor.RegisterEntity()
 	building.RegisterEntity()
 	p := &realTerrainProcess{fatal: make(chan error, 1)}
-	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: physical, Databases: databases})
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: physical, Databases: databases, ServerID: sid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -810,7 +911,7 @@ func startRealTerrainProcessWithProjection(t *testing.T, ctx context.Context, cl
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.m, err = terrainmap.Open(pack, wholeMap, chunks, editors, syncsender.NewTerrainEditSender(p.engine)); err != nil {
+	if p.m, err = terrainmap.Open(pack, region, chunks, editors, syncsender.NewTerrainEditSender(p.engine)); err != nil {
 		t.Fatal(err)
 	}
 	p.m.EnableBuildings(buildings, syncsender.NewBuildingSender(p.engine))
@@ -870,7 +971,7 @@ func TestTerrainRestartRealMongo(t *testing.T) {
 	// 清理登记在进程之前：t.Cleanup 后进先出，库在两个进程都停下（投影排空）之后才删。
 	t.Cleanup(func() { _ = client.Close(context.Background()) })
 	physical := fmt.Sprintf("terrain_it_%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+	t.Cleanup(func() { dropTerrainDB(client, physical) })
 	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
 		Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
 	})
@@ -895,7 +996,7 @@ func TestTerrainRestartRealMongo(t *testing.T) {
 	first.stop(t)
 
 	// 库里就是改过的那 5 块（(0,0) 两次、(2,1) 一次、另外三块各一次），没有别的块。
-	count, err := client.Database(physical).Collection(db.TerrainChunkDaoCollection).CountDocuments(ctx, map[string]any{})
+	count, err := terrainDB(client, physical).Collection(db.TerrainChunkDaoCollection).CountDocuments(ctx, map[string]any{})
 	if err != nil || count != 5 {
 		t.Fatalf("%d chunk documents in Mongo (%v), want 5", count, err)
 	}
@@ -927,7 +1028,7 @@ func TestTerrainRestartRealMongo(t *testing.T) {
 		Version int64   `bson:"2"`
 		Heights []int32 `bson:"3"`
 	}
-	if err := client.Database(physical).Collection(db.TerrainChunkDaoCollection).FindOne(ctx, map[string]any{"_id": mustChunkID(t, terrain.ChunkKey{})}, &stored); err != nil {
+	if err := terrainDB(client, physical).Collection(db.TerrainChunkDaoCollection).FindOne(ctx, map[string]any{"_id": mustChunkID(t, terrain.ChunkKey{})}, &stored); err != nil {
 		t.Fatal(err)
 	}
 	if stored.Version != 3 || len(stored.Heights) != terrain.ChunkPoints || stored.Heights[1*terrain.ChunkSamples+1] != 9 {
@@ -943,7 +1044,7 @@ func TestTerrainRestartRealMongo(t *testing.T) {
 	}
 	third.stop(t)
 	stored.Version, stored.Heights = -1, nil
-	if err := client.Database(physical).Collection(db.TerrainChunkDaoCollection).FindOne(ctx, map[string]any{"_id": mustChunkID(t, terrain.ChunkKey{})}, &stored); err != nil {
+	if err := terrainDB(client, physical).Collection(db.TerrainChunkDaoCollection).FindOne(ctx, map[string]any{"_id": mustChunkID(t, terrain.ChunkKey{})}, &stored); err != nil {
 		t.Fatal(err)
 	}
 	if stored.Version != 0 || len(stored.Heights) != 0 {
@@ -972,7 +1073,7 @@ func TestTerrainEditLedgerRealMongo(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close(context.Background()) })
 	physical := fmt.Sprintf("terrain_ledger_it_%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+	t.Cleanup(func() { dropTerrainDB(client, physical) })
 	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
 		Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
 	})
@@ -1010,12 +1111,12 @@ func TestTerrainEditLedgerRealMongo(t *testing.T) {
 	readLedger := func() storedLedger {
 		t.Helper()
 		var stored storedLedger
-		if err := client.Database(physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &stored); err != nil {
+		if err := terrainDB(client, physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &stored); err != nil {
 			t.Fatal(err)
 		}
 		return stored
 	}
-	count, err := client.Database(physical).Collection(db.TerrainEditorDaoCollection).CountDocuments(ctx, map[string]any{})
+	count, err := terrainDB(client, physical).Collection(db.TerrainEditorDaoCollection).CountDocuments(ctx, map[string]any{})
 	if err != nil || count != 1 {
 		t.Fatalf("%d ledger documents in Mongo (%v), want 1", count, err)
 	}
@@ -1049,79 +1150,185 @@ func TestTerrainEditLedgerRealMongo(t *testing.T) {
 	if got := readLedger(); got != (storedLedger{LastSeq: 71, Window: -1}) {
 		t.Fatalf("stored ledger after sequence 71: %+v", got)
 	}
+}
 
-	// 玩家换到另一个进程（换服：rehome 的交出）再换回来，编辑账本跟着玩家走（TerrainEditor 在全局库里，只由玩家所在的
-	// 进程写）。修前交出只带 Player：进程 1 内存里留着 LastSeq 3 的旧账本，玩家回来后它把进程 2 已应用的序号 4 再应用
-	// 一遍、写回库，投影版本冲突致命（expected=4 next=5 stored=6），账本回退。
-	t.Run("the ledger leaves with the player and comes back current", func(t *testing.T) {
+// 地形按地图归属的库范围在真实 Mongo 上（维护者 2026-11-14 D11 Q17 A + N3 A）：普通场景的块、建筑与编辑账本在
+// <物理库>_<sid>，玩家换服时留在原服；分区场景的图在共用库。门变量同 TestTerrainRestartRealMongo。
+func TestTerrainMapOwnershipRealMongo(t *testing.T) {
+	uri := os.Getenv("ROOST_TERRAIN_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("ROOST_TERRAIN_IT_MONGO_URI not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	dir := t.TempDir()
+	pack := writeTerrainPack(t, dir, 1)
+	ledgerID, err := terrain_editor.EntityID(brushPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlimited := func(p *realTerrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	}
+	paint := func(seq uint64) terrain.Brush {
+		return terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: byte(seq)}
+	}
+
+	// 玩家换服（rehome：sid 1 → sid 2 → sid 1）时地形归地图（维护者 2026-11-14 D11 Q17 A + N3 A）：不分区的图归本服，块、
+	// 建筑与编辑账本都在 <物理库>_<sid> 里，交出只交 Player。两个服各开一张同样坐标的图，同一块、同一个玩家的账本实体 ID
+	// 相同，各写各的库、互不相干；他在 sid 1 放的建筑留在 sid 1、仍是他的，sid 2 的账本从零起、不知道 sid 1 的建筑；
+	// 换回 sid 1 时那里的账本与建筑原样都在（序号 3 仍是重复）。修前三种文档都在共用库：两个服写同一份文档。
+	t.Run("the map keeps its ledger and buildings when the player changes servers", func(t *testing.T) {
 		physical := fmt.Sprintf("terrain_ledger_move_it_%d", time.Now().UnixNano())
-		t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+		const home, away int32 = 1, 2
+		t.Cleanup(func() {
+			_ = client.Database(physical).Drop(context.Background())
+			_ = client.DatabaseForSid(physical, home).Drop(context.Background())
+			_ = client.DatabaseForSid(physical, away).Drop(context.Background())
+		})
 		databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
 			Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		readMoved := func() storedLedger {
+		type storedEditor struct {
+			LastSeq   int64 `bson:"1"`
+			Buildings int64 `bson:"3"`
+		}
+		readLedgerAt := func(sid int32) storedEditor {
 			t.Helper()
-			var stored storedLedger
-			_ = client.Database(physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &stored)
+			var stored storedEditor
+			_ = client.DatabaseForSid(physical, sid).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &stored)
 			return stored
 		}
-		// 每个进程改自己的块（块不冲突），共用的只有账本。
-		paintAt := func(x int64, seq uint64) terrain.Brush {
-			return terrain.Brush{Op: terrain.BrushPaint, X: x, Y: 3200, Radius: 300, Material: byte(seq)}
+		countAt := func(database fmongo.IDatabase, collection string, filter map[string]any) int64 {
+			t.Helper()
+			count, err := database.Collection(collection).CountDocuments(ctx, filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return count
 		}
-		brush := func(p *realTerrainProcess, x int64, seq uint64) {
+		pack := buildingPack(t, dir, 1)
+		brush := func(p *realTerrainProcess, seq uint64) {
 			t.Helper()
 			terrainmap.Install(p.m)
-			if r, err := p.m.Brush(ctx, brushPlayer, seq, paintAt(x, seq)); err != nil || r.Duplicate || r.LastSeq != int64(seq) {
+			if r, err := p.m.Brush(ctx, brushPlayer, seq, paint(seq)); err != nil || r.Duplicate || r.LastSeq < int64(seq) {
 				t.Fatalf("sequence %d: %+v, %v", seq, r, err)
 			}
 		}
-		player.RegisterEntity() // 交出的是 Player 与它的账本
+		player.RegisterEntity() // 交出的是 Player
 		depart := func(p *realTerrainProcess) func(context.Context) error {
 			t.Helper()
-			evictor := playerEvictor{handOff: p.runtime, playerScoped: []func(int64) (int64, error){terrainEditorOf}}
-			release, err := evictor.DepartPlayer(ctx, brushPlayer)
+			release, err := (playerEvictor{handOff: p.runtime}).DepartPlayer(ctx, brushPlayer)
 			if err != nil {
 				t.Fatalf("hand the player off: %v", err)
 			}
 			return release
 		}
-		one := startRealTerrainProcess(t, ctx, client, databases, physical, filepath.Join(dir, "move-1"), pack)
+		one := startRealTerrainProcessAt(t, ctx, client, databases, physical, filepath.Join(dir, "move-1"), pack, engine.ProjectorOptions{}, home, wholeMap)
 		unlimited(one)
 		for seq := uint64(1); seq <= 3; seq++ {
-			brush(one, 3200, seq)
+			brush(one, seq)
+		}
+		if _, err := one.m.Place(ctx, brushPlayer, 4, hall(60, 20, true)); err != nil {
+			t.Fatalf("a hall on server %d: %v", home, err)
 		}
 		backHere := depart(one)
 
-		two := startRealTerrainProcess(t, ctx, client, databases, physical, filepath.Join(dir, "move-2"), pack)
+		two := startRealTerrainProcessAt(t, ctx, client, databases, physical, filepath.Join(dir, "move-2"), pack, engine.ProjectorOptions{}, away, wholeMap)
 		unlimited(two)
-		for seq := uint64(4); seq <= 5; seq++ {
-			brush(two, 9600, seq)
+		if v, _ := two.m.View().Version(terrain.ChunkKey{}); v != 0 {
+			t.Fatalf("server %d loaded chunk (0,0) at version %d: it read server %d's edits", away, v, home)
 		}
-		depart(two)
+		if two.buildingStats.Standing != 0 {
+			t.Fatalf("server %d reconciled %d standing buildings; the hall stays on server %d's map", away, two.buildingStats.Standing, home)
+		}
+		for seq := uint64(5); seq <= 6; seq++ {
+			brush(two, seq)
+		}
+		two.stop(t)
 		if err := backHere(ctx); err != nil {
-			t.Fatalf("release the barrier on the first process: %v", err)
+			t.Fatalf("release the barrier on server %d: %v", home, err)
 		}
 
 		terrainmap.Install(one.m)
-		if r, err := one.m.Brush(ctx, brushPlayer, 4, paintAt(3200, 4)); err != nil || !r.Duplicate || r.LastSeq != 5 {
-			t.Fatalf("the first process replayed sequence 4, which the second applied: %+v, %v (want Duplicate, LastSeq 5)", r, err)
+		if r, err := one.m.Brush(ctx, brushPlayer, 3, paint(3)); err != nil || !r.Duplicate || r.LastSeq != 4 {
+			t.Fatalf("back on server %d, sequence 3 again: %+v, %v (want Duplicate, LastSeq 4: this map's ledger is still here)", home, r, err)
 		}
-		brush(one, 3200, 6)
+		brush(one, 7)
 		select {
 		case fatal := <-one.fatal:
-			t.Fatalf("the first process failed: %v", fatal)
+			t.Fatalf("server %d failed: %v", home, fatal)
 		default:
 		}
 		one.stop(t)
-		if got := readMoved(); got.LastSeq != 6 {
-			t.Fatalf("stored ledger %+v, want LastSeq 6", got)
+
+		if got := readLedgerAt(home); got != (storedEditor{LastSeq: 7, Buildings: 1}) {
+			t.Fatalf("server %d's ledger %+v, want LastSeq 7 and the hall", home, got)
 		}
-		terrainmap.Install(two.m)
-		two.stop(t)
+		if got := readLedgerAt(away); got != (storedEditor{LastSeq: 6}) {
+			t.Fatalf("server %d's ledger %+v, want LastSeq 6 and no building", away, got)
+		}
+		standing := map[string]any{"1": int32(1), "2": brushPlayer}
+		if n := countAt(client.DatabaseForSid(physical, home), db.BuildingDaoCollection, standing); n != 1 {
+			t.Fatalf("server %d has %d standing buildings of the player, want the hall", home, n)
+		}
+		if n := countAt(client.DatabaseForSid(physical, away), db.BuildingDaoCollection, map[string]any{}); n != 0 {
+			t.Fatalf("server %d has %d building documents, want none", away, n)
+		}
+		for _, sid := range []int32{home, away} {
+			if n := countAt(client.DatabaseForSid(physical, sid), db.TerrainChunkDaoCollection, map[string]any{"_id": mustChunkID(t, terrain.ChunkKey{})}); n != 1 {
+				t.Fatalf("server %d has %d documents of chunk (0,0), want its own one", sid, n)
+			}
+		}
+		for _, collection := range []string{db.TerrainChunkDaoCollection, db.BuildingDaoCollection, db.TerrainEditorDaoCollection} {
+			if n := countAt(client.Database(physical), collection, map[string]any{}); n != 0 {
+				t.Fatalf("the shared database has %d %s documents; an ordinary scene's terrain is one database per server", n, collection)
+			}
+		}
+	})
+
+	// 分区场景的图跨服共享（Region.Shared），三种地形文档在共用库里（D11 Q17 A）：sid 3 的进程改的块与账本落在 <物理库>，
+	// 不在 <物理库>_3。
+	t.Run("a partitioned map keeps its documents in the shared database", func(t *testing.T) {
+		physical := fmt.Sprintf("terrain_shared_it_%d", time.Now().UnixNano())
+		const sid int32 = 3
+		t.Cleanup(func() {
+			_ = client.Database(physical).Drop(context.Background())
+			_ = client.DatabaseForSid(physical, sid).Drop(context.Background())
+		})
+		databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+			Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		shared := func(meta terrain.Meta) (terrainmap.Region, error) {
+			return terrainmap.Region{Own: meta.Bounds(), Load: meta.Bounds(), Shared: true}, nil
+		}
+		p := startRealTerrainProcessAt(t, ctx, client, databases, physical, filepath.Join(dir, "shared"), pack, engine.ProjectorOptions{}, sid, shared)
+		unlimited(p)
+		if r, err := p.m.Brush(ctx, brushPlayer, 1, paint(1)); err != nil || r.Duplicate {
+			t.Fatalf("brush: %+v, %v", r, err)
+		}
+		p.stop(t)
+		for _, collection := range []string{db.TerrainChunkDaoCollection, db.TerrainEditorDaoCollection} {
+			if n, err := client.Database(physical).Collection(collection).CountDocuments(ctx, map[string]any{}); err != nil || n == 0 {
+				t.Fatalf("the shared database has %d %s documents (%v), want the brush's", n, collection, err)
+			}
+			if n, err := client.DatabaseForSid(physical, sid).Collection(collection).CountDocuments(ctx, map[string]any{}); err != nil || n != 0 {
+				t.Fatalf("server %d's own database has %d %s documents (%v), want none", sid, n, collection, err)
+			}
+		}
 	})
 }
 

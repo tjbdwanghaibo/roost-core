@@ -139,6 +139,7 @@
 - `team` + `rehome`：在队伍里不能换服；档里有换服意图时不能建队或入队。
 - `matchmaking` + `rehome`：有匹配状态时不能换服；有换服意图时不能排队。
 - `alliance` + `rehome`：联盟的原生步骤在执行前用 `rehome.Binding` 核对玩家当前归哪个服，换服中等待、已换服改投。
+- `mailbox` + `rehome`：离开钩子按旧范围合并一次全服邮件，合并不成中止换服；到新服由 mailbox 与 enter 的进入钩子按新范围拉（D11 N3 A）。
 
 ## 验证范围
 

@@ -96,6 +96,7 @@
 - `with/bag`：登记 `item` 这种附件（`mailbox.Item(itemID, amount)`，线上格式 `{"type":"item","id":1001,"amount":3}`），领取时经 `Bag().Add` 进背包，与账本同一笔事务；背包拒绝时邮件保持未领。
 - `with/enter`：玩家进入游戏时把属于他的全服邮件合并进邮箱（mail 服务的 `PullBroadcasts`）。画像规则在工程的 `BroadcastProfileOnEnter`：注册时间缺省取首次进入的时间，会话带着 account 的角色创建时间与承载服 / 原服时改用它们。它是进入钩子，失败只记日志，下一次进入再做。
 - `with/gm`：命令 `gm.mail.send`，单人补偿邮件，要求稳定的 `request_id`。
+- `with/rehome`（`game/controllers/mailbox_rehome.go`，维护者 2026-11-14 D11 N3 A）：换服时全服邮件离开前按旧范围合并一次。rehome 的离开钩子（会话已断、实体还没交出）调 mail 的 `Summary`，mail 服务按他记着的画像——在本服进入时给的那一份，范围是本服——合并，水位推进到此刻；到了新服由 `with/enter` 的进入钩子按会话里新的承载服重新拉。所以在本服期间发给本服的都收到；离开之后才发给旧服的、离开之前就发给新服的都在水位以下，不再合并。合并不成（mail 服务不可用）钩子返回错误，换服中止；可以重复，已合并的不会再合并。没有配置 LazyBroadcast、或从没拉过的玩家只是问一次汇总。
 - `with/profile`：升级奖励邮件，见下一节。
 
 别的模块：
@@ -105,7 +106,7 @@
 
 ## 验证范围
 
-`roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/modules/mailbox` 10 条、`game/controllers/mailbox.go` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条。
+`roost module verify` 跑 33 条场景（`^TestMailbox`：`game/handler` 14 条、`game/modules/mailbox` 10 条、`game/controllers/mailbox.go` 9 条）。联动另计：bag 9 条、enter 5 条、gm 4 条、profile 10 条、rehome 2 条（真实 mail `Service` 加内存存储：旧服 / 新服在离开前后发的四封各归谁；合并失败中止换服、钩子已登记）。
 
 场景是离线的、在一个进程内：发放事务用真实的 Nest 加替身提交器；端点的场景用真实的 mail `Service` 加内存存储。Nest 调用因等结果超时返回错误而事务其实已提交的那条路径有端点场景（`TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce`：这一次答错误码并归还预留，重试在账本上认出这封邮件、不发第二笔、补上确认）。真实依赖另有一档（不在 `roost module verify` 里）：`game/controllers/mailbox_integration_test.go`（显式 `-tags integration`，`ROOST_MAILBOX_IT_NATS_URL` / `ROOST_MAILBOX_IT_REDIS_ADDR` 必填），端点经 `wiring/mail.ClientMod` 的 BusClient 在真实 NATS 上调 `wiring/mail.Mod`（Redis 存储）挂出的 mail 服务，core 与 jetstream 两种 RPC 传输各一遍：正常领取；预留的答复超时（服务方已预留）后重试，租约内答“领取在途”、租约到期后领到；确认的答复超时（服务方已确认）照常答成功、再领答已领取；mail 服务停机时领取失败、按同一个 Redis 键前缀重启后领到；jetstream 下服务实例执行预留后连接断开，broker 把请求重投给另一个实例。每一步核对附件恰好到账一次。由 `scripts/test-demo-generated.sh` 在生成的 game-demo 里运行。Nest 仍是替身提交器，Redis Cluster、跨机与容量没有跑。
 

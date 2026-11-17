@@ -310,6 +310,7 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"daoCollConst":       daoCollectionConstName,
 		"daoKeyConst":        daoRegistryKeyConstName,
 		"dbScope":            databaseScopeExpr,
+		"bootScopeVar":       bootScopeVar,
 		"isNested":           func(typeName string) bool { return isNestedType(defs, typeName) },
 		"wireType":           func(f FieldDef) string { return wireType(defs, f) },
 		"toWire":             func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
@@ -396,10 +397,10 @@ func validatePersistDocFieldNames(dao DaoDef) error {
 }
 
 func validateDatabaseScope(dao DaoDef) error {
-	if dao.DbScope == "" || dao.DbScope == "global" || dao.DbScope == "sid" {
+	if dao.DbScope == "" || dao.DbScope == "global" || dao.DbScope == "sid" || dao.DbScope == "boot" {
 		return nil
 	}
-	return fmt.Errorf("dao %s has unsupported dbscope %q (want global or sid)", dao.Name, dao.DbScope)
+	return fmt.Errorf("dao %s has unsupported dbscope %q (want global, sid or boot)", dao.Name, dao.DbScope)
 }
 
 // validateNoCollectionFields refuses a nocoll DAO with a persistent field. A
@@ -423,11 +424,21 @@ func validateNoCollectionFields(dao DaoDef) error {
 		dao.Name, strings.Join(persistent, ", "))
 }
 
+// databaseScopeExpr 是生成的 DbScope 方法返回的表达式。dbscope=boot 的 DAO 返回本进程起服时选定的范围
+// （bootScopeVar 命名的包级函数，读 Set<Dao>DbScope 设置的值），其余是常量。
 func databaseScopeExpr(dao DaoDef) string {
-	if dao.DbScope == "sid" {
+	switch dao.DbScope {
+	case "sid":
 		return "dataengine.DatabaseServer"
+	case "boot":
+		return bootScopeVar(dao.Name) + "()"
 	}
 	return "dataengine.DatabaseGlobal"
+}
+
+// bootScopeVar 是 dbscope=boot 的 DAO 读本进程库范围的包级函数名；记值的变量是它加 Global 后缀。
+func bootScopeVar(daoName string) string {
+	return lower1(derefDaoTypeName(daoName)) + "DbScope"
 }
 
 func fieldMaskName(daoName, fieldName string) string {
