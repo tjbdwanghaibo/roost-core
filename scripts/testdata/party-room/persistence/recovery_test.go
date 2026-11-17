@@ -76,6 +76,7 @@ func openPartyRuntime(t *testing.T, manual bool, now int64) *partyRuntime {
 	roomentity.RegisterEntity()
 	RegisterPartyRoomNestHandlers()
 	RegisterTickPartyRoomTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	h := &partyRuntime{database: database}
 	h.now.Store(now)
 	clock.SetSource(func() time.Time { return time.UnixMilli(h.now.Load()) })
@@ -187,7 +188,7 @@ func (h *partyRuntime) coins(t *testing.T) [3]int64 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out[i] = v.(*playerentity.Player).Dao().GetCoins()
+		out[i] = v.(*playerentity.Player).Dao().GetWallet().GetCoins()
 	}
 	return out
 }
@@ -229,7 +230,8 @@ func TestPartyGameRealCrashRecovery(t *testing.T) {
 			if _, err := h.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer}); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.Sync_PartyPlayerInit(ctx, id); err != nil {
+			// 建档走 enter（Q6）。
+			if _, err := sender.NewEnterInitSender(h.scheduler).Sync_EnterInit(ctx, id); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -393,6 +395,10 @@ func TestPartyGameRealCrashRecovery(t *testing.T) {
 		t.Fatalf("third process: %v\n%s", err, output)
 	}
 	if err := h.mongo.Database(h.database).Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// add dao --entity 给本地实体写 dbscope=sid（v1.47.0 起）：这些 DAO 的文档在 <库>_<sid>，本用例的存储没有 sid（0）。
+	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("SIGKILL: %d unprojected records; cold load restored the playing room, re-armed its heartbeat, replayed the input receipt, settled, rewarded once, deleted the room; third process saw the same coins and no room", barrier.Unprojected)

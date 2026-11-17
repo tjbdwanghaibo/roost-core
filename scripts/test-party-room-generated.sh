@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# 实时派对房间业务接入纵切：正式生成器、Player / PartyRoom DAO、PartyRoom 实体心跳（100ms 档）与持久定时器、
-# 多实体 Sender 与 Nest，加房间内同步（access.player.self_sync + sync_groups: [party_room]，wiring/selfsync.Groups：
-# 房间组与玩家自身视图共用同一个 Manager 与玩家连接）、service/match 成局与 service/session 进房。
-# 业务规则（“抢星”小游戏、回合 / 加时 / 硬期限、房间码、人满、房主转移、断线宽限、输入去重、结算发奖与座位归还、
-# 业务层补位：房间票 + 玩家票弹性成局、进房 handler 拒绝超员）
-# 只在 scripts/testdata/party-room，不是框架默认玩法，生成器也不生成这些文件。
+# 实时派对房间业务接入纵切：正式生成器 + 业务模块（R9 批 2）+ 只手写模块没覆盖的部分。
+# 模块：wallet（玩家金币，状态本来就标 sync，经自身视图下发）、enter（建档；Q6 只装 enter；它的 plan 代办玩家 TCP 接入
+# 与 access.player.self_sync，脚本只追加 sync_groups: [party_room]）。
+# 手写（scripts/testdata/party-room，Q3 B：PartyRoom 不并入 room 的 Room，借鉴 room 的代际围栏）：PartyRoom DAO、
+# 实体心跳（100ms 档）与持久定时器、多实体 Sender 与 Nest，房间内同步（wiring/selfsync.Groups：房间组与玩家自身视图共用
+# 同一个 Manager 与玩家连接）、service/match 成局与 service/session 进房；业务规则（“抢星”小游戏、回合 / 加时 / 硬期限、
+# 房间码、人满、房主转移、断线宽限、输入去重、结算发奖与座位归还、业务层补位：房间票 + 玩家票弹性成局、进房 handler
+# 拒绝超员）。room 不广播、不装 EntitySync（D24 A 暂缓），matchmaking 模块不做弹性人数与补位，所以这些留手写。
+# 这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身，心跳驱动跑真实循环、业务时间用 clock.SetSource 拨。
 # ROOST_PARTY_ROOM_REAL=1（并提供隔离 Mongo 副本集 ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在局内（strict 输入
 # 已确认、WAL 未投影）被父进程 SIGKILL，新进程冷加载、心跳按持久阶段重新启动并把局推进到结算、发奖、删档，
@@ -39,7 +42,10 @@ cd "$project_root"
 # 先指向本检出：后面 generate 里的 go mod tidy 不去解析可能尚未发布的最低 core 版本，生成物也按本检出编译。
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 export ROOST_PARTY_ROOM_DB="roost_party_room_it_${PPID}_$$"
-"$review_root/roost" add dao Player --entity Player >> "$review_root/generate.log" 2>&1
+# 模块清单写在脚本里（Q8：不建配方）；Player 主 DAO、玩家 TCP 接入与 self_sync 由 enter 的 plan 代办。
+genre_modules=(wallet enter)
+modules_sh="$repo_root/scripts/testdata/genre-common/modules.sh"
+bash "$modules_sh" add "$review_root/roost" "${genre_modules[@]}" >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add entity PartyRoom >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add dao PartyRoom --entity PartyRoom >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add heartbeat --entity PartyRoom >> "$review_root/generate.log" 2>&1
@@ -50,17 +56,20 @@ from pathlib import Path
 import sys
 root = Path(sys.argv[1])
 for name, fields in {
-    # Coins 标 sync：自身视图（self_sync 的默认 packer）把它推给玩家本人，与房间组同步共用连接。
-    'player': [('Coins', 'int64', 'coins', 'persist,sync'), ('Matches', 'int64', 'matches', 'nosync'), ('Initialized', 'bool', 'initialized', 'nosync')],
+    # 金币在 wallet 的 Wallet（persist,sync：自身视图推给玩家本人，与房间组同步共用连接），建档在 enter 的 Enter；
+    # Player 上只追加派对自己的战绩。
+    'player': [('Matches', 'int64', 'matches', 'nosync')],
     # State 是房间的持久事实（含种子与回执，不同步）；Board 是公开记分板，不落库、经 SyncGroup 同步给房间全体成员。
     'party_room': [('State', 'string', 'state', 'nosync'), ('WakeTimer', 'int64', 'wake_timer', 'nosync'), ('Board', 'string', 'board', 'nopersist,sync')],
 }.items():
     p = root / 'db/def' / f'{name}.go'
     typename = ''.join(part.title() for part in name.split('_')) + 'Dao'
     marker = 'type ' + typename + ' struct {'
-    text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"{tag}"`\n' for field, typ, key, tag in fields))
-    assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
-    p.write_text(text)
+    text = p.read_text()
+    assert marker in text and 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
+    # 追加在结构体末尾（模块状态之后）。
+    end = text.index('\n}', text.index(marker))
+    p.write_text(text[:end] + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"{tag}"`\n' for field, typ, key, tag in fields) + text[end:])
 # PartyRoom 与 Player 在同一事务里领奖；放在 World 锁档（低于 Player），多实体锁序固定。
 # 房间是 Entity Sync 的 subject：sync=true，用业务自己的 packer（只同步 Board 视图）。
 p = root / 'game/entities/party_room/entity.go'
@@ -80,16 +89,16 @@ cp "$repo_root/scripts/testdata/party-room/gameplay_test.go.txt" game/handler/pa
 mkdir -p game/modules/partymatch
 cp "$repo_root/scripts/testdata/party-room/backfill_match.go.txt" game/modules/partymatch/backfill.go
 gofmt -w db/def/*.go game/modules/partyroom/*.go game/modules/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
-# 房间内同步走正式入口（在标记与 packer 就位之后打开，project sync 的就绪检查才过）：玩家接入（TCP）+ self_sync（玩家看自己）+ sync_groups（房间推给成员），同一条连接、同一个推送编号。
-"$review_root/roost" add access player --service game >> "$review_root/generate.log" 2>&1
-"$review_root/roost" add transport tcp >> "$review_root/generate.log" 2>&1
+# 房间内同步走正式入口：玩家接入（TCP）与 self_sync（玩家看自己）已由 enter 的 plan 打开；这里在标记与 packer 就位之后
+# 只追加 sync_groups（房间推给成员，project sync 的就绪检查才过），同一条连接、同一个推送编号。
 python3 - "$project_root/roost.yaml" <<'MANIFEST'
 import sys
 path = sys.argv[1]
 text = open(path).read()
 marker = '    player:\n        service: game\n'
-assert marker in text, 'access.player missing'
-text = text.replace(marker, marker + '        self_sync: true\n        sync_groups:\n            - party_room\n', 1)
+self_sync = '        self_sync: true\n'
+assert marker in text and text.count(self_sync) == 1, 'access.player.self_sync missing (enter plan should have opened it)'
+text = text.replace(self_sync, self_sync + '        sync_groups:\n            - party_room\n', 1)
 open(path, 'w').write(text)
 MANIFEST
 "$review_root/roost" project sync >> "$review_root/generate.log" 2>&1
@@ -109,6 +118,8 @@ go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+# 已装模块自带的场景照跑：每个模块通过数 == 本检出 modules/<名>/module.yaml 的 verify.pass、0 skip（结果 module-verify.json）。
+bash "$modules_sh" verify "$review_root/roost" "$repo_root" "$review_root/module-verify.json" "${genre_modules[@]}" | tee "$review_root/module-verify.txt"
 # 真实依赖用例缺省模式也复制进工程并 vet（只编译不运行）：生成器签名变了，发版门禁里就能看到这些夹具编译失败。
 for path in "$repo_root"/scripts/testdata/party-room/persistence/*_test.go; do cp "$path" "game/handler/party_room_$(basename "$path")"; done
 gofmt -w game/handler/party_room_*_test.go

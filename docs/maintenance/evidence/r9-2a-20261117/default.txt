@@ -1,0 +1,27 @@
+# bash scripts/test-party-room-generated.sh（缺省档，ROOST_GENRE_OUTPUT=<scratchpad>/b1117-r9-2a/default），2026-11-17
+--- PASS: TestPartyGameRulesValidateAndRoomCode (0.00s)
+--- PASS: TestPartyGameRulesVariableStepEquivalence (0.00s)
+--- PASS: TestPartyGameRulesBackfillSeats (0.00s)
+ok  	example.com/party-room-practice/game/modules/partyroom	1.453s
+--- PASS: TestPartyGameMatchmakingOpensOneRoomPerMatch (0.02s)
+--- PASS: TestPartyGameCodeRoomFullAndLateJoinRejected (0.02s)
+--- PASS: TestPartyGameHostLeaveTransfersHost (0.01s)
+--- PASS: TestPartyGameHeartbeatDrivesRoundsAndGroupSync (0.26s)
+--- PASS: TestPartyGameFirstGrabWinsAndDuplicateInputDedup (0.02s)
+--- PASS: TestPartyGameFoulEliminationAndUndoRollback (0.08s)
+--- PASS: TestPartyGameReconnectWithinGraceReturnsToSameRoom (0.02s)
+--- PASS: TestPartyGameGraceExpiryAndMidGameLeaveEndEarly (0.09s)
+--- PASS: TestPartyGameSettlementRewardsOnceAndRoomDestroyed (0.14s)
+--- PASS: TestPartyGameMatchDeadlineTimerForcesSettlement (0.09s)
+--- PASS: TestPartyGameSelfViewAndRoomShareOneConnection (0.05s)
+--- PASS: TestPartyGameBackfillAfterMidGameLeave (0.02s)
+--- PASS: TestPartyGameBackfillConcurrentMatchesAdmitOne (0.01s)
+--- PASS: TestPartyGameBackfillDeadlineWithdrawsTicket (0.09s)
+--- PASS: TestPartyGameBackfillPlayerJoinsGroupWithFullSync (0.02s)
+--- PASS: TestPartyGameRobotBusiness (0.08s)
+ok  	example.com/party-room-practice/game/handler	2.624s
+IDs are valid
+generated files are up to date
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0
+PASS count: 19  SKIP count: 0  exit 0

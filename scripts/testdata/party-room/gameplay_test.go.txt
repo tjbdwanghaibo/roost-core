@@ -61,7 +61,7 @@ const partyNow int64 = 1800000000000
 type partyClient struct {
 	receiver *entitysync.Decoder
 	boards   map[frame.ObjectRef]string         // 房间视图：记分板原文
-	selves   map[frame.ObjectRef]map[string]any // 自身视图：Player 的同步字段
+	selves   map[frame.ObjectRef]*db.SyncPlayerDao // 自身视图：Player 的同步快照（全量为基线，增量按生成的 Apply 合并）
 	fulls    int
 	err      error
 }
@@ -132,19 +132,18 @@ func (w *partyWire) PushSyncPlayer(_ context.Context, player int64, messageID ui
 						if err != nil {
 							return err
 						}
-						doc, err := patch.Values()
-						if err != nil {
-							return err
-						}
 						if update.SubjectID != entityOf(player) {
 							return fmt.Errorf("player %d received the self view of entity %d", player, update.SubjectID)
 						}
-						merged := c.selves[object.Ref]
-						if merged == nil || update.Full {
-							merged = map[string]any{}
+						// 金币在 wallet 的嵌套状态 Wallet 里：增量可能只带嵌套补丁，客户端按生成的 ApplySyncPlayerDao
+						// 合到基线上（全量时没有基线）。
+						previous := c.selves[object.Ref]
+						if update.Full {
+							previous = nil
 						}
-						for key, value := range doc {
-							merged[key] = value
+						merged, err := db.ApplySyncPlayerDao(patch, previous)
+						if err != nil {
+							return err
 						}
 						c.selves[object.Ref] = merged
 					default:
@@ -184,7 +183,7 @@ func (w *partyWire) CloseSessions(player int64, _ error) int {
 func (w *partyWire) open(player int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.clients[player] = &partyClient{receiver: entitysync.NewDecoder(frame.DefaultLimits()), boards: map[frame.ObjectRef]string{}, selves: map[frame.ObjectRef]map[string]any{}}
+	w.clients[player] = &partyClient{receiver: entitysync.NewDecoder(frame.DefaultLimits()), boards: map[frame.ObjectRef]string{}, selves: map[frame.ObjectRef]*db.SyncPlayerDao{}}
 }
 
 func (w *partyWire) close(player int64) {
@@ -220,8 +219,8 @@ func (w *partyWire) board(t *testing.T, playerEntity int64) (string, int) {
 	return "", c.fulls
 }
 
-// self 返回一名玩家客户端上自己 Player 的同步字段（自身视图）；没有时为 nil。
-func (w *partyWire) self(t *testing.T, playerEntity int64) map[string]any {
+// self 返回一名玩家客户端上自己 Player 的同步快照（自身视图）；没有时为 nil。
+func (w *partyWire) self(t *testing.T, playerEntity int64) *db.SyncPlayerDao {
 	t.Helper()
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -267,6 +266,7 @@ func newPartyFixture(t *testing.T) *partyFixture {
 	roomentity.RegisterEntity()
 	RegisterPartyRoomNestHandlers()
 	RegisterTickPartyRoomTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	f := &partyFixture{ctx: context.Background(), created: map[int64]bool{}, releases: map[string]int{}, closed: map[int64]bool{}}
 	f.now.Store(partyNow)
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
@@ -341,7 +341,8 @@ func newPartyFixture(t *testing.T) *partyFixture {
 			t.Fatal(err)
 		}
 		f.players[i], f.ids[i] = v.(*playerentity.Player), v.ID()
-		if err := f.s().Sync_PartyPlayerInit(f.ctx, f.ids[i]); err != nil {
+		// 建档走 enter（Q6）：首次初始化做过，领奖 handler 查 Enter().Built()。
+		if _, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(f.ctx, f.ids[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1078,7 +1079,7 @@ func TestPartyGameSettlementRewardsOnceAndRoomDestroyed(t *testing.T) {
 	read := nest.NewHandlerName("party_room_test_coins")
 	nest.MustRegisterHandlerWithMeta(read, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		d := es[0].(IPartyPlayerEntity).Dao()
-		return [2]int64{d.GetCoins(), d.GetMatches()}, nil
+		return [2]int64{d.GetWallet().GetCoins(), d.GetMatches()}, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 	for seat := range 4 {
 		v, err := f.engine.Request(f.ctx, read, f.ids[seat], nil)
@@ -1170,29 +1171,28 @@ func TestPartyGameMatchDeadlineTimerForcesSettlement(t *testing.T) {
 }
 
 var partyCoinsOnce sync.Once
-var partyCoinsName = nest.NewHandlerName("party_room_test_set_coins")
+var partyCoinsName = nest.NewHandlerName("party_room_test_add_coins")
 
-// setCoins 经一个 strict handler 改玩家的金币（Player 的 sync 字段，自身视图推给本人）。
-func (f *partyFixture) setCoins(t *testing.T, seat int, coins int64) {
+// addCoins 经一个 strict handler 给玩家加金币（wallet 的 Wallet().Add；Wallet 是 persist,sync，自身视图推给本人）。
+func (f *partyFixture) addCoins(t *testing.T, seat int, delta int64) {
 	t.Helper()
 	partyCoinsOnce.Do(func() {
 		nest.MustRegisterHandlerWithMeta(partyCoinsName, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
-			es[0].(IPartyPlayerEntity).Dao().SetCoins(args[0].(int64))
-			return nil, nil
+			return es[0].(IPartyPlayerEntity).Wallet().Add(args[0].(int64))
 		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	})
-	if _, err := f.engine.Request(f.ctx, partyCoinsName, f.ids[seat], nest.NewParams(coins)); err != nil {
+	if _, err := f.engine.Request(f.ctx, partyCoinsName, f.ids[seat], nest.NewParams(delta)); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func coinsOf(t *testing.T, doc map[string]any) int64 {
+// coinsOf 读自身视图里 wallet 的余额（Wallet.Coins）；视图里没有 Wallet 直接失败。
+func coinsOf(t *testing.T, self *db.SyncPlayerDao) int64 {
 	t.Helper()
-	coins, ok := doc["coins"].(int64)
-	if !ok {
-		t.Fatalf("self view %v has no coins", doc)
+	if self == nil || self.Wallet == nil {
+		t.Fatalf("self view %+v has no wallet", self)
 	}
-	return coins
+	return self.Wallet.Value.Coins
 }
 
 // 11. 自身视图与房间组同步共用一条连接：同一个 Manager、同一个推送编号（msgid.MsgSelfSync），客户端按命名空间分两路
@@ -1211,7 +1211,7 @@ func TestPartyGameSelfViewAndRoomShareOneConnection(t *testing.T) {
 		}
 	}
 
-	f.setCoins(t, 0, 7)
+	f.addCoins(t, 0, 7)
 	f.flush(t)
 	if coinsOf(t, f.wire.self(t, f.ids[0])) != 7 || coinsOf(t, f.wire.self(t, f.ids[1])) != 0 {
 		t.Fatal("a player's own change did not reach exactly that player")
@@ -1246,7 +1246,7 @@ func TestPartyGameSelfViewAndRoomShareOneConnection(t *testing.T) {
 	if b, _ := f.wire.board(t, f.ids[1]); b != "" {
 		t.Fatal("the player who left still sees the room")
 	}
-	f.setCoins(t, 1, 3)
+	f.addCoins(t, 1, 3)
 	f.flush(t)
 	if coinsOf(t, f.wire.self(t, f.ids[1])) != 3 {
 		t.Fatal("leaving the room stopped the self view")

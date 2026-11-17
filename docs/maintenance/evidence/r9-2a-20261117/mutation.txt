@@ -1,0 +1,69 @@
+# 变异：在保留的生成工程（<scratchpad>/b1117-r9-2a/default/project，REAL 一条在 …/real/project）里改 handler / 夹具，跑对应场景看红，恢复看绿；2026-11-17
+# 命令：go test -mod=mod -race -count=1 -timeout 3m -run '<场景>' ./game/handler（REAL 加 ROOST_PARTY_ROOM_DB / ROOST_PARTY_ROOM_WAL）
+
+### M1 领奖不调 Wallet().Add
+mutation: game/handler/party_room.go: if\ _\,\ err\ :=\ p.Wallet\(\).Add\(reward\)\;\ err\ \!=\ nil\ \{ -> if\ _\,\ err\ :=\ p.Wallet\(\).Balance\(\)\,\ error\(nil\)\;\ err\ \!=\ nil\ \{
+red run (rc=1):
+--- FAIL: TestPartyGameSettlementRewardsOnceAndRoomDestroyed (0.10s)
+    party_room_test.go:1094: seat 0 coins/matches [0 1], want 10/1
+FAIL
+FAIL	example.com/party-room-practice/game/handler	0.732s
+FAIL
+restored (rc=0):
+ok  	example.com/party-room-practice/game/handler	1.722s
+
+### M2 夹具不经 enter 建档
+mutation: game/handler/party_room_test.go: if\ _\,\ err\ :=\ sender.NewEnterInitSender\(f.engine\).Sync_EnterInit\(f.ctx\,\ f.ids\[i\]\)\;\ err\ \!=\ nil\ \{ -> if\ _\,\ err\ :=\ any\(nil\)\,\ error\(nil\)\;\ err\ \!=\ nil\ \{
+red run (rc=1):
+--- FAIL: TestPartyGameSettlementRewardsOnceAndRoomDestroyed (0.09s)
+    party_room_test.go:1060: party room: invalid identity, phase, sequence or value
+FAIL
+FAIL	example.com/party-room-practice/game/handler	0.731s
+FAIL
+restored (rc=0):
+ok  	example.com/party-room-practice/game/handler	1.516s
+
+### M3 领奖不查 Enter().Built()（对照：没有场景覆盖未建档领奖）
+mutation: game/handler/party_room.go: if\ \!p.Enter\(\).Built\(\)\ \{ -> if\ false\ \{
+red run (rc=0):
+ok  	example.com/party-room-practice/game/handler	2.232s
+restored (rc=0):
+ok  	example.com/party-room-practice/game/handler	1.808s
+
+### M5 客户端增量不按基线合并
+mutation: game/handler/party_room_test.go: $'\t\t\t\t\t\tif update.Full {\n\t\t\t\t\t\t\tprevious = nil\n\t\t\t\t\t\t}' -> $'\t\t\t\t\t\tprevious = nil'
+red run (rc=1):
+--- FAIL: TestPartyGameSelfViewAndRoomShareOneConnection (0.01s)
+    party_room_test.go:1214: missing nested baseline
+FAIL
+FAIL	example.com/party-room-practice/game/handler	0.627s
+FAIL
+restored (rc=0):
+ok  	example.com/party-room-practice/game/handler	1.419s
+
+### M6 金币上限不读 wallet 余额
+mutation: game/handler/party_room.go: if\ p.Wallet\(\).Balance\(\)\ \>\ partyCoinCap-reward\ \{ -> if\ p.Dao\(\).GetMatches\(\)\ \>\ partyCoinCap-reward\ \{
+red run (rc=0):
+ok  	example.com/party-room-practice/game/handler	1.730s
+restored (rc=0):
+ok  	example.com/party-room-practice/game/handler	1.472s
+
+### M4 Wallet 改成不下发（nosync）→ 编译期红
+mutation: db/def/player.go: Wallet `dao:"persist,sync"` -> `dao:"nosync"`，roost generate
+red (build failed):
+game/handler/party_room_test.go:64:35: undefined: db.SyncPlayerDao
+game/handler/party_room_test.go:144:25: undefined: db.ApplySyncPlayerDao
+game/handler/wallet_test.go:298:27: undefined: db.PlayerDaoSyncFields
+restored: ok
+
+### M4' Wallet 不下发、Matches 改为下发（让 SyncPlayerDao 仍存在）→ 仍是编译期红
+red (build failed):
+game/handler/party_room_test.go:1192:25: self.Wallet undefined (type *db.SyncPlayerDao has no field or method Wallet)
+restored: --- PASS: TestPartyGameSelfViewAndRoomShareOneConnection / --- PASS: TestPartyGameBackfillPlayerJoinsGroupWithFullSync；generate --check 通过
+说明：自身视图的客户端改为读生成的类型化快照（SyncPlayerDao.Wallet），“wallet 不下发”在编译期就被拦住，
+不是运行期断言变红；按 1D 的口径编译失败不算红，所以这条只作对照。这两个场景运行期的红由 M5 给出
+（增量只带嵌套补丁、客户端不按基线合并即失败）。
+
+### M1-REAL 领奖不调 Wallet().Add（REAL 档，TestPartyGameRealCrashRecovery）
+red:   party_room_recovery_test.go:380: rewards [0 0 0] / --- FAIL: TestPartyGameRealCrashRecovery
+restored: SIGKILL: 12 unprojected records; … / --- PASS: TestPartyGameRealCrashRecovery

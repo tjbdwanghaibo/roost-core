@@ -1,0 +1,31 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh，2026-11-17（recovery_test 补删 <库>_0 之后的复跑）
+--- PASS: TestPartyGameRulesValidateAndRoomCode (0.00s)
+--- PASS: TestPartyGameRulesVariableStepEquivalence (0.00s)
+--- PASS: TestPartyGameRulesBackfillSeats (0.00s)
+ok  	example.com/party-room-practice/game/modules/partyroom	1.964s
+--- PASS: TestPartyGameMatchmakingOpensOneRoomPerMatch (0.03s)
+--- PASS: TestPartyGameCodeRoomFullAndLateJoinRejected (0.02s)
+--- PASS: TestPartyGameHostLeaveTransfersHost (0.01s)
+--- PASS: TestPartyGameHeartbeatDrivesRoundsAndGroupSync (0.27s)
+--- PASS: TestPartyGameFirstGrabWinsAndDuplicateInputDedup (0.05s)
+--- PASS: TestPartyGameFoulEliminationAndUndoRollback (0.05s)
+--- PASS: TestPartyGameReconnectWithinGraceReturnsToSameRoom (0.02s)
+--- PASS: TestPartyGameGraceExpiryAndMidGameLeaveEndEarly (0.09s)
+--- PASS: TestPartyGameSettlementRewardsOnceAndRoomDestroyed (0.14s)
+--- PASS: TestPartyGameMatchDeadlineTimerForcesSettlement (0.09s)
+--- PASS: TestPartyGameSelfViewAndRoomShareOneConnection (0.05s)
+--- PASS: TestPartyGameBackfillAfterMidGameLeave (0.02s)
+--- PASS: TestPartyGameBackfillConcurrentMatchesAdmitOne (0.01s)
+--- PASS: TestPartyGameBackfillDeadlineWithdrawsTicket (0.09s)
+--- PASS: TestPartyGameBackfillPlayerJoinsGroupWithFullSync (0.02s)
+--- PASS: TestPartyGameRobotBusiness (0.08s)
+ok  	example.com/party-room-practice/game/handler	2.749s
+IDs are valid
+generated files are up to date
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0
+    party_room_recovery_test.go:404: SIGKILL: 12 unprojected records; cold load restored the playing room, re-armed its heartbeat, replayed the input receipt, settled, rewarded once, deleted the room; third process saw the same coins and no room
+--- PASS: TestPartyGameRealCrashRecovery (2.23s)
+ok  	example.com/party-room-practice/game/handler	3.863s
+缺省 PASS: 19；REAL PASS: 1；SKIP: 0；exit 0
+跑完后 Mongo 里没有本次的 roost_party_room_it_* 库（含 <库>_0）

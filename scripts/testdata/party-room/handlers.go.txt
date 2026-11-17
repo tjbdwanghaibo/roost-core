@@ -8,6 +8,7 @@ import (
 	db "example.com/party-room-practice/db"
 	roomentity "example.com/party-room-practice/game/entities/party_room"
 	party "example.com/party-room-practice/game/modules/partyroom"
+	"example.com/party-room-practice/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -28,12 +29,15 @@ type IPartyRoomEntity interface {
 	BeatActive() bool
 }
 
+// IPartyPlayerEntity 用到 wallet（金币）、enter（建档做过没有）与 Player DAO 上派对自己的战绩（Matches）。
 type IPartyPlayerEntity interface {
 	entity.IThreadSafeEntity
 	Dao() *db.PlayerDao
+	Wallet() view.Wallet
+	Enter() view.Enter
 }
 
-// 金币上限：奖励写入前检查，超出拒绝整笔领奖（不截断）。
+// 金币上限：奖励写入前检查，超出拒绝整笔领奖（不截断）。wallet 不设持有上限，派对的上限读 Balance() 手写。
 const partyCoinCap int64 = 1_000_000
 
 // PartyRoomIDForMatch 把成局 ID 映射成房间实体 ID：同一 Match 重放得到同一房间，开房 handler 用房间里记下的
@@ -63,14 +67,6 @@ func loadRoom(room IPartyRoomEntity, now int64) (party.State, error) {
 	}
 	s.Advance(now)
 	return s, nil
-}
-
-// 玩家建档必须经过一次正式事务；创建内存实体不代表已持久化。
-//
-//roost:nest rollback=undo durability=strict
-func handlerPartyPlayerInit(p IPartyPlayerEntity) error {
-	p.Dao().SetInitialized(true)
-	return nil
 }
 
 // 成局开房：名单与成局 ID 来自匹配服务的 Match，规则来自服务端配置快照。同一 Match 重放返回原房间、不重置；
@@ -212,7 +208,9 @@ func handlerPartyView(room IPartyRoomEntity, player int64, nowUnixMilli int64) (
 	return s.BoardAt(nowUnixMilli), nil
 }
 
-// 结算领奖：Player 金币与房间 Claimed 在同一个 strict 事务里；奖励只由服务端终局推导，重复领返回同一数额。
+// 结算领奖：Player 金币（wallet）与房间 Claimed 在同一个 strict 事务里；奖励只由服务端终局推导，重复领返回同一数额。
+// 玩家必须已经建档（enter 的首次初始化做过，Enter().Built()）。“领过没有”是房间座位的 Claimed，金币走 Wallet().Add
+// （不留回执：长期“只发一次”由 Claimed 保证，见 wallet README）；奖励为 0 不调 Add（Add(0) 是 wallet_invalid）。
 // Player 静态归属；本地同库示例用 MultiSync，跨 sid 发奖另接 Saga / effect，不伪装成本地事务。
 //
 //roost:nest rollback=undo durability=strict
@@ -221,17 +219,21 @@ func handlerPartyClaim(p IPartyPlayerEntity, room IPartyRoomEntity, nowUnixMilli
 	if err != nil {
 		return 0, err
 	}
-	if !p.Dao().GetInitialized() {
+	if !p.Enter().Built() {
 		return 0, party.ErrRule
 	}
 	reward, changed, err := s.Claim(p.ID())
 	if err != nil || !changed {
 		return reward, err
 	}
-	if p.Dao().GetCoins() > partyCoinCap-reward {
+	if p.Wallet().Balance() > partyCoinCap-reward {
 		return 0, party.ErrRule
 	}
-	p.Dao().SetCoins(p.Dao().GetCoins() + reward)
+	if reward > 0 {
+		if _, err := p.Wallet().Add(reward); err != nil {
+			return 0, err
+		}
+	}
 	p.Dao().SetMatches(p.Dao().GetMatches() + 1)
 	return reward, room.SaveRoom(s, nowUnixMilli)
 }

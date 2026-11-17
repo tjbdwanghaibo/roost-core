@@ -1,0 +1,11 @@
+# python3 scripts/test-genres-generated.py --out <scratchpad>/b1117-r9-2a/matrix --genres party-room，2026-11-17
+Running party-room: <scratchpad>/b1117-r9-2a/matrix/party-room
+party-room: passed
+genre: party-room
+status: passed
+module: example.com/acceptance/party-room
+passed_tests: 19
+custom_module_passed_tests: 19
+skipped_tests: 0
+custom_module_verify: {'enter': 29, 'wallet': 17}
+elapsed_seconds: 63.371
