@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -357,5 +358,68 @@ func TestCellworldHostStopsTheNodeTheServiceLeftRunning(t *testing.T) {
 	}
 	if err := cellworldHost(t, registry).Close(ctx); err != nil {
 		t.Fatalf("closing the host after the service stopped the Node: %v", err)
+	}
+}
+
+// countingTransport 记着还在的订阅数：Node.Run 返回前退掉全部订阅，降回 0 说明 Node 已经停了。
+type countingTransport struct{ live *atomic.Int64 }
+
+func (countingTransport) Publish(string, []byte) error { return nil }
+func (c countingTransport) Subscribe(string, func([]byte)) (func() error, error) {
+	c.live.Add(1)
+	return func() error { c.live.Add(-1); return nil }, nil
+}
+
+// Node 就绪之后 AddIngress 失败（App 已开始停机、关了输入，这时再登记的准入不会有人关）时，Start 撤掉刚起的 Node：
+// 返回登记失败的错误，Node.Run 已退出、订阅全退，Runtime 从 Host 拿下并回到未启动——不留 done / cancel，StartSpawns
+// 拒绝，Stop 与 Host.Close 无事可做；Start 只能调用一次，再调仍拒绝。
+func TestCellworldStartAfterInputsClosedTakesTheNodeDown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	registry := cellRegistry(t, "")
+	if err := app.CloseRegisteredIngress(ctx, registry); err != nil {
+		t.Fatal(err)
+	}
+	live := new(atomic.Int64)
+	runtime, err := New(registry, cellConfig(t, countingTransport{live: live}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runtime.Start(ctx)
+	if err == nil {
+		t.Fatal("Start succeeded although the App no longer accepts inputs")
+	}
+	if !strings.Contains(err.Error(), `"cellworld"`) {
+		t.Fatalf("Start error does not name the refused input: %v", err)
+	}
+	select {
+	case <-runtime.Node.Ready():
+	default:
+		t.Fatal("the Node never became ready; this case must fail at AddIngress, after readiness")
+	}
+	if n := live.Load(); n != 0 {
+		t.Fatalf("Node.Run still holds %d subscriptions after the refused Start", n)
+	}
+	if runtime.done != nil || runtime.cancel != nil {
+		t.Error("the refused Start left the stopped Node's done / cancel behind")
+	}
+	host := cellworldHost(t, registry)
+	host.mu.Lock()
+	attached := host.runtime
+	host.mu.Unlock()
+	if attached != nil {
+		t.Error("the refused Runtime is still attached to the host")
+	}
+	if err := runtime.Stop(ctx); err != nil {
+		t.Errorf("Stop after the refused Start: %v", err)
+	}
+	if err := host.Close(ctx); err != nil {
+		t.Errorf("Host.Close after the refused Start: %v", err)
+	}
+	if err := runtime.StartSpawns(nil, nil); err == nil {
+		t.Fatal("spawns started on a Node that was taken down")
+	}
+	if err := runtime.Start(ctx); err == nil || !strings.Contains(err.Error(), "already started") {
+		t.Fatalf("second Start after the refusal: %v", err)
 	}
 }
