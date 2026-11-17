@@ -66,6 +66,8 @@ type Admin interface {
 	// by the target from then on. UnmergeServer removes the alias. Both are
 	// operator writes — they change which process every role of a server
 	// logs in to — so, like ResolvePendingCreation, they are not on the bus.
+	// MergeServer refuses while the source is the source or target of a role
+	// transfer in flight (ErrTransferInProgress, listed in the result).
 	MergeServer(ctx context.Context, request MergeRequest) (MergeResult, error)
 	UnmergeServer(ctx context.Context, from int32, note string) (MergeResult, error)
 

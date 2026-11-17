@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 )
 
 // 别名合服（DESIGN-TODO D15，设计 docs/maintenance/FEATURE-2026-10-20-server-merge-alias.md）。
@@ -43,13 +44,44 @@ type MergeResult struct {
 	DryRun  bool `json:"dry_run,omitempty"`
 	// Servers 是操作之后（DryRun 时是操作之前）相关的服务器记录：From、Into 与 Repointed。
 	Servers []GameServer `json:"servers"`
+	// TransfersInFlight 是 MergeServer 因此拒绝的在途换服：以 From 为来源或目标的，按期限从早到晚（每条是那个角色
+	// 当前的绑定）。只在答 ErrTransferInProgress 时非空。
+	TransfersInFlight []RoleBinding `json:"transfers_in_flight,omitempty"`
+}
+
+// shownTransfers 是拒绝合服的错误文本里至多点名几个在途换服；全部在 MergeResult.TransfersInFlight。
+const shownTransfers = 10
+
+// transfersInFlightRefusal 是“被并走的服还有在途换服”的拒绝：点名这些换服并给出了结的办法。
+func transfersInFlightRefusal(from int32, flights []RoleBinding) error {
+	var named strings.Builder
+	for i, flight := range flights {
+		if i == shownTransfers {
+			fmt.Fprintf(&named, "; and %d more", len(flights)-shownTransfers)
+			break
+		}
+		if i > 0 {
+			named.WriteString("; ")
+		}
+		fmt.Fprintf(&named, "player %d transfer %s (%d -> %d, deadline %d)", flight.PlayerID, flight.Transfer.ID,
+			flight.Transfer.From, flight.Transfer.To, flight.Transfer.DeadlineUnix)
+	}
+	return fmt.Errorf("%w: server %d is the source or target of %d role transfers in flight: %s; settle them before the merge "+
+		"(accountctl transfer-role list; accountctl transfer-role abort -player P -id ID -note TEXT, or wait for the account "+
+		"service to abort them at their deadlines), then run the merge again", ErrTransferInProgress, from, len(flights), named.String())
 }
 
 // MergeServer 把 request.From 并入 request.Into（拍平），见文件头注释。
 //
 // 拒绝（什么也不写）：From / Into 不是正数、相同或不存在（ErrServerInvalid）；Into 自己已并入别处、或
 // 会形成环（ErrServerMergeCycle）；From 已并入另一个服（ErrConflict，先 UnmergeServer）；备注缺失或超长
-// （ErrAdminNoteRequired）。同一对重复执行幂等成功，Changed 为 false；上次中途停下的会在这次补完。
+// （ErrAdminNoteRequired）；From 是在途换服的来源或目标（ErrTransferInProgress，MergeResult.TransfersInFlight
+// 列出它们，dry-run 同样拒绝；角色存储没有在途索引时答 ErrNoTransferIndex——证明不了“一个都没有”就不合）。
+// 同一对重复执行幂等成功，Changed 为 false；上次中途停下的会在这次补完。
+//
+// 在途换服的检查在写之前做一次，不与后面的写原子：检查之后才发起的换服（停服窗口里 A、B 都是 maintenance，
+// 发起要求目标服 open、发起方是承载服，只剩“读到合服之前的记录、写在合服之后”的竞态）照旧由提交时的检查
+// （目标服已并走则拒绝）与期限中止兜底。
 //
 // 写入顺序，以及为什么：
 //
@@ -109,6 +141,18 @@ func (s *Service) MergeServer(ctx context.Context, request MergeRequest) (MergeR
 	wantMembers := append([]int32{from}, result.Repointed...)
 	result.Changed = source.MergedInto != into || source.Status != ServerClosed || len(source.MergedFrom) != 0 ||
 		!containsAll(target.MergedFrom, wantMembers) || slices.ContainsFunc(repoint, func(member GameServer) bool { return member.MergedInto != into })
+	if result.Changed {
+		// 合服前置条件：From 不是任何在途换服的来源或目标（换服方案三期）。dry-run 同样回答，运维在第 3 步就能看到。
+		flights, err := s.transfersInvolving(ctx, from)
+		if err != nil {
+			return result, fmt.Errorf("account: list the role transfers involving server %d before merging it: %w", from, err)
+		}
+		if len(flights) > 0 {
+			result.TransfersInFlight = flights
+			result.Servers = append([]GameServer{source, target}, repoint...)
+			return result, transfersInFlightRefusal(from, flights)
+		}
+	}
 	if request.DryRun || !result.Changed {
 		result.Servers = append([]GameServer{source, target}, repoint...)
 		return result, nil

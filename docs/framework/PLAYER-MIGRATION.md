@@ -96,11 +96,11 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 | 0 准备 | 读清单：`go run ./cmd/sidmerge checklist`（按 sid 分库的逻辑库要搬，共享逻辑库两侧必须同一位置，持久总线消息，需要业务语义的合并）。业务按 §6.3 准备自己的合并脚本 | 清单里每一项有负责人 |
 | 1 公告、停准入 | A、B 的 account 状态改 maintenance（`accountctl upsert-server -status maintenance`），接入层停止接受新连接 | — |
 | 2 停服 | A、B 的 game 进程正常停机（SIGTERM，等进程退出）；之前先按清单的 `bus` 项处理发往 A 的持久消息（可靠总线的死信、JetStream RPC 的实例 durable） | 进程退出；`sidmove singleton` 两把锁都已释放 |
-| 3 前置检查 | `go run ./cmd/sidmerge migrate -from A -into B [-from-config …] [-into-config …] -dry-run`：两侧 WAL 已排空（且配置的库名映射与该进程最后一次运行记下的相同）、每个非按 sid 的逻辑库两侧在同一 Mongo 的同一物理库、A 的 outbox 为空或两侧共用控制库、saga 全部终态、按 sid 分库的 `_id` 冲突扫描；持久总线清单要人工确认（`confirm`） | 报告 `ready: true`，`confirm` 项已逐条确认。WAL 不在本机时在那台机器跑 `sidmove wal-drained`，通过后加 `-from-wal-checked` / `-into-wal-checked` |
+| 3 前置检查 | `go run ./cmd/sidmerge migrate -from A -into B [-from-config …] [-into-config …] -dry-run`：两侧 WAL 已排空（且配置的库名映射与该进程最后一次运行记下的相同）、每个非按 sid 的逻辑库两侧在同一 Mongo 的同一物理库、A 的 outbox 为空或两侧共用控制库、saga 全部终态、按 sid 分库的 `_id` 冲突扫描；持久总线清单要人工确认（`confirm`）。另跑 `accountctl merge-server -from A -into B -note … -dry-run`：A 是在途换服的来源或目标时它拒绝（`ErrTransferInProgress`）并在 `transfers_in_flight` 列出这些换服——等它们了结（源服还在跑的会自己提交或中止），或 `accountctl transfer-role abort -player P -id ID -note …` 中止，再跑一次 | 报告 `ready: true`，`confirm` 项已逐条确认；`merge-server -dry-run` 不再拒绝。WAL 不在本机时在那台机器跑 `sidmove wal-drained`，通过后加 `-from-wal-checked` / `-into-wal-checked` |
 | 4 抽样快照 | `sidmove players -sid A -ids <A 的抽样玩家> -out before.json`（v1.47.0 起 Player 的 DAO 是 `dbscope=sid`，读 A 的库） | — |
 | 5 迁移按 sid 独占的数据 | `go run ./cmd/sidmerge migrate -from A -into B -manifest merge-A.json`：A 的 `<物理名A>_<A>` 逐集合原样拷进 B 的 `<物理名B>_<B>`（两侧各按自己的 `dataengine.databases` 换算），带 `_version` / `_schema` / `_last_tx` 与墓碑字段；冲突整体停止、不覆盖不跳过；重跑幂等。没有 `dbscope=sid` DAO 的工程这一步什么也不写；game-demo 按服分库的有 Player、World、分区场景的地形格账本 `TerrainCellEditor`，以及普通场景里的地形块、建筑与玩家编辑账本（`dbscope=boot`，按地图归属，分区场景时它们在共用库、这一步不搬；逻辑库 main 因此是混合库）。两个服的普通场景若是同一张图，块与建筑的 `_id` 相同，这一步按冲突停止，先由业务决定 A 的图怎么处理再重跑（KNOWN-LIMITS“地形的库范围按地图归属”） | 报告 `copied` / `already_present`；清单文件保存好（回退要用）。源库保留为只读归档，确认无误后由运维手动删除 |
 | 6 业务语义合并 | 业务脚本（§6.3） | 业务自己的核对 |
-| 7 account 记录 | `accountctl merge-server -from A -into B -note "<窗口、工单>"`（先 `-dry-run` 看会改哪些记录）：A 写 `MergedInto = B`、`closed`；原来并入 A 的服一并改指 B（拍平） | `accountctl show-server -sid A`：`merged_into: B`；`show-server -sid B` 的 `merged_from` 含 A |
+| 7 account 记录 | `accountctl merge-server -from A -into B -note "<窗口、工单>"`（先 `-dry-run` 看会改哪些记录）：A 写 `MergedInto = B`、`closed`；原来并入 A 的服一并改指 B（拍平）。写之前再查一次在途换服，有就拒绝、什么也不写：那是第 3 步之后才发起的（A 已是 maintenance，只可能是人工发起），了结之后若有换服提交到了 A，先重跑第 5 步的 migrate（幂等）把它的档搬过去，再合服 | `accountctl show-server -sid A`：`merged_into: B`；`show-server -sid B` 的 `merged_from` 含 A |
 | 8 部署层 | 服务器列表显示“A（已并入 B）”并给出 B 的接入地址；嵌入 TCP 部署把 A 的接入域名 / 端口指到 B；独立 Gate 不需要配置 | — |
 | 9 启动 B | 启动 game(B)，开放登录前 `sidmove players -sid B -ids <同一批玩家> -compare before.json`（Player 已随第 5 步原样拷进 B 的库，文档未变），按清单核对迁入文档 | `/readyz` 200；比较通过 |
 | 10 开放登录 | B 的状态改回 open。之后不再部署 game(A) | A 的角色登录到 B；`CreateRole` 在 A 上被拒（`server … is merged into B`） |
@@ -138,6 +138,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 - `sidmerge` 不连 NATS：持久总线一项只能列出、由运维确认，不自动检查积压。
 - “同一 Mongo” 按 URI 的主机列表 + 副本集名比较：同一集群换主机名写会被判为不同而拒绝（偏保守）。
 - saga 记录不带“属于哪个 sid”，检查的是整个 saga 存储：同一存储里还在运行的其他服的 saga 也会让检查不通过。
+- 在途换服由 account 的 `MergeServer` 检查（`sidmerge` 不连 account）：以 A 为来源或目标的在途换服一个都不能有，角色存储没有在途索引时也拒绝（证明不了）。检查在写之前做一次、不与写原子：检查之后才落下的发起由提交时的拒绝（目标服已并走）与期限中止兜底。
 - 剩余边界与尚未确认项见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#合服d15)。
 
 ## 7. 单个玩家换服（account 一侧）
@@ -234,7 +235,7 @@ go run ./cmd/accountctl transfer-role abort  -player 1000001 -id <ID> -note "源
 ### 7.5 边界
 
 - 游戏侧 rehome 已完成本节开头的本机真实验收；跨机、物理卷迁移仍未验。提交后源服崩溃留下的旧源档由起服核对清理；目标服在源服重启之前已经写过他（版本不同）时源档保留、记 Error，由运维对账。
-- 一期不涉及**已并入另一服的服**：角色的绑定服已并入别服、或目标服已并入别服，发起都被拒绝；提交时目标服已并入别服也被拒绝。承载着别的服（别人并入它）的服是普通的源与目标。`MergeServer` 不检查有没有在途的换服指向被合并的服（索引有了，但合服时怎么处理在途换服没有定：现在靠提交时的拒绝与期限中止兜底）。
+- 一期不涉及**已并入另一服的服**：角色的绑定服已并入别服、或目标服已并入别服，发起都被拒绝；提交时目标服已并入别服也被拒绝。承载着别的服（别人并入它）的服是普通的源与目标。`MergeServer` 在被并走的服是在途换服的来源或目标时拒绝（`ErrTransferInProgress`，结果的 `transfers_in_flight` 列出它们，见 §6.1 第 3、7 步）；检查之后才落下的发起由提交时的拒绝与期限中止兜底。
 - 换服 ID 仍由调用方保证不复用，但“已中止的换服不被重放复活”不再依赖它：过期的 Begin 由 `TransferSeq` 挡住。account 按 ID 只认在途的那一次与最近了结的那一次——调用方拿一个早已了结的 ID、带着**当前**的代数与序号重新发起，会被当作一次新的换服受理；重发一个早已被别的了结覆盖掉的 ID 的 Abort（当前没有换服在途时），会被当作“中止一个没发起过的 ID”再记一次（即使它当年是提交的）。
 - account 只负责绑定，不负责搬玩家 DAO。只调 account 改绑而不执行游戏侧搬档，目标物理库里可能没有玩家数据；rehome 在 v1.47.0 的完整流程中负责 dbscope=sid 文档复制与条件删除，可去的服仍由业务规则限定。
 - 独立 Gate 的会话 claims 已由激活通知交给 Game（`GameDependencies.OnActivated`，login 联动）；claims 只是认证时的快照，恢复/准入仍核对 account 当前绑定，不能拿快照作持续写授权。

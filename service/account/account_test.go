@@ -72,8 +72,9 @@ func newService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config
 		t.Fatal(err)
 	}
 	cfg := Config{
-		Accounts:      versionstore.NewMemoryStore[string, Account](),
-		Roles:         versionstore.NewMemoryStore[int64, Role](),
+		Accounts: versionstore.NewMemoryStore[string, Account](),
+		// 与生产的 Redis 角色存储一样带在途换服的索引（合服、列举、清扫都要它）；要“没有索引”的用例自己换成普通存储。
+		Roles:         NewMemoryRoles(),
 		Servers:       versionstore.NewMemoryStore[int32, GameServer](),
 		Names:         names,
 		Slots:         versionstore.NewMemoryStore[string, Slot](),

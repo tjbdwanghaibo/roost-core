@@ -278,7 +278,7 @@ func newPortalWorldWith(t *testing.T, account func(*svcaccount.Config), mutate .
 	t.Helper()
 	w := &portalWorld{t: t, stores: portalStores{
 		accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
-		roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		roles:    svcaccount.NewMemoryRoles(), // 带在途换服索引，与生产的 Redis 角色存储一样（合服要它）
 		slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
 	}}
 	w.now.Store(time.Unix(1_800_000_000, 0).UnixMilli())

@@ -822,6 +822,27 @@ func TestATransferredRoleKeepsItsNameUnderTheCreationOwner(t *testing.T) {
 
 // 与别名合服的交叉：一期拒绝涉及“已并入另一服”的服——角色的绑定服已并入别处（它由承载服的进程服务，
 // 原服身份还挂在别名上），或目标服已并入别处。承载着别的服（别人并入它）的服不算，照常可作源或目标。
+// raceMerge 不经 MergeServer、直接写下“from 并入 into”的两条服务器记录：模拟在 MergeServer 检查在途换服之后
+// 才落下的发起（检查与写不原子），给提交时的兜底用。
+func raceMerge(t *testing.T, cfg Config, from, into int32) {
+	t.Helper()
+	ctx := context.Background()
+	if _, _, err := cfg.Servers.Update(ctx, into, func(current GameServer, found bool) (GameServer, bool, error) {
+		next := current.clone()
+		next.MergedFrom = unionSorted(next.MergedFrom, []int32{from})
+		return next, found, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cfg.Servers.Update(ctx, from, func(current GameServer, found bool) (GameServer, bool, error) {
+		next := current.clone()
+		next.MergedInto, next.Status, next.MergeNote = into, ServerClosed, mergeNote
+		return next, found, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTransfersInvolvingAMergedAwayServerAreRefused(t *testing.T) {
 	ctx := context.Background()
 	t.Run("source merged away", func(t *testing.T) {
@@ -841,10 +862,15 @@ func TestTransfersInvolvingAMergedAwayServerAreRefused(t *testing.T) {
 			t.Fatalf("the merged role after the refusals = %+v, %v", validated, err)
 		}
 	})
+	// 下面两条是兜底：MergeServer 在写之前拒绝涉及被并走的服的在途换服，只剩“检查之后才落下的发起”这个竞态，
+	// 用直接写服务器记录模拟这样的合服（raceMerge）。
 	t.Run("target merged away while the transfer is in flight", func(t *testing.T) {
 		s, cfg, role, session := transferFixture(t)
 		mustBegin(t, s, role.PlayerID, transferTo("t-1", homeSID, thirdSID, 0))
-		mustMerge(t, s, thirdSID, awaySID)
+		if _, err := s.MergeServer(ctx, MergeRequest{From: thirdSID, Into: awaySID, Note: mergeNote}); !errors.Is(err, ErrTransferInProgress) {
+			t.Fatalf("merging the target of a transfer in flight = %v, want ErrTransferInProgress", err)
+		}
+		raceMerge(t, cfg, thirdSID, awaySID)
 		binding, err := s.CommitRoleTransfer(ctx, role.PlayerID, "t-1")
 		if !errors.Is(err, ErrServerClosed) || binding.ServerID != homeSID || binding.Transfer == nil {
 			t.Fatalf("Commit onto a server merged away meanwhile = %+v, %v; want ErrServerClosed with the transfer still in flight", binding, err)
@@ -862,7 +888,10 @@ func TestTransfersInvolvingAMergedAwayServerAreRefused(t *testing.T) {
 		// 角色正要离开的服被并走：提交照常，角色落在目标服，与合服再无关系。
 		s, cfg, role, session := transferFixture(t)
 		mustBegin(t, s, role.PlayerID, transferTo("t-1", homeSID, thirdSID, 0))
-		mustMerge(t, s, homeSID, awaySID)
+		if _, err := s.MergeServer(ctx, MergeRequest{From: homeSID, Into: awaySID, Note: mergeNote}); !errors.Is(err, ErrTransferInProgress) {
+			t.Fatalf("merging the source of a transfer in flight = %v, want ErrTransferInProgress", err)
+		}
+		raceMerge(t, cfg, homeSID, awaySID)
 		mustCommit(t, s, role.PlayerID, "t-1")
 		mustBeBoundTo(t, s, cfg, role, session.Token, thirdSID, 1)
 	})
@@ -1809,7 +1838,14 @@ func TestListRoleTransfersListsTransfersInFlightByDeadline(t *testing.T) {
 
 // 没有索引的角色存储不假装列得出来。
 func TestListingTransfersNeedsTheIndex(t *testing.T) {
-	s, _, _ := newService(t)
+	s, _, cfg := newService(t, func(c *Config) { c.Roles = versionstore.NewMemoryStore[int64, Role]() })
+	upsertOpen(t, s, 2)
+	if _, err := s.MergeServer(context.Background(), MergeRequest{From: 2, Into: 1, Note: mergeNote}); !errors.Is(err, ErrNoTransferIndex) {
+		t.Fatalf("merge without an index = %v, want ErrNoTransferIndex: without the index nobody can tell no transfer involves server 2", err)
+	}
+	if got := storedServer(t, cfg, 2); got.MergedInto != 0 {
+		t.Fatalf("a merge refused for want of the index wrote server 2: %+v", got)
+	}
 	if _, err := s.ListRoleTransfers(context.Background(), 0); !errors.Is(err, ErrNoTransferIndex) {
 		t.Fatalf("list without an index = %v, want ErrNoTransferIndex", err)
 	}

@@ -75,16 +75,35 @@ func transferExpired(transfer *RoleTransfer, nowUnix int64) bool {
 // 列举按索引翻页、再逐条读角色记录核对：翻页期间了结的不列，期间新发起的可能漏掉——调用方要的是“此刻在途的大致全集”，
 // 定期再列一次就会看到。
 func (s *Service) ListRoleTransfers(ctx context.Context, fromServerID int32) ([]RoleBinding, error) {
-	index := s.transferIndex()
-	if index == nil {
+	if s.transferIndex() == nil {
 		return nil, ErrNoTransferIndex
 	}
 	if fromServerID < 0 {
 		return nil, fmt.Errorf("%w: server id %d is negative", ErrRangeInvalid, fromServerID)
 	}
+	return s.scanTransfers(ctx, func(transfer RoleTransfer) bool {
+		return fromServerID == 0 || transfer.From == fromServerID
+	}, MaxListedTransfers)
+}
+
+// transfersInvolving 列出以 serverID 为来源或目标的全部在途换服（不设条数上限：合服要的是“一个都没有”的证明，
+// 截断的列表证明不了）。只读；角色存储没有索引时答 ErrNoTransferIndex。
+func (s *Service) transfersInvolving(ctx context.Context, serverID int32) ([]RoleBinding, error) {
+	return s.scanTransfers(ctx, func(transfer RoleTransfer) bool {
+		return transfer.From == serverID || transfer.To == serverID
+	}, 0)
+}
+
+// scanTransfers 按索引翻页、逐条读角色记录核对，返回 keep 认的在途换服（按期限从早到晚）；limit > 0 时至多 limit 条。
+func (s *Service) scanTransfers(ctx context.Context, keep func(RoleTransfer) bool, limit int) ([]RoleBinding, error) {
+	index := s.transferIndex()
+	if index == nil {
+		return nil, ErrNoTransferIndex
+	}
+	full := func(listed []RoleBinding) bool { return limit > 0 && len(listed) >= limit }
 	var listed []RoleBinding
 	seen := map[int64]bool{}
-	for offset := 0; len(listed) < MaxListedTransfers; offset += transferListPage {
+	for offset := 0; !full(listed); offset += transferListPage {
 		ids, err := index.TransfersDue(ctx, math.MaxInt64, offset, transferListPage)
 		if err != nil {
 			return nil, err
@@ -98,7 +117,7 @@ func (s *Service) ListRoleTransfers(ctx context.Context, fromServerID int32) ([]
 			if err != nil {
 				return nil, err
 			}
-			if !found || role.Value.Transfer == nil || (fromServerID != 0 && role.Value.Transfer.From != fromServerID) {
+			if !found || role.Value.Transfer == nil || !keep(*role.Value.Transfer) {
 				continue
 			}
 			binding, err := s.bindingOf(ctx, role.Value.clone())
@@ -106,7 +125,7 @@ func (s *Service) ListRoleTransfers(ctx context.Context, fromServerID int32) ([]
 				return nil, err
 			}
 			listed = append(listed, binding)
-			if len(listed) == MaxListedTransfers {
+			if full(listed) {
 				break
 			}
 		}

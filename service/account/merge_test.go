@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -400,5 +401,66 @@ func TestConcurrentMergesThatChainAreReported(t *testing.T) {
 	}
 	if !errors.Is(err, ErrServerMergeCycle) || !strings.Contains(err.Error(), "unmerge-server") {
 		t.Fatalf("a merge whose target was merged meanwhile = %v, want ErrServerMergeCycle with the repair commands", err)
+	}
+}
+
+// 合服前置条件（换服方案三期“合服清单加无在途换服”）：被并走的服是在途换服的来源或目标时，MergeServer（含
+// dry-run）拒绝、什么也不写，并列出这些换服；了结之后同一次合服照常。与被并走的服无关的换服（别处来去、去承载服）不挡。
+func TestAMergeIsRefusedWhileATransferInvolvesTheMergedServer(t *testing.T) {
+	s, _, cfg := pendingContractService(t)
+	ctx := context.Background()
+	const merged, host, other int32 = 2, 1, 3
+	upsertOpen(t, s, merged, other)
+	leaving, _ := roleOn(t, s, "leaving", merged, "Leaving")
+	arriving, _ := roleOn(t, s, "arriving", other, "Arriving")
+	toHost, _ := roleOn(t, s, "tohost", other, "ToHost")
+	mustBegin(t, s, leaving.PlayerID, transferTo("out", merged, other, 0))
+	mustBegin(t, s, arriving.PlayerID, transferTo("in", other, merged, 0))
+	mustBegin(t, s, toHost.PlayerID, transferTo("unrelated", other, host, 0))
+
+	unchanged := func(label string) {
+		t.Helper()
+		if got := storedServer(t, cfg, merged); got.MergedInto != 0 || got.Status != ServerOpen {
+			t.Fatalf("%s: a refused merge wrote server %d: %+v", label, merged, got)
+		}
+		if got := storedServer(t, cfg, host).MergedFrom; len(got) != 0 {
+			t.Fatalf("%s: a refused merge wrote server %d's index: %v", label, host, got)
+		}
+	}
+	for _, dryRun := range []bool{true, false} {
+		result, err := s.MergeServer(ctx, MergeRequest{From: merged, Into: host, Note: mergeNote, DryRun: dryRun})
+		if !errors.Is(err, ErrTransferInProgress) {
+			t.Fatalf("merge (dry-run %v) with transfers in flight from and onto %d = %v, want ErrTransferInProgress", dryRun, merged, err)
+		}
+		var listed []string
+		for _, flight := range result.TransfersInFlight {
+			listed = append(listed, fmt.Sprintf("%d:%s", flight.PlayerID, flight.Transfer.ID))
+		}
+		slices.Sort(listed)
+		if want := []string{fmt.Sprintf("%d:out", leaving.PlayerID), fmt.Sprintf("%d:in", arriving.PlayerID)}; !slices.Equal(listed, slices.Sorted(slices.Values(want))) {
+			t.Fatalf("the refused merge lists %v, want %v", listed, want)
+		}
+		for _, want := range []string{"out", "in", "transfer-role abort"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the refusal does not name %q: %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "unrelated") {
+			t.Fatalf("the refusal names a transfer that does not involve server %d: %v", merged, err)
+		}
+		unchanged(fmt.Sprintf("dry-run=%v", dryRun))
+	}
+
+	// 了结一个还不够；两个都了结之后合服照常（去承载服的那个仍在途，不挡）。
+	if _, err := s.AbortRoleTransfer(ctx, leaving.PlayerID, "out", "merge window"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MergeServer(ctx, MergeRequest{From: merged, Into: host, Note: mergeNote}); !errors.Is(err, ErrTransferInProgress) {
+		t.Fatalf("merge with the inbound transfer still in flight = %v, want ErrTransferInProgress", err)
+	}
+	unchanged("one settled")
+	mustCommit(t, s, arriving.PlayerID, "in")
+	if result := mustMerge(t, s, merged, host); !result.Changed {
+		t.Fatalf("the merge after both transfers settled changed nothing: %+v", result)
 	}
 }

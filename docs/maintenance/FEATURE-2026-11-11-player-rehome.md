@@ -141,7 +141,7 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 | --- | --- | --- |
 | 一 | account 接口与 accountctl；`HandOffEntity`；模块 `rehome` 最小形态、enter 的进入前检查、`with/enter`；demo 的 `admitBound` 与 `PlayerOwners` 接上并改写用例；文档 | **已实现**，只有离线验证 |
 | 二 | demo 全量联动：队伍与匹配（换服前必须不在队里 / 自动取消排队）、副本与战斗中拒绝、场景（离开时离场景、到达回出生点）、联盟 `HomeSID` 惰性修正、全服邮件范围、名下建筑的规则；其余联动（mailbox、chat、leaderboard）；真实依赖演练（两个 game sid + account + saga，每个阶段后 kill -9） | 未开始 |
-| 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 索引、列举、按期限了结与源服重启后的恢复**已实现**（2026-11-17，D7 A / D8 A）；其余未开始 |
+| 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 索引、列举、按期限了结与源服重启后的恢复**已实现**（2026-11-17，D7 A / D8 A）；合服前“无在途换服”**已实现**（2026-11-18，放在 account 的 `MergeServer`：`sidmerge` 不连 account，见 [PLAYER-MIGRATION §6.1](../framework/PLAYER-MIGRATION.md#61-步骤) 第 3、7 步）；其余未开始 |
 
 ### 一期后半的实施结果（2026-11-11）
 

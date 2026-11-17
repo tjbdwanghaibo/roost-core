@@ -121,7 +121,7 @@ func TestAccountAuthenticatorRoutesAMergedServersRoleToItsServingServer(t *testi
 	}
 	var nextID atomic.Int64
 	service, err := account.New(account.Config{
-		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: versionstore.NewMemoryStore[int64, account.Role](),
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: account.NewMemoryRoles(),
 		Servers: versionstore.NewMemoryStore[int32, account.GameServer](), Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
 		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
 			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil

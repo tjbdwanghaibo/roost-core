@@ -76,7 +76,7 @@ func newLoginWorld(t *testing.T) *loginWorld {
 	w := &loginWorld{
 		t:        t,
 		accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
-		roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		roles:    svcaccount.NewMemoryRoles(), // 带在途换服索引，与生产的 Redis 角色存储一样（合服要它）
 		servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
 	}
