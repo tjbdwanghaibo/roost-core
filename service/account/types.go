@@ -249,6 +249,9 @@ type Account struct {
 	// is the record that remains for the next reader.
 	AdminNote         string `json:"admin_note,omitempty"`
 	AdminActionAtUnix int64  `json:"admin_action_at_unix,omitempty"`
+	// GameTokenGeneration 是这个账号的游戏账号 token 代数（game_token.go）：签发时写进 token，校验时与这里比较，
+	// 不相等的拒绝。RevokeGameTokens 把它加一，在此之前签发的 token 随之全部失效。只增不减；零是从未吊销过。
+	GameTokenGeneration uint64 `json:"game_token_generation,omitempty"`
 }
 
 // ServerStatus says whether a server accepts new roles.

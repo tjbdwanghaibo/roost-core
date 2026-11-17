@@ -121,15 +121,21 @@ type Accounts interface {
 	// 游戏账号 token（game_token.go，方案 2026-11-16 §4.1.1）：开房间类游戏的大厅凭它认“哪个账号、玩哪个游戏”。
 	// 签发与校验都在 account，大厅不持有密钥、不自己验签。
 
-	// IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt1，寿命 account.games.<game>.token_ttl）。
+	// IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt2，寿命 account.games.<game>.token_ttl）。
 	// 只读。账号只取自票据：票据无效 ErrSessionInvalid；账号不在、被封 ErrAccountMissing / ErrIdentityDenied；
 	// game 不在 account.games 里 ErrGameInvalid。
 	IssueGameToken(ctx context.Context, accountTicket string, game string) (token GameToken, err error)
 
 	// ValidateGameToken 校验一张游戏账号 token，返回账号、游戏与过期时刻。只读。token 无效（过期、被改、
-	// 拿别的票据冒充）一律 ErrSessionInvalid；游戏已经不在 account.games 里 ErrGameInvalid；账号不在、被封
-	// ErrAccountMissing / ErrIdentityDenied（封号当场生效）。它不核对调用方的游戏：调用方用 GameAccount.RequireGame。
+	// 拿别的票据冒充、已被 RevokeGameTokens 吊销）一律 ErrSessionInvalid；游戏已经不在 account.games 里 ErrGameInvalid；
+	// 账号不在、被封 ErrAccountMissing / ErrIdentityDenied（封号当场生效）。它不核对调用方的游戏：调用方用 GameAccount.RequireGame。
 	ValidateGameToken(ctx context.Context, token string) (account GameAccount, err error)
+
+	// RevokeGameTokens 吊销 accountID 在此之前签发的全部游戏账号 token（账号上的代数加一并落库），返回新的代数；
+	// 之后签发的照常可用，封号状态与别的票据不受影响。账号不存在 ErrAccountMissing。调用方是运维（accountctl）与
+	// 账号凭证变更的那一方（改密码、换绑）；可信调用方提供 accountID，信任模型同 SelectRole。在总线上：它只会让
+	// token 失效，不会放进任何人。
+	RevokeGameTokens(ctx context.Context, accountID string) (generation uint64, err error)
 
 	// ListServices 返回 account.services（services.go），按服务名升序；没有配置时为空（单一 game 服务的工程）。
 	// 只读、不需要调用方身份。登录入口用它按服务列出清单。

@@ -54,6 +54,7 @@ const (
 	MethodEnterServer            = "account.EnterServer"
 	MethodIssueGameToken         = "account.IssueGameToken"
 	MethodValidateGameToken      = "account.ValidateGameToken"
+	MethodRevokeGameTokens       = "account.RevokeGameTokens"
 	MethodListServices           = "account.ListServices"
 	MethodRoleBinding            = "account.RoleBinding"
 	MethodBeginRoleTransfer      = "account.BeginRoleTransfer"
@@ -86,6 +87,7 @@ var Methods = []string{
 	MethodEnterServer,
 	MethodIssueGameToken,
 	MethodValidateGameToken,
+	MethodRevokeGameTokens,
 	MethodListServices,
 	MethodRoleBinding,
 	MethodBeginRoleTransfer,
@@ -417,6 +419,22 @@ type rpcValidateGameTokenResponse struct {
 	Account GameAccount `json:"account"`
 }
 
+// rpcRevokeGameTokensRequest is the RevokeGameTokens request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcRevokeGameTokensRequest struct {
+	AccountID string `json:"account_id"`
+}
+
+// rpcRevokeGameTokensResponse is the RevokeGameTokens response on the wire.
+type rpcRevokeGameTokensResponse struct {
+	rpcStatus
+	Generation uint64 `json:"generation"`
+}
+
 // rpcListServicesRequest is the ListServices request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -692,6 +710,14 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			account, err := service.ValidateGameToken(ctx.Context(), wire.Token)
 			return rpcValidateGameTokenResponse{rpcStatus: statusOf(err), Account: account}, nil
+		},
+		MethodRevokeGameTokens: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcRevokeGameTokensRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcRevokeGameTokensResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			generation, err := service.RevokeGameTokens(ctx.Context(), wire.AccountID)
+			return rpcRevokeGameTokensResponse{rpcStatus: statusOf(err), Generation: generation}, nil
 		},
 		MethodListServices: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcListServicesRequest
@@ -999,7 +1025,7 @@ func (c *BusClient) EnterServer(ctx context.Context, ticket string) (ServerEntry
 	return resp.Entry, err
 }
 
-// IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt1，寿命 account.games.<game>.token_ttl）。
+// IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt2，寿命 account.games.<game>.token_ttl）。
 // 只读。账号只取自票据：票据无效 ErrSessionInvalid；账号不在、被封 ErrAccountMissing / ErrIdentityDenied；
 // game 不在 account.games 里 ErrGameInvalid。
 // IssueGameToken implements Accounts.
@@ -1013,8 +1039,8 @@ func (c *BusClient) IssueGameToken(ctx context.Context, accountTicket string, ga
 }
 
 // ValidateGameToken 校验一张游戏账号 token，返回账号、游戏与过期时刻。只读。token 无效（过期、被改、
-// 拿别的票据冒充）一律 ErrSessionInvalid；游戏已经不在 account.games 里 ErrGameInvalid；账号不在、被封
-// ErrAccountMissing / ErrIdentityDenied（封号当场生效）。它不核对调用方的游戏：调用方用 GameAccount.RequireGame。
+// 拿别的票据冒充、已被 RevokeGameTokens 吊销）一律 ErrSessionInvalid；游戏已经不在 account.games 里 ErrGameInvalid；
+// 账号不在、被封 ErrAccountMissing / ErrIdentityDenied（封号当场生效）。它不核对调用方的游戏：调用方用 GameAccount.RequireGame。
 // ValidateGameToken implements Accounts.
 func (c *BusClient) ValidateGameToken(ctx context.Context, token string) (GameAccount, error) {
 	var resp rpcValidateGameTokenResponse
@@ -1022,6 +1048,19 @@ func (c *BusClient) ValidateGameToken(ctx context.Context, token string) (GameAc
 		Token: token,
 	}, &resp)
 	return resp.Account, err
+}
+
+// RevokeGameTokens 吊销 accountID 在此之前签发的全部游戏账号 token（账号上的代数加一并落库），返回新的代数；
+// 之后签发的照常可用，封号状态与别的票据不受影响。账号不存在 ErrAccountMissing。调用方是运维（accountctl）与
+// 账号凭证变更的那一方（改密码、换绑）；可信调用方提供 accountID，信任模型同 SelectRole。在总线上：它只会让
+// token 失效，不会放进任何人。
+// RevokeGameTokens implements Accounts.
+func (c *BusClient) RevokeGameTokens(ctx context.Context, accountID string) (uint64, error) {
+	var resp rpcRevokeGameTokensResponse
+	err := c.call(ctx, MethodRevokeGameTokens, rpcRevokeGameTokensRequest{
+		AccountID: accountID,
+	}, &resp)
+	return resp.Generation, err
 }
 
 // ListServices 返回 account.services（services.go），按服务名升序；没有配置时为空（单一 game 服务的工程）。
@@ -1213,6 +1252,10 @@ func (c capability) IssueGameToken(ctx context.Context, accountTicket string, ga
 
 func (c capability) ValidateGameToken(ctx context.Context, token string) (GameAccount, error) {
 	return c.inner.ValidateGameToken(ctx, token)
+}
+
+func (c capability) RevokeGameTokens(ctx context.Context, accountID string) (uint64, error) {
+	return c.inner.RevokeGameTokens(ctx, accountID)
 }
 
 func (c capability) ListServices(ctx context.Context) ([]ServiceSpec, error) {

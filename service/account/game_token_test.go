@@ -26,7 +26,7 @@ func mustGameToken(t *testing.T, s *Service, accountID, game string) GameToken {
 	return token
 }
 
-// 签发与校验：形状 gt1.<过期秒>.<游戏>.<账号>.<签名>，寿命按游戏；校验答账号、游戏与过期时刻；本地与经总线相同；
+// 签发与校验：形状 gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>（从未吊销的账号代数是 0），寿命按游戏；校验答账号、游戏与过期时刻；本地与经总线相同；
 // 只读（不写账号记录）。
 func TestGameTokensAreIssuedPerGameAndValidatedByAccount(t *testing.T) {
 	s, _, cfg := pendingContractService(t, gameTokenGames)
@@ -41,13 +41,13 @@ func TestGameTokensAreIssuedPerGameAndValidatedByAccount(t *testing.T) {
 			t.Fatalf("%s: %v", transport, err)
 		}
 		parts := strings.Split(party.Token, ".")
-		if len(parts) != 5 || parts[0] != "gt1" || parts[1] != "1700007200" || parts[2] != "party" || party.Game != "party" || party.ExpiresAtUnix != 1_700_007_200 {
-			t.Fatalf("%s: party token = %+v, want gt1.1700007200.party.<account>.<signature>", transport, party)
+		if len(parts) != 6 || parts[0] != "gt2" || parts[1] != "1700007200" || parts[2] != "party" || parts[4] != "0" || party.Game != "party" || party.ExpiresAtUnix != 1_700_007_200 {
+			t.Fatalf("%s: party token = %+v, want gt2.1700007200.party.<account>.0.<signature>", transport, party)
 		}
 		if decoded, err := base64.RawURLEncoding.DecodeString(parts[3]); err != nil || string(decoded) != alice.ID {
 			t.Fatalf("%s: the account segment decodes to %q, %v", transport, decoded, err)
 		}
-		if signature, err := base64.RawURLEncoding.DecodeString(parts[4]); err != nil || len(signature) != 32 {
+		if signature, err := base64.RawURLEncoding.DecodeString(parts[5]); err != nil || len(signature) != 32 {
 			t.Fatalf("%s: the signature is %d bytes, %v", transport, len(signature), err)
 		}
 		got, err := accounts.ValidateGameToken(ctx, party.Token)
@@ -58,7 +58,7 @@ func TestGameTokensAreIssuedPerGameAndValidatedByAccount(t *testing.T) {
 			t.Fatalf("%s: the party token for the party lobby: %v", transport, err)
 		}
 		brawl, err := accounts.IssueGameToken(ctx, ticket, "brawl")
-		if err != nil || brawl.ExpiresAtUnix != 1_700_005_400 || !strings.HasPrefix(brawl.Token, "gt1.1700005400.brawl.") {
+		if err != nil || brawl.ExpiresAtUnix != 1_700_005_400 || !strings.HasPrefix(brawl.Token, "gt2.1700005400.brawl.") {
 			t.Fatalf("%s: brawl (90 minutes) = %+v, %v", transport, brawl, err)
 		}
 		// 各认各的：bob 的 token 是 bob 的。
@@ -87,7 +87,8 @@ func TestAGameTokenExpiresOnTheSystemClock(t *testing.T) {
 	}
 }
 
-// 篡改：改任何一段（过期时刻、游戏、账号、签名）、别的密钥签的、截断、超长，一律 ErrSessionInvalid，错误里不带 token。
+// 篡改：改任何一段（过期时刻、游戏、账号、代数、签名）、别的密钥签的、截断、超长、旧版本 gt1 的形状，
+// 一律 ErrSessionInvalid，错误里不带 token。
 func TestATamperedGameTokenIsRefused(t *testing.T) {
 	s, _, _ := newService(t, gameTokenGames)
 	other, _, _ := newService(t, gameTokenGames, func(c *Config) { c.SessionSecret = "another-secret" })
@@ -103,17 +104,24 @@ func TestATamperedGameTokenIsRefused(t *testing.T) {
 		return strings.Join(changed, ".")
 	}
 	cases := map[string]string{
-		"a later expiry":            with(1, "1800000000"),
-		"another game":              with(2, "brawl"),
-		"another account":           with(3, base64.RawURLEncoding.EncodeToString([]byte(bob.ID))),
-		"a flipped signature":       with(4, base64.RawURLEncoding.EncodeToString(make([]byte, 32))),
-		"signed with another key":   mustGameToken(t, other, alice.ID, "party").Token,
-		"no signature":              strings.Join(parts[:4], "."),
-		"an extra segment":          token + ".x",
-		"another version":           with(0, "gt2"),
-		"longer than the limit":     token + strings.Repeat("A", 1024),
-		"empty":                     "",
-		"a game name with an upper": with(2, "Party"),
+		"a later expiry":           with(1, "1800000000"),
+		"another game":             with(2, "brawl"),
+		"another account":          with(3, base64.RawURLEncoding.EncodeToString([]byte(bob.ID))),
+		"another generation":       with(4, "1"),
+		"a generation with a sign": with(4, "+0"),
+		"a flipped signature":      with(5, base64.RawURLEncoding.EncodeToString(make([]byte, 32))),
+		"signed with another key":  mustGameToken(t, other, alice.ID, "party").Token,
+		"no signature":             strings.Join(parts[:5], "."),
+		"an extra segment":         token + ".x",
+		"another version":          with(0, "gt1"),
+		"the next version":         with(0, "gt3"),
+		// 旧格式 gt1（五段、没有代数），用同一把密钥、同一个域签的：版本与段数都不对，不再认（不兼容，未上线）。
+		"a gt1 signed by this key": s.signTicket(gameTokenDomain, "gt1."+parts[1]+".party."+parts[3]),
+		// 版本是 gt2、内容少了代数段（五段），同一把密钥签的：段数不对，不认。
+		"a gt2 body without the generation": s.signTicket(gameTokenDomain, strings.Join([]string{"gt2", parts[1], "party", parts[3]}, ".")),
+		"longer than the limit":             token + strings.Repeat("A", 1024),
+		"empty":                             "",
+		"a game name with an upper":         with(2, "Party"),
 	}
 	for label, forged := range cases {
 		got, err := s.ValidateGameToken(ctx, forged)
@@ -152,7 +160,7 @@ func TestOtherTicketsCannotPassAsGameTokens(t *testing.T) {
 	}
 	// 同一把密钥、同样的内容，换个版本号也不行：签名的域不同。
 	body := strings.Split(accountTicket, ".")
-	if got, err := s.ValidateGameToken(ctx, "gt1."+body[1]+".party."+body[2]+"."+body[3]); !errors.Is(err, ErrSessionInvalid) {
+	if got, err := s.ValidateGameToken(ctx, "gt2."+body[1]+".party."+body[2]+".0."+body[3]); !errors.Is(err, ErrSessionInvalid) {
 		t.Fatalf("an account ticket's signature on a game token body: %+v, %v", got, err)
 	}
 	game := mustGameToken(t, s, alice.ID, "party").Token
@@ -267,5 +275,110 @@ func TestABanRefusesGameTokensAtOnce(t *testing.T) {
 	}
 	if got, err := s.ValidateGameToken(ctx, bobToken); !errors.Is(err, ErrAccountMissing) || got.AccountID != "" {
 		t.Fatalf("a game token whose account is gone: %+v, %v", got, err)
+	}
+}
+
+// 按账号吊销（交接 C6，维护者 2026-11-17 选“代数”）：RevokeGameTokens 之后，在此之前签发的 token 一律
+// ErrSessionInvalid，之后签发的带新代数、照常可用；别的账号不受影响。本地与经总线相同。代数落在账号记录上：
+// 同一套存储上另起的 account（重启、别的实例）也拒绝旧 token。再吊销一次，上一代也失效。
+func TestRevokingGameTokensRefusesTheOnesIssuedBefore(t *testing.T) {
+	s, _, cfg := pendingContractService(t, gameTokenGames)
+	ctx := context.Background()
+	for transport, accounts := range enterClients(t, s) {
+		alice := login(t, s, "alice-"+transport)
+		bob := login(t, s, "bob-"+transport)
+		before := mustGameToken(t, s, alice.ID, "party").Token
+		brawlBefore := mustGameToken(t, s, alice.ID, "brawl").Token
+		bobs := mustGameToken(t, s, bob.ID, "party").Token
+		if _, err := accounts.ValidateGameToken(ctx, before); err != nil {
+			t.Fatalf("%s: before revoking: %v", transport, err)
+		}
+		generation, err := accounts.RevokeGameTokens(ctx, alice.ID)
+		if err != nil || generation != 1 {
+			t.Fatalf("%s: RevokeGameTokens = %d, %v; want generation 1", transport, generation, err)
+		}
+		for label, token := range map[string]string{"party": before, "brawl": brawlBefore} {
+			if got, err := accounts.ValidateGameToken(ctx, token); !errors.Is(err, ErrSessionInvalid) || Code(err) != 560111 || got.AccountID != "" {
+				t.Fatalf("%s: alice's %s token issued before the revocation: %+v, %v; want ErrSessionInvalid", transport, label, got, err)
+			}
+		}
+		// 把旧 token 的代数段改成当前代数：签名盖着代数段，对不上。
+		forged := strings.Split(before, ".")
+		forged[4] = "1"
+		if got, err := accounts.ValidateGameToken(ctx, strings.Join(forged, ".")); !errors.Is(err, ErrSessionInvalid) || got.AccountID != "" {
+			t.Fatalf("%s: a revoked token with its generation rewritten to the current one: %+v, %v", transport, got, err)
+		}
+		if got, err := accounts.ValidateGameToken(ctx, bobs); err != nil || got.AccountID != bob.ID {
+			t.Fatalf("%s: bob's token after alice's revocation: %+v, %v", transport, got, err)
+		}
+		after, err := accounts.IssueGameToken(ctx, mustAccountTicket(t, s, alice.ID), "party")
+		if err != nil || strings.Split(after.Token, ".")[4] != "1" {
+			t.Fatalf("%s: a token issued after the revocation = %+v, %v; want generation 1 in it", transport, after, err)
+		}
+		if got, err := accounts.ValidateGameToken(ctx, after.Token); err != nil || got.AccountID != alice.ID {
+			t.Fatalf("%s: a token issued after the revocation: %+v, %v", transport, got, err)
+		}
+		// 代数在账号记录上，不在这个进程里。
+		record, _, err := cfg.Accounts.Get(ctx, alice.ID)
+		if err != nil || record.Value.GameTokenGeneration != 1 {
+			t.Fatalf("%s: the stored generation is %d, %v; want 1", transport, record.Value.GameTokenGeneration, err)
+		}
+		restarted, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restarted.ValidateGameToken(ctx, before); !errors.Is(err, ErrSessionInvalid) {
+			t.Fatalf("%s: another account instance on the same store took the revoked token: %v", transport, err)
+		}
+		if got, err := restarted.ValidateGameToken(ctx, after.Token); err != nil || got.AccountID != alice.ID {
+			t.Fatalf("%s: another account instance refused the current token: %+v, %v", transport, got, err)
+		}
+		if generation, err := accounts.RevokeGameTokens(ctx, alice.ID); err != nil || generation != 2 {
+			t.Fatalf("%s: the second revocation = %d, %v; want 2", transport, generation, err)
+		}
+		if _, err := accounts.ValidateGameToken(ctx, after.Token); !errors.Is(err, ErrSessionInvalid) {
+			t.Fatalf("%s: generation 1 after the second revocation: %v", transport, err)
+		}
+	}
+}
+
+// 吊销不碰别的：账号票据仍然换得到新 token；封号的回答不变（被封的账号吊销照样成功，校验答 ErrIdentityDenied，
+// 解封之后吊销之前签的 token 也不复活）。没有这个账号、空账号答 ErrAccountMissing，什么也不写。
+func TestRevokingGameTokensLeavesBansAndTicketsAlone(t *testing.T) {
+	s, _, cfg := pendingContractService(t, gameTokenGames)
+	ctx := context.Background()
+	alice := login(t, s, "alice")
+	ticket := mustAccountTicket(t, s, alice.ID)
+	before := mustGameToken(t, s, alice.ID, "party").Token
+	banAccount(t, cfg, alice.ID)
+	if generation, err := s.RevokeGameTokens(ctx, alice.ID); err != nil || generation != 1 {
+		t.Fatalf("revoking a banned account: %d, %v", generation, err)
+	}
+	if _, err := s.ValidateGameToken(ctx, before); !errors.Is(err, ErrIdentityDenied) {
+		t.Fatalf("a banned account's revoked token: %v; want the ban's ErrIdentityDenied", err)
+	}
+	if _, _, err := cfg.Accounts.Update(ctx, alice.ID, func(current Account, found bool) (Account, bool, error) {
+		current.Banned = false
+		return current, found, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ValidateGameToken(ctx, before); !errors.Is(err, ErrSessionInvalid) {
+		t.Fatalf("a token revoked while banned came back after the unban: %v", err)
+	}
+	got, err := s.IssueGameToken(ctx, ticket, "party")
+	if err != nil {
+		t.Fatalf("the account ticket after the revocation: %+v, %v", got, err)
+	}
+	if _, err := s.ValidateGameToken(ctx, got.Token); err != nil {
+		t.Fatalf("a token from the same account ticket after the revocation: %v", err)
+	}
+	for _, accountID := range []string{"store:nobody", "", "  "} {
+		if generation, err := s.RevokeGameTokens(ctx, accountID); !errors.Is(err, ErrAccountMissing) || generation != 0 {
+			t.Fatalf("revoking %q: %d, %v; want ErrAccountMissing", accountID, generation, err)
+		}
+	}
+	if _, found, err := cfg.Accounts.Get(ctx, "store:nobody"); err != nil || found {
+		t.Fatalf("revoking a missing account created it: found %v, %v", found, err)
 	}
 }
