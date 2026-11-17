@@ -1,0 +1,84 @@
+## M1 host_changed 不按 epoch 比大小（!= 代替 >） -> RED
+--- FAIL: TestHostChangedAcceptsOnlyLargerEpochs (0.00s)
+    --- FAIL: TestHostChangedAcceptsOnlyLargerEpochs/memory (0.00s)
+        lobby_test.go:437: after epochs 2 then 1 then 2 again: host acc-alice epoch 2, want acc-bob at 2
+    --- FAIL: TestHostChangedAcceptsOnlyLargerEpochs/redis (0.00s)
+        lobby_test.go:437: after epochs 2 then 1 then 2 again: host acc-alice epoch 2, want acc-bob at 2
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.250s
+FAIL
+## M2 签令牌不按当前房主填角色（一律 member） -> RED
+--- FAIL: TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken (0.00s)
+    --- FAIL: TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken/memory (0.00s)
+        lobby_test.go:212: claims = {Relay:relay-b Room:a3873dcf194bf0a2 Account:acc-host Role:member MaxMembers:4 ExpiresAt:2026-11-17 15:26:53 +0800 CST}, want host acc-host with the game's 4 seats
+    --- FAIL: TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken/redis (0.00s)
+        lobby_test.go:212: claims = {Relay:relay-b Room:232bee859e3fa43b Account:acc-host Role:member MaxMembers:4 ExpiresAt:2026-11-17 15:26:53 +0800 CST}, want host acc-host with the game's 4 seats
+--- FAIL: TestTokenRoleFollowsTheHostAfterAHostChange (0.00s)
+    --- FAIL: TestTokenRoleFollowsTheHostAfterAHostChange/memory (0.00s)
+        lobby_test.go:464: new host's token role = member, want host
+## M3 去掉满员检查 -> RED
+--- FAIL: TestJoinRefusesWhenFullAndIsIdempotentForMembers (0.00s)
+    --- FAIL: TestJoinRefusesWhenFullAndIsIdempotentForMembers/memory (0.00s)
+        lobby_test.go:292: bob into a full room: err = <nil>, want ErrRoomFull
+    --- FAIL: TestJoinRefusesWhenFullAndIsIdempotentForMembers/redis (0.00s)
+        lobby_test.go:292: bob into a full room: err = <nil>, want ErrRoomFull
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.265s
+FAIL
+## M4 去掉密码检查 -> RED
+--- FAIL: TestJoinChecksThePassword (0.00s)
+    --- FAIL: TestJoinChecksThePassword/memory (0.00s)
+        lobby_test.go:330: password "": err = <nil>, want ErrWrongPassword
+    --- FAIL: TestJoinChecksThePassword/redis (0.00s)
+        lobby_test.go:330: password "": err = <nil>, want ErrWrongPassword
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.251s
+FAIL
+## M5 去掉 /state 的房主检查 -> RED
+--- FAIL: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers (0.00s)
+    --- FAIL: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers/memory (0.00s)
+        lobby_test.go:354: member changing state: err = <nil>, want ErrNotHost
+    --- FAIL: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers/redis (0.00s)
+        lobby_test.go:354: member changing state: err = <nil>, want ErrNotHost
+--- FAIL: TestTokenRoleFollowsTheHostAfterAHostChange (0.00s)
+    --- FAIL: TestTokenRoleFollowsTheHostAfterAHostChange/memory (0.00s)
+        lobby_test.go:474: old host changing state: err = <nil>, want ErrNotHost
+## M6 列表不要求 relay 已报告 -> RED
+--- FAIL: TestListShowsOnlyJoinableConfirmedRoomsOfTheMode (0.01s)
+    --- FAIL: TestListShowsOnlyJoinableConfirmedRoomsOfTheMode/memory (0.00s)
+        lobby_test.go:410: listed = [{ID:9ed6fec7f51a5221 Game:party Mode:duel Name: MaxMembers:4 Members:1 HasPassword:false State:open Host:acc-alice HostEpoch:0 Attrs:null CreatedAtUnix:1794900389} {ID:c720402302da93ae Game:party Mode:duel Name: MaxMembers:4 Members:1 HasPassword:false State:open Host:acc-host HostEpoch:0 Attrs:null CreatedAtUnix:1794900389} {ID:e96393bd939253b7 Game:party Mode:duel Name: MaxMembers:4 Members:1 HasPassword:false State:open Host:acc-host HostEpoch:0 Attrs:null CreatedAtUnix:1794900387}], want [newer, older] only (unconfirmed c720402302da93ae, full 14d886b2bb2236ba, closed 2daf5d7b7783967b excluded)
+    --- FAIL: TestListShowsOnlyJoinableConfirmedRoomsOfTheMode/redis (0.01s)
+        lobby_test.go:410: listed = [{ID:66ddb0e065f95c8a Game:party Mode:duel Name: MaxMembers:4 Members:1 HasPassword:false State:open Host:acc-alice HostEpoch:0 Attrs:null CreatedAtUnix:1794900389} {ID:aba5343f1b901993 Game:party Mode:duel Name: MaxMembers:4 Members:1 HasPassword:false State:open Host:acc-host HostEpoch:0 Attrs:null CreatedAtUnix:1794900389} {ID:261ba4d3f8b76eea Game:party Mode:duel Name: MaxMembers:4 Members:1 HasPassword:false State:open Host:acc-host HostEpoch:0 Attrs:null CreatedAtUnix:1794900387}], want [newer, older] only (unconfirmed aba5343f1b901993, full c2d07cb95b6f634d, closed 7ea6a04819f5b5f8 excluded)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.273s
+FAIL
+## M7 relay 报告不写入（不续 TTL） -> RED
+--- FAIL: TestRoomsExpireWithoutRelayReports (2.26s)
+    --- FAIL: TestRoomsExpireWithoutRelayReports/memory (0.00s)
+        lobby_test.go:612: listed = [], want only the room kept alive by heartbeats
+    --- FAIL: TestRoomsExpireWithoutRelayReports/redis (2.26s)
+        lobby_test.go:612: listed = [], want only the room kept alive by heartbeats
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	2.504s
+FAIL
+## M8 Redis 记录不带 TTL -> RED
+--- FAIL: TestRoomsExpireWithoutRelayReports (2.26s)
+    --- FAIL: TestRoomsExpireWithoutRelayReports/redis (2.26s)
+        lobby_test.go:608: expired room: err = <nil>, want ErrRoomMissing
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	2.495s
+FAIL
+## M9 迟到的旧报告也改写在线名单（不比 seq） -> RED
+--- FAIL: TestRelayReportsMaintainSeats (0.00s)
+    --- FAIL: TestRelayReportsMaintainSeats/memory (0.00s)
+        lobby_test.go:502: seats = "acc-host:online acc-bob:online acc-alice:online", want the host kept offline and bob online
+    --- FAIL: TestRelayReportsMaintainSeats/redis (0.00s)
+        lobby_test.go:502: seats = "acc-host:online acc-bob:online acc-alice:online", want the host kept offline and bob online
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.248s
+FAIL
+## 全部恢复后
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	5.819s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lobby	1.683s
+ok  	github.com/tjbdwanghaibo/roost-core/service/relay/token	1.413s
+
