@@ -545,7 +545,7 @@ func renderDockerReadme(m Manifest) string {
 			service = gate
 		}
 		playerPort = "      -p 7000:7000 \\\n"
-		playerNote = "Player TCP 已声明，因此示例同时发布 7000；若生产配置修改 player_access.tcp.addr，端口映射、LB 和防火墙必须同步修改。"
+		playerNote = "Player TCP 已声明，因此示例与生产 compose 都发布 7000；若生产配置修改 player_access.tcp.addr，端口映射、LB 和防火墙必须同步修改。"
 	}
 	// lobby / relay / 玩家 WebSocket 的端口（serviceClientPorts）；生产 compose 给每个服务发布自己的那些。
 	for _, port := range serviceClientPorts(m, service) {

@@ -113,7 +113,7 @@ func TestPlayerWebSocketPortIsDeployed(t *testing.T) {
 		if policy := files["deploy/k8s/base/network-policy.yaml"]; !strings.Contains(policy, "        - {protocol: TCP, port: 7000}\n        - {protocol: TCP, port: "+port+"}\n") {
 			t.Errorf("%s: network-policy.yaml does not open 7000 and %s to the player-access namespaces:\n%s", tc.name, port, policy)
 		}
-		if compose := renderProductionCompose(tc.m); !strings.Contains(compose, "  "+tc.listener+":\n") || !strings.Contains(compose, "    ports:\n      - \""+port+":"+port+"\"\n") || strings.Count(compose, "    ports:\n") != 1 {
+		if compose := renderProductionCompose(tc.m); !strings.Contains(compose, "  "+tc.listener+":\n") || !strings.Contains(compose, "    ports:\n      - \"7000:7000\"\n      - \""+port+":"+port+"\"\n") || strings.Count(compose, "    ports:\n") != 1 {
 			t.Errorf("%s: docker-compose.prod.yaml:\n%s", tc.name, compose)
 		}
 		if readme := files["deploy/docker/README.md"]; !strings.Contains(readme, "      -p 7000:7000 \\\n      -p "+port+":"+port+" \\\n") || !strings.Contains(readme, playerWebSocketAddrKey(tc.m)+": 0.0.0.0:"+port) {

@@ -303,7 +303,12 @@ func composeClientSettings(m Manifest, service string) string {
 		env := m.relayTokenKeyEnvName()
 		fmt.Fprintf(&b, "    environment:\n      %s: ${%s:?%s (the relay token key, at least 16 bytes) is required}\n", env, env, env)
 	}
-	if ports := serviceClientPorts(m, service); len(ports) > 0 {
+	ports := serviceClientPorts(m, service)
+	if playerTCPEnabled(m) && servicePlayerListener(m, service) {
+		// 玩家 TCP 7000（交接 A2，2026-11-17）：与 k8s 的 player-tcp、docker run 示例的 -p 7000:7000 同一个服务。
+		ports = append([]clientPort{{Name: "player-tcp", Port: 7000}}, ports...)
+	}
+	if len(ports) > 0 {
 		b.WriteString("    ports:\n")
 		for _, port := range ports {
 			fmt.Fprintf(&b, "      - \"%d:%d\"\n", port.Port, port.Port)

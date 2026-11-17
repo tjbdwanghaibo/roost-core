@@ -453,3 +453,54 @@ func TestProductionComposeTmpfsIsOneAbsoluteMountPerService(t *testing.T) {
 		})
 	}
 }
+
+// composeServiceBlock 是生产 compose 里一个服务的那一段（从 "  <service>:" 到下一个同级键或顶层键之前）。
+func composeServiceBlock(compose, service string) string {
+	start := strings.Index(compose, "\n  "+service+":\n")
+	if start < 0 {
+		return ""
+	}
+	rest := compose[start+1:]
+	next := regexp.MustCompile(`\n(  )?[A-Za-z0-9_.-]+:\n`).FindStringIndex(rest[len("  "+service+":\n")-1:])
+	if next == nil {
+		return rest
+	}
+	return rest[:len("  "+service+":\n")-1+next[0]+1]
+}
+
+// 交接 A2（2026-11-17）：生产 compose 自 2026-08-30 引入起没有给玩家 TCP 写 ports，按 compose 部署时玩家从宿主机外
+// 连不上 7000（docker run 示例与 k8s 模板都发布了它）。监听玩家 TCP 的那个服务——有独立 Gate 时是 Gate，嵌入 TCP 时
+// 是拥有玩家接入的服务——发布 "7000:7000"，别的服务不发布；没有玩家接入的工程仍然没有 ports。
+func TestProductionComposePublishesPlayerTCPOnTheListener(t *testing.T) {
+	gate := gateManifestNamed("gate", "game")
+	embedded := gateManifestNamed("gate", "game")
+	access := embedded.Access["player"]
+	access.Gate = ""
+	embedded.Access["player"] = access
+	delete(embedded.Services, "gate")
+	for _, tc := range []struct {
+		name     string
+		m        Manifest
+		listener string
+	}{{"gate", gate, "gate"}, {"embedded", embedded, "game"}} {
+		compose := renderProductionCompose(tc.m)
+		for service := range tc.m.Services {
+			block := composeServiceBlock(compose, service)
+			if block == "" {
+				t.Fatalf("%s: no %s service in docker-compose.prod.yaml:\n%s", tc.name, service, compose)
+			}
+			published := strings.Contains(block, "    ports:\n      - \"7000:7000\"\n")
+			if service == tc.listener && !published {
+				t.Errorf("%s: %s listens for players but does not publish 7000:\n%s", tc.name, service, block)
+			}
+			if service != tc.listener && strings.Contains(block, "7000") {
+				t.Errorf("%s: %s does not listen for players but publishes 7000:\n%s", tc.name, service, block)
+			}
+		}
+	}
+	none := gateManifestNamed("gate", "game")
+	delete(none.Access, "player")
+	if compose := renderProductionCompose(none); strings.Contains(compose, "ports:") {
+		t.Errorf("no player access: docker-compose.prod.yaml publishes ports:\n%s", compose)
+	}
+}

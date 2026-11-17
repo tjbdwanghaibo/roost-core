@@ -377,7 +377,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **TLS 由前置负载均衡终结**（wss）：进程里不配证书。
 - **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。
 - **单条消息上限有 1 字节余量**：库按流读，越过上限后的下一次读才失败，超出部分最多先读出 1 个字节，之后连接以 1009 关闭。上限之内的帧照常处理。
-- **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 不发布玩家 TCP 7000 的问题见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
+- **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 在同一段 `ports` 里发布玩家 TCP 7000 与 7080（2026-11-17 起，之前漏了 7000）。生产 compose 不发布 ops 9100（docker run 示例发布），是否有意尚未确认。
 
 ### 生成器、配置与模块
 
@@ -920,7 +920,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **多进程演练没有做**：方案 §5 的 lobby + relay 真实进程演练（kill -9 房主客户端与 relay 进程、两个 relay 实例分布、吞吐基线）没有做。已有的是进程内真实 NATS + etcd + Redis 的集成用例（`wiring/relay` 的 `TestRealRelay*`：转发、报告、leave 命令、etcd 广播、换 host、踢人、验权、开局后回座），以及生成器组 `make dev-run` 起 account、lobby、relay 三个进程的冒烟（全部 ready、lobby 拒绝伪造的 gt1、relay 在 etcd 广播 tcp 与 ws 地址，[证据](evidence/lobby-relay-gen-20261117/README.md)），以及 2026-11-17 在 `-template lobby` + `roost module add portal` 工程上三个真实进程（单个 relay）的正常路径演练：经 portal 拿 gt1、建房加入、两个通道收发、主动转交、lobby 房主跟随、踢人后再 join 与旧令牌都被拒（[证据](evidence/lobby-relay-portal-20261117/README.md)）。跨机、容量未验。
 - **account 新用例没在真实 Redis 上跑**：游戏账号 token 与多服务的新用例只跑了内存存储；`ROOST_REVIEW3_BACKEND=redis` 走真实 Redis 的那一遍这一轮没跑（[证据](evidence/lobby-relay-account-20261117/README.md)）。
-- **生产 compose 不发布玩家 TCP 7000（已确认是遗漏，未修）**：compose 自 2026-08-30 引入起就没有给玩家 TCP 写 `ports`，而生成工程的文档、docker run 示例与 k8s 模板都声明 7000；文件是生成物，`deploy.sh` 也没有 override 入口，按 README 部署出来的玩家端口从宿主机外连不上。修之前用 compose 部署要自己在生成物之外发布 7000（[证据](evidence/compose-player-tcp-port-20261117/README.md)）。ops 9100 在 compose 里同样没有发布，是否有意尚未确认。
 
 ### 地形与无缝世界（遗留）
 

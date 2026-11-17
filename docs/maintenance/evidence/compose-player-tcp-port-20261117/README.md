@@ -110,3 +110,7 @@
 
 - CHANGELOG `[Unreleased]`：**生成器：生产 compose 发布玩家 TCP 7000**。声明了 player TCP 的工程，`deploy/docker/docker-compose.prod.yaml` 里监听玩家连接的服务（独立 Gate，或嵌入 TCP 所在的服务）多出 `ports: "7000:7000"`；之前只有 docker run 示例和 k8s 模板发布它，按 compose 部署时玩家从宿主机外连不上。没有玩家接入的工程生成结果不变。已有工程 `roost project sync` 后 compose 会多出这两行。
 - KNOWN-LIMITS：删掉二里的这一条，以及一“WebSocket 接入”里指向它的那半句。
+
+## 修复（2026-11-17，协调者）
+
+维护者要求修。按上面“修法”第 1、2 条实施：`composeClientSettings` 在 `playerTCPEnabled(m) && servicePlayerListener(m, service)` 时先写 `"7000:7000"`；绑定写法与 lobby、relay、7080 一致（全部地址）。新用例 `TestProductionComposePublishesPlayerTCPOnTheListener` 修前在 Gate、嵌入两种工程上都红（监听服务没有 7000），修后绿；`TestPlayerWebSocketPortIsDeployed` 的 compose 断言改成同一段 `ports` 里 7000 与 7080 都在。生成的 docker README 那句改成“示例与生产 compose 都发布 7000”。`GOWORK=off go test -race -run 'Compose|WebSocket|PlayerTCP|Deploy|Docker|LobbyRelay|Relay|Lobby' ./codegen/internal/roost/` 与 `go vet` 通过。没有用真实镜像经 docker 再起一次（尚未确认）；ops 9100 没动，仍是尚未确认。
