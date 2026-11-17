@@ -1,0 +1,10 @@
+--- FAIL: TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy (0.00s)
+    tcp_transport_test.go:319: client 2.2.2.2 behind the trusted proxy, limit 1 per IP: failed to get reader: failed to read frame header: EOF
+--- FAIL: TestWebSocketConfigIsValidatedAndTheListenerStopsWithTheServer (0.00s)
+    tcp_transport_test.go:434: validation error player tcp: player_access.tcp.websocket.addr = "127.0.0.1:7000" is the same as player_access.tcp.addr; the two listeners need their own ports
+        player tcp: player_access.tcp.websocket.path: wsconn: path "ws" must start with / and carry no query, fragment or space
+        player tcp: player_access.tcp.websocket.allowed_origins: wsconn: allowed origin "[": syntax error in pattern does not name websocket.trusted_proxies
+    tcp_transport_test.go:440: trusted_proxies ::/0: <nil>, want a refusal naming websocket.trusted_proxies
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	3.042s
+FAIL

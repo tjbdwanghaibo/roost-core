@@ -2,6 +2,8 @@
 
 状态：**方案，未实施**。等维护者定了再做。源码行号按 main 的 `742ccafc`。
 
+（2026-11-17 更新：维护者选 A，配置名 `websocket.trusted_proxies`，relay 不加按 IP 限额、PROXY protocol 不做；实施与证据见 [c3-trusted-proxies-20261117](../c3-trusted-proxies-20261117/README.md)。下文保留为方案原文。）
+
 ## 先说一个和交接文档不一致的地方
 
 交接文档写“Gate 和 relay 共用的 `infra/network/wsconn` 都要改”。核对的结果：

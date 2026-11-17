@@ -1,0 +1,41 @@
+--- FAIL: TestATrustedProxyForwardsTheClientAddress (0.00s)
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/one_hop (0.00s)
+        wsconn_test.go:427: RemoteAddr host = 127.0.0.1, want 1.2.3.4
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/through_a_second_trusted_proxy (0.00s)
+        wsconn_test.go:427: RemoteAddr host = 127.0.0.1, want 1.1.1.1
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/a_forged_leftmost_entry (0.00s)
+        wsconn_test.go:427: RemoteAddr host = 127.0.0.1, want 1.1.1.1
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/the_header_on_two_lines (0.00s)
+        wsconn_test.go:427: RemoteAddr host = 127.0.0.1, want 1.1.1.1
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/IPv6 (0.00s)
+        wsconn_test.go:427: RemoteAddr host = 127.0.0.1, want 2001:db8::1
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/IPv4-mapped_IPv6 (0.00s)
+        wsconn_test.go:427: RemoteAddr host = 127.0.0.1, want 1.2.3.4
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/with_a_port (0.00s)
+        wsconn_test.go:427: RemoteAddr host = 127.0.0.1, want 1.2.3.4
+--- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer (0.00s)
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/no_header (0.00s)
+        wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/an_empty_header (0.00s)
+        wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/not_an_address (0.00s)
+        wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/a_bad_entry_before_the_trusted_hops (0.00s)
+        wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/an_empty_entry (0.00s)
+        wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/only_trusted_addresses (0.00s)
+        wsconn_test.go:485: ForwardedFallback was not called
+--- FAIL: TestTrustedProxiesAreValidated (0.00s)
+    wsconn_test.go:502: trusted proxy "0.0.0.0/0" was accepted
+    wsconn_test.go:502: trusted proxy "::/0" was accepted
+    wsconn_test.go:502: trusted proxy "::ffff:0.0.0.0/96" was accepted
+    wsconn_test.go:502: trusted proxy "::ffff:10.0.0.0/104" was accepted
+    wsconn_test.go:502: trusted proxy "10.0.0.0/33" was accepted
+    wsconn_test.go:502: trusted proxy "garbage" was accepted
+    wsconn_test.go:502: trusted proxy "" was accepted
+    wsconn_test.go:502: trusted proxy " 10.0.0.0/8" was accepted
+    wsconn_test.go:508: Listen accepted a trusted proxy list that trusts everyone
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	0.502s
+FAIL

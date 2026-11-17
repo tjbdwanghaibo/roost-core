@@ -1,0 +1,73 @@
+== M1 去掉“对端必须可信”  (infra/network/wsconn/wsconn.go)
+  ./infra/network/wsconn/ TestTheHeaderIsIgnoredUnlessThePeerIsATrustedProxy -> RED
+    --- FAIL: TestTheHeaderIsIgnoredUnlessThePeerIsATrustedProxy (0.00s)
+    --- FAIL: TestTheHeaderIsIgnoredUnlessThePeerIsATrustedProxy/an_untrusted_peer (0.00s)
+    wsconn_test.go:446: RemoteAddr host = 1.2.3.4, want the TCP peer 127.0.0.1
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	0.495s
+    FAIL
+== M2 改成取最左一项  (infra/network/wsconn/wsconn.go)
+  ./infra/network/wsconn/ TestATrustedProxyForwardsTheClientAddress -> RED
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress (0.00s)
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/a_forged_leftmost_entry (0.00s)
+    wsconn_test.go:427: RemoteAddr host = 9.9.9.9, want 1.1.1.1
+    --- FAIL: TestATrustedProxyForwardsTheClientAddress/the_header_on_two_lines (0.00s)
+    wsconn_test.go:427: RemoteAddr host = 9.9.9.9, want 1.1.1.1
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	0.272s
+    FAIL
+== M3a 退回对端但不报告（不计指标）  (infra/network/wsconn/wsconn.go)
+  ./infra/network/wsconn/ TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer -> RED
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer (0.00s)
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/no_header (0.00s)
+    wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/an_empty_header (0.00s)
+    wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/not_an_address (0.00s)
+    wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/a_bad_entry_before_the_trusted_hops (0.00s)
+  ./infra/network/gateway/ TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy -> RED
+    --- FAIL: TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy (0.00s)
+    tcp_transport_test.go:341: forwarded fallbacks counted = 0, want 2
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.423s
+    FAIL
+== M3b 取不出时放行（每条连接各算一个地址，不按代理地址计数）  (infra/network/wsconn/wsconn.go)
+  ./infra/network/wsconn/ TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer -> RED
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer (0.00s)
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/no_header (0.00s)
+    wsconn_test.go:477: RemoteAddr host = 240.0.247.176, want the TCP peer 127.0.0.1
+    wsconn_test.go:485: ForwardedFallback was not called
+    --- FAIL: TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer/an_empty_header (0.00s)
+    wsconn_test.go:477: RemoteAddr host = 240.0.247.178, want the TCP peer 127.0.0.1
+    wsconn_test.go:485: ForwardedFallback was not called
+    FAIL
+  ./infra/network/gateway/ TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy -> RED
+    --- FAIL: TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy (0.00s)
+    tcp_transport_test.go:338: a second connection without X-Forwarded-For was not counted on the proxy's address
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.263s
+    FAIL
+== M4 不拒绝全零前缀  (infra/network/wsconn/wsconn.go)
+  ./infra/network/wsconn/ TestTrustedProxiesAreValidated -> RED
+    --- FAIL: TestTrustedProxiesAreValidated (0.00s)
+    wsconn_test.go:502: trusted proxy "0.0.0.0/0" was accepted
+    wsconn_test.go:502: trusted proxy "::/0" was accepted
+    wsconn_test.go:508: Listen accepted a trusted proxy list that trusts everyone
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	0.709s
+    FAIL
+  ./infra/network/gateway/ TestWebSocketConfigIsValidatedAndTheListenerStopsWithTheServer -> RED
+    --- FAIL: TestWebSocketConfigIsValidatedAndTheListenerStopsWithTheServer (0.00s)
+    tcp_transport_test.go:434: validation error player tcp: player_access.tcp.websocket.addr = "127.0.0.1:7000" is the same as player_access.tcp.addr; the two listeners need their own ports
+    tcp_transport_test.go:440: trusted_proxies ::/0: <nil>, want a refusal naming websocket.trusted_proxies
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.993s
+    FAIL
+== M5 Gate 不把 trusted_proxies 传给 wsconn  (infra/network/gateway/tcp.go)
+  ./infra/network/gateway/ TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy -> RED
+    --- FAIL: TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy (0.00s)
+    tcp_transport_test.go:319: client 2.2.2.2 behind the trusted proxy, limit 1 per IP: failed to get reader: failed to read frame header: EOF
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.594s
+    FAIL

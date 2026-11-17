@@ -1,0 +1,11 @@
+--- FAIL: TestPlayerWebSocketTransportPassesItsKeysThrough (0.00s)
+    player_websocket_test.go:39: server_gen.go with the websocket transport does not contain "\t\tWebSocket: gateway.WebSocketConfig{Addr: tcp.WebSocket.Addr, Path: tcp.WebSocket.Path, AllowedOrigins: tcp.WebSocket.AllowedOrigins, TrustedProxies: tcp.WebSocket.TrustedProxies},\n"
+--- FAIL: TestPlayerWebSocketPortIsDeployed (0.00s)
+    player_websocket_test.go:139: gate: the WebSocket guide does not explain player_access.gate.websocket.trusted_proxies:
+    player_websocket_test.go:139: embedded: the WebSocket guide does not explain player_access.tcp.websocket.trusted_proxies:
+--- FAIL: TestGeneratedProjectRefusesTrustedProxiesThatTrustEveryone (21.64s)
+    player_websocket_test.go:321: config-check:gate with a trusted proxy list that trusts everyone = ok "configs/service/config.gate.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)"; want a FAIL naming player_access.gate.websocket.trusted_proxies
+    player_websocket_test.go:321: config-check:game with a trusted proxy list that trusts everyone = ok "configs/service/config.game.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)"; want a FAIL naming player_access.tcp.websocket.trusted_proxies
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	22.270s
+FAIL

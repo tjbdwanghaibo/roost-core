@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	2.382s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	7.384s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	1.516s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.814s

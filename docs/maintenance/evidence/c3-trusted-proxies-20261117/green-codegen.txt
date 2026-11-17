@@ -1,0 +1,8 @@
+# GOWORK=off go test -race -count=1 -timeout 60m -run 'WebSocket|TrustedProx|PlayerTCP|Gate|ConfigCheck|PlayerAccess' ./codegen/internal/roost/
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	255.829s
+
+# -v 复跑新增与改动的三条（确认没有被跳过）
+--- PASS: TestPlayerWebSocketTransportPassesItsKeysThrough (0.00s)
+--- PASS: TestPlayerWebSocketPortIsDeployed (0.05s)
+--- PASS: TestGeneratedProjectRefusesTrustedProxiesThatTrustEveryone (19.75s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	21.228s
