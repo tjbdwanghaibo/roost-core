@@ -1,5 +1,7 @@
 # R9 批 2D：MOBA 帧同步装模块（wallet）——证据（2026-11-17）
 
+提交：`e4eba16b`（夹具、脚本、手册、skill reference 与本目录）。
+
 依据：[方案](../../PLAN-2026-11-17-r9-genre-modules.md) §3.13（映射）、§5 表 2D 行（文件范围）、§9（批 0 定型写法）；D5（Lockstep 房间与夹具不迁 `Stepper`）。手册：[MOBA §4.6](../../../framework/MOBA-INTEGRATION.md#46-模块化之后场景语义的变化r92026-11-17)。
 
 ## 改法

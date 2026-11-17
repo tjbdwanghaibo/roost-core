@@ -1,5 +1,7 @@
 # R9 批 2C：SLG 装模块（wallet）——证据（2026-11-17）
 
+提交：`17952d07`（夹具、脚本、手册、skill reference 与本目录）。
+
 依据：[方案](../../PLAN-2026-11-17-r9-genre-modules.md) §3.12（映射）、§5 表 2C 行（文件范围）、§9（批 0 定型写法）；维护者 Q4 A（联盟活动教学消费者保留）。手册：[SLG §3.5](../../../framework/SLG-INTEGRATION.md#35-模块化之后场景语义的变化r92026-11-17)。
 
 ## 改法
@@ -25,7 +27,7 @@
 | 2 | `python3 scripts/test-genres-generated.py --out <scratchpad>/matrix-slg --genres slg` | `status passed`，`custom_module_verify {'wallet': 17}`，passed 7 / custom 9（7 + 联盟纯内存 2，矩阵按 `*.log` 计）/ skipped 0（[matrix.txt](matrix.txt)） |
 | 3 | `source ~/.roost-it/roost-dataengine-it/env.sh` + 持 `remote-acceptance.lock` + `ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh` | 四条 REAL 全过、0 SKIP：`TestSLGAllianceActivity`、`…PlayerDelivery`、`…RemoteDelivery`、`…RPCReceiverBudget`（[real.txt](real.txt)） |
 | 4 | 变异 | 5 个，全部红 → 恢复绿（[mutation.txt](mutation.txt)，脚本 [mutate.py.txt](mutate.py.txt)） |
-| 5 | `git status` 无本组残留；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 见下方“提交后核对” |
+| 5 | `git status` 无本组残留；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 提交后本组路径 `git status` 无残留；文档用例里本组链接无错，当时的失败只来自别组尚未提交的证据目录（r9-1a / r9-1d / r9-2b，见交接报告） |
 | 6 | 手册 + skill reference | 已改；命令块按 SKILL.md §3.2（自定 module `example.com/myslg` / `myslgadv`）原样抽出实跑：§3 7 PASS + wallet 17/17，§3.1 进阶 7 + 2 PASS + wallet 17/17，§3.4 收尾全过、doctor 无 FAIL；手册 §3.3 / §7.6 示例编译 + vet 通过（[skill-block.txt](skill-block.txt)） |
 
 场景数：缺省 7 + 2、REAL 4，**均不变**。
