@@ -1,0 +1,17 @@
+# 变异：去掉续锁里“KeepAliveOnce 失败即返回”（2026-11-17）
+
+改法：`wiring/etcd/singleton.go` renew 的 `if _, err := s.lease.KeepAliveOnce(ctx, held.id); err != nil {` 改成 `... err != nil && false {`。
+
+```
+    singleton_integration_test.go:245: renewal with a failed keep-alive = true, "", <nil>; want the keep-alive error and applied=false
+--- FAIL: TestSingletonStoreRenewalWhoseKeepAliveFailedIsNotApplied (1.04s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/etcd	1.606s
+FAIL
+```
+
+原样（未变异）：
+```
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/etcd	1.635s
+```

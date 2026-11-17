@@ -820,7 +820,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 单实例锁：遗留
 
-- **锁改存 etcd（已实施，待最终全量）**：维护者 2026-11-16 定做法 A，已在分支 `feat/round-20261116` 实施：`wiring/etcd` 的 `SingletonStore`（契约见 [impl/13-wiring](../framework/impl/13-wiring.md)），生成工程全工程统一用它，锁与服务发现共用同一个 etcd 集群，`framework/app` 只改注释；Redis 版已删除；doctor 新增 `singleton:etcd-consistent`；etcd 不可用时 fail-stop 已写进上面的框架限制。`wiring/etcd` 的真实 etcd 单测（`-tags integration`）已过。**还没做**：本轮阶段 7 的全量（codegen 包、模块门禁、genre 脚本、pretag）、真实进程演练 `scripts/testdata/singleton-etcd-drill/singleton-etcd-drill.sh`（含 etcd 恢复后的重连延迟实测）、先失败后通过的证据（去掉续锁里“KeepAliveOnce 失败即返回”后 `TestSingletonStoreRenewalWhoseKeepAliveFailedIsNotApplied` 应变红）。方案见 [FEATURE-2026-11-16-singleton-etcd](FEATURE-2026-11-16-singleton-etcd.md)，全量安排见[本轮总览](FEATURE-2026-11-16-round-overview.md)。
 
 ### DataEngine、Remote 与 Saga（遗留）
 
@@ -920,7 +919,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### 地形 / 无缝世界：遗留
 
 - **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
-- **登录潮里 account CreateRole 超时，尚未确认**（2026-11-15）：在 chat 抢写风暴条件下可复现（2 轮中 1 轮，53 次，同一秒内），无风暴的 21 轮都没有；“Redis 被拖慢到 3 秒”的推测已排除（Redis CPU ≤ 0.3 核，PING 最长约 0.18s，同批机器人前一步 Login 未超时）；account 的 Redis 连接池（缺省 10，一次 CreateRole 十几次往返）、NATS 排队、整机 CPU 未排除，要给 account 加 RPC 处理时长与连接池等待的指标再复现。风暴条件已由 chat 写排队与公告合并去掉。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
 - **CellWorld Runtime**：模块场景 10 条已验，含 Start / Stop、三种失败复位（就绪前退出、ctx 先到、就绪后 AddIngress 失败，2026-11-17 补，[证据](evidence/d-small-items-20261117/README.md)）与 manager 托管；业务 Entity 适配仍只在 demo（D21 后半，维护者 2026-11-17 说先不做）。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 

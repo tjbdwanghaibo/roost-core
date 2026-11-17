@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **KNOWN-LIMITS 收口两条**（2026-11-17）：“锁改存 etcd（待最终全量）”删除——全量与真实进程演练在 v1.52.0 时已做，今天补了“去掉 KeepAliveOnce 失败即返回”的变异（变红）；“登录潮里 account CreateRole 超时”按维护者决定关闭（触发条件已由 chat 写排队与公告合并去掉，记为未归因）。[证据](docs/maintenance/evidence/known-limits-cleanup-20261117/README.md)
 - **relay 协议：Welcome 带 epoch、前台上报、状态字节带压缩方式标识**（维护者 2026-11-17，交接 C2、C4 按推荐：C2 一 + 二的选项 1、C4 A + D）：
   - `Welcome` 固定 13 字节 `[角色][房主槽位 4B][epoch 8B]`；选人阶段进房的连接拿到房主槽位 0 和新一轮的 epoch；三份 SDK 在 Welcome 时（含重连）更新 `Role` 的 epoch。
   - 新控制帧 `Presence = 85`（成员 → relay，`[1/0]`）与 `MemberPresence = 70`（relay → 当前已就绪的房主，Seq 为成员槽位）；relay 只核格式，选人阶段 / 宽限期 / 房主自己发的丢弃，计入帧率限额。SDK 新增 `SetForeground`、`OnMemberPresence`，收到 HostChanged 与每次连上后自动重发；没连上时先记下、连上后发出。TS `WebHost` 按页面可见性上报；游戏没有显式声明候选顺序时，房主自动“前台在前、槽位升序”声明，游戏显式声明的优先。Go / C# 不自动排序。
