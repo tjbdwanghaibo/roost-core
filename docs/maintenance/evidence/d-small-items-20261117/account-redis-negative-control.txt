@@ -1,0 +1,10 @@
+--- FAIL: TestGameTokensAreIssuedPerGameAndValidatedByAccount (2.69s)
+--- FAIL: TestABanRefusesGameTokensAtOnce (2.70s)
+--- FAIL: TestTheServerIndexRefusesNewServersWhenFull (2.68s)
+--- FAIL: TestWithoutServicesTheServerListIsUnchanged (2.59s)
+--- FAIL: TestServersBelongToTheOnlyGameService (2.69s)
+--- FAIL: TestTwoGameServicesShareOneServerNumbering (2.64s)
+--- FAIL: TestBadServicesAreRefusedAtStart (2.62s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	19.186s
+FAIL

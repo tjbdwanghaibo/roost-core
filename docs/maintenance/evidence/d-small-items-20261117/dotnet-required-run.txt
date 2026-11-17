@@ -1,0 +1,15 @@
+        NULL table balance: read: readText returned null for balance.json
+        TYPES aé
+        "q" bonus=7 alias=(null) grid=[1,2];[] groups=x:p,q rate=1.5 big=18446744073709551615 on=True class=255
+        TYPES b bonus=(null) alias=bb grid= groups= rate=-0.2 big=0 on=False class=0
+        BAD required: table monster row 2 (key 11) field model: required: missing or null
+        BAD ref: table monster row 2 (key 11) field scene_id: ref: references missing scene key 9
+        BAD unique: table scene row 2 (key 2) field name: unique: value forest repeats row 1
+        BAD min: table monster row 2 (key 11) field level: min: value 0 is below min=1
+        BAD enum: table scene row 2 (key 2) field kind: enum: value sky is not one of [field dungeon]
+        BAD kvrequired: table balance field max_level: required: missing or null
+        BAD type: table monster row 2 (key 11) field rewards[1]: type: want an int64, got a string
+        BAD overflow: table monster row 2 (key 11) field level: type: want an int32, got the number 3000000000
+--- PASS: TestClientConfigCSharpRuntime (4.90s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	5.525s

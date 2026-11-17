@@ -1,0 +1,5 @@
+    client_config_export_test.go:732: ROOST_REQUIRE_DOTNET=1 but dotnet is not on PATH: exec: "dotnet": executable file not found in $PATH
+--- FAIL: TestClientConfigCSharpRuntime (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.388s
+FAIL

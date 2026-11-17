@@ -1,0 +1,27 @@
+=== RUN   TestGameTokensAreIssuedPerGameAndValidatedByAccount
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.01s)
+=== RUN   TestAGameTokenExpiresOnTheSystemClock
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+=== RUN   TestATamperedGameTokenIsRefused
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+=== RUN   TestOtherTicketsCannotPassAsGameTokens
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+=== RUN   TestOnlyTheConfiguredGamesGetTokens
+--- PASS: TestOnlyTheConfiguredGamesGetTokens (0.00s)
+=== RUN   TestAGameTokenOnlyOpensItsOwnGame
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+=== RUN   TestABanRefusesGameTokensAtOnce
+--- PASS: TestABanRefusesGameTokensAtOnce (0.01s)
+=== RUN   TestTheServerIndexRefusesNewServersWhenFull
+--- PASS: TestTheServerIndexRefusesNewServersWhenFull (0.09s)
+=== RUN   TestWithoutServicesTheServerListIsUnchanged
+--- PASS: TestWithoutServicesTheServerListIsUnchanged (0.00s)
+=== RUN   TestServersBelongToTheOnlyGameService
+--- PASS: TestServersBelongToTheOnlyGameService (0.00s)
+=== RUN   TestTwoGameServicesShareOneServerNumbering
+2026/11/17 21:33:48 INFO account: server merged from=21 into=20 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestTwoGameServicesShareOneServerNumbering (0.01s)
+=== RUN   TestBadServicesAreRefusedAtStart
+--- PASS: TestBadServicesAreRefusedAtStart (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.864s

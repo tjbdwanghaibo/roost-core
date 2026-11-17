@@ -1,0 +1,12 @@
+--- PASS: TestCellworldSpawnIdentitySurvivesReorder (0.00s)
+--- PASS: TestCellworldSpawnIdentityRejectsOverflow (0.00s)
+--- PASS: TestCellworldMissingRegistryFailsClosed (0.00s)
+--- PASS: TestCellworldNewCellBranchTakesAuthorityFromTheApp (0.00s)
+--- PASS: TestCellworldStartAndStop (0.00s)
+--- PASS: TestCellworldFailedStartLeavesRuntimeNotStarted (0.02s)
+--- PASS: TestCellworldStartNeedsTheManagerHost (0.00s)
+--- PASS: TestCellworldHostStopsTheNodeTheServiceLeftRunning (0.00s)
+--- PASS: TestCellworldStartAfterInputsClosedTakesTheNodeDown (0.00s)
+ok  	example.com/cwtest/game/modules/cellworldhost	1.411s
+--- PASS: TestCellworldHostManagerPublishesTheHostAndClosesItOnStop (0.00s)
+ok  	example.com/cwtest/game/managers	1.643s
