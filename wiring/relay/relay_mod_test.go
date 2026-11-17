@@ -142,6 +142,26 @@ func TestServerReportsAdvertisesAndTakesLobbyCommands(t *testing.T) {
 	nats.waitReport(t, "t.lobby.events", func(r domain.Report) bool {
 		return r.Type == domain.EventMemberJoined && r.Account == "acc-a" && slices.Equal(r.Online, []string{"host", "acc-a"})
 	})
+	// 每条连接都经 <subject>.verify 向 lobby 验权；lobby 拒绝、不可用时连接被拒。
+	var asked verifyRequest
+	if last := nats.lastRequest(); last.subject != "t.lobby.verify" || json.Unmarshal(last.data, &asked) != nil ||
+		asked != (verifyRequest{Room: "room-1", Account: "acc-a", Relay: "relay-3"}) {
+		t.Fatalf("verification request %s %s", last.subject, last.data)
+	}
+	nats.setAnswer(func(context.Context, []byte) ([]byte, error) { return []byte(`{"ok":false,"reason":"kicked"}`), nil })
+	dialWithToken(t, server.Addr().String(), signTestToken(t, "room-1", "acc-x", token.RoleMember)).
+		expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonLobbyRejected)})
+	nats.setAnswer(func(context.Context, []byte) ([]byte, error) {
+		return []byte(`{"ok":false,"reason":"unavailable"}`), nil
+	})
+	dialWithToken(t, server.Addr().String(), signTestToken(t, "room-1", "acc-x", token.RoleMember)).
+		expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonLobbyUnavailable)})
+	nats.setAnswer(func(context.Context, []byte) ([]byte, error) {
+		return nil, errors.New("nats: no responders available for request")
+	})
+	dialWithToken(t, server.Addr().String(), signTestToken(t, "room-1", "acc-x", token.RoleMember)).
+		expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonLobbyUnavailable)})
+	nats.setAnswer(nil)
 	nats.waitReport(t, "t.lobby.events", func(r domain.Report) bool { // 定时心跳
 		return r.Type == domain.EventHeartbeat && r.Room == "room-1" && len(r.Online) == 2
 	})
@@ -186,10 +206,23 @@ type relayClient struct {
 
 func dialRelay(t *testing.T, addr, room, account string, role token.Role) *relayClient {
 	t.Helper()
+	c := dialWithToken(t, addr, signTestToken(t, room, account, role))
+	c.expectControl(t, wire.RelayOpWelcome, nil)
+	return c
+}
+
+func signTestToken(t *testing.T, room, account string, role token.Role) string {
+	t.Helper()
 	signed, err := token.Sign([]byte(testKey), token.Claims{Relay: "relay-3", Room: room, Account: account, Role: role, MaxMembers: 4, ExpiresAt: time.Now().Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return signed
+}
+
+// dialWithToken 连上 relay、发令牌首帧，不读答复。
+func dialWithToken(t *testing.T, addr, signed string) *relayClient {
+	t.Helper()
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +232,6 @@ func dialRelay(t *testing.T, addr, room, account string, role token.Role) *relay
 	if err := wire.WriteRelay(conn, []*wire.Packet{{Payload: []byte(signed)}}, 0); err != nil {
 		t.Fatal(err)
 	}
-	c.expectControl(t, wire.RelayOpWelcome, nil)
 	return c
 }
 
@@ -236,6 +268,9 @@ type fakeNats struct {
 	published []published
 	handlers  map[string]fnats.MsgHandler
 	drainedOK bool
+	requests  []published
+	// answer 是 lobby 对验权请求的答复；nil 时一律放行（{"ok":true}）。
+	answer func(ctx context.Context, data []byte) ([]byte, error)
 }
 
 type published struct {
@@ -245,8 +280,30 @@ type published struct {
 
 func newFakeNats() *fakeNats { return &fakeNats{handlers: map[string]fnats.MsgHandler{}} }
 
-func (f *fakeNats) RequestContext(context.Context, string, []byte) ([]byte, error) {
-	return nil, errors.New("not used")
+func (f *fakeNats) RequestContext(ctx context.Context, subject string, data []byte) ([]byte, error) {
+	f.mu.Lock()
+	f.requests = append(f.requests, published{subject, append([]byte(nil), data...)})
+	answer := f.answer
+	f.mu.Unlock()
+	if answer == nil {
+		return []byte(`{"ok":true}`), nil
+	}
+	return answer(ctx, data)
+}
+
+func (f *fakeNats) setAnswer(answer func(ctx context.Context, data []byte) ([]byte, error)) {
+	f.mu.Lock()
+	f.answer = answer
+	f.mu.Unlock()
+}
+
+func (f *fakeNats) lastRequest() published {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) == 0 {
+		return published{}
+	}
+	return f.requests[len(f.requests)-1]
 }
 func (f *fakeNats) PublishOnce(subject string, data []byte) error {
 	f.mu.Lock()

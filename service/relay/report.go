@@ -13,11 +13,11 @@ const (
 	EventHeartbeat    = "room.heartbeat"
 	EventMemberJoined = "room.member_joined" // 同一账号顶号不报（在线名单没变）
 	EventMemberLeft   = "room.member_left"
-	EventHostChanged  = "room.host_changed" // 换 host（下一批）
+	EventHostChanged  = "room.host_changed" // 新房主回了 host_ready（Account / Slot 是新房主）
 	EventClosed       = "room.closed"       // 之后不再有这个房间的报告
 )
 
-// Report 是一条房间报告。JSON 字段名是与 lobby 的约定（service/lobby.RoomEvent）；Slot、Reason 是附加字段，
+// Report 是一条房间报告。JSON 字段名是与 lobby 的约定（service/lobby.RoomEvent）；Slot 是附加字段，
 // lobby 不读，留给日志与排查。
 type Report struct {
 	Type  string `json:"type"`
@@ -26,14 +26,15 @@ type Report struct {
 	Seq   uint64 `json:"seq"`
 	// Online 是此刻在线的账号（含房主），按槽位排列。
 	Online []string `json:"online,omitempty"`
-	// Host 是当前房主的账号；Epoch 是房主代次（建房时为 0，换 host 每次加 1，lobby 只接受更大的值）。
+	// Host / Epoch 是最近一个已就绪的房主与它的代次（建房时为 0，换 host 每次加 1，lobby 只接受更大的值）。
+	// 选新房主的过程中仍是旧房主与旧代次，新房主回 host_ready 之后才变。
 	Host  string `json:"host,omitempty"`
 	Epoch uint64 `json:"epoch"`
-	// Account / Slot 只在 member_joined / member_left 上有：进出的是谁、哪个槽位。
+	// Account / Slot 在 member_joined / member_left 上是进出的是谁、哪个槽位；在 host_changed 上是新房主。
 	Account string `json:"account,omitempty"`
 	Slot    uint32 `json:"slot,omitempty"`
 	// Reason 只在 member_left / closed 上有：disconnected、kicked、left、slow_consumer、room_closed、idle_timeout 等
-	// （wire.RelayReason 的名字）。
+	// （wire.RelayReason 的名字）。lobby 读 member_left 上的 kicked：把 Account 记进被踢名单。
 	Reason string `json:"reason,omitempty"`
 }
 

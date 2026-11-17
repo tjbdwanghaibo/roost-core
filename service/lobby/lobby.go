@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -71,6 +72,8 @@ var (
 	ErrNotHost = errors.New("lobby: only the host may do this")
 	// ErrWrongPassword：密码不对。HTTP 403。
 	ErrWrongPassword = errors.New("lobby: wrong room password")
+	// ErrKicked：这个账号被房主踢出过这个房间（被踢名单随房间记录一起过期）。HTTP 403。
+	ErrKicked = errors.New("lobby: kicked from this room")
 	// ErrRoomMissing：房间不存在、已过期或已关闭。HTTP 404。
 	ErrRoomMissing = errors.New("lobby: room not found")
 	// ErrRoomFull：满员。HTTP 409。
@@ -196,6 +199,9 @@ type Room struct {
 	Relay Relay `json:"relay"`
 	// Members 是占着席位的人（含房主）：relay 报告在线的、预留期内（拿了令牌还没连上）的，以及房主本人。
 	Members []Member `json:"members"`
+	// Kicked 是被房主踢出过的账号（relay 报告 member_left、原因 kicked 时记下）：之后 join 与 relay 的验权都拒绝它，
+	// 名单随房间记录一起过期（方案 §4.4）。
+	Kicked []string `json:"kicked,omitempty"`
 	// RelaySeq 是已应用的 relay 报告的最大序号；0 表示 relay 还没报告过（房主还没连上）。
 	RelaySeq      uint64 `json:"relay_seq,omitempty"`
 	CreatedAtUnix int64  `json:"created_at_unix"`
@@ -249,6 +255,8 @@ func (r Room) View() RoomView {
 func (r Room) listable() bool {
 	return !r.Closed && r.State == StateOpen && r.RelaySeq > 0 && len(r.Members) < r.MaxMembers
 }
+
+func (r Room) kicked(account string) bool { return slices.Contains(r.Kicked, account) }
 
 func (r Room) memberIndex(account string) int {
 	for i, member := range r.Members {

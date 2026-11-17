@@ -206,6 +206,52 @@ func (r natsReporter) Report(report domain.Report) {
 	}
 }
 
+// verifyRequest / verifyReply 是向 lobby 验权的请求与答复（service/lobby.RelayVerifyRequest / RelayVerifyReply 的 JSON）。
+type verifyRequest struct {
+	Room    string `json:"room"`
+	Account string `json:"account"`
+	Relay   string `json:"relay"`
+	Create  bool   `json:"create,omitempty"`
+}
+
+type verifyReply struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// verifyUnavailable 与 service/lobby.VerifyUnavailable 同值：lobby 自己出了错，按不可用处理（不是拒绝）。
+const verifyUnavailable = "unavailable"
+
+// natsAdmission 经 NATS request 向 lobby 验权（service/relay.Admission）：lobby 答 ok 放行；答别的原因是拒绝
+// （ErrAdmissionDenied）；请求失败、超时、没有 lobby 应答、答复解不开、lobby 答 unavailable 都按不可用处理。
+// 两种结果 relay 都拒绝这条连接（失败即关闭）。
+type natsAdmission struct {
+	client  fnats.RawClient
+	subject string
+}
+
+func (a natsAdmission) Admit(ctx context.Context, request domain.AdmitRequest) error {
+	data, err := json.Marshal(verifyRequest{Room: request.Room, Account: request.Account, Relay: request.Relay, Create: request.Create})
+	if err != nil {
+		return err
+	}
+	answer, err := a.client.RequestContext(ctx, a.subject, data)
+	if err != nil {
+		return fmt.Errorf("relay: ask the lobby (%s): %w", a.subject, err)
+	}
+	var reply verifyReply
+	if err := json.Unmarshal(answer, &reply); err != nil {
+		return fmt.Errorf("relay: unreadable lobby verification reply: %w", err)
+	}
+	switch {
+	case reply.OK:
+		return nil
+	case reply.Reason == verifyUnavailable || reply.Reason == "":
+		return fmt.Errorf("relay: the lobby could not verify the connection (%q)", reply.Reason)
+	}
+	return fmt.Errorf("%w: %s", domain.ErrAdmissionDenied, reply.Reason)
+}
+
 // Advertisement 是 relay 实例在 etcd 里的广播（service/lobby.Relay 的 JSON）。
 type Advertisement struct {
 	Instance string `json:"instance"`

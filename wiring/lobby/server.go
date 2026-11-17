@@ -24,7 +24,10 @@ const ServiceName app.ServiceName = "lobby"
 // eventTimeout 是处理一条 relay 报告（一次 Redis compare-and-set）的上限。
 const eventTimeout = 5 * time.Second
 
-// Server 是大厅服的 app.Service：Serve 先订阅 relay 的房间事件，再绑定监听、开始处理 HTTP，直到 ctx 结束；
+// verifyTimeout 是答复一条验权请求（一次 Redis 读）的上限；relay 那边另有自己的期限（relay.admit_timeout）。
+const verifyTimeout = 2 * time.Second
+
+// Server 是大厅服的 app.Service：Serve 先订阅 relay 的房间事件与验权请求，再绑定监听、开始处理 HTTP，直到 ctx 结束；
 // Shutdown 先退订（不再改目录），再停 HTTP（不接新请求，在 ctx 内等在途请求结束）。
 type Server struct {
 	lobby *Lobby
@@ -32,6 +35,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	sub      fnats.ISubscription
+	verify   fnats.ISubscription
 	http     *http.Server
 	bound    string
 	shutdown bool
@@ -70,9 +74,26 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("lobby server: subscribe %s: %w", domain.EventSubject(s.lobby.Subject), err)
 	}
+	// relay 每条连接进房前的验权（方案 §4.3）：队列组里一个实例答复。答复发不出去只记日志，relay 等到期限按 lobby
+	// 不可用拒绝那条连接。
+	verify, err := s.nats.QueueSubscribe(domain.VerifySubject(s.lobby.Subject), domain.VerifyQueue, func(msg *fnats.Msg) {
+		if msg.Reply == "" {
+			return
+		}
+		verifyCtx, cancel := context.WithTimeout(context.Background(), verifyTimeout)
+		defer cancel()
+		if err := s.nats.Publish(msg.Reply, service.HandleRelayVerifyData(verifyCtx, msg.Data)); err != nil {
+			slog.Warn("lobby: relay verification reply not sent", "err", err)
+		}
+	})
+	if err != nil {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("lobby server: subscribe %s: %w", domain.VerifySubject(s.lobby.Subject), err)
+	}
 	listener, err := net.Listen("tcp", s.lobby.Listen)
 	if err != nil {
 		_ = sub.Unsubscribe()
+		_ = verify.Unsubscribe()
 		return fmt.Errorf("lobby server: listen on lobby.listen %s: %w", s.lobby.Listen, err)
 	}
 	server := httpserver.NewServer(s.lobby.Listen, service.Handler(s.lobby.CORSOrigins))
@@ -81,10 +102,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	if s.shutdown {
 		s.mu.Unlock()
 		_ = sub.Unsubscribe()
+		_ = verify.Unsubscribe()
 		_ = listener.Close()
 		return nil
 	}
-	s.sub, s.http, s.bound = sub, server, listener.Addr().String()
+	s.sub, s.verify, s.http, s.bound = sub, verify, server, listener.Addr().String()
 	s.mu.Unlock()
 	slog.Info("lobby: serving", "addr", s.bound, "events", domain.EventSubject(s.lobby.Subject))
 
@@ -112,12 +134,15 @@ func (s *Server) Addr() string {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.shutdown = true
-	sub, server := s.sub, s.http
-	s.sub, s.http = nil, nil
+	sub, verify, server := s.sub, s.verify, s.http
+	s.sub, s.verify, s.http = nil, nil, nil
 	s.mu.Unlock()
 	var errs []error
-	if sub != nil {
-		if err := sub.Unsubscribe(); err != nil {
+	for _, subscription := range []fnats.ISubscription{sub, verify} {
+		if subscription == nil {
+			continue
+		}
+		if err := subscription.Unsubscribe(); err != nil {
 			errs = append(errs, fmt.Errorf("lobby server: unsubscribe: %w", err))
 		}
 	}

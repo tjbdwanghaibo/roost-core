@@ -178,6 +178,17 @@ func (f *fakeNATS) QueueSubscribe(subject, queue string, handler fnats.MsgHandle
 func (f *fakeNATS) Drain() error { return nil }
 func (f *fakeNATS) Close()       {}
 
+func (f *fakeNATS) request(t *testing.T, subject, reply, data string) {
+	t.Helper()
+	f.mu.Lock()
+	handler := f.handlers[subject]
+	f.mu.Unlock()
+	if handler == nil {
+		t.Fatalf("nothing subscribed to %s", subject)
+	}
+	handler(&fnats.Msg{Subject: subject, Reply: reply, Data: []byte(data)})
+}
+
 func (f *fakeNATS) deliver(t *testing.T, subject string, event domain.RoomEvent) {
 	t.Helper()
 	f.mu.Lock()
@@ -308,8 +319,14 @@ func TestModAndServerOnRealRedis(t *testing.T) {
 	}
 	post("/rooms/"+id+"/join", "gt-guest", map[string]any{"game": "party"})
 	nats.deliver(t, "roost.test.lobby.events", domain.RoomEvent{Type: domain.EventMemberJoined, Room: id, Relay: "relay-2", Seq: 2, Host: "acc-host", Online: []string{"acc-host", "acc-guest"}})
+	// relay 的验权请求：答复发到请求的回信主题。
+	nats.request(t, "roost.test.lobby.verify", "inbox.1", `{"room":"`+id+`","account":"acc-guest","relay":"relay-2"}`)
+	nats.request(t, "roost.test.lobby.verify", "inbox.2", `{"room":"`+id+`","account":"acc-stranger","relay":"relay-2"}`)
+	if len(nats.published) != 2 || nats.published[0] != `inbox.1 {"ok":true}` || nats.published[1] != `inbox.2 {"ok":false,"reason":"not_member"}` {
+		t.Fatalf("verification replies = %v", nats.published)
+	}
 	post("/rooms/"+id+"/leave", "gt-guest", map[string]any{"game": "party"})
-	if len(nats.published) != 1 || !strings.HasPrefix(nats.published[0], "roost.test.lobby.relay.relay-2 ") {
+	if len(nats.published) != 3 || !strings.HasPrefix(nats.published[2], "roost.test.lobby.relay.relay-2 ") {
 		t.Fatalf("relay commands = %v", nats.published)
 	}
 

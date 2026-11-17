@@ -29,6 +29,7 @@ type RoomStore interface {
 // copyRoom 让 mutate 改的是副本：Members 是切片，就地修改会改到存储读出来的那一份。
 func copyRoom(room Room) Room {
 	room.Members = slices.Clone(room.Members)
+	room.Kicked = slices.Clone(room.Kicked)
 	room.Attrs = slices.Clone(room.Attrs)
 	return room
 }

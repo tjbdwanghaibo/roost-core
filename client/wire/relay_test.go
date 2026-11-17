@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
@@ -75,6 +76,53 @@ func TestRelayControlPayloads(t *testing.T) {
 	}
 }
 
+func TestRelayHostChangePayloads(t *testing.T) {
+	if got, err := wire.DecodeRelayEpoch(wire.EncodeRelayEpoch(1<<40 + 5)); err != nil || got != 1<<40+5 {
+		t.Fatalf("epoch %d %v", got, err)
+	}
+	if _, err := wire.DecodeRelayEpoch([]byte{1}); !errors.Is(err, wire.ErrInvalidPacket) {
+		t.Fatalf("short epoch accepted: %v", err)
+	}
+	changed := wire.RelayHostChanged{Epoch: 3, Account: "acc-9"}
+	if got, err := wire.DecodeRelayHostChanged(wire.EncodeRelayHostChanged(changed)); err != nil || got != changed {
+		t.Fatalf("host changed %+v %v", got, err)
+	}
+	host := wire.RelayYouAreHost{Epoch: 4, Source: wire.RelayStateSnapshot, SnapshotSeq: 99, SnapshotAgeMillis: 1234,
+		Members: []wire.RelaySeat{{Slot: 1, Account: "old-host"}, {Slot: 2, Account: "", Online: true}, {Slot: 5, Account: "acc-5", Online: true}},
+		State: []byte("compressed")}
+	got, err := wire.DecodeRelayYouAreHost(wire.EncodeRelayYouAreHost(host))
+	if err != nil || got.Epoch != host.Epoch || got.Source != host.Source || got.SnapshotSeq != host.SnapshotSeq ||
+		got.SnapshotAgeMillis != host.SnapshotAgeMillis || !slices.Equal(got.Members, host.Members) || !bytes.Equal(got.State, host.State) {
+		t.Fatalf("you_are_host %+v %v", got, err)
+	}
+	encoded := wire.EncodeRelayYouAreHost(host)
+	for _, bad := range [][]byte{encoded[:22], encoded[:30], append([]byte{}, encoded[:8]...)} {
+		if _, err := wire.DecodeRelayYouAreHost(bad); !errors.Is(err, wire.ErrInvalidPacket) {
+			t.Fatalf("truncated you_are_host accepted: %v", err)
+		}
+	}
+	snapshot := wire.RelaySnapshot{Seq: 12, Data: []byte{1, 2, 3}}
+	if got, err := wire.DecodeRelaySnapshot(wire.EncodeRelaySnapshot(snapshot)); err != nil || got.Seq != 12 || !bytes.Equal(got.Data, snapshot.Data) {
+		t.Fatalf("snapshot %+v %v", got, err)
+	}
+	if got, err := wire.DecodeRelaySuccessors(wire.EncodeRelaySuccessors([]uint32{4, 2, 9})); err != nil || !slices.Equal(got, []uint32{4, 2, 9}) {
+		t.Fatalf("successors %v %v", got, err)
+	}
+	if _, err := wire.DecodeRelaySuccessors([]byte{0, 0, 1}); !errors.Is(err, wire.ErrInvalidPacket) {
+		t.Fatalf("ragged successors accepted: %v", err)
+	}
+	if _, err := wire.DecodeRelaySuccessors(make([]byte, 4*(wire.RelayMaxSuccessors+1))); !errors.Is(err, wire.ErrInvalidPacket) {
+		t.Fatalf("too many successors accepted: %v", err)
+	}
+	rejected := wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectTooBig, Seq: 77}
+	if got, err := wire.DecodeRelayRejected(wire.EncodeRelayRejected(rejected)); err != nil || got != rejected {
+		t.Fatalf("rejected %+v %v", got, err)
+	}
+	if wire.RelayReasonLobbyRejected.String() != "lobby_rejected" || wire.RelayReasonLobbyUnavailable.String() != "lobby_unavailable" {
+		t.Fatal("reason names")
+	}
+}
+
 // relay 帧的跨语言金样（client/spec/relay-packets.json）。与 packets.json 分开：packets.json 的每一条都要能被
 // Gate 的严格解码器（Go、C#）解开，relay 帧不行。C# / TS 的 relay SDK 交付时消费这一份。
 func TestRelayProtocolGolden(t *testing.T) {
@@ -100,6 +148,23 @@ func TestRelayProtocolGolden(t *testing.T) {
 		{"relay_mute", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpMute, Seq: 3, Payload: []byte{1}}},
 		{"relay_ping", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpPing, Payload: []byte{0, 0, 0, 42}}},
 		{"relay_pong", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpPong, Payload: []byte{0, 0, 0, 42}}},
+		// 换 host（§4.6）：只追加，不改上面的条目。
+		{"relay_you_are_member", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreMember, Seq: 1, Payload: wire.EncodeRelayEpoch(2)}},
+		{"relay_you_are_host_snapshot", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreHost, Seq: 3, Payload: wire.EncodeRelayYouAreHost(wire.RelayYouAreHost{
+			Epoch: 2, Source: wire.RelayStateSnapshot, SnapshotSeq: 7, SnapshotAgeMillis: 1500,
+			Members: []wire.RelaySeat{{Slot: 1, Account: "a1"}, {Slot: 3, Account: "a3", Online: true}}, State: []byte{0xAB, 0xCD}})}},
+		{"relay_you_are_host_handoff", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreHost, Seq: 2, Payload: wire.EncodeRelayYouAreHost(wire.RelayYouAreHost{
+			Epoch: 1, Source: wire.RelayStateHandoff, Members: []wire.RelaySeat{{Slot: 1, Account: "a1", Online: true}, {Slot: 2, Account: "a2", Online: true}}, State: []byte("h")})}},
+		{"relay_host_changing", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostChanging, Payload: wire.EncodeRelayEpoch(2)}},
+		{"relay_host_changed", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostChanged, Seq: 3, Payload: wire.EncodeRelayHostChanged(wire.RelayHostChanged{Epoch: 2, Account: "a3"})}},
+		{"relay_host_resumed", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostResumed, Seq: 1, Payload: wire.EncodeRelayEpoch(0)}},
+		{"relay_rejected_snapshot_too_soon", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpRejected, Payload: wire.EncodeRelayRejected(wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectTooSoon, Seq: 8})}},
+		{"relay_transfer", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 3, Payload: []byte("handoff")}},
+		{"relay_leave", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpLeave}},
+		{"relay_successors", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpSuccessors, Payload: wire.EncodeRelaySuccessors([]uint32{3, 2})}},
+		{"relay_snapshot", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpSnapshot, Payload: wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: 7, Data: []byte{0xAB, 0xCD}})}},
+		{"relay_host_ready", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostReady, Payload: wire.EncodeRelayEpoch(2)}},
+		{"relay_closed_lobby_rejected", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpClosed, Payload: []byte{byte(wire.RelayReasonLobbyRejected)}}},
 	}
 	want := []golden{}
 	for _, entry := range entries {

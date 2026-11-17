@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -518,6 +519,112 @@ func TestRelayReportsMaintainSeats(t *testing.T) {
 			t.Fatalf("closed room accepted a later report: %+v", room)
 		}
 	})
+}
+
+// 被踢记在 lobby（方案 §4.4）：relay 报 member_left、原因 kicked，lobby 把账号记进被踢名单、让出席位，之后
+// join 被拒（ErrKicked）；迟到的报告也照记；relay 的在线名单里再出现它也不补回来。名单随房间记录一起过期。
+func TestKickedAccountsAreRecordedAndRefused(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		created := h.create(t, "gt-host", CreateRequest{})
+		id := created.Room.ID
+		for _, tok := range []string{"gt-alice", "gt-bob"} {
+			if _, err := h.join(tok, id, JoinRequest{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 5, Host: "acc-host", Online: []string{"acc-host", "acc-alice", "acc-bob"}})
+		// 序号比已应用的小（迟到）也照记：踢出是永久的事实。
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 4, Host: "acc-host", Account: "acc-alice", Reason: ReasonKicked,
+			Online: []string{"acc-host", "acc-bob"}})
+		room := h.room(t, id)
+		if !slices.Equal(room.Kicked, []string{"acc-alice"}) {
+			t.Fatalf("after the kick: kicked %v seats %q", room.Kicked, seats(room))
+		}
+		if room.memberIndex("acc-alice") >= 0 {
+			t.Fatalf("kicked account still holds a seat: %q", seats(room))
+		}
+		if _, err := h.join("gt-alice", id, JoinRequest{}); !errors.Is(err, ErrKicked) {
+			t.Fatalf("kicked account joining: err = %v, want ErrKicked", err)
+		}
+		// 普通的离开不是被踢。
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 6, Host: "acc-host", Account: "acc-bob", Reason: "disconnected",
+			Online: []string{"acc-host"}})
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+			t.Fatalf("disconnected member rejoining: %v", err)
+		}
+		// relay 报告在线也不把被踢的人补回席位。
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 7, Host: "acc-host", Online: []string{"acc-host", "acc-alice"}})
+		if room := h.room(t, id); room.memberIndex("acc-alice") >= 0 {
+			t.Fatalf("kicked account re-added from the relay's list: %q", seats(room))
+		}
+	})
+}
+
+// relay 每条连接的验权（方案 §4.3）：房间还在、分在这个 relay、没被踢、占着席位；建房的连接还要是目录里的房主。
+// 不核对角色：换 host 之后的新旧房主都按“能不能进房”答。
+func TestRelayVerification(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		created := h.create(t, "gt-host", CreateRequest{})
+		id := created.Room.ID
+		if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		verify := func(account, relay string, create bool) RelayVerifyReply {
+			return h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id, Account: account, Relay: relay, Create: create})
+		}
+		for name, c := range map[string]struct {
+			got  RelayVerifyReply
+			want RelayVerifyReply
+		}{
+			"host creates":        {verify("acc-host", "relay-b", true), RelayVerifyReply{OK: true}},
+			"member":              {verify("acc-alice", "relay-b", false), RelayVerifyReply{OK: true}},
+			"member creates":      {verify("acc-alice", "relay-b", true), RelayVerifyReply{Reason: VerifyNotHost}},
+			"stranger":            {verify("acc-bob", "relay-b", false), RelayVerifyReply{Reason: VerifyNotMember}},
+			"other relay":         {verify("acc-alice", "relay-a", false), RelayVerifyReply{Reason: VerifyWrongRelay}},
+			"missing room":        {h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: "nope", Account: "acc-alice", Relay: "relay-b"}), RelayVerifyReply{Reason: VerifyRoomNotFound}},
+			"missing fields":      {h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id}), RelayVerifyReply{Reason: VerifyBadRequest}},
+			"undecodable request": {decodeReply(t, h.svc.HandleRelayVerifyData(ctx, []byte("{"))), RelayVerifyReply{Reason: VerifyBadRequest}},
+			"decoded member":      {decodeReply(t, h.svc.HandleRelayVerifyData(ctx, []byte(`{"room":"`+id+`","account":"acc-alice","relay":"relay-b"}`))), RelayVerifyReply{OK: true}},
+		} {
+			if c.got != c.want {
+				t.Fatalf("%s: %+v, want %+v", name, c.got, c.want)
+			}
+		}
+
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Account: "acc-alice", Reason: ReasonKicked,
+			Online: []string{"acc-host"}})
+		if got := verify("acc-alice", "relay-b", false); got != (RelayVerifyReply{Reason: VerifyKicked}) {
+			t.Fatalf("kicked member: %+v", got)
+		}
+		// 主动转交之后旧房主仍连着、占着席位：重连能进（角色由 relay 定，只能当成员）；新房主同样能进。
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHostChanged, Room: id, Relay: "relay-b", Seq: 3, Host: "acc-bob", Epoch: 1, Online: []string{"acc-host", "acc-bob"}})
+		if got := verify("acc-host", "relay-b", false); !got.OK {
+			t.Fatalf("old host still seated: %+v", got)
+		}
+		if got := verify("acc-bob", "relay-b", false); !got.OK {
+			t.Fatalf("new host: %+v", got)
+		}
+		if got := verify("acc-host", "relay-b", true); got != (RelayVerifyReply{Reason: VerifyNotHost}) {
+			t.Fatalf("old host creating: %+v", got)
+		}
+		h.report(t, RoomEvent{Type: EventClosed, Room: id, Relay: "relay-b", Seq: 4})
+		if got := verify("acc-bob", "relay-b", false); got != (RelayVerifyReply{Reason: VerifyRoomNotFound}) {
+			t.Fatalf("closed room: %+v", got)
+		}
+	})
+}
+
+func decodeReply(t *testing.T, data []byte) RelayVerifyReply {
+	t.Helper()
+	var reply RelayVerifyReply
+	if err := json.Unmarshal(data, &reply); err != nil {
+		t.Fatal(err)
+	}
+	return reply
 }
 
 func seats(room Room) string {

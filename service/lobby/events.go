@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -31,6 +32,12 @@ const (
 
 	// CommandLeave 让 relay 把 Account 从 Room 里移出（等同于他自己发 leave / 断开）；是房主时 relay 走换 host。
 	CommandLeave = "leave"
+
+	// ReasonKicked 是 member_left 报告里“被房主踢出”的原因（relay 的 wire.RelayReasonKicked 的名字）。
+	ReasonKicked = "kicked"
+
+	// VerifyQueue 是验权请求的队列组：多个 lobby 实例只有一个答复。
+	VerifyQueue = "lobby"
 )
 
 // RoomEvent 是 relay 发给 lobby 的房间报告。除 closed 以外，每一条都带房间的全量快照（Online、Host、Epoch），
@@ -50,6 +57,8 @@ type RoomEvent struct {
 	Host    string   `json:"host,omitempty"`
 	Epoch   uint64   `json:"epoch"`
 	Account string   `json:"account,omitempty"`
+	// Reason 只在 member_left / closed 上有；lobby 只认 member_left 的 ReasonKicked：把 Account 记进被踢名单。
+	Reason string `json:"reason,omitempty"`
 }
 
 // RelayCommand 是 lobby 发给 relay 的命令。
@@ -94,6 +103,15 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 			room.Closed = true
 			return true, nil
 		}
+		// 被踢：记进被踢名单、让出席位。踢出是永久的事实，与序号无关，迟到也照记。
+		if event.Type == EventMemberLeft && event.Reason == ReasonKicked && event.Account != "" && event.Account != room.Host {
+			if !room.kicked(event.Account) {
+				room.Kicked = append(room.Kicked, event.Account)
+			}
+			if i := room.memberIndex(event.Account); i >= 0 {
+				room.Members = append(room.Members[:i], room.Members[i+1:]...)
+			}
+		}
 		// 房主：按 epoch 做 CAS，只认更大的。
 		if event.Epoch > room.HostEpoch && event.Host != "" {
 			room.Host, room.HostEpoch = event.Host, event.Epoch
@@ -137,9 +155,79 @@ func (r *Room) applyOnline(online []string, now time.Time) {
 	}
 	r.Members = kept
 	for _, account := range online {
-		if connected[account] {
+		if connected[account] && !r.kicked(account) {
 			r.Members = append(r.Members, Member{Account: account, Online: true})
 			delete(connected, account)
 		}
 	}
+}
+
+// relay 每条连接进房前的验权（方案 §4.3）：relay 本地验签通过后经 NATS request 发到 VerifySubject，lobby 按房间
+// 目录答复能不能进。只核对能不能进房，不核对角色——换 host 之后目录里的房主可能比 relay 晚一步，角色以 relay 为准。
+
+// VerifySubject 是验权请求的主题（lobby 用队列组 VerifyQueue 订阅）。
+func VerifySubject(subject string) string { return subject + ".verify" }
+
+// RelayVerifyRequest 是 relay 发来的验权请求。Create 为 true 表示 relay 上还没有这个房间、要用这条连接建房。
+type RelayVerifyRequest struct {
+	Room    string `json:"room"`
+	Account string `json:"account"`
+	Relay   string `json:"relay"`
+	Create  bool   `json:"create,omitempty"`
+}
+
+// RelayVerifyReply 是验权的答复。OK 为 false 时 Reason 是下面的 Verify* 之一；VerifyUnavailable 表示 lobby 自己
+// 出了错（Redis 不可达），relay 按 lobby 不可用处理。
+type RelayVerifyReply struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// 验权拒绝的原因（RelayVerifyReply.Reason）。
+const (
+	VerifyRoomNotFound = "room_not_found" // 房间不存在、已过期或已关闭
+	VerifyWrongRelay   = "wrong_relay"    // 房间不分在发请求的 relay 实例上
+	VerifyKicked       = "kicked"         // 账号在被踢名单里
+	VerifyNotMember    = "not_member"     // 账号不占席位（没 join，或已离开、席位已让出）
+	VerifyNotHost      = "not_host"       // 建房的连接不是目录里的房主
+	VerifyUnavailable  = "unavailable"    // lobby 读目录出错
+	VerifyBadRequest   = "bad_request"    // 请求解不开或缺字段
+)
+
+// VerifyRelayConnection 按房间目录核对四件事：房间还在、分在这个 relay 上、账号没被踢、账号占着席位；建房时
+// 账号还必须是目录里的房主。只读，不写目录。
+func (s *Service) VerifyRelayConnection(ctx context.Context, req RelayVerifyRequest) RelayVerifyReply {
+	if req.Room == "" || req.Account == "" || req.Relay == "" {
+		return RelayVerifyReply{Reason: VerifyBadRequest}
+	}
+	room, found, err := s.cfg.Rooms.Get(ctx, req.Room)
+	switch {
+	case err != nil:
+		slog.Warn("lobby: relay verification could not read the room", "room", req.Room, "err", err)
+		return RelayVerifyReply{Reason: VerifyUnavailable}
+	case !found || room.Closed:
+		return RelayVerifyReply{Reason: VerifyRoomNotFound}
+	case room.Relay.Instance != req.Relay:
+		return RelayVerifyReply{Reason: VerifyWrongRelay}
+	case room.kicked(req.Account):
+		return RelayVerifyReply{Reason: VerifyKicked}
+	case req.Create && req.Account != room.Host:
+		return RelayVerifyReply{Reason: VerifyNotHost}
+	}
+	room.pruneReservations(s.cfg.Now())
+	if room.memberIndex(req.Account) < 0 {
+		return RelayVerifyReply{Reason: VerifyNotMember}
+	}
+	return RelayVerifyReply{OK: true}
+}
+
+// HandleRelayVerifyData 解码一条验权请求并返回编码好的答复（NATS 回调直接调它）。
+func (s *Service) HandleRelayVerifyData(ctx context.Context, data []byte) []byte {
+	var req RelayVerifyRequest
+	reply := RelayVerifyReply{Reason: VerifyBadRequest}
+	if err := json.Unmarshal(data, &req); err == nil {
+		reply = s.VerifyRelayConnection(ctx, req)
+	}
+	out, _ := json.Marshal(reply)
+	return out
 }

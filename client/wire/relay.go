@@ -67,7 +67,7 @@ func WriteRelay(writer io.Writer, packets []*Packet, maxPayload int) error {
 }
 
 // 控制帧操作码（控制帧的 message_id）。1～15 由 relay 发出，16～31 由房主发出，32～ 任何一端都可以发；
-// 64～127 留给换 host（FEATURE-2026-11-16-lobby-relay §4.6）。不认识的操作码 relay 丢弃，不断开。
+// 64～127 是换 host（FEATURE-2026-11-16-lobby-relay §4.6，见本文件末尾）。不认识的操作码 relay 丢弃，不断开。
 const (
 	// RelayOpWelcome：relay → 刚接入的连接。Seq=自己的槽位；载荷见 RelayWelcome。
 	RelayOpWelcome uint32 = 1
@@ -104,7 +104,7 @@ const (
 	RelayReasonDisconnected  RelayReason = 1  // 连接断开（读写出错、客户端关闭）
 	RelayReasonKicked        RelayReason = 2  // 被房主踢出
 	RelayReasonReplaced      RelayReason = 3  // 同一账号的新连接顶掉了这一条
-	RelayReasonRoomClosed    RelayReason = 4  // 房间关闭（这一批：房主断开）
+	RelayReasonRoomClosed    RelayReason = 4  // 房间关闭（房主走了且选不出新房主）
 	RelayReasonFrameTooBig   RelayReason = 5  // 单帧超过上限
 	RelayReasonRateLimited   RelayReason = 6  // 每秒帧数超过上限
 	RelayReasonSlowConsumer  RelayReason = 7  // 发送队列满（只出现在 MemberLeft 与 NATS 报告里）
@@ -114,11 +114,17 @@ const (
 	RelayReasonRoomNotFound  RelayReason = 11 // 成员令牌对应的房间不存在（房主还没到，或房间已关闭）
 	RelayReasonRoomFull      RelayReason = 12 // 在线人数已达令牌里的上限
 	RelayReasonShutdown      RelayReason = 13 // relay 进程停机
-	RelayReasonLeft          RelayReason = 14 // 玩家经 lobby 的 leave 离开
+	RelayReasonLeft          RelayReason = 14 // 玩家经 lobby 的 leave（或 RelayOpLeave）离开
+	// RelayReasonLobbyRejected：令牌验签通过，但 lobby 验权不让进（房间不在、不分在这个 relay、不是成员、被踢、
+	// 建房的不是房主）。客户端重新向 lobby join 才可能进来。
+	RelayReasonLobbyRejected RelayReason = 15
+	// RelayReasonLobbyUnavailable：向 lobby 验权失败或超时（lobby 不可用）。失败即关闭，客户端稍后重试。
+	RelayReasonLobbyUnavailable RelayReason = 16
 )
 
 var relayReasonNames = [...]string{"none", "disconnected", "kicked", "replaced", "room_closed", "frame_too_big", "rate_limited",
-	"slow_consumer", "idle_timeout", "protocol", "token_rejected", "room_not_found", "room_full", "shutdown", "left"}
+	"slow_consumer", "idle_timeout", "protocol", "token_rejected", "room_not_found", "room_full", "shutdown", "left",
+	"lobby_rejected", "lobby_unavailable"}
 
 // String 是原因码的小写名字（NATS 报告、日志用）。
 func (r RelayReason) String() string {
@@ -166,4 +172,218 @@ func DecodeRelayMember(payload []byte) (RelayMember, error) {
 		return RelayMember{}, fmt.Errorf("%w: relay member", ErrInvalidPacket)
 	}
 	return RelayMember{Reason: RelayReason(payload[0]), Account: string(payload[1:])}, nil
+}
+
+// 换 host 的控制帧（FEATURE-2026-11-16-lobby-relay §4.6；docs/framework/RELAY.md §2.3）。64～79 由 relay 发出，
+// 80～95 由客户端发出。epoch 都是 8 字节大端的 host_epoch：建房时为 0，每次换 host 加 1。
+const (
+	// RelayOpYouAreMember：relay → 不再是（或没能成为）房主的连接。Seq=自己的槽位；载荷 [epoch 8B]。
+	// 主动转交后的旧房主、没在时限内回 host_ready 的候选人收到它；之后它发的游戏帧按成员帧处理。
+	RelayOpYouAreMember uint32 = 64
+	// RelayOpYouAreHost：relay → 被选中的新房主候选。Seq=自己的槽位；载荷见 RelayYouAreHost。
+	// 候选要在 host_ready_timeout 内回 RelayOpHostReady，否则 relay 换下一个人。
+	RelayOpYouAreHost uint32 = 65
+	// RelayOpHostChanging：relay → 成员。房主不在（宽限期或正在选新房主），这个成员发给房主的游戏帧被丢弃了；
+	// 每次换 host 每个成员最多收到一次。Seq=0；载荷 [epoch 8B]（宽限期内是当前的 epoch，选人阶段是新的 epoch）。
+	RelayOpHostChanging uint32 = 66
+	// RelayOpHostChanged：relay → 房间里在线的每个人（含新房主），新房主已就绪，游戏帧恢复转发。
+	// Seq=新房主的槽位；载荷见 RelayHostChanged。
+	RelayOpHostChanged uint32 = 67
+	// RelayOpHostResumed：relay → 成员，房主在宽限期内重连回来了，仍是原来的房主。Seq=房主槽位；载荷 [epoch 8B]。
+	RelayOpHostResumed uint32 = 68
+	// RelayOpRejected：relay → 房主，它发的快照或转交被拒（连接保留）。Seq=0；载荷见 RelayRejected。
+	RelayOpRejected uint32 = 69
+
+	// RelayOpTransfer：房主 → relay，主动把房主转交给槽位 Seq 上的在线成员。载荷是交接数据（不透明，
+	// 不超过 snapshot_max_bytes），relay 原样放进新房主的 RelayOpYouAreHost。
+	RelayOpTransfer uint32 = 80
+	// RelayOpLeave：任何人 → relay，离开房间（等同于经 lobby 的 leave）。Seq=0、无载荷。房主离开不等宽限期，
+	// 立即用 relay 存的快照换 host。relay 回 Closed{left} 后断开。
+	RelayOpLeave uint32 = 81
+	// RelayOpSuccessors：房主 → relay，声明候选顺序。Seq=0；载荷是槽位列表，每个 4 字节大端，至多 RelayMaxSuccessors 个。
+	// relay 只记最新一份，不判断合不合理。
+	RelayOpSuccessors uint32 = 82
+	// RelayOpSnapshot：房主 → relay，最新快照。Seq=0；载荷见 RelaySnapshot。relay 只存最新一份，不解析。
+	RelayOpSnapshot uint32 = 83
+	// RelayOpHostReady：新房主候选 → relay，已接手。Seq=0；载荷 [epoch 8B]，必须等于 RelayOpYouAreHost 里的 epoch。
+	RelayOpHostReady uint32 = 84
+)
+
+// RelayMaxSuccessors 是 RelayOpSuccessors 里槽位的个数上限。
+const RelayMaxSuccessors = 256
+
+// EncodeRelayEpoch / DecodeRelayEpoch 是只带 epoch 的载荷（YouAreMember、HostChanging、HostResumed、HostReady）。
+func EncodeRelayEpoch(epoch uint64) []byte { return binary.BigEndian.AppendUint64(nil, epoch) }
+
+func DecodeRelayEpoch(payload []byte) (uint64, error) {
+	if len(payload) != 8 {
+		return 0, fmt.Errorf("%w: relay epoch", ErrInvalidPacket)
+	}
+	return binary.BigEndian.Uint64(payload), nil
+}
+
+// RelayHostChanged 是 RelayOpHostChanged 的载荷：[epoch 8B][新房主账号 UTF-8]。新房主槽位在 Seq。
+type RelayHostChanged struct {
+	Epoch   uint64
+	Account string
+}
+
+func EncodeRelayHostChanged(changed RelayHostChanged) []byte {
+	return append(binary.BigEndian.AppendUint64(nil, changed.Epoch), changed.Account...)
+}
+
+func DecodeRelayHostChanged(payload []byte) (RelayHostChanged, error) {
+	if len(payload) < 9 {
+		return RelayHostChanged{}, fmt.Errorf("%w: relay host changed", ErrInvalidPacket)
+	}
+	return RelayHostChanged{Epoch: binary.BigEndian.Uint64(payload), Account: string(payload[8:])}, nil
+}
+
+// RelayStateSource 说明 RelayYouAreHost.State 从哪来。
+type RelayStateSource byte
+
+const (
+	RelayStateNone     RelayStateSource = 0 // 没有可交的状态：新房主用自己本地的状态，或由游戏决定重开
+	RelayStateHandoff  RelayStateSource = 1 // 主动转交时旧房主随 transfer 带来的交接数据
+	RelayStateSnapshot RelayStateSource = 2 // relay 存的最新快照（房主离开或断线）
+)
+
+// RelaySeat 是 RelayYouAreHost 里的一个成员：房间存续期间进过房、没被踢的账号，含离线的。
+type RelaySeat struct {
+	Slot    uint32
+	Account string
+	Online  bool
+}
+
+// RelayYouAreHost 是 RelayOpYouAreHost 的载荷：
+//
+//	[epoch 8B][来源 1B][快照 seq 8B][快照年龄毫秒 4B][成员数 2B]
+//	成员数 × { [槽位 4B][在线 1B：1 在线 / 0 离线][账号长度 2B][账号 UTF-8] }
+//	[状态字节：剩下的全部]
+//
+// 来源为 RelayStateSnapshot 时 SnapshotSeq / SnapshotAgeMillis 是那份快照的 seq 与 relay 收到它到现在的毫秒数
+// （新房主据此知道快照落后了多少）；其余来源这两项为 0。整数都是大端。
+type RelayYouAreHost struct {
+	Epoch             uint64
+	Source            RelayStateSource
+	SnapshotSeq       uint64
+	SnapshotAgeMillis uint32
+	Members           []RelaySeat
+	State             []byte
+}
+
+func EncodeRelayYouAreHost(host RelayYouAreHost) []byte {
+	size := 23 + len(host.State)
+	for _, seat := range host.Members {
+		size += 7 + len(seat.Account)
+	}
+	out := make([]byte, 0, size)
+	out = binary.BigEndian.AppendUint64(out, host.Epoch)
+	out = append(out, byte(host.Source))
+	out = binary.BigEndian.AppendUint64(out, host.SnapshotSeq)
+	out = binary.BigEndian.AppendUint32(out, host.SnapshotAgeMillis)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(host.Members)))
+	for _, seat := range host.Members {
+		out = binary.BigEndian.AppendUint32(out, seat.Slot)
+		online := byte(0)
+		if seat.Online {
+			online = 1
+		}
+		out = append(out, online)
+		out = binary.BigEndian.AppendUint16(out, uint16(len(seat.Account)))
+		out = append(out, seat.Account...)
+	}
+	return append(out, host.State...)
+}
+
+func DecodeRelayYouAreHost(payload []byte) (RelayYouAreHost, error) {
+	bad := fmt.Errorf("%w: relay you_are_host", ErrInvalidPacket)
+	if len(payload) < 23 || payload[8] > byte(RelayStateSnapshot) {
+		return RelayYouAreHost{}, bad
+	}
+	host := RelayYouAreHost{Epoch: binary.BigEndian.Uint64(payload), Source: RelayStateSource(payload[8]),
+		SnapshotSeq: binary.BigEndian.Uint64(payload[9:]), SnapshotAgeMillis: binary.BigEndian.Uint32(payload[17:])}
+	count := int(binary.BigEndian.Uint16(payload[21:]))
+	rest := payload[23:]
+	host.Members = make([]RelaySeat, 0, count)
+	for range count {
+		if len(rest) < 7 || rest[4] > 1 {
+			return RelayYouAreHost{}, bad
+		}
+		n := int(binary.BigEndian.Uint16(rest[5:]))
+		if len(rest) < 7+n {
+			return RelayYouAreHost{}, bad
+		}
+		host.Members = append(host.Members, RelaySeat{Slot: binary.BigEndian.Uint32(rest), Online: rest[4] == 1, Account: string(rest[7 : 7+n])})
+		rest = rest[7+n:]
+	}
+	host.State = append([]byte(nil), rest...)
+	return host, nil
+}
+
+// RelaySnapshot 是 RelayOpSnapshot 的载荷：[seq 8B][快照字节]。seq 在房间内必须递增（跨房主：新房主从
+// RelayYouAreHost.SnapshotSeq 往上接）；快照字节由房主客户端压缩，relay 不压缩、不解压、不解析。
+type RelaySnapshot struct {
+	Seq  uint64
+	Data []byte
+}
+
+func EncodeRelaySnapshot(snapshot RelaySnapshot) []byte {
+	return append(binary.BigEndian.AppendUint64(make([]byte, 0, 8+len(snapshot.Data)), snapshot.Seq), snapshot.Data...)
+}
+
+func DecodeRelaySnapshot(payload []byte) (RelaySnapshot, error) {
+	if len(payload) < 8 {
+		return RelaySnapshot{}, fmt.Errorf("%w: relay snapshot", ErrInvalidPacket)
+	}
+	return RelaySnapshot{Seq: binary.BigEndian.Uint64(payload), Data: payload[8:]}, nil
+}
+
+// EncodeRelaySuccessors / DecodeRelaySuccessors 是 RelayOpSuccessors 的载荷：槽位列表，每个 4 字节大端。
+func EncodeRelaySuccessors(slots []uint32) []byte {
+	out := make([]byte, 0, 4*len(slots))
+	for _, slot := range slots {
+		out = binary.BigEndian.AppendUint32(out, slot)
+	}
+	return out
+}
+
+func DecodeRelaySuccessors(payload []byte) ([]uint32, error) {
+	if len(payload)%4 != 0 || len(payload)/4 > RelayMaxSuccessors {
+		return nil, fmt.Errorf("%w: relay successors", ErrInvalidPacket)
+	}
+	slots := make([]uint32, len(payload)/4)
+	for i := range slots {
+		slots[i] = binary.BigEndian.Uint32(payload[4*i:])
+	}
+	return slots, nil
+}
+
+// RelayRejectCode 是 RelayOpRejected 的原因。
+type RelayRejectCode byte
+
+const (
+	RelayRejectTooBig    RelayRejectCode = 1 // 快照或交接数据超过 snapshot_max_bytes
+	RelayRejectTooSoon   RelayRejectCode = 2 // 离上一份快照不到 snapshot_min_interval
+	RelayRejectStaleSeq  RelayRejectCode = 3 // 快照 seq 不大于 relay 存着的那一份
+	RelayRejectBadTarget RelayRejectCode = 4 // 转交的目标不在线，或是房主自己
+	RelayRejectNotHost   RelayRejectCode = 5 // 发送者此刻不是房主（已被换下，或正在换 host）
+)
+
+// RelayRejected 是 RelayOpRejected 的载荷：[被拒的操作码 1B][原因 1B][seq 8B]。seq 是被拒快照的 seq，转交为 0。
+type RelayRejected struct {
+	Op   uint32
+	Code RelayRejectCode
+	Seq  uint64
+}
+
+func EncodeRelayRejected(rejected RelayRejected) []byte {
+	return binary.BigEndian.AppendUint64([]byte{byte(rejected.Op), byte(rejected.Code)}, rejected.Seq)
+}
+
+func DecodeRelayRejected(payload []byte) (RelayRejected, error) {
+	if len(payload) != 10 {
+		return RelayRejected{}, fmt.Errorf("%w: relay rejected", ErrInvalidPacket)
+	}
+	return RelayRejected{Op: uint32(payload[0]), Code: RelayRejectCode(payload[1]), Seq: binary.BigEndian.Uint64(payload[2:])}, nil
 }

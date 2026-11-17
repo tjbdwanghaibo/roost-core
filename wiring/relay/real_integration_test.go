@@ -3,7 +3,6 @@
 package relay
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +22,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
+	"github.com/tjbdwanghaibo/roost-core/service/lobby"
 	domain "github.com/tjbdwanghaibo/roost-core/service/relay"
 	"github.com/tjbdwanghaibo/roost-core/service/relay/token"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
@@ -128,6 +131,15 @@ func TestRealRelayReportsCommandsAndAdvertisement(t *testing.T) {
 		t.Fatalf("etcd advertisement %q, want %+v", last, want)
 	}
 
+	// lobby 一侧的验权：这条用例只看报告、命令与广播，一律放行（真正的 lobby 验权见 TestRealRelayHostChangeKickAndVerification）。
+	verify, err := raw.SubscribeBounded(VerifySubject(subject), fnats.PendingLimits{Messages: 1024, Bytes: 1 << 20}, func(msg *fnats.Msg) {
+		_ = raw.PublishOnce(msg.Reply, []byte(`{"ok":true}`))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verify.DrainContext(context.Background())
+
 	server := NewServer()
 	if err := server.Init(registry); err != nil {
 		t.Fatal(err)
@@ -144,8 +156,10 @@ func TestRealRelayReportsCommandsAndAdvertisement(t *testing.T) {
 		}
 		return signed
 	}
-	host := dialWithToken(t, server.Addr(), signer("host", token.RoleHost))
-	member := dialWithToken(t, server.Addr(), signer("acc-a", token.RoleMember))
+	host := dialWithToken(t, server.Addr().String(), signer("host", token.RoleHost))
+	host.expectControl(t, wire.RelayOpWelcome, nil)
+	member := dialWithToken(t, server.Addr().String(), signer("acc-a", token.RoleMember))
+	member.expectControl(t, wire.RelayOpWelcome, nil)
 	host.expectControl(t, wire.RelayOpMemberJoined, nil)
 	waitAdvert(Advertisement{Instance: "relay-9", TCPAddr: "relay.it:7100", Rooms: 1})
 	waitReport(func(r domain.Report) bool {
@@ -185,19 +199,188 @@ func TestRealRelayReportsCommandsAndAdvertisement(t *testing.T) {
 	}
 }
 
-func dialWithToken(t *testing.T, addr net.Addr, signed string) *relayClient {
-	t.Helper()
-	conn, err := net.Dial("tcp", addr.String())
+// 真实 NATS（+ 私有 etcd，有 ROOST_DATAENGINE_IT_REDIS_ADDR 时房间目录放真实 Redis）上的 relay 与 lobby（service/lobby
+// 的验权与报告处理，经 NATS 订阅）：每条连接经 <subject>.verify 验权；主动转交换 host 后 lobby 收到 room.host_changed、
+// 改写房主；新房主踢掉旧房主后 lobby 记进被踢名单，join 被拒，旧令牌也连不上；lobby 不应答时新连接被拒。
+//
+//	source ~/.roost-it/roost-dataengine-it/env.sh && go test -tags integration -run TestRealRelay ./wiring/relay/
+func TestRealRelayHostChangeKickAndVerification(t *testing.T) {
+	natsURL := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if natsURL == "" {
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run against a private environment (scripts/mirror-local.sh)")
+	}
+	etcdEndpoint := startPrivateEtcd(t)
+	t.Setenv(testKeyEnv, testKey)
+	suffix := fmt.Sprintf("%d%d", os.Getpid(), time.Now().UnixNano())
+	subject := "relayhost" + suffix + ".lobby"
+
+	cfg := viper.New()
+	cfg.Set("sid", 9)
+	cfg.Set("server_type", "relay")
+	cfg.Set("nats.url", natsURL)
+	cfg.Set("nats.prefix", "relayhost"+suffix)
+	cfg.Set("etcd.endpoints", []string{etcdEndpoint})
+	cfg.Set("relay.listen", "127.0.0.1:0")
+	cfg.Set("relay.advertise_addr", "relay.it:7100")
+	cfg.Set("relay.token_key_env", testKeyEnv)
+	cfg.Set("relay.subject", subject)
+	cfg.Set("relay.registry_prefix", "/relay-host-it-"+suffix+"/relays/")
+	cfg.Set("relay.admit_timeout", "500ms")
+
+	registry := app.NewRegistry(cfg)
+	natsMod, etcdMod, relayMod := kitnats.NewNatsMod(nil), kitetcd.NewEtcdMod(), NewMod()
+	for _, mod := range []app.Mod{natsMod, etcdMod, relayMod} {
+		if err := mod.Init(cfg); err != nil {
+			t.Fatalf("%s init: %v", mod.Name(), err)
+		}
+		if err := mod.Provide(registry); err != nil {
+			t.Fatalf("%s provide: %v", mod.Name(), err)
+		}
+		if err := mod.Start(); err != nil {
+			t.Fatalf("%s start: %v", mod.Name(), err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = etcdMod.StopWithContext(context.Background())
+		_ = natsMod.StopWithContext(context.Background())
+	})
+	raw, _ := app.Lookup[fnats.RawClient](registry, mods.ModNatsRaw)
+
+	server := NewServer()
+	if err := server.Init(registry); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(ctx) }()
+	t.Cleanup(func() { // 先于 NATS / etcd Mod 的清理执行（后进先出）
+		cancel()
+		<-served
+		stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_ = server.Shutdown(stopCtx)
+	})
+
+	// lobby：房间目录（真实 Redis 或内存）、报告与验权都经真实 NATS。
+	var rooms lobby.RoomStore
+	var err error
+	if addr := os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR"); addr != "" {
+		prefix := redistest.Prefix(t, addr, "roost:relayit:{lobby}")
+		client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		if rooms, err = lobby.NewRedisRooms(client, prefix, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	} else if rooms, err = lobby.NewMemoryRooms(time.Hour, time.Now); err != nil {
+		t.Fatal(err)
+	}
+	service, err := lobby.New(lobby.Config{
+		Games: map[string]lobby.GameRule{"party": {MaxMembers: 4}}, Rooms: rooms,
+		Tokens:   bridgeTokens{"gt-host": "host", "gt-alice": "acc-alice"},
+		Relays:   bridgeRelays{{Instance: "relay-9", TCPAddr: server.Addr().String()}},
+		Commands: rawPublisher{raw}, Subject: subject, RelayTokenKey: []byte(testKey),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
-	c := &relayClient{conn: conn, reader: bufio.NewReader(conn)}
-	if err := wire.WriteRelay(conn, []*wire.Packet{{Payload: []byte(signed)}}, 0); err != nil {
+	events, err := raw.SubscribeBounded(EventSubject(subject), fnats.PendingLimits{Messages: 1024, Bytes: 1 << 20}, func(msg *fnats.Msg) {
+		if err := service.HandleRelayEventData(context.Background(), msg.Data); err != nil {
+			t.Errorf("lobby event: %v", err)
+		}
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	c.expectControl(t, wire.RelayOpWelcome, nil)
-	return c
+	defer events.DrainContext(context.Background())
+	verify, err := raw.SubscribeBounded(lobby.VerifySubject(subject), fnats.PendingLimits{Messages: 1024, Bytes: 1 << 20}, func(msg *fnats.Msg) {
+		_ = raw.PublishOnce(msg.Reply, service.HandleRelayVerifyData(context.Background(), msg.Data))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushCtx, flushed := context.WithTimeout(ctx, 5*time.Second)
+	defer flushed()
+	if err := raw.FlushContext(flushCtx); err != nil {
+		t.Fatal(err)
+	}
+	waitRoom := func(id string, match func(lobby.Room) bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			room, _, err := rooms.Get(context.Background(), id)
+			if err == nil && match(room) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("lobby room %+v (%v)", room, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	created, err := service.CreateRoom(ctx, "gt-host", lobby.CreateRequest{Game: "party", Mode: "duel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Room.ID
+	host := dialWithToken(t, created.RelayAddr, created.Token)
+	host.expectControl(t, wire.RelayOpWelcome, nil)
+	joined, err := service.JoinRoom(ctx, "gt-alice", id, lobby.JoinRequest{Game: "party"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := dialWithToken(t, joined.RelayAddr, joined.Token)
+	alice.expectControl(t, wire.RelayOpWelcome, nil)
+	host.expectControl(t, wire.RelayOpMemberJoined, nil)
+
+	// 主动转交：alice 接手，lobby 收到 room.host_changed，房主改成 alice、epoch 1。
+	if err := wire.WriteRelay(host.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 2, Payload: []byte("state")}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	alice.expectControl(t, wire.RelayOpYouAreHost, nil)
+	if err := wire.WriteRelay(alice.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostReady, Payload: wire.EncodeRelayEpoch(1)}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	host.expectControl(t, wire.RelayOpHostChanged, wire.EncodeRelayHostChanged(wire.RelayHostChanged{Epoch: 1, Account: "acc-alice"}))
+	waitRoom(id, func(r lobby.Room) bool { return r.Host == "acc-alice" && r.HostEpoch == 1 })
+	if _, err := service.SetRoomState(ctx, "gt-host", id, lobby.StateRequest{Game: "party", State: lobby.StateStarted}); !errors.Is(err, lobby.ErrNotHost) {
+		t.Fatalf("old host changing state: %v", err)
+	}
+
+	// 新房主踢掉旧房主：lobby 记进被踢名单；join 被拒；旧的 host 令牌（还没过期）也连不上。
+	if err := wire.WriteRelay(alice.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpKick, Seq: 1}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	host.expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonKicked)})
+	waitRoom(id, func(r lobby.Room) bool { return slices.Contains(r.Kicked, "host") })
+	if _, err := service.JoinRoom(ctx, "gt-host", id, lobby.JoinRequest{Game: "party"}); !errors.Is(err, lobby.ErrKicked) {
+		t.Fatalf("kicked old host joining: %v", err)
+	}
+	dialWithToken(t, created.RelayAddr, created.Token).expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonKicked)}) // relay 本地先挡
+
+	// lobby 不应答（验权订阅撤掉）：alice 用新令牌重连也进不来，失败即关闭；已连上的 alice 不受影响。
+	if err := verify.DrainContext(flushCtx); err != nil {
+		t.Fatal(err)
+	}
+	rejoined, err := service.JoinRoom(ctx, "gt-alice", id, lobby.JoinRequest{Game: "party"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialWithToken(t, rejoined.RelayAddr, rejoined.Token).expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonLobbyUnavailable)})
+	if err := wire.WriteRelay(alice.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpPing, Payload: []byte("ok")}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	alice.expectControl(t, wire.RelayOpPong, []byte("ok"))
+}
+
+// rawPublisher 把 lobby 的命令经 NATS 发出（wiring/lobby 用 IClient.Publish，这里只有 RawClient）。
+type rawPublisher struct{ client fnats.RawClient }
+
+func (p rawPublisher) Publish(subject string, data []byte) error {
+	return p.client.PublishOnce(subject, data)
 }
 
 // startPrivateEtcd 在空闲端口上起一个单节点 etcd（与 wiring/etcd 的 singleton 用例同一写法），不碰共享环境。

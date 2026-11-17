@@ -176,6 +176,9 @@ func (s *Service) JoinRoom(ctx context.Context, gameToken, roomID string, req Jo
 		if room.Relay.Addr(transport) == "" {
 			return false, fmt.Errorf("%w: %s", ErrTransportUnavailable, transport)
 		}
+		if room.kicked(account) {
+			return false, ErrKicked
+		}
 		room.pruneReservations(now)
 		if i := room.memberIndex(account); i >= 0 {
 			room.Members[i].ReservedUntilUnix = s.reservedUntil(now)
@@ -357,6 +360,8 @@ func errorStatus(err error) (int, string) {
 		return 403, "not_host"
 	case errors.Is(err, ErrWrongPassword):
 		return 403, "wrong_password"
+	case errors.Is(err, ErrKicked):
+		return 403, "kicked"
 	case errors.Is(err, ErrRoomMissing):
 		return 404, "room_not_found"
 	case errors.Is(err, ErrRoomFull):

@@ -94,6 +94,11 @@ func TestHTTPRoomLifecycle(t *testing.T) {
 	if status, reply := call(t, server, http.MethodPost, "/rooms/"+id+"/leave", "gt-alice", map[string]any{"game": "party"}); status != http.StatusOK || reply["token"] != nil {
 		t.Fatalf("leave: %d %v", status, reply)
 	}
+	h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Account: "acc-bob", Reason: ReasonKicked,
+		Online: []string{"acc-host"}})
+	if status, reply := call(t, server, http.MethodPost, "/rooms/"+id+"/join", "gt-bob", map[string]any{"game": "party", "password": "pw"}); status != http.StatusForbidden || reply["error"] != "kicked" {
+		t.Fatalf("kicked: %d %v", status, reply)
+	}
 	if status, reply := call(t, server, http.MethodPost, "/rooms/nope/join", "gt-alice", map[string]any{"game": "party"}); status != http.StatusNotFound || reply["error"] != "room_not_found" {
 		t.Fatalf("missing room: %d %v", status, reply)
 	}

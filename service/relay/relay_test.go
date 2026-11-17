@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"slices"
@@ -26,21 +27,58 @@ type harness struct {
 	addr    string
 	dialer  func() net.Conn
 	reports *recorder
+	lobby   *fakeLobby
+}
+
+// fakeLobby 代替 lobby 的验权：缺省全部放行；deny 里的账号被拒；hang 为 true 时不应答（等到 ctx 到期）。
+type fakeLobby struct {
+	mu       sync.Mutex
+	deny     map[string]bool
+	hang     bool
+	requests []relay.AdmitRequest
+}
+
+func (f *fakeLobby) Admit(ctx context.Context, request relay.AdmitRequest) error {
+	f.mu.Lock()
+	f.requests = append(f.requests, request)
+	deny, hang := f.deny[request.Account], f.hang
+	f.mu.Unlock()
+	switch {
+	case hang:
+		<-ctx.Done()
+		return ctx.Err()
+	case deny:
+		return fmt.Errorf("%w: test lobby says no", relay.ErrAdmissionDenied)
+	}
+	return nil
+}
+
+func (f *fakeLobby) set(change func(*fakeLobby)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	change(f)
+}
+
+func (f *fakeLobby) seen() []relay.AdmitRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.requests)
 }
 
 // newHarness 起一个 relay，默认监听 TCP 回环；pipe 为 true 时换成内存 net.Pipe 的 Listener（任意 net.Listener 都能接）。
 func newHarness(t *testing.T, pipe bool, mutate func(*relay.Config)) *harness {
 	t.Helper()
+	admission := &fakeLobby{}
 	config := relay.Config{Instance: testInstance, TokenKey: testKey}
 	if mutate != nil {
 		mutate(&config)
 	}
 	reports := &recorder{}
-	server, err := relay.NewServer(config, reports)
+	server, err := relay.NewServer(config, reports, admission)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{t: t, server: server, reports: reports}
+	h := &harness{t: t, server: server, reports: reports, lobby: admission}
 	var listener net.Listener
 	if pipe {
 		pl := newPipeListener()
@@ -93,7 +131,7 @@ func (h *harness) connect(room, account string, role token.Role, maxMembers int)
 		h.t.Fatalf("%s: expected welcome, got channel %d op %d payload %v", account, p.RelayChannel(), p.MsgID, p.Payload)
 	}
 	welcome, err := wire.DecodeRelayWelcome(p.Payload)
-	if err != nil || welcome.HostSlot != 1 || p.Seq == 0 {
+	if err != nil || p.Seq == 0 {
 		h.t.Fatalf("%s: welcome %+v slot %d: %v", account, welcome, p.Seq, err)
 	}
 	c.slot = p.Seq
@@ -370,21 +408,25 @@ func TestMuteBlocksOnlyTheRoomChannel(t *testing.T) {
 	host.expect(wire.RelayRoom, 5, 3, "back")
 }
 
-// 槽位、踢人、同账号顶号。
+// 槽位、踢人、同账号顶号。槽位属于账号：成员下线后座位留着，重连拿回原来的槽位；新账号取下一个没用过的槽位。
 func TestSlotsKickAndReplace(t *testing.T) {
 	h := newHarness(t, false, nil)
 	host, a, b := h.room3("room-slots")
 
-	// 成员走了，槽位空出来，新成员取最小的空槽位。
 	_ = a.conn.Close()
 	host.expectMember(wire.RelayOpMemberLeft, 2, wire.RelayReasonDisconnected, "acc-a")
 	c, _ := h.connect("room-slots", "acc-c", token.RoleMember, 8)
-	if c.slot != 2 {
-		t.Fatalf("new member slot %d, want the freed 2", c.slot)
+	if c.slot != 4 {
+		t.Fatalf("new member slot %d, want the next unused 4", c.slot)
 	}
-	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonNone, "acc-c")
+	host.expectMember(wire.RelayOpMemberJoined, 4, wire.RelayReasonNone, "acc-c")
+	a2, _ := h.connect("room-slots", "acc-a", token.RoleMember, 8)
+	if a2.slot != 2 {
+		t.Fatalf("returning member slot %d, want its old 2", a2.slot)
+	}
+	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonNone, "acc-a")
 
-	// 踢人：被踢的收到 Closed{kicked} 后断开，房主收到 MemberLeft{kicked}；同一账号再来被拒。
+	// 踢人：被踢的收到 Closed{kicked} 后断开，房主收到 MemberLeft{kicked}；同一账号再来被拒（本地记录，lobby 还没到）。
 	host.send(wire.FlagRelayControl, wire.RelayOpKick, 3, nil)
 	b.expectClosed(wire.RelayReasonKicked)
 	host.expectMember(wire.RelayOpMemberLeft, 3, wire.RelayReasonKicked, "acc-b")
@@ -395,19 +437,19 @@ func TestSlotsKickAndReplace(t *testing.T) {
 
 	// 成员发踢人控制帧不生效。
 	c.send(wire.FlagRelayControl, wire.RelayOpKick, 1, nil)
-	host.send(wire.FlagRelayGame, 1, 2, []byte("alive"))
+	host.send(wire.FlagRelayGame, 1, 4, []byte("alive"))
 	c.expect(wire.RelayGame, 1, 1, "alive")
 
 	// 同账号顶号：旧连接收到 Closed{replaced}，新连接沿用槽位，房主收到 MemberJoined{replaced}。
 	c2, _ := h.connect("room-slots", "acc-c", token.RoleMember, 8)
-	if c2.slot != 2 {
-		t.Fatalf("replacing connection slot %d, want 2", c2.slot)
+	if c2.slot != 4 {
+		t.Fatalf("replacing connection slot %d, want 4", c2.slot)
 	}
 	c.expectClosed(wire.RelayReasonReplaced)
-	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonReplaced, "acc-c")
+	host.expectMember(wire.RelayOpMemberJoined, 4, wire.RelayReasonReplaced, "acc-c")
 	c2.send(wire.FlagRelayGame, 2, 0, []byte("from new"))
-	host.expect(wire.RelayGame, 2, 2, "from new")
-	host.send(wire.FlagRelayGame, 3, 2, []byte("to new"))
+	host.expect(wire.RelayGame, 2, 4, "from new")
+	host.send(wire.FlagRelayGame, 3, 4, []byte("to new"))
 	c2.expect(wire.RelayGame, 3, 1, "to new")
 	if n := h.reports.count(func(r relay.Report) bool { return r.Type == relay.EventMemberLeft && r.Account == "acc-c" }); n != 0 {
 		t.Fatalf("replacement reported %d left events", n)
@@ -420,7 +462,7 @@ func TestSlotsKickAndReplace(t *testing.T) {
 	}
 	host.expectClosed(wire.RelayReasonReplaced)
 	c2.send(wire.FlagRelayGame, 4, 0, []byte("to new host"))
-	host2.expect(wire.RelayGame, 4, 2, "to new host")
+	host2.expect(wire.RelayGame, 4, 4, "to new host")
 }
 
 // 角色以房间状态为准（§4.6.5）：房间建好以后不看令牌里的角色字段。
@@ -468,10 +510,12 @@ func TestRoomLifecycleAndReports(t *testing.T) {
 	})
 	h.rejected(h.token("room-life", "acc-b", token.RoleMember, 2), wire.RelayReasonRoomFull)
 
+	// 成员走了、只剩房主时房主断开：没人可以接手，关房。
+	_ = a.conn.Close()
+	host.expectMember(wire.RelayOpMemberLeft, 2, wire.RelayReasonDisconnected, "acc-a")
 	_ = host.conn.Close()
-	a.expectClosed(wire.RelayReasonRoomClosed)
 	h.reports.wait(t, func(r relay.Report) bool {
-		return r.Type == relay.EventClosed && r.Seq == 3 && r.Room == "room-life" && r.Reason == "room_closed" && len(r.Online) == 0
+		return r.Type == relay.EventClosed && r.Seq == 4 && r.Room == "room-life" && r.Reason == "room_closed" && len(r.Online) == 0
 	})
 	if stats := h.server.Stats(); stats.Rooms != 0 {
 		t.Fatalf("stats %+v after close", stats)
@@ -507,21 +551,21 @@ func TestConnectionLimits(t *testing.T) {
 	host.expectMember(wire.RelayOpMemberLeft, 2, wire.RelayReasonFrameTooBig, "acc-big")
 
 	fast, _ := h.connect("room-limits", "acc-fast", token.RoleMember, 8)
-	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonNone, "acc-fast")
+	host.expectMember(wire.RelayOpMemberJoined, 3, wire.RelayReasonNone, "acc-fast")
 	for i := 0; i < 25; i++ {
 		fast.send(wire.FlagRelayGame, 1, 0, nil)
 	}
 	for i := 0; i < 20; i++ { // 前 20 帧（一秒的额度）照常转给房主
-		host.expect(wire.RelayGame, 1, 2, "")
+		host.expect(wire.RelayGame, 1, 3, "")
 	}
 	fast.expectClosed(wire.RelayReasonRateLimited)
-	host.expectMember(wire.RelayOpMemberLeft, 2, wire.RelayReasonRateLimited, "acc-fast")
+	host.expectMember(wire.RelayOpMemberLeft, 3, wire.RelayReasonRateLimited, "acc-fast")
 
 	// 心跳保活：每 100ms 一次 Ping，过了两倍空闲超时仍在线。房主同样靠心跳保活。
 	alive, _ := h.connect("room-limits", "acc-alive", token.RoleMember, 8)
-	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonNone, "acc-alive")
+	host.expectMember(wire.RelayOpMemberJoined, 4, wire.RelayReasonNone, "acc-alive")
 	idle, _ := h.connect("room-limits", "acc-idle", token.RoleMember, 8)
-	host.expectMember(wire.RelayOpMemberJoined, 3, wire.RelayReasonNone, "acc-idle")
+	host.expectMember(wire.RelayOpMemberJoined, 5, wire.RelayReasonNone, "acc-idle")
 	for i := 0; i < 6; i++ {
 		alive.send(wire.FlagRelayControl, wire.RelayOpPing, 0, []byte{byte(i)})
 		alive.expect(wire.RelayControl, wire.RelayOpPong, 0, string([]byte{byte(i)}))
@@ -534,7 +578,7 @@ func TestConnectionLimits(t *testing.T) {
 		if p.MsgID == wire.RelayOpPong {
 			continue
 		}
-		if p.MsgID != wire.RelayOpMemberLeft || p.Seq != 3 {
+		if p.MsgID != wire.RelayOpMemberLeft || p.Seq != 5 {
 			t.Fatalf("host got op %d seq %d", p.MsgID, p.Seq)
 		}
 		if member, _ := wire.DecodeRelayMember(p.Payload); member.Reason != wire.RelayReasonIdleTimeout {
@@ -542,7 +586,7 @@ func TestConnectionLimits(t *testing.T) {
 		}
 		break
 	}
-	host.send(wire.FlagRelayGame, 9, 2, []byte("ok"))
+	host.send(wire.FlagRelayGame, 9, 4, []byte("ok"))
 	alive.expect(wire.RelayGame, 9, 1, "ok")
 
 	// 超长的 Ping 是协议错误。
@@ -593,22 +637,31 @@ func TestLobbyLeaveCommand(t *testing.T) {
 	host.send(wire.FlagRelayGame, 1, 3, []byte("b still here"))
 	b.expect(wire.RelayGame, 1, 1, "b still here")
 
+	// 房主被 lobby 移出：不等宽限期，立即换 host，剩下的 b 被选中（§4.6.1“房主离开”）。
 	h.server.Leave("room-leave", "host")
 	host.expectClosed(wire.RelayReasonLeft)
-	b.expectClosed(wire.RelayReasonRoomClosed)
-	h.reports.wait(t, func(r relay.Report) bool { return r.Type == relay.EventClosed && r.Room == "room-leave" })
+	offer := b.expectYouAreHost(1)
+	if offer.Source != wire.RelayStateNone {
+		t.Fatalf("offer without a snapshot has source %d", offer.Source)
+	}
+	b.send(wire.FlagRelayControl, wire.RelayOpHostReady, 0, wire.EncodeRelayEpoch(1))
+	b.expectHostChanged(1, 3, "acc-b")
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventHostChanged && r.Host == "acc-b" && r.Epoch == 1 && slices.Equal(r.Online, []string{"acc-b"})
+	})
 }
 
-// 房主断开后关房：全部成员收到 Closed{room_closed} 后断开。
-func TestHostDisconnectClosesTheRoom(t *testing.T) {
-	h := newHarness(t, false, nil)
-	host, a, b := h.room3("room-close")
+// 没有成员时房主断开就关房（§5“没有成员时房主断开就关房”），不等宽限期。
+func TestHostDisconnectWithoutMembersClosesTheRoom(t *testing.T) {
+	h := newHarness(t, false, func(c *relay.Config) { c.HostGrace = time.Hour })
+	host, _ := h.connect("room-close", "host", token.RoleHost, 8)
 	_ = host.conn.Close()
-	a.expectClosed(wire.RelayReasonRoomClosed)
-	b.expectClosed(wire.RelayReasonRoomClosed)
 	report := h.reports.wait(t, func(r relay.Report) bool { return r.Type == relay.EventClosed && r.Room == "room-close" })
 	if len(report.Online) != 0 || report.Reason != "room_closed" {
 		t.Fatalf("closed report %+v", report)
+	}
+	if stats := h.server.Stats(); stats.Rooms != 0 {
+		t.Fatalf("stats %+v", stats)
 	}
 }
 
@@ -666,16 +719,56 @@ func TestTokenMustArriveInTime(t *testing.T) {
 	silent.expectClosed(wire.RelayReasonIdleTimeout)
 }
 
+// 每条连接都向 lobby 验权（§4.3）：建房的连接带 Create；lobby 拒绝时 Closed{lobby_rejected}，不应答时到
+// AdmitTimeout 后 Closed{lobby_unavailable}（失败即关闭）；被拒的连接不进房、房主收不到 MemberJoined。
+func TestEveryConnectionIsCheckedWithTheLobby(t *testing.T) {
+	h := newHarness(t, false, func(c *relay.Config) { c.AdmitTimeout = 200 * time.Millisecond })
+	host, _ := h.connect("room-admit", "host", token.RoleHost, 8)
+	a, _ := h.connect("room-admit", "acc-a", token.RoleMember, 8)
+	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonNone, "acc-a")
+	if got := h.lobby.seen(); !slices.Equal(got, []relay.AdmitRequest{
+		{Room: "room-admit", Account: "host", Relay: testInstance, Create: true},
+		{Room: "room-admit", Account: "acc-a", Relay: testInstance},
+	}) {
+		t.Fatalf("admission requests %+v", got)
+	}
+
+	h.lobby.set(func(f *fakeLobby) { f.deny = map[string]bool{"acc-b": true} })
+	h.rejected(h.token("room-admit", "acc-b", token.RoleMember, 8), wire.RelayReasonLobbyRejected)
+	h.rejected(h.token("room-new", "acc-b", token.RoleHost, 8), wire.RelayReasonLobbyRejected) // 建房同样要过 lobby
+	if stats := h.server.Stats(); stats.Rooms != 1 {
+		t.Fatalf("a refused host created a room: %+v", stats)
+	}
+
+	h.lobby.set(func(f *fakeLobby) { f.deny, f.hang = nil, true })
+	start := time.Now()
+	h.rejected(h.token("room-admit", "acc-c", token.RoleMember, 8), wire.RelayReasonLobbyUnavailable)
+	if waited := time.Since(start); waited < 200*time.Millisecond {
+		t.Fatalf("gave up after %v, before the admit timeout", waited)
+	}
+	// 同一账号重连也要验权：lobby 不可用时掉线的人回不来；已连上的不受影响。
+	h.rejected(h.token("room-admit", "acc-a", token.RoleMember, 8), wire.RelayReasonLobbyUnavailable)
+	host.expectSilence(quiet)
+	a.send(wire.FlagRelayGame, 1, 0, []byte("still connected"))
+	host.expect(wire.RelayGame, 1, 2, "still connected")
+}
+
 func TestConfigValidation(t *testing.T) {
+	allow := relay.AdmissionFunc(func(context.Context, relay.AdmitRequest) error { return nil })
 	for name, config := range map[string]relay.Config{
-		"no instance":          {TokenKey: testKey},
-		"short key":            {Instance: "r", TokenKey: []byte("short")},
-		"room bytes below max": {Instance: "r", TokenKey: testKey, MaxPayloadBytes: 2048, RoomBytesPerSecond: 1024},
-		"queue below 2 frames": {Instance: "r", TokenKey: testKey, MaxPayloadBytes: 1024, SendQueueBytes: 1024},
+		"no instance":            {TokenKey: testKey},
+		"short key":              {Instance: "r", TokenKey: []byte("short")},
+		"room bytes below max":   {Instance: "r", TokenKey: testKey, MaxPayloadBytes: 2048, RoomBytesPerSecond: 1024},
+		"queue below 2 frames":   {Instance: "r", TokenKey: testKey, MaxPayloadBytes: 1024, SendQueueBytes: 1024},
+		"queue below a snapshot": {Instance: "r", TokenKey: testKey, SnapshotMaxBytes: 1 << 20, SendQueueBytes: 1 << 20},
+		"huge snapshot":          {Instance: "r", TokenKey: testKey, SnapshotMaxBytes: 64 << 20, SendQueueBytes: 256 << 20},
 	} {
-		if _, err := relay.NewServer(config, nil); err == nil {
+		if _, err := relay.NewServer(config, nil, allow); err == nil {
 			t.Fatalf("%s accepted", name)
 		}
+	}
+	if _, err := relay.NewServer(relay.Config{Instance: "r", TokenKey: testKey}, nil, nil); err == nil {
+		t.Fatal("a relay without the lobby check accepted")
 	}
 }
 

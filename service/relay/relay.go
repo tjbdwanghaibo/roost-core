@@ -8,10 +8,13 @@
 //   - 房间通道：聊天、表情、语音，按目标直达（全体或某个槽位），房主也是收件人；另有单独限额，可被房主禁言。
 //   - 控制帧：relay 告诉房主成员上下线；房主让 relay 踢人、禁言。lobby 的 leave 命令经 Server.Leave 移出账号。
 //   - 报告：房间建成、成员进出、关闭时立即一条，另外每个房间定时一条心跳（Reporter，契约同 service/lobby.RoomEvent）。
-//   - 房间结束：这一批房主断开就关房（hostLost 是下一批接换 host 的位置，§4.6）。
+//   - 验权：令牌本地验签通过后，每条连接都经 Admission 问 lobby 能不能进房（§4.3）；拒绝、出错、超时都拒绝连接。
+//   - 换 host（§4.6，room.go）：主动转交、房主离开立即换；房主断线等宽限期，期满按候选顺序选新房主，新房主回
+//     host_ready 才生效；房主推来的最新快照只存不解，换 host 时交给新房主。选不出人才关房。
 //
-// 并发：每条连接一个读 goroutine（限额、按通道分发）和一个写 goroutine（有界发送队列，满了断开这一条，不阻塞别人）；
-// 房间状态由 room.mu 保护，锁的顺序是 Server.mu → room.mu → conn.mu，持有 conn.mu 时不取别的锁。
+// 并发：每条连接一个读 goroutine（验权、限额、按通道分发）和一个写 goroutine（有界发送队列，满了断开这一条，不阻塞别人）；
+// 房间状态由 room.mu 保护，锁的顺序是 Server.mu → room.mu → conn.mu，持有 conn.mu 时不取别的锁。房间的两个计时器
+// （宽限期、host_ready 期限）的回调也只在 room.mu 内改状态。向 lobby 验权在不持任何锁时进行。
 // 向 lobby 的报告（Reporter）都在释放锁之后发出。
 package relay
 
@@ -42,6 +45,16 @@ const (
 	DefaultEmptyRoomTimeout    = 10 * time.Minute
 	DefaultClosedRoomRetention = 2 * time.Minute
 	DefaultHeartbeatInterval   = 5 * time.Second
+
+	// 换 host（§4.6，§7 A、F）。
+	DefaultHostIdleTimeout     = 2 * time.Second
+	DefaultHostGrace           = 5 * time.Second
+	DefaultHostReadyTimeout    = 10 * time.Second
+	DefaultSnapshotMinInterval = time.Second
+	DefaultSnapshotMaxBytes    = 256 << 10
+
+	// 向 lobby 验权（§4.3）。
+	DefaultAdmitTimeout = 2 * time.Second
 )
 
 // Config 是一个 relay 实例的设置。零值字段取上面的缺省值（WithDefaults）；Instance 必填。
@@ -73,6 +86,22 @@ type Config struct {
 	ClosedRoomRetention time.Duration
 	// HeartbeatInterval：每个房间经 Reporter 发心跳的间隔，也是检查空房超时的间隔。
 	HeartbeatInterval time.Duration
+
+	// HostIdleTimeout：房主连接上这么久没收到任何帧就当房主断线（§4.6.3“relay 心跳超时”），进入宽限期。
+	// 房主的 SDK 要按它的三分之一左右发 Ping（房主一直在广播时不用另发）。成员仍按 IdleTimeout。
+	HostIdleTimeout time.Duration
+	// HostGrace：房主断线后等它用同一账号重连回来的时间；期满按候选顺序换 host（§4.6.1，§7 A）。
+	HostGrace time.Duration
+	// HostReadyTimeout：新房主候选收到 you_are_host 后回 host_ready 的期限；超时或断开换下一个人（§4.6.4 第 5 步）。
+	HostReadyTimeout time.Duration
+	// SnapshotMinInterval：同一个房主两份快照之间的最小间隔，太密的拒收并告诉房主（§4.6.3，§7 F）。
+	SnapshotMinInterval time.Duration
+	// SnapshotMaxBytes：单份快照（压缩后的字节）与主动转交的交接数据的上限，超限拒收并告诉房主。
+	// relay 每个房间只存最新一份，快照内存上限约为“房间数 × SnapshotMaxBytes”。
+	SnapshotMaxBytes int
+
+	// AdmitTimeout：一次验权的期限；超时按 lobby 不可用拒绝这条连接（失败即关闭）。
+	AdmitTimeout time.Duration
 }
 
 // WithDefaults 把零值字段换成缺省值。
@@ -99,6 +128,12 @@ func (c Config) WithDefaults() Config {
 	setDur(&c.EmptyRoomTimeout, DefaultEmptyRoomTimeout)
 	setDur(&c.ClosedRoomRetention, DefaultClosedRoomRetention)
 	setDur(&c.HeartbeatInterval, DefaultHeartbeatInterval)
+	setDur(&c.HostIdleTimeout, DefaultHostIdleTimeout)
+	setDur(&c.HostGrace, DefaultHostGrace)
+	setDur(&c.HostReadyTimeout, DefaultHostReadyTimeout)
+	setDur(&c.SnapshotMinInterval, DefaultSnapshotMinInterval)
+	setInt(&c.SnapshotMaxBytes, DefaultSnapshotMaxBytes)
+	setDur(&c.AdmitTimeout, DefaultAdmitTimeout)
 	return c
 }
 
@@ -118,23 +153,71 @@ func (c Config) Validate() error {
 	case c.SendQueueBytes < 2*(c.MaxPayloadBytes+wire.HeaderSize):
 		return fmt.Errorf("relay: send_queue_bytes %d must hold at least two full frames (%d)", c.SendQueueBytes, 2*(c.MaxPayloadBytes+wire.HeaderSize))
 	case c.IdleTimeout <= 0 || c.AuthTimeout <= 0 || c.WriteTimeout <= 0 || c.EmptyRoomTimeout <= 0 ||
-		c.ClosedRoomRetention <= 0 || c.HeartbeatInterval <= 0:
+		c.ClosedRoomRetention <= 0 || c.HeartbeatInterval <= 0 || c.HostIdleTimeout <= 0 || c.HostGrace <= 0 ||
+		c.HostReadyTimeout <= 0 || c.SnapshotMinInterval <= 0 || c.AdmitTimeout <= 0:
 		return errors.New("relay: timeouts must be positive")
+	case c.SnapshotMaxBytes <= 0 || c.SnapshotMaxBytes > maxSnapshotBytes:
+		return fmt.Errorf("relay: snapshot_max_bytes %d must be in 1..%d", c.SnapshotMaxBytes, maxSnapshotBytes)
+	case c.SendQueueBytes < c.SnapshotMaxBytes+c.MaxPayloadBytes+2*wire.HeaderSize+youAreHostOverhead:
+		// 新房主的发送队列要放得下一份带快照的 you_are_host 和一个满帧，否则候选会被当成慢连接断开。
+		return fmt.Errorf("relay: send_queue_bytes %d must hold a you_are_host with a full snapshot plus a full frame (%d)",
+			c.SendQueueBytes, c.SnapshotMaxBytes+c.MaxPayloadBytes+2*wire.HeaderSize+youAreHostOverhead)
 	}
 	return nil
 }
 
+// maxSnapshotBytes 是 snapshot_max_bytes 的上限：快照帧在读入前按帧头里的长度分配内存，这里给它一个硬顶。
+const maxSnapshotBytes = 16 << 20
+
+// youAreHostOverhead 是 you_are_host 除状态字节以外的余量（固定头 + 成员列表），只用于发送队列的下限检查。
+const youAreHostOverhead = 16 << 10
+
+// MaxFrameBytes 是客户端发来的单帧（含 16 字节帧头）可能的最大字节数：快照与转交帧可以到 2 × SnapshotMaxBytes
+// （超过 SnapshotMaxBytes 的拒收并通知，超过两倍按超大帧断开），其余帧到 MaxPayloadBytes。WebSocket 接入的单条
+// 消息上限取它。
+func (c Config) MaxFrameBytes() int {
+	return max(c.MaxPayloadBytes, stateFrameHardLimit(c)) + wire.HeaderSize
+}
+
 // instancePattern 是实例名的写法（与 lobby 的 relay 广播约定相同）。
 var instancePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// Admission 是 relay 每条连接进房前向 lobby 的验权（方案 §4.3；契约同 service/lobby 的 RelayVerifyRequest）：
+// 令牌本地验签通过后，问 lobby“这个账号此刻能不能进这个房间”。lobby 只核对能不能进房（房间还在、分在本实例、
+// 是成员、没被踢；建房时是房间记录里的房主），不核对角色——角色以 relay 的房间状态为准（§4.6.5）。
+//
+// 返回包着 ErrAdmissionDenied 的错误表示 lobby 拒绝（RelayReasonLobbyRejected）；其他错误、ctx 到期都按
+// lobby 不可用处理（RelayReasonLobbyUnavailable）。两种都拒绝这条连接：失败即关闭。
+type Admission interface {
+	Admit(ctx context.Context, request AdmitRequest) error
+}
+
+// AdmitRequest 是一次验权的内容。Create 为 true 表示 relay 上还没有这个房间、这条连接拿的是 host 令牌，
+// 要用它建房：lobby 额外核对账号是房间记录里的房主。
+type AdmitRequest struct {
+	Room    string
+	Account string
+	Relay   string
+	Create  bool
+}
+
+// AdmissionFunc 把函数当 Admission 用。
+type AdmissionFunc func(ctx context.Context, request AdmitRequest) error
+
+func (f AdmissionFunc) Admit(ctx context.Context, request AdmitRequest) error { return f(ctx, request) }
+
+// ErrAdmissionDenied 是 lobby 明确拒绝的验权结果。
+var ErrAdmissionDenied = errors.New("relay: the lobby refused this connection")
 
 // ErrStopped 是停机之后再调用 Serve 的结果。
 var ErrStopped = errors.New("relay: server stopped")
 
 // Server 是一个 relay 实例：持有本实例上的全部房间与连接。
 type Server struct {
-	config Config
-	report Reporter
-	now    func() time.Time
+	config    Config
+	report    Reporter
+	admission Admission
+	now       func() time.Time
 
 	mu        sync.Mutex
 	stopping  bool
@@ -143,18 +226,27 @@ type Server struct {
 	listeners map[net.Listener]struct{}
 	conns     map[*conn]struct{}
 	wg        sync.WaitGroup
+
+	// stopped 在 Shutdown 时取消，打断正在等 lobby 验权的连接。
+	stopped context.Context
+	stop    context.CancelFunc
 }
 
-// NewServer 建一个 relay 实例。report 为 nil 时不报告（只用于测试）。
-func NewServer(config Config, report Reporter) (*Server, error) {
+// NewServer 建一个 relay 实例。report 为 nil 时不报告（只用于测试）；admission 是每条连接进房前向 lobby 的验权，
+// 必填（wiring/relay 接 NATS request，单测接替身）。
+func NewServer(config Config, report Reporter, admission Admission) (*Server, error) {
 	config = config.WithDefaults()
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	if admission == nil {
+		return nil, errors.New("relay: admission (the lobby check on every connection) is required")
+	}
 	if report == nil {
 		report = ReporterFunc(func(Report) {})
 	}
-	return &Server{config: config, report: report, now: time.Now,
+	stopped, stop := context.WithCancel(context.Background())
+	return &Server{config: config, report: report, admission: admission, now: time.Now, stopped: stopped, stop: stop,
 		rooms: map[string]*room{}, closed: map[string]time.Time{}, listeners: map[net.Listener]struct{}{}, conns: map[*conn]struct{}{}}, nil
 }
 
@@ -256,6 +348,7 @@ func (s *Server) Stats() Stats {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.stopping = true
+	s.stop()
 	for listener := range s.listeners {
 		_ = listener.Close()
 	}
@@ -306,6 +399,10 @@ func (s *Server) serveConn(c *conn) {
 		c.finish(reason, reason != wire.RelayReasonDisconnected)
 		return
 	}
+	if reason = s.checkWithLobby(claims); reason != wire.RelayReasonNone {
+		c.finish(reason, true)
+		return
+	}
 	r, reason := s.admit(claims, c)
 	if reason != wire.RelayReasonNone {
 		c.finish(reason, true)
@@ -314,6 +411,40 @@ func (s *Server) serveConn(c *conn) {
 	reason = c.readLoop(r)
 	c.finish(reason, reason != wire.RelayReasonDisconnected)
 	r.leave(c)
+}
+
+// checkWithLobby 先按本地状态挡掉显然进不来的连接（房间不在而令牌不是 host、关过的房间号、本地记着被踢），
+// 再向 lobby 验权（§4.3）。lobby 拒绝、出错、超时都拒绝这条连接。本地的被踢记录只挡“踢出”报到 lobby 之前的
+// 那一小段时间；lobby 的被踢名单才是权威。
+func (s *Server) checkWithLobby(claims token.Claims) wire.RelayReason {
+	now := s.now()
+	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		return wire.RelayReasonShutdown
+	}
+	r := s.rooms[claims.Room]
+	until, closed := s.closed[claims.Room]
+	s.mu.Unlock()
+	create := r == nil
+	switch {
+	case create && ((closed && now.Before(until)) || claims.Role != token.RoleHost):
+		return wire.RelayReasonRoomNotFound
+	case !create && r.isKicked(claims.Account):
+		return wire.RelayReasonKicked
+	}
+	ctx, cancel := context.WithTimeout(s.stopped, s.config.AdmitTimeout)
+	defer cancel()
+	err := s.admission.Admit(ctx, AdmitRequest{Room: claims.Room, Account: claims.Account, Relay: s.config.Instance, Create: create})
+	switch {
+	case err == nil:
+		return wire.RelayReasonNone
+	case errors.Is(err, ErrAdmissionDenied):
+		return wire.RelayReasonLobbyRejected
+	case s.stopped.Err() != nil:
+		return wire.RelayReasonShutdown
+	}
+	return wire.RelayReasonLobbyUnavailable
 }
 
 // admit 把通过验签的连接放进房间：房间不存在时，只有 host 令牌能建房（关过的房间号在 ClosedRoomRetention 内不能重建）；

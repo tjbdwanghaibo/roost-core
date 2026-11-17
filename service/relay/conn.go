@@ -2,7 +2,9 @@ package relay
 
 import (
 	"bufio"
+	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -32,6 +34,9 @@ type conn struct {
 	lastFrame atomic.Int64 // 最近一帧（或开始计时）的 UnixNano
 	idleLimit atomic.Int64 // 当前的空闲上限：令牌阶段是 AuthTimeout，进房后是 IdleTimeout
 	idleTimer *time.Timer
+
+	// changingSeen 是这条连接最近一次收到 host_changing 时房间的 changeGen（由 room.mu 保护）：每次换 host 最多一条。
+	changingSeen uint64
 
 	mu           sync.Mutex
 	queue        [][]byte
@@ -74,9 +79,8 @@ func (c *conn) readToken() (token.Claims, wire.RelayReason) {
 
 // readLoop 逐帧读、扣限额、按通道交给房间，返回连接结束的原因。
 func (c *conn) readLoop(r *room) wire.RelayReason {
-	cfg := c.server.config
 	for {
-		p, err := wire.ReadRelay(c.reader, cfg.MaxPayloadBytes)
+		p, err := c.readFrame()
 		if err != nil {
 			return readFailure(err)
 		}
@@ -84,6 +88,9 @@ func (c *conn) readLoop(r *room) wire.RelayReason {
 		c.lastFrame.Store(now.UnixNano())
 		if !c.frames.take(now, 1) {
 			return wire.RelayReasonRateLimited
+		}
+		if p == nil { // 超大的快照或转交：载荷已丢掉、已回 Rejected{too_big}，连接保留
+			continue
 		}
 		switch p.RelayChannel() {
 		case wire.RelayGame:
@@ -105,7 +112,66 @@ func (c *conn) readLoop(r *room) wire.RelayReason {
 	}
 }
 
-// control 处理客户端发来的控制帧。踢人、禁言只认当前房主（room 里核对）；不认识的操作码丢弃，留给以后的协议扩展。
+// readFrame 读一帧。快照与转交帧的载荷上限是 snapshot_max_bytes（快照另加 8 字节 seq）：超过它但不到两倍时，
+// 丢掉载荷、回 Rejected{too_big}、返回 nil 帧，连接保留（§4.6.3“超限拒收并告诉房主”）；再大的按超大帧断开。
+// 其余帧的上限是 MaxPayloadBytes。上限在申请载荷内存之前按帧头检查。
+func (c *conn) readFrame() (*wire.Packet, error) {
+	cfg := c.server.config
+	head, err := c.reader.Peek(wire.HeaderSize)
+	if err != nil {
+		return nil, err
+	}
+	hard := stateFrameHardLimit(cfg)
+	h, err := wire.ParseRelayHeader(head, max(cfg.MaxPayloadBytes, hard))
+	if err != nil {
+		return nil, err
+	}
+	limit := cfg.MaxPayloadBytes
+	if h.RelayChannel() == wire.RelayControl && (h.MsgID == wire.RelayOpSnapshot || h.MsgID == wire.RelayOpTransfer) {
+		limit = stateFrameLimit(cfg, h.MsgID)
+		if size := int(h.PayloadSize); size > limit && size <= hard {
+			return nil, c.discardOversizedState(h)
+		}
+	}
+	if int(h.PayloadSize) > limit {
+		return nil, wire.ErrPacketTooBig
+	}
+	return wire.ReadRelay(c.reader, limit)
+}
+
+// discardOversizedState 丢掉一帧超大的快照或转交（不进内存），回 Rejected{too_big}。快照的 seq 带回去，
+// 房主据此知道是哪一份被拒。
+func (c *conn) discardOversizedState(h wire.Header) error {
+	if _, err := c.reader.Discard(wire.HeaderSize); err != nil {
+		return err
+	}
+	body, seq := int(h.PayloadSize), uint64(0)
+	if h.MsgID == wire.RelayOpSnapshot {
+		var raw [8]byte
+		if _, err := io.ReadFull(c.reader, raw[:]); err != nil {
+			return err
+		}
+		seq, body = binary.BigEndian.Uint64(raw[:]), body-8
+	}
+	if _, err := c.reader.Discard(body); err != nil {
+		return err
+	}
+	c.enqueueControl(wire.RelayOpRejected, 0, wire.EncodeRelayRejected(wire.RelayRejected{Op: h.MsgID, Code: wire.RelayRejectTooBig, Seq: seq}))
+	return nil
+}
+
+// stateFrameLimit 是快照或转交帧的载荷上限；stateFrameHardLimit 是两倍于它的硬顶（超过就断开）。
+func stateFrameLimit(cfg Config, op uint32) int {
+	if op == wire.RelayOpSnapshot {
+		return cfg.SnapshotMaxBytes + 8
+	}
+	return cfg.SnapshotMaxBytes
+}
+
+func stateFrameHardLimit(cfg Config) int { return 2*cfg.SnapshotMaxBytes + 8 }
+
+// control 处理客户端发来的控制帧。踢人、禁言、转交、候选顺序、快照只认当前房主，host_ready 只认当前候选
+// （都在 room 里核对）；不认识的操作码丢弃，留给以后的协议扩展。
 func (c *conn) control(r *room, p *wire.Packet) wire.RelayReason {
 	switch p.MsgID {
 	case wire.RelayOpPing:
@@ -120,6 +186,28 @@ func (c *conn) control(r *room, p *wire.Packet) wire.RelayReason {
 			return wire.RelayReasonProtocol
 		}
 		r.mute(c, p.Seq, p.Payload[0] == 1)
+	case wire.RelayOpTransfer:
+		r.transfer(c, p.Seq, p.Payload)
+	case wire.RelayOpLeave:
+		return wire.RelayReasonLeft
+	case wire.RelayOpSuccessors:
+		slots, err := wire.DecodeRelaySuccessors(p.Payload)
+		if err != nil {
+			return wire.RelayReasonProtocol
+		}
+		r.setSuccessors(c, slots)
+	case wire.RelayOpSnapshot:
+		snapshot, err := wire.DecodeRelaySnapshot(p.Payload)
+		if err != nil {
+			return wire.RelayReasonProtocol
+		}
+		r.storeSnapshot(c, snapshot)
+	case wire.RelayOpHostReady:
+		epoch, err := wire.DecodeRelayEpoch(p.Payload)
+		if err != nil {
+			return wire.RelayReasonProtocol
+		}
+		r.hostReady(c, epoch)
 	}
 	return wire.RelayReasonNone
 }
@@ -132,6 +220,15 @@ func (c *conn) watchIdle(limit time.Duration) {
 }
 
 func (c *conn) touch() { c.lastFrame.Store(time.Now().UnixNano()) }
+
+// setIdleLimit 换空闲上限（成为房主时换成 HostIdleTimeout，降为成员时换回 IdleTimeout），按最后一帧的时间重新计时。
+// 由房间在锁内调用；计时器在令牌阶段就已建好。
+func (c *conn) setIdleLimit(limit time.Duration) {
+	c.idleLimit.Store(int64(limit))
+	if c.idleTimer != nil {
+		c.idleTimer.Reset(max(limit-time.Since(time.Unix(0, c.lastFrame.Load())), 0))
+	}
+}
 
 func (c *conn) checkIdle() {
 	c.mu.Lock()
