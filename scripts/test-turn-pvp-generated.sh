@@ -24,9 +24,10 @@ sed "s|TURN_MODULE|$module|g" "$repo_root/scripts/testdata/turn-pvp-real/timer_t
 gofmt -w "$review_root/project/game/handler/turn_timer_real_test.go"
 cd "$review_root/project"
 # 默认档也编译 / vet 恢复夹具；只有显式 REAL 才接真实存储，不能以 SKIP 冒充验收。
-# 夹具带构建标签 turnreal：名字以 TestTurn 开头，不带标签时 turn 的 module verify（^TestTurn）会把它的 SKIP 算进去。
-go test -mod=mod -tags turnreal -run '^$' ./game/handler
-go vet -mod=mod -tags turnreal ./game/handler
+# 名字虽以 TestTurn 开头，turn 的 module verify 只运行、只统计 turn 装进工程的测试文件里的用例（维护者 2026-11-17），
+# 不会把它缺省档的 SKIP 算进 turn 的条数，所以不需要构建标签。
+go test -mod=mod -run '^$' ./game/handler
+go vet -mod=mod ./game/handler
 if [[ "${ROOST_TURN_PVP_REAL:-0}" == 1 ]]; then
   : "${ROOST_DATAENGINE_IT_MONGO_URI:?private Mongo replica set required}"
   command -v mongosh >/dev/null
@@ -34,7 +35,7 @@ if [[ "${ROOST_TURN_PVP_REAL:-0}" == 1 ]]; then
   export TURN_TIMER_DATABASE="$timer_database" TURN_TIMER_ROOT="$review_root/timer" ROOST_TURN_PVP_REAL=1
   mkdir -p "$TURN_TIMER_ROOT"
   for phase in seed recover; do
-    TURN_TIMER_PHASE="$phase" go test -mod=mod -tags turnreal -race -count=1 -timeout 2m -v -run '^TestTurnPVPRealTimerRecovery$' ./game/handler >"$review_root/timer-$phase.log" 2>&1 || { cat "$review_root/timer-$phase.log"; exit 1; }
+    TURN_TIMER_PHASE="$phase" go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestTurnPVPRealTimerRecovery$' ./game/handler >"$review_root/timer-$phase.log" 2>&1 || { cat "$review_root/timer-$phase.log"; exit 1; }
     grep -q '^--- PASS: TestTurnPVPRealTimerRecovery' "$review_root/timer-$phase.log"
     if grep -q -- '--- SKIP:' "$review_root/timer-$phase.log"; then echo "unexpected timer SKIP" >&2; exit 1; fi
     grep 'PASS real timer' "$review_root/timer-$phase.log"

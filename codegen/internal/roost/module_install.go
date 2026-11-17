@@ -26,6 +26,7 @@ import (
 //
 //  1. 前置骨架（实体的主 DAO、玩家接入）经已有的 roost add 补齐——它们本身就是完整的工程状态；
 //  2. 逐个模块：写入模板 → 往主 DAO 末尾追加状态字段 → 接组件 → 为自带实体补 lifecycle；
+//     联动文件；放了模块测试文件的包里补上模块场景的公共夹具（装载工程的 configs/data，见 module_testconfig.go）；
 //  3. 把归属记录写进 roost.yaml 的 modules；
 //  4. 运行全部生成器（GenerateTransactional：暂存区里生成，成功才提交）。
 //
@@ -594,6 +595,18 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 	for _, glue := range plan.Glue {
 		touched = append(touched, glue.Files...)
 	}
+	// 模块场景测试的公共夹具（装载工程的 configs/data）：这次写测试文件的包里还没有的，跟模块一起写、一起回滚。
+	var testFiles []string
+	for _, item := range plan.Modules {
+		if item.Status == moduleStatusInstall {
+			testFiles = append(testFiles, item.spec.Files...)
+		}
+	}
+	for _, glue := range plan.Glue {
+		testFiles = append(testFiles, glue.Files...)
+	}
+	configFixtures := moduleConfigFixtures(root, testFiles)
+	touched = append(touched, configFixtures...)
 	backups, err := captureFiles(root, touched)
 	if err != nil {
 		return ModulePlan{}, err
@@ -660,6 +673,9 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		}
 		record.With[glue.With] = append([]string(nil), glue.Files...)
 		manifest.Modules[glue.Module] = record
+	}
+	if err := writeModuleConfigFixtures(root, manifest.Project.Module, configFixtures, testFiles); err != nil {
+		return fail(err)
 	}
 	// 模块可能同时补 packer 与附加 DAO。全部业务声明就位后再开启自身同步，
 	// 避免中途 project sync 用未完成的默认 packer 校验；开关也纳入同一次回滚。

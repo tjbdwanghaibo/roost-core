@@ -16,9 +16,9 @@
 
 | 业务状态 | 拥有者 | 框架接法 | 业务边界 |
 | --- | --- | --- | --- |
-| 建档做过没有、初始金币 | **enter 模块**（Player DAO 的 `Enter`） | `roost module add enter`；建档经 `EnterInit`，初始金币写在 `event.EnterFirst` 的 Player 监听（`game/entities/player/idle_sim.go`）里，与建档标记同一笔；放置建档要求 `Enter().Built()` | Q6：只装 enter，不装 login / portal，Robot 用夹具鉴权 |
+| 建档做过没有、初始金币与宝石 | **enter 模块**（Player DAO 的 `Enter`） | `roost module add enter`；建档经 `EnterInit`，初始金币（wallet）与初始宝石（bag）写在 `event.EnterFirst` 的 Player 监听（`game/entities/player/idle_sim.go`）里，与建档标记同一笔；放置建档要求 `Enter().Built()` | Q6：只装 enter，不装 login / portal，Robot 用夹具鉴权 |
 | 金币 | **wallet 模块**（Player DAO 的 `Wallet`） | 新命令的金币变化经 `Wallet().Add` 与放置存档同一笔提交 | “只做一次”由放置的 `Seq` 回执保证，不用 wallet 的去重窗口；放置自己的 100 万业务上限按读到的余额判断 |
-| 宝石 | **bag 模块**（Player DAO 的 `Bag`，道具号 `GemItem = 1101`） | 脚本往 `configs/table/item.csv` 追加一行；初始 10 颗随放置存档一笔经 `Bag().Add` 发，加速经 `Bag().Remove` 扣 | Q2 B：次要货币做道具；进程里要装着道具表（`ItemRule` 读配置快照） |
+| 宝石 | **bag 模块**（Player DAO 的 `Bag`，道具号 `GemItem = 1101`） | 脚本往 `configs/table/item.csv` 追加一行；初始 10 颗在 enter 建档那一笔经 `Bag().Add` 发，加速经 `Bag().Remove` 扣 | Q2 B：次要货币做道具；进程里要装着道具表（`ItemRule` 读配置快照）。正式进程启动时装载 `configs/data`；模块场景的测试由安装器写的 `roost_config_data_test.go` 先按同样的方式装载（维护者 2026-11-17），所以 enter 自带的场景照样建档成功 |
 | 每日奖励 | **checkin 模块**（Player DAO 的 `Checkin`） | `daily` 命令在同一笔事务里调 `Checkin().Claim(now)` | 业务日、连续天数加成（连续第 n 天 10×min(n,7)）与“今天领过没有”都归 checkin |
 | 工坊等级、生产队列（工时 / 投入 / 产出在入队时冻结）、待领产物 | Player DAO 末尾的 `IdleState`（手写） | 生成的 Player DAO 字段，只在 Nest 事务里经 mutator 修改 | 每工坊四个在途、四格待领；整个 `IdleState` 是一段业务 JSON |
 | 原料、仓库、收益箱、收入等级、倍率期限 | Player DAO 的 `IdleState` | 与队列同事务 | 收益箱 100 封顶、仓库 20 格、原料 100 上限；仓库里的产品是放置自己的事实（不进 bag），容量照旧手写校验 |
@@ -74,7 +74,7 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 | 2 | `game/modules/idlesim/state.go`（[state.go.txt](../../scripts/testdata/idle-sim/state.go.txt)） | 存档里有什么？`LastAt` 与 `Horizon` 各表示什么？视图为什么要深拷贝队列？ |
 | 3 | `game/modules/idlesim/production.go`（[production.go.txt](../../scripts/testdata/idle-sim/production.go.txt)） | `Advance` 怎样把一段时间一次积分（倍率分段、余数、封顶、缓冲满暂停）？`Apply` 怎样先结算再改？ |
 | 4 | `game/handler/idle_sim.go`（[handlers.go.txt](../../scripts/testdata/idle-sim/handlers.go.txt)） | 命令、查回执分别在哪个锁与提交边界里生效？`Apply` 交出的 `Effect` 怎样在同一笔里交给 wallet / bag / checkin？唤醒定时器在哪里替换？ |
-| 4A | `game/entities/player/idle_sim.go`（[first_enter.go.txt](../../scripts/testdata/idle-sim/first_enter.go.txt)） | 初始金币为什么写在 `event.EnterFirst` 监听里、初始宝石为什么不在这里发？ |
+| 4A | `game/entities/player/idle_sim.go`（[first_enter.go.txt](../../scripts/testdata/idle-sim/first_enter.go.txt)） | 初始金币与宝石为什么写在 `event.EnterFirst` 监听里、放置存档为什么不在这里建？ |
 | 5 | `game/entities/player/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/idle-sim/timer_handlers.go.txt)） | 唤醒回调怎样核对身份？离线很久为什么只积分一次？ |
 | 5A | enter / wallet / bag / checkin 模块的 README（[enter](../../modules/enter/README.md)、[wallet](../../modules/wallet/README.md)、[bag](../../modules/bag/README.md)、[checkin](../../modules/checkin/README.md)），借鉴的 [idle](../../modules/idle/README.md) | 模块管到哪、不管什么；`roost module verify` 跑的是哪些场景 |
 | 6 | `game/handler/syncsender/` | 生成的 Sender 怎样把 Player ID 与业务参数交给 Nest；业务调用它，不手改 |
@@ -99,7 +99,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// initAndQueue 是已鉴权入口的调用顺序：建放置存档（同一笔发初始宝石；已有存档时原样返回）、在 1 号工坊排一个 1 号配方。
+// initAndQueue 是已鉴权入口的调用顺序：建放置存档（初始金币与宝石已在 enter 建档时发过；已有存档时原样返回）、在 1 号工坊排一个 1 号配方。
 // Rules 由服务器捕获，不来自请求；已有存档会忽略它，沿用初始化那一代。
 func initAndQueue(ctx context.Context, client nest.Client, catalog *configdata.Store,
 	playerEntityID int64) (idlesim.Receipt, error) {
@@ -180,7 +180,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 
 | 场景 | 旧断言 | 新断言 |
 | --- | --- | --- |
-| 全部 Nest 场景 | 夹具的 `Sync_IdleInit` 建档并发初始金币 100、钻石 10 | enter 的 `Sync_EnterInit` 建档（`EnterFirst` 监听经 wallet 发 100 金币），`Sync_IdleInit` 要求 `Enter().Built()`、建放置存档并经 bag 发 10 颗宝石；建档前的 `Sync_IdleInit` 被拒 |
+| 全部 Nest 场景 | 夹具的 `Sync_IdleInit` 建档并发初始金币 100、钻石 10 | enter 的 `Sync_EnterInit` 建档（`EnterFirst` 监听经 wallet 发 100 金币、经 bag 发 10 颗宝石），`Sync_IdleInit` 要求 `Enter().Built()`、建放置存档；建档前的 `Sync_IdleInit` 被拒 |
 | `WarehouseCapacityOrdersAndSalesAreAtomic` | `State.Gold == 126` | wallet 的 `Wallet.Coins == 126` |
 | `UpgradeAndBoostSettleOldRatesBeforeChangingThem` | `State.Gold == 90`、`State.Gems == 8`；初始化重试存档不变 | `Wallet.Coins == 90`、`Bag().Count(1101) == 8`；初始化重试存档、金币与宝石都不变 |
 | `ConcurrentAdmissionAndClaimsRetainOriginalReceipt` | `State.Gold == 106`（收益 1 + 每日 5） | `Wallet.Coins == 111`（收益 1 + checkin 第 1 天 10），checkin `Total == 1` |

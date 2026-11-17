@@ -1,0 +1,13 @@
+# 修后：同一命令
+# GOWORK=off go test -count=1 -run '^TestModuleVerify(LoadsTheProjectConfigData|CountsOnlyTheModulesOwnTests)$' -v ./codegen/internal/roost/
+
+=== RUN   TestModuleVerifyLoadsTheProjectConfigData
+=== PAUSE TestModuleVerifyLoadsTheProjectConfigData
+=== RUN   TestModuleVerifyCountsOnlyTheModulesOwnTests
+=== PAUSE TestModuleVerifyCountsOnlyTheModulesOwnTests
+=== CONT  TestModuleVerifyLoadsTheProjectConfigData
+=== CONT  TestModuleVerifyCountsOnlyTheModulesOwnTests
+--- PASS: TestModuleVerifyLoadsTheProjectConfigData (19.69s)
+--- PASS: TestModuleVerifyCountsOnlyTheModulesOwnTests (23.50s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	24.062s

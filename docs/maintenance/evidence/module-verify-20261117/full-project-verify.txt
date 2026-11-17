@@ -1,0 +1,139 @@
+# 修后：全新工程 -template game，一次装全部 42 个模块（与 scripts/test-modules-generated.sh 的 all_modules 同一清单），roost module verify --json
+# 结果 ok=True；90 项（模块 + 联动），与 test-modules-generated.sh 的 all_counts 逐项比对：不一致 无，多出 无
+activity passed=21 want=21 skipped=0 ok=True
+activity+enter passed=2 want=2 skipped=0 ok=True
+activity+leaderboard passed=1 want=1 skipped=0 ok=True
+activity+mailbox passed=1 want=1 skipped=0 ok=True
+activity+profile passed=1 want=1 skipped=0 ok=True
+activity_alliance passed=7 want=7 skipped=0 ok=True
+activity_world passed=6 want=6 skipped=0 ok=True
+actor passed=14 want=14 skipped=0 ok=True
+alliance passed=55 want=55 skipped=0 ok=True
+alliance+enter passed=2 want=2 skipped=0 ok=True
+alliance+rehome passed=2 want=2 skipped=0 ok=True
+attribute passed=20 want=20 skipped=0 ok=True
+attribute+enter passed=2 want=2 skipped=0 ok=True
+attribute+equipment passed=8 want=8 skipped=0 ok=True
+bag passed=20 want=20 skipped=0 ok=True
+bag+gm passed=4 want=4 skipped=0 ok=True
+cdkey passed=12 want=12 skipped=0 ok=True
+chat passed=10 want=10 skipped=0 ok=True
+chat+enter passed=2 want=2 skipped=0 ok=True
+checkin passed=8 want=8 skipped=0 ok=True
+combat passed=38 want=38 skipped=0 ok=True
+combat+equipment passed=2 want=2 skipped=0 ok=True
+combat+scene passed=2 want=2 skipped=0 ok=True
+combat+skillbook passed=1 want=1 skipped=0 ok=True
+dungeon passed=21 want=21 skipped=0 ok=True
+dungeon+leaderboard passed=3 want=3 skipped=0 ok=True
+enter passed=29 want=29 skipped=0 ok=True
+enter+profile passed=3 want=3 skipped=0 ok=True
+equipment passed=18 want=18 skipped=0 ok=True
+friends passed=18 want=18 skipped=0 ok=True
+gacha passed=29 want=29 skipped=0 ok=True
+gm passed=9 want=9 skipped=0 ok=True
+idle passed=19 want=19 skipped=0 ok=True
+leaderboard passed=21 want=21 skipped=0 ok=True
+login passed=37 want=37 skipped=0 ok=True
+login+enter passed=6 want=6 skipped=0 ok=True
+mailbox passed=33 want=33 skipped=0 ok=True
+mailbox+bag passed=9 want=9 skipped=0 ok=True
+mailbox+enter passed=5 want=5 skipped=0 ok=True
+mailbox+gm passed=4 want=4 skipped=0 ok=True
+mailbox+profile passed=10 want=10 skipped=0 ok=True
+mailbox+rehome passed=2 want=2 skipped=0 ok=True
+matchmaking passed=17 want=17 skipped=0 ok=True
+matchmaking+rehome passed=2 want=2 skipped=0 ok=True
+matchroom passed=12 want=12 skipped=0 ok=True
+monster passed=27 want=27 skipped=0 ok=True
+naming passed=15 want=15 skipped=0 ok=True
+notice passed=8 want=8 skipped=0 ok=True
+notice+gm passed=4 want=4 skipped=0 ok=True
+portal passed=12 want=12 skipped=0 ok=True
+portal+enter passed=2 want=2 skipped=0 ok=True
+profile passed=21 want=21 skipped=0 ok=True
+profile+enter passed=4 want=4 skipped=0 ok=True
+profile+gm passed=4 want=4 skipped=0 ok=True
+purchase passed=21 want=21 skipped=0 ok=True
+purchase+bag passed=4 want=4 skipped=0 ok=True
+purchase+enter passed=2 want=2 skipped=0 ok=True
+rehome passed=50 want=50 skipped=0 ok=True
+rehome+enter passed=5 want=5 skipped=0 ok=True
+rehome+gm passed=4 want=4 skipped=0 ok=True
+room passed=34 want=34 skipped=0 ok=True
+rules passed=10 want=10 skipped=0 ok=True
+scene passed=28 want=28 skipped=0 ok=True
+scene+attribute passed=2 want=2 skipped=0 ok=True
+scene+chat passed=5 want=5 skipped=0 ok=True
+scene+equipment passed=2 want=2 skipped=0 ok=True
+scene+profile passed=2 want=2 skipped=0 ok=True
+servertime passed=12 want=12 skipped=0 ok=True
+servertime+enter passed=3 want=3 skipped=0 ok=True
+shop passed=20 want=20 skipped=0 ok=True
+shop+rules passed=2 want=2 skipped=0 ok=True
+skillbook passed=11 want=11 skipped=0 ok=True
+stamina passed=26 want=26 skipped=0 ok=True
+stamina+rules passed=2 want=2 skipped=0 ok=True
+task passed=29 want=29 skipped=0 ok=True
+task+bag passed=3 want=3 skipped=0 ok=True
+task+checkin passed=3 want=3 skipped=0 ok=True
+task+dungeon passed=2 want=2 skipped=0 ok=True
+task+leaderboard passed=3 want=3 skipped=0 ok=True
+task+profile passed=2 want=2 skipped=0 ok=True
+task+shop passed=3 want=3 skipped=0 ok=True
+task+stamina passed=3 want=3 skipped=0 ok=True
+task+wallet passed=6 want=6 skipped=0 ok=True
+team passed=35 want=35 skipped=0 ok=True
+team+rehome passed=2 want=2 skipped=0 ok=True
+terrain passed=28 want=28 skipped=0 ok=True
+terrain+monster passed=2 want=2 skipped=0 ok=True
+turn passed=25 want=25 skipped=0 ok=True
+wallet passed=17 want=17 skipped=0 ok=True
+wallet+gm passed=4 want=4 skipped=0 ok=True
+check go build ./... ok=True
+check go vet ./... ok=True
+check roost id check ok=True
+check roost generate --check ok=True
+
+# 安装器写的公共夹具 roost_config_data_test.go（39 个包）
+./cmd/accountctl/roost_config_data_test.go
+./db/roost_config_data_test.go
+./game/components/activity/roost_config_data_test.go
+./game/components/gacha/roost_config_data_test.go
+./game/components/idle/roost_config_data_test.go
+./game/components/rules/roost_config_data_test.go
+./game/components/shop/roost_config_data_test.go
+./game/components/stamina/roost_config_data_test.go
+./game/components/task/roost_config_data_test.go
+./game/controllers/roost_config_data_test.go
+./game/handler/roost_config_data_test.go
+./game/managers/roost_config_data_test.go
+./game/modules/alliance/roost_config_data_test.go
+./game/modules/alliance/runtime/roost_config_data_test.go
+./game/modules/chat/roost_config_data_test.go
+./game/modules/gameplay/attribute/roost_config_data_test.go
+./game/modules/gm/roost_config_data_test.go
+./game/modules/leaderboard/roost_config_data_test.go
+./game/modules/login/roost_config_data_test.go
+./game/modules/mailbox/roost_config_data_test.go
+./game/modules/matchmaking/roost_config_data_test.go
+./game/modules/matchroom/roost_config_data_test.go
+./game/modules/monster/service/roost_config_data_test.go
+./game/modules/notice/roost_config_data_test.go
+./game/modules/purchase/roost_config_data_test.go
+./game/modules/rehome/roost_config_data_test.go
+./game/modules/room/roost_config_data_test.go
+./game/modules/servertime/roost_config_data_test.go
+./game/modules/skillbook/roost_config_data_test.go
+./game/modules/skills/roost_config_data_test.go
+./internal/access/player/tcp/roost_config_data_test.go
+./internal/rpc/activity_alliance/roost_config_data_test.go
+./internal/rpc/activity_world/roost_config_data_test.go
+./internal/rpc/alliance/roost_config_data_test.go
+./internal/service/alliance/roost_config_data_test.go
+./services/account/portal/roost_config_data_test.go
+./services/account/roost_config_data_test.go
+./services/chat/roost_config_data_test.go
+./services/platform/roost_config_data_test.go
+
+# 同一工程 go test -mod=mod ./...：ok 45 个包，FAIL 0

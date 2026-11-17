@@ -50,8 +50,6 @@ printf '%s\n' 2001,钻石,0 2002,尘,0 2101,英雄1,0 2102,英雄2,0 2103,英雄
 printf '%s\n' 2,2,5,2106,false >> configs/table/gacha_pool.csv
 printf '%s\n' 201,2,2101,27 202,2,2102,27 203,2,2103,26 204,2,2104,7 205,2,2105,7 206,2,2106,6 >> configs/table/gacha_drop.csv
 printf '%s\n' 101,card.won,permanent,1,0,item,2001,10,false >> configs/table/task.csv
-# 钻石与尘建档时就发，写进 bag 的规则入口，不依赖道具表是否已装载（enter 的模块场景不装工程的表；CARD §3.1）
-perl -0pi -e 's/(func ItemRule\(itemID int64\) \(maxStack int64, ok bool\) \{\n)/$1\tif itemID == 2001 || itemID == 2002 {\n\t\treturn 0, true\n\t}\n/ or die "no ItemRule\n"' game/components/bag/items.go
 mkdir -p game/modules/cardrpg
 for n in catalog profile battle catalog_test; do cp "$F/$n.go.txt" "game/modules/cardrpg/$n.go"; done
 cp "$F/attributes.go.txt"     game/modules/gameplay/attribute/hero_stats.go
@@ -62,7 +60,7 @@ cp "$F/gameplay_test.go.txt"  game/handler/card_rpg_test.go
 fix_mod card-rpg-practice game/modules/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
   game/entities/card_run/timer_handlers.go game/entities/player/card_rpg.go game/handler/card_rpg*.go
 gofmt -w db/def/*.go game/modules/cardrpg/*.go game/modules/gameplay/attribute/hero_stats.go \
-  game/entities/card_run/timer_handlers.go game/entities/player/card_rpg.go game/components/bag/items.go game/handler/card_rpg*.go
+  game/entities/card_run/timer_handlers.go game/entities/player/card_rpg.go game/handler/card_rpg*.go
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" card-rpg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/modules/cardrpg ./game/handler 2>&1 | tee "$WORK/test.log"
@@ -93,7 +91,7 @@ bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$
 - handler 里发同步 Nest 请求：`ErrSyncInHandler`。
 - 为“再试一次”换新序号 / 新请求键：会重复扣款；抽卡重发同一个 gacha 请求键，养成重发同一序号和内容（CARD §5）。
 - 卡牌规则另开一个 configdata Store 装载：装载会发布成进程缺省配置，覆盖 gacha / bag / task 读的表；`cardrpg.OpenCatalog` 把 `card_rules` 与 `generated.RegisterGeneratedConfigData` 登记在同一个 Registry（CARD §4）。
-- EnterFirst 监听里发 bag 道具：enter 的模块场景不装工程道具表，道具号须在 bag 规则入口 `items.go` 里认下，否则 `module verify` 的 enter 场景答 `bag_item_invalid`（CARD §3.1）。
+- EnterFirst 监听里发 bag 道具：道具号写进工程道具表 `item.csv` 即可，不改 bag 的规则入口 `items.go`；模块场景的测试由安装器写的 `roost_config_data_test.go` 先按正式启动的方式装载工程的 `configs/data`（维护者 2026-11-17），enter 自带的场景照样认得（CARD §3.1）。
 - 公网请求携带 `Rules`：配置只由服务端入口捕获（CARD §4）。
 
 ## 7. 验证

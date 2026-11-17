@@ -218,7 +218,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// 道具表在放置规则之后装（装载会发布成进程当前配置）：放置建档事务里的初始宝石经 bag 放入要它。
+		// 道具表在放置规则之后装（装载会发布成进程当前配置）：enter 建档事务里的初始宝石经 bag 放入要它。
 		idleUseItems(t, dir, false)
 		if _, err := sender.NewEnterInitSender(h.scheduler).Sync_EnterInit(ctx, h.playerID); err != nil {
 			t.Fatal(err)

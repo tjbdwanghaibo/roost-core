@@ -1,8 +1,3 @@
-// 构建标签 turnreal：turn 模块的 module verify 按 ^TestTurn 选场景，不带标签就会把本用例（缺省 SKIP）算进 turn 的条数。
-// 脚本缺省档带标签编译 / vet，REAL 档带标签运行。
-
-//go:build turnreal
-
 package handler
 
 import (

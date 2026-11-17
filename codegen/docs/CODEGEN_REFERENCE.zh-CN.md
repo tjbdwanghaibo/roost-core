@@ -486,7 +486,7 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 | `list` | 列出模块、依赖与它追加的状态字段 | 不需要在工程里执行 |
 | `plan <name…>` | 算出安装顺序（依赖在前）、会先执行的 `roost add`、会新声明的托管框架服务（`framework_services`）、追加的 DAO 字段、分配的号、写入的文件 | 不改动工程 |
 | `add <name…>` | 按同一份计划安装，运行全部生成器 | 已安装的模块不再处理；不覆盖业务文件 |
-| `verify [name…]` | 每个已装模块跑自带场景，要求通过的顶层场景数等于清单里的数（子测试不另算）、任何一层零跳过；再跑 `go build`、`go vet`、`roost id check`、`roost generate --check` | 场景用替身提交器，不连真实依赖 |
+| `verify [name…]` | 每个已装模块跑自带场景，要求通过的顶层场景数等于清单里的数（子测试不另算）、任何一层零跳过；再跑 `go build`、`go vet`、`roost id check`、`roost generate --check`。只运行、只统计模块装进工程的测试文件里的用例：用例名从 `roost.yaml` 记下的模块文件（联动是 `with.<另一个模块>` 的文件）里读出、与清单的 `run` 取交集，拼成精确的 `-run '^(A|B|…)$'`，工程自己的同前缀测试不算进去 | 场景用替身提交器，不连真实依赖；场景之前先按正式启动的方式装载工程的 `configs/data`（安装器写的 `roost_config_data_test.go`，见下第 3 步） |
 
 自带实体用清单 `entities: [Room]`：模板提供 Entity / DAO，`{{ID:entity:Room}}` 分配实体号，安装器补 lifecycle，并在同一暂存区刷新 owner / handler 接线；失败整体回退，不作为保留的前置步骤。细节见 [modules/README](../../modules/README.md#自带实体)。
 
@@ -496,6 +496,7 @@ roost module verify               # 模块自带场景 + build / vet / id check 
    - **托管框架服务**：模块的 `needs.uses` 与 `runtime.framework` 用到、工程还没有的托管服务（`-template game` 缺省一个都不带），在模块事务里声明 `services.<name>.framework: <name>` 并加进业务服务的 `uses`（`runtime.framework` 的托管服务这次才声明时，清单 `needs.mods` 里可代办的 Mod 直接写进它的 `mods`）；业务服务的配置补上 ClientMod 要的段（match、activity 要 etcd），新服务的配置、部署与协作者文件由第 6 步的 project sync 生成；随 `roost.yaml` 一起回滚。同名的已经是业务服务时拒绝安装。`plan` / `add` 输出 `framework service <name>: will declare` / `declared`。
 2. **状态**：模块的状态字段追加到实体主 DAO 的**末尾**，类型是模块自带的嵌套结构体。追加在末尾是因为同步的 PB 字段号按定义顺序排。同名字段已按同样的类型与标签存在时跳过；类型或标签不同、存储键已被占用时拒绝。
 3. **组件与文件**：模板先渲染进工程，再追加状态、接组件；`daos` 追加独立 DAO 聚合声明，`sync_packer` 接明确的同步工厂，已有业务工厂时拒绝覆盖；自带实体最后补 lifecycle。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `services/<name>/collaborators.go`；v1.47.0 之前生成的工程在 `internal/service/<name>/`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
+   - **模块场景的公共夹具**：每个放了模块测试文件（含联动的测试文件）的包里写一份 `roost_config_data_test.go`（已经有就不动，之后归工程所有，不记在任何模块名下），它的 `init` 按 game 进程正式启动的方式装载工程的 `configs/data`：生成的 `RegisterGeneratedConfigData` 登记全部表（新建的 Registry，不碰缺省 Registry），从 `configs/data` 装载一次并发布成进程当前配置。工程挂在模块流程上的业务（`EnterFirst` 监听里发道具表里的道具）因此在模块场景里读到工程的表（维护者 2026-11-17）。与模块文件同一个回滚边界。
    - **联动文件**：模块可以带与另一个模块的联动（`modules/<name>/with/<另一个模块>/`）。这次装的模块与已装的或同一次装的模块凑成一对、而这一对有联动时，全部模块写完之后把联动文件写进工程，归属记在拥有它的模块的 `modules.<name>.with.<另一个模块>` 下；`plan` / `add` 输出 `glue <模块> with <另一个模块>`，`--json` 里是 `glue` 数组。落点已有内容不同的文件时拒绝（`already exists and is not this glue file`）。两个都早已装好的不补。`verify` 把联动自带的场景单独列一项 `<模块>+<另一个模块>`。
 4. **号**：实体号、协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
 5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段、文件、目标 service、requires 与可选 runtime。

@@ -1,0 +1,20 @@
+# 修前（main 002ceca6，2026-11-17）
+# 命令：GOWORK=off go test -count=1 -run '^TestModuleVerify(LoadsTheProjectConfigData|CountsOnlyTheModulesOwnTests)$' -v ./codegen/internal/roost/
+
+=== RUN   TestModuleVerifyLoadsTheProjectConfigData
+=== PAUSE TestModuleVerifyLoadsTheProjectConfigData
+=== RUN   TestModuleVerifyCountsOnlyTheModulesOwnTests
+=== PAUSE TestModuleVerifyCountsOnlyTheModulesOwnTests
+=== CONT  TestModuleVerifyLoadsTheProjectConfigData
+=== CONT  TestModuleVerifyCountsOnlyTheModulesOwnTests
+=== NAME  TestModuleVerifyLoadsTheProjectConfigData
+    module_verify_test.go:57: verify = map[bag:[20 0] enter:[16 0]], err = module verification failed; want enter 29 and bag 20 passing, 0 skipped
+--- FAIL: TestModuleVerifyLoadsTheProjectConfigData (22.68s)
+=== NAME  TestModuleVerifyCountsOnlyTheModulesOwnTests
+    module_verify_test.go:103: enter = [30 1], want [29 0] passing / skipped
+    module_verify_test.go:103: enter+profile = [3 1], want [3 0] passing / skipped
+    module_verify_test.go:113: verify = map[enter:[30 1] enter+profile:[3 1] profile:[21 0] profile+enter:[4 0]], err = module verification failed
+--- FAIL: TestModuleVerifyCountsOnlyTheModulesOwnTests (26.13s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	26.906s
+FAIL

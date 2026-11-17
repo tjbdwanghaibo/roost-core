@@ -20,9 +20,9 @@
 
 | 业务 | 归谁 | 出处 |
 | --- | --- | --- |
-| 建档、初始金币 | **enter**：建档 `EnterInit`；初始金币写在 `event.EnterFirst` 的 Player 监听（夹具 `first_enter.go.txt`）；玩法存档建在建档之后、要求 `Enter().Built()` | IDLE §2、MERGE §2 |
+| 建档、初始资产 | **enter**：建档 `EnterInit`；初始金币（放置还有初始宝石）写在 `event.EnterFirst` 的 Player 监听（夹具 `first_enter.go.txt`）；玩法存档建在建档之后、要求 `Enter().Built()` | IDLE §2、MERGE §2 |
 | 金币 | **wallet**：新命令的金币变化经 `Wallet().Add` 与玩法存档同一笔；“只做一次”由玩法自己的 `Seq` 回执保证 | IDLE §2、§6，MERGE §2、§5 |
-| 放置的宝石 | **bag** 道具 `1101`（Q2 B）：初始 10 颗随放置存档一笔 `Bag().Add`，加速 `Bag().Remove`；道具表加一行 | IDLE §2 |
+| 放置的宝石 | **bag** 道具 `1101`（Q2 B）：初始 10 颗在 `EnterFirst` 监听里 `Bag().Add`，加速 `Bag().Remove`；道具表加一行 | IDLE §2 |
 | 放置的每日奖励 | **checkin**：`daily` 命令同一笔 `Checkin().Claim(now)`，按业务日、连续天数加成 | IDLE §5 |
 | 合成的体力 | **stamina**（Q1 A）：`Spend` / `Grant` / `Current`，规则在 `game/components/stamina/rules.go`，不随棋盘冻结 | MERGE §2、§4、§6 |
 | 生产队列 / 收益积分、棋盘 / 生产器 / 订单 / 挑战 / 广告 | 手写；Player DAO 末尾的 `IdleState` / `MergeState` + `IdleWakeTimer` / `MergeWakeTimer`，`rollback=undo durability=strict`；放置借鉴 idle 模块的“游标只前移整周期”，合成的广告借鉴 checkin 的业务日与 wallet 的业务键 | IDLE §2、MERGE §2 |
@@ -46,7 +46,7 @@ printf '1101,宝石,0\n' >> configs/table/item.csv                              
 mkdir -p game/modules/idlesim
 for n in rules state production rules_test; do cp "$F/$n.go.txt" "game/modules/idlesim/$n.go"; done
 cp "$F/timer_handlers.go.txt" game/entities/player/timer_handlers.go
-cp "$F/first_enter.go.txt"    game/entities/player/idle_sim.go      # event.EnterFirst 监听：初始金币
+cp "$F/first_enter.go.txt"    game/entities/player/idle_sim.go      # event.EnterFirst 监听：初始金币与宝石
 cp "$F/handlers.go.txt"       game/handler/idle_sim.go
 cp "$F/gameplay_test.go.txt"  game/handler/idle_sim_test.go
 fix_mod idle-sim-practice game/modules/idlesim/*.go game/entities/player/{timer_handlers,idle_sim}.go game/handler/idle_sim*.go
@@ -96,7 +96,7 @@ R9 之后场景名与条数不变，改过断言的场景（旧断言 → 新断
 | 类别 | 内容 | 出处 |
 | --- | --- | --- |
 | 框架能做 | 存档、唤醒期限与同一 Player 上的模块状态（wallet / bag / checkin / stamina）同事务、离线后加载只补触发一次、undo 回滚、配置原子发布 | IDLE §10、MERGE §11“证明” |
-| 模块边界 | wallet 只有一种货币（放置的宝石做 bag 道具）、去重窗口 128 次（长期“只做一次”靠玩法回执，用 `Add` 不用 `Apply`）；stamina 规则不随存档冻结、`Grant` 到硬顶静默截断（合成要求发足）；checkin 奖励按连续天数加成；enter 自带场景不装道具表，`EnterFirst` 里发 bag 道具会让它们失败（初始宝石改随放置存档发） | IDLE §2、§3.5，MERGE §2、§4；各模块 README |
+| 模块边界 | wallet 只有一种货币（放置的宝石做 bag 道具）、去重窗口 128 次（长期“只做一次”靠玩法回执，用 `Add` 不用 `Apply`）；stamina 规则不随存档冻结、`Grant` 到硬顶静默截断（合成要求发足）；checkin 奖励按连续天数加成；`EnterFirst` 里发 bag 道具只要道具号在工程道具表里（模块场景先按正式启动的方式装载 `configs/data`，维护者 2026-11-17） | IDLE §2、§3.5，MERGE §2、§4；各模块 README |
 | 框架不能做 | 离线追帧（离线一年也只投递一次，补多少由业务一次算完）；离线实体准点唤醒；“读视图推进时间” | IDLE §5、MERGE §6；KNOWN-LIMITS“按实体的持久定时器（D11）” |
 | 时间边界 | 驱动索引在提交之后（AfterCommit）更新，测试读到新状态后仍要有界等待索引；每日边界正式服按业务时区算 | IDLE §5 |
 | 一致性边界 | 每玩家一个有序命令流，同序号同内容返回原回执；放置账本 128 条、合成命令 / 广告账本各 128 条、单批 16 条，满了拒绝不淘汰；改 `bson` 名或删字段会丢旧键（加载只打 WARN），要离线迁移 | IDLE §6、MERGE §5、§7 |

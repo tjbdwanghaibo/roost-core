@@ -1,0 +1,37 @@
+# 修后：回合 PvP REAL 档（turnreal 标签已去掉，入口命令不带 -tags）
+# 命令：source ~/.roost-it/roost-dataengine-it/env.sh; GOWORK=off ROOST_TURN_PVP_REAL=1 bash scripts/test-turn-pvp-generated.sh   → exit 0
+
+## TestTurnPVPRealTimerRecovery seed（go test -mod=mod -race -count=1 -run '^TestTurnPVPRealTimerRecovery$' ./game/handler）
+    turn_timer_real_test.go:188: PASS real timer seed: open, joins, turn start, strict attack with receipt, reward and deadline node flushed
+--- PASS: TestTurnPVPRealTimerRecovery (0.59s)
+ok  	example.com/turn-pvp-practice/game/handler	2.209s
+
+## TestTurnPVPRealTimerRecovery recover（go test -mod=mod -race -count=1 -run '^TestTurnPVPRealTimerRecovery$' ./game/handler）
+    turn_timer_real_test.go:272: PASS real timer recover: complete cold DAO, indexed deadline, offline seats refused until RoomReconnect, offline timeout once, replay and terminal cleanup
+--- PASS: TestTurnPVPRealTimerRecovery (0.16s)
+ok  	example.com/turn-pvp-practice/game/handler	1.519s
+
+## scripts/test-turn-pvp-real.sh（配方演练）
+--- PASS: TestScenarioTurnOrder (0.01s)
+--- PASS: TestScenarioTimeoutConsumesOneTurn (0.01s)
+--- PASS: TestScenarioTerminalCannotAttack (0.01s)
+--- PASS: TestScenarioReconnectReadsAuthoritativeTurn (0.01s)
+--- PASS: TestScenarioTurnTimesOutByTheRoomTimer (3.55s)
+--- PASS: TestScenarioRobotTCPRetryAndReconnect (0.05s)
+--- PASS: TestScenarioRetryAndConflict (0.01s)
+--- PASS: TestScenarioCommitRejectionRollsBack (0.01s)
+--- PASS: TestScenarioStaleRevision (0.01s)
+--- PASS: TestScenarioMembership (0.00s)
+PASS
+    turn_timer_real_test.go:188: PASS real timer seed: open, joins, turn start, strict attack with receipt, reward and deadline node flushed
+    turn_timer_real_test.go:272: PASS real timer recover: complete cold DAO, indexed deadline, offline seats refused until RoomReconnect, offline timeout once, replay and terminal cleanup
+[drill 11:09:22] generating turn-pvp recipe trn83e5a2
+[drill 11:09:50] game-ingress ready (pid 20820, ops 127.0.0.1:44100)
+[drill 11:09:52] gate ready (pid 20888, ops 127.0.0.1:44300)
+[drill 11:09:54] SIGKILL game-ingress; waiting past two saved turn deadlines
+[drill 11:10:10] game-ingress ready (pid 21166, ops 127.0.0.1:44100)
+    recipe_test.go:94: PASS real turn seed: room=1 round=2 sequence=1; replay stayed round=2; deadline=1794884999038
+    recipe_test.go:151: PASS real turn recovery: room=1; old connections rejected; epochs advanced; offline timeout once; sequence retained; replay and finish exactly once
+[drill 11:10:10] PASS real turn-pvp recipe: Gate/TCP/NATS/Mongo/WAL, SIGKILL recovery, offline timeout once and replay; evidence artifacts/turn-pvp-real-trn83e5a2
+[drill 11:10:11] stopped game-ingress
+[drill 11:10:12] stopped gate

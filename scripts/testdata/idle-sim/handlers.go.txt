@@ -20,8 +20,8 @@ func idlePurse(p IIdlePlayerEntity) idle.Purse {
 	return idle.Purse{Gold: p.Wallet().Balance(), Gems: p.Bag().Count(idle.GemItem)}
 }
 
-// 放置存档建在 enter 建档之后（初始金币已经在 enter 的首次初始化事务里发过，game/entities/player/idle_sim.go）。
-// 这里建放置自己的存档，并在同一笔事务里经 bag 发初始宝石：“发过没有”就是存档已经存在，同号重试只读不发。
+// 放置存档建在 enter 建档之后（初始金币与宝石已经在 enter 的首次初始化事务里发过，game/entities/player/idle_sim.go）。
+// 这里只建放置自己的存档：已经有存档时同号重试只读不写。
 // Rules 来自服务端捕获的 configdata Snapshot，冻结进存档；已有存档不因重试或新配置改变经济。
 //
 //roost:nest rollback=undo durability=strict
@@ -35,9 +35,6 @@ func handlerIdleInit(p IIdlePlayerEntity, nowUnixMilli int64, rules idle.Rules) 
 	}
 	s, err := idle.NewState(nowUnixMilli, rules)
 	if err != nil {
-		return idle.View{}, err
-	}
-	if _, err := p.Bag().Add(idle.GemItem, idle.StartGems); err != nil {
 		return idle.View{}, err
 	}
 	if err := saveIdle(p, s); err != nil {

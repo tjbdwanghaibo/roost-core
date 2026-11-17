@@ -7,10 +7,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"io"
 	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -291,6 +296,10 @@ func countModuleScenarios(output []byte) (passed, skipped int) {
 // VerifyModules 跑已装模块（names 为空 = 全部）自带的场景，要求通过数恰好等于清单里的数、零跳过，
 // 再跑工程级检查。通过数与跳过数都核对：-run 写错或用例被跳过时 go test 照样报 ok。
 // 有任何一项不通过时返回错误，报告里逐项写明。
+//
+// 只运行、只统计模块装进工程的那些测试文件里的用例（维护者 2026-11-17）：用例名从 roost.yaml 记下的
+// 模块文件（联动是 with.<另一个模块> 记下的文件）里读出，再与清单的 run 取交集，拼成精确的 -run '^(A|B|…)$'。
+// 工程自己的测试即使与模块场景同前缀（回合 PvP 的 TestTurnPVPRealTimerRecovery 之于 ^TestTurn）也不会被运行或计数。
 func VerifyModules(ctx context.Context, root string, names []string, stderr io.Writer) (ModuleVerifyReport, error) {
 	catalog, err := loadModuleCatalog()
 	if err != nil {
@@ -313,33 +322,36 @@ func VerifyModules(ctx context.Context, root string, names []string, stderr io.W
 	for _, name := range names {
 		name = toSnake(name)
 		spec, known := catalog[name]
-		if _, installed := manifest.Modules[name]; !installed || !known {
+		installed, isInstalled := manifest.Modules[name]
+		if !isInstalled || !known {
 			return ModuleVerifyReport{}, fmt.Errorf("module %q is not installed in this project", name)
 		}
-		scenarios := []struct {
-			name   string
-			verify ModuleVerify
-		}{{name, spec.Verify}}
+		scenarios := []moduleScenario{{name: name, verify: spec.Verify, files: installed.Files}}
 		// 已经写进工程的联动各自带场景时，跟在所属模块后面，名字是 <模块>+<另一个模块>。
-		others := make([]string, 0, len(manifest.Modules[name].With))
-		for other := range manifest.Modules[name].With {
+		others := make([]string, 0, len(installed.With))
+		for other := range installed.With {
 			others = append(others, other)
 		}
 		sort.Strings(others)
 		for _, other := range others {
 			if with, ok := spec.With[other]; ok && with.Verify != nil {
-				scenarios = append(scenarios, struct {
-					name   string
-					verify ModuleVerify
-				}{name + "+" + other, *with.Verify})
+				scenarios = append(scenarios, moduleScenario{name: name + "+" + other, verify: *with.Verify, files: installed.With[other]})
 			}
 		}
 		for _, scenario := range scenarios {
-			args := append([]string{"test", "-mod=mod", "-race", "-count=1", "-v", "-run", scenario.verify.Run}, scenario.verify.Packages...)
-			output, runErr := runModuleTool(ctx, root, "go", args...)
-			result := ModuleVerifyResult{
-				Name: scenario.name, Want: scenario.verify.Pass,
+			result := ModuleVerifyResult{Name: scenario.name, Want: scenario.verify.Pass}
+			tests, err := moduleScenarioTests(root, scenario.files, scenario.verify.Run)
+			if err == nil && len(tests) == 0 {
+				err = fmt.Errorf("no test matching %s in the module's installed test files", scenario.verify.Run)
 			}
+			if err != nil {
+				result.Detail = err.Error()
+				report.OK = false
+				report.Modules = append(report.Modules, result)
+				continue
+			}
+			args := append([]string{"test", "-mod=mod", "-race", "-count=1", "-v", "-run", moduleExactRun(tests)}, scenario.verify.Packages...)
+			output, runErr := runModuleTool(ctx, root, "go", args...)
 			result.Passed, result.Skipped = countModuleScenarios(output)
 			result.OK = runErr == nil && result.Passed == result.Want && result.Skipped == 0
 			if !result.OK {
@@ -375,6 +387,74 @@ func VerifyModules(ctx context.Context, root string, names []string, stderr io.W
 		return report, errors.New("module verification failed")
 	}
 	return report, nil
+}
+
+// moduleScenario 是 verify 的一项：模块自己的场景，或一组联动的场景。files 是它装进工程的文件（roost.yaml 的记录）。
+type moduleScenario struct {
+	name   string
+	verify ModuleVerify
+	files  []string
+}
+
+// moduleScenarioTests 读出 files 里的测试文件（_test.go，按当前 GOOS / GOARCH 与构建约束会编译的那些；
+// 带 integration 一类标签的真实依赖用例不在其中）中名字匹配 run 的顶层测试函数，按名字排序。
+// 文件不在工程里（被删了）是错误：模块场景少了，条数也就对不上。
+func moduleScenarioTests(root string, files []string, run string) ([]string, error) {
+	pattern, err := regexp.Compile(run)
+	if err != nil {
+		return nil, fmt.Errorf("verify.run %q: %w", run, err)
+	}
+	seen := map[string]bool{}
+	for _, rel := range files {
+		if !strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		match, err := build.Default.MatchFile(filepath.Dir(path), filepath.Base(path))
+		if err != nil {
+			return nil, fmt.Errorf("module test file %s: %w", rel, err)
+		}
+		if !match {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("module test file %s: %w", rel, err)
+		}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && isGoTestFunc(fn) && pattern.MatchString(fn.Name.Name) {
+				seen[fn.Name.Name] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// isGoTestFunc 与 go test 认测试函数的规则相同：顶层函数 TestXxx(t *testing.T)，Test 之后不是小写字母。
+func isGoTestFunc(fn *ast.FuncDecl) bool {
+	name := fn.Name.Name
+	if fn.Recv != nil || !strings.HasPrefix(name, "Test") || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
+		return false
+	}
+	if rest := name[len("Test"):]; rest != "" && rest[0] >= 'a' && rest[0] <= 'z' {
+		return false
+	}
+	param := fn.Type.Params.List[0]
+	star, ok := param.Type.(*ast.StarExpr)
+	if !ok || len(param.Names) > 1 {
+		return false
+	}
+	selector, ok := star.X.(*ast.SelectorExpr)
+	return ok && selector.Sel.Name == "T"
+}
+
+// moduleExactRun 把用例名拼成只匹配这些名字的 -run：^(A|B|…)$。
+func moduleExactRun(tests []string) string {
+	quoted := make([]string, len(tests))
+	for i, test := range tests {
+		quoted[i] = regexp.QuoteMeta(test)
+	}
+	return "^(" + strings.Join(quoted, "|") + ")$"
 }
 
 // runModuleTool 在工程根目录里执行一条工具命令；GOWORK=off 让结果不受外层 go.work 影响。

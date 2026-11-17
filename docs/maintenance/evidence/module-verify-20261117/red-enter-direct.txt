@@ -1,0 +1,35 @@
+# 修前：在生成工程（enter + bag，道具表加 2001、EnterFirst 监听发 2001）里直接跑 enter 的场景
+# 命令：go test -mod=mod -count=1 -v -run '^TestEnter' ./game/handler ./game/modules/login ./game/controllers
+# 结果：PASS 16，FAIL 13
+
+    enter_create_test.go:139: EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterCreateBuildsThePlayerAndTheNextEnterIsFirst (0.00s)
+    enter_create_test.go:168: EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterCreateOfABuiltPlayerIsRefusedAndChangesNothing (0.00s)
+    enter_create_test.go:190: load-or-create enter: {First:false FirstAtUnixMilli:0}, EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterCreateAndLoadOrCreateAgreeOnWhoIsBuilt (0.00s)
+    enter_create_test.go:211: EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterCreatedPlayerIsFirstOnceOnTheLoadOrCreatePathToo (0.00s)
+    enter_create_test.go:238: create with another name: EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterCreateRefusedByTheNameHookWritesNothing (0.00s)
+    enter_create_test.go:258: EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterCreateRejectedCommitRollsBackAndCanBeRetried (0.00s)
+    enter_create_test.go:285: request 0: err = EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001], want success or enter_created
+--- FAIL: TestEnterCreateConcurrentRequestsBuildThePlayerOnce (0.00s)
+    enter_create_test.go:299: load-or-create enter: {First:false FirstAtUnixMilli:0}, EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterFirstEventCarriesTheFrozenTime (0.00s)
+    enter_create_test.go:318: init with a refusing EnterFirst listener: {First:false FirstAtUnixMilli:0}, EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]; want the listener's error
+--- FAIL: TestEnterFirstListenerErrorRollsBackTheInit (0.00s)
+    enter_create_test.go:336: create with a refusing EnterFirst listener: err = EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001], want the listener's error
+--- FAIL: TestEnterFirstListenerErrorRollsBackTheCreate (0.00s)
+    enter_test.go:116: first enter: result={First:false FirstAtUnixMilli:0} err=EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001], want first at 1794301200000
+--- FAIL: TestEnterFirstTimeRunsTheInitialization (0.00s)
+    enter_test.go:127: EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001]
+--- FAIL: TestEnterAgainDoesNothing (0.00s)
+    enter_test.go:154: enter after the rollback: result={First:false FirstAtUnixMilli:0} err=EnterFirst listener player.Player.OnGemsEnterFirst: bag_item_invalid: unknown item [item_id=2001], want first at 1794301260000
+--- FAIL: TestEnterRejectedInitializationIsDoneOnTheNextEnter (0.00s)
+FAIL
+FAIL	example.com/p1/game/handler	1.085s
+ok  	example.com/p1/game/modules/login	0.513s
+ok  	example.com/p1/game/controllers	1.613s
+FAIL

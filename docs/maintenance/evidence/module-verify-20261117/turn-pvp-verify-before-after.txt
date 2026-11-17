@@ -1,0 +1,18 @@
+# 回合 PvP：去掉 turnreal 构建标签之后，同一个生成工程（bash scripts/test-turn-pvp-generated.sh 缺省档留下的工程，game/handler/turn_timer_real_test.go 不带标签）上跑 roost module verify turn
+
+## 修前的 roost（main 0b397ed4 构建）：按 ^TestTurn 选场景，把工程的 TestTurnPVPRealTimerRecovery（缺省 SKIP）算进 turn
+FAIL module turn: 25 passed (want 25), 1 skipped
+--- SKIP: TestTurnPVPRealTimerRecovery (0.00s)
+ok  	example.com/turn-pvp-practice/game/handler	2.037s
+ok  	example.com/turn-pvp-practice/game/controllers	1.351s
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+
+## 修后的 roost：只跑 turn 装进工程的测试文件里的 25 条
+ok   module turn: 25 passed (want 25), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check

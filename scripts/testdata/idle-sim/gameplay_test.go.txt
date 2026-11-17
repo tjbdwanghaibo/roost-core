@@ -145,7 +145,7 @@ func newIdleFixture(t *testing.T, custom ...idle.Rules) *idleFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.player.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	// 先经 enter 建档（初始金币在首次初始化事务里发），再建放置存档（初始宝石与存档同一笔）。没建档的玩家建不了存档。
+	// 先经 enter 建档（初始金币与宝石在首次初始化事务里发），再建放置存档。没建档的玩家建不了存档，也还没有宝石。
 	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), id, f.rules); err == nil || f.player.Dao().GetIdleState() != "" || f.gems() != 0 {
 		t.Fatal("idle save created before enter built the player", err)
 	}

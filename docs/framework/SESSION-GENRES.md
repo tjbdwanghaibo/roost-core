@@ -122,7 +122,7 @@ go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <已分配的新房间ID> -epo
 
 ## 回合 PvP 真实档
 
-使用本机私有 mirror-local 的 Mongo、Redis、NATS 环境，运行 `ROOST_TURN_PVP_REAL=1 GOWORK=off GOFLAGS=-p=2 bash scripts/test-turn-pvp-generated.sh`。默认 10 条场景保持不变，真实档再跑 `TestTurnPVPRealTimerRecovery` 的 seed / recover 两阶段（各独立进程、race、零 SKIP），随后调用 `scripts/test-turn-pvp-real.sh`。可用 `ROOST_GENRE_MODULE` 验证自定义 module。这个用例的文件带构建标签 `turnreal`（缺省档带标签编译 / vet，REAL 档带标签运行）：名字以 `TestTurn` 开头，不带标签时 turn 的 `module verify`（按 `^TestTurn` 选场景）会把它缺省档的 SKIP 算进 turn 的条数。
+使用本机私有 mirror-local 的 Mongo、Redis、NATS 环境，运行 `ROOST_TURN_PVP_REAL=1 GOWORK=off GOFLAGS=-p=2 bash scripts/test-turn-pvp-generated.sh`。默认 10 条场景保持不变，真实档再跑 `TestTurnPVPRealTimerRecovery` 的 seed / recover 两阶段（各独立进程、race、零 SKIP），随后调用 `scripts/test-turn-pvp-real.sh`。可用 `ROOST_GENRE_MODULE` 验证自定义 module。这个用例名字以 `TestTurn` 开头，但 turn 的 `module verify` 只运行、只统计 turn 装进工程的测试文件里的用例（维护者 2026-11-17），不会把它缺省档的 SKIP 算进 turn 的条数，所以不带构建标签：缺省档编译 / vet，REAL 档按名字运行。
 
 `TestTurnPVPRealTimerRecovery`（R9 起测 Room 上 turn 的 `TurnDeadline`，Q7 A）：seed 进程经正式 Sender 开房 + 名单、两人 `RoomJoin`、房主 `TurnStart`、玩家 0 攻击一次（turn 回执、命中奖励、新期限节点），刷盘退出；recover 进程冷加载同一真实 Mongo / 文件 WAL，核对 Room 与两名 Player 的完整持久文档及驱动的到期索引。在线状态不落库：原连接、原代际的重放被拒（turn 的重放也要求在线），两人换连接 `RoomReconnect` 后重放得原结果；业务钟跨过两小时、驱动循环只补消费一个回合（行动方生命 3→1），原回执可重放、旧页面被拒，继续至终局后期限节点为 0。
 

@@ -1,0 +1,6 @@
+# 修后：codegen 相关单测
+# GOWORK=off go test -count=1 -timeout 60m -run 'TestModule|TestAppendDaoFields|TestTenModuleStructs|TestRecipe' ./codegen/internal/roost
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1681.591s
+
+# GOWORK=off go test -count=1 -run 'Link|Anchor|Doc' .
+ok  	github.com/tjbdwanghaibo/roost-core	1.964s

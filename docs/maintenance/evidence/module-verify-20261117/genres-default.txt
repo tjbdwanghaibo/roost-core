@@ -1,0 +1,33 @@
+# 修后：三类玩法脚本缺省档（2026-11-17，工作区含本次改动）
+# 命令：GOWORK=off ROOST_GENRE_OUTPUT=<scratch>/g-<玩法> bash scripts/test-<玩法>-generated.sh
+
+card-rpg exit=0 64s
+idle-sim exit=0 36s
+turn-pvp exit=0 39s
+
+## card-rpg：玩法场景 17 PASS、0 SKIP；modules.sh verify：
+module verify: bag 20/20 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: gacha 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+stamina 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0
+
+## idle-sim：玩法场景 13 PASS、0 SKIP；modules.sh verify：
+module verify: bag 20/20 skipped=0
+module verify: checkin 8/8 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0
+
+## turn-pvp：玩法场景 10 PASS、0 SKIP；modules.sh verify：
+module verify: room 34/34 skipped=0
+module verify: turn 25/25 skipped=0
+module verify: wallet 17/17 skipped=0
+
+卡牌工程的 game/components/bag/items.go 不再打补丁（grep 2001 无结果），enter 29/29 靠安装器写的 game/handler 等包里的 roost_config_data_test.go 装载工程道具表。
+放置的初始宝石在 EnterFirst 监听里发，enter 29/29。

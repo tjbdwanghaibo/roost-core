@@ -251,7 +251,7 @@ with:                        # 与别的模块的联动（见下），文件在 
       pass: 2
 verify:
   packages: [./game/handler]
-  run: ^TestWallet
+  run: ^TestWallet           # 只在模块自己的测试文件里挑（见下“verify 跑哪些用例”）
   pass: 8                    # 恰好这么多条通过、零跳过
 ```
 
@@ -304,6 +304,8 @@ verify:
 - **长期“只做一次”记在自己的状态里**：每日、每局、每个订单这类周期性发放，先判自己的状态再调 `Wallet().Add`；不要拿递增的键去占货币的去重窗口（它只留最近 128 次）。
 - **日界用业务日**：`clock.BusinessDay(time.UnixMilli(nowUnixMilli))`，不自己除以一天的毫秒数。
 - **`verify.pass` 数的是顶层场景**：`roost module verify` 只数第一列的 `--- PASS` 行（一个顶层测试一个场景），`t.Run` 的子测试是同一场景的几种情形、不另算；任何一层的 `--- SKIP` 都算跳过，要求为 0。
+- **verify 跑哪些用例**（维护者 2026-11-17）：只运行、只统计模块装进工程的那些测试文件里的用例。用例名从 `roost.yaml` 记下的模块文件（`modules.<name>.files`；联动是 `with.<另一个模块>` 下记的文件）里读出——`_test.go`、按当前 GOOS / GOARCH 与构建约束会编译的（带 `integration` 一类标签的真实依赖用例不在其中）、名字匹配清单 `run` 的顶层 `TestXxx(t *testing.T)`——再拼成精确的 `-run '^(A|B|…)$'` 在 `packages` 里跑。工程自己的测试即使与模块场景同前缀（回合 PvP 的 `TestTurnPVPRealTimerRecovery` 之于 `^TestTurn`）也不会被运行或计数，不用为此加构建标签；模块的测试文件被工程删掉时条数对不上、verify 失败。
+- **模块场景先装工程的配置表**（维护者 2026-11-17）：安装器在每个放了模块测试文件（含联动的测试文件）的包里写一份公共夹具 `roost_config_data_test.go`（已经有就不动，之后归工程所有），它的 `init` 按 game 进程正式启动的方式装载工程的 `configs/data`（生成的 `RegisterGeneratedConfigData` 登记全部表，从 `configs/data` 装载一次，发布成进程当前配置）。所以工程挂在模块流程上的业务——例如 enter 的 `EnterFirst` 监听里发道具表里的道具——在模块场景里读到的是工程的表；模块的测试要特定的表时照旧自己装、结束时换回（换回的就是工程的表），要“没有装载配置”的情形显式 `SetDefaultStore(nil)`（bag 的 `TestBagWithoutALoadedItemTableRefusesEveryGrant`）。模块测试不要再各自装工程的表。
 - **回滚统一走 DAO**：组件不保存事务会改的状态，不登记 undo。
 - **业务时间**：handler 的最后一个参数写 `nowUnixMilli int64`，由 Nest 填这条消息冻结的业务时间；测试用 `clock.SetSource` 拨。
 

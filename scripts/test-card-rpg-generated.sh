@@ -66,9 +66,11 @@ for name, fields in {
 # CardRun 与 Player 在同一事务里开局 / 领奖；把 Run 放在 World 锁档（低于 Player），多实体锁序固定。
 p = root / 'game/entities/card_run/entity.go'
 p.write_text(p.read_text().replace('category=entity.EntityCategoryOther', 'category=entity.EntityCategoryWorld'))
-# 卡牌的道具、卡池与首胜任务追加在模块自带的表后面（模块的场景用自己的表，工程行不影响它们）：
+# 卡牌的道具、卡池与首胜任务追加在模块自带的表后面（要特定表的模块场景自己装测试表，工程行不影响它们）：
 # 2001 钻石、2002 尘、2101～2106 六个英雄道具；卡池 2 单抽 2 金币、连续 4 抽没出 2106 第 5 抽必出；
 # 任务 101 永久“首胜”（事件 card.won）奖 10 钻石（task 的 item 奖励由 bag 联动登记）。
+# 钻石与尘在建档（enter 的 EnterFirst 监听）时就发，只靠这张表：模块场景的测试先按正式启动的方式装载工程的
+# configs/data（安装器写的 roost_config_data_test.go，维护者 2026-11-17），enter 自带的场景照样认得这两个道具号。
 rows = {
     'item.csv': ['2001,钻石,0', '2002,尘,0'] + [f'{2100 + i},英雄{i},0' for i in range(1, 7)],
     'gacha_pool.csv': ['2,2,5,2106,false'],
@@ -80,16 +82,6 @@ for name, lines in rows.items():
     text = p.read_text()
     assert text.endswith('\n'), p
     p.write_text(text + ''.join(line + '\n' for line in lines))
-# 钻石与尘在建档（enter 的 EnterFirst 监听）时就要发；bag 的规则入口（工程文件 items.go）缺省只认已装载的道具表，
-# 而 enter 自己的模块场景不装工程的表。两种货币道具写进规则入口，不依赖表是否装载（英雄道具仍走表：gacha 按表校验掉落）。
-p = root / 'game/components/bag/items.go'
-marker = 'func ItemRule(itemID int64) (maxStack int64, ok bool) {\n'
-text = p.read_text()
-assert marker in text, p
-p.write_text(text.replace(marker, marker + (
-    '\t// 卡牌 RPG：钻石（2001）与尘（2002）是玩法的货币道具（cardrpg.ItemGems / ItemDust，Q2 B），新玩家建档时就发，\n'
-    '\t// 不随道具表装载与否变化；单种不单独限制。\n'
-    '\tif itemID == 2001 || itemID == 2002 {\n\t\treturn 0, true\n\t}\n')))
 DEFS
 fixture="$repo_root/scripts/testdata/card-rpg"
 mkdir -p game/modules/cardrpg
