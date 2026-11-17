@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	generated "example.com/card-rpg-practice/configs/generated"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"io"
 )
@@ -18,6 +19,25 @@ const LedgerLimit = 64
 const ValueLimit int64 = 1000000
 const MaxActions = 120
 const TurnMillis int64 = 5000
+
+// 模块化之后（R9）的资产映射：金币是 wallet；钻石与尘是 bag 道具（Q2 B）；抽卡是 gacha 的卡池 DrawPool，
+// 每一抽得到一个英雄道具 HeroItemBase+模板号，卡牌 handler 在同一笔事务里把它转成卡牌实例或碎片。
+// 道具行在 configs/table/item.csv，卡池与掉落在 gacha_pool.csv / gacha_drop.csv（由生成脚本追加）。
+const (
+	DrawPool     int64 = 2
+	ItemGems     int64 = 2001
+	ItemDust     int64 = 2002
+	HeroItemBase int64 = 2100
+)
+
+// HeroTemplate 把卡池给的道具号换成英雄模板号；不是英雄道具时 ok 为 false（卡池配错，整笔抽卡回滚）。
+func HeroTemplate(itemID int64) (int, bool) {
+	template := itemID - HeroItemBase
+	if template < 1 || template > 6 {
+		return 0, false
+	}
+	return int(template), true
+}
 
 // 所有切片均为定长数组，捕获配置时按值复制，运行中的关卡不读取新一代数值。
 type HeroRule struct {
@@ -30,16 +50,15 @@ type StageRule struct {
 	HP, Attack              int64
 	Energy, Gold, FirstGold int64
 }
+// 抽卡价格与保底在 gacha 的卡池表里，不在这里（R9：抽卡交给 gacha 模块）。
 type Rules struct {
-	Version  string
-	DrawCost int64
-	Pity     int
-	Heroes   [6]HeroRule
-	Stages   [3]StageRule
+	Version string
+	Heroes  [6]HeroRule
+	Stages  [3]StageRule
 }
 
 func DemoRules() Rules {
-	r := Rules{Version: "cards-v1", DrawCost: 2, Pity: 5}
+	r := Rules{Version: "cards-v1"}
 	for i := range r.Heroes {
 		r.Heroes[i] = HeroRule{ID: i + 1, HP: 80 + int64(i)*5, Attack: 24 + int64(i)*2, Armor: 5, Speed: 20 - int64(i), Rare: i >= 3}
 	}
@@ -49,7 +68,7 @@ func DemoRules() Rules {
 	return r
 }
 func (r Rules) Validate() error {
-	if len(r.Version) == 0 || len(r.Version) > 64 || r.DrawCost < 1 || r.DrawCost > 100 || r.Pity < 1 || r.Pity > 10 {
+	if len(r.Version) == 0 || len(r.Version) > 64 {
 		return ErrRule
 	}
 	for i, h := range r.Heroes {
@@ -92,8 +111,13 @@ func encode(v any) string {
 }
 
 // 进程启动加载业务表；端点捕获一份 Snapshot，得到 Rules 后再传内部 Sender，公网请求不携带 Rules。
+// 卡牌规则与工程生成的表（道具、卡池、掉落、任务）登记在同一个 Registry、从同一个目录装载：configdata 的装载
+// 会发布成进程的缺省配置，两份 Store 各自装载会互相覆盖，gacha / bag / task 读到的就不是这一代表。
 func OpenCatalog(dir string) (*configdata.Store, error) {
 	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		return nil, err
+	}
 	configdata.MustRegisterObject(registry, configdata.ObjectDef[Rules]{Name: "card_rules", File: "cards.json", Validate: func(_ *configdata.BuildContext, r Rules) error { return r.Validate() }})
 	store := configdata.NewStore(registry, dir)
 	_, err := store.Load(context.Background())

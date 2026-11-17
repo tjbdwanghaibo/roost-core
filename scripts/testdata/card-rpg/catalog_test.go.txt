@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	attr "example.com/card-rpg-practice/game/modules/gameplay/attribute"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	frameworkattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,25 @@ import (
 
 func TestCardRPGCatalogReloadIsAtomicAndFrozenRulesRemainUsable(t *testing.T) {
 	dir := t.TempDir()
+	// 卡牌规则与工程生成的表（道具、卡池、掉落、任务：configs/data）同一个 Store 装载；装载会发布成进程缺省配置，结束时换回。
+	entries, err := os.ReadDir("../../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "_") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../../configs/data", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous, config := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(config) })
 	write := func(r Rules) {
 		t.Helper()
 		raw, _ := json.Marshal(r)
@@ -42,7 +63,7 @@ func TestCardRPGCatalogReloadIsAtomicAndFrozenRulesRemainUsable(t *testing.T) {
 	}
 	patched := original
 	patched.Version = "cards-v2"
-	patched.DrawCost = 3
+	patched.Stages[0].Gold = 4
 	patched.Heroes[0].Attack = 70
 	write(patched)
 	if _, err := store.Reload(context.Background()); err != nil {
@@ -78,15 +99,15 @@ func TestCardRPGGeneratedAttributesDeriveAndSnapshotIsIndependent(t *testing.T) 
 }
 func TestCardRPGPrivateKeysNeverAppearInPublicProjection(t *testing.T) {
 	key := strings.Repeat("ab", 32)
-	p, err := NewProfile(key, 1800000000000)
+	p, err := NewProfile(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Draw(1, 10, DemoRules()); err != nil {
+	if _, err := p.Manage(Manage{Seq: 1, Kind: "team", Team: [3]int64{3, 2, 1}}, DemoRules()); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(p.View())
-	for _, private := range []string{key, "DrawKey", "Draws", "Operations"} {
+	for _, private := range []string{key, "BattleKey", "Operations", "ConfigHash"} {
 		if strings.Contains(string(raw), private) {
 			t.Fatal("private field exposed", private)
 		}
@@ -108,7 +129,7 @@ func TestCardRPGPrivateKeysNeverAppearInPublicProjection(t *testing.T) {
 }
 func TestCardRPGMalformedStateAndFrozenBattleTamperingFailClosed(t *testing.T) {
 	key := strings.Repeat("ab", 32)
-	p, err := NewProfile(key, 1800000000000)
+	p, err := NewProfile(key)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,77 +2,123 @@ package handler
 
 import (
 	db "example.com/card-rpg-practice/db"
-	"example.com/card-rpg-practice/game/modules/cardrpg"
 	runentity "example.com/card-rpg-practice/game/entities/card_run"
+	"example.com/card-rpg-practice/game/modules/cardrpg"
+	"example.com/card-rpg-practice/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"time"
 )
 
-type ICardPlayerEntity interface {
-	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
-}
+// 卡牌的 Player 参数是实体总接口 view.PlayerEntity：同一笔事务里要用 wallet（金币）、bag（钻石、尘、英雄道具）、
+// stamina（体力）、gacha（抽卡）与 task（任务事件）几个模块组件，卡牌自己的存档在 PlayerDao.State。
 type ICardRunEntity interface {
 	entity.IThreadSafeEntity
 	Dao() *db.CardRunDao
 	TimerComp() *runentity.TimerComponent
 }
 
-// Bootstrap 是受信任的首登入口；密钥来自服务端 crypto/rand，不能让客户端指定或投影给客户端。
-//
-//roost:nest rollback=undo durability=strict
-func handlerCardInit(player ICardPlayerEntity, key string, nowUnixMilli int64) (cardrpg.ProfileView, error) {
-	if player.Dao().GetState() != "" {
-		p, err := cardrpg.DecodeProfile(player.Dao().GetState())
-		if err != nil {
-			return cardrpg.ProfileView{}, err
-		}
-		if p.DrawKey != key {
-			return cardrpg.ProfileView{}, cardrpg.ErrRule
-		}
-		return p.View(), nil
-	}
-	p, err := cardrpg.NewProfile(key, nowUnixMilli)
-	if err != nil {
-		return cardrpg.ProfileView{}, err
-	}
-	player.Dao().SetState(p.Encode())
-	return p.View(), nil
+// CardWonEvent 是胜利领奖时上报给 task 的事件名；任务表里 event 列等于它的任务（缺省“首胜”）随之推进。
+const CardWonEvent = "card.won"
+
+// cardView 是玩家视图：卡牌存档裁剪后的部分加上模块状态里的资产。体力取这条消息冻结的业务时间那一刻的值。
+func cardView(player view.PlayerEntity, p cardrpg.Profile, nowUnixMilli int64) cardrpg.ProfileView {
+	v := p.View()
+	v.Gold = player.Wallet().Balance()
+	v.Gems = player.Bag().Count(cardrpg.ItemGems)
+	v.Dust = player.Bag().Count(cardrpg.ItemDust)
+	v.Energy = player.Stamina().Current(nowUnixMilli)
+	return v
 }
 
-// Rules 由端点捕获 configdata Snapshot 后传入，仅是内部业务参数，不是公网协议字段。
+// applyEffects 把养成 / 扫荡的资产增减交给模块：先扣（体力、金币、尘），再发。任何一步被拒（stamina_short、
+// wallet_short、bag_short……）原样返回，Nest 把卡牌状态与已做的模块写入一起回滚。
+func applyEffects(player view.PlayerEntity, e cardrpg.Effects, nowUnixMilli int64) error {
+	if e.Energy > 0 {
+		if _, err := player.Stamina().Spend(e.Energy, nowUnixMilli); err != nil {
+			return err
+		}
+	}
+	if e.Gold != 0 {
+		if _, err := player.Wallet().Add(e.Gold); err != nil {
+			return err
+		}
+	}
+	if e.Dust < 0 {
+		if _, err := player.Bag().Remove(cardrpg.ItemDust, -e.Dust); err != nil {
+			return err
+		}
+	} else if e.Dust > 0 {
+		if _, err := player.Bag().Add(cardrpg.ItemDust, e.Dust); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// 抽卡交给 gacha：扣金币、按卡池权重与保底抽样、发英雄道具、记回执都在 Gacha().Draw 里；本 handler 在同一笔事务里
+// 把发进背包的英雄道具取出，换成卡牌实例，重复卡转碎片并得 1 尘。gacha 的重放（Replayed）什么都没写，这里也不再转换。
+// 失败的尝试（余额不足、背包满、转换被拒、提交失败）整笔回滚，没有持久结果；重试会重新抽样，成功结果由回执固定。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardDraw(player ICardPlayerEntity, seq uint64, count int, rules cardrpg.Rules) (cardrpg.DrawReceipt, error) {
+func handlerCardDraw(player view.PlayerEntity, key string, count int) (cardrpg.DrawReceipt, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
 		return cardrpg.DrawReceipt{}, err
 	}
-	receipt, err := p.Draw(seq, count, rules)
+	r, err := player.Gacha().Draw(key, cardrpg.DrawPool, int64(count))
 	if err != nil {
-		return receipt, err
+		return cardrpg.DrawReceipt{}, err
+	}
+	receipt := cardrpg.DrawReceipt{Key: key, Count: count, Cost: r.Cost, Balance: r.Balance, Misses: r.Misses}
+	for _, item := range r.Items {
+		template, ok := cardrpg.HeroTemplate(item)
+		if !ok {
+			return cardrpg.DrawReceipt{}, cardrpg.ErrRule
+		}
+		receipt.Templates = append(receipt.Templates, template)
+	}
+	if r.Replayed {
+		return receipt, nil
+	}
+	for _, item := range r.Items {
+		if _, err := player.Bag().Remove(item, 1); err != nil {
+			return cardrpg.DrawReceipt{}, err
+		}
+		_, duplicate, err := p.Collect(item)
+		if err != nil {
+			return cardrpg.DrawReceipt{}, err
+		}
+		if duplicate {
+			if _, err := player.Bag().Add(cardrpg.ItemDust, 1); err != nil {
+				return cardrpg.DrawReceipt{}, err
+			}
+		}
 	}
 	player.Dao().SetState(p.Encode())
 	return receipt, nil
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerCardManage(player ICardPlayerEntity, command cardrpg.Manage, rules cardrpg.Rules, nowUnixMilli int64) (cardrpg.ProfileView, error) {
+func handlerCardManage(player view.PlayerEntity, command cardrpg.Manage, rules cardrpg.Rules, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
 		return cardrpg.ProfileView{}, err
 	}
-	if err := p.Manage(command, rules, nowUnixMilli); err != nil {
+	effects, err := p.Manage(command, rules)
+	if err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	if err := applyEffects(player, effects, nowUnixMilli); err != nil {
 		return cardrpg.ProfileView{}, err
 	}
 	player.Dao().SetState(p.Encode())
-	return p.View(), nil
+	return cardView(player, p, nowUnixMilli), nil
 }
 
-// 体力、开局顺序身份、冻结的编队和 Run 一起提交。Player 保持静态 sid，Run 由同一原服承载。
+// 体力（stamina）、开局顺序身份、冻结的编队和 Run 一起提交。Player 保持静态 sid，Run 由同一原服承载。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, stage int, rules cardrpg.Rules, nowUnixMilli int64) (int64, error) {
+func handlerCardStart(player view.PlayerEntity, run ICardRunEntity, seq uint64, stage int, rules cardrpg.Rules, nowUnixMilli int64) (int64, error) {
 	if !entity.MatchEntityID(run.ID(), runentity.EntityKindCardRun) || !cardrpg.ValidTime(nowUnixMilli) {
 		return 0, cardrpg.ErrRule
 	}
@@ -90,12 +136,6 @@ func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, 
 	if seq == 0 || seq != uint64(len(p.Runs))+1 || len(p.Runs) >= cardrpg.LedgerLimit || p.ActiveRun != 0 || stage < 1 || stage > 3 || stage > 1 && p.Clears[stage-2] == 0 || rules.Validate() != nil || run.Dao().GetState() != "" {
 		return 0, cardrpg.ErrRule
 	}
-	if err := p.Regenerate(nowUnixMilli); err != nil {
-		return 0, err
-	}
-	if p.Energy < rules.Stages[stage-1].Energy {
-		return 0, cardrpg.ErrRule
-	}
 	units, err := p.TeamUnits(rules)
 	if err != nil {
 		return 0, err
@@ -104,7 +144,9 @@ func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, 
 	if err != nil {
 		return 0, err
 	}
-	p.Energy -= rules.Stages[stage-1].Energy
+	if _, err := player.Stamina().Spend(rules.Stages[stage-1].Energy, nowUnixMilli); err != nil {
+		return 0, err
+	}
 	p.ActiveRun = run.ID()
 	p.Runs = append(p.Runs, cardrpg.Admission{Seq: seq, RunID: run.ID(), Stage: stage, ConfigHash: rules.Hash()})
 	player.Dao().SetState(p.Encode())
@@ -171,10 +213,11 @@ func handlerCardEnemy(run ICardRunEntity, expected uint64, nowUnixMilli int64) (
 	return b.View(), nil
 }
 
-// 同一 Run 与 Player 的奖励、首通、星级、任务进度和领奖事实同事务，不信任客户端报胜或奖励数值。
+// 同一 Run 与 Player 的奖励（金币经 wallet、尘经 bag）、首通、星级、任务事件（task 的 card.won）和领奖事实同事务，
+// 不信任客户端报胜或奖励数值。“领过没有”是 Run 与开局账本里的 Claimed，金币用不留回执的 Wallet().Add。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardClaim(player ICardPlayerEntity, run ICardRunEntity) (cardrpg.ProfileView, error) {
+func handlerCardClaim(player view.PlayerEntity, run ICardRunEntity, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
 		return cardrpg.ProfileView{}, err
@@ -191,7 +234,7 @@ func handlerCardClaim(player ICardPlayerEntity, run ICardRunEntity) (cardrpg.Pro
 		return cardrpg.ProfileView{}, cardrpg.ErrRule
 	}
 	if b.Claimed {
-		return p.View(), nil
+		return cardView(player, p, nowUnixMilli), nil
 	}
 	if p.ActiveRun != run.ID() {
 		return cardrpg.ProfileView{}, cardrpg.ErrRule
@@ -202,11 +245,15 @@ func handlerCardClaim(player ICardPlayerEntity, run ICardRunEntity) (cardrpg.Pro
 		if p.Clears[b.Stage-1] == 0 {
 			reward += stage.FirstGold
 		}
-		if p.Gold > cardrpg.ValueLimit-reward || p.Dust >= cardrpg.ValueLimit || p.Wins >= cardrpg.ValueLimit {
+		if p.Wins >= cardrpg.ValueLimit {
 			return cardrpg.ProfileView{}, cardrpg.ErrRule
 		}
-		p.Gold += reward
-		p.Dust++
+		if err := applyEffects(player, cardrpg.Effects{Gold: reward, Dust: 1}, nowUnixMilli); err != nil {
+			return cardrpg.ProfileView{}, err
+		}
+		if err := player.Task().Report(CardWonEvent, 1, nowUnixMilli); err != nil {
+			return cardrpg.ProfileView{}, err
+		}
 		p.Wins++
 		p.Clears[b.Stage-1] = max(p.Clears[b.Stage-1], b.Stars())
 	}
@@ -215,18 +262,18 @@ func handlerCardClaim(player ICardPlayerEntity, run ICardRunEntity) (cardrpg.Pro
 	p.ActiveRun = 0
 	player.Dao().SetState(p.Encode())
 	run.Dao().SetState(b.Encode())
-	return p.View(), nil
+	return cardView(player, p, nowUnixMilli), nil
 }
 
 // 读取也经正式锁边界，防止并发修改时直接从实体指针复制撕裂的视图。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardProfile(player ICardPlayerEntity) (cardrpg.ProfileView, error) {
+func handlerCardProfile(player view.PlayerEntity, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
 		return cardrpg.ProfileView{}, err
 	}
-	return p.View(), nil
+	return cardView(player, p, nowUnixMilli), nil
 }
 
 //roost:nest rollback=undo durability=strict

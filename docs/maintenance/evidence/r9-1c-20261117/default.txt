@@ -1,0 +1,34 @@
+# ROOST_GENRE_OUTPUT=<scratchpad>/run1 bash scripts/test-card-rpg-generated.sh（缺省档，2026-11-17，main 9003dd28 附近 + 本批未提交改动）
+# exit 0；TestCardRPG PASS 数：17，SKIP 数：0
+--- PASS: TestCardRPGCatalogReloadIsAtomicAndFrozenRulesRemainUsable (0.01s)
+--- PASS: TestCardRPGGeneratedAttributesDeriveAndSnapshotIsIndependent (0.00s)
+--- PASS: TestCardRPGPrivateKeysNeverAppearInPublicProjection (0.00s)
+--- PASS: TestCardRPGMalformedStateAndFrozenBattleTamperingFailClosed (0.00s)
+ok  	example.com/card-rpg-practice/game/modules/cardrpg	1.262s
+--- PASS: TestCardRPGDrawConcurrentReplayPityAndConfigIdentity (0.03s)
+--- PASS: TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream (0.02s)
+--- PASS: TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots (0.02s)
+--- PASS: TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams (0.01s)
+--- PASS: TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge (0.01s)
+--- PASS: TestCardRPGTurnAuthoritySequenceAndReplayDoNotRearmDeadline (0.02s)
+--- PASS: TestCardRPGCombatUsesShieldsManaPoisonAndHealing (0.01s)
+--- PASS: TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay (0.03s)
+--- PASS: TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce (0.04s)
+--- PASS: TestCardRPGTurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce (0.01s)
+--- PASS: TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact (0.01s)
+--- PASS: TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence (0.17s)
+--- PASS: TestCardRPGRobotBusiness (0.04s)
+ok  	example.com/card-rpg-practice/game/handler	2.493s
+IDs are valid
+generated files are up to date
+module verify: bag 20/20 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: gacha 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+stamina 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0

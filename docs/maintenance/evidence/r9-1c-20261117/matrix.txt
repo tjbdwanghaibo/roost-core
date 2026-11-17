@@ -1,0 +1,10 @@
+# python3 scripts/test-genres-generated.py --out <scratchpad>/matrix1 --genres card-rpg（2026-11-17）
+Running card-rpg: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-r9-1c/matrix1/card-rpg
+card-rpg: passed
+genre: card-rpg
+status: passed
+module: example.com/acceptance/card-rpg
+passed_tests: 17
+custom_module_passed_tests: 17
+skipped_tests: 0
+custom_module_verify: {'bag': 20, 'enter': 29, 'gacha': 29, 'rules': 10, 'stamina': 26, 'stamina+rules': 2, 'task': 29, 'task+bag': 3, 'task+stamina': 3, 'task+wallet': 6, 'wallet': 17}

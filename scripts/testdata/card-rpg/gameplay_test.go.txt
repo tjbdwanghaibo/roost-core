@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"example.com/card-rpg-practice/game/modules/cardrpg"
+	"example.com/card-rpg-practice/configs/schema"
 	runentity "example.com/card-rpg-practice/game/entities/card_run"
 	playerentity "example.com/card-rpg-practice/game/entities/player"
 	sender "example.com/card-rpg-practice/game/handler/syncsender"
+	"example.com/card-rpg-practice/game/modules/cardrpg"
+	"example.com/card-rpg-practice/game/view"
+	apperrors "example.com/card-rpg-practice/internal/errors"
+	"example.com/card-rpg-practice/protocol/pb"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -54,16 +59,52 @@ type cardFixture struct {
 	players [2]*playerentity.Player
 	runs    [3]*runentity.CardRun
 	rules   cardrpg.Rules
+	store   *configdata.Store
+	dir     string
 	clock   atomic.Int64
 }
 
-func loadCardRules(t *testing.T, rules cardrpg.Rules) cardrpg.Rules {
+// cardTablesDir 是工程的配置数据（configs/table 经 roost generate 转成的 JSON：道具、卡池、掉落、任务）。
+const cardTablesDir = "../../configs/data"
+
+// cardFirstWinTask 是生成脚本追加的永久任务“首胜”（事件 card.won，奖 10 钻石）。
+const cardFirstWinTask int64 = 101
+
+// cardRegenMillis 是 stamina 缺省规则（game/components/stamina/rules.go）恢复 1 点体力的毫秒数。
+const cardRegenMillis int64 = 5 * 60 * 1000
+
+// writeCardCatalog 把工程的表与卡牌规则 cards.json 放进同一个目录：卡牌规则与 gacha / bag / task 的表同一个
+// Store、同一代快照（cardrpg.OpenCatalog）。
+func writeCardCatalog(t testing.TB, dir string, rules cardrpg.Rules) {
 	t.Helper()
-	dir := t.TempDir()
+	entries, err := os.ReadDir(cardTablesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), "_") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(cardTablesDir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	raw, _ := json.Marshal(rules)
 	if err := os.WriteFile(filepath.Join(dir, "cards.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// openCardCatalog 装载目录并捕获卡牌规则；装载会发布成进程的缺省配置，用例结束时换回原来的。
+func openCardCatalog(t testing.TB, dir string, rules cardrpg.Rules) (*configdata.Store, cardrpg.Rules) {
+	t.Helper()
+	writeCardCatalog(t, dir, rules)
+	previous, config := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(config) })
 	store, err := cardrpg.OpenCatalog(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -72,15 +113,51 @@ func loadCardRules(t *testing.T, rules cardrpg.Rules) cardrpg.Rules {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return captured
+	return store, captured
 }
+
+// setCardDrawPrice 改卡池 DrawPool 的单抽金币价并热更：gacha 的新配置只对下一次新的抽卡生效，旧回执不重算。
+func setCardDrawPrice(t testing.TB, store *configdata.Store, dir string, price int64) {
+	t.Helper()
+	path := filepath.Join(dir, "gacha_pool.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pools []schema.GachaPool
+	if err := json.Unmarshal(raw, &pools); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for i := range pools {
+		if pools[i].ID == cardrpg.DrawPool {
+			pools[i].Price = price
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("card pool missing from configs/table/gacha_pool.csv")
+	}
+	raw, _ = json.Marshal(pools)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *cardFixture) setDrawPrice(t *testing.T, price int64) { setCardDrawPrice(t, f.store, f.dir, price) }
+
 func newCardFixture(t *testing.T) *cardFixture {
 	t.Helper()
 	playerentity.RegisterEntity()
 	runentity.RegisterEntity()
 	RegisterCardRpgNestHandlers()
 	RegisterTickCardRunTimerGenNestHandlers()
-	f := &cardFixture{rules: loadCardRules(t, cardrpg.DemoRules())}
+	RegisterEnterInitNestHandlers()
+	RegisterTaskClaimNestHandlers()
+	f := &cardFixture{dir: t.TempDir()}
+	f.store, f.rules = openCardCatalog(t, f.dir, cardrpg.DemoRules())
 	f.clock.Store(1800000000000)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
 	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
@@ -120,8 +197,9 @@ func newCardFixture(t *testing.T) *cardFixture {
 			r.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 		}
 	})
-	for i, p := range f.players {
-		if _, err := sender.NewCardRpgSender(f.engine).Sync_CardInit(context.Background(), p.ID(), fmt.Sprintf("%064x", i+7)); err != nil {
+	// 建档走 enter：首次初始化的那笔事务里 OnCardEnterFirst 写初始卡组、发 100 金币 / 100 钻石 / 20 尘。
+	for _, p := range f.players {
+		if _, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), p.ID()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -135,6 +213,41 @@ func (f *cardFixture) profile(t *testing.T) cardrpg.Profile {
 	}
 	return p
 }
+
+// view 经正式 handler 读玩家视图：金币取 wallet、钻石与尘取 bag、体力取 stamina 在当前业务时间的值。
+func (f *cardFixture) view(t *testing.T) cardrpg.ProfileView {
+	t.Helper()
+	v, err := sender.NewCardRpgSender(f.engine).Sync_CardProfile(context.Background(), f.players[0].ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// cardAssets 是一名玩家的全部持久事实：卡牌存档加上模块状态（金币、背包、体力、抽卡保底与回执、任务）。
+// “拒绝 / 回滚什么都没写”的断言比较整份。
+type cardAssets struct {
+	State                 string
+	Coins                 int64
+	Items, Misses         map[int64]int64
+	Stamina, StaminaAt    int64
+	Receipts              int
+	GachaSeq, WalletSeq   int64
+	TaskClaimed, TaskDone int
+}
+
+func readCardAssets(p *playerentity.Player) cardAssets {
+	d := p.Dao()
+	a := cardAssets{State: d.GetState(), Coins: d.GetWallet().GetCoins(), Items: map[int64]int64{}, Misses: map[int64]int64{}}
+	d.GetBag().RangeItems(func(k, v int64) bool { a.Items[k] = v; return true })
+	d.GetGacha().RangeMisses(func(k, v int64) bool { a.Misses[k] = v; return true })
+	a.Stamina, a.StaminaAt = d.GetStamina().GetValue(), d.GetStamina().GetSettledAt()
+	a.Receipts, a.GachaSeq = d.GetGachaLedger().ReceiptsLen(), d.GetGachaLedger().GetNextSeq()
+	a.WalletSeq = d.GetWalletLedger().GetNextSeq()
+	a.TaskClaimed, a.TaskDone = d.GetTask().GetPermanent().ClaimedLen(), d.GetTask().GetPermanent().ProgressLen()
+	return a
+}
+func (f *cardFixture) assets(index int) cardAssets { return readCardAssets(f.players[index]) }
 func (f *cardFixture) battle(t *testing.T, index int) cardrpg.Battle {
 	t.Helper()
 	b, err := cardrpg.DecodeBattle(f.runs[index].Dao().GetState())
@@ -181,6 +294,8 @@ func finishCardBattle(t *testing.T, engine *nest.NestMgr, runID, ownerID int64, 
 	t.Fatal("battle failed to reach bounded terminal")
 	return cardrpg.BattleView{}
 }
+// 抽卡交给 gacha（R9）：同一个请求键并发重放只扣一次金币、结果相同；卡池 2 的保底道具是英雄 6，连续 4 抽没出它
+// 第 5 抽必出；十连的道具全部在同一笔事务里换成卡牌实例或碎片；同键换次数、非法键被拒；卡池热更不重算旧回执。
 func TestCardRPGDrawConcurrentReplayPityAndConfigIdentity(t *testing.T) {
 	f := newCardFixture(t)
 	s := sender.NewCardRpgSender(f.engine)
@@ -192,7 +307,7 @@ func TestCardRPGDrawConcurrentReplayPityAndConfigIdentity(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			receipts[i], errs[i] = s.Sync_CardDraw(ctx, f.players[0].ID(), 1, 10, f.rules)
+			receipts[i], errs[i] = s.Sync_CardDraw(ctx, f.players[0].ID(), "draw-1", 10)
 		}(i)
 	}
 	wg.Wait()
@@ -201,13 +316,12 @@ func TestCardRPGDrawConcurrentReplayPityAndConfigIdentity(t *testing.T) {
 			t.Fatal("replayed draw rerolled", err)
 		}
 	}
-	p := f.profile(t)
-	if p.Gems != 80 || len(p.Draws) != 1 {
-		t.Fatal("draw paid repeatedly")
+	if v := f.view(t); v.Gold != 80 || f.assets(0).Receipts != 1 || receipts[0].Cost != 20 || receipts[0].Balance != 80 {
+		t.Fatal("draw paid repeatedly", v.Gold, receipts[0])
 	}
 	gap := 0
 	for _, template := range receipts[0].Templates {
-		if template >= 4 {
+		if template == 6 {
 			gap = 0
 		} else {
 			gap++
@@ -216,51 +330,70 @@ func TestCardRPGDrawConcurrentReplayPityAndConfigIdentity(t *testing.T) {
 			}
 		}
 	}
-	if _, err := s.Sync_CardDraw(ctx, f.players[0].ID(), 1, 1, f.rules); err == nil {
-		t.Fatal("same sequence changed draw size")
+	if receipts[0].Misses != int64(gap) {
+		t.Fatal("gacha pity counter differs from the draw result", receipts[0].Misses, gap)
 	}
-	if _, err := s.Sync_CardDraw(ctx, f.players[0].ID(), 3, 1, f.rules); err == nil {
-		t.Fatal("sequence gap accepted")
+	p := f.profile(t)
+	a := f.assets(0)
+	shards := int64(0)
+	for _, card := range p.Cards {
+		shards += card.Shards
 	}
-	patched := f.rules
-	patched.Version = "patched"
-	patched.DrawCost = 99
-	old, err := s.Sync_CardDraw(ctx, f.players[0].ID(), 1, 10, patched)
-	if err != nil || !reflect.DeepEqual(old, receipts[0]) || f.profile(t).Gems != 80 {
+	if shards+int64(len(p.Cards)-3) != 10 || a.Items[cardrpg.ItemDust] != cardrpg.InitialDust+shards {
+		t.Fatal("drawn items not converted to cards / shards exactly once", p.Cards, a.Items)
+	}
+	for template := int64(1); template <= 6; template++ {
+		if a.Items[cardrpg.HeroItemBase+template] != 0 {
+			t.Fatal("hero item left in bag after conversion")
+		}
+	}
+	if _, err := s.Sync_CardDraw(ctx, f.players[0].ID(), "draw-1", 1); !errors.Is(err, apperrors.ErrGachaKeyConflict) {
+		t.Fatal("same key changed draw size", err)
+	}
+	before := f.assets(0)
+	if _, err := s.Sync_CardDraw(ctx, f.players[0].ID(), "bad key", 1); !errors.Is(err, apperrors.ErrGachaKeyInvalid) || !reflect.DeepEqual(f.assets(0), before) {
+		t.Fatal("invalid request key accepted", err)
+	}
+	f.setDrawPrice(t, 99)
+	old, err := s.Sync_CardDraw(ctx, f.players[0].ID(), "draw-1", 10)
+	if err != nil || !reflect.DeepEqual(old, receipts[0]) || !reflect.DeepEqual(f.assets(0), before) {
 		t.Fatal("old draw repriced / rerolled", err)
 	}
 }
+
+// gacha 失败的尝试没有持久结果（Q1 A：跟 gacha）：抽完之后整笔被拒，金币、背包、保底、回执与卡牌都不变；同一个键再来
+// 是一次新的抽样，成功之后结果由回执固定（重放得到同一份、零写入）；金币不足整笔拒绝、什么都没写。
 func TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream(t *testing.T) {
 	f := newCardFixture(t)
-	before := f.players[0].Dao().GetState()
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	before := f.assets(0)
 	refused := errors.New("refuse after draw")
 	name := nest.NewHandlerName("card_draw_undo")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-		if _, err := handlerCardDraw(es[0].(ICardPlayerEntity), 1, 10, f.rules); err != nil {
+		if _, err := handlerCardDraw(es[0].(view.PlayerEntity), "draw-1", 10); err != nil {
 			return nil, err
 		}
 		return nil, refused
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
-	if _, err := f.engine.Request(context.Background(), name, f.players[0].ID(), nil); !errors.Is(err, refused) {
+	if _, err := f.engine.Request(ctx, name, f.players[0].ID(), nil); !errors.Is(err, refused) {
 		t.Fatal(err)
 	}
-	if f.players[0].Dao().GetState() != before {
-		t.Fatal("draw rollback lost assets / random identity")
+	if !reflect.DeepEqual(f.assets(0), before) {
+		t.Fatal("draw rollback lost funds / items / receipt")
 	}
-	expected := f.profile(t)
-	receipt, err := expected.Draw(1, 10, f.rules)
-	if err != nil {
-		t.Fatal(err)
+	receipt, err := s.Sync_CardDraw(ctx, f.players[0].ID(), "draw-1", 10)
+	if err != nil || receipt.Balance != before.Coins-20 {
+		t.Fatal("retry after undo did not draw once", err)
 	}
-	actual, err := sender.NewCardRpgSender(f.engine).Sync_CardDraw(context.Background(), f.players[0].ID(), 1, 10, f.rules)
-	if err != nil || !reflect.DeepEqual(actual, receipt) {
-		t.Fatal("rollback changed random results", err)
+	drawn := f.assets(0)
+	replay, err := s.Sync_CardDraw(ctx, f.players[0].ID(), "draw-1", 10)
+	if err != nil || !reflect.DeepEqual(replay, receipt) || !reflect.DeepEqual(f.assets(0), drawn) {
+		t.Fatal("successful result not fixed by the receipt", err)
 	}
-	expensive := f.rules
-	expensive.DrawCost = 100
-	before = f.players[0].Dao().GetState()
-	if _, err := sender.NewCardRpgSender(f.engine).Sync_CardDraw(context.Background(), f.players[0].ID(), 2, 10, expensive); err == nil || f.players[0].Dao().GetState() != before {
-		t.Fatal("insufficient draw partially applied")
+	f.setDrawPrice(t, 100)
+	if _, err := s.Sync_CardDraw(ctx, f.players[0].ID(), "draw-2", 10); !errors.Is(err, apperrors.ErrWalletShort) || !reflect.DeepEqual(f.assets(0), drawn) {
+		t.Fatal("insufficient draw partially applied", err)
 	}
 }
 func TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots(t *testing.T) {
@@ -268,7 +401,7 @@ func TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots(t *testing.T
 	s := sender.NewCardRpgSender(f.engine)
 	ctx := context.Background()
 	p := f.players[0].ID()
-	if _, err := s.Sync_CardDraw(ctx, p, 1, 10, f.rules); err != nil {
+	if _, err := s.Sync_CardDraw(ctx, p, "draw-1", 10); err != nil {
 		t.Fatal(err)
 	}
 	seq := uint64(1)
@@ -310,9 +443,9 @@ func TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams(t *testing.T
 	s := sender.NewCardRpgSender(f.engine)
 	ctx := context.Background()
 	id := f.players[0].ID()
-	before := f.players[0].Dao().GetState()
+	before := f.assets(0)
 	for _, c := range []cardrpg.Manage{{Seq: 2, Kind: "level", CardID: 1, Target: 2}, {Seq: 1, Kind: "level", CardID: 99, Target: 2}, {Seq: 1, Kind: "star", CardID: 1, Target: 2}, {Seq: 1, Kind: "team", Team: [3]int64{1, 1, 2}}} {
-		if _, err := s.Sync_CardManage(ctx, id, c, f.rules); err == nil || f.players[0].Dao().GetState() != before {
+		if _, err := s.Sync_CardManage(ctx, id, c, f.rules); err == nil || !reflect.DeepEqual(f.assets(0), before) {
 			t.Fatal("invalid growth changed assets")
 		}
 	}
@@ -320,13 +453,13 @@ func TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams(t *testing.T
 	if _, err := s.Sync_CardManage(ctx, id, command, f.rules); err != nil {
 		t.Fatal(err)
 	}
-	gold := f.profile(t).Gold
+	gold := f.assets(0).Coins
 	for range 2 {
 		if _, err := s.Sync_CardManage(ctx, id, command, f.rules); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if f.profile(t).Gold != gold {
+	if f.assets(0).Coins != gold || gold != cardrpg.InitialGold-5 {
 		t.Fatal("upgrade charged twice")
 	}
 	command.Target = 3
@@ -354,7 +487,7 @@ func TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge(t *testing.T) {
 		}
 	}
 	p := f.profile(t)
-	if p.Energy != 8 || len(p.Runs) != 1 || p.ActiveRun != f.runs[0].ID() {
+	if f.view(t).Energy != 98 || len(p.Runs) != 1 || p.ActiveRun != f.runs[0].ID() {
 		t.Fatal("admission paid more than once")
 	}
 	original, err := s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[1].ID(), 1, 1, f.rules)
@@ -498,18 +631,24 @@ func TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p := f.profile(t)
-	if p.Gold != 108 || p.Dust != 21 || p.Wins != 1 || p.Clears[0] == 0 || p.ActiveRun != 0 {
+	v := f.view(t)
+	if v.Gold != 108 || v.Dust != 21 || v.Wins != 1 || v.Clears[0] == 0 || v.ActiveRun != 0 {
 		t.Fatal("reward / first-clear repeated or missing")
 	}
-	for _, c := range []cardrpg.Manage{{Seq: 1, Kind: "quest", CardID: 1}, {Seq: 2, Kind: "sweep", CardID: 1, Target: 2}, {Seq: 3, Kind: "quest", CardID: 1}} {
-		if _, err := s.Sync_CardManage(ctx, f.players[0].ID(), c, f.rules); err != nil {
-			t.Fatal(err)
-		}
+	// 首胜是 task 的永久任务（领奖处 Report card.won）：领一次得 10 钻石，再领答 task_claimed。
+	tasks := sender.NewTaskClaimSender(f.engine)
+	if _, err := tasks.Sync_TaskClaim(ctx, f.players[0].ID(), &pb.TaskClaimRequest{TaskID: cardFirstWinTask}); err != nil {
+		t.Fatal(err)
 	}
-	p = f.profile(t)
-	if p.Gems != 110 || p.Gold != 114 || p.Energy != 4 || p.Dust != 23 {
-		t.Fatal("sweep / quest economy incorrect")
+	if _, err := s.Sync_CardManage(ctx, f.players[0].ID(), cardrpg.Manage{Seq: 1, Kind: "sweep", CardID: 1, Target: 2}, f.rules); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tasks.Sync_TaskClaim(ctx, f.players[0].ID(), &pb.TaskClaimRequest{TaskID: cardFirstWinTask}); !errors.Is(err, apperrors.ErrTaskClaimed) {
+		t.Fatal("first-win task paid twice", err)
+	}
+	v = f.view(t)
+	if v.Gems != 110 || v.Gold != 114 || v.Energy != 94 || v.Dust != 23 {
+		t.Fatal("sweep / quest economy incorrect", v)
 	}
 }
 func TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce(t *testing.T) {
@@ -528,7 +667,7 @@ func TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce(t *testing.T) {
 	if _, err := s.MultiSync_CardClaim(ctx, owner, f.runs[0].ID()); err != nil {
 		t.Fatal(err)
 	}
-	if f.profile(t).Gold != 100 || f.profile(t).Wins != 0 {
+	if f.view(t).Gold != 100 || f.profile(t).Wins != 0 {
 		t.Fatal("retreat paid reward")
 	}
 	for i := 1; i < 3; i++ {
@@ -540,7 +679,7 @@ func TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.profile(t).Gold != 111 || f.profile(t).Wins != 2 {
+	if f.view(t).Gold != 111 || f.profile(t).Wins != 2 {
 		t.Fatal("first-clear repeated / missed")
 	}
 }
@@ -586,9 +725,10 @@ func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
 	refused := errors.New("refuse after admission")
 	name := nest.NewHandlerName("card_start_undo")
 	ctx := context.Background()
+	assets := f.assets(0)
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
-		_, err := handlerCardStart(es[0].(ICardPlayerEntity), es[1].(ICardRunEntity), 1, 1, f.rules, fctx.NowMilli())
+		_, err := handlerCardStart(es[0].(view.PlayerEntity), es[1].(ICardRunEntity), 1, 1, f.rules, fctx.NowMilli())
 		if err != nil {
 			return nil, err
 		}
@@ -597,7 +737,7 @@ func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
 	if _, err := f.engine.RequestMulti(ctx, name, []int64{f.players[0].ID(), f.runs[0].ID()}, nil); !errors.Is(err, refused) {
 		t.Fatal(err)
 	}
-	if f.profile(t).Energy != 10 || f.profile(t).ActiveRun != 0 || f.runs[0].Dao().GetState() != "" || f.runs[0].Dao().GetTurnTimer() != 0 || len(f.runs[0].TimerComp().Timers()) != 0 {
+	if !reflect.DeepEqual(f.assets(0), assets) || f.profile(t).ActiveRun != 0 || f.runs[0].Dao().GetState() != "" || f.runs[0].Dao().GetTurnTimer() != 0 || len(f.runs[0].TimerComp().Timers()) != 0 {
 		t.Fatal("partial admission / timer survived undo")
 	}
 	f.start(t, 0, 1)
@@ -624,24 +764,31 @@ func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
 		t.Fatal("battle and timer did not roll back together")
 	}
 }
+// 两本账都有界（R9 后抽卡那本是 gacha 的）：gacha 只留最近 64 次成功回执，第 65 次成功并淘汰最旧的，窗口内的旧键
+// 重放零写入，窗口外的旧键当新请求；养成账本满了明确拒绝、不淘汰。体力是 stamina 的惰性恢复：保留零头、到上限
+// 停止，时钟回拨不恢复也不倒扣；视图不带私有密钥。
 func TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence(t *testing.T) {
 	f := newCardFixture(t)
 	s := sender.NewCardRpgSender(f.engine)
 	ctx := context.Background()
 	id := f.players[0].ID()
-	cheap := f.rules
-	cheap.DrawCost = 1
-	for i := uint64(1); i <= cardrpg.LedgerLimit; i++ {
-		if _, err := s.Sync_CardDraw(ctx, id, i, 1, cheap); err != nil {
+	f.setDrawPrice(t, 1)
+	for i := 1; i <= cardrpg.LedgerLimit+1; i++ {
+		if _, err := s.Sync_CardDraw(ctx, id, fmt.Sprintf("draw-%d", i), 1); err != nil {
 			t.Fatal(err)
 		}
 	}
-	before := f.players[0].Dao().GetState()
-	if _, err := s.Sync_CardDraw(ctx, id, 65, 1, cheap); err == nil || f.players[0].Dao().GetState() != before {
-		t.Fatal("full draw ledger evicted evidence")
+	before := f.assets(0)
+	if before.Receipts != cardrpg.LedgerLimit || before.Coins != cardrpg.InitialGold-cardrpg.LedgerLimit-1 {
+		t.Fatal("gacha receipt window not bounded", before.Receipts, before.Coins)
 	}
-	if _, err := s.Sync_CardDraw(ctx, id, 1, 1, f.rules); err != nil {
-		t.Fatal("old draw lost after full ledger", err)
+	for _, key := range []string{"draw-2", fmt.Sprintf("draw-%d", cardrpg.LedgerLimit+1)} {
+		if _, err := s.Sync_CardDraw(ctx, id, key, 1); err != nil || !reflect.DeepEqual(f.assets(0), before) {
+			t.Fatal("replay inside the receipt window wrote state", key, err)
+		}
+	}
+	if r, err := s.Sync_CardDraw(ctx, id, "draw-1", 1); err != nil || r.Balance != before.Coins-1 {
+		t.Fatal("key outside the receipt window was not a new draw", err)
 	}
 	for i := uint64(1); i <= cardrpg.LedgerLimit; i++ {
 		if _, err := s.Sync_CardManage(ctx, id, cardrpg.Manage{Seq: i, Kind: "team", Team: [3]int64{1, 2, 3}}, f.rules); err != nil {
@@ -652,18 +799,23 @@ func TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence(t *testing.T) {
 		t.Fatal("full operation ledger silently evicted")
 	}
 	f.start(t, 0, 1)
-	p := f.profile(t)
-	if err := p.Regenerate(p.EnergyAt + 4500); err != nil || p.Energy != 9 {
+	at := f.clock.Load()
+	energyAt := func(now int64) int64 {
+		t.Helper()
+		f.clock.Store(now)
+		defer f.clock.Store(at)
+		return f.view(t).Energy
+	}
+	if energyAt(at) != 98 || energyAt(at+cardRegenMillis*3/2) != 99 {
 		t.Fatal("offline energy lost remainder")
 	}
-	at := p.EnergyAt
-	if err := p.Regenerate(at + 3000); err != nil || p.Energy != 10 {
+	if energyAt(at+cardRegenMillis*2) != 100 || energyAt(at+cardRegenMillis*50) != 100 {
 		t.Fatal("offline energy did not cap")
 	}
-	if err := p.Regenerate(at); err == nil {
-		t.Fatal("backward clock accepted")
+	if energyAt(at-1000) != 98 {
+		t.Fatal("backward clock regenerated or charged energy")
 	}
-	if strings.Contains(fmt.Sprintf("%+v", p.View()), "DrawKey") {
+	if strings.Contains(fmt.Sprintf("%+v", f.view(t)), f.profile(t).BattleKey) {
 		t.Fatal("private state in view")
 	}
 }

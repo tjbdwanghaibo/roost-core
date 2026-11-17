@@ -1,0 +1,28 @@
+# 变异：保留的生成工程（run1/project）里逐个改 handler / 建档监听，跑对应场景看红，恢复看绿（驱动脚本见 README）
+M1 抽卡重放仍转换（删 Replayed 早退）
+  TestCardRPGDrawConcurrentReplayPityAndConfigIdentity: mutated -> FAIL (red) ['card_rpg_test.go:319: replayed draw rerolled bag_short: not enough items [item_id=2102 have=0 want=1]']
+  restored -> PASS (green)
+M2 英雄道具不从背包取出（删 Bag().Remove）
+  TestCardRPGDrawConcurrentReplayPityAndConfigIdentity: mutated -> FAIL (red) ['card_rpg_test.go:350: hero item left in bag after conversion']
+  restored -> PASS (green)
+M3 抽卡改调 DrawFree（不扣金币）
+  TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream: mutated -> FAIL (red) ['card_rpg_test.go:390: retry after undo did not draw once <nil>']
+  restored -> PASS (green)
+M4 开局不扣体力（删 Stamina().Spend）
+  TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge: mutated -> FAIL (red) ['card_rpg_test.go:494: admission paid more than once']
+  restored -> PASS (green)
+M5 胜利不上报任务（删 Task().Report）
+  TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay: mutated -> FAIL (red) ['card_rpg_test.go:644: task_incomplete: task is not finished in this period']
+  restored -> PASS (green)
+M6 领奖金币不经 wallet（Effects.Gold 置 0）
+  TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce: mutated -> FAIL (red) ['card_rpg_test.go:686: first-clear repeated / missed']
+  restored -> PASS (green)
+M7 养成不扣金币（applyEffects 跳过 wallet）
+  TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams: mutated -> FAIL (red) ['card_rpg_test.go:466: upgrade charged twice']
+  restored -> PASS (green)
+M8 视图体力读存值不结算（Current 换成 GetValue）
+  TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence: mutated -> FAIL (red) ['card_rpg_test.go:814: offline energy lost remainder']
+  restored -> PASS (green)
+M9 建档不发初始金币（删 Wallet().Add）
+  TestCardRPGRobotBusiness: mutated -> FAIL (red) []
+  restored -> PASS (green)

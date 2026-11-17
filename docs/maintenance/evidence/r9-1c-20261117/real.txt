@@ -1,0 +1,18 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_CARD_RPG_REAL=1 bash scripts/test-card-rpg-generated.sh（2026-11-17）
+# exit 0；缺省 17 条 + REAL 1 条，SKIP 数：0；本次唯一库与 WAL 成功后已删
+ok  	example.com/card-rpg-practice/game/modules/cardrpg	1.471s
+ok  	example.com/card-rpg-practice/game/handler	2.013s
+module verify: bag 20/20 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: gacha 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+stamina 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0
+    card_rpg_recovery_test.go:493: SIGKILL recovery: 7 unprojected strict records; draw/growth unchanged; driver loop delivered one overdue turn after cold load and the next turn at its deadline; won, claimed and retried after another process restart exactly once
+--- PASS: TestCardRPGRealCrashRecovery (2.88s)
+ok  	example.com/card-rpg-practice/game/handler	4.479s

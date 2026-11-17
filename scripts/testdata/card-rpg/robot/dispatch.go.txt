@@ -6,6 +6,7 @@ import (
 	"GENRE_MODULE/protocol/msgid"
 	"GENRE_MODULE/protocol/pb"
 	"context"
+	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
@@ -24,7 +25,8 @@ func Dispatch(engine *nest.NestMgr, rules domain.Rules) gateway.TCPDispatch {
 		}
 		switch request.Kind {
 		case "draw":
-			_, err = business.Sync_CardDraw(ctx, session.Principal().PlayerID, request.Seq, int(request.Count), rules)
+			// 抽卡的请求身份是 gacha 的请求键（R9）；协议的 Seq 换成键，同一个 Seq 重发得到同一份回执。
+			_, err = business.Sync_CardDraw(ctx, session.Principal().PlayerID, fmt.Sprintf("draw-%d", request.Seq), int(request.Count))
 		case "start":
 			_, err = business.MultiSync_CardStart(ctx, session.Principal().PlayerID, request.RoomID, request.Seq, int(request.Count), rules)
 		case "auto":

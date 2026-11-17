@@ -1,0 +1,33 @@
+package player
+
+import (
+	"example.com/card-rpg-practice/game/event"
+	"example.com/card-rpg-practice/game/modules/cardrpg"
+)
+
+// OnCardEnterFirst 是卡牌的建档（R9：原 handlerCardInit 交给 enter 模块）：新玩家首次初始化的那笔 Player 事务里，
+// 写初始卡组（三张 1 星卡、编队 1-2-3、服务器私有战斗密钥），并发初始资产——金币经 wallet，钻石与尘是 bag 道具。
+// 体力不用发：stamina 的零值就是满体力。“只发一次”由 enter 在同一笔事务里置的 Initialized 保证；返回错误整笔回滚，
+// 玩家仍是没建成，下次进入再做。
+//
+//roost:listen
+func (e *Player) OnCardEnterFirst(ev event.EnterFirst) error {
+	if e.Dao().GetState() != "" {
+		return cardrpg.ErrRule
+	}
+	p, err := cardrpg.NewProfile(cardrpg.NewBattleKey())
+	if err != nil {
+		return err
+	}
+	if _, err := e.Wallet().Add(cardrpg.InitialGold); err != nil {
+		return err
+	}
+	if _, err := e.Bag().Add(cardrpg.ItemGems, cardrpg.InitialGems); err != nil {
+		return err
+	}
+	if _, err := e.Bag().Add(cardrpg.ItemDust, cardrpg.InitialDust); err != nil {
+		return err
+	}
+	e.Dao().SetState(p.Encode())
+	return nil
+}

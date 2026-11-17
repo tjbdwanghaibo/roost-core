@@ -10,6 +10,7 @@ import (
 	sender "example.com/card-rpg-practice/game/handler/syncsender"
 	"example.com/card-rpg-practice/game/modules/cardrpg"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -45,9 +46,14 @@ type cardRuntime struct {
 	database        string
 	playerID, runID int64
 	clock           atomic.Int64
+	// 配置：卡牌规则与工程的表（道具、卡池、掉落、任务）同一个 Store，目录在本次 WAL 根下（子进程被 SIGKILL 不清理
+	// t.TempDir，放在 WAL 根下由脚本成功后整体删除）。
+	store   *configdata.Store
+	catalog string
+	rules   cardrpg.Rules
 }
 
-func openCardRuntime(t *testing.T, manual bool, now int64) *cardRuntime {
+func openCardRuntime(t *testing.T, manual bool, now int64, catalog string) *cardRuntime {
 	t.Helper()
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	if uri == "" {
@@ -69,7 +75,12 @@ func openCardRuntime(t *testing.T, manual bool, now int64) *cardRuntime {
 	runentity.RegisterEntity()
 	RegisterCardRpgNestHandlers()
 	RegisterTickCardRunTimerGenNestHandlers()
-	h := &cardRuntime{database: database}
+	RegisterEnterInitNestHandlers()
+	h := &cardRuntime{database: database, catalog: filepath.Join(os.Getenv("ROOST_CARD_RPG_WAL"), catalog)}
+	if err := os.MkdirAll(h.catalog, 0700); err != nil {
+		t.Fatal(err)
+	}
+	h.store, h.rules = openCardCatalog(t, h.catalog, cardrpg.DemoRules())
 	h.clock.Store(now)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
 	// 两处读同一个 h.clock，测试拨 h.clock 就是拨业务时间。
@@ -160,9 +171,11 @@ func cardTimerCounter(name string) int64 {
 	return total
 }
 
+// cardBarrier 是崩溃边界的事实：资产取模块状态（钱包、背包、体力的存值），Draw 是抽卡回执，重启后同键重放必须等于它。
 type cardBarrier struct {
 	BattleDigest             string
 	Gems, Gold, Dust, Energy int64
+	Draw                     cardrpg.DrawReceipt
 	Unprojected              uint64
 	TurnTimer                int64
 }
@@ -172,7 +185,9 @@ type cardBarrier struct {
 func TestCardRPGRealCrashRecovery(t *testing.T) {
 	const baseNow int64 = 1800000000000
 	if os.Getenv("ROOST_CARD_RPG_CHILD") == "verify" {
-		h := openCardRuntime(t, false, baseNow+7200000)
+		h := openCardRuntime(t, false, baseNow+7200000, "catalog-verify")
+		// 重启后卡池涨价：已成功的抽卡按回执重放，不按新价重扣。
+		setCardDrawPrice(t, h.store, h.catalog, 99)
 		ctx := context.Background()
 		s := sender.NewCardRpgSender(h.scheduler)
 		raw, err := os.ReadFile(filepath.Join(os.Getenv("ROOST_CARD_RPG_WAL"), "claimed.json"))
@@ -203,10 +218,7 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		patched := cardrpg.DemoRules()
-		patched.Version = "after-restart"
-		patched.DrawCost = 99
-		if _, err := s.Sync_CardDraw(ctx, h.playerID, 1, 10, patched); err != nil {
+		if _, err := s.Sync_CardDraw(ctx, h.playerID, "draw-1", 10); err != nil {
 			t.Fatal(err)
 		}
 		view, err = s.Sync_CardProfile(ctx, h.playerID)
@@ -216,27 +228,10 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 		return
 	}
 	if os.Getenv("ROOST_CARD_RPG_CHILD") == "write" {
-		h := openCardRuntime(t, true, baseNow)
+		h := openCardRuntime(t, true, baseNow, "catalog-write")
 		ctx := context.Background()
 		s := sender.NewCardRpgSender(h.scheduler)
-		// 配置目录放在本次 WAL 根下而不是 t.TempDir：子进程被 SIGKILL，不会执行 TempDir 清理，否则每次运行都在
-		// TMPDIR 留下一份残留目录；脚本成功后整体删除 WAL 根。
-		catalogDir := filepath.Join(os.Getenv("ROOST_CARD_RPG_WAL"), "catalog")
-		rawRules, _ := json.Marshal(cardrpg.DemoRules())
-		if err := os.MkdirAll(catalogDir, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(catalogDir, "cards.json"), rawRules, 0600); err != nil {
-			t.Fatal(err)
-		}
-		store, err := cardrpg.OpenCatalog(catalogDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rules, err := cardrpg.CaptureRules(store.Current())
-		if err != nil {
-			t.Fatal(err)
-		}
+		rules := h.rules
 		for _, id := range []int64{h.playerID, h.runID} {
 			kind := playerentity.EntityKindPlayer
 			if id == h.runID {
@@ -246,10 +241,12 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := s.Sync_CardInit(ctx, h.playerID, strings.Repeat("ab", 32)); err != nil {
+		// 建档走 enter：首次初始化的那笔事务里写初始卡组与初始资产（OnCardEnterFirst）。
+		if _, err := sender.NewEnterInitSender(h.scheduler).Sync_EnterInit(ctx, h.playerID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Sync_CardDraw(ctx, h.playerID, 1, 10, rules); err != nil {
+		draw, err := s.Sync_CardDraw(ctx, h.playerID, "draw-1", 10)
+		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, rules); err != nil {
@@ -270,10 +267,7 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p, err := cardrpg.DecodeProfile(player.(*playerentity.Player).Dao().GetState())
-		if err != nil {
-			t.Fatal(err)
-		}
+		a := readCardAssets(player.(*playerentity.Player))
 		b, err := cardrpg.DecodeBattle(run.(*runentity.CardRun).Dao().GetState())
 		if err != nil {
 			t.Fatal(err)
@@ -282,7 +276,7 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 		if stats.Projected != 0 || stats.WALUnacked == 0 {
 			t.Fatal("no unprojected strict WAL at crash boundary")
 		}
-		barrier := cardBarrier{b.Digest(), p.Gems, p.Gold, p.Dust, p.Energy, stats.WALUnacked, run.(*runentity.CardRun).Dao().GetTurnTimer()}
+		barrier := cardBarrier{b.Digest(), a.Items[cardrpg.ItemGems], a.Coins, a.Items[cardrpg.ItemDust], a.Stamina, draw, stats.WALUnacked, run.(*runentity.CardRun).Dao().GetTurnTimer()}
 		raw, _ := json.Marshal(barrier)
 		if err := os.WriteFile(filepath.Join(os.Getenv("ROOST_CARD_RPG_WAL"), "ready.json"), raw, 0600); err != nil {
 			t.Fatal(err)
@@ -352,7 +346,7 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if err := <-done; err == nil {
 		t.Fatal("child did not crash")
 	}
-	h := openCardRuntime(t, false, baseNow+3600000)
+	h := openCardRuntime(t, false, baseNow+3600000, "catalog-recover")
 	ctx := context.Background()
 	s := sender.NewCardRpgSender(h.scheduler)
 	player, err := h.access.Get(ctx, h.playerID, entity.EntityCategoryOther)
@@ -363,23 +357,20 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := cardrpg.DecodeProfile(player.(*playerentity.Player).Dao().GetState())
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := readCardAssets(player.(*playerentity.Player))
 	b, err := cardrpg.DecodeBattle(run.(*runentity.CardRun).Dao().GetState())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Digest() != barrier.BattleDigest || b.NextSeq() != 2 || p.Gems != barrier.Gems || p.Gold != barrier.Gold || p.Dust != barrier.Dust || p.Energy != barrier.Energy || run.(*runentity.CardRun).Dao().GetTurnTimer() != barrier.TurnTimer {
+	if b.Digest() != barrier.BattleDigest || b.NextSeq() != 2 || a.Items[cardrpg.ItemGems] != barrier.Gems || a.Coins != barrier.Gold || a.Items[cardrpg.ItemDust] != barrier.Dust || a.Stamina != barrier.Energy || run.(*runentity.CardRun).Dao().GetTurnTimer() != barrier.TurnTimer {
 		t.Fatal("WAL recovery lost state / timer")
 	}
-	// 已确认抽卡与养成在新配置下重试，仍沿用原结果；运行中关卡继续用旧配置。
+	// 已确认抽卡与养成在新配置下重试，仍沿用原结果（gacha 回执固定成功结果；卡池涨价不重扣）；运行中关卡继续用旧配置。
+	setCardDrawPrice(t, h.store, h.catalog, 99)
 	patched := cardrpg.DemoRules()
 	patched.Version = "cards-v2"
-	patched.DrawCost = 99
 	patched.Heroes[0].Attack = 90
-	if receipt, err := s.Sync_CardDraw(ctx, h.playerID, 1, 10, patched); err != nil || receipt.Version != "cards-v1" {
+	if receipt, err := s.Sync_CardDraw(ctx, h.playerID, "draw-1", 10); err != nil || !reflect.DeepEqual(receipt, barrier.Draw) || readCardAssets(player.(*playerentity.Player)).Coins != barrier.Gold {
 		t.Fatal("recovered draw rerolled / repriced", err)
 	}
 	if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, patched); err != nil {
@@ -459,21 +450,26 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p, err = cardrpg.DecodeProfile(player.(*playerentity.Player).Dao().GetState())
+	p, err := cardrpg.DecodeProfile(player.(*playerentity.Player).Dao().GetState())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Gems != barrier.Gems || p.Gold != barrier.Gold+8 || p.Dust != barrier.Dust+1 || p.Wins != 1 || len(p.Draws) != 1 || len(p.Operations) != 1 || len(p.Runs) != 1 || !p.Runs[0].Claimed {
+	a = readCardAssets(player.(*playerentity.Player))
+	if a.Items[cardrpg.ItemGems] != barrier.Gems || a.Coins != barrier.Gold+8 || a.Items[cardrpg.ItemDust] != barrier.Dust+1 || p.Wins != 1 || a.Receipts != 1 || len(p.Operations) != 1 || len(p.Runs) != 1 || !p.Runs[0].Claimed {
 		t.Fatal("recovery repeated spend or rewards")
 	}
 	finalBattle, err := cardrpg.DecodeBattle(run.(*runentity.CardRun).Dao().GetState())
 	if err != nil {
 		t.Fatal(err)
 	}
+	view, err := s.Sync_CardProfile(ctx, h.playerID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	expectedRaw, _ := json.Marshal(struct {
 		Profile cardrpg.ProfileView
 		Digest  string
-	}{p.View(), finalBattle.Digest()})
+	}{view, finalBattle.Digest()})
 	if err := os.WriteFile(filepath.Join(root, "claimed.json"), expectedRaw, 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,45 @@
+import subprocess, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+H = 'game/handler/card_rpg.go'
+L = 'game/entities/player/card_rpg.go'
+muts = [
+ ('M1 抽卡重放仍转换（删 Replayed 早退）', H, '''	if r.Replayed {
+		return receipt, nil
+	}
+''', '', 'TestCardRPGDrawConcurrentReplayPityAndConfigIdentity'),
+ ('M2 英雄道具不从背包取出（删 Bag().Remove）', H, '''		if _, err := player.Bag().Remove(item, 1); err != nil {
+			return cardrpg.DrawReceipt{}, err
+		}
+''', '', 'TestCardRPGDrawConcurrentReplayPityAndConfigIdentity'),
+ ('M3 抽卡改调 DrawFree（不扣金币）', H, 'r, err := player.Gacha().Draw(key, cardrpg.DrawPool, int64(count))', 'r, err := player.Gacha().DrawFree(key, cardrpg.DrawPool)', 'TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream'),
+ ('M4 开局不扣体力（删 Stamina().Spend）', H, '''	if _, err := player.Stamina().Spend(rules.Stages[stage-1].Energy, nowUnixMilli); err != nil {
+		return 0, err
+	}
+''', '', 'TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge'),
+ ('M5 胜利不上报任务（删 Task().Report）', H, '''		if err := player.Task().Report(CardWonEvent, 1, nowUnixMilli); err != nil {
+			return cardrpg.ProfileView{}, err
+		}
+''', '', 'TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay'),
+ ('M6 领奖金币不经 wallet（Effects.Gold 置 0）', H, 'cardrpg.Effects{Gold: reward, Dust: 1}', 'cardrpg.Effects{Gold: 0 * reward, Dust: 1}', 'TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce'),
+ ('M7 养成不扣金币（applyEffects 跳过 wallet）', H, '	if e.Gold != 0 {\n		if _, err := player.Wallet().Add(e.Gold)', '	if e.Gold > 0 {\n		if _, err := player.Wallet().Add(e.Gold)', 'TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams'),
+ ('M8 视图体力读存值不结算（Current 换成 GetValue）', H, 'v.Energy = player.Stamina().Current(nowUnixMilli)', 'v.Energy = player.Dao().GetStamina().GetValue()', 'TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence'),
+ ('M9 建档不发初始金币（删 Wallet().Add）', L, '''	if _, err := e.Wallet().Add(cardrpg.InitialGold); err != nil {
+		return err
+	}
+''', '', 'TestCardRPGRobotBusiness'),
+]
+for name, path, old, new, test in muts:
+    f = root / path
+    text = f.read_text()
+    assert text.count(old) == 1, name
+    f.write_text(text.replace(old, new))
+    try:
+        r = subprocess.run(['go', 'test', '-mod=mod', '-count=1', '-run', '^' + test + '$', './game/handler'], cwd=root, capture_output=True, text=True, env={**__import__('os').environ, 'GOWORK': 'off'})
+        out = r.stdout + r.stderr
+        reason = [l.strip() for l in out.splitlines() if 'card_rpg' in l and '.go:' in l][:1]
+        print(f'{name}\n  {test}: mutated -> {"FAIL (red)" if r.returncode else "PASS (NOT RED!)"} {reason}')
+    finally:
+        f.write_text(text)
+    r = subprocess.run(['go', 'test', '-mod=mod', '-count=1', '-run', '^' + test + '$', './game/handler'], cwd=root, capture_output=True, text=True, env={**__import__('os').environ, 'GOWORK': 'off'})
+    print(f'  restored -> {"PASS (green)" if r.returncode == 0 else "FAIL"}')
