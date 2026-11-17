@@ -173,7 +173,7 @@ v1.35.0 起（v1.36.0 补齐闭环与 SyncProbe）13 类网络验收已覆盖既
 | 类型 | 结论 | 原因（出处） |
 | --- | --- | --- |
 | FPS / 动作射击 | 不建议 | 现有心跳调度最短 50ms（guide/10-time.md §4A），不提供更高频的该心跳档位；这不是 Sync 发送上限，on_change 在 handler 提交、确认与解锁后汇总唤醒（guide/04-sync.md §3）。高频动作玩法还缺专门验收；无延迟补偿 / 命中回溯、无通用客户端预测（physicsroom 的 Unity 预测只针对物理闯关，KNOWN-LIMITS“UGC 物理闯关”）；接入层只有 TCP（§5 #10） |
-| 无缝开放世界（多进程分区） | 固定分区可做，容量未达标 | v1.47.0 起有 `cellworld` 模块（`modules/cellworld/README.md`，契约见 `gameplay/cellworld/README.md`）：固定网格、一个进程一个 Cell，Player 留在 Base 进程，场景角色与怪物由所在 Cell 执行，跨格移动、跨 Cell 攻击、死亡奖励与出生槽都有正式路径。不支持动态拆格、一个进程多个 Cell、跨多个 Cell 的原子战斗结算；千人 / 50ms 状态同步目标在本机没有通过（`docs/performance/CELLWORLD.md`），Linux / 跨机 / 生产 Redis HA 没有实跑。用户要做时如实说明容量结论，按 game-demo 的 `game/partition` 接线，并把容量验收写进说明文档的限制 |
+| 无缝开放世界（多进程分区） | 固定分区可做，容量未达标 | v1.47.0 起有 `cellworld` 模块（`modules/cellworld/README.md`，契约见 `gameplay/cellworld/README.md`）：固定网格、一个进程一个 Cell，Player 留在 Base 进程，场景角色与怪物由所在 Cell 执行，跨格移动、跨 Cell 攻击、死亡奖励与出生槽都有正式路径。不支持动态拆格、一个进程多个 Cell、跨多个 Cell 的原子战斗结算；千人 / 50ms 状态同步目标在本机没有通过（`docs/performance/CELLWORLD.md`），Linux / 跨机 / 生产 Redis HA 没有实跑。用户要做时如实说明容量结论，装模块（它带 SceneActor 实体与状态映射 `game/modules/cellworldhost`），Player / 场景 / 怪物的接线照 game-demo 的 `game/entities/player/cell_base.go` 与 `internal/service/game/partition.go` 写，并把容量验收写进说明文档的限制 |
 | MOBA 状态同步 / RTS | 暂缓 | 阵营视野挂接几十个、必须 ApplyAsync 并按自身密度压测（guide/04-sync.md §2 选型表）；无纵切、无容量数据。帧同步 MOBA 走 moba-lockstep |
 
 用户坚持做这些类型时：如实说明缺口与出处，提议先做框架设计讨论，不要用现有零件拼一个“能跑”的假 demo。

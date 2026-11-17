@@ -4,7 +4,7 @@ import (
 	gameteam "{{MODULE}}/game/components/team"
 	scene_actor "{{MODULE}}/game/entities/scene_actor"
 	"{{MODULE}}/game/event"
-	"{{MODULE}}/game/partition"
+	"{{MODULE}}/game/modules/cellworldhost"
 	"{{MODULE}}/game/view"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -21,7 +21,7 @@ import (
 //
 //roost:listen
 func (player *Player) OnTeamChanged(ev event.TeamChanged) error {
-	node := partition.Node()
+	node := cellworldhost.Node()
 	if node == nil {
 		return nil
 	}

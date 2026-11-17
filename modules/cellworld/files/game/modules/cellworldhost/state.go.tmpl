@@ -1,49 +1,114 @@
-// Package partition 是分区场景（scene.partition，gameplay/cellworld）在实体一侧的接线：本进程的 cellworld.Node
-// 装在哪里、SceneActor / Monster 的 DAO 与 cellworld.ActorState 怎么互相映射、Player 的 DAO 与 cellworld.BaseState
-// 怎么互相映射。实体包（scene_actor、monster、player、scene）与 game 服务都引用它，它不引用任何实体包。
-//
-// 共享授权、迁移与恢复契约见 core 的 gameplay/cellworld/README.md。
-// 没有声明 scene.partition.enabled 的进程从不安装 Node，
-// 这里的函数也不会被调用，普通场景的行为不变。
-package partition
+package cellworldhost
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"sync/atomic"
+	"time"
 
 	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-// node 是本进程的 cellworld 端点。game 服务在 Init 里建好后 Install、Shutdown 时 Uninstall；实体的格内心跳
-// （cell.actor / scene.cell / cell.base）在回调里读它，没装（或已卸）时什么都不做。
+// 实体一侧的接线：本进程的 cellworld.Node 装在哪里、格心跳怎么登记、Actor 的 DAO 与 cellworld.ActorState、Player 的
+// DAO 与 cellworld.BaseState 怎么互相映射。实体包（模块自带的 scene_actor、工程自己的 Player / 走格的怪物 / 场景）
+// 引用这里，这里不引用任何实体包。共享授权、迁移与恢复契约见 core 的 gameplay/cellworld/README.md。
+// 没有装 Node 的进程（普通场景）这里的函数都不会被调用，或者调用了什么都不做。
+
+// installed 是本进程的 Node 与心跳驱动；scene 是分区场景的 Scene ID（Player 的快照位置记在 SavedSceneID = 它之下）。
+// 服务在 Init 里建好 Runtime 之后 Install、Shutdown 时 Uninstall；实体的格内心跳在回调里读它，没装（或已卸）时什么都不做。
 var (
-	node  atomic.Pointer[cellworld.Node]
-	scene atomic.Int64
+	installed atomic.Pointer[installation]
+	scene     atomic.Int64
 )
 
-// Install 装上本进程的 Node 与分区场景的 Scene ID（Player 的快照位置记在 SavedSceneID = 它之下）。一个进程一个。
-func Install(n *cellworld.Node, sceneID int64) {
+type installation struct {
+	node   *cellworld.Node
+	driver *heartbeat.Driver
+}
+
+// Install 装上本进程的 Node、分区场景的 Scene ID 与格内心跳用的驱动（SceneActor 从它取心跳宿主；工程自己的实体
+// 用自己的宿主）。一个进程一个；要在 Runtime.Start 之前装，Node 一开始投递就会建 SceneActor。
+func Install(n *cellworld.Node, sceneID int64, driver *heartbeat.Driver) {
 	scene.Store(sceneID)
-	node.Store(n)
+	installed.Store(&installation{node: n, driver: driver})
 }
 
 // Uninstall 卸下 n（只卸自己装的那一个）。
-func Uninstall(n *cellworld.Node) { node.CompareAndSwap(n, nil) }
+func Uninstall(n *cellworld.Node) {
+	if cur := installed.Load(); cur != nil && cur.node == n {
+		installed.CompareAndSwap(cur, nil)
+	}
+}
 
 // Node 是本进程的 Node；不是分区进程时为 nil。
-func Node() *cellworld.Node { return node.Load() }
+func Node() *cellworld.Node {
+	if cur := installed.Load(); cur != nil {
+		return cur.node
+	}
+	return nil
+}
+
+// Heartbeat 是 Install 给的心跳驱动；没装 Node 时为 nil。
+func Heartbeat() *heartbeat.Driver {
+	if cur := installed.Load(); cur != nil {
+		return cur.driver
+	}
+	return nil
+}
 
 // SceneID 是分区场景的 Scene ID（Install 时给出）。
 func SceneID() int64 { return scene.Load() }
 
-// CellMode 是分区场景的 Node 在 handler 里新建 SceneActor / Monster 时的 EntityCreateParam.Param：实体据此登记
-// 格内心跳（cell.actor），Monster 也据此知道自己是“格内心跳的行者”，不启动 AI / 动作 / 移动 / 状态 / Buff
-// （维护者 2026-11-03 决定 D5 = A）。
+// CellMode 是分区场景的 Node 在 handler 里新建 SceneActor / 走格的怪物时的 EntityCreateParam.Param：实体据此登记
+// 格内心跳（cell.actor），走格的怪物也据此不启动自己的 AI / 移动（格的心跳代替它们）。
 type CellMode struct{}
 
-// CellDao 是 SceneActorDao 与 MonsterDao 共有的那组生成读写器：两个 DAO 用同名字段承载 cellworld.ActorState，
-// 所以一份映射同时服务两种实体。
+// IsCellMode 报告 param 是不是 CellMode。
+func IsCellMode(param any) bool {
+	_, ok := param.(CellMode)
+	return ok
+}
+
+// ErrNoNode 是本进程没有装 Node（不是分区进程，或已经卸下）。
+var ErrNoNode = errors.New("cellworldhost: this process runs no partitioned scene")
+
+// RegisterActorBeat 在 host 上登记格内心跳 "cell.actor"（周期取 Node 配置，Node.ActorBeat 推进位置、回写与交接）。
+// 只登记不启动：Node 在装好状态的那笔事务里调 Actor.StartCell，提交后生效；换档由 Actor.SetCellPeriod 做。
+// 没装 Node 时返回 ErrNoNode；Node 卸下之后已登记的心跳什么都不做。
+func RegisterActorBeat(host *heartbeat.Host, owner cellworld.Actor) (*heartbeat.Reg, error) {
+	node := Node()
+	if node == nil {
+		return nil, ErrNoNode
+	}
+	return host.Register("cell.actor", node.Config().Period, func(beat heartbeat.Beat) error {
+		if n := Node(); n != nil {
+			return n.ActorBeat(owner, time.Now(), beat.Elapsed)
+		}
+		return nil
+	})
+}
+
+// RegisterBaseBeat 在 host 上登记 Base 的路由心跳 "cell.base"（周期是 Node 配置的 WatchPeriod，Node.BaseBeat 做看门狗
+// 与租约续期），由 Node 在玩家进场时经 BasePlayer.StartBase 启动。本进程不跑分区场景时返回 (nil, nil)：Player 在
+// 普通场景里照常装载，没有这个心跳。
+func RegisterBaseBeat(host *heartbeat.Host, owner cellworld.BasePlayer) (*heartbeat.Reg, error) {
+	node := Node()
+	if node == nil {
+		return nil, nil
+	}
+	return host.Register("cell.base", node.Config().WatchPeriod, func(heartbeat.Beat) error {
+		if n := Node(); n != nil {
+			return n.BaseBeat(owner, time.Now())
+		}
+		return nil
+	})
+}
+
+// CellDao 是承载 cellworld.ActorState 的那组生成读写器：模块自带的 SceneActorDao，以及工程让它走格的实体的 DAO
+// （声明同名同类型的字段即可，例如 game-demo 的 MonsterDao），共用一份映射。
 type CellDao interface {
 	GetCellSpawnGeneration() uint64
 	SetCellSpawnGeneration(uint64)
@@ -160,7 +225,7 @@ func WriteActor(d CellDao, st cellworld.ActorState) {
 	writeDeath(d, st.Death)
 	d.SetCellDeathAcked(st.DeathAcked)
 	d.SetCellDeathNextAt(st.DeathNextAt)
-	writeRecovery(d, st.Recovery)
+	writeRecovery(d.GetCellRecovery(), st.Recovery, d.SetCellRecovery)
 	writeOwner(d, st)
 	d.SetPosX(st.X)
 	d.SetPosY(st.Y)
@@ -231,18 +296,104 @@ func sameHandoff(h *db.CellHandoff, p *cellworld.HandoffState) bool {
 	}
 }
 
-// ReadBase 从 PlayerDao 读出 Player 的分区路由状态。快照位置取 PosX / PosY（实时，随 witness 更新）；HP 与快照版本
-// 取持久的 CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。面板（CellMaxHP /
-// CellAttack / CellPower / CellPanelVer）与 Real 已确认的序号（CellPanelAcked）也持久：序号跨 Base 重启单调。Base 重启后重新装载的
-// Player 不在世界里、实时位置是零（PosX / PosY 不持久）：这时快照位置取持久的 SavedPosX / SavedPosY——条件是它记在
-// 这个分区场景之下（SavedSceneID == sceneID，sceneID 是本进程的分区场景 Scene ID），否则留零，Enter 取 spawn。
-func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
+// BaseDao 是 Player 承载 cellworld.BaseState 的那组生成读写器。字段由工程在 PlayerDao 里声明（同名同类型；README 列了
+// 全表与各自的持久 / 同步选项）：
+//   - PosX / PosY 是实时位置（不持久，随 witness 更新）；SavedSceneID / SavedPosX / SavedPosY 是持久的快照位置，只在
+//     Base 接受一次回写（快照版本前进）时写；
+//   - CellHP / CellSnapEpoch / CellSnapSeq、面板 CellMaxHP / CellAttack / CellPower / CellPanelVer / CellPanelAcked、
+//     入场计数 CellEntry 持久：Base 重启后 Enter 以它们为准重建 SceneActor，面板序号跨重启单调；
+//   - 恢复快照与死亡回执是模块自己追加的状态 PlayerDao.CellworldBase（GetCellworldBase，安装时写进 PlayerDao）；
+//   - 其余（路由、看门狗计时、面板重发计时、队伍面板计时）不持久。
+//
+// 工程用 Base 的 mirror 借 Player 的同步编码给客户端看 SceneActor 时，CellHP 与面板字段同时标 sync（game-demo 如此）。
+type BaseDao interface {
+	GetPosX() int64
+	SetPosX(int64)
+	GetPosY() int64
+	SetPosY(int64)
+	GetSavedSceneID() int64
+	SetSavedSceneID(int64)
+	GetSavedPosX() int64
+	SetSavedPosX(int64)
+	GetSavedPosY() int64
+	SetSavedPosY(int64)
+	GetCellworldBase() *db.CellworldBaseState
+	GetCellActor() int64
+	SetCellActor(int64)
+	GetCellInWorld() bool
+	SetCellInWorld(bool)
+	GetCellOwner() int32
+	SetCellOwner(int32)
+	GetCellEpoch() uint64
+	SetCellEpoch(uint64)
+	GetCellHP() int64
+	SetCellHP(int64)
+	GetCellSnapEpoch() uint64
+	SetCellSnapEpoch(uint64)
+	GetCellSnapSeq() uint64
+	SetCellSnapSeq(uint64)
+	GetCellIntentSeq() uint64
+	SetCellIntentSeq(uint64)
+	GetCellVX() int64
+	SetCellVX(int64)
+	GetCellVY() int64
+	SetCellVY(int64)
+	GetCellAttackSeq() uint64
+	SetCellAttackSeq(uint64)
+	GetCellViewAt() int64
+	SetCellViewAt(int64)
+	GetCellEnterAt() int64
+	SetCellEnterAt(int64)
+	GetCellLeaseAt() int64
+	SetCellLeaseAt(int64)
+	GetCellHint() int32
+	SetCellHint(int32)
+	GetCellLostEpoch() uint64
+	SetCellLostEpoch(uint64)
+	GetCellLostAt() int64
+	SetCellLostAt(int64)
+	GetCellShown() bool
+	SetCellShown(bool)
+	GetCellEntry() uint64
+	SetCellEntry(uint64)
+	GetCellMaxHP() int64
+	SetCellMaxHP(int64)
+	GetCellAttack() int64
+	SetCellAttack(int64)
+	GetCellPower() int64
+	SetCellPower(int64)
+	GetCellPanelVer() uint64
+	SetCellPanelVer(uint64)
+	GetCellPanelAcked() uint64
+	SetCellPanelAcked(uint64)
+	GetCellPanelSentAt() int64
+	SetCellPanelSentAt(int64)
+	GetCellPanelSince() int64
+	SetCellPanelSince(int64)
+	GetCellPanelUnknown() bool
+	SetCellPanelUnknown(bool)
+	GetCellGroupSentAt() int64
+	SetCellGroupSentAt(int64)
+	GetCellGroupSyncAt() int64
+	SetCellGroupSyncAt(int64)
+	GetCellGroupViewID() int64
+	SetCellGroupViewID(int64)
+	GetCellGroupViewVer() uint64
+	SetCellGroupViewVer(uint64)
+}
+
+// ReadBase 从 Player 的 DAO 读出分区路由状态。快照位置取 PosX / PosY（实时，随 witness 更新）；HP 与快照版本取持久的
+// CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。面板与 Real 已确认的序号
+// （CellPanelAcked）也持久：序号跨 Base 重启单调。Base 重启后重新装载的 Player 不在世界里、实时位置是零（PosX / PosY
+// 不持久）：这时快照位置取持久的 SavedPosX / SavedPosY——条件是它记在这个分区场景之下（SavedSceneID == sceneID，
+// sceneID 是本进程的分区场景 Scene ID），否则留零，Enter 取出生点。
+func ReadBase(d BaseDao, sceneID int64) cellworld.BaseState {
 	x, y := d.GetPosX(), d.GetPosY()
 	if !d.GetCellInWorld() && x == 0 && y == 0 && sceneID != 0 && d.GetSavedSceneID() == sceneID {
 		x, y = d.GetSavedPosX(), d.GetSavedPosY()
 	}
 	return cellworld.BaseState{
-		Recovery: readRecovery(d.GetCellRecovery()),
+		Recovery: readRecovery(d.GetCellworldBase().GetRecovery()),
 		Actor:    d.GetCellActor(), InWorld: d.GetCellInWorld(),
 		Cell: d.GetCellOwner(), Epoch: d.GetCellEpoch(),
 		X: x, Y: y, HP: int32(d.GetCellHP()),
@@ -262,11 +413,12 @@ func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
 	}
 }
 
-// WriteBase 把 st 写进 PlayerDao（生成 setter：回滚即还原；持久字段随这笔事务进 WAL）。快照版本前进（Base 接受了
-// 一次回写）时，同一笔事务里把位置写进持久的 SavedPosX / SavedPosY / SavedSceneID：回写是“固定时机”，witness
-// 不是——实时位置只写不持久的 PosX / PosY。sceneID 是分区场景的 Scene ID。
-func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
-	writeRecovery(d, st.Recovery)
+// WriteBase 把 st 写进 Player 的 DAO（生成 setter：回滚即还原；持久字段随这笔事务进 WAL）。快照版本前进（Base 接受了
+// 一次回写）时，同一笔事务里把位置写进持久的 SavedPosX / SavedPosY / SavedSceneID：回写是“固定时机”，witness 不是——
+// 实时位置只写不持久的 PosX / PosY。sceneID 是分区场景的 Scene ID。
+func WriteBase(d BaseDao, st cellworld.BaseState, sceneID int64) {
+	state := d.GetCellworldBase()
+	writeRecovery(state.GetRecovery(), st.Recovery, state.SetRecovery)
 	snapshot := st.SnapVer != (cellworld.Version{Epoch: d.GetCellSnapEpoch(), Seq: d.GetCellSnapSeq()})
 	d.SetCellActor(st.Actor)
 	d.SetCellInWorld(st.InWorld)
@@ -306,6 +458,23 @@ func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
 		d.SetSavedPosX(st.X)
 		d.SetSavedPosY(st.Y)
 	}
+}
+
+// DeathReceipt 是 Player 对 target 记下的最后一条命（cellworld.BasePlayer.CellDeathReceipt）；s 是 PlayerDao.CellworldBase。
+// 回执与 SettleDeath 的奖励在同一笔 Player strict 事务里提交：重复投递的死亡事实只结算一次。
+func DeathReceipt(s *db.CellworldBaseState, target int64) uint64 {
+	v, _ := s.GetDeathReceipts(target)
+	return v
+}
+
+// RecordDeathReceipt 记下 target 的这一条命（cellworld.BasePlayer.RecordCellDeathReceipt）。表里没有 target 且已有
+// limit 条时拒绝：Node 不确认这条死亡，等容量（见 CellWorld README“死亡与复活”）。
+func RecordDeathReceipt(s *db.CellworldBaseState, target int64, life uint64, limit int) error {
+	if _, known := s.GetDeathReceipts(target); !known && s.DeathReceiptsLen() >= limit {
+		return fmt.Errorf("cellworld: death receipt capacity exhausted")
+	}
+	s.SetDeathReceiptsKey(target, life)
+	return nil
 }
 
 func readOwner(v *db.CellOwnership) (cellworld.OwnerGrant, *cellworld.PendingOwner, bool) {
@@ -356,11 +525,10 @@ func readRecovery(d *db.CellRecovery) cellworld.RecoveryState {
 	})
 	return s
 }
-func writeRecovery(d interface {
-	GetCellRecovery() *db.CellRecovery
-	SetCellRecovery(*db.CellRecovery)
-}, s cellworld.RecoveryState) {
-	old := readRecovery(d.GetCellRecovery())
+
+// writeRecovery 只在内容变化时整份替换恢复快照（写进 DAO 的值不原地改：回滚的逆操作引用旧值）。
+func writeRecovery(stored *db.CellRecovery, s cellworld.RecoveryState, set func(*db.CellRecovery)) {
+	old := readRecovery(stored)
 	if old.Revision == s.Revision && slices.Equal(old.Effects, s.Effects) && slices.Equal(old.Cooldowns, s.Cooldowns) {
 		return
 	}
@@ -380,7 +548,7 @@ func writeRecovery(d interface {
 		cooldowns[i].SetReadyAt(c.ReadyAt)
 	}
 	value.SetCooldowns(cooldowns)
-	d.SetCellRecovery(value)
+	set(value)
 }
 
 func readDeath(d *db.CellDeath) *cellworld.DeathFact {

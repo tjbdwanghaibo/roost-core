@@ -1,11 +1,9 @@
 package dbdef
 
-//roost:dao coll=player db=main dbscope=sid schema=5
+//roost:dao coll=player db=main dbscope=sid schema=6
 type PlayerDao struct {
-	// Buff / 冷却的恢复快照：玩家持久，空间代理临时；不传内部账本给客户端。
-	// 奖励与生命代次去重水位必须在同一 strict 事务持久化。
-	CellDeathReceipts map[int64]uint64 `dao:"nosync" store:"cell_death_receipts"`
-	CellRecovery      *CellRecovery    `dao:"nosync" store:"cell_recovery"`
+	// 分区场景的恢复快照（Buff / 冷却）与死亡回执不在这里：它们是 cellworld 模块的状态 PlayerDao.CellworldBase（db/def/cellworld.go，
+	// 存储键 cellworld_base），安装模块时追加在这个结构体末尾；与奖励在同一 strict 事务持久化。
 	// 名字、等级、经验不在这里：它们是 profile 模块的状态，安装时追加在这个结构体末尾
 	// （Profile：名字与等级，别的玩家也可以看；ProfilePrivate：等级内经验，只给本人；定义在 db/def/profile.go）。
 	//

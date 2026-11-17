@@ -44,7 +44,8 @@ import (
 )
 
 const (
-	kindSceneActor = entity.EntityKind(9)
+	// SceneActor 是 cellworld 模块自带的实体，号由 game-demo 生成时的安装器分配（Player 1、World 2、Scene 3、Monster 4 之后，2026-11-17 起是 5）。
+	kindSceneActor = entity.EntityKind(5)
 	kindMonster    = entity.EntityKind(4)
 	// boundary 是两个格的分界线 x（cell_size 3000，2 × 1）。
 	boundary = 3000

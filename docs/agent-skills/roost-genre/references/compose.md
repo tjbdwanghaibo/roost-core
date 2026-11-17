@@ -4,7 +4,7 @@
 
 Markdown 链接相对本文件所在目录；反引号里写的路径（`modules/<name>/README.md` 等）相对 roost-core 根目录。命令以目标检出为准：`roost module` 在 v1.43.0 之后的 main 上才有（v1.43.0 及更早的 tag 没有），更早的 tag 没有这条路，只能手写（第 4 步）。
 
-固定分区的大世界（多个进程各管一块地图、玩家跨格移动与战斗）装 `cellworld` 模块（[模块说明](../../../../modules/cellworld/README.md)，v1.47.0 起）：它只装配进程，业务的 Player / 场景角色 / 怪物适配照 game-demo 的 `game/partition` 写；千人容量与 50ms 同步目标在本机没有通过，Linux / 跨机要在目标环境实跑，这两点写进说明文档的限制。
+固定分区的大世界（多个进程各管一块地图、玩家跨格移动与战斗）装 `cellworld` 模块（[模块说明](../../../../modules/cellworld/README.md)，v1.47.0 起）：它装配进程，并带来玩家在格上的 SceneActor 实体、分区状态的映射（`game/modules/cellworldhost` 的 ReadActor / WriteActor / ReadBase / WriteBase）与 Player 上的恢复快照 / 死亡回执状态；Player 的 Base 字段、场景与怪物的接线照 game-demo 的 `game/entities/player/cell_base.go`、`internal/service/game/partition.go` 写；千人容量与 50ms 同步目标在本机没有通过，Linux / 跨机要在目标环境实跑，这两点写进说明文档的限制。
 
 ## 0. 四条规则（总边界，每一步都受它们约束）
 

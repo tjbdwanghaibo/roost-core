@@ -1,4 +1,4 @@
-package partition_test
+package player_test
 
 import (
 	"context"
@@ -11,104 +11,23 @@ import (
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/partition"
+	"{{MODULE}}/game/modules/cellworldhost"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 )
 
-// 两个 DAO 都承载 cellworld.ActorState：同一份映射。
-var (
-	_ partition.CellDao = (*db.SceneActorDao)(nil)
-	_ partition.CellDao = (*db.MonsterDao)(nil)
-)
+// Player 作为分区场景的 Base：映射是 cellworld 模块的（game/modules/cellworldhost 的 ReadBase / WriteBase，模块场景
+// 用替身覆盖映射本身），这里核对 demo 的 PlayerDao 接上之后的事：字段经生成 setter 回滚、持久字段经正式编码与文件 WAL
+// 恢复。
+
+// demo 的 PlayerDao 声明了模块要的全部 Base 字段（恢复快照与死亡回执是模块追加的 CellworldBase）。
+var _ cellworldhost.BaseDao = (*db.PlayerDao)(nil)
 
 type nullCommitter struct{}
 
 func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
-
-func sampleState(id int64, kind cellworld.EntityKind, seq uint64) cellworld.ActorState {
-	st := cellworld.ActorState{
-		EntityState: cellworld.EntityState{ID: id, Kind: kind, Base: 1000, Life: 17, X: 2990, Y: 1500, VX: 120, VY: -30, HP: 70,
-			Ver: cellworld.Version{Epoch: 3, Seq: seq}, Idle: kind == cellworld.KindNPC,
-			Panel: cellworld.Panel{MaxHP: 120, Attack: 14, Power: 40, Ver: seq}},
-		Recovery: cellworld.RecoveryState{Revision: 5, Effects: []cellworld.TimedEffect{{Key: "attack", Stacks: 2, Value: 7, ExpiresAt: 2000000000000}}, Cooldowns: []cellworld.Cooldown{{Key: "dash", ReadyAt: 2000000000001}}},
-		Role:     cellworld.RoleFrozen, LastInput: 9,
-		Grant:   cellworld.OwnerGrant{ID: "owner", Epoch: 2, Process: cellworld.OwnerProcess{SID: 101, Incarnation: "startup"}},
-		Pending: &cellworld.PendingOwner{Token: "operation", Transfer: cellworld.OwnerTransfer{ID: "transfer", Target: 102, Epoch: 3}}, CloseEntry: true,
-		Applied:    []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1, ID: "first"}, At: 100}, {Hit: cellworld.HitID{Attacker: 78, Seq: 4, ID: "second"}, At: 200}},
-		Handoff:    &cellworld.HandoffState{ID: "transfer", Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
-		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7, Entry: 8, FracX: 640, FracY: -250,
-	}
-	st.SpawnGeneration = 4
-	deathState := st.EntityState
-	deathState.HP = 0
-	st.Death = &cellworld.DeathFact{ID: "death", Target: id, Life: 17, Hit: cellworld.HitID{Attacker: 77, Seq: 3, ID: "hit"}, RewardBase: 1000, ReplySID: 101, Damage: 70, At: 1700000000000, State: deathState}
-	st.DeathNextAt = 41
-	st.DeathAcked = true
-	return st
-}
-
-// The mapping is the whole state: what goes in comes out, for both entities' DAOs.
-func TestCellStateRoundTripsThroughBothDAOs(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		dao  partition.CellDao
-		kind cellworld.EntityKind
-	}{
-		{"scene actor", db.NewSceneActorDao(), cellworld.KindPlayer},
-		{"monster", db.NewMonsterDao(), cellworld.KindNPC},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			want := sampleState(42, tc.kind, 10)
-			partition.WriteActor(tc.dao, want)
-			if got := partition.ReadActor(tc.dao, 42, tc.kind); !reflect.DeepEqual(got, want) {
-				t.Fatalf("read back\n got %+v\nwant %+v", got, want)
-			}
-			// What is read is a copy: changing it does not change the DAO (cellworld's value semantics).
-			got := partition.ReadActor(tc.dao, 42, tc.kind)
-			got.Applied[0].At, got.Handoff.Epoch = 999, 999
-			got.Pending.Token = "changed"
-			got.Recovery.Effects[0].Stacks = 99
-			got.Recovery.Cooldowns[0].ReadyAt = 99
-			if again := partition.ReadActor(tc.dao, 42, tc.kind); !reflect.DeepEqual(again, want) {
-				t.Fatalf("a read copy reached the DAO: %+v", again)
-			}
-			// Back to Real: the handoff and the dedup list go.
-			real := want
-			real.Role, real.Handoff, real.Applied = cellworld.RoleReal, nil, nil
-			partition.WriteActor(tc.dao, real)
-			if got := partition.ReadActor(tc.dao, 42, tc.kind); got.Handoff != nil || got.Applied != nil || got.Role != cellworld.RoleReal {
-				t.Fatalf("after clearing: %+v", got)
-			}
-		})
-	}
-}
-
-// A beat or handler that fails restores the cell state through the generated setters' undo (D8 = A): the whole point
-// of keeping it in a generated DAO.
-func TestCellStateRollsBackWithTheTransaction(t *testing.T) {
-	dao := db.NewSceneActorDao()
-	before := sampleState(42, cellworld.KindPlayer, 10)
-	partition.WriteActor(dao, before)
-	failure := errors.New("install failed after the write")
-	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "cell_state_rollback", func() (any, error) {
-		next := sampleState(42, cellworld.KindPlayer, 11)
-		next.X, next.HP, next.Role = 3100, 50, cellworld.RoleReal
-		next.FracX, next.FracY = -999, 1
-		next.Applied = append(next.Applied, cellworld.AppliedHit{Hit: cellworld.HitID{Attacker: 79, Seq: 1}, At: 500})
-		next.Handoff = nil
-		partition.WriteActor(dao, next)
-		return nil, failure
-	})
-	if !errors.Is(err, failure) {
-		t.Fatalf("transaction: %v", err)
-	}
-	if got := partition.ReadActor(dao, 42, cellworld.KindPlayer); !reflect.DeepEqual(got, before) {
-		t.Fatalf("not restored\n got %+v\nwant %+v", got, before)
-	}
-}
 
 // The Player's routing state: the live position is the non-persisted PosX / PosY, and the persisted snapshot
 // position (SavedPosX / SavedPosY / SavedSceneID) is written only when an accepted write-back advances the snapshot
@@ -127,7 +46,7 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 	write := func(st cellworld.BaseState) {
 		t.Helper()
 		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "base_state", func() (any, error) {
-			partition.WriteBase(dao, st, sceneID)
+			cellworldhost.WriteBase(dao, st, sceneID)
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -137,7 +56,7 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 2}, PanelAcked: 1, PanelSentAt: 50, PanelSince: 40, PanelUnknown: true,
 		GroupSentAt: 60, GroupSyncAt: 70, GroupViewID: 9001, GroupViewVer: 3, Entry: 80}
 	write(st)
-	if got := partition.ReadBase(dao, sceneID); !reflect.DeepEqual(got, st) {
+	if got := cellworldhost.ReadBase(dao, sceneID); !reflect.DeepEqual(got, st) {
 		t.Fatalf("read back\n got %+v\nwant %+v", got, st)
 	}
 	if dao.GetSavedSceneID() != 0 || dao.GetSavedPosX() != 0 {
@@ -159,7 +78,7 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 	if err := reloaded.RestorePersisted(dao.MarshalPersist(dataengine.AllFields), db.PlayerDaoSchemaVersion, 1); err != nil {
 		t.Fatal(err)
 	}
-	if got := partition.ReadBase(reloaded, sceneID).Entry; got != st.Entry {
+	if got := cellworldhost.ReadBase(reloaded, sceneID).Entry; got != st.Entry {
 		t.Fatalf("persisted entry = %d, want %d", got, st.Entry)
 	}
 }
@@ -188,10 +107,10 @@ func TestReloadedPlayerEntersAtItsSavedPosition(t *testing.T) {
 		}
 		return dao
 	}
-	if got := partition.ReadBase(reloaded(sceneID), sceneID); got.InWorld || got.X != 1200 || got.Y != 1450 || got.HP != 70 {
+	if got := cellworldhost.ReadBase(reloaded(sceneID), sceneID); got.InWorld || got.X != 1200 || got.Y != 1450 || got.HP != 70 {
 		t.Fatalf("a reloaded player reads %+v, want its saved position (1200, 1450) and hp 70", got)
 	}
-	if got := partition.ReadBase(reloaded(999), sceneID); got.X != 0 || got.Y != 0 {
+	if got := cellworldhost.ReadBase(reloaded(999), sceneID); got.X != 0 || got.Y != 0 {
 		t.Fatalf("a position saved under another scene was used: %+v", got)
 	}
 }
@@ -210,23 +129,23 @@ func TestPendingPanelRollsBackWithTheTransaction(t *testing.T) {
 	before := cellworld.BaseState{Actor: 9, InWorld: true, Cell: 1001, Epoch: 1, HP: 100,
 		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 1}, PanelAcked: 1}
 	if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "enter", func() (any, error) {
-		partition.WriteBase(dao, before, sceneID)
+		cellworldhost.WriteBase(dao, before, sceneID)
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("a later step of the level-up failed")
 	_, err = nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "level_up", func() (any, error) {
-		next := partition.ReadBase(dao, sceneID)
+		next := cellworldhost.ReadBase(dao, sceneID)
 		next.Panel = cellworld.Panel{MaxHP: 120, Attack: 14, Power: 40, Ver: 2}
 		next.PanelSince = 77
-		partition.WriteBase(dao, next, sceneID)
+		cellworldhost.WriteBase(dao, next, sceneID)
 		return nil, failure
 	})
 	if !errors.Is(err, failure) {
 		t.Fatalf("transaction: %v", err)
 	}
-	if got := partition.ReadBase(dao, sceneID); got.Panel != before.Panel || got.PanelAcked != 1 || got.PanelSince != 0 {
+	if got := cellworldhost.ReadBase(dao, sceneID); got.Panel != before.Panel || got.PanelAcked != 1 || got.PanelSince != 0 {
 		t.Fatalf("pending panel not rolled back: %+v acked %d since %d, want %+v", got.Panel, got.PanelAcked, got.PanelSince, before.Panel)
 	}
 	if dao.GetCellPanelVer() != 1 || dao.GetCellMaxHP() != 110 {
@@ -257,9 +176,11 @@ func TestCellDeathRewardAndRecoverySurviveFileWAL(t *testing.T) {
 	dao.SetId(id)
 	acknowledged := false
 	_, err = nest.RunIsolatedTransaction(ctx, projector, "cellworld_death", func() (any, error) {
-		dao.SetCellDeathReceipts(781, 9)
+		if err := cellworldhost.RecordDeathReceipt(dao.GetCellworldBase(), 781, 9, 8); err != nil {
+			return nil, err
+		}
 		dao.GetWallet().SetCoins(17)
-		partition.WriteBase(dao, cellworld.BaseState{Entry: 3, HP: 0, Recovery: cellworld.RecoveryState{Revision: 1, Effects: []cellworld.TimedEffect{{Key: "shield", Stacks: 2, Value: 7, ExpiresAt: 2000000000000}}, Cooldowns: []cellworld.Cooldown{{Key: "dash", ReadyAt: 2000000000001}}}}, 123)
+		cellworldhost.WriteBase(dao, cellworld.BaseState{Entry: 3, HP: 0, Recovery: cellworld.RecoveryState{Revision: 1, Effects: []cellworld.TimedEffect{{Key: "shield", Stacks: 2, Value: 7, ExpiresAt: 2000000000000}}, Cooldowns: []cellworld.Cooldown{{Key: "dash", ReadyAt: 2000000000001}}}}, 123)
 		nest.CurrentRollbackTx().AfterCommit(func() { acknowledged = wal.Stats().Appended == 1 && wal.Stats().Syncs > 0 })
 		return nil, nil
 	})
@@ -292,8 +213,8 @@ func TestCellDeathRewardAndRecoverySurviveFileWAL(t *testing.T) {
 		if err := restored.RestorePersisted(mutation.Data, mutation.Schema, mutation.NextVersion); err != nil {
 			return err
 		}
-		life, ok := restored.GetCellDeathReceipts(781)
-		recovered := partition.ReadBase(restored, 123)
+		life, ok := restored.GetCellworldBase().GetDeathReceipts(781)
+		recovered := cellworldhost.ReadBase(restored, 123)
 		if !ok || life != 9 || restored.GetWallet().GetCoins() != 17 || recovered.Entry != 3 || len(recovered.Recovery.Effects) != 1 || len(recovered.Recovery.Cooldowns) != 1 {
 			return fmt.Errorf("incomplete recovered death transaction")
 		}

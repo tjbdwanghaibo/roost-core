@@ -109,16 +109,16 @@ Ghost / Witness 传全量或字段 mask 增量，零值变化也可表达；接�
 
 ## 正式接入
 
-优先使用 `roost module add cellworld`，装配契约见 [模块 README](../../modules/cellworld/README.md)。game-demo 的关键位置：
+优先使用 `roost module add cellworld`，装配契约见 [模块 README](../../modules/cellworld/README.md)。模块带来的与 game-demo 自己的位置：
 
-| 路径 | 职责 |
-| --- | --- |
-| `game/partition` | Entity / DAO 适配、面板与客户端载荷 |
-| `game/entities/player/cell_base.go` | Base 快照、持久入场计数与死亡回执 |
-| `game/modules/cellworldhost` | 通用 Runtime、App / Redis / NATS 装配、稳定出生 ID |
-| `game/managers/cellworld_host.go` | 托管 Node 协程的 manager（D22）：发布 Host，服务心跳装好后 `Runtime.Start` 交给它，停机兜底排空 |
-| `internal/service/game/partition.go` | 心跳、镜像、Scene 与服务生命周期 |
-| `cmd/loadtest` | 正式 Robot 登录、PB 移动请求、EntitySync 解码与统计 |
+| 路径 | 来源 | 职责 |
+| --- | --- | --- |
+| `game/modules/cellworldhost` | 模块 | 通用 Runtime、App / Redis / NATS 装配、稳定出生 ID；Node 安装点、DAO 与 Actor / Base 状态的映射、格心跳登记、死亡回执 |
+| `game/entities/scene_actor`、`db/def/scene_actor.go`、`db/def/cellworld.go` | 模块 | 玩家在格上的 SceneActor 实体与 DAO、分区状态的嵌套类型、Player 上的 `CellworldBase`（恢复快照与死亡回执） |
+| `game/entities/player/cell_base.go` | demo | Player 的 Base 字段声明之上的 BasePlayer 实现、面板（取属性）与队伍副本 |
+| `game/managers/cellworld_host.go` | 模块 | 托管 Node 协程的 manager（D22）：发布 Host，服务心跳装好后 `Runtime.Start` 交给它，停机兜底排空 |
+| `internal/service/game/partition.go` | demo | 心跳、镜像、Scene 与服务生命周期 |
+| `cmd/loadtest` | demo | 正式 Robot 登录、PB 移动请求、EntitySync 解码与统计 |
 
 game-demo 在死亡结算回调中给击杀 NPC 的玩家增加 1 金币，与回执同一笔 strict 事务；示例不规定产品掉落表。
 

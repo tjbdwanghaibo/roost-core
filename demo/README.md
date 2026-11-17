@@ -188,7 +188,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 
 缺省不分区：没有 `scene.partition` 的配置，game 跑普通场景，上面的一切照旧。`scene.partition.enabled: true` 把本进程的场景变成
 分区场景（`gameplay/cellworld`，Cell + Ghost）的一员：sid 在 `owners` 里的进程托管那个格（**Cell**），每个进程都是自己玩家的
-**Base**（Player 不迁移，玩家站在哪个格，那个格的进程上就有他的 SceneActor）。通用装配来自 [cellworld 模块](../modules/cellworld/README.md)；权威、迁移与恢复见
+**Base**（Player 不迁移，玩家站在哪个格，那个格的进程上就有他的 SceneActor）。通用装配、SceneActor 实体、分区状态的映射与 Player 上的恢复快照 / 死亡回执来自 [cellworld 模块](../modules/cellworld/README.md)（demo 先单独装它，见模块 README“复用方式”）；demo 自己写的是 Player 的 Base 字段与面板、走格的怪物、mirror 编码、攻击结论推送、奖励规则与分区地形。权威、迁移与恢复见
 [CellWorld 契约](../gameplay/cellworld/README.md)，已测范围见 [容量与验收](../docs/performance/CELLWORLD.md)。
 
 每个 game 进程读同一份（加到 `configs/service/config.game*.yaml`；声明与校验在 `game/settings/partition.go`）：

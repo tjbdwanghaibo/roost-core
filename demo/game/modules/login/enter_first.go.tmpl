@@ -16,7 +16,7 @@ import (
 // 写的，不在这里；demo 不发初始道具或金币（D26 之后金币来自副本与活动）。
 //
 // 分区场景（scene.partition）不读这里写的位置：分区快照只认记在本分区场景之下的位置（SavedSceneID，见
-// game/partition 的 ReadBase），新玩家的 SavedSceneID 是 0，照旧从格的出生点进入。
+// game/modules/cellworldhost 的 ReadBase），新玩家的 SavedSceneID 是 0，照旧从格的出生点进入。
 //
 // 约定同模块：只改当前玩家的 DAO，不调服务、不发消息；返回错误整笔回滚，下次进入再执行。
 func firstEnter(host view.PlayerEntity, nowUnixMilli int64) error {

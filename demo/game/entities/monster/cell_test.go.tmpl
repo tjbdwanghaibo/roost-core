@@ -1,0 +1,58 @@
+package monster_test
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/modules/cellworldhost"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// 分区场景里的怪物走格（D5 = A）：MonsterDao 声明了与模块的 SceneActorDao 同名的 Cell* 字段，同一份映射
+// （cellworldhost.ReadActor / WriteActor，模块场景覆盖映射本身）。这里核对 demo 的 MonsterDao 接上之后整份状态读得回来、
+// 回滚整份还原。
+var _ cellworldhost.CellDao = (*db.MonsterDao)(nil)
+
+type nullCommitter struct{}
+
+func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+func cellMonster(seq uint64) cellworld.ActorState {
+	st := cellworld.ActorState{
+		EntityState: cellworld.EntityState{ID: 42, Kind: cellworld.KindNPC, Life: 3, X: 2990, Y: 1500, VX: 120, VY: -30, HP: 70,
+			Ver: cellworld.Version{Epoch: 3, Seq: seq}, Idle: true},
+		Recovery: cellworld.RecoveryState{Revision: 5, Cooldowns: []cellworld.Cooldown{{Key: "bite", ReadyAt: 2000000000001}}},
+		Role:     cellworld.RoleFrozen,
+		Grant:    cellworld.OwnerGrant{ID: "owner", Epoch: 2, Process: cellworld.OwnerProcess{SID: 101, Incarnation: "startup"}},
+		Applied:  []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1, ID: "first"}, At: 100}},
+		Handoff:  &cellworld.HandoffState{ID: "transfer", Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
+		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7, FracX: 640, FracY: -250, SpawnGeneration: 4,
+	}
+	return st
+}
+
+func TestMonsterCellStateRoundTripsAndRollsBack(t *testing.T) {
+	dao := db.NewMonsterDao()
+	before := cellMonster(10)
+	cellworldhost.WriteActor(dao, before)
+	if got := cellworldhost.ReadActor(dao, 42, cellworld.KindNPC); !reflect.DeepEqual(got, before) {
+		t.Fatalf("read back\n got %+v\nwant %+v", got, before)
+	}
+	failure := errors.New("the beat failed after the write")
+	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "monster_cell_rollback", func() (any, error) {
+		next := cellMonster(11)
+		next.X, next.HP, next.Role, next.Handoff, next.Applied = 3100, 50, cellworld.RoleReal, nil, nil
+		cellworldhost.WriteActor(dao, next)
+		return nil, failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("transaction: %v", err)
+	}
+	if got := cellworldhost.ReadActor(dao, 42, cellworld.KindNPC); !reflect.DeepEqual(got, before) {
+		t.Fatalf("not restored\n got %+v\nwant %+v", got, before)
+	}
+}

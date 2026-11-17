@@ -8,7 +8,7 @@ import (
 	db "{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
 	"{{MODULE}}/game/flags"
-	"{{MODULE}}/game/partition"
+	"{{MODULE}}/game/modules/cellworldhost"
 	gamescene "{{MODULE}}/game/scene"
 	sceneruntime "{{MODULE}}/game/scene/runtime"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -326,7 +326,7 @@ func (s *Scene) HostCell(period time.Duration) error {
 		return fmt.Errorf("scene %d: not initialized", s.ID())
 	}
 	reg, err := s.host.Register("scene.cell", period, func(heartbeat.Beat) error {
-		if node := partition.Node(); node != nil {
+		if node := cellworldhost.Node(); node != nil {
 			return node.RegionBeat(s, time.Now())
 		}
 		return nil

@@ -593,7 +593,7 @@ func TestTerrainPartitionDiscardWithdrawsTheOverlay(t *testing.T) {
 //
 // 每个格进程除了上面的地形部分（Map、改块事务、partitionTerrain 的副本），再起一个 cellworld Node 积分 NPC，地面钩子就是
 // 生产接线用的 partitionSurface(Map, grid)。Node 用自己的 Nest 引擎、心跳驱动与替身 Scene / NPC 实体：demo 的 SceneActor /
-// Monster 经进程级的 partition.Node() 找 Node，一个测试进程里装不下两个格；替身的状态写法与它们相同（事务内登记逆操作）。
+// Monster 经进程级的 cellworldhost.Node() 找 Node，一个测试进程里装不下两个格；替身的状态写法与它们相同（事务内登记逆操作）。
 // 格之间的 cellworld 消息走进程内的 walkTransport。
 
 const (

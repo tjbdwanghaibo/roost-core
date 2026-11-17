@@ -1292,7 +1292,7 @@ func (m *Map) Close() error {
 	return m.pack.Close()
 }
 
-// active 是本进程当前的 Map，给改块 handler 用（handler 是包级函数，拿不到服务对象；与 game/partition 的 Node 同一做法）。
+// active 是本进程当前的 Map，给改块 handler 用（handler 是包级函数，拿不到服务对象；与 cellworldhost.Node 同一做法）。
 var active atomic.Pointer[Map]
 
 // Install 发布本进程的 Map；Load 完成之后、服务开始接请求之前调用。

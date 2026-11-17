@@ -1,0 +1,404 @@
+package cellworldhost_test
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	"{{MODULE}}/game/modules/cellworldhost"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+)
+
+// 模块自带的 SceneActorDao 承载 cellworld.ActorState：工程让自己的实体走格时照它声明同名字段。
+var _ cellworldhost.CellDao = (*db.SceneActorDao)(nil)
+
+type nullCommitter struct{}
+
+func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+func sampleActor(id int64, kind cellworld.EntityKind, seq uint64) cellworld.ActorState {
+	st := cellworld.ActorState{
+		EntityState: cellworld.EntityState{ID: id, Kind: kind, Base: 1000, Life: 17, X: 2990, Y: 1500, VX: 120, VY: -30, HP: 70,
+			Ver: cellworld.Version{Epoch: 3, Seq: seq}, Idle: kind == cellworld.KindNPC,
+			Panel: cellworld.Panel{MaxHP: 120, Attack: 14, Power: 40, Ver: seq}},
+		Recovery: cellworld.RecoveryState{Revision: 5, Effects: []cellworld.TimedEffect{{Key: "attack", Stacks: 2, Value: 7, ExpiresAt: 2000000000000}}, Cooldowns: []cellworld.Cooldown{{Key: "dash", ReadyAt: 2000000000001}}},
+		Role:     cellworld.RoleFrozen, LastInput: 9,
+		Grant:   cellworld.OwnerGrant{ID: "owner", Epoch: 2, Process: cellworld.OwnerProcess{SID: 101, Incarnation: "startup"}},
+		Pending: &cellworld.PendingOwner{Token: "operation", Transfer: cellworld.OwnerTransfer{ID: "transfer", Target: 102, Epoch: 3}}, CloseEntry: true,
+		Applied:    []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1, ID: "first"}, At: 100}, {Hit: cellworld.HitID{Attacker: 78, Seq: 4, ID: "second"}, At: 200}},
+		Handoff:    &cellworld.HandoffState{ID: "transfer", Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
+		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7, Entry: 8, FracX: 640, FracY: -250,
+	}
+	st.SpawnGeneration = 4
+	deathState := st.EntityState
+	deathState.HP = 0
+	st.Death = &cellworld.DeathFact{ID: "death", Target: id, Life: 17, Hit: cellworld.HitID{Attacker: 77, Seq: 3, ID: "hit"}, RewardBase: 1000, ReplySID: 101, Damage: 70, At: 1700000000000, State: deathState}
+	st.DeathNextAt = 41
+	st.DeathAcked = true
+	return st
+}
+
+// 映射就是整份状态：写进去的每个字段都读得回来；读出的是副本，改它不碰 DAO；回到 Real 时交接与去重表清掉。
+func TestCellworldActorStateRoundTripsThroughTheSceneActorDAO(t *testing.T) {
+	for _, kind := range []cellworld.EntityKind{cellworld.KindPlayer, cellworld.KindNPC} {
+		dao := db.NewSceneActorDao()
+		want := sampleActor(42, kind, 10)
+		cellworldhost.WriteActor(dao, want)
+		if got := cellworldhost.ReadActor(dao, 42, kind); !reflect.DeepEqual(got, want) {
+			t.Fatalf("kind %d read back\n got %+v\nwant %+v", kind, got, want)
+		}
+		got := cellworldhost.ReadActor(dao, 42, kind)
+		got.Applied[0].At, got.Handoff.Epoch = 999, 999
+		got.Pending.Token = "changed"
+		got.Recovery.Effects[0].Stacks = 99
+		got.Recovery.Cooldowns[0].ReadyAt = 99
+		got.Death.Damage = 1
+		if again := cellworldhost.ReadActor(dao, 42, kind); !reflect.DeepEqual(again, want) {
+			t.Fatalf("kind %d: a read copy reached the DAO: %+v", kind, again)
+		}
+		real := want
+		real.Role, real.Handoff, real.Applied, real.Death, real.Pending = cellworld.RoleReal, nil, nil, nil, nil
+		cellworldhost.WriteActor(dao, real)
+		if got := cellworldhost.ReadActor(dao, 42, kind); !reflect.DeepEqual(got, real) {
+			t.Fatalf("kind %d after clearing\n got %+v\nwant %+v", kind, got, real)
+		}
+	}
+}
+
+// 心跳或 handler 的事务失败时，格内状态经生成 setter 的逆操作整份还原：状态放在生成 DAO 里就是为了这个。
+func TestCellworldActorStateRollsBackWithTheTransaction(t *testing.T) {
+	dao := db.NewSceneActorDao()
+	before := sampleActor(42, cellworld.KindPlayer, 10)
+	cellworldhost.WriteActor(dao, before)
+	failure := errors.New("install failed after the write")
+	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "cell_state_rollback", func() (any, error) {
+		next := sampleActor(42, cellworld.KindPlayer, 11)
+		next.X, next.HP, next.Role = 3100, 50, cellworld.RoleReal
+		next.FracX, next.FracY = -999, 1
+		next.Applied = append(next.Applied, cellworld.AppliedHit{Hit: cellworld.HitID{Attacker: 79, Seq: 1}, At: 500})
+		next.Handoff, next.Death = nil, nil
+		next.Recovery.Revision = 6
+		cellworldhost.WriteActor(dao, next)
+		return nil, failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("transaction: %v", err)
+	}
+	if got := cellworldhost.ReadActor(dao, 42, cellworld.KindPlayer); !reflect.DeepEqual(got, before) {
+		t.Fatalf("not restored\n got %+v\nwant %+v", got, before)
+	}
+}
+
+// Base 一侧：实时位置写不持久的 PosX / PosY；持久的快照位置（SavedPosX / SavedPosY / SavedSceneID）只在 Base 接受一次
+// 回写、快照版本前进时写——固定时机，不是每份 witness。
+func TestCellworldBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
+	const sceneID = 12345
+	dao := &baseDao{}
+	st := cellworld.BaseState{Actor: 7, InWorld: true, Cell: 1001, Epoch: 2, X: 2900, Y: 1500, HP: 100, IntentSeq: 3, VX: 100, VY: -4, AttackSeq: 4,
+		LastViewAt: 11, LastEnterAt: 12, LastLeaseAt: 13, EnterHint: 1002, LostEpoch: 1, LostAt: 14, Shown: true,
+		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 2}, PanelAcked: 1, PanelSentAt: 50, PanelSince: 40, PanelUnknown: true,
+		GroupSentAt: 60, GroupSyncAt: 70, GroupViewID: 9001, GroupViewVer: 3, Entry: 80,
+		Recovery: cellworld.RecoveryState{Revision: 2, Effects: []cellworld.TimedEffect{{Key: "shield", Stacks: 1, Value: 3, ExpiresAt: 9}}}}
+	cellworldhost.WriteBase(dao, st, sceneID)
+	if got := cellworldhost.ReadBase(dao, sceneID); !reflect.DeepEqual(got, st) {
+		t.Fatalf("read back\n got %+v\nwant %+v", got, st)
+	}
+	if dao.savedScene != 0 || dao.savedX != 0 {
+		t.Fatalf("a witness wrote the stored position: scene %d x %d", dao.savedScene, dao.savedX)
+	}
+	st.X, st.Y, st.HP, st.SnapVer = 3010, 1520, 80, cellworld.Version{Epoch: 2, Seq: 40}
+	cellworldhost.WriteBase(dao, st, sceneID)
+	if dao.savedScene != sceneID || dao.savedX != 3010 || dao.savedY != 1520 || dao.hp != 80 || dao.snapSeq != 40 {
+		t.Fatalf("a write-back did not reach the stored fields: %+v", *dao)
+	}
+	st.X = 3050
+	cellworldhost.WriteBase(dao, st, sceneID)
+	if dao.savedX != 3010 {
+		t.Fatalf("a witness after the write-back moved the stored position to %d", dao.savedX)
+	}
+}
+
+// Base 重启后重新装载的 Player 不在世界里、实时位置是零：进场位置取持久的快照位置，只有记在这个分区场景之下才算。
+func TestCellworldReloadedBaseEntersAtItsSavedPosition(t *testing.T) {
+	const sceneID = 12345
+	reloaded := func(savedScene int64) *baseDao {
+		return &baseDao{savedScene: savedScene, savedX: 1200, savedY: 1450, hp: 70}
+	}
+	if got := cellworldhost.ReadBase(reloaded(sceneID), sceneID); got.InWorld || got.X != 1200 || got.Y != 1450 || got.HP != 70 {
+		t.Fatalf("a reloaded player reads %+v, want its saved position (1200, 1450) and hp 70", got)
+	}
+	if got := cellworldhost.ReadBase(reloaded(999), sceneID); got.X != 0 || got.Y != 0 {
+		t.Fatalf("a position saved under another scene was used: %+v", got)
+	}
+	inWorld := reloaded(sceneID)
+	inWorld.inWorld, inWorld.x, inWorld.y = true, 5, 6
+	if got := cellworldhost.ReadBase(inWorld, sceneID); got.X != 5 || got.Y != 6 {
+		t.Fatalf("a player in the world read its saved position instead of the live one: %+v", got)
+	}
+}
+
+// 死亡回执：同一目标再记覆盖；表满时新目标被拒（Node 不确认这条死亡），已有目标照常更新。
+func TestCellworldDeathReceiptsRefuseANewTargetWhenFull(t *testing.T) {
+	state := &db.CellworldBaseState{}
+	if err := cellworldhost.RecordDeathReceipt(state, 1, 3, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := cellworldhost.RecordDeathReceipt(state, 2, 5, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := cellworldhost.RecordDeathReceipt(state, 3, 1, 2); err == nil {
+		t.Fatal("a third target was recorded past the limit of 2")
+	}
+	if err := cellworldhost.RecordDeathReceipt(state, 1, 4, 2); err != nil {
+		t.Fatalf("a known target was refused when full: %v", err)
+	}
+	if got := cellworldhost.DeathReceipt(state, 1); got != 4 {
+		t.Fatalf("receipt for 1 = %d, want 4", got)
+	}
+	if got := cellworldhost.DeathReceipt(state, 3); got != 0 {
+		t.Fatalf("receipt for the refused target = %d, want 0", got)
+	}
+}
+
+// 安装时追加在 PlayerDao 末尾的 CellworldBase：死亡回执与恢复快照在 Player 的事务里写，事务失败整份还原；提交后经正式
+// 持久编码再水合仍在（Base 重启后靠它们：重复的死亡不再发奖、Buff / 冷却照常恢复）。
+func TestCellworldPlayerStateRollsBackAndSurvivesTheStoredForm(t *testing.T) {
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(41, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao := db.NewPlayerDao()
+	dao.SetId(id)
+	recovery := func(revision uint64) *db.CellRecovery {
+		r := &db.CellRecovery{}
+		r.SetRevision(revision)
+		effects := make([]db.CellEffect, 1)
+		effects[0].SetKey("shield")
+		effects[0].SetStacks(2)
+		effects[0].SetExpiresAt(2000000000000)
+		r.SetEffects(effects)
+		return r
+	}
+	write := func(target int64, life uint64, revision uint64, fail error) error {
+		t.Helper()
+		_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "cellworld_player_state", func() (any, error) {
+			if err := cellworldhost.RecordDeathReceipt(dao.GetCellworldBase(), target, life, 8); err != nil {
+				return nil, err
+			}
+			dao.GetCellworldBase().SetRecovery(recovery(revision))
+			return nil, fail
+		})
+		return err
+	}
+	if err := write(781, 9, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("the reward failed after the receipt")
+	if err := write(782, 3, 2, failure); !errors.Is(err, failure) {
+		t.Fatalf("transaction: %v", err)
+	}
+	state := dao.GetCellworldBase()
+	if _, ok := state.GetDeathReceipts(782); ok || state.GetRecovery().GetRevision() != 1 {
+		t.Fatalf("a failed transaction left its receipt or recovery behind: receipts %d, revision %d", state.DeathReceiptsLen(), state.GetRecovery().GetRevision())
+	}
+	restored := db.NewPlayerDao()
+	restored.SetId(id)
+	if err := restored.RestorePersisted(dao.MarshalPersist(dataengine.AllFields), db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	again := restored.GetCellworldBase()
+	if cellworldhost.DeathReceipt(again, 781) != 9 || again.GetRecovery().GetRevision() != 1 || again.GetRecovery().EffectsLen() != 1 {
+		t.Fatalf("the stored form lost the receipt or the recovery: receipt %d, recovery %+v", cellworldhost.DeathReceipt(again, 781), again.GetRecovery())
+	}
+}
+
+// SceneActor 只由装了 Node 的进程以 CellMode 建出：没有 Node、不是 CellMode 都拒绝；建出之后格内心跳已登记、可以启动与
+// 换档，状态经模块的映射读写。Node 卸下之后 Base 心跳不再登记。
+func TestCellworldSceneActorNeedsTheInstalledNode(t *testing.T) {
+	scene_actor.RegisterEntity()
+	id, err := entity.BuildEntityID(31, scene_actor.EntityKindSceneActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(param any) error {
+		p := &entity.EntityCreateParam{IsCreate: true, Id: id, Kind: scene_actor.EntityKindSceneActor, Category: entity.EntityCategoryOther, Param: param}
+		a, err := scene_actor.NewSceneActor(p)
+		if err != nil {
+			return err
+		}
+		return a.OnInitFinish(p)
+	}
+	if err := create(cellworldhost.CellMode{}); err == nil {
+		t.Fatal("a scene actor was created on a process with no Node")
+	}
+	if reg, err := cellworldhost.RegisterBaseBeat(nil, nil); reg != nil || err != nil {
+		t.Fatalf("base beat without a Node = %v, %v; want nothing", reg, err)
+	}
+	node := testNode(t)
+	driver := heartbeat.NewDriver(heartbeat.Config{Name: "cellworld-state-test"})
+	cellworldhost.Install(node, 77, driver)
+	defer cellworldhost.Uninstall(node)
+	if cellworldhost.Node() != node || cellworldhost.SceneID() != 77 || cellworldhost.Heartbeat() != driver {
+		t.Fatal("Install did not publish the node, scene and driver")
+	}
+	if err := create(struct{}{}); err == nil {
+		t.Fatal("a scene actor was created without CellMode")
+	}
+	p := &entity.EntityCreateParam{IsCreate: true, Id: id, Kind: scene_actor.EntityKindSceneActor, Category: entity.EntityCategoryOther, Param: cellworldhost.CellMode{}}
+	a, err := scene_actor.NewSceneActor(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OnInitFinish(p); err != nil {
+		t.Fatalf("scene actor with the installed node: %v", err)
+	}
+	if err := a.StartCell(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetCellPeriod(100 * time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	want := sampleActor(id, cellworld.KindPlayer, 3)
+	a.SetCellState(want)
+	if got := a.CellState(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("scene actor state\n got %+v\nwant %+v", got, want)
+	}
+	a.OnDestroy(entity.DestroyReasonCommon)
+	cellworldhost.Uninstall(testNode(t)) // 只卸自己装的那一个
+	if cellworldhost.Node() != node {
+		t.Fatal("Uninstall of another node took this one down")
+	}
+	cellworldhost.Uninstall(node)
+	if cellworldhost.Node() != nil || cellworldhost.Heartbeat() != nil {
+		t.Fatal("Uninstall left the node installed")
+	}
+	if err := create(cellworldhost.CellMode{}); err == nil {
+		t.Fatal("a scene actor was created after the node was uninstalled")
+	}
+}
+
+type idleNest struct{ nest.Client }
+
+type idleTransport struct{}
+
+func (idleTransport) Publish(string, []byte) error { return nil }
+func (idleTransport) Subscribe(string, func([]byte)) (func() error, error) {
+	return func() error { return nil }, nil
+}
+
+// testNode 是只做 Base 的 Node（不托管格，不运行）：只用来给 Install 与心跳登记一个真实的配置。
+func testNode(t *testing.T) *cellworld.Node {
+	t.Helper()
+	grid, err := cellworld.NewGrid(cellworld.GridConfig{Cols: 1, Rows: 1, CellSize: 1000, GhostBand: 100, Hysteresis: 10, Owners: map[cellworld.CellID]int32{{}: 9}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := cellworld.NewNode(cellworld.NodeConfig{World: "statetest", SID: 8, Grid: grid, Transport: idleTransport{}, Nest: idleNest{},
+		Destroy: func(context.Context, entity.IThreadSafeEntity) error { return nil }, Scene: 77, ViewRadius: 50,
+		PlayerEntity: func(actor int64) int64 { return actor }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
+// baseDao 是 BaseDao 的内存替身：模块的测试工程里 Player 没有分区字段（字段由工程声明，见 README），映射只看读写器。
+// 回滚由生成 setter 负责，这里不测；game-demo 的 Player 用例覆盖真实 PlayerDao 的回滚与 WAL。
+type baseDao struct {
+	x, y, savedScene, savedX, savedY                  int64
+	state                                             db.CellworldBaseState
+	actor                                             int64
+	inWorld, shown, panelUnknown                      bool
+	owner, hint                                       int32
+	epoch, snapEpoch, snapSeq, intentSeq, attackSeq   uint64
+	lostEpoch, entry, panelVer, panelAcked, groupVer  uint64
+	hp, vx, vy, viewAt, enterAt, leaseAt, lostAt      int64
+	maxHP, attack, power, panelSentAt, panelSince     int64
+	groupSentAt, groupSyncAt, groupViewID             int64
+}
+
+func (d *baseDao) GetPosX() int64                       { return d.x }
+func (d *baseDao) SetPosX(v int64)                      { d.x = v }
+func (d *baseDao) GetPosY() int64                       { return d.y }
+func (d *baseDao) SetPosY(v int64)                      { d.y = v }
+func (d *baseDao) GetSavedSceneID() int64               { return d.savedScene }
+func (d *baseDao) SetSavedSceneID(v int64)              { d.savedScene = v }
+func (d *baseDao) GetSavedPosX() int64                  { return d.savedX }
+func (d *baseDao) SetSavedPosX(v int64)                 { d.savedX = v }
+func (d *baseDao) GetSavedPosY() int64                  { return d.savedY }
+func (d *baseDao) SetSavedPosY(v int64)                 { d.savedY = v }
+func (d *baseDao) GetCellworldBase() *db.CellworldBaseState { return &d.state }
+func (d *baseDao) GetCellActor() int64                  { return d.actor }
+func (d *baseDao) SetCellActor(v int64)                 { d.actor = v }
+func (d *baseDao) GetCellInWorld() bool                 { return d.inWorld }
+func (d *baseDao) SetCellInWorld(v bool)                { d.inWorld = v }
+func (d *baseDao) GetCellOwner() int32                  { return d.owner }
+func (d *baseDao) SetCellOwner(v int32)                 { d.owner = v }
+func (d *baseDao) GetCellEpoch() uint64                 { return d.epoch }
+func (d *baseDao) SetCellEpoch(v uint64)                { d.epoch = v }
+func (d *baseDao) GetCellHP() int64                     { return d.hp }
+func (d *baseDao) SetCellHP(v int64)                    { d.hp = v }
+func (d *baseDao) GetCellSnapEpoch() uint64             { return d.snapEpoch }
+func (d *baseDao) SetCellSnapEpoch(v uint64)            { d.snapEpoch = v }
+func (d *baseDao) GetCellSnapSeq() uint64               { return d.snapSeq }
+func (d *baseDao) SetCellSnapSeq(v uint64)              { d.snapSeq = v }
+func (d *baseDao) GetCellIntentSeq() uint64             { return d.intentSeq }
+func (d *baseDao) SetCellIntentSeq(v uint64)            { d.intentSeq = v }
+func (d *baseDao) GetCellVX() int64                     { return d.vx }
+func (d *baseDao) SetCellVX(v int64)                    { d.vx = v }
+func (d *baseDao) GetCellVY() int64                     { return d.vy }
+func (d *baseDao) SetCellVY(v int64)                    { d.vy = v }
+func (d *baseDao) GetCellAttackSeq() uint64             { return d.attackSeq }
+func (d *baseDao) SetCellAttackSeq(v uint64)            { d.attackSeq = v }
+func (d *baseDao) GetCellViewAt() int64                 { return d.viewAt }
+func (d *baseDao) SetCellViewAt(v int64)                { d.viewAt = v }
+func (d *baseDao) GetCellEnterAt() int64                { return d.enterAt }
+func (d *baseDao) SetCellEnterAt(v int64)               { d.enterAt = v }
+func (d *baseDao) GetCellLeaseAt() int64                { return d.leaseAt }
+func (d *baseDao) SetCellLeaseAt(v int64)               { d.leaseAt = v }
+func (d *baseDao) GetCellHint() int32                   { return d.hint }
+func (d *baseDao) SetCellHint(v int32)                  { d.hint = v }
+func (d *baseDao) GetCellLostEpoch() uint64             { return d.lostEpoch }
+func (d *baseDao) SetCellLostEpoch(v uint64)            { d.lostEpoch = v }
+func (d *baseDao) GetCellLostAt() int64                 { return d.lostAt }
+func (d *baseDao) SetCellLostAt(v int64)                { d.lostAt = v }
+func (d *baseDao) GetCellShown() bool                   { return d.shown }
+func (d *baseDao) SetCellShown(v bool)                  { d.shown = v }
+func (d *baseDao) GetCellEntry() uint64                 { return d.entry }
+func (d *baseDao) SetCellEntry(v uint64)                { d.entry = v }
+func (d *baseDao) GetCellMaxHP() int64                  { return d.maxHP }
+func (d *baseDao) SetCellMaxHP(v int64)                 { d.maxHP = v }
+func (d *baseDao) GetCellAttack() int64                 { return d.attack }
+func (d *baseDao) SetCellAttack(v int64)                { d.attack = v }
+func (d *baseDao) GetCellPower() int64                  { return d.power }
+func (d *baseDao) SetCellPower(v int64)                 { d.power = v }
+func (d *baseDao) GetCellPanelVer() uint64              { return d.panelVer }
+func (d *baseDao) SetCellPanelVer(v uint64)             { d.panelVer = v }
+func (d *baseDao) GetCellPanelAcked() uint64            { return d.panelAcked }
+func (d *baseDao) SetCellPanelAcked(v uint64)           { d.panelAcked = v }
+func (d *baseDao) GetCellPanelSentAt() int64            { return d.panelSentAt }
+func (d *baseDao) SetCellPanelSentAt(v int64)           { d.panelSentAt = v }
+func (d *baseDao) GetCellPanelSince() int64             { return d.panelSince }
+func (d *baseDao) SetCellPanelSince(v int64)            { d.panelSince = v }
+func (d *baseDao) GetCellPanelUnknown() bool            { return d.panelUnknown }
+func (d *baseDao) SetCellPanelUnknown(v bool)           { d.panelUnknown = v }
+func (d *baseDao) GetCellGroupSentAt() int64            { return d.groupSentAt }
+func (d *baseDao) SetCellGroupSentAt(v int64)           { d.groupSentAt = v }
+func (d *baseDao) GetCellGroupSyncAt() int64            { return d.groupSyncAt }
+func (d *baseDao) SetCellGroupSyncAt(v int64)           { d.groupSyncAt = v }
+func (d *baseDao) GetCellGroupViewID() int64            { return d.groupViewID }
+func (d *baseDao) SetCellGroupViewID(v int64)           { d.groupViewID = v }
+func (d *baseDao) GetCellGroupViewVer() uint64          { return d.groupVer }
+func (d *baseDao) SetCellGroupViewVer(v uint64)         { d.groupVer = v }
+
+var _ cellworldhost.BaseDao = (*baseDao)(nil)

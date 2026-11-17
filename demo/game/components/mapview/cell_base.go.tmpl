@@ -1,35 +1,23 @@
 package mapview
 
 import (
-	"time"
-
-	"{{MODULE}}/game/partition"
+	"{{MODULE}}/game/modules/cellworldhost"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
 // 分区场景（scene.partition，gameplay/cellworld）里玩家不在进程间移动：本进程是它的 Base，它在地图上的那一份是所在格的
-// SceneActor。Base 一侧的路由心跳（"cell.base"，Node.BaseBeat）与面板更新在这里；cellworld.BasePlayer 的实体方法在
-// game/entities/player/cell_base.go。
+// SceneActor（cellworld 模块自带的实体）。Base 一侧的路由心跳（"cell.base"，Node.BaseBeat）挂在这个组件的心跳宿主上，
+// 登记本身是模块的（cellworldhost.RegisterBaseBeat）；cellworld.BasePlayer 的实体方法在 game/entities/player/cell_base.go。
 
 // registerCellBase registers the routing beat when this process runs a
 // partitioned scene; it is started by the Node when the player enters it.
-func (component *Component) registerCellBase() error {
-	node := partition.Node()
-	if node == nil {
-		return nil
-	}
-	owner := component.owner
-	reg, err := component.host.Register("cell.base", node.Config().WatchPeriod, func(heartbeat.Beat) error {
-		if n := partition.Node(); n != nil {
-			return n.BaseBeat(owner, time.Now())
-		}
-		return nil
-	})
+func (c *Component) registerCellBase() error {
+	reg, err := cellworldhost.RegisterBaseBeat(c.host, c.owner)
 	if err != nil {
 		return err
 	}
-	component.cellBase = reg
+	c.cellBase = reg
 	return nil
 }
 

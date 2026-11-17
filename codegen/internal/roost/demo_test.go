@@ -115,15 +115,23 @@ func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 //   - 建在这些组件上的 Nest handler 不跑 roost add handler（它要求组件文件已经在盘上，而且只写一个随即被覆盖的骨架）：
 //     handler 文件直接由 write 步骤写出、留在原处，模块那一步跑生成器时全部 handler 都在盘上；
 //   - 覆盖模块文件的 write 排在安装之后，否则安装器会因为落点被占用而拒绝。
+//
+// 唯一的例外是 cellworld（D21 后半，2026-11-17）：它带来 demo 的 MonsterDao / PlayerDao 用到的分区状态嵌套类型，GiftItem
+// saga 那一步重刷全部生成物时这些类型必须已经在盘上，所以它单独一步、排在那之前；那时工程还没有引用任何别的模块，它也
+// 没有协议号与错误码，只分一个实体号（SceneActor）。
 func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	steps := demoScaffoldSteps("game")
 	installed := -1
 	var modules []string
+	installedAt := map[string]int{} // 模块 -> 装它的那一步
 	for index, step := range steps {
 		if len(step.modules) == 0 {
 			continue
 		}
-		if installed >= 0 {
+		for _, name := range step.modules {
+			installedAt[name] = index
+		}
+		if installed >= 0 && strings.Join(modules, " ") != "cellworld" {
 			t.Fatalf("modules are installed in more than one step (%v, then %v): the first step's generators and go mod tidy would run on a project that refers to modules not installed yet", modules, step.modules)
 		}
 		installed, modules = index, step.modules
@@ -131,9 +139,15 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime cellworld room turn matchroom matchmaking"; got != want {
+	if first, ok := installedAt["cellworld"]; !ok || first >= installed {
+		t.Error("cellworld is not installed in its own step before the other modules")
+	} else if saga := slices.IndexFunc(steps, func(step demoScaffoldStep) bool { return step.add != nil && step.add.Kind == "saga" }); saga >= 0 && first > saga {
+		t.Error("cellworld is installed after the GiftItem saga step, whose full refresh needs the module's nested types on disk")
+	}
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime room turn matchroom matchmaking"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
+	modules = append([]string{"cellworld"}, modules...)
 	catalog, err := loadModuleCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +185,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 			continue
 		}
 		written[step.write] = true
-		if module := moduleFiles[step.write]; module != "" && index < installed {
+		if module := moduleFiles[step.write]; module != "" && index < installedAt[module] {
 			t.Errorf("%s is the %s module's file and is written before the module is installed", step.write, module)
 		}
 	}
@@ -293,12 +307,10 @@ func TestDemoEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
 	cellworldActor := "implements cellworld.Actor: the framework's cell runtime calls it to store / pace the actor"
 	cellworldBase := "implements cellworld.BasePlayer: the framework's base side calls it inside the player's transaction"
 	checkEntityMethodsLeaveStateToComponents(t, demo.Files, map[string]string{
-		"game/entities/scene/entity.go.tmpl Scene.OnInitFinish":                "builds the scene's runtime objects (time domain, world clock and ground for the actors) from the create parameters",
-		"game/entities/scene/entity.go.tmpl Scene.SetTimeRate":                 "the scene's own time domain (a runtime object of the entity) writes its anchor into SceneDao",
-		"game/entities/scene_actor/entity.go.tmpl SceneActor.SetCellPeriod":    cellworldActor,
-		"game/entities/monster/cell.go.tmpl Monster.SetCellPeriod":             cellworldActor,
-		"game/entities/player/cell_base.go.tmpl Player.SetCellGroup":           cellworldBase,
-		"game/entities/player/cell_base.go.tmpl Player.RecordCellDeathReceipt": cellworldBase,
+		"game/entities/scene/entity.go.tmpl Scene.OnInitFinish":      "builds the scene's runtime objects (time domain, world clock and ground for the actors) from the create parameters",
+		"game/entities/scene/entity.go.tmpl Scene.SetTimeRate":       "the scene's own time domain (a runtime object of the entity) writes its anchor into SceneDao",
+		"game/entities/monster/cell.go.tmpl Monster.SetCellPeriod":   cellworldActor,
+		"game/entities/player/cell_base.go.tmpl Player.SetCellGroup": cellworldBase,
 		// 分区场景的组投影（cellworld.GroupPlayer）只有 demo 的 Player 有；team 组件发布的 event.TeamChanged 在 Player 上监听，
 		// 交给 Node.SetGroup 写 Base 的那份成员表（原来是 game/handler 里经 OnTeamChanged 登记的钩子）。
 		"game/entities/player/cell_team.go.tmpl Player.OnTeamChanged": "listens to the team module's event.TeamChanged and hands the roster to cellworld's Node.SetGroup, the base side's copy of the team (cellworld.GroupPlayer)",
@@ -821,8 +833,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if def := read("db/def/player.go"); !strings.Contains(def, "Equipment EquipmentState") || !strings.Contains(read("db/def/equipment.go"), "Slots map[int32]*GearPiece") {
 		t.Errorf("the Player DAO has no nested struct field, so the demo never exercises two-level dirty propagation")
 	}
-	// 持久 schema 继续声明，用于加载前的严格版本校验。
-	if def := read("db/def/player.go"); !strings.Contains(def, "schema=5") {
+	// 持久 schema 继续声明，用于加载前的严格版本校验。6：分区场景的恢复快照与死亡回执移进 cellworld 模块的 CellworldBase（2026-11-17）。
+	if def := read("db/def/player.go"); !strings.Contains(def, "schema=6") {
 		t.Errorf("the Player DAO does not declare a schema version, so stored data cannot be checked")
 	}
 	// Entity sync: the Player is a replicated subject, the scene is the room

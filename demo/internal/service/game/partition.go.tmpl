@@ -10,13 +10,13 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/actor"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	scene_actor "{{MODULE}}/game/entities/scene_actor"
 	handlersender "{{MODULE}}/game/handler/sender"
 	"{{MODULE}}/game/modules/cellworldhost"
-	"{{MODULE}}/game/partition"
 	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
@@ -224,7 +224,8 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	rt.host, rt.spawnBook = host, host.Births
 	node := host.Node
 	rt.node = node
-	partition.Install(node, area.ID())
+	// SceneActor（模块自带）从这里装的驱动取心跳宿主：与 Scene / Player / Monster 是同一个驱动（actor.Heartbeat）。
+	cellworldhost.Install(node, area.ID(), actor.Heartbeat)
 	if rt.cell != nil {
 		if err := area.HostCell(node.Config().Period); err != nil {
 			_ = rt.stop(context.Background())
@@ -233,7 +234,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	}
 	ctx := context.Background()
 	if err := host.Start(ctx); err != nil {
-		partition.Uninstall(node)
+		cellworldhost.Uninstall(node)
 		rt.mirrors.Close()
 		return nil, err
 	}
@@ -269,7 +270,7 @@ func (rt *partitionRuntime) stop(ctx context.Context) error {
 		return err
 	}
 	if rt.node != nil {
-		partition.Uninstall(rt.node)
+		cellworldhost.Uninstall(rt.node)
 	}
 	if rt.mirrors != nil {
 		rt.mirrors.Close()
@@ -278,7 +279,8 @@ func (rt *partitionRuntime) stop(ctx context.Context) error {
 }
 
 // createActor 在 Node 的 handler 里新建 SceneActor（玩家）或 Monster（NPC）：EntityManager.Create 在 handler 内即
-// CreateInScope，由事务捕获，回滚就撤销发布。实体按 partition.CellMode 登记格内心跳。
+// CreateInScope，由事务捕获，回滚就撤销发布。实体按 cellworldhost.CellMode 登记格内心跳（SceneActor 是 cellworld
+// 模块自带的实体，Monster 是 demo 自己的）。
 func (rt *partitionRuntime) createActor(id int64, kind cellworld.EntityKind) (cellworld.Actor, error) {
 	want := monster.EntityKindMonster
 	if kind == cellworld.KindPlayer {
@@ -288,7 +290,7 @@ func (rt *partitionRuntime) createActor(id int64, kind cellworld.EntityKind) (ce
 		return nil, fmt.Errorf("partition: entity %d is kind %d, want %d", id, got, want)
 	}
 	e, err := rt.access.Create(&coreentity.EntityCreateParam{
-		IsCreate: true, Id: id, Kind: want, Category: coreentity.EntityCategoryOther, Param: partition.CellMode{},
+		IsCreate: true, Id: id, Kind: want, Category: coreentity.EntityCategoryOther, Param: cellworldhost.CellMode{},
 	})
 	if err != nil {
 		return nil, err

@@ -1,35 +1,21 @@
 package monsteractor
 
 import (
-	"errors"
-	"time"
+	"{{MODULE}}/game/modules/cellworldhost"
 
-	"{{MODULE}}/game/partition"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
 // 分区场景（scene.partition）里的怪物是格内行走者：位置、速度、HP 由格的心跳（"cell.actor"，Node.ActorBeat）推进，
-// 走过格界时交给下一格的进程。实体一侧的 cellworld.Actor 方法在 game/entities/monster/cell.go。
+// 走过格界时交给下一格的进程。实体一侧的 cellworld.Actor 方法在 game/entities/monster/cell.go；状态映射与心跳登记
+// 是 cellworld 模块的（game/modules/cellworldhost），这里只把怪物自己的心跳宿主交给它。
 
-func isCellMode(param any) bool {
-	_, ok := param.(partition.CellMode)
-	return ok
-}
+func isCellMode(param any) bool { return cellworldhost.IsCellMode(param) }
 
 // registerCell registers the cell beat on the monster's heartbeat host; the
 // Node starts it (StartCell) in the transaction that installs the monster.
 func (component *Component) registerCell() error {
-	node := partition.Node()
-	if node == nil {
-		return errors.New("this process runs no partitioned scene")
-	}
-	owner := component.owner
-	reg, err := component.host.Register("cell.actor", node.Config().Period, func(beat heartbeat.Beat) error {
-		if n := partition.Node(); n != nil {
-			return n.ActorBeat(owner, time.Now(), beat.Elapsed)
-		}
-		return nil
-	})
+	reg, err := cellworldhost.RegisterActorBeat(component.host, component.owner)
 	if err != nil {
 		return err
 	}
