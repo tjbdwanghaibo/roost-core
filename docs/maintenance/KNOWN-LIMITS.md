@@ -813,7 +813,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 移动与动作、行为与技能：遗留
 
-- **移动每拍分配**（M-2 已测，2026-11-18）：`BenchmarkMoveBeatAllocations` 六轮稳定，空事务底数 5 次 / 945 B / 约 355 ns，一拍移动 17 次 / 1885 B / 约 808 ns，移动本身每拍 12 次分配、约 940 B；分配来源没拆（没跑 -memprofile），是否要压由维护者定（[证据](evidence/perf-compressed-20261118/README.md)）。
+- **移动每拍分配**（M-2 已测，2026-11-18）：`BenchmarkMoveBeatAllocations` 六轮稳定，空事务底数 5 次 / 945 B / 约 355 ns，一拍移动 17 次 / 1885 B / 约 808 ns，移动本身每拍 12 次分配、约 940 B；分配来源没拆（没跑 -memprofile）。维护者 2026-11-18 定不改：按 1000 个单位每秒 5 拍估算约每秒 6 万次分配、不到 5 MB，等真实负载里 GC 成为瓶颈再压（[证据](evidence/perf-compressed-20261118/README.md)）。
 - **Linux SLG 恢复**：macOS 的默认 / REAL / MOBA ROUTING 已复验；SLG 修后 Linux 复跑仍见 C-L2。
 
 #### 压测工具的心跳驱动：遗留
