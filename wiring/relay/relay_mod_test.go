@@ -221,6 +221,16 @@ func (c *relayClient) expectControl(t *testing.T, op uint32, payload []byte) {
 	}
 }
 
+// expectData 读下一帧，核对通道、message_id、槽位与载荷。
+func (c *relayClient) expectData(t *testing.T, channel wire.RelayChannel, msgID, slot uint32, payload string) {
+	t.Helper()
+	_ = c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	p, err := wire.ReadRelay(c.reader, 0)
+	if err != nil || p.RelayChannel() != channel || p.MsgID != msgID || p.Seq != slot || string(p.Payload) != payload {
+		t.Fatalf("got %+v %v; want channel %d msg %d slot %d %q", p, err, channel, msgID, slot, payload)
+	}
+}
+
 type fakeNats struct {
 	mu        sync.Mutex
 	published []published

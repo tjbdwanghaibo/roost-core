@@ -48,9 +48,17 @@ relay 组证据（2026-11-17，大厅 / relay 实施第一批：转发核心，�
 ----
 mutations.txt：15 条关键行各撤一次，目标用例全部变红，恢复后全部变绿（脚本 mutate.py.txt）。
 
+真实依赖
+--------
+    source ~/.roost-it/roost-dataengine-it/env.sh && go test -tags integration -race -count=1 -run TestRealRelay -v ./wiring/relay/
+    → real-nats-etcd.txt：PASS
+私有环境的 NATS 集群 + 用例自己起的单节点 etcd（结束即杀），正式的 NATS Mod、etcd Mod、relay Mod 与 Server：
+TCP 转发、报告经真实 NATS 到 <subject>.events、leave 命令经真实 NATS 送达、etcd 广播随房间数更新、停机后键消失。
+etcd Mod 自己的服务登记（/service/relay/9）与 relay 的广播键互不影响。
+
 没有做的
 --------
-- 真实 NATS / etcd 的进程演练（wiring 测试用的是假 NATS 与假 etcd；真实演练按方案 §5 放到最后统一做）。
+- 多进程演练（lobby + relay 真实进程、kill -9、两实例分布、吞吐基线）：按方案 §5 放到最后统一做。
 - WebSocket 监听：wsconn（ws 组）在本组收尾时尚未提交，relay 侧没有接 relay.ws_listen（见 RELAY.md §7）。
 - 换 host（下一批）。
 
