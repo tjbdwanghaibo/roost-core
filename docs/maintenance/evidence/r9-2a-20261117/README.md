@@ -1,6 +1,6 @@
 # R9 批 2A：派对房间改为“装模块 + 只写模块没覆盖的部分”（2026-11-17）
 
-提交：见本目录所在提交（实现、手册、证据同一笔）。依据：[R9 方案](../../PLAN-2026-11-17-r9-genre-modules.md) §3.10，写法照 §9（批 0 塔防样板）。场景名与条数不变：19（3 规则 + 15 Nest / 心跳 / 同步 / 补位 + 1 业务 Robot），0 SKIP。
+提交：`f80f703a`（实现、手册、证据同一笔）。依据：[R9 方案](../../PLAN-2026-11-17-r9-genre-modules.md) §3.10，写法照 §9（批 0 塔防样板）。场景名与条数不变：19（3 规则 + 15 Nest / 心跳 / 同步 / 补位 + 1 业务 Robot），0 SKIP。
 
 ## 改法
 
@@ -30,7 +30,7 @@
 | 2 | `python3 scripts/test-genres-generated.py --out <scratchpad>/matrix --genres party-room` | `passed`，自定 module 名下 19 / 19，`custom_module_verify` = enter 29、wallet 17（[matrix.txt](matrix.txt)） |
 | 3 | `source ~/.roost-it/roost-dataengine-it/env.sh` 后 `ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh` | `TestPartyGameRealCrashRecovery` PASS，0 SKIP，WAL 未投影 12 条（与改前相同：建档仍是每人一笔 strict）（[real.txt](real.txt)） |
 | 4 | 变异 | 见下（[mutation.txt](mutation.txt)） |
-| 5 | `git status`；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 见报告（提交后跑） |
+| 5 | `git status`；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 本组路径提交后无残留；提交前后 `go test -run 'Link\|Anchor\|Doc' .` 均 ok |
 | 6 | 手册与 reference | 手册 §3.5 写旧断言 → 新断言；reference §3 命令块接 SKILL.md §3.2 前置 + §3.4 收尾、自定 module `example.com/acme/myparty` 原样抽 bash 块实跑：19 PASS、0 SKIP、module verify 全过、`project doctor` 0 FAIL（[skill-block.txt](skill-block.txt)）；手册 §3.3 的 Go 示例放进生成工程 `go vet` 通过 |
 
 ## 改过断言的场景（旧 → 新，详见手册 §3.5）
