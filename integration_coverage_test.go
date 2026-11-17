@@ -172,6 +172,14 @@ var redisGateVariable = regexp.MustCompile(`os\.Getenv\("((?:[A-Z0-9_]*REDIS[A-Z
 
 func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {
 	wanted := map[string][]string{}
+	// 全环境（故障矩阵）的变量 ROOST_DATAENGINE_IT_* 由 dataengine-env.sh 的环境提供，不属于这个 Redis 服务 job
+	// （与 ci.yml 里“隔离环境的 ROOST_DATAENGINE_IT_REDIS_ADDR 跳过不属于本 job”同一口径）；但读它的包必须在故障
+	// 矩阵的 go test 参数里，否则同样没人跑（2026-11-17，wiring/relay 是第一个带全环境用例的服务域接线）。
+	matrixRaw, err := os.ReadFile(filepath.Join("wiring", "scripts", "integration", "dataengine-env.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matrixArgs := goTestPackageArgs(string(matrixRaw))
 	// 接线服务已从 wiring/service 平铺到 wiring；仅按实际 service 域查找对应接线，
 	// DataEngine 等基础框架的集成环境由故障矩阵负责，不属于这个 Redis 服务 job。
 	roots := []string{"service"}
@@ -200,6 +208,12 @@ func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {
 				name := m[1]
 				// A real Redis Cluster has its own manual runner (redis-cluster-suites.sh).
 				if name == "ROOST_REVIEW_CLUSTER" {
+					continue
+				}
+				if strings.HasPrefix(name, "ROOST_DATAENGINE_IT_") {
+					if dir := filepath.ToSlash(filepath.Dir(path)); !covers(matrixArgs, dir) {
+						t.Errorf("%s reads %s (the full-environment variable) but the fault matrix (dataengine-env.sh) never runs %s, so its Redis variant runs nowhere", path, name, dir)
+					}
 					continue
 				}
 				wanted[name] = append(wanted[name], filepath.ToSlash(path))

@@ -186,7 +186,7 @@ jobs:
       - name: integration-tagged service tests on Redis
         run: |
           set -o pipefail
-          go test -tags integration -count=1 -p 1 -json ./wiring/redis/ ./wiring/... ./service/... ./infra/storage/redis/... ./infra/storage/versionstore/ ./framework/cache/ | tee test.json \
+          go test -tags integration -count=1 -p 1 -json ./wiring/redis/ ./wiring/... ./service/... ./infra/storage/redis/... ./infra/storage/versionstore/ ./framework/cache/ ./client/relay/ | tee test.json \
             | jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Action + "\t" + .Package'
       - name: failing test output (on failure)
         if: failure()

@@ -89,7 +89,7 @@ func TestRelayHostChangePayloads(t *testing.T) {
 	}
 	host := wire.RelayYouAreHost{Epoch: 4, Source: wire.RelayStateSnapshot, SnapshotSeq: 99, SnapshotAgeMillis: 1234,
 		Members: []wire.RelaySeat{{Slot: 1, Account: "old-host"}, {Slot: 2, Account: "", Online: true}, {Slot: 5, Account: "acc-5", Online: true}},
-		State: []byte("compressed")}
+		State:   []byte("compressed")}
 	got, err := wire.DecodeRelayYouAreHost(wire.EncodeRelayYouAreHost(host))
 	if err != nil || got.Epoch != host.Epoch || got.Source != host.Source || got.SnapshotSeq != host.SnapshotSeq ||
 		got.SnapshotAgeMillis != host.SnapshotAgeMillis || !slices.Equal(got.Members, host.Members) || !bytes.Equal(got.State, host.State) {
