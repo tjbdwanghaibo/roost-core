@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -469,8 +470,8 @@ func TestWebSocketConfigIsValidatedAndTheListenerStopsWithTheServer(t *testing.T
 }
 
 // stalledWebSocketSession 是一条真实 WebSocket 连接服务端一侧的会话（wsconn.Conn），客户端连上后不读：
-// 缓冲写满之后每次写都卡在 socket 上。
-func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration) *tcpSession {
+// 缓冲写满之后每次写都卡在 socket 上。返回的客户端连接供用例之后再开始读。
+func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration) (*tcpSession, *websocket.Conn) {
 	t.Helper()
 	listener, err := wsconn.Listen("127.0.0.1:0", wsconn.Config{Path: "/ws", MaxMessageBytes: 1 << 21, HandshakeTimeout: 2 * time.Second})
 	if err != nil {
@@ -502,17 +503,17 @@ func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration) *tcpSessi
 	select {
 	case conn := <-accepted:
 		t.Cleanup(func() { _ = conn.Close() })
-		return &tcpSession{connection: conn, writeTimeout: writeTimeout, maxPayloadBytes: 1 << 20}
+		return &tcpSession{connection: conn, writeTimeout: writeTimeout, maxPayloadBytes: 1 << 20}, client
 	case <-time.After(2 * time.Second):
 		t.Fatal("the upgraded connection never reached Accept")
-		return nil
+		return nil, nil
 	}
 }
 
 // 会话关闭（慢连接断开、停机）立即打断 WebSocket 连接上阻塞的写，不等一分钟的写期限：tcpSession.close 先关连接再取写锁，
 // wsconn.Conn.Close 立即关闭底层 socket。
 func TestWebSocketSessionCloseInterruptsABlockedWrite(t *testing.T) {
-	session := stalledWebSocketSession(t, time.Minute)
+	session, _ := stalledWebSocketSession(t, time.Minute)
 	payload := bytes.Repeat([]byte{1}, 512<<10)
 	written := make(chan error, 1)
 	go func() {
@@ -543,7 +544,7 @@ func TestWebSocketSessionCloseInterruptsABlockedWrite(t *testing.T) {
 // 调用方期限（独立 Gate 的单帧发送预算）在 WebSocket 写的过程中到期：库已关闭整条连接，这一写报告连接坏了
 // （errConnectionBroken），不能当成“什么也没写、连接还在”的拒绝。慢连接因此被断开，与 TCP 上写到一半的结果相同。
 func TestACallerDeadlineThatEndsAWebSocketWriteBreaksTheConnection(t *testing.T) {
-	session := stalledWebSocketSession(t, time.Minute)
+	session, _ := stalledWebSocketSession(t, time.Minute)
 	payload := bytes.Repeat([]byte{1}, 512<<10)
 	for attempt := 0; ; attempt++ {
 		if attempt == 256 {
@@ -559,6 +560,50 @@ func TestACallerDeadlineThatEndsAWebSocketWriteBreaksTheConnection(t *testing.T)
 			t.Fatalf("a write cut off by the caller's deadline mid-message returned %v; want errConnectionBroken (the library closed the connection)", err)
 		}
 		return
+	}
+}
+
+// 上一帧的期限（这里是独立 Gate 推送的单帧发送预算，调用方期限）在两帧之间到期、下一帧恰在那时开始写：下一帧有自己的
+// 期限，不能被上一帧的期限断开（TCP 上 SetWriteDeadline 换期限即生效，旧期限不再作用）。修复前 wsconn 把期限原样交给
+// coder/websocket 的 NetConn，它的期限计时器一直挂着，到期回调晚于新一帧拿到写锁时把新一帧当成“写在期限处未完成”，
+// 关掉整条连接——relay 成员在心跳整 10s 点被断开是同一个原因（wsconn 的 TestAStaleWriteDeadlineDoesNotCloseALaterWrite）。
+// 调度次序的固定方法见那个用例：GOMAXPROCS(1)、占住处理器跨过两个到期点、由唤醒计时器把测试 goroutine 排在回调之前。
+func TestAnEarlierFramesDeadlineDoesNotBreakTheNextWebSocketWrite(t *testing.T) {
+	session, client := stalledWebSocketSession(t, time.Minute)
+	big := bytes.Repeat([]byte{2}, 1<<20)
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	stale := time.Now().Add(3 * time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), stale)
+	err := session.WritePacket(ctx, 101, 0, wire.PayloadProtobuf, true, []byte("small"))
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wake := make(chan struct{})
+	time.AfterFunc(time.Until(stale)+time.Millisecond, func() { close(wake) })
+	for time.Now().Before(stale.Add(2 * time.Millisecond)) { // 不让出处理器；总时长远小于 10ms 的异步抢占
+	}
+	<-wake
+
+	read := make(chan error, 1)
+	go func() {
+		time.Sleep(200 * time.Millisecond) // 写此时卡在停读的客户端上
+		readCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.SetReadLimit(2 << 20) // 客户端缺省只收 32KiB 的消息
+		for _, want := range []int{wire.HeaderSize + len("small"), wire.HeaderSize + len(big)} {
+			if _, message, err := client.Read(readCtx); err != nil || len(message) != want {
+				read <- fmt.Errorf("client read a %d-byte message, %v; want %d bytes", len(message), err, want)
+				return
+			}
+		}
+		read <- nil
+	}()
+	if err := session.WritePacket(context.Background(), 101, 0, wire.PayloadProtobuf, true, big); err != nil {
+		t.Fatalf("a frame written under write_timeout (a minute) failed: %v (the previous frame's deadline closed the connection)", err)
+	}
+	if err := <-read; err != nil {
+		t.Fatal(err)
 	}
 }
 

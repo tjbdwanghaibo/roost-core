@@ -123,7 +123,7 @@
 | `send_queue_bytes` | 4 MiB | 同上 | 至少两个满帧 |
 | `idle_timeout` | 30s | 断开（`idle_timeout`） | 客户端约 10s 发一次 Ping |
 | `auth_timeout` | 5s | 断开（`idle_timeout`） | |
-| `write_timeout` | 10s | 断开这一条 | 一次写 socket 的期限 |
+| `write_timeout` | 10s | 断开这一条 | 一次写 socket 的期限（每批写前设、写完不清；WebSocket 上旧期限也不作用于之后的写，见 [GATEWAY §6](GATEWAY.md#6-websocket-接入)） |
 | `empty_room_timeout` | 10m | 关房 | 房主等人进房的上限 |
 | `closed_room_retention` | 2m | — | 不短于 lobby 的令牌有效期（缺省 30s） |
 | `heartbeat_interval` | 5s | — | 明显短于 `lobby.room_ttl`（推荐 room_ttl/3） |
@@ -140,6 +140,8 @@
 内存预算：每条连接最多驻留 `send_queue_bytes`；多个收件人共用同一份编码好的帧。每个房间另存最新一份快照，快照缓存的上限约为“房间数 × `snapshot_max_bytes`”（缺省 1000 个房间约 250 MiB）；换 host 期间再加一份交接数据。
 
 空闲与令牌首帧的超时用每条连接一个计时器检查最后一帧的时间，不用读期限：WebSocket 接入在读期限到期时会直接关掉整条连接，relay 就来不及发 `Closed`。用计时器后 TCP 与 WebSocket 都先收到 `Closed{idle_timeout}` 再断开。
+
+写期限照用：`writeLoop` 每批写前设 `now + write_timeout`。2026-11-17 之前 WebSocket 成员偶发在心跳的整 10s 点被 relay 自己断开（读一侧报 `use of closed network connection`，写一侧没有错误）：Pong 的那次写恰好落在上一批写期限的到期点上，库的期限计时器把它当成“写在期限处未完成”关掉了连接。修在共用的 `wsconn`（期限只在一次读写进行期间交给库），Gate 的 WebSocket 会话同样受益。
 
 ## 4A. 换 host（方案 §4.6）
 

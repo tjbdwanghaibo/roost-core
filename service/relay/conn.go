@@ -348,6 +348,8 @@ func (c *conn) writeLoop() {
 		for _, data := range batch {
 			size += len(data)
 		}
+		// 写完不清：换期限即生效，上一批的期限不作用于这一批。WebSocket 连接上这一点由 wsconn 保证（期限只在一次写
+		// 进行期间交给库），否则 Pong 恰好落在上一批期限的到期点时连接会被库关掉（2026-11-17）。
 		_ = c.netConn.SetWriteDeadline(time.Now().Add(cfg.WriteTimeout))
 		buffers := net.Buffers(batch)
 		_, err := buffers.WriteTo(c.netConn)

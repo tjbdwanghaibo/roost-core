@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -116,6 +118,76 @@ func TestAnAlreadyExpiredDeadlineRefusesWithoutClosing(t *testing.T) {
 	got := make([]byte, 4)
 	if _, err := io.ReadFull(server, got); err != nil || string(got) != "ping" {
 		t.Fatalf("server read %q, %v", got, err)
+	}
+}
+
+// 期限已过时，紧接着的写不等计时器也立即拒绝，连接不关、什么也不写出（上一个用例先睡 20ms 让库的计时器在没有写的
+// 时候到期；这里不睡）。NetConn 把已过的期限当成 1ns 后到期：计时器回调要是在这次写拿到锁之后才跑，就把它当成“写在
+// 期限处还没完成”取消写 context、关掉整条连接；先跑则这次写照样写出、期限推到下一次写。独立 Gate 的单帧发送预算快用完时
+// 就会走到这里。GOMAXPROCS(1) 让设期限与开始写之间不让出处理器，写塞满停读的对端后挂起、回调才跑，结果不随调度变化。
+func TestAnExpiredWriteDeadlineRefusesTheVeryNextWrite(t *testing.T) {
+	server, client := pair(t, 4<<10)
+	big := bytes.Repeat([]byte{1}, 4<<20) // 先分配：设期限与开始写之间不能有可能让出处理器的大块分配
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	_ = server.SetWriteDeadline(time.Now().Add(-time.Second))
+	if _, err := server.Write(big); !errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write right after setting an expired deadline: %v, want os.ErrDeadlineExceeded without net.ErrClosed", err)
+	}
+	_ = server.SetWriteDeadline(time.Time{})
+	if _, err := server.Write([]byte("after")); err != nil {
+		t.Fatalf("write after clearing the deadline: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, message, err := client.Read(ctx); err != nil || string(message) != "after" {
+		t.Fatalf("client read %q, %v; want only the message written after clearing the deadline", message, err)
+	}
+}
+
+// 上一次写设的期限没有清除、在两次写之间到期，下一次写之前已经设了新期限：这次写不受旧期限影响，连接不关。
+// 这是 relay 的 writeLoop（每批写前设 now+write_timeout、写完不清）与 Gate 的会话写（每帧写前设期限）的用法；
+// 成员每 10s 发一次 Ping，relay 回 Pong 的那次写正好落在上一批期限的到期点上。修复前 NetConn 的期限计时器一直挂着：
+// 到期回调在自己的 goroutine 里判断“有没有写在进行”，计时器已触发、回调还没跑时新期限的 Reset 拦不住它，新的写先拿到锁，
+// 回调就取消写 context、关掉整条连接（读一侧看到 use of closed network connection，写一侧可能毫无错误）。
+//
+// 调度次序用 GOMAXPROCS(1) 固定：测试 goroutine 占住唯一的处理器跨过旧期限与唤醒计时器两个到期点，再在通道上挂起；
+// 调度器在同一轮里先触发旧期限（回调进 runnext）、再触发唤醒（唤醒 goroutine 进 runnext，回调挤到队尾），唤醒把测试
+// goroutine 放回 runnext，于是测试 goroutine 先设新期限、开始一次塞满停读对端的写并挂起，回调此时才跑。
+func TestAStaleWriteDeadlineDoesNotCloseALaterWrite(t *testing.T) {
+	server, client := pair(t, 4<<10)
+	big := bytes.Repeat([]byte{2}, 4<<20)
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	stale := time.Now().Add(3 * time.Millisecond)
+	_ = server.SetWriteDeadline(stale)
+	if _, err := server.Write([]byte("pong")); err != nil {
+		t.Fatal(err)
+	}
+	wake := make(chan struct{})
+	time.AfterFunc(time.Until(stale)+time.Millisecond, func() { close(wake) })
+	for time.Now().Before(stale.Add(2 * time.Millisecond)) { // 不让出处理器；总时长远小于 10ms 的异步抢占
+	}
+	<-wake
+
+	_ = server.SetWriteDeadline(time.Now().Add(time.Minute))
+	read := make(chan error, 1)
+	go func() {
+		time.Sleep(200 * time.Millisecond) // 写此时卡在停读的对端上
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.SetReadLimit(int64(len(big))) // 客户端缺省只收 32KiB 的消息
+		for _, want := range [][]byte{[]byte("pong"), big} {
+			if _, message, err := client.Read(ctx); err != nil || !bytes.Equal(message, want) {
+				read <- fmt.Errorf("client read %d bytes, %v; want %d", len(message), err, len(want))
+				return
+			}
+		}
+		read <- nil
+	}()
+	if _, err := server.Write(big); err != nil {
+		t.Fatalf("a write under a fresh one-minute deadline failed: %v (the earlier deadline's timer closed the connection)", err)
+	}
+	if err := <-read; err != nil {
+		t.Fatal(err)
 	}
 }
 

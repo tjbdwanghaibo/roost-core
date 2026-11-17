@@ -25,7 +25,6 @@ import (
 	"path"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -403,7 +402,8 @@ func (websocketAddr) String() string  { return "websocket" }
 //   - 读写期限：SetReadDeadline / SetWriteDeadline 真的生效，到期的读写返回 errors.Is(err, os.ErrDeadlineExceeded)
 //     的错误。区别在于期限在一次读写进行中到期时，coder/websocket 取消它并关闭整条连接（TCP 只打断这一次）；
 //     这种错误同时包裹 net.ErrClosed，调用方据此知道连接已经不能用，不要当成“什么也没写、连接还在”的拒绝。
-//     期限在读写开始之前就已过去时什么也不做，连接仍可用，错误不包裹 net.ErrClosed。
+//     期限在读写开始之前就已过去时立即拒绝、什么也不做，连接仍可用，错误不包裹 net.ErrClosed。
+//     与 TCP 一样，换期限即生效：旧期限不再作用于之后的读写。为此期限只在一次读写进行期间交给 NetConn（见 deadline）。
 //   - Close 立即关闭底层 socket（websocket.Conn.CloseNow），打断阻塞中的读写，不做 WebSocket 关闭握手、不等对端：
 //     与关闭 TCP socket 一样，浏览器看到 1006。会话的慢连接断开与停机依赖这一点。
 //   - RemoteAddr 是客户端地址：直连对端是 Config.TrustedProxies 里的代理时，是从 X-Forwarded-For 取出的地址
@@ -415,8 +415,7 @@ type Conn struct {
 	// client 是 RemoteAddr 报告的转发客户端地址；nil 表示用 TCP 对端地址。升级时写一次，之后只读。
 	client net.Addr
 
-	readDeadline  atomic.Int64 // UnixNano；0 表示没有期限
-	writeDeadline atomic.Int64
+	read, write deadline // 两个方向各自的期限；读写都经它们进行
 
 	closeOnce sync.Once
 	closeErr  error
@@ -426,7 +425,9 @@ func newConn(socket *websocket.Conn, maxMessageBytes int64) *Conn {
 	stream := websocket.NetConn(context.Background(), socket, websocket.MessageBinary)
 	// NetConn 把读上限设成 -1（不限），这里按配置重新设：单条消息超出时库以 1009 关闭连接，读返回错误。
 	socket.SetReadLimit(maxMessageBytes)
-	return &Conn{Conn: stream, socket: socket}
+	conn := &Conn{Conn: stream, socket: socket}
+	conn.read.apply, conn.write.apply = stream.SetReadDeadline, stream.SetWriteDeadline
+	return conn
 }
 
 // RemoteAddr 是客户端地址（见类型注释）。
@@ -441,20 +442,12 @@ func (conn *Conn) RemoteAddr() net.Addr {
 func (conn *Conn) PeerAddr() net.Addr { return conn.Conn.RemoteAddr() }
 
 func (conn *Conn) Read(buffer []byte) (int, error) {
-	n, err := conn.Conn.Read(buffer)
-	if err != nil {
-		err = deadlineError(err, &conn.readDeadline)
-	}
-	return n, err
+	return conn.read.do(func() (int, error) { return conn.Conn.Read(buffer) })
 }
 
 // Write 把 buffer 写成一条二进制消息。
 func (conn *Conn) Write(buffer []byte) (int, error) {
-	n, err := conn.Conn.Write(buffer)
-	if err != nil {
-		err = deadlineError(err, &conn.writeDeadline)
-	}
-	return n, err
+	return conn.write.do(func() (int, error) { return conn.Conn.Write(buffer) })
 }
 
 // WriteMessage 把 parts 依次拼成恰好一条二进制消息写出（gateway 写一帧：帧头 + 载荷）。多段时先复制进一块缓冲：
@@ -478,19 +471,19 @@ func (conn *Conn) WriteMessage(parts ...[]byte) (int64, error) {
 }
 
 func (conn *Conn) SetDeadline(at time.Time) error {
-	conn.readDeadline.Store(unixNano(at))
-	conn.writeDeadline.Store(unixNano(at))
-	return conn.Conn.SetDeadline(at)
+	conn.read.set(at)
+	conn.write.set(at)
+	return nil
 }
 
 func (conn *Conn) SetReadDeadline(at time.Time) error {
-	conn.readDeadline.Store(unixNano(at))
-	return conn.Conn.SetReadDeadline(at)
+	conn.read.set(at)
+	return nil
 }
 
 func (conn *Conn) SetWriteDeadline(at time.Time) error {
-	conn.writeDeadline.Store(unixNano(at))
-	return conn.Conn.SetWriteDeadline(at)
+	conn.write.set(at)
+	return nil
 }
 
 // Close 见类型注释。第一次调用返回关闭的结果（已被对端关闭也算成功），之后的调用返回包裹 net.ErrClosed 的错误。
@@ -511,21 +504,68 @@ func (conn *Conn) Close() error {
 	return conn.closeErr
 }
 
-func unixNano(at time.Time) int64 {
-	if at.IsZero() {
-		return 0
+// deadline 是一个方向（读或写）的期限。coder/websocket 的 NetConn 用一个计时器实现期限，到期回调在自己的 goroutine 里
+// 判断“这时有没有读写在进行”：有就取消它并关闭整条连接，没有就让之后的读写失败。计时器若一直挂着，就会出两种错
+// （2026-11-17，relay 成员在心跳整 10s 点被断开）：
+//   - 旧期限误杀新的读写：调用方每次写前设 now+期限、写完不清（relay 的 writeLoop、Gate 的会话写）。下一次写恰在上一次
+//     期限的到期点开始时，计时器已触发、回调还没跑，新期限的 Reset 拦不住它；新的写先拿到锁，回调就把它当成“写在期限处
+//     未完成”，关掉连接。读一侧看到 use of closed network connection，写一侧可能毫无错误。
+//   - 已过的期限：NetConn 把它当成 1ns 后到期，紧接着的写要么照样写出，要么被回调关掉连接，而不是 TCP 那样立即拒绝。
+//
+// 所以期限只在一次读写进行期间交给 NetConn：开始时已过期就立即拒绝（不碰 NetConn）；否则把期限设上、读写、再清掉。
+// 读写进行期间调用方换期限，照 net.Conn 的约定立即作用于这次读写。剩下的边界：一次读写恰好在期限处结束、回调已触发而
+// 还没跑时，它仍可能关掉随后的那次读写——那次期限确实到了，与“读写在期限处未完成”同样处理。
+type deadline struct {
+	op    sync.Mutex // 同一方向一次一个读写：设期限 → 读写 → 清期限不能与另一次交错（NetConn 本来也逐个执行）
+	mu    sync.Mutex // 保护 at、busy，并与设期限互斥
+	at    time.Time  // 零值表示没有期限
+	busy  bool       // 有读写在进行，期限已交给 NetConn
+	apply func(time.Time) error
+}
+
+func (d *deadline) set(at time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.at = at
+	if d.busy {
+		_ = d.apply(at)
 	}
-	return at.UnixNano()
+}
+
+// do 在期限之内执行一次读写 op。
+func (d *deadline) do(op func() (int, error)) (int, error) {
+	d.op.Lock()
+	defer d.op.Unlock()
+	d.mu.Lock()
+	at := d.at
+	if !at.IsZero() && !time.Now().Before(at) {
+		d.mu.Unlock()
+		return 0, fmt.Errorf("wsconn: %w before the read or write started", os.ErrDeadlineExceeded)
+	}
+	d.busy = true
+	_ = d.apply(at)
+	d.mu.Unlock()
+
+	n, err := op()
+
+	d.mu.Lock()
+	d.busy = false
+	_ = d.apply(time.Time{}) // 停掉计时器：旧期限不再作用于之后的读写
+	at = d.at
+	d.mu.Unlock()
+	if err != nil {
+		err = deadlineError(err, at)
+	}
+	return n, err
 }
 
 // deadlineError 把期限到期造成的错误变成 errors.Is(err, os.ErrDeadlineExceeded)（见 Conn 的注释）。期限没到的错误原样返回。
-func deadlineError(err error, deadline *atomic.Int64) error {
-	at := deadline.Load()
-	if at == 0 || time.Now().UnixNano() < at {
+func deadlineError(err error, at time.Time) error {
+	if at.IsZero() || time.Now().Before(at) {
 		return err
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		// NetConn 在读写开始前发现期限已过：什么也没做，连接仍可用。
+		// NetConn 在读写开始前发现期限已过（回调在没有读写时到期，见 deadline 的边界）：什么也没做，连接仍可用。
 		return fmt.Errorf("%w: %w", os.ErrDeadlineExceeded, err)
 	}
 	// 期限在读写进行中到期：NetConn 取消了这次读写，coder/websocket 随之关闭整条连接。
