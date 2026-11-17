@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestRoomPresenceDisconnectsEveryRoomOfAClosedConnection(t *testing.T) {
 		t.Fatalf("disconnects = %v", got)
 	}
 	w.presence.ForgetRoom(3)
-	w.presence.Forget(4, 102)
+	w.presence.Forget(4, 102, 2)
 	// drain 先调断线（这里收到调用）、再撤登记，收到第二次调用时撤登记可能还差一步，所以等到位。
 	for deadline := time.Now().Add(2 * time.Second); w.presence.Tracked() != 0; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
@@ -203,7 +204,7 @@ func TestRoomPresenceStopsWithClose(t *testing.T) {
 	w.none(t)
 	var absent *Presence
 	absent.Track(1, 101, "a", 1)
-	absent.Forget(1, 101)
+	absent.Forget(1, 101, 1)
 	absent.ForgetRoom(1)
 	absent.Sweep()
 	if PresenceFromRegistry(nil) != nil {
@@ -214,5 +215,50 @@ func TestRoomPresenceStopsWithClose(t *testing.T) {
 	}
 	if _, err := NewPresence(presenceClient{}, nil, 0); err == nil {
 		t.Fatal("NewPresence accepted no connections")
+	}
+}
+
+// RV-20261116-01：提交后回调不保证按提交顺序执行，登记按席位代际单调——旧代际迟到的登记不覆盖、不删新代际；旧代际
+// 迟到的离开不撤新代际；离开（或关房）先于同一代入房的回调到时，迟到的登记被墓碑（关房标记）挡住；墓碑过期后清掉。
+func TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive(t *testing.T) {
+	w := newPresenceWorld(t)
+	var clock atomic.Int64
+	base := time.Now()
+	w.presence.now = func() time.Time { return base.Add(time.Duration(clock.Load())) }
+	w.conns.active[presenceKey{101, "old"}] = true
+	w.conns.active[presenceKey{101, "new"}] = true
+	w.conns.active[presenceKey{102, "b"}] = true
+
+	w.presence.Track(1, 101, "new", 3) // Reconnect 的回调先到
+	w.presence.Track(1, 101, "old", 1) // 重复 Join 的回调迟到
+	w.presence.Forget(1, 101, 1)       // 更早一代的离开迟到
+	if n := w.presence.Tracked(); n != 1 {
+		t.Fatalf("%d tracked; want only the new connection", n)
+	}
+	w.conns.close(101, "old")
+	w.none(t)
+	w.conns.close(101, "new")
+	w.expect(t, presenceCall{1, 101, 3})
+
+	w.presence.Forget(2, 101, 5)     // 离开的回调先到
+	w.presence.Track(2, 101, "x", 5) // 同一代入房的回调迟到（连接 x 不在，登记了就会断线）
+	w.presence.ForgetRoom(3)         // 关房的回调先到
+	w.presence.Track(3, 102, "b", 2) // 关房之前那次入房的回调迟到
+	w.none(t)
+	for deadline := time.Now().Add(2 * time.Second); w.presence.Tracked() != 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d tracked; late registrations of retired seats were accepted", w.presence.Tracked())
+		}
+	}
+	w.conns.close(102, "b")
+	w.none(t)
+
+	clock.Store(int64(presenceTombstoneRetention + time.Second))
+	w.presence.Sweep()
+	w.presence.mu.Lock()
+	seats, rooms, closed := len(w.presence.seats), len(w.presence.byRoom), len(w.presence.closed)
+	w.presence.mu.Unlock()
+	if seats != 0 || rooms != 0 || closed != 0 {
+		t.Fatalf("expired tombstones kept: seats=%d rooms=%d closed=%d", seats, rooms, closed)
 	}
 }

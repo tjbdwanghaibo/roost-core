@@ -1,10 +1,18 @@
 package handler
 
-import "{{MODULE}}/game/view"
+import (
+	roomlogic "{{MODULE}}/game/modules/room"
+	"{{MODULE}}/game/view"
+)
 
 // handlerRoomJoin 在 Room 的 Nest 锁内处理。持久事实提交成功后才向调用者确认。
+// 成功时登记这条连接（提交之后才生效、回滚不登记，不看控制器收没收到回包；见 game/modules/room/room_presence.go）。
 //
 //roost:nest rollback=undo durability=strict
 func handlerRoomJoin(target view.IRoomEntity, playerID int64, connection string) (view.RoomSnapshot, error) {
-	return target.Room().Join(playerID, connection)
+	snapshot, err := target.Room().Join(playerID, connection)
+	if err == nil {
+		roomlogic.TrackCommitted(target.UniqueID(), playerID, connection, snapshot.Epoch)
+	}
+	return snapshot, err
 }

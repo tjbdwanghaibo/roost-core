@@ -15,9 +15,10 @@ import (
 // 这个文件是 room 模块的 manager（维护者 D22 / D24）：房间的断线订阅。安装 room 时，安装器在本目录 managers.go 的
 // Managers() 列表里加了一行 NewRoomPresence()。
 //
-//   - Start：建 gameroom.Presence（席位连接登记表），订阅玩家接入层的连接关闭，起后台协程，以
-//     gameroom.PresenceCapability 发布。room 的控制器在 Join / Reconnect 成功之后按能力名取它登记，Leave / Close
-//     之后撤掉；登记过的连接关了，后台协程对那几间房调 Disconnect（契约见 game/modules/room/room_presence.go）。
+//   - Start：建 gameroom.Presence（席位连接登记表），订阅玩家接入层的连接关闭，起后台协程，设为本进程正在运行的
+//     Presence，并以 gameroom.PresenceCapability 发布（诊断与测试取）。room 的 Nest handler 在 Join / Reconnect
+//     提交之后登记、Leave / Close 提交之后撤掉；登记过的连接关了，后台协程对那几间房调 Disconnect（契约见
+//     game/modules/room/room_presence.go）。
 //   - Stop：退订、停下后台协程，在停机期限之内等它返回。没处理完的断线不补：在线状态不落库，下次装载本来就是全断线。
 //
 // manager Mod 在 Nest 与玩家接入的 Mod 之前启动：Start 时两者都已经 Provide（能力在），连接还没开始接；停机时玩家接入

@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **room 连接登记随提交、按代际更新（修复 RV-20261116-01，P2，v1.49.0 起）**：断线订阅的连接登记原来由控制器在收到 Join / Reconnect 成功回包后 `Track`、Leave / Close 后 `Forget` / `ForgetRoom`；`Track` 没有代际比较且先删同玩家别的连接，`Forget` 无条件撤同玩家全部登记。于是旧 Join 回包迟到会覆盖新 Reconnect 的登记、旧 Leave 回包迟到会撤掉同玩家新 Join 的登记、同步等待被取消（`ErrNestCanceled`）而事务照样提交时根本不登记——三种情况下连接关了席位一直在线（补扫只扫已登记的连接）。现在 room 的 Join / Reconnect / Leave / Close handler 在组件成功后调 `TrackCommitted` / `ForgetCommitted` / `ForgetRoomCommitted`，经 `nest.AfterCommit` 在提交后更新本进程正在运行的 `Presence`（manager 的 `Start` 设、`Close` 撤），控制器不再碰登记；登记每个（房间, 玩家）一条、按席位代际单调，Leave 只撤它离开的那一代及更旧的，撤掉的留墓碑、关房留标记挡乱序迟到的旧登记（1 分钟后补扫时清）。`Presence.Forget` 多一个 `epoch` 参数（不兼容，只影响直接调它的代码）。room 场景 29 → 33（三条真实 Nest 回归 + 一条乱序单测），模块门禁（`codegen/internal/roost/module_{entity,timer,matchroom,matchmaking}_test.go`）与 `scripts/test-modules-generated.sh` 的计数随之改。已有工程：重新安装 room，或手工把 `game/handler/room_{join,reconnect,leave,close}.go`、`game/modules/room/room_presence.go`、`game/controllers/room.go`、`game/managers/room_presence.go` 换成新版。证据 `docs/maintenance/evidence/room-presence-20261117/README.md`。
 - **生成物要求的最低 core 提到 v1.52.0**（2026-11-17）：生成的 bootstrap 用 `kitetcd.SingletonStore`、生成的 `<实体>_event_gen.go` 用 `entity.RegisterEventListener` / `SetEventDispatch`，都要 v1.52.0；framework-compat 的 minimum 一栏随之改为 v1.52.0。
 
 ## [v1.52.0] - 2026-11-17

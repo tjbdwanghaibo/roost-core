@@ -1,0 +1,27 @@
+--- FAIL: TestRoomPresenceLateJoinReplyKeepsTheReconnectedSeatTracked (2.01s)
+    room_test.go:479: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+--- FAIL: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (2.00s)
+    room_test.go:519: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+--- FAIL: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (2.01s)
+    room_test.go:584: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+FAIL
+FAIL	example.com/rp/game/controllers	6.341s
+FAIL
+--- FAIL: TestRoomPresenceLateJoinReplyKeepsTheReconnectedSeatTracked (2.01s)
+    room_test.go:479: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+--- FAIL: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (2.00s)
+    room_test.go:519: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+--- FAIL: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (2.00s)
+    room_test.go:584: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+FAIL
+FAIL	example.com/rp/game/controllers	6.329s
+FAIL
+--- FAIL: TestRoomPresenceLateJoinReplyKeepsTheReconnectedSeatTracked (2.01s)
+    room_test.go:479: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+--- FAIL: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (2.00s)
+    room_test.go:519: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+--- FAIL: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (2.00s)
+    room_test.go:584: every connection of player 101 closed, but the seat stays online after sweeps; 1 tracked
+FAIL
+FAIL	example.com/rp/game/controllers	6.331s
+FAIL

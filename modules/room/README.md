@@ -20,7 +20,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 - `room.Open(ctx, registry, uniqueID, capacity) error`：开一间空房。`uniqueID` 由服务端分配、不能复用；先经生成的 lifecycle `GetOrCreate`，再经 `RoomOpen` 初始化。同样容量重复调用不重置房间；初始化失败可以用同一个号重试。第一位成功加入的人成为房主。
 - `room.Disconnect(ctx, nestClient, roomID, playerID, epoch) (bool, error)`：把那个席位标成断线。断线订阅（下一条）自动调它，业务不用调；业务要主动“视作断线”时也可以调。`epoch` 必须是这条连接最后一次成功 Join / Reconnect 拿到的值；迟到或重复的旧关闭事件返回 `false`，不影响新连接。
-- **断线订阅**（`game/modules/room/room_presence.go` 的 `Presence`，manager `NewRoomPresence` 启停，维护者 D24）：控制器在 Join / Reconnect 提交成功之后登记“这名玩家的这条连接坐在这间房、代际多少”，Leave / Close 之后撤掉；manager 订阅玩家接入层的连接关闭（`OnSessionClosed`，事件带连接标识 `ConnectionID`），登记过的连接关了就在自己的后台协程里对那几间房调 `Disconnect`。三个洞的补法：关闭事件可能丢（接入层队列满）——每 30 秒（`SweepInterval`）问一遍接入层每条登记的连接还在不在（`ConnectionActive`）；连接在 Join 提交之前就关了——登记时立刻问一次；进程重启——见下一条。断线失败的留到下一轮补扫，连续 3 次放弃并记 Warn。`Presence.Sweep()` 可以立刻补扫一遍（诊断用）。没有登记这个 manager 时控制器不登记，断线回到业务自己调 `Disconnect`。
+- **断线订阅**（`game/modules/room/room_presence.go` 的 `Presence`，manager `NewRoomPresence` 启停，维护者 D24）：Join / Reconnect / Leave / Close 的 Nest handler 在组件成功之后经 `nest.AfterCommit` 更新登记（`TrackCommitted` / `ForgetCommitted` / `ForgetRoomCommitted`）：事务提交之后登记“这名玩家的这条连接坐在这间房、代际多少”或撤掉，回滚则不动。登记由“提交成功”驱动，不看控制器收没收到回包——回包迟到、同步等待被取消（`ErrNestCanceled`，事务照样提交）都不丢登记；提交后回调可能乱序，所以每个（房间, 玩家）只记一条、按席位代际单调：旧代际迟到的登记不覆盖新代际，Leave 只撤它离开的那一代及更旧的，撤掉的留墓碑、关房留标记挡迟到的旧登记（保留 1 分钟，补扫时清）（RV-20261116-01）；manager 订阅玩家接入层的连接关闭（`OnSessionClosed`，事件带连接标识 `ConnectionID`），登记过的连接关了就在自己的后台协程里对那几间房调 `Disconnect`。三个洞的补法：关闭事件可能丢（接入层队列满）——每 30 秒（`SweepInterval`）问一遍接入层每条登记的连接还在不在（`ConnectionActive`）；连接在 Join 提交之前就关了——登记时立刻问一次；进程重启——见下一条。断线失败的留到下一轮补扫，连续 3 次放弃并记 Warn。`Presence.Sweep()` 可以立刻补扫一遍（诊断用）。一个进程只有一个正在运行的 `Presence`（manager 的 `Start` 设、`Close` 撤）；没有登记这个 manager 时提交后回调什么都不做，断线回到业务自己调 `Disconnect`。业务自己的 handler 若在 Room 上另做入房 / 离开（不经这几条 handler），要同样调这三个函数，否则那些连接不在登记里。
 - **在线状态不落库**：`RoomDao.Online`（玩家号 → 在线的连接，`dao:"nopersist"`）随事务回滚、不写库。房间在新进程里装载（重启、冷加载、运维刷新）时它是空的：全部席位是断线——上一个进程的连接不可能活到新进程里（连接标识是新进程的 nonce）。成员用 `RoomReconnect`（带上次的 `Epoch`、换新连接）重新上线；旧连接的请求按代际 / 连接围栏拒绝（`room_stale_epoch`）。
 - `room.EntityID(roomID) (int64, error)`：把房间唯一号换成 Room 的完整 Entity ID。
 - `room.ConnectionKey(session) (string, error)`：从服务端 Session 的 `ConnectionID()` 取连接标识。
@@ -68,10 +68,10 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 
 ## 验证范围
 
-- `roost module verify room`：29 条场景（`game/handler` 21 条、`game/controllers` 4 条、`game/modules/room` 3 条、`game/managers` 1 条）。
+- `roost module verify room`：33 条场景（`game/handler` 21 条、`game/controllers` 7 条、`game/modules/room` 4 条、`game/managers` 1 条）。
 - 离线：真实的 Nest 引擎、生成的 Sender、正式的 ManagerAccess 与 lifecycle，提交器是替身（可以注入提交失败）；没有 Mongo、Redis 与真实网络。
 - 覆盖：容量、幂等、座位复用、房主交接、关闭终态、CAS 竞争、旧连接的请求与关闭事件、PB 编解码、成员权限、BSON 往返恢复、代际上限，以及 Join / Reconnect / Leave / Close 提交失败后的完整回滚；加载失败不会建出空实体。
-- 断线订阅与重启（D24）：经真实控制器、生成的 Sender 与 Nest——连接关了席位自动断线（座位与房主不变）、Join 提交之前就关了的连接登记时补上、丢掉的关闭事件由补扫补上、离开之后不再登记（`TestRoomClosedConnectionMarksTheSeatOffline`，接入层是替身）；`Presence` 自身——一条连接坐在多间房各断一次、撤掉的不再断、失败重试与三次放弃、停了退订（`game/modules/room`）；manager 起停与缺能力时拒绝启动（`game/managers`）；从持久字节重新装载之后全部断线、成员换连接重连才在线、旧连接的重放被拒，离开 / 重连被拒提交时在线标记一起回滚（`game/handler`）。没有经真实 TCP / Gate 的断线与真实进程 kill -9 重启。
+- 断线订阅与重启（D24）：经真实控制器、生成的 Sender 与 Nest——连接关了席位自动断线（座位与房主不变）、Join 提交之前就关了的连接登记时补上、丢掉的关闭事件由补扫补上、离开之后不再登记（`TestRoomClosedConnectionMarksTheSeatOffline`，接入层是替身）；登记随提交（RV-20261116-01，三条）——旧 Join 的回包迟到不覆盖新 Reconnect 的登记、旧 Leave 的回包迟到不撤同玩家新 Join 的登记、同步等待被取消而 Join 照样提交时照样登记（`TestRoomPresence*`，提交器替身可在提交里停住）；`Presence` 自身——一条连接坐在多间房各断一次、撤掉的不再断、失败重试与三次放弃、停了退订、提交后回调乱序时代际单调与墓碑过期（`game/modules/room`）；manager 起停与缺能力时拒绝启动（`game/managers`）；从持久字节重新装载之后全部断线、成员换连接重连才在线、旧连接的重放被拒，离开 / 重连被拒提交时在线标记一起回滚（`game/handler`）。没有经真实 TCP / Gate 的断线与真实进程 kill -9 重启。
 - 安装器另测实体号避让、已有文件冲突、生成失败回滚、重复安装与业务文件保留。
 - 真实联合验收（2026-11-14）：`ROOST_TURN_PVP_REAL=1 bash scripts/test-turn-pvp-generated.sh` 的正式配方经真实 account / match、独立 Gate / NATS / Game Ingress、Mongo / 文件 WAL 验证名单入房、重连代际、关闭，以及 SIGKILL 后冷加载与顺序回合恢复。模块原 22 条计数不变；[证据和边界](../../docs/maintenance/evidence/turn-real-20261114/README.md)。
 

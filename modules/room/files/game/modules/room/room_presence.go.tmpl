@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -14,15 +15,27 @@ import (
 
 // 断线订阅（维护者 D24）：房间自己知道成员的连接断了，不用业务在连接关闭回调里调 Disconnect。
 //
-// Presence 记着本进程里“哪名玩家的哪条连接坐在哪间房、代际是多少”——只在 Join / Reconnect 提交成功之后由控制器
-// 登记（Track），离开、关房之后撤掉（Forget / ForgetRoom）。它订阅玩家接入层的连接关闭事件：登记过的连接关了，
-// 就在自己的后台协程里对每间房调一次 Disconnect（带登记时的代际，迟到的旧事件伤不到新连接——同一个 CAS）。
+// Presence 记着本进程里“哪名玩家的哪条连接坐在哪间房、代际是多少”。它订阅玩家接入层的连接关闭事件：登记过的连接
+// 关了，就在自己的后台协程里对每间房调一次 Disconnect（带登记时的代际，迟到的旧事件伤不到新连接——同一个 CAS）。
+//
+// 登记由“提交成功”驱动（RV-20261116-01）：Join / Reconnect / Leave / Close 的 Nest handler 在组件成功之后调
+// TrackCommitted / ForgetCommitted / ForgetRoomCommitted，它们经 nest.AfterCommit 在事务提交之后更新本进程正在运行
+// 的 Presence；事务回滚就什么都不改。不由控制器收没收到成功回包驱动：控制器的回包可以迟到（协程被调度走），同步
+// 等待可以被取消（ErrNestCanceled，事务照样提交），这两种情况下登记都不能丢、也不能被旧结果改写。
+//
+// 提交后回调不保证按提交顺序执行（解锁之后才跑，同一间房的下一笔可能先跑完），所以登记按席位代际单调：
+//
+//   - 每个（房间, 玩家）只记一条：Track 只认比现有代际新的（相同代际、相同连接是重放，不变）；旧代际迟到的登记不覆盖
+//     新代际，也不删同玩家新连接的登记。
+//   - Forget 只撤代际不超过离开那一代的登记；之后才到的同代际登记（Join 的回调落在 Leave 的回调后面）被挡住。
+//   - 撤掉的登记留一个墓碑（只有代际），ForgetRoom 给房间留一个关闭标记（关了的房间号不再开），挡迟到的旧登记；
+//     墓碑与关闭标记在补扫时清掉超过 presenceTombstoneRetention 的（提交后回调之间的乱序远短于它）。
 //
 // 三个洞与各自的补法：
 //
 //   - 关闭事件可以丢（接入层的关闭队列满时丢最旧的，见 gateway.TCPRuntime.OnSessionClosed）：每 SweepInterval 扫一遍
 //     登记表，问接入层每条连接还在不在（ConnectionActive），不在的照样断线。
-//   - 关闭先于登记（连接在 Join 提交与回包之间断了，事件到的时候还没有登记）：Track 登记之后立刻问一次 ConnectionActive，
+//   - 关闭先于登记（连接在 Join 提交与登记之间断了，事件到的时候还没有登记）：Track 登记之后立刻问一次 ConnectionActive，
 //     接入层保证“先摘掉、再发布关闭事件”，所以要么事件看得到登记、要么这一问答 false。
 //   - 进程重启：在线状态不落库（RoomDao.Online 是 nopersist），房间在新进程里装载时全部席位都是断线，成员用
 //     RoomReconnect 重新上线并重新登记。登记表本身也只在内存里，重启后是空的，不需要恢复。
@@ -30,8 +43,9 @@ import (
 // 断线只改在线标记（nopersist），失败不丢座位；失败的留着下一轮再试，连续 maxDisconnectFailures 次失败（房间删了、
 // 一直装不上）就放弃这一条并记 Warn。停机时不再处理：在线状态不落库，下次装载本来就是全断线。
 //
-// 并发安全。由 manager（game/managers/room_presence.go）创建、启停，并以 PresenceCapability 发布；控制器在请求时
-// 按能力名取，取不到（没登记 manager）就不登记——那时断线要业务自己调 Disconnect。
+// 并发安全。由 manager（game/managers/room_presence.go）创建、启停，并以 PresenceCapability 发布（给诊断与测试取）；
+// Start 把它设为本进程正在运行的 Presence（handler 的提交后回调更新它，一个进程一个，后启动的接替先启动的），
+// Close 撤下。没有 Presence 在运行（没登记 manager）时提交后回调什么都不做——那时断线要业务自己调 Disconnect。
 
 // PresenceCapability 是 Presence 在 Registry 里的能力名。
 const PresenceCapability app.ModName = "game.room.presence"
@@ -42,20 +56,61 @@ const SweepInterval = 30 * time.Second
 // maxDisconnectFailures 是同一条登记连续断线失败多少次之后放弃。
 const maxDisconnectFailures = 3
 
+// presenceTombstoneRetention 是撤掉的登记（墓碑）与关房标记保留多久：只用来挡乱序迟到的提交后回调。
+const presenceTombstoneRetention = time.Minute
+
 // Connections 是 Presence 用到的玩家接入层的那一部分（gateway.PlayerRuntime 满足它）。
 type Connections interface {
 	ConnectionActive(playerID int64, connectionID string) bool
 	OnSessionClosed(func(gateway.TCPSessionClosed)) func()
 }
 
+// presenceKey 是一条连接：玩家号 + 连接 nonce。
 type presenceKey struct {
 	playerID   int64
 	connection string
 }
 
+// seatKey 是一个席位：房间号 + 玩家号。
+type seatKey struct {
+	roomID   int64
+	playerID int64
+}
+
+// presenceSeat 是一个席位的登记。gone 非零时是墓碑：登记已经撤掉，只留代际挡迟到的旧登记。
 type presenceSeat struct {
-	epoch    uint64
-	failures int
+	connection string
+	epoch      uint64
+	failures   int
+	gone       time.Time
+}
+
+func (seat *presenceSeat) live() bool { return seat != nil && seat.gone.IsZero() }
+
+// running 是本进程正在运行的 Presence：Start 设、Close 撤；handler 的提交后回调更新它。
+var running atomic.Pointer[Presence]
+
+// TrackCommitted 在 Join / Reconnect 的 Nest handler 里、组件成功之后调用：事务提交之后登记 playerID 用 connection
+// 坐在 roomID、代际 epoch（回滚则不登记）。不在事务里时立即登记。
+func TrackCommitted(roomID, playerID int64, connection string, epoch uint64) {
+	afterCommit(func() { running.Load().Track(roomID, playerID, connection, epoch) })
+}
+
+// ForgetCommitted 在 Leave 的 Nest handler 里、确实撤掉了代际 epoch 的席位之后调用：事务提交之后撤掉这一代（及更旧）
+// 的登记，同玩家更新代际的登记不动。epoch 必须是撤掉的那个席位的真实代际，不能是客户端随意给的值。
+func ForgetCommitted(roomID, playerID int64, epoch uint64) {
+	afterCommit(func() { running.Load().Forget(roomID, playerID, epoch) })
+}
+
+// ForgetRoomCommitted 在 Close 的 Nest handler 里、关房成功之后调用：事务提交之后撤掉 roomID 的全部登记。
+func ForgetRoomCommitted(roomID int64) {
+	afterCommit(func() { running.Load().ForgetRoom(roomID) })
+}
+
+func afterCommit(fn func()) {
+	if !nest.AfterCommit(fn) {
+		fn()
+	}
 }
 
 // Presence 是本进程的席位连接登记表与断线的后台执行。用 NewPresence 构造、Start 启动、Close 停止。
@@ -65,11 +120,15 @@ type Presence struct {
 	sweep  time.Duration
 	// disconnect 是对一间房的断线调用；缺省是本包的 Disconnect，测试可以换。
 	disconnect func(ctx context.Context, client nest.Client, roomID, playerID int64, epoch uint64) (bool, error)
+	// now 是墓碑计时用的时钟；缺省 time.Now，测试可以换。
+	now func() time.Time
 
 	mu      sync.Mutex
-	seats   map[presenceKey]map[int64]presenceSeat // 连接 -> 房间号 -> 登记
-	byRoom  map[int64]map[presenceKey]struct{}     // 房间号 -> 坐在里面的连接
-	pending map[presenceKey]struct{}               // 要检查、断线的连接
+	seats   map[seatKey]*presenceSeat           // 席位 -> 登记（含墓碑）
+	byRoom  map[int64]map[int64]struct{}        // 房间号 -> 有登记（含墓碑）的玩家
+	byConn  map[presenceKey]map[int64]struct{}  // 连接 -> 用它坐着的房间（只含活登记）
+	closed  map[int64]time.Time                 // 关了的房间号 -> 关的时刻
+	pending map[presenceKey]struct{}            // 要检查、断线的连接
 	wake    chan struct{}
 
 	cancel      context.CancelFunc
@@ -90,26 +149,29 @@ func NewPresence(client nest.Client, conns Connections, sweep time.Duration) (*P
 		sweep = SweepInterval
 	}
 	return &Presence{
-		client: client, conns: conns, sweep: sweep, disconnect: Disconnect,
-		seats: map[presenceKey]map[int64]presenceSeat{}, byRoom: map[int64]map[presenceKey]struct{}{},
-		pending: map[presenceKey]struct{}{}, wake: make(chan struct{}, 1),
+		client: client, conns: conns, sweep: sweep, disconnect: Disconnect, now: time.Now,
+		seats: map[seatKey]*presenceSeat{}, byRoom: map[int64]map[int64]struct{}{}, byConn: map[presenceKey]map[int64]struct{}{},
+		closed: map[int64]time.Time{}, pending: map[presenceKey]struct{}{}, wake: make(chan struct{}, 1),
 	}, nil
 }
 
-// Start 订阅连接关闭并起后台协程。只调一次。
+// Start 订阅连接关闭、起后台协程，并设为本进程正在运行的 Presence。只调一次。
 func (p *Presence) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel, p.done = cancel, make(chan struct{})
-	p.unsubscribe = p.conns.OnSessionClosed(p.closed)
+	p.unsubscribe = p.conns.OnSessionClosed(p.closedEvent)
 	go p.run(ctx)
+	running.Store(p)
 }
 
-// Close 退订、停下后台协程，在 ctx 之内等它返回（在途的一次断线调用随 ctx 取消）。可以重复调用。
+// Close 撤下（不再是正在运行的 Presence）、退订、停下后台协程，在 ctx 之内等它返回（在途的一次断线调用随 ctx 取消）。
+// 可以重复调用。
 func (p *Presence) Close(ctx context.Context) error {
 	if p.cancel == nil {
 		return nil
 	}
 	p.closeOnce.Do(func() {
+		running.CompareAndSwap(p, nil)
 		if p.unsubscribe != nil {
 			p.unsubscribe()
 		}
@@ -123,57 +185,71 @@ func (p *Presence) Close(ctx context.Context) error {
 	}
 }
 
-// Track 在 Join / Reconnect 提交成功之后登记：playerID 用 connection 坐在 roomID，代际 epoch。同一名玩家在这间房
+// Track 登记：playerID 用 connection 坐在 roomID，代际 epoch。只认比现有登记（或墓碑）新的代际；同一名玩家在这间房
 // 的旧连接登记随之撤掉（Reconnect 换了连接）。登记之后立刻问一次连接还在不在，补“关闭先于登记”。
+// 正式链路经 TrackCommitted 在提交之后调用。
 func (p *Presence) Track(roomID, playerID int64, connection string, epoch uint64) {
 	if p == nil || roomID <= 0 || playerID <= 0 || connection == "" || epoch == 0 {
 		return
 	}
-	key := presenceKey{playerID: playerID, connection: connection}
+	key, seat := presenceKey{playerID: playerID, connection: connection}, seatKey{roomID: roomID, playerID: playerID}
 	p.mu.Lock()
-	for other := range p.byRoom[roomID] {
-		if other.playerID == playerID && other != key {
-			p.dropLocked(roomID, other)
+	if _, closed := p.closed[roomID]; closed {
+		p.mu.Unlock()
+		return
+	}
+	if current := p.seats[seat]; current != nil {
+		if epoch <= current.epoch {
+			// 旧代际迟到，或同一代际的重放 / 已经撤掉的那一代：不改。
+			p.mu.Unlock()
+			return
 		}
+		p.unindexLocked(seat, current)
 	}
-	if p.seats[key] == nil {
-		p.seats[key] = map[int64]presenceSeat{}
-	}
-	p.seats[key][roomID] = presenceSeat{epoch: epoch}
+	p.seats[seat] = &presenceSeat{connection: connection, epoch: epoch}
 	if p.byRoom[roomID] == nil {
-		p.byRoom[roomID] = map[presenceKey]struct{}{}
+		p.byRoom[roomID] = map[int64]struct{}{}
 	}
-	p.byRoom[roomID][key] = struct{}{}
+	p.byRoom[roomID][playerID] = struct{}{}
+	if p.byConn[key] == nil {
+		p.byConn[key] = map[int64]struct{}{}
+	}
+	p.byConn[key][roomID] = struct{}{}
 	p.mu.Unlock()
 	if !p.conns.ConnectionActive(playerID, connection) {
 		p.markPending(key)
 	}
 }
 
-// Forget 在 Leave 提交成功之后撤掉 playerID 在 roomID 的登记。
-func (p *Presence) Forget(roomID, playerID int64) {
-	if p == nil {
+// Forget 撤掉 playerID 在 roomID 代际不超过 epoch 的登记（留墓碑）；更新代际的登记不动。正式链路经 ForgetCommitted
+// 在 Leave 提交之后调用。
+func (p *Presence) Forget(roomID, playerID int64, epoch uint64) {
+	if p == nil || roomID <= 0 || playerID <= 0 || epoch == 0 {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for key := range p.byRoom[roomID] {
-		if key.playerID == playerID {
-			p.dropLocked(roomID, key)
-		}
+	if _, closed := p.closed[roomID]; closed {
+		return
 	}
+	p.retireLocked(seatKey{roomID: roomID, playerID: playerID}, epoch)
 }
 
-// ForgetRoom 在 Close 提交成功之后撤掉 roomID 的全部登记。
+// ForgetRoom 撤掉 roomID 的全部登记，并记下房间已关（之后迟到的登记不认）。正式链路经 ForgetRoomCommitted 在 Close
+// 提交之后调用。
 func (p *Presence) ForgetRoom(roomID int64) {
-	if p == nil {
+	if p == nil || roomID <= 0 {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for key := range p.byRoom[roomID] {
-		p.dropLocked(roomID, key)
+	for playerID := range p.byRoom[roomID] {
+		seat := seatKey{roomID: roomID, playerID: playerID}
+		p.unindexLocked(seat, p.seats[seat])
+		delete(p.seats, seat)
 	}
+	delete(p.byRoom, roomID)
+	p.closed[roomID] = p.now()
 }
 
 // Sweep 立刻补扫一遍（不等 SweepInterval）：登记着、但接入层说已经不在的连接照样断线。给运维诊断与测试用。
@@ -188,39 +264,72 @@ func (p *Presence) Sweep() {
 	}
 }
 
-// Tracked 是登记着的（连接, 房间）对数。给测试与诊断用。
+// Tracked 是登记着的（连接, 房间）对数（不含墓碑）。给测试与诊断用。
 func (p *Presence) Tracked() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	count := 0
-	for _, rooms := range p.seats {
+	for _, rooms := range p.byConn {
 		count += len(rooms)
 	}
 	return count
 }
 
-// dropLocked 撤掉 key 在 roomID 的登记。调用方持有锁。
-func (p *Presence) dropLocked(roomID int64, key presenceKey) {
-	if rooms := p.seats[key]; rooms != nil {
-		delete(rooms, roomID)
-		if len(rooms) == 0 {
-			delete(p.seats, key)
-			delete(p.pending, key)
-		}
+// retireLocked 把 seat 代际不超过 epoch 的登记换成 epoch 的墓碑；现有登记更新时不动。调用方持有锁。
+func (p *Presence) retireLocked(seat seatKey, epoch uint64) {
+	current := p.seats[seat]
+	if current != nil && current.epoch > epoch {
+		return
 	}
-	if keys := p.byRoom[roomID]; keys != nil {
-		delete(keys, key)
-		if len(keys) == 0 {
-			delete(p.byRoom, roomID)
+	p.unindexLocked(seat, current)
+	p.seats[seat] = &presenceSeat{epoch: epoch, gone: p.now()}
+	if p.byRoom[seat.roomID] == nil {
+		p.byRoom[seat.roomID] = map[int64]struct{}{}
+	}
+	p.byRoom[seat.roomID][seat.playerID] = struct{}{}
+}
+
+// unindexLocked 把活登记从连接索引里摘掉（墓碑与 nil 什么都不做）。调用方持有锁。
+func (p *Presence) unindexLocked(seat seatKey, current *presenceSeat) {
+	if !current.live() {
+		return
+	}
+	key := presenceKey{playerID: seat.playerID, connection: current.connection}
+	if rooms := p.byConn[key]; rooms != nil {
+		delete(rooms, seat.roomID)
+		if len(rooms) == 0 {
+			delete(p.byConn, key)
+			delete(p.pending, key)
 		}
 	}
 }
 
-// closed 是连接关闭事件的订阅：只记下要处理的连接、唤醒后台协程，不在接入层的事件协程里做 Nest 调用。
-func (p *Presence) closed(event gateway.TCPSessionClosed) {
+// pruneLocked 清掉超过 presenceTombstoneRetention 的墓碑与关房标记。调用方持有锁。
+func (p *Presence) pruneLocked() {
+	cutoff := p.now().Add(-presenceTombstoneRetention)
+	for seat, current := range p.seats {
+		if !current.live() && current.gone.Before(cutoff) {
+			delete(p.seats, seat)
+			if players := p.byRoom[seat.roomID]; players != nil {
+				delete(players, seat.playerID)
+				if len(players) == 0 {
+					delete(p.byRoom, seat.roomID)
+				}
+			}
+		}
+	}
+	for roomID, at := range p.closed {
+		if at.Before(cutoff) {
+			delete(p.closed, roomID)
+		}
+	}
+}
+
+// closedEvent 是连接关闭事件的订阅：只记下要处理的连接、唤醒后台协程，不在接入层的事件协程里做 Nest 调用。
+func (p *Presence) closedEvent(event gateway.TCPSessionClosed) {
 	key := presenceKey{playerID: event.PlayerID, connection: event.ConnectionID}
 	p.mu.Lock()
-	_, tracked := p.seats[key]
+	_, tracked := p.byConn[key]
 	p.mu.Unlock()
 	if tracked {
 		p.markPending(key)
@@ -229,7 +338,7 @@ func (p *Presence) closed(event gateway.TCPSessionClosed) {
 
 func (p *Presence) markPending(key presenceKey) {
 	p.mu.Lock()
-	if _, tracked := p.seats[key]; tracked {
+	if _, tracked := p.byConn[key]; tracked {
 		p.pending[key] = struct{}{}
 	}
 	p.mu.Unlock()
@@ -255,18 +364,19 @@ func (p *Presence) run(ctx context.Context) {
 	}
 }
 
-// sweepInactive 把登记着、但接入层说已经不在的连接记成待处理（补丢掉的关闭事件）。
+// sweepInactive 把登记着、但接入层说已经不在的连接记成待处理（补丢掉的关闭事件），顺带清掉过期的墓碑。
 func (p *Presence) sweepInactive() {
 	p.mu.Lock()
-	keys := make([]presenceKey, 0, len(p.seats))
-	for key := range p.seats {
+	p.pruneLocked()
+	keys := make([]presenceKey, 0, len(p.byConn))
+	for key := range p.byConn {
 		keys = append(keys, key)
 	}
 	p.mu.Unlock()
 	for _, key := range keys {
 		if !p.conns.ConnectionActive(key.playerID, key.connection) {
 			p.mu.Lock()
-			if _, tracked := p.seats[key]; tracked {
+			if _, tracked := p.byConn[key]; tracked {
 				p.pending[key] = struct{}{}
 			}
 			p.mu.Unlock()
@@ -286,8 +396,8 @@ func (p *Presence) drain(ctx context.Context) {
 	var jobs []job
 	for key := range p.pending {
 		delete(p.pending, key)
-		for roomID, seat := range p.seats[key] {
-			jobs = append(jobs, job{key: key, roomID: roomID, epoch: seat.epoch})
+		for roomID := range p.byConn[key] {
+			jobs = append(jobs, job{key: key, roomID: roomID, epoch: p.seats[seatKey{roomID: roomID, playerID: key.playerID}].epoch})
 		}
 	}
 	p.mu.Unlock()
@@ -296,21 +406,21 @@ func (p *Presence) drain(ctx context.Context) {
 			return
 		}
 		_, err := p.disconnect(ctx, p.client, item.roomID, item.key.playerID, item.epoch)
+		seat := seatKey{roomID: item.roomID, playerID: item.key.playerID}
 		p.mu.Lock()
-		seat, still := p.seats[item.key][item.roomID]
+		current := p.seats[seat]
 		switch {
-		case !still || seat.epoch != item.epoch:
+		case !current.live() || current.epoch != item.epoch || current.connection != item.key.connection:
 			// 处理期间重新登记过（Reconnect）或已经撤掉：结果以新登记为准。
 		case err == nil:
-			p.dropLocked(item.roomID, item.key)
+			p.retireLocked(seat, item.epoch)
 		case ctx.Err() != nil:
 		default:
-			seat.failures++
-			if seat.failures >= maxDisconnectFailures {
-				p.dropLocked(item.roomID, item.key)
+			current.failures++
+			if current.failures >= maxDisconnectFailures {
+				p.retireLocked(seat, item.epoch)
 				slog.Warn("room presence: gave up marking a closed connection offline", "room_id", item.roomID, "player_id", item.key.playerID, "epoch", item.epoch, "err", err)
 			} else {
-				p.seats[item.key][item.roomID] = seat
 				slog.Debug("room presence: disconnect failed; retrying on the next sweep", "room_id", item.roomID, "player_id", item.key.playerID, "err", err)
 			}
 		}
@@ -318,7 +428,7 @@ func (p *Presence) drain(ctx context.Context) {
 	}
 }
 
-// PresenceFromRegistry 取 manager 发布的 Presence；没有登记时返回 nil（Track / Forget 对 nil 什么都不做）。
+// PresenceFromRegistry 取 manager 发布的 Presence（诊断与测试用）；没有登记时返回 nil（Track / Forget 对 nil 什么都不做）。
 func PresenceFromRegistry(registry *app.Registry) *Presence {
 	if registry == nil {
 		return nil

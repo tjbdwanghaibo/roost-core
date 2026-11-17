@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,9 +34,15 @@ type roomEndpointFixture struct {
 
 func newRoomEndpointFixture(t *testing.T) *roomEndpointFixture {
 	t.Helper()
+	return newRoomEndpointFixtureWith(t, roomEndpointCommitter{})
+}
+
+// newRoomEndpointFixtureWith 同上，持久提交器由用例给（取消等待的用例要在提交里停一下）。
+func newRoomEndpointFixtureWith(t *testing.T, committer nest.TransactionCommitter) *roomEndpointFixture {
+	t.Helper()
 	roomentity.RegisterEntity()
 	access := entity.NewManagerAccess(entity.NewEntityManager())
-	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(roomEndpointCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	for _, register := range []func(*nest.NestMgr) error{handler.RegisterRoomOpenNestHandlersOn, handler.RegisterRoomJoinNestHandlersOn, handler.RegisterRoomViewNestHandlersOn, handler.RegisterRoomLeaveNestHandlersOn, handler.RegisterRoomReconnectNestHandlersOn, handler.RegisterRoomDisconnectNestHandlersOn, handler.RegisterRoomCloseNestHandlersOn} {
 		if err := register(engine); err != nil {
 			t.Fatal(err)
@@ -350,4 +357,229 @@ func TestRoomClosedConnectionMarksTheSeatOffline(t *testing.T) {
 	if got := presence.Tracked(); got != 0 {
 		t.Fatalf("%d seats still tracked after the last live member left", got)
 	}
+}
+
+// RV-20261116-01：连接登记由“提交成功”这一事实驱动、按席位代际单调，不由控制器收没收到成功回包驱动。下面三条
+// 经真实控制器、生成的 Sender 与 Nest：控制器的回包可以迟到（协程被调度走）、同步等待可以被取消，但提交了的入房 /
+// 离开对登记的影响不能丢、也不能被迟到的旧结果改写。连接层与持久提交器是替身。
+
+// startRoomPresence 起一个 Presence（定时补扫给一小时，只在用例显式调 Sweep 时补扫），以能力名登记，用例结束时停。
+func startRoomPresence(t *testing.T, f *roomEndpointFixture) (*roomConns, *roomlogic.Presence) {
+	t.Helper()
+	conns := &roomConns{active: map[roomConnKey]bool{}}
+	presence, err := roomlogic.NewPresence(f.controller.NestClient(), conns, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.Register(roomlogic.PresenceCapability, presence); err != nil {
+		t.Fatal(err)
+	}
+	presence.Start()
+	t.Cleanup(func() { _ = presence.Close(context.Background()) })
+	return conns, presence
+}
+
+// roomSeatGoesOffline 反复补扫并经 viewer 读快照，直到 playerID 的席位断线；到期还在线就失败。
+func roomSeatGoesOffline(t *testing.T, f *roomEndpointFixture, presence *roomlogic.Presence, roomID, viewer int64, viewerConnection string, playerID int64) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		presence.Sweep()
+		reply, err := f.controller.HandleRoomView(roomContext(viewer, viewerConnection), &pb.RoomViewRequest{RoomID: roomID})
+		if err != nil || reply.Code != 0 {
+			t.Fatalf("view: %+v %v", reply, err)
+		}
+		online, seated := false, false
+		for _, seat := range reply.Info.Seats {
+			if seat.PlayerID == playerID {
+				online, seated = seat.Connected, true
+			}
+		}
+		if !seated {
+			t.Fatalf("player %d lost the seat: %+v", playerID, reply.Info)
+		}
+		if !online {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("every connection of player %d closed, but the seat stays online after sweeps; %d tracked", playerID, presence.Tracked())
+		}
+	}
+}
+
+// roomHeldReply 让名为 name 的 Nest 请求照常执行、提交，只把成功的回包扣住，直到 release 关闭：模拟控制器协程在
+// 收到回包之前被调度走。不改任何业务。
+type roomHeldReply struct {
+	nest.Client
+	name    string
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (c *roomHeldReply) Request(ctx context.Context, name nest.HandlerName, id int64, params nest.Params, opts ...nest.SendOpt) (any, error) {
+	result, err := c.Client.Request(ctx, name, id, params, opts...)
+	if name.String() == c.name && err == nil {
+		close(c.reached)
+		<-c.release
+	}
+	return result, err
+}
+
+// heldController 返回一个经 roomHeldReply 发 name 请求的控制器，与 f.controller 共用 Registry 与 Nest。
+func (f *roomEndpointFixture) heldController(name string) (*Controller, *roomHeldReply) {
+	held := &roomHeldReply{Client: f.controller.NestClient(), name: name, reached: make(chan struct{}), release: make(chan struct{})}
+	return &Controller{registry: f.registry, nestClient: held}, held
+}
+
+func (held *roomHeldReply) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-held.reached:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s did not commit", held.name)
+	}
+}
+
+// 旧 Join 的回包迟到：101 已有代际 1 的席位，同一连接重复 Join，提交完成后回包被扣住；另一条连接 Reconnect 拿到
+// 代际 3。旧 Join 的结果之后才到，不能把登记改回旧连接——两条连接都关了，席位必须断线。
+func TestRoomPresenceLateJoinReplyKeepsTheReconnectedSeatTracked(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	conns, presence := startRoomPresence(t, f)
+	const roomID int64 = 81901
+	if err := roomlogic.Open(context.Background(), f.registry, roomID, 3); err != nil {
+		t.Fatal(err)
+	}
+	conns.open(101, "old")
+	conns.open(102, "viewer")
+	for _, who := range []struct {
+		id   int64
+		conn string
+	}{{101, "old"}, {102, "viewer"}} {
+		if reply, err := f.controller.HandleRoomJoin(roomContext(who.id, who.conn), &pb.RoomJoinRequest{RoomID: roomID}); err != nil || reply.Code != 0 {
+			t.Fatalf("join %d: %+v %v", who.id, reply, err)
+		}
+	}
+	older, held := f.heldController("handlerRoomJoin")
+	done := make(chan *pb.RoomJoinResponse, 1)
+	go func() {
+		reply, _ := older.HandleRoomJoin(roomContext(101, "old"), &pb.RoomJoinRequest{RoomID: roomID})
+		done <- reply
+	}()
+	held.wait(t)
+	conns.open(101, "new")
+	reconnected, err := f.controller.HandleRoomReconnect(roomContext(101, "new"), &pb.RoomReconnectRequest{RoomID: roomID, Epoch: 1})
+	if err != nil || reconnected.Code != 0 || reconnected.Info.Epoch != 3 {
+		t.Fatalf("reconnect: %+v %v", reconnected, err)
+	}
+	close(held.release)
+	if reply := <-done; reply == nil || reply.Code != 0 || reply.Info.Epoch != 1 {
+		t.Fatalf("the repeated join: %+v", reply)
+	}
+	conns.close(101, "old")
+	conns.close(101, "new")
+	roomSeatGoesOffline(t, f, presence, roomID, 102, "viewer", 101)
+}
+
+// 旧 Leave 的回包迟到：房里还有 102（房间不因最后一人离开而关）。101 的 Leave 提交完成后回包被扣住；101 用新连接
+// 重新入房、拿到新代际。旧 Leave 的结果之后才到，不能撤掉新席位的登记——新连接关了，席位必须断线。
+func TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked(t *testing.T) {
+	f := newRoomEndpointFixture(t)
+	conns, presence := startRoomPresence(t, f)
+	const roomID int64 = 81902
+	if err := roomlogic.Open(context.Background(), f.registry, roomID, 3); err != nil {
+		t.Fatal(err)
+	}
+	conns.open(101, "old")
+	conns.open(102, "viewer")
+	for _, who := range []struct {
+		id   int64
+		conn string
+	}{{101, "old"}, {102, "viewer"}} {
+		if reply, err := f.controller.HandleRoomJoin(roomContext(who.id, who.conn), &pb.RoomJoinRequest{RoomID: roomID}); err != nil || reply.Code != 0 {
+			t.Fatalf("join %d: %+v %v", who.id, reply, err)
+		}
+	}
+	older, held := f.heldController("handlerRoomLeave")
+	done := make(chan *pb.RoomLeaveResponse, 1)
+	go func() {
+		reply, _ := older.HandleRoomLeave(roomContext(101, "old"), &pb.RoomLeaveRequest{RoomID: roomID, Epoch: 1})
+		done <- reply
+	}()
+	held.wait(t)
+	conns.open(101, "new")
+	rejoined, err := f.controller.HandleRoomJoin(roomContext(101, "new"), &pb.RoomJoinRequest{RoomID: roomID})
+	if err != nil || rejoined.Code != 0 || rejoined.Info.Epoch != 3 {
+		t.Fatalf("rejoin: %+v %v", rejoined, err)
+	}
+	close(held.release)
+	if reply := <-done; reply == nil || reply.Code != 0 {
+		t.Fatalf("the old leave: %+v", reply)
+	}
+	conns.close(101, "old")
+	conns.close(101, "new")
+	roomSeatGoesOffline(t, f, presence, roomID, 102, "viewer", 101)
+}
+
+// roomHeldCommitter 是持久提交器的替身：armed 时下一笔提交停在里面，直到 release 关闭，然后照常成功——模拟已经
+// 开始、最终成功的持久写。
+type roomHeldCommitter struct {
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *roomHeldCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.armed.Swap(false) {
+		close(c.entered)
+		<-c.release
+	}
+	return nil
+}
+
+// 同步等待被取消、Join 仍然提交：真实 Nest 开始 strict 提交后停在提交器里，这时取消请求的 ctx，控制器拿到
+// ErrNestCanceled；放行提交，事务成功、席位在线。这条连接之后关了，席位必须断线——登记不能因为控制器没等到结果就丢。
+func TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin(t *testing.T) {
+	committer := &roomHeldCommitter{entered: make(chan struct{}), release: make(chan struct{})}
+	f := newRoomEndpointFixtureWith(t, committer)
+	conns, presence := startRoomPresence(t, f)
+	const roomID int64 = 81903
+	if err := roomlogic.Open(context.Background(), f.registry, roomID, 3); err != nil {
+		t.Fatal(err)
+	}
+	conns.open(102, "viewer")
+	if reply, err := f.controller.HandleRoomJoin(roomContext(102, "viewer"), &pb.RoomJoinRequest{RoomID: roomID}); err != nil || reply.Code != 0 {
+		t.Fatalf("viewer join: %+v %v", reply, err)
+	}
+	conns.open(101, "player")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	player := roomContext(101, "player")
+	player.BaseCtx = ctx
+	committer.armed.Store(true)
+	done := make(chan *pb.RoomJoinResponse, 1)
+	go func() {
+		reply, _ := f.controller.HandleRoomJoin(player, &pb.RoomJoinRequest{RoomID: roomID})
+		done <- reply
+	}()
+	select {
+	case <-committer.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the join did not reach the commit")
+	}
+	cancel()
+	select {
+	case reply := <-done:
+		if reply == nil || reply.Code == 0 {
+			t.Fatalf("a canceled wait answered success: %+v", reply)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the canceled wait did not return")
+	}
+	close(committer.release)
+	// 排在提交之后的真实 View 确认 Join 已经提交、席位在线。
+	view, err := f.controller.HandleRoomView(roomContext(102, "viewer"), &pb.RoomViewRequest{RoomID: roomID})
+	if err != nil || view.Code != 0 || len(view.Info.Seats) != 2 || !view.Info.Seats[1].Connected {
+		t.Fatalf("the committed join: %+v %v", view, err)
+	}
+	conns.close(101, "player")
+	roomSeatGoesOffline(t, f, presence, roomID, 102, "viewer", 101)
 }

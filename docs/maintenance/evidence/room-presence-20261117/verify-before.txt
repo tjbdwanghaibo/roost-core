@@ -1,0 +1,6 @@
+# roost module verify room（修前基线工程 p1，修复前模板）
+ok   module room: 29 passed (want 29), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check

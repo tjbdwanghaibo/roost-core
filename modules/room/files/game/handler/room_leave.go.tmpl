@@ -1,10 +1,22 @@
 package handler
 
-import "{{MODULE}}/game/view"
+import (
+	roomlogic "{{MODULE}}/game/modules/room"
+	"{{MODULE}}/game/view"
+)
 
 // handlerRoomLeave 在 Room 的 Nest 锁内处理。持久事实提交成功后才向调用者确认。
+// 确实撤掉了 epoch 这一代的席位时，提交之后撤掉这一代的连接登记；同玩家更新代际的登记不动（重复退出不撤任何登记，
+// 客户端给的 epoch 不会进登记表）。见 game/modules/room/room_presence.go。
 //
 //roost:nest rollback=undo durability=strict
 func handlerRoomLeave(target view.IRoomEntity, playerID int64, epoch uint64, connection string) error {
-	return target.Room().Leave(playerID, epoch, connection)
+	_, notSeated := target.Room().Member(playerID, epoch)
+	if err := target.Room().Leave(playerID, epoch, connection); err != nil {
+		return err
+	}
+	if notSeated == nil {
+		roomlogic.ForgetCommitted(target.UniqueID(), playerID, epoch)
+	}
+	return nil
 }

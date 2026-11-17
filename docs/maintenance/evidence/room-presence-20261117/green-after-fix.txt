@@ -1,0 +1,21 @@
+--- PASS: TestRoomClosedConnectionMarksTheSeatOffline (0.14s)
+--- PASS: TestRoomPresenceLateJoinReplyKeepsTheReconnectedSeatTracked (0.01s)
+--- PASS: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (0.01s)
+--- PASS: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (0.01s)
+ok  	example.com/rp/game/controllers	1.497s
+--- PASS: TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive (0.15s)
+ok  	example.com/rp/game/modules/room	1.772s
+--- PASS: TestRoomClosedConnectionMarksTheSeatOffline (0.14s)
+--- PASS: TestRoomPresenceLateJoinReplyKeepsTheReconnectedSeatTracked (0.01s)
+--- PASS: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (0.01s)
+--- PASS: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (0.00s)
+ok  	example.com/rp/game/controllers	1.914s
+--- PASS: TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive (0.15s)
+ok  	example.com/rp/game/modules/room	2.176s
+--- PASS: TestRoomClosedConnectionMarksTheSeatOffline (0.13s)
+--- PASS: TestRoomPresenceLateJoinReplyKeepsTheReconnectedSeatTracked (0.01s)
+--- PASS: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (0.01s)
+--- PASS: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (0.00s)
+ok  	example.com/rp/game/controllers	1.752s
+--- PASS: TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive (0.15s)
+ok  	example.com/rp/game/modules/room	1.475s

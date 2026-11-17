@@ -1,0 +1,26 @@
+## M1: Track 去掉代际比较（if epoch <= current.epoch → if false）
+ok  	example.com/rp/game/controllers	1.290s
+--- FAIL: TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive (0.00s)
+    room_presence_test.go:236: 0 tracked; want only the new connection
+FAIL
+FAIL	example.com/rp/game/modules/room	0.599s
+FAIL
+## M2: Forget 去掉代际条件（retireLocked 不看现有代际）
+ok  	example.com/rp/game/controllers	0.704s
+--- FAIL: TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive (0.00s)
+    room_presence_test.go:236: 0 tracked; want only the new connection
+FAIL
+FAIL	example.com/rp/game/modules/room	1.139s
+FAIL
+## M3: Join handler 去掉提交后登记（roomlogic.TrackCommitted 一行注释掉）
+15:		_ = roomlogic.EntityID // TrackCommitted(target.UniqueID(), playerID, connection, snapshot.Epoch)
+--- FAIL: TestRoomClosedConnectionMarksTheSeatOffline (2.01s)
+    room_test.go:316: the closed connection's seat goes offline: seats = map[101:true 102:true]
+--- FAIL: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (2.00s)
+    room_test.go:519: every connection of player 101 closed, but the seat stays online after sweeps; 0 tracked
+--- FAIL: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (2.00s)
+    room_test.go:584: every connection of player 101 closed, but the seat stays online after sweeps; 0 tracked
+FAIL
+FAIL	example.com/rp/game/controllers	6.569s
+ok  	example.com/rp/game/modules/room	1.242s
+FAIL

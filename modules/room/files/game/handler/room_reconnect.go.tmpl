@@ -1,10 +1,18 @@
 package handler
 
-import "{{MODULE}}/game/view"
+import (
+	roomlogic "{{MODULE}}/game/modules/room"
+	"{{MODULE}}/game/view"
+)
 
 // handlerRoomReconnect 在 Room 的 Nest 锁内处理。持久事实提交成功后才向调用者确认。
+// 成功时登记新连接、撤掉同房间的旧连接登记（提交之后才生效，按代际单调；见 game/modules/room/room_presence.go）。
 //
 //roost:nest rollback=undo durability=strict
 func handlerRoomReconnect(target view.IRoomEntity, playerID int64, epoch uint64, connection string) (view.RoomSnapshot, error) {
-	return target.Room().Reconnect(playerID, epoch, connection)
+	snapshot, err := target.Room().Reconnect(playerID, epoch, connection)
+	if err == nil {
+		roomlogic.TrackCommitted(target.UniqueID(), playerID, connection, snapshot.Epoch)
+	}
+	return snapshot, err
 }

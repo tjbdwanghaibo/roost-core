@@ -61,7 +61,7 @@ func TestModuleOwnedEntityInstallIsTransactional(t *testing.T) {
 	if err := diffManifest(root, manifest, false, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if report, err := VerifyModules(context.Background(), root, []string{"room"}, nil); err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 29 {
+	if report, err := VerifyModules(context.Background(), root, []string{"room"}, nil); err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 33 {
 		t.Fatalf("verify: %v %+v", err, report)
 	}
 	// 模块源码已经归业务所有，重复安装不能覆盖。
