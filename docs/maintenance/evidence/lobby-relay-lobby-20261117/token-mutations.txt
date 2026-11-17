@@ -1,0 +1,15 @@
+## 变异 1：去掉“令牌写的实例必须是本 relay”
+142:	if !ok1 || !ok2 || !ok3 {
+--- FAIL: TestVerifyRefusesTamperedForeignAndMisdirectedTokens (0.00s)
+    token_test.go:99: token for relay-1 presented to relay-2: err = <nil>, want ErrInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay/token	0.465s
+FAIL
+## 变异 2：去掉过期检查
+--- FAIL: TestVerifyRefusesExpiredTokens (0.00s)
+    token_test.go:57: at 30s: err = <nil>, want ErrInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay/token	0.438s
+FAIL
+## 恢复后
+ok  	github.com/tjbdwanghaibo/roost-core/service/relay/token	1.449s
