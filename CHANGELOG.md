@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+- **relay 协议：Welcome 带 epoch、前台上报、状态字节带压缩方式标识**（维护者 2026-11-17，交接 C2、C4 按推荐：C2 一 + 二的选项 1、C4 A + D）：
+  - `Welcome` 固定 13 字节 `[角色][房主槽位 4B][epoch 8B]`；选人阶段进房的连接拿到房主槽位 0 和新一轮的 epoch；三份 SDK 在 Welcome 时（含重连）更新 `Role` 的 epoch。
+  - 新控制帧 `Presence = 85`（成员 → relay，`[1/0]`）与 `MemberPresence = 70`（relay → 当前已就绪的房主，Seq 为成员槽位）；relay 只核格式，选人阶段 / 宽限期 / 房主自己发的丢弃，计入帧率限额。SDK 新增 `SetForeground`、`OnMemberPresence`，收到 HostChanged 与每次连上后自动重发；没连上时先记下、连上后发出。TS `WebHost` 按页面可见性上报；游戏没有显式声明候选顺序时，房主自动“前台在前、槽位升序”声明，游戏显式声明的优先。Go / C# 不自动排序。
+  - 快照与交接数据非空时是 `[压缩方式 1B][压缩后]`：0 不压缩、1 deflate（谁都解得开），2～255 归游戏；不认识的标识报明确错误（Go `ErrUnknownCompression`、C# `RelayUnknownCompressionException`、TS `UnknownCompressionError`）。缺省仍用 deflate，不加依赖，三份 README 给了接入 zstd / LZ4 的示例（示例代码在各自测试里编译）。
+  - 金样 `relay-packets.json` 变为 31 条（`relay_welcome` 与快照、交接各条变了，新增 4 条）。
+  - **升级**：不兼容。relay 与三份 SDK 必须一起升级：旧客户端收到 13 字节 Welcome 按协议错误断开，新客户端不接受旧 relay 的 5 字节 Welcome；旧客户端的状态字节没有标识。
+  - **验证**：金样先红，16 个变异全红；Go、TS 60/60、C# 409 项通过。浏览器真实切后台、Unity 没测。[证据](docs/maintenance/evidence/c2-c4-relay-protocol-20261117/README.md)
 - **换服：源服重启后不等登录也能恢复，committed 崩溃窗口（Q4）关闭**（R2，D7 A / D8 A，维护者 2026-11-14 已定）：
   - **account**：在途换服索引（Redis 上 `<key_prefix>:transfers` 有序集合，与角色记录同一个脚本维护）与 `ListRoleTransfers(from)` / `RoleBindingsAway(sid, ids)`（上总线）；每 30s 清扫过期的在途换服；期限（`now >= DeadlineUnix`）之后的 `CommitRoleTransfer` 答 `ErrTransferStale` 并记为已中止（`LastTransfer.Note` 以 `expired:` 开头），原来期限只记录。`accountctl transfer-role list [-from SID]`。**Redis Cluster 上 account 的 `key_prefix` 必须带 hash tag**，否则 Mod 初始化报错。
   - **DataEngine**：本地起服预加载的准入检查（`PreloadAdmitter`，`PreloadAdmitCapability(kind)`，被否决的计 `dataengine.local_preload_total{result="skipped"}`）与只列不加载的 `Mod.ListLocalEntityIDs`。

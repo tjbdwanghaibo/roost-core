@@ -571,10 +571,9 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **relay 进程崩溃时房间丢失**：房间（连接、座位、快照、本地被踢记录）只在一个实例的内存里，没有跨实例接管，也不落盘。进程重启后关房记录也没了：还没过期的 host 令牌能在新进程上重建同一个房间号（lobby 验权仍要求是目录里的房主、房间没关）。
 - **lobby 不可用时新连接与重连都进不来**（方案 §4.3，失败即关闭）：relay 每条连接都向 lobby 验权，超时或不可用答 `Closed{lobby_unavailable}`；已连上的不受影响。
 - **房主心跳要求约每 0.6s 一帧**：房主连接的空闲阈值 `relay.host_idle_timeout` 缺省 2s（成员仍是 30s），超过即当断线、进宽限期。三份 SDK 的房主与候选每 600ms 没发过帧就补一个 Ping；自己写客户端时要遵守。
-- **Welcome 不带 epoch**：连上后还没见过换 host 时，SDK 的 `Role.Epoch` 是 0，不一定是房间的真实 epoch；只影响查询，`HostReady` 用 `YouAreHost` 带来的 epoch。
 - **被踢的人收到两种答复**：同一个 relay 上被踢的人再连收到 `Closed{kicked}`（relay 本地记录，房间存续期间有效）；relay 重启后本地记录没了，由 lobby 的被踢名单挡住，收到 `Closed{lobby_rejected}`；再 join 答 403 `kicked`。SDK 两种都停止重连，客户端都按“不能再进”处理。
 - **开局后掉线不回的人占着位子**（§6 第 12 条）：已开始的房间里，连上过 relay 的成员掉线后席位一直保留（他回来回原座），直到他主动离开、被踢或关房；不回来的人要房主踢掉（relay 能踢有座位但不在线的槽位）才空出来。
-- **快照压缩用 deflate，可替换，同一房间必须用同一种**：SDK 缺省用各语言自带的原始 deflate（不加第三方依赖；方案原写 LZ4 / zstd），留 `Compressor` / `IRelayCompressor` 接口换实现。SDK 对快照与交接数据透明压缩、在 `YouAreHost` 里透明解压，所以房间里每个客户端必须用同一种。解压上限 16 MiB 是常量。
+- **快照压缩缺省用 deflate，SDK 不带 zstd / LZ4**（2026-11-17，交接 C4 选 A + D）：要用就由游戏自带库实现压缩接口，示例见各 SDK README。状态字节带 1 字节压缩方式标识，内置的不压缩与 deflate 谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上，否则新房主拿到“不认识的压缩方式”错误、按没有状态处理。deflate 与 zstd 在真实状态上的差距没有测过。解压上限 16 MiB 是常量。
 - **快照 seq 跨房主递增**：relay 要求 seq 在房间内递增（跨房主也一样），`YouAreHost` 带 relay 存着的最新 seq；SDK 取 `max(本地, YouAreHost 的 seq, epoch<<32) + 1`。自己写客户端时至少从 `YouAreHost` 的 seq 往上接，否则 `Rejected{stale_seq}`。
 - **选 relay 有延迟**：lobby 按 etcd 里的房间数选实例，这个数由 relay 定时更新；几个 lobby 实例同时建房，可能都选中同一个 relay。
 - **一个 `lobby.subject` 对应一份房间目录**：共用 relay 的几个 lobby 服务必须共用 `key_prefix` 与 `subject`。过期房间在 `game/mode` 索引里的项只在列表时清理。
@@ -743,7 +742,7 @@ Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（未发版），�
 - **Go 与 C# 只连 TCP，TS 只连 WebSocket**：C# 的 `Roost.Client.Relay` 与 `Roost.Client` 是两个包，没有 WebSocket。
 - **Web 房主在后台标签页靠 Worker 撑住只是缓解**：浏览器不保证 Worker 计时器不被限流，手机后台页随时被冻结，冻结后走 relay 的断线换 host。
 - **内置浏览器面板测不了真实后台**：Claude 桌面应用内置浏览器面板里，后台标签页的 `document.visibilityState` 始终是 `visible`，所以在那里“切到后台”只能用演示页的“模拟隐藏”按钮触发；后台限流对 Worker 计时器的影响没有实测。
-- **“我在前台”没有专门的控制帧**（relay 不转发不认识的控制帧）：`WebHost` 让出房主时按房主声明的候选顺序取第一个在线成员，候选顺序由游戏维护（例如成员经游戏通道报前台状态）。
+- **relay 选人不看前台状态**（交接 C2 选项 3 不做）：前台上报（`Presence = 85` / `MemberPresence = 70`，2026-11-17）只经房主声明的 `Successors` 生效，包括 TS `WebHost` 的自动声明。房主还没收到上报、或来不及声明就掉线时，兜底仍是槽位最小的在线成员。成员可以谎报前台状态，后果只是影响候选顺序。
 - **Go 的定时快照回调与其他回调并发**：`SnapshotState` 在心跳 goroutine 上调用，并发安全由游戏保证；C# 在 `Pump` 里调用。
 
 ### 验收与运维
