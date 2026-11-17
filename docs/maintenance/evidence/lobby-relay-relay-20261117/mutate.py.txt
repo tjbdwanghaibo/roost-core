@@ -1,0 +1,67 @@
+import subprocess, shutil, sys, os
+repo = '/Users/whb/roost/roost-core'
+os.chdir(repo)
+M = [
+ ("M1 成员游戏帧只到房主", "service/relay/room.go",
+  "\tif from != r.host {\n\t\tr.host.enqueue(data)\n\t\treturn\n\t}", "\tif from != r.host {\n\t\tr.host.enqueue(data)\n\t}",
+  "./service/relay", "TestGameChannelDirection"),
+ ("M2 房间通道单独限额", "service/relay/conn.go",
+  "if c.roomFrames.ready(now, 1) && c.roomBytes.ready(now, len(p.Payload)) {", "if true {",
+  "./service/relay", "TestRoomChannelHasItsOwnLimit"),
+ ("M3 禁言", "service/relay/room.go",
+  "r.members[from.slot] != from || r.muted[from.account] {", "r.members[from.slot] != from {",
+  "./service/relay", "TestMuteBlocksOnlyTheRoomChannel"),
+ ("M4 踢出后不许再进", "service/relay/room.go",
+  "\t\t\tr.kicked[target.account] = true\n", "",
+  "./service/relay", "TestSlotsKickAndReplace"),
+ ("M5 同账号顶号", "service/relay/room.go",
+  "\t\told.finish(wire.RelayReasonReplaced, true)\n", "\t\t_ = old\n",
+  "./service/relay", "TestSlotsKickAndReplace"),
+ ("M6 发送队列满断开慢连接", "service/relay/conn.go",
+  "if c.queuedFrames+1 > cfg.SendQueueFrames || c.queuedBytes+len(data) > cfg.SendQueueBytes {", "if cfg.SendQueueFrames < 0 {",
+  "./service/relay", "TestSlowConsumerIsDisconnectedWithoutBlockingOthers"),
+ ("M7 房主断开关房", "service/relay/room.go",
+  "\tr.closeLocked(wire.RelayReasonRoomClosed, reports)\n\treturn true", "\treturn false",
+  "./service/relay", "TestHostDisconnectClosesTheRoom"),
+ ("M8 关过的房间号不能重建", "service/relay/relay.go",
+  "(closed && now.Before(until)) || claims.Role != token.RoleHost", "claims.Role != token.RoleHost && closed && now.Before(until)",
+  "./service/relay", "TestRoomLifecycleAndReports"),
+ ("M9 角色以房间状态为准（建房后不看令牌角色）", "service/relay/relay.go",
+  "\tr := s.rooms[claims.Room]\n\tif r == nil {", "\tr := s.rooms[claims.Room]\n\tif r == nil || claims.Role == token.RoleHost {",
+  "./service/relay", "TestRoleFollowsTheRoomNotTheToken"),
+ ("M10 单帧上限", "service/relay/conn.go",
+  "p, err := wire.ReadRelay(c.reader, cfg.MaxPayloadBytes)", "p, err := wire.ReadRelay(c.reader, 1<<20)",
+  "./service/relay", "TestConnectionLimits"),
+ ("M11 每秒帧数上限", "service/relay/conn.go",
+  "\t\tif !c.frames.take(now, 1) {\n\t\t\treturn wire.RelayReasonRateLimited\n\t\t}\n", "",
+  "./service/relay", "TestConnectionLimits"),
+ ("M12 Gate 仍拒绝 relay 通道位", "client/wire/packet.go",
+  "\tif relay {\n\t\tallowed |= relayChannelMask\n\t}", "\tallowed |= relayChannelMask",
+  "./client/wire", "TestRelayChannelBitsAreRejectedByTheGateCodec"),
+ ("M13 下行 Seq 改写为发送者槽位", "service/relay/room.go",
+  "MsgID: p.MsgID, Seq: fromSlot, Payload: p.Payload}", "MsgID: p.MsgID, Seq: p.Seq, Payload: p.Payload}",
+  "./service/relay", "TestGameChannelDirection"),
+ ("M14 lobby leave 命令", "wiring/relay/server.go",
+  "\t\tserver.Leave(cmd.Room, cmd.Account)\n", "",
+  "./wiring/relay", "TestServerReportsAdvertisesAndTakesLobbyCommands"),
+ ("M15 空房超时关房", "service/relay/room.go",
+  "if !r.aloneSince.IsZero() && now.Sub(r.aloneSince) >= r.server.config.EmptyRoomTimeout {", "if false {",
+  "./service/relay", "TestHeartbeatAndEmptyRoomTimeout"),
+]
+only = sys.argv[1:]
+for name, path, old, new, pkg, test in M:
+    if only and name.split()[0] not in only: continue
+    src = open(path).read()
+    assert src.count(old) == 1, (name, src.count(old))
+    backup = src
+    open(path, 'w').write(src.replace(old, new))
+    try:
+        r = subprocess.run(['go', 'test', '-count=1', pkg, '-run', '^' + test + '$'], capture_output=True, text=True, timeout=300)
+        out = (r.stdout + r.stderr).strip().splitlines()
+        fail = [l for l in out if 'relay_test.go' in l or 'relay_mod_test.go' in l or '_test.go:' in l][:1]
+        status = 'RED' if r.returncode != 0 else 'GREEN(!)'
+        print(f"{name}\t{path}\t{test}\t{status}\t{fail[0].strip() if fail else out[-1] if out else ''}", flush=True)
+    finally:
+        open(path, 'w').write(backup)
+    r = subprocess.run(['go', 'test', '-count=1', pkg, '-run', '^' + test + '$'], capture_output=True, text=True, timeout=300)
+    print(f"  restored -> {'GREEN' if r.returncode == 0 else 'RED(!)'}", flush=True)

@@ -1,0 +1,21 @@
+# 变异：撤掉关键的一行 → 目标用例变红 → 恢复后变绿（脚本 mutate.py，go test -count=1 <pkg> -run ^<Test>$）
+# 第一轮 M5/M6 的写法删掉了变量引起编译失败，不算数；改成保留变量的写法重跑（见末尾两行）
+M1 成员游戏帧只到房主	service/relay/room.go	TestGameChannelDirection	RED	relay_test.go:271: slot 3 expected silence, got channel 1 msg 101 seq 2 payload "from-a"
+M2 房间通道单独限额	service/relay/conn.go	TestRoomChannelHasItsOwnLimit	RED	relay_test.go:327: slot 1 got channel 2 msg 1 seq 2 payload "\x03"; want channel 1 msg 2 seq 2 payload "game"
+M3 禁言	service/relay/room.go	TestMuteBlocksOnlyTheRoomChannel	RED	relay_test.go:350: slot 1 got channel 2 msg 1 seq 3 payload "spam"; want channel 1 msg 2 seq 3 payload "move"
+M4 踢出后不许再进	service/relay/room.go	TestSlotsKickAndReplace	RED	relay_test.go:391: slot 0 got channel 3 msg 1 seq 3 payload "\x02\x00\x00\x00\x01"; want channel 3 msg 4 seq 0 payload "\x02"
+M7 房主断开关房	service/relay/room.go	TestHostDisconnectClosesTheRoom	RED	relay_test.go:607: slot 2 read: read tcp 127.0.0.1:65231->127.0.0.1:65229: i/o timeout
+M8 关过的房间号不能重建	service/relay/relay.go	TestRoomLifecycleAndReports	RED	relay_test.go:453: slot 0 got channel 3 msg 1 seq 1 payload "\x01\x00\x00\x00\x01"; want channel 3 msg 4 seq 0 payload "\v"
+M9 角色以房间状态为准（建房后不看令牌角色）	service/relay/relay.go	TestRoleFollowsTheRoomNotTheToken	RED	relay_test.go:433: a host token for a non-host account became {Host:true HostSlot:1} slot 1
+M10 单帧上限	service/relay/conn.go	TestConnectionLimits	RED	relay_test.go:506: slot 2 got channel 3 msg 4 seq 0 payload "\b"; want channel 3 msg 4 seq 0 payload "\x05"
+M11 每秒帧数上限	service/relay/conn.go	TestConnectionLimits	RED	relay_test.go:517: slot 2 got channel 3 msg 4 seq 0 payload "\x04"; want channel 3 msg 4 seq 0 payload "\x06"
+M12 Gate 仍拒绝 relay 通道位	client/wire/packet.go	TestRelayChannelBitsAreRejectedByTheGateCodec	RED	relay_test.go:19: Gate accepted relay flags 00001000: <nil>
+M13 下行 Seq 改写为发送者槽位	service/relay/room.go	TestGameChannelDirection	RED	relay_test.go:270: slot 1 got channel 1 msg 101 seq 3 payload "from-a"; want channel 1 msg 101 seq 2 payload "from-a"
+M14 lobby leave 命令	wiring/relay/server.go	TestServerReportsAdvertisesAndTakesLobbyCommands	RED	relay_mod_test.go:151: waiting for op 4: read tcp 127.0.0.1:65301->127.0.0.1:65299: i/o timeout
+M15 空房超时关房	service/relay/room.go	TestHeartbeatAndEmptyRoomTimeout	RED	relay_test.go:639: slot 1 read: read tcp 127.0.0.1:65308->127.0.0.1:65307: i/o timeout
+
+# M5 / M6 重跑（行为变异）
+M5 同账号顶号	service/relay/room.go	TestSlotsKickAndReplace	RED	relay_test.go:406: slot 2 read: read tcp 127.0.0.1:65336->127.0.0.1:65332: i/o timeout
+M6 发送队列满断开慢连接	service/relay/conn.go	TestSlowConsumerIsDisconnectedWithoutBlockingOthers	RED	relay_test.go:575: slot 1 read: read pipe: i/o timeout
+
+# 每条变异恢复后目标用例都重新跑过：全部 GREEN
