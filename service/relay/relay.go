@@ -6,7 +6,8 @@
 //     房主的连接到达时房间才建成，成员只能进已建成的房间。
 //   - 游戏通道：成员的帧加上成员槽位只转给房主；房主的帧按目标转给某个成员或全体成员。
 //   - 房间通道：聊天、表情、语音，按目标直达（全体或某个槽位），房主也是收件人；另有单独限额，可被房主禁言。
-//   - 控制帧：relay 告诉房主成员上下线；房主让 relay 踢人、禁言。
+//   - 控制帧：relay 告诉房主成员上下线；房主让 relay 踢人、禁言。lobby 的 leave 命令经 Server.Leave 移出账号。
+//   - 报告：房间建成、成员进出、关闭时立即一条，另外每个房间定时一条心跳（Reporter，契约同 service/lobby.RoomEvent）。
 //   - 房间结束：这一批房主断开就关房（hostLost 是下一批接换 host 的位置，§4.6）。
 //
 // 并发：每条连接一个读 goroutine（限额、按通道分发）和一个写 goroutine（有界发送队列，满了断开这一条，不阻塞别人）；
@@ -19,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"sync"
 	"time"
 
@@ -103,8 +105,8 @@ func (c Config) WithDefaults() Config {
 // Validate 检查取过缺省值之后的设置。
 func (c Config) Validate() error {
 	switch {
-	case c.Instance == "":
-		return errors.New("relay: instance name is required")
+	case !instancePattern.MatchString(c.Instance):
+		return fmt.Errorf("relay: instance name %q must be 1-64 letters, digits, _ or - (it is the last segment of a NATS subject and an etcd key)", c.Instance)
 	case len(c.TokenKey) < token.MinKeyBytes:
 		return fmt.Errorf("relay: token key must be at least %d bytes", token.MinKeyBytes)
 	case c.MaxPayloadBytes <= 0 || c.FramesPerSecond <= 0 || c.RoomFramesPerSecond <= 0 || c.RoomBytesPerSecond <= 0 ||
@@ -121,6 +123,9 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
+
+// instancePattern 是实例名的写法（与 lobby 的 relay 广播约定相同）。
+var instancePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // ErrStopped 是停机之后再调用 Serve 的结果。
 var ErrStopped = errors.New("relay: server stopped")
@@ -331,6 +336,17 @@ func (s *Server) admit(claims token.Claims, c *conn) (*room, wire.RelayReason) {
 	}
 	s.mu.Unlock()
 	return r, r.join(claims, c, now)
+}
+
+// Leave 是 lobby 发来的 leave 命令（service/lobby.CommandLeave）：把 account 移出 room，等同于它自己断开；
+// 是房主时按房主离开处理。房间或账号不在时什么也不做（命令可能迟到）。
+func (s *Server) Leave(room, account string) {
+	s.mu.Lock()
+	r := s.rooms[room]
+	s.mu.Unlock()
+	if r != nil {
+		r.remove(account)
+	}
 }
 
 // forgetRoom 在房间关闭后把它从表里摘掉，并记下房间号，挡住还没过期的 host 令牌重建同一个房间。

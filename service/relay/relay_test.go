@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -388,7 +389,9 @@ func TestSlotsKickAndReplace(t *testing.T) {
 	b.expectClosed(wire.RelayReasonKicked)
 	host.expectMember(wire.RelayOpMemberLeft, 3, wire.RelayReasonKicked, "acc-b")
 	h.rejected(h.token("room-slots", "acc-b", token.RoleMember, 8), wire.RelayReasonKicked)
-	h.reports.wait(t, func(r relay.Report) bool { return r.Event == relay.EventLeft && r.Account == "acc-b" && r.Reason == "kicked" })
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventMemberLeft && r.Account == "acc-b" && r.Reason == "kicked"
+	})
 
 	// 成员发踢人控制帧不生效。
 	c.send(wire.FlagRelayControl, wire.RelayOpKick, 1, nil)
@@ -406,7 +409,7 @@ func TestSlotsKickAndReplace(t *testing.T) {
 	host.expect(wire.RelayGame, 2, 2, "from new")
 	host.send(wire.FlagRelayGame, 3, 2, []byte("to new"))
 	c2.expect(wire.RelayGame, 3, 1, "to new")
-	if n := h.reports.count(func(r relay.Report) bool { return r.Event == relay.EventLeft && r.Account == "acc-c" }); n != 0 {
+	if n := h.reports.count(func(r relay.Report) bool { return r.Type == relay.EventMemberLeft && r.Account == "acc-c" }); n != 0 {
 		t.Fatalf("replacement reported %d left events", n)
 	}
 
@@ -454,16 +457,22 @@ func TestRoomLifecycleAndReports(t *testing.T) {
 	host.sendToken(hostToken)
 	host.expect(wire.RelayControl, wire.RelayOpWelcome, 1, string(wire.EncodeRelayWelcome(wire.RelayWelcome{Host: true, HostSlot: 1})))
 	h.reports.wait(t, func(r relay.Report) bool {
-		return r.Event == relay.EventOpened && r.Room == "room-life" && r.Relay == testInstance && r.Host == "host" && r.Members == 1 && r.MaxMembers == 2
+		return r.Type == relay.EventHeartbeat && r.Seq == 1 && r.Room == "room-life" && r.Relay == testInstance && r.Host == "host" && r.Epoch == 0 &&
+			slices.Equal(r.Online, []string{"host"})
 	})
 	a, _ := h.connect("room-life", "acc-a", token.RoleMember, 2)
 	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonNone, "acc-a")
-	h.reports.wait(t, func(r relay.Report) bool { return r.Event == relay.EventJoined && r.Slot == 2 && r.Account == "acc-a" && r.Members == 2 })
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventMemberJoined && r.Seq == 2 && r.Slot == 2 && r.Account == "acc-a" &&
+			slices.Equal(r.Online, []string{"host", "acc-a"})
+	})
 	h.rejected(h.token("room-life", "acc-b", token.RoleMember, 2), wire.RelayReasonRoomFull)
 
 	_ = host.conn.Close()
 	a.expectClosed(wire.RelayReasonRoomClosed)
-	h.reports.wait(t, func(r relay.Report) bool { return r.Event == relay.EventClosed && r.Room == "room-life" && r.Reason == "room_closed" })
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventClosed && r.Seq == 3 && r.Room == "room-life" && r.Reason == "room_closed" && len(r.Online) == 0
+	})
 	if stats := h.server.Stats(); stats.Rooms != 0 {
 		t.Fatalf("stats %+v after close", stats)
 	}
@@ -564,7 +573,30 @@ func TestSlowConsumerIsDisconnectedWithoutBlockingOthers(t *testing.T) {
 		t.Fatalf("broadcast took %v; a slow member blocked the room", elapsed)
 	}
 	host.expectMember(wire.RelayOpMemberLeft, 3, wire.RelayReasonSlowConsumer, "acc-b")
-	h.reports.wait(t, func(r relay.Report) bool { return r.Event == relay.EventLeft && r.Account == "acc-b" && r.Reason == "slow_consumer" })
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventMemberLeft && r.Account == "acc-b" && r.Reason == "slow_consumer"
+	})
+}
+
+// lobby 的 leave 命令：成员被移出（Closed{left}，房主收到 MemberLeft{left}）；房主被移出时关房。
+func TestLobbyLeaveCommand(t *testing.T) {
+	h := newHarness(t, false, nil)
+	host, a, b := h.room3("room-leave")
+	h.server.Leave("room-leave", "acc-a")
+	a.expectClosed(wire.RelayReasonLeft)
+	host.expectMember(wire.RelayOpMemberLeft, 2, wire.RelayReasonLeft, "acc-a")
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventMemberLeft && r.Account == "acc-a" && r.Reason == "left" && slices.Equal(r.Online, []string{"host", "acc-b"})
+	})
+	h.server.Leave("room-leave", "nobody") // 迟到或无关的命令不影响房间
+	h.server.Leave("no-such-room", "acc-b")
+	host.send(wire.FlagRelayGame, 1, 3, []byte("b still here"))
+	b.expect(wire.RelayGame, 1, 1, "b still here")
+
+	h.server.Leave("room-leave", "host")
+	host.expectClosed(wire.RelayReasonLeft)
+	b.expectClosed(wire.RelayReasonRoomClosed)
+	h.reports.wait(t, func(r relay.Report) bool { return r.Type == relay.EventClosed && r.Room == "room-leave" })
 }
 
 // 房主断开后关房：全部成员收到 Closed{room_closed} 后断开。
@@ -574,8 +606,8 @@ func TestHostDisconnectClosesTheRoom(t *testing.T) {
 	_ = host.conn.Close()
 	a.expectClosed(wire.RelayReasonRoomClosed)
 	b.expectClosed(wire.RelayReasonRoomClosed)
-	report := h.reports.wait(t, func(r relay.Report) bool { return r.Event == relay.EventClosed && r.Room == "room-close" })
-	if report.Members != 0 || report.Reason != "room_closed" {
+	report := h.reports.wait(t, func(r relay.Report) bool { return r.Type == relay.EventClosed && r.Room == "room-close" })
+	if len(report.Online) != 0 || report.Reason != "room_closed" {
 		t.Fatalf("closed report %+v", report)
 	}
 }
@@ -593,7 +625,9 @@ func TestHeartbeatAndEmptyRoomTimeout(t *testing.T) {
 	host, _ := h.connect("room-hb", "host", token.RoleHost, 4)
 	a, _ := h.connect("room-hb", "acc-a", token.RoleMember, 4)
 	host.expectMember(wire.RelayOpMemberJoined, 2, wire.RelayReasonNone, "acc-a")
-	h.reports.wait(t, func(r relay.Report) bool { return r.Event == relay.EventHeartbeat && r.Room == "room-hb" && r.Members == 2 })
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventHeartbeat && r.Room == "room-hb" && len(r.Online) == 2
+	})
 	time.Sleep(400 * time.Millisecond) // 有成员时不算空房
 	host.send(wire.FlagRelayGame, 1, 2, []byte("still open"))
 	a.expect(wire.RelayGame, 1, 1, "still open")
@@ -603,7 +637,9 @@ func TestHeartbeatAndEmptyRoomTimeout(t *testing.T) {
 	host.send(wire.FlagRelayControl, wire.RelayOpPing, 0, nil)
 	host.expect(wire.RelayControl, wire.RelayOpPong, 0, "")
 	host.expectClosed(wire.RelayReasonIdleTimeout)
-	h.reports.wait(t, func(r relay.Report) bool { return r.Event == relay.EventClosed && r.Room == "room-hb" && r.Reason == "idle_timeout" })
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventClosed && r.Room == "room-hb" && r.Reason == "idle_timeout"
+	})
 }
 
 // 停机：每条连接收到 Closed{shutdown}。

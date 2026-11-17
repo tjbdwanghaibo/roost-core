@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -19,10 +20,12 @@ type room struct {
 	server     *Server
 	id         string
 	maxMembers int
-	opened     Report // 建房时的报告，admit 在放锁之后发出
+	opened     Report // 建房时的心跳，admit 在放锁之后发出
 
 	mu          sync.Mutex
 	closed      bool
+	seq         uint64 // 最近一条报告的序号（Report.Seq），锁内递增
+	epoch       uint64 // 房主代次：这一批恒为 0，换 host 每次加 1
 	hostAccount string
 	host        *conn
 	members     map[uint32]*conn  // 槽位 → 在线连接，含房主
@@ -38,7 +41,7 @@ func newRoom(s *Server, claims token.Claims, host *conn, now time.Time) *room {
 		muted: map[string]bool{}, kicked: map[string]bool{}, aloneSince: now}
 	host.slot = hostSlot
 	host.enqueueControl(wire.RelayOpWelcome, hostSlot, wire.EncodeRelayWelcome(wire.RelayWelcome{Host: true, HostSlot: hostSlot}))
-	r.opened = r.reportLocked(EventOpened, now)
+	r.opened = r.reportLocked(EventHeartbeat)
 	return r
 }
 
@@ -84,7 +87,7 @@ func (r *room) joinLocked(account string, c *conn, now time.Time, reports *[]Rep
 	r.aloneSince = time.Time{}
 	r.welcomeLocked(c)
 	r.host.enqueueControl(wire.RelayOpMemberJoined, slot, wire.EncodeRelayMember(wire.RelayMember{Account: account}))
-	report := r.reportLocked(EventJoined, now)
+	report := r.reportLocked(EventMemberJoined)
 	report.Slot, report.Account = slot, account
 	*reports = append(*reports, report)
 	return wire.RelayReasonNone
@@ -135,9 +138,31 @@ func (r *room) removeLocked(c *conn, reason wire.RelayReason, reports *[]Report)
 		r.aloneSince = r.server.now()
 	}
 	r.host.enqueueControl(wire.RelayOpMemberLeft, c.slot, wire.EncodeRelayMember(wire.RelayMember{Reason: reason, Account: account}))
-	report := r.reportLocked(EventLeft, r.server.now())
-	report.Slot, report.Account, report.Reason = c.slot, account, reasonName(reason)
+	report := r.reportLocked(EventMemberLeft)
+	report.Slot, report.Account, report.Reason = c.slot, account, reason.String()
 	*reports = append(*reports, report)
+}
+
+// remove 是 lobby 的 leave 命令（玩家调了 lobby 的 leave）：把账号移出房间，等同于它自己断开。
+// 是房主时按房主离开处理（这一批关房）。账号不在线时什么也不做。
+func (r *room) remove(account string) {
+	var reports []Report
+	closed := false
+	r.mu.Lock()
+	if slot, online := r.slots[account]; online && !r.closed {
+		c := r.members[slot]
+		c.finish(wire.RelayReasonLeft, true)
+		if c == r.host {
+			closed = r.hostLostLocked(wire.RelayReasonLeft, &reports)
+		} else {
+			r.removeLocked(c, wire.RelayReasonLeft, &reports)
+		}
+	}
+	r.mu.Unlock()
+	r.emit(reports)
+	if closed {
+		r.server.forgetRoom(r)
+	}
 }
 
 // close 从外部关房（停机、空房超时）。
@@ -157,15 +182,15 @@ func (r *room) closeLocked(reason wire.RelayReason, reports *[]Report) {
 	if r.closed {
 		return
 	}
-	report := r.reportLocked(EventClosed, r.server.now())
-	report.Members, report.Reason = 0, reasonName(reason)
-	*reports = append(*reports, report)
 	r.closed = true
+	clear(r.slots)
+	report := r.reportLocked(EventClosed)
+	report.Online, report.Reason = nil, reason.String()
+	*reports = append(*reports, report)
 	for _, c := range r.members {
 		c.finish(reason, true)
 	}
 	clear(r.members)
-	clear(r.slots)
 }
 
 // heartbeat 发一条心跳；只剩房主超过 EmptyRoomTimeout 时改为关房。
@@ -180,7 +205,7 @@ func (r *room) heartbeat(now time.Time) {
 		r.close(wire.RelayReasonIdleTimeout)
 		return
 	}
-	report := r.reportLocked(EventHeartbeat, now)
+	report := r.reportLocked(EventHeartbeat)
 	r.mu.Unlock()
 	r.server.report.Report(report)
 }
@@ -272,9 +297,15 @@ func (r *room) mute(from *conn, slot uint32, on bool) {
 	target.enqueueControl(wire.RelayOpMuted, slot, []byte{flag})
 }
 
-func (r *room) reportLocked(event string, now time.Time) Report {
-	return Report{Event: event, Relay: r.server.config.Instance, Room: r.id, Host: r.hostAccount,
-		Members: len(r.members), MaxMembers: r.maxMembers, AtUnixMilli: now.UnixMilli()}
+// reportLocked 生成一条带全量快照的报告并占用下一个序号。
+func (r *room) reportLocked(event string) Report {
+	r.seq++
+	online := make([]string, 0, len(r.slots))
+	for account := range r.slots {
+		online = append(online, account)
+	}
+	slices.SortFunc(online, func(a, b string) int { return int(r.slots[a]) - int(r.slots[b]) })
+	return Report{Type: event, Room: r.id, Relay: r.server.config.Instance, Seq: r.seq, Online: online, Host: r.hostAccount, Epoch: r.epoch}
 }
 
 func (r *room) emit(reports []Report) {
@@ -289,5 +320,3 @@ func encodeDown(p *wire.Packet, fromSlot uint32) ([]byte, bool) {
 	data, err := wire.EncodeRelay([]*wire.Packet{{Flags: p.Flags, MsgID: p.MsgID, Seq: fromSlot, Payload: p.Payload}}, max(len(p.Payload), 1))
 	return data, err == nil
 }
-
-func reasonName(reason wire.RelayReason) string { return reason.String() }

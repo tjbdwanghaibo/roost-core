@@ -114,10 +114,11 @@ const (
 	RelayReasonRoomNotFound  RelayReason = 11 // 成员令牌对应的房间不存在（房主还没到，或房间已关闭）
 	RelayReasonRoomFull      RelayReason = 12 // 在线人数已达令牌里的上限
 	RelayReasonShutdown      RelayReason = 13 // relay 进程停机
+	RelayReasonLeft          RelayReason = 14 // 玩家经 lobby 的 leave 离开
 )
 
 var relayReasonNames = [...]string{"none", "disconnected", "kicked", "replaced", "room_closed", "frame_too_big", "rate_limited",
-	"slow_consumer", "idle_timeout", "protocol", "token_rejected", "room_not_found", "room_full", "shutdown"}
+	"slow_consumer", "idle_timeout", "protocol", "token_rejected", "room_not_found", "room_full", "shutdown", "left"}
 
 // String 是原因码的小写名字（NATS 报告、日志用）。
 func (r RelayReason) String() string {
