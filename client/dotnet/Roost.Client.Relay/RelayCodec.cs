@@ -344,24 +344,34 @@ namespace Roost.Client.Relay
         }
 
         /// <summary>从流里读一帧；流在帧中间结束时抛 EndOfStreamException。</summary>
-        public static async Task<RelayFrame> ReadAsync(Stream stream, int maxPayload, CancellationToken cancellation = default)
+        public static Task<RelayFrame> ReadAsync(Stream stream, int maxPayload, CancellationToken cancellation = default) =>
+            ReadAsync(stream.ReadAsync, maxPayload, cancellation);
+
+        /// <summary>
+        /// 从连接上读一帧：按包头拼帧，不看字节是怎么到的（WebSocket 上一条消息里有几帧、一帧拆成几条消息都行）。
+        /// 连接在帧中间结束时抛 EndOfStreamException。
+        /// </summary>
+        public static Task<RelayFrame> ReadAsync(IRelayTransport transport, int maxPayload, CancellationToken cancellation = default) =>
+            ReadAsync(transport.ReceiveAsync, maxPayload, cancellation);
+
+        private static async Task<RelayFrame> ReadAsync(Func<byte[], int, int, CancellationToken, Task<int>> read, int maxPayload, CancellationToken cancellation)
         {
             var header = new byte[HeaderSize];
-            await ReadExactlyAsync(stream, header, cancellation).ConfigureAwait(false);
+            await ReadExactlyAsync(read, header, cancellation).ConfigureAwait(false);
             int size = ParseHeader(header, maxPayload);
             var payload = new byte[size];
-            await ReadExactlyAsync(stream, payload, cancellation).ConfigureAwait(false);
+            await ReadExactlyAsync(read, payload, cancellation).ConfigureAwait(false);
             return FromHeader(header, payload);
         }
 
-        private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken cancellation)
+        private static async Task ReadExactlyAsync(Func<byte[], int, int, CancellationToken, Task<int>> read, byte[] buffer, CancellationToken cancellation)
         {
             int offset = 0;
             while (offset < buffer.Length)
             {
-                int read = await stream.ReadAsync(buffer, offset, buffer.Length - offset, cancellation).ConfigureAwait(false);
-                if (read == 0) throw new EndOfStreamException();
-                offset += read;
+                int got = await read(buffer, offset, buffer.Length - offset, cancellation).ConfigureAwait(false);
+                if (got == 0) throw new EndOfStreamException();
+                offset += got;
             }
         }
 

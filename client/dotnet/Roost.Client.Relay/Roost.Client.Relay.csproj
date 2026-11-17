@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- 开房间场景（房主客户端就是 host）的 C# SDK：lobby 的 HTTP 调用与 relay 的 TCP 连接。与 Roost.Client 一样无第三方依赖。 -->
+  <!-- 开房间场景（房主客户端就是 host）的 C# SDK：lobby 的 HTTP 调用与 relay 的 TCP / WebSocket 连接。与 Roost.Client 一样无第三方依赖。 -->
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>8.0</LangVersion>

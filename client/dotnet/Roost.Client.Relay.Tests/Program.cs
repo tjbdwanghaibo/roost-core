@@ -14,15 +14,19 @@ using Roost.Client.Relay;
 // Roost.Client.Relay 的测试：
 //   1. 金样：SDK 编出的帧与 client/spec/relay-packets.json（Go 的 client/wire 生成）逐字节相同，relay 发来的控制帧解出预期字段；
 //      换 host 的 13 条另用本地假 relay 走 SDK 的公开方法与分发路径核对（HostFramesAgainstFakeRelay）；
+//      收发跨消息边界：假的消息型连接经 TransportFactory 交给 SDK（MessageBoundaries）；
 //   2. 真实对端：起 client/relay 的测试二进制当对端（peer_test.go，Go 写的真实 relay 与 lobby，Redis 用 ~/.roost-it 的），
 //      跑建房、加入、游戏通道往返、房间通道直达、禁言、踢人（记在 lobby）、离开、断线重连、lobby 错误映射，以及换 host：
 //      主动转交、房主断线后候选拿快照接手、宽限期内房主回来、候选顺序、快照节奏与 Rejected、定时快照、房主心跳、
-//      重连遇到 lobby_unavailable 退避重试 / lobby_rejected 停止。
+//      重连遇到 lobby_unavailable 退避重试 / lobby_rejected 停止。全部真实对端用例对 TCP 与 WebSocket 各跑一遍（交接 C1），
+//      WebSocket 一轮另加“向 lobby 要 ws 再连上”与“令牌与 Ping 拼在一条消息里 relay 照样读”。
 // 用法：dotnet run --project client/dotnet/Roost.Client.Relay.Tests [-- <仓库根目录>]
 internal static class Program
 {
     private const string Game = "party";
     private static int checks;
+    /// <summary>真实对端用例这一轮用的传输：全部用例对 TCP 与 WebSocket 各跑一遍（交接 C1）。</summary>
+    private static RelayTransport Transport = RelayTransport.Tcp;
 
     private static async Task<int> Main(string[] args)
     {
@@ -31,48 +35,81 @@ internal static class Program
         {
             Golden(Path.Combine(root, "client", "spec", "relay-packets.json"));
             Console.WriteLine("golden: ok");
+            await MessageBoundaries();
+            Console.WriteLine("frames across message boundaries (fake transport): ok");
             await UnknownControlOp();
             Console.WriteLine("unknown control op: ok");
             Compressors();
             Console.WriteLine("compressors: ok");
             await HostFramesAgainstFakeRelay(Path.Combine(root, "client", "spec", "relay-packets.json"));
             Console.WriteLine("host frames against a fake relay: ok");
-            await using var peer = await Peer.StartAsync(root);
-            Console.WriteLine($"peer: lobby {peer.LobbyUrl}, relay {peer.RelayTcp}, room directory {peer.Backend}");
-            // 真实对端用例；环境变量 ROOST_RELAY_TESTS_ONLY=<名字片段> 时只跑名字含它的那些（变异时用来把红落到指定用例上）。
-            var only = Environment.GetEnvironmentVariable("ROOST_RELAY_TESTS_ONLY");
-            var cases = new (string name, Func<Peer, Task> run)[]
-            {
-                ("lobby errors", LobbyErrors),
-                ("room lifecycle", RoomLifecycle),
-                ("reconnect", Reconnect),
-                ("host transfer", Transfer),
-                ("host loss → snapshot to the declared successor", HostLoss),
-                ("host resumed within the grace period", HostResumed),
-                ("host leave uses the successor order", LeaveWithSuccessors),
-                ("snapshot pacing and rejections", SnapshotPacing),
-                ("automatic snapshots", AutoSnapshot),
-                ("host heartbeat under host_idle_timeout", HostHeartbeat),
-                ("reconnect vs lobby_unavailable / lobby_rejected", ReconnectAdmission),
-                ("started room: reconnect, rejoin, kick an offline seat", StartedRoom),
-                ("welcome epoch for a late joiner and a rejoin", WelcomeEpoch),
-                ("presence re-sent after host changed and reconnect", Presence),
-            };
-            foreach (var (name, run) in cases)
-            {
-                if (!string.IsNullOrEmpty(only) && !name.Contains(only, StringComparison.Ordinal)) continue;
-                await run(peer);
-                Console.WriteLine(name + ": ok");
-            }
-            Check(Player.CallbackErrors.IsEmpty, "no callback threw: " + string.Join("; ", Player.CallbackErrors));
-            Console.WriteLine($"all {checks} checks passed");
-            return 0;
+            var binary = await Peer.BuildAsync(root);
+            try { return await AgainstPeers(root, binary); }
+            finally { try { Directory.Delete(Path.GetDirectoryName(binary)!, true); } catch (IOException) { } }
         }
         catch (Exception error)
         {
             Console.Error.WriteLine("FAILED: " + error);
             return 1;
         }
+    }
+
+    private static async Task<int> AgainstPeers(string root, string binary)
+    {
+        await using (var tcpOnly = await Peer.StartAsync(root, binary, webSocket: false))
+        {
+            await NoWebSocketRelay(tcpOnly);
+            Console.WriteLine("lobby without a ws relay: ok");
+        }
+        // 真实对端用例，对 TCP 与 WebSocket 各跑一遍；每一轮起一个新的对端（Redis 键前缀不同），账号与房间互不影响。
+        // 环境变量 ROOST_RELAY_TESTS_ONLY=<名字片段> 时只跑名字含它的那些，名字形如“[ws] room lifecycle”（变异时用来把红落到指定用例上）。
+        var only = Environment.GetEnvironmentVariable("ROOST_RELAY_TESTS_ONLY");
+        var cases = new (string name, Func<Peer, Task> run)[]
+        {
+            ("lobby errors", LobbyErrors),
+            ("room lifecycle", RoomLifecycle),
+            ("reconnect", Reconnect),
+            ("host transfer", Transfer),
+            ("host loss → snapshot to the declared successor", HostLoss),
+            ("host resumed within the grace period", HostResumed),
+            ("host leave uses the successor order", LeaveWithSuccessors),
+            ("snapshot pacing and rejections", SnapshotPacing),
+            ("automatic snapshots", AutoSnapshot),
+            ("host heartbeat under host_idle_timeout", HostHeartbeat),
+            ("reconnect vs lobby_unavailable / lobby_rejected", ReconnectAdmission),
+            ("started room: reconnect, rejoin, kick an offline seat", StartedRoom),
+            ("welcome epoch for a late joiner and a rejoin", WelcomeEpoch),
+            ("presence re-sent after host changed and reconnect", Presence),
+        };
+        foreach (var transport in new[] { RelayTransport.Tcp, RelayTransport.Ws })
+        {
+            Transport = transport;
+            string tag = transport == RelayTransport.Ws ? "[ws] " : "[tcp] ";
+            await using var peer = await Peer.StartAsync(root, binary, webSocket: true);
+            Console.WriteLine($"{tag}peer: lobby {peer.LobbyUrl}, relay {peer.RelayAddr}, room directory {peer.Backend}");
+            if (transport == RelayTransport.Ws)
+            {
+                foreach (var (name, run) in new (string, Func<Peer, Task>)[]
+                {
+                    ("ask the lobby for ws and connect", WebSocketConnect),
+                    ("relay reads several frames from one message", RelayReadsCoalescedFrames),
+                })
+                {
+                    if (!string.IsNullOrEmpty(only) && !(tag + name).Contains(only, StringComparison.Ordinal)) continue;
+                    await run(peer);
+                    Console.WriteLine(tag + name + ": ok");
+                }
+            }
+            foreach (var (name, run) in cases)
+            {
+                if (!string.IsNullOrEmpty(only) && !(tag + name).Contains(only, StringComparison.Ordinal)) continue;
+                await run(peer);
+                Console.WriteLine(tag + name + ": ok");
+            }
+        }
+        Check(Player.CallbackErrors.IsEmpty, "no callback threw: " + string.Join("; ", Player.CallbackErrors));
+        Console.WriteLine($"all {checks} checks passed");
+        return 0;
     }
 
     private static void Check(bool condition, string what)
@@ -193,6 +230,109 @@ internal static class Program
     }
 
     private static string Hex(byte[] data) => Convert.ToHexString(data).ToLowerInvariant();
+
+    // 收的一侧按字节流拼帧，不假设一条消息一帧（交接 C1，与 TS 一样）：用假的消息型连接（像 WebSocket：一次收不跨消息边界）
+    // 经 TransportFactory 交给 SDK，relay 一侧把 Welcome 与一帧游戏帧放进一条消息，再把一帧拆成两条（包头也被切开）、
+    // 与下一帧拼在一条里。发的一侧：每次 Send 恰好一整帧（一条消息一帧）。
+    private static async Task MessageBoundaries()
+    {
+        static byte[] GameBytes(uint id, string text) => RelayCodec.Encode(new RelayFrame(RelayChannel.Game, 1, id, Encoding.UTF8.GetBytes(text)));
+        var welcome = RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 2, RelayOps.Welcome, RelayCodec.EncodeWelcome(new RelayWelcome(2, false, 1, 4))));
+        byte[] second = GameBytes(102, "split"), third = GameBytes(103, "after");
+        var fake = new FakeMessageTransport(
+            welcome.Concat(GameBytes(101, "together")).ToArray(),                // 两帧一条消息
+            second.Take(10).ToArray(),                                      // 一帧拆两条：前 10 字节（包头的一部分）
+            second.Skip(10).Concat(third).ToArray());                       // 剩下的与下一帧拼在一条里
+        using var client = new RelayClient(null, new RelayClientOptions { Game = Game, Transport = RelayTransport.Ws, TransportFactory = () => fake });
+        var frames = new ConcurrentQueue<RelayFrame>();
+        client.GameFrame += frames.Enqueue;
+        var got = await client.ConnectAsync(new RoomTicket(new RoomInfo(), "ws://fake/relay", "rt1.fake", 0));
+        Check(got.Equals(new RelayWelcome(2, false, 1, 4)) && fake.Address == "ws://fake/relay", "welcome from a message that also carries a game frame");
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var seen = new List<RelayFrame>();
+        while (seen.Count < 3 && DateTime.UtcNow < deadline)
+        {
+            client.Pump();
+            while (frames.TryDequeue(out var frame)) seen.Add(frame);
+            await Task.Delay(5);
+        }
+        Check(seen.Count == 3, "three game frames reassembled across message boundaries, got " + seen.Count);
+        Frame(seen[0], RelayChannel.Game, 1, 101, "together");
+        Frame(seen[1], RelayChannel.Game, 1, 102, "split");
+        Frame(seen[2], RelayChannel.Game, 1, 103, "after");
+        Check(client.SendGame(0, 201, Encoding.UTF8.GetBytes("up")) && client.SendRoom(0, 7, Encoding.UTF8.GetBytes("hi")), "sends over the fake transport");
+        var sent = fake.Sent;
+        Check(sent.Count == 3, "token + two frames sent as three messages, got " + sent.Count);
+        Check(Encoding.ASCII.GetString(RelayCodec.Decode(sent[0]).Payload.Span) == "rt1.fake", "first message is exactly the token frame");
+        Frame(RelayCodec.Decode(sent[1]), RelayChannel.Game, 0, 201, "up"); // Decode 要求恰好一帧：一条消息一帧
+        Frame(RelayCodec.Decode(sent[2]), RelayChannel.Room, 0, 7, "hi");
+    }
+
+    /// <summary>
+    /// 假的消息型连接：像 WebSocket 那样按消息交付，一次 ReceiveAsync 不跨消息边界（消息比 buffer 大时分几次交出）。
+    /// 收到第一帧（令牌）后放出预先排好的消息；Send 的每次调用记成一条消息。
+    /// </summary>
+    private sealed class FakeMessageTransport : IRelayTransport
+    {
+        private readonly Queue<byte[]> script;
+        private readonly Queue<byte[]> inbox = new Queue<byte[]>();
+        private readonly List<byte[]> sent = new List<byte[]>();
+        private byte[]? current;
+        private int offset;
+        private TaskCompletionSource<bool>? waiter;
+        private bool closed;
+        public string? Address;
+
+        public FakeMessageTransport(params byte[][] messages) { script = new Queue<byte[]>(messages); }
+
+        public List<byte[]> Sent { get { lock (inbox) return sent.ToList(); } }
+
+        public Task ConnectAsync(string address, CancellationToken cancellation) { Address = address; return Task.CompletedTask; }
+
+        public void Send(byte[] frame)
+        {
+            TaskCompletionSource<bool>? wake;
+            lock (inbox)
+            {
+                if (closed) throw new IOException("closed");
+                sent.Add(frame.ToArray());
+                if (sent.Count == 1) while (script.Count > 0) inbox.Enqueue(script.Dequeue());
+                wake = waiter; waiter = null;
+            }
+            wake?.TrySetResult(true);
+        }
+
+        public async Task<int> ReceiveAsync(byte[] buffer, int offsetInBuffer, int count, CancellationToken cancellation)
+        {
+            while (true)
+            {
+                Task wait;
+                lock (inbox)
+                {
+                    if (closed) return 0;
+                    if (current == null && inbox.Count > 0) { current = inbox.Dequeue(); offset = 0; }
+                    if (current != null)
+                    {
+                        int n = Math.Min(count, current.Length - offset);
+                        Array.Copy(current, offset, buffer, offsetInBuffer, n);
+                        offset += n;
+                        if (offset == current.Length) current = null;
+                        return n;
+                    }
+                    waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    wait = waiter.Task;
+                }
+                await wait.ConfigureAwait(false);
+            }
+        }
+
+        public void Dispose()
+        {
+            TaskCompletionSource<bool>? wake;
+            lock (inbox) { closed = true; wake = waiter; waiter = null; }
+            wake?.TrySetResult(true);
+        }
+    }
 
     // 不认识的控制帧操作码（127 没有分配）丢弃、连接不断；注册了 OnControl 的交给它。
     // 用本地 TcpListener 扮 relay：收令牌后一次写出 Welcome + 操作码 127 + 一帧游戏帧。
@@ -425,19 +565,60 @@ internal static class Program
         var full = await lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "full", MaxMembers = 1 });
         var other = new LobbyClient(peer.LobbyUrl, await peer.GameTokenAsync("cs-errs-2"));
         Check((await Throws<LobbyException>(() => other.JoinRoomAsync(full.Room.Id, new JoinRoomRequest { Game = Game }))).Code == LobbyErrorCode.RoomFull, "full room");
-        var noWs = await Throws<LobbyException>(() => lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "ws", Transport = RelayTransport.Ws }));
-        Check(noWs.Code == LobbyErrorCode.NoRelay && noWs.IsTemporary, "ws transport without a ws relay → no_relay");
         using var client = new RelayClient(lobby, new RelayClientOptions { Game = Game });
         var forged = await Throws<RelayClosedException>(() => client.ConnectAsync(new RoomTicket(full.Room, peer.RelayTcp, "rt1.forged", 0)));
         Check(forged.Reason == RelayReason.TokenRejected, "forged relay token → Closed{token_rejected}");
         await Throws<ArgumentException>(() => client.ConnectAsync(new RoomTicket(full.Room, "ws://127.0.0.1:1/relay", "x", 0)));
     }
 
+    /// <summary>relay 没开 WebSocket 监听时，向 lobby 要 ws 答 no_relay（临时错误）。</summary>
+    private static async Task NoWebSocketRelay(Peer peer)
+    {
+        var lobby = new LobbyClient(peer.LobbyUrl, await peer.GameTokenAsync("cs-nows"));
+        var noWs = await Throws<LobbyException>(() => lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "ws", Transport = RelayTransport.Ws }));
+        Check(noWs.Code == LobbyErrorCode.NoRelay && noWs.IsTemporary, "ws transport without a ws relay → no_relay");
+    }
+
+    /// <summary>
+    /// relay 的 WebSocket 一侧按字节流读：令牌帧与一个 Ping 放在同一条消息里发出，relay 照样回 Welcome 与 Pong
+    /// （SDK 一条消息一帧只是发送的约定，relay 不依赖它）。直接用 WebSocketRelayTransport.Send 发拼好的两帧。
+    /// </summary>
+    private static async Task RelayReadsCoalescedFrames(Peer peer)
+    {
+        var lobby = new LobbyClient(peer.LobbyUrl, await peer.GameTokenAsync("cs-ws-coalesce"));
+        var ticket = await lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "coalesce", Transport = RelayTransport.Ws });
+        using var transport = new WebSocketRelayTransport(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await transport.ConnectAsync(ticket.RelayAddr, timeout.Token);
+        var ping = RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Ping, new byte[] { 7, 7 }));
+        transport.Send(RelayCodec.EncodeToken(ticket.Token).Concat(ping).ToArray());
+        var welcome = await RelayCodec.ReadAsync(transport, 1 << 20, timeout.Token);
+        Check(welcome.Channel == RelayChannel.Control && welcome.MessageId == RelayOps.Welcome && RelayCodec.DecodeWelcome(welcome.Slot, welcome.Payload.Span).IsHost, "welcome after token+ping in one message");
+        var pong = await RelayCodec.ReadAsync(transport, 1 << 20, timeout.Token);
+        Check(pong.MessageId == RelayOps.Pong && pong.Payload.Span.SequenceEqual(new byte[] { 7, 7 }), "pong for the ping that shared the token's message");
+    }
+
+    /// <summary>向 lobby 要 ws，拿到 ws:// 地址，再经 WebSocket 连上 relay（房主建房、成员加入、游戏帧往返）。</summary>
+    private static async Task WebSocketConnect(Peer peer)
+    {
+        using var host = await Player.CreateAsync(peer, "cs-ws-host", new RelayClientOptions { Game = Game, Transport = RelayTransport.Ws });
+        var ticket = await host.Lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "ws", Transport = RelayTransport.Ws });
+        Check(ticket.RelayAddr == peer.RelayWs, "lobby gave the ws relay url: " + ticket.RelayAddr);
+        var welcome = await host.Client.ConnectAsync(ticket);
+        Check(welcome.IsHost && welcome.Slot == 1, "ws host welcome");
+        using var member = await Player.CreateAsync(peer, "cs-ws-m2", new RelayClientOptions { Game = Game, Transport = RelayTransport.Ws });
+        var joined = await member.Lobby.JoinRoomAsync(ticket.Room.Id, new JoinRoomRequest { Game = Game, Transport = RelayTransport.Ws });
+        Check(joined.RelayAddr == peer.RelayWs, "join over ws gave the ws relay url");
+        Check((await member.Client.ConnectAsync(joined)).Slot == 2, "ws member welcome");
+        Check(member.Client.SendGame(0, 101, Encoding.UTF8.GetBytes("move")), "ws member send");
+        Frame(await host.Next(host.Game, "member game frame over ws"), RelayChannel.Game, 2, 101, "move");
+    }
+
     private static async Task RoomLifecycle(Peer peer)
     {
         using var host = await Player.CreateAsync(peer, "cs-host", new RelayClientOptions { Game = Game });
-        var ticket = await host.Lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "duel", Name = "cs", Password = "pw", MaxMembers = 4, AttrsJson = "{\"map\":\"a\"}" });
-        Check(ticket.Room.Host == "cs-host" && ticket.Room.HasPassword && ticket.RelayAddr == peer.RelayTcp && ticket.Room.AttrsJson == "{\"map\":\"a\"}", "create ticket");
+        var ticket = await host.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "duel", Name = "cs", Password = "pw", MaxMembers = 4, AttrsJson = "{\"map\":\"a\"}" });
+        Check(ticket.Room.Host == "cs-host" && ticket.Room.HasPassword && ticket.RelayAddr == peer.RelayAddr && ticket.Room.AttrsJson == "{\"map\":\"a\"}", "create ticket");
         var hostWelcome = await host.Client.ConnectAsync(ticket);
         Check(hostWelcome.IsHost && hostWelcome.Slot == 1 && hostWelcome.HostSlot == 1 && host.Client.IsHost, "host welcome");
         await Until("room listed", async () =>
@@ -503,7 +684,7 @@ internal static class Program
         var again = await Throws<LobbyException>(() => m2.Client.RejoinAsync());
         Check(again.Code == LobbyErrorCode.Kicked && again.Status == 403 && again.ErrorName == "kicked", "kicked account: lobby join → 403 kicked");
         // 拿还没过期的旧令牌直接连 relay：relay 本地记着被踢，Closed{kicked}。
-        using (var stale = new RelayClient(null, new RelayClientOptions { Game = Game }))
+        using (var stale = new RelayClient(null, Opts()))
             Check((await Throws<RelayClosedException>(() => stale.ConnectAsync(m2.Ticket!))).Reason == RelayReason.Kicked, "kicked account's old token → Closed{kicked}");
 
         // 离开：先在 relay 上发 Leave，再经 lobby 让出席位；房主收到 MemberLeft{left}。
@@ -511,7 +692,7 @@ internal static class Program
         var leftViaLobby = await host.Next(host.Left, "member left");
         Check(leftViaLobby.Slot == 2 && leftViaLobby.Reason == RelayReason.Left, "member left (left)");
         // 席位让出后拿还没过期的旧令牌连 relay：令牌验签通过，lobby 验权不让进，Closed{lobby_rejected}。
-        using (var stale = new RelayClient(null, new RelayClientOptions { Game = Game }))
+        using (var stale = new RelayClient(null, Opts()))
             Check((await Throws<RelayClosedException>(() => stale.ConnectAsync(m1.Ticket!))).Reason == RelayReason.LobbyRejected, "left member's old token → Closed{lobby_rejected}");
 
         // 只有房主能改状态；开始后的房间新人不能进。
@@ -524,7 +705,7 @@ internal static class Program
     private static async Task Reconnect(Peer peer)
     {
         using var host = await Player.CreateAsync(peer, "cs-host-r", new RelayClientOptions { Game = Game });
-        var ticket = await host.Lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "coop" });
+        var ticket = await host.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "coop" });
         await host.Client.ConnectAsync(ticket);
         using var member = await Player.CreateAsync(peer, "cs-member-r", new RelayClientOptions
         {
@@ -569,7 +750,7 @@ internal static class Program
     private static async Task<(Player host, Player[] members, string room)> OpenRoom(Peer peer, string prefix, RelayClientOptions hostOptions, params RelayClientOptions[] memberOptions)
     {
         var host = await Player.CreateAsync(peer, prefix + "-host", hostOptions);
-        var ticket = await host.Lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "host" });
+        var ticket = await host.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "host" });
         await host.Client.ConnectAsync(ticket);
         var members = new Player[memberOptions.Length];
         for (int i = 0; i < members.Length; i++)
@@ -584,7 +765,7 @@ internal static class Program
 
     private static RelayClientOptions Opts(Action<RelayClientOptions>? edit = null)
     {
-        var options = new RelayClientOptions { Game = Game };
+        var options = new RelayClientOptions { Game = Game, Transport = Transport };
         edit?.Invoke(options);
         return options;
     }
@@ -719,7 +900,7 @@ internal static class Program
         Dispose(host, members);
 
         using var eager = await Player.CreateAsync(peer, "cs-pace-eager", Opts(o => o.SnapshotMinInterval = TimeSpan.FromMilliseconds(1)));
-        await eager.Client.ConnectAsync(await eager.Lobby.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "eager" }));
+        await eager.Client.ConnectAsync(await eager.CreateRoomAsync(new CreateRoomRequest { Game = Game, Mode = "eager" }));
         Check(eager.Client.Snapshot(new byte[] { 1 }) == RelaySnapshotResult.Sent, "eager first");
         await Task.Delay(5);
         Check(eager.Client.Snapshot(new byte[] { 2 }) == RelaySnapshotResult.Sent, "eager second (SDK lets it through)");
@@ -975,12 +1156,20 @@ internal static class Program
         {
             var counter = new JoinCounter();
             var lobby = new LobbyClient(peer.LobbyUrl, await peer.GameTokenAsync(account), new HttpClient(counter));
+            options.Transport = Transport; // 这一轮的传输：向 lobby 要哪种地址、重连沿用哪种
             return new Player(lobby, new RelayClient(lobby, options), counter);
+        }
+
+        /// <summary>按这一轮的传输建房。</summary>
+        public Task<RoomTicket> CreateRoomAsync(CreateRoomRequest request)
+        {
+            request.Transport = Transport;
+            return Lobby.CreateRoomAsync(request);
         }
 
         public async Task<RelayWelcome> JoinAsync(string roomId, string? password)
         {
-            var ticket = await Lobby.JoinRoomAsync(roomId, new JoinRoomRequest { Game = "party", Password = password });
+            var ticket = await Lobby.JoinRoomAsync(roomId, new JoinRoomRequest { Game = "party", Password = password, Transport = Transport });
             Ticket = ticket;
             return await Client.ConnectAsync(ticket);
         }
@@ -1024,25 +1213,33 @@ internal static class Program
         }
     }
 
-    /// <summary>Go 写的测试对端进程（client/relay/peer_test.go）：先 go test -c，再以 ROOST_RELAYPEER_SERVE=1 起二进制；stdin 关闭它就退出。</summary>
+    /// <summary>
+    /// Go 写的测试对端进程（client/relay/peer_test.go）：先 go test -c（BuildAsync，一次），再以 ROOST_RELAYPEER_SERVE=1 起二进制；
+    /// stdin 关闭它就退出。webSocket 为 false 时 relay 不开 WebSocket 监听，lobby 对 transport=ws 答 no_relay。
+    /// </summary>
     private sealed class Peer : IAsyncDisposable
     {
         private readonly Process process;
-        private readonly string directory;
         private static readonly HttpClient Http = new HttpClient();
         public string LobbyUrl { get; }
         public string RelayTcp { get; }
+        /// <summary>relay 的 WebSocket URL；没开时为空。</summary>
+        public string RelayWs { get; }
+        /// <summary>这一轮的传输下 lobby 应当给的 relay 地址。</summary>
+        public string RelayAddr => Transport == RelayTransport.Ws ? RelayWs : RelayTcp;
         public string Backend { get; }
 
-        private Peer(Process process, string directory, JsonElement info)
+        private Peer(Process process, JsonElement info)
         {
-            this.process = process; this.directory = directory;
+            this.process = process;
             LobbyUrl = info.GetProperty("lobby_url").GetString()!;
             RelayTcp = info.GetProperty("relay_tcp").GetString()!;
+            RelayWs = info.GetProperty("relay_ws").GetString()!;
             Backend = info.GetProperty("backend").GetString()!;
         }
 
-        public static async Task<Peer> StartAsync(string root)
+        /// <summary>编对端二进制，返回它的路径（放在新建的临时目录里，调用方用完删掉目录）。</summary>
+        public static async Task<string> BuildAsync(string root)
         {
             var directory = Directory.CreateTempSubdirectory("roost-relaypeer-").FullName;
             var binary = Path.Combine(directory, "relaypeer");
@@ -1050,16 +1247,20 @@ internal static class Program
             var build = Process.Start(new ProcessStartInfo("go", $"test -c -o \"{binary}\" ./client/relay") { WorkingDirectory = root })!;
             await build.WaitForExitAsync();
             if (build.ExitCode != 0) throw new Exception("go test -c ./client/relay failed");
+            return binary;
+        }
+
+        public static async Task<Peer> StartAsync(string root, string binary, bool webSocket)
+        {
             var start = new ProcessStartInfo(binary)
             {
                 RedirectStandardInput = true, RedirectStandardOutput = true, UseShellExecute = false, WorkingDirectory = root,
             };
             start.Environment["ROOST_RELAYPEER_SERVE"] = "1";
-            // C# 只连 TCP：relay 不开 WebSocket，lobby 对 transport=ws 答 no_relay。
-            start.Environment["ROOST_RELAYPEER_WS"] = "0";
+            start.Environment["ROOST_RELAYPEER_WS"] = webSocket ? "1" : "0";
             var process = Process.Start(start)!;
             var line = await process.StandardOutput.ReadLineAsync() ?? throw new Exception("relaypeer exited before printing its addresses");
-            return new Peer(process, directory, JsonDocument.Parse(line).RootElement);
+            return new Peer(process, JsonDocument.Parse(line).RootElement);
         }
 
         /// <summary>切换对端 relay 向 lobby 验权的结果：ok（照 lobby 的真实答复）、reject、down。</summary>
@@ -1083,7 +1284,6 @@ internal static class Program
             try { await process.WaitForExitAsync(timeout.Token); }
             catch (OperationCanceledException) { process.Kill(); }
             process.Dispose();
-            try { Directory.Delete(directory, true); } catch (IOException) { }
         }
     }
 }

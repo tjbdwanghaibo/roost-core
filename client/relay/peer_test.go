@@ -8,7 +8,7 @@ package relay_test
 //
 //     {"lobby_url":"http://127.0.0.1:...","relay_tcp":"127.0.0.1:...","relay_ws":"ws://127.0.0.1:.../relay","backend":"redis","game":"party"}
 //
-//     ROOST_RELAYPEER_WS=0 时不开 WebSocket 监听（C# 只连 TCP）。测试拿 POST <lobby_url>/harness/game-token {"account":"a"}
+//     ROOST_RELAYPEER_WS=0 时不开 WebSocket 监听（C# 测试用它核对 lobby 对 ws 答 no_relay）。测试拿 POST <lobby_url>/harness/game-token {"account":"a"}
 //     换一张测试 gt2，再按 lobby 的正式接口建房、加入。POST <lobby_url>/harness/admission {"mode":"ok|reject|down"}
 //     切换 relay 向 lobby 验权的结果（缺省 ok：照 lobby 的真实答复；reject：一律拒绝，relay 发 Closed{lobby_rejected}；
 //     down：一律不可用，relay 发 Closed{lobby_unavailable}），用来测自动重连遇到这两种拒绝时停还是退避重试。

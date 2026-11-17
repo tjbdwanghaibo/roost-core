@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace Roost.Client.Relay
 {
-    /// <summary>向 lobby 要的 relay 接入方式。C# SDK 只连 TCP；Ws 给浏览器（TS SDK）。</summary>
+    /// <summary>向 lobby 要的 relay 接入方式：Tcp 给 host:port，Ws 给 ws:// / wss:// URL（RelayClientOptions.Transport 选连哪种）。</summary>
     public enum RelayTransport { Tcp, Ws }
 
     /// <summary>房主设置的房间状态。</summary>

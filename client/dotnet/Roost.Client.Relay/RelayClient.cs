@@ -3,9 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -34,6 +32,19 @@ namespace Roost.Client.Relay
         public TimeSpan ReconnectMaxBackoff { get; set; } = TimeSpan.FromSeconds(5);
         /// <summary>等 Pump 派发的通知上限；业务长期不 Pump、积压超过它时断开连接，不无界占内存。</summary>
         public int MaxPendingEvents { get; set; } = 65536;
+
+        // ---------- 传输（交接 C1） ----------
+
+        /// <summary>
+        /// 连 relay 的方式。断线重连向 lobby 要令牌时按它要地址（重连沿用同一种）；ConnectAsync 的票据也要是按它向 lobby 要的
+        /// （CreateRoomRequest / JoinRoomRequest 的 Transport 填同一个值），否则连接时抛 ArgumentException。
+        /// </summary>
+        public RelayTransport Transport { get; set; } = RelayTransport.Tcp;
+        /// <summary>
+        /// 每次连接（含重连）新建一个连接对象。null 时按 Transport 用 SDK 自带的 TcpRelayTransport / WebSocketRelayTransport；
+        /// Unity WebGL 上没有套接字，填一个用浏览器 WebSocket 实现的 IRelayTransport（Transport 设成 Ws），见 README。
+        /// </summary>
+        public Func<IRelayTransport>? TransportFactory { get; set; }
 
         // ---------- 换 host（方案 §4.6） ----------
 
@@ -120,11 +131,10 @@ namespace Roost.Client.Relay
         public RelayClosedException(RelayReason reason) : base("relay: closed by relay: " + reason) { Reason = reason; }
     }
 
-    /// <summary>一条已进房的 relay 连接。网络线程独占读；写由 writeLock 串行。</summary>
+    /// <summary>一条已进房的 relay 连接。网络线程独占读；写由 writeLock 串行（IRelayTransport.Send 不并发）。</summary>
     internal sealed class RelaySession
     {
-        public readonly TcpClient Tcp;
-        public readonly NetworkStream Stream;
+        public readonly IRelayTransport Transport;
         public readonly RelayWelcome Welcome;
         public readonly CancellationTokenSource Stop = new CancellationTokenSource();
         /// <summary>角色变了：叫醒心跳任务按新角色重算间隔。</summary>
@@ -132,9 +142,9 @@ namespace Roost.Client.Relay
         private readonly object writeLock = new object();
         private long lastReceive;
 
-        public RelaySession(TcpClient tcp, NetworkStream stream, RelayWelcome welcome, long now)
+        public RelaySession(IRelayTransport transport, RelayWelcome welcome, long now)
         {
-            Tcp = tcp; Stream = stream; Welcome = welcome; lastReceive = now;
+            Transport = transport; Welcome = welcome; lastReceive = now;
         }
 
         public void Touch(long now) => Interlocked.Exchange(ref lastReceive, now);
@@ -144,21 +154,22 @@ namespace Roost.Client.Relay
         {
             lock (writeLock)
             {
-                try { Stream.Write(data, 0, data.Length); return true; }
+                try { Transport.Send(data); return true; }
                 catch (Exception) { Abort(); return false; }
             }
         }
 
-        /// <summary>立即关 socket（不发任何帧）；读循环随之结束。</summary>
+        /// <summary>立即关连接（不发任何帧）；读循环随之结束。</summary>
         public void Abort()
         {
             try { Stop.Cancel(); } catch (ObjectDisposedException) { }
-            Tcp.Dispose();
+            Transport.Dispose();
         }
     }
 
     /// <summary>
-    /// 一个玩家在一个房间里的 relay TCP 连接（含断线重连），方案 FEATURE-2026-11-16-lobby-relay §4.5，契约见 docs/framework/RELAY.md。
+    /// 一个玩家在一个房间里的 relay 连接（TCP 或 WebSocket，见 Transport / TransportFactory；含断线重连），方案 FEATURE-2026-11-16-lobby-relay §4.5，
+    /// 契约见 docs/framework/RELAY.md。
     ///
     /// 线程：网络在后台线程收发；业务通知（帧、成员上下线、禁言、断线、重连）只由 <see cref="Pump"/> 在调用它的线程派发
     /// （Unity 每帧在主线程调用一次），与 Roost.Client 的 GameClient 相同。Send 一类方法可以从任意线程调用。
@@ -718,7 +729,7 @@ namespace Roost.Client.Relay
             {
                 while (true)
                 {
-                    var frame = await RelayCodec.ReadAsync(session.Stream, frameLimit, session.Stop.Token).ConfigureAwait(false);
+                    var frame = await RelayCodec.ReadAsync(session.Transport, frameLimit, session.Stop.Token).ConfigureAwait(false);
                     session.Touch(Clock.ElapsedTicks);
                     var reason = Dispatch(frame);
                     if (reason != RelayReason.None) return (reason, new RelayClosedException(reason));
@@ -838,57 +849,52 @@ namespace Roost.Client.Relay
         {
             string? room = RoomId;
             if (lobby == null || room == null) throw new InvalidOperationException("Rejoin needs a lobby and a room from an earlier ConnectAsync.");
-            var ticket = await lobby.JoinRoomAsync(room, new JoinRoomRequest { Game = options.Game, Password = options.Password, Transport = RelayTransport.Tcp }, cancellation).ConfigureAwait(false);
+            var ticket = await lobby.JoinRoomAsync(room, new JoinRoomRequest { Game = options.Game, Password = options.Password, Transport = options.Transport }, cancellation).ConfigureAwait(false);
             return await DialAsync(ticket.RelayAddr, ticket.Token, cancellation).ConfigureAwait(false);
         }
 
         /// <summary>拨号、发令牌首帧、等第一帧：Welcome 就进房成功，Closed 就是 relay 拒绝。relay 总是先发 Welcome。</summary>
         private async Task<RelaySession> DialAsync(string address, string token, CancellationToken cancellation)
         {
-            var (host, port) = ParseAddress(address);
+            var transport = NewTransport();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation, lifetime.Token);
             timeout.CancelAfter(options.ConnectTimeout);
-            var tcp = new TcpClient { NoDelay = true };
             try
             {
-                using (timeout.Token.Register(() => tcp.Dispose()))
+                // 超时或取消时关掉连接：不依赖各实现对 CancellationToken 的处理（Mono 的 TcpClient.ConnectAsync 不收 token）。
+                using (timeout.Token.Register(transport.Dispose))
                 {
-                    await tcp.ConnectAsync(host, port).ConfigureAwait(false);
-                    var stream = tcp.GetStream();
-                    var tokenFrame = RelayCodec.EncodeToken(token);
-                    await stream.WriteAsync(tokenFrame, 0, tokenFrame.Length, timeout.Token).ConfigureAwait(false);
-                    var first = await RelayCodec.ReadAsync(stream, frameLimit, timeout.Token).ConfigureAwait(false);
+                    await transport.ConnectAsync(address, timeout.Token).ConfigureAwait(false);
+                    transport.Send(RelayCodec.EncodeToken(token));
+                    var first = await RelayCodec.ReadAsync(transport, frameLimit, timeout.Token).ConfigureAwait(false);
                     if (first.Channel == RelayChannel.Control && first.MessageId == RelayOps.Closed && first.Payload.Length == 1)
                         throw new RelayClosedException((RelayReason)first.Payload.Span[0]);
                     if (first.Channel != RelayChannel.Control || first.MessageId != RelayOps.Welcome)
                         throw new InvalidDataException("First relay frame is not a welcome.");
                     var welcome = RelayCodec.DecodeWelcome(first.Slot, first.Payload.Span);
-                    tcp.SendTimeout = (int)options.WriteTimeout.TotalMilliseconds;
-                    return new RelaySession(tcp, stream, welcome, Clock.ElapsedTicks);
+                    return new RelaySession(transport, welcome, Clock.ElapsedTicks);
                 }
             }
             catch (Exception error) when (!(error is RelayClosedException) && timeout.IsCancellationRequested)
             {
-                tcp.Dispose();
+                transport.Dispose();
                 cancellation.ThrowIfCancellationRequested();
                 if (lifetime.IsCancellationRequested) throw new ObjectDisposedException(nameof(RelayClient));
                 throw new TimeoutException($"relay: connecting to {address} timed out.", error);
             }
             catch
             {
-                tcp.Dispose();
+                transport.Dispose();
                 throw;
             }
         }
 
-        private static (string, int) ParseAddress(string address)
+        /// <summary>按选项新建一条连接：TransportFactory，否则按 Transport 用自带的 TCP / WebSocket。</summary>
+        private IRelayTransport NewTransport()
         {
-            if (string.IsNullOrEmpty(address) || address.Contains("://"))
-                throw new ArgumentException($"'{address}' is not a TCP address (the C# SDK connects over TCP; ask the lobby for transport tcp).");
-            int colon = address.LastIndexOf(':');
-            if (colon <= 0 || !int.TryParse(address.Substring(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int port))
-                throw new ArgumentException($"'{address}' is not host:port.");
-            return (address.Substring(0, colon).Trim('[', ']'), port);
+            if (options.TransportFactory != null)
+                return options.TransportFactory() ?? throw new InvalidOperationException("RelayClientOptions.TransportFactory returned null.");
+            return options.Transport == RelayTransport.Ws ? (IRelayTransport)new WebSocketRelayTransport(options.WriteTimeout) : new TcpRelayTransport(options.WriteTimeout);
         }
     }
 }
