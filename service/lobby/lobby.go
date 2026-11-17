@@ -203,6 +203,10 @@ type Room struct {
 	// Kicked 是被房主踢出过的账号（relay 报告 member_left、原因 kicked 时记下）：之后 join 与 relay 的验权都拒绝它，
 	// 名单随房间记录一起过期（方案 §4.4）。
 	Kicked []string `json:"kicked,omitempty"`
+	// Leaving 是经 lobby 离开、relay 还没确认的账号（2026-11-17，交接 A1）。relay 的在线名单是带延迟的快照：
+	// 离开之前发出、离开之后才处理到的报告里还有他。名单里的人不会被这种报告补回席位，也不会被重新记成 Connected；
+	// relay 报告他 member_left（序号更大）或者他重新 join 成功时清掉；更新的报告仍说他在线时，lobby 再发一次 leave 命令。
+	Leaving []string `json:"leaving,omitempty"`
 	// RelaySeq 是已应用的 relay 报告的最大序号；0 表示 relay 还没报告过（房主还没连上）。
 	RelaySeq      uint64 `json:"relay_seq,omitempty"`
 	CreatedAtUnix int64  `json:"created_at_unix"`
@@ -261,6 +265,21 @@ func (r Room) listable() bool {
 }
 
 func (r Room) kicked(account string) bool { return slices.Contains(r.Kicked, account) }
+
+func (r Room) leaving(account string) bool { return slices.Contains(r.Leaving, account) }
+
+func (r *Room) markLeaving(account string) {
+	if !r.leaving(account) {
+		r.Leaving = append(r.Leaving, account)
+	}
+}
+
+func (r *Room) clearLeaving(account string) {
+	r.Leaving = slices.DeleteFunc(r.Leaving, func(a string) bool { return a == account })
+	if len(r.Leaving) == 0 {
+		r.Leaving = nil
+	}
+}
 
 func (r Room) memberIndex(account string) int {
 	for i, member := range r.Members {

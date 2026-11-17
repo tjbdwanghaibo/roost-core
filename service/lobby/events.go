@@ -99,7 +99,9 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 		return fmt.Errorf("%w: relay event without room or relay", ErrBadRequest)
 	}
 	now := s.cfg.Now()
+	var stillOnline []string // 经 lobby 离开、更新的报告里仍在线的人：放锁后再发一次 leave 命令
 	_, err := s.cfg.Rooms.Update(ctx, event.Room, func(room *Room) (bool, error) {
+		stillOnline = stillOnline[:0]
 		if room.Closed || room.Relay.Instance != event.Relay {
 			return false, nil
 		}
@@ -128,6 +130,15 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 					room.Members[i].Connected = false
 				}
 			}
+			// relay 确认这个人走了（任何原因）：经 lobby 离开的记录可以清掉。
+			if event.Type == EventMemberLeft && event.Account != "" {
+				room.clearLeaving(event.Account)
+			}
+			for _, account := range event.Online {
+				if room.leaving(account) {
+					stillOnline = append(stillOnline, account)
+				}
+			}
 			room.applyOnline(event.Online, now)
 		}
 		if room.memberIndex(room.Host) < 0 {
@@ -138,6 +149,11 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 	})
 	if errors.Is(err, ErrRoomMissing) {
 		return nil
+	}
+	if err == nil {
+		for _, account := range stillOnline {
+			s.sendRelayCommand(event.Relay, RelayCommand{Type: CommandLeave, Room: event.Room, Account: account})
+		}
 	}
 	return err
 }
@@ -156,7 +172,9 @@ func (r *Room) applyOnline(online []string, now time.Time) {
 		member.Online = connected[member.Account]
 		if member.Online {
 			member.ReservedUntilUnix = 0
-			member.Connected = true
+			if !r.leaving(member.Account) { // 经 lobby 离开的人（房主）：迟到的名单不把他重新记成连上过
+				member.Connected = true
+			}
 			delete(connected, member.Account)
 		}
 		if r.holdsSeat(member, now) {
@@ -165,7 +183,7 @@ func (r *Room) applyOnline(online []string, now time.Time) {
 	}
 	r.Members = kept
 	for _, account := range online {
-		if connected[account] && !r.kicked(account) {
+		if connected[account] && !r.kicked(account) && !r.leaving(account) {
 			r.Members = append(r.Members, Member{Account: account, Online: true, Connected: true})
 			delete(connected, account)
 		}

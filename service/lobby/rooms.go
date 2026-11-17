@@ -183,6 +183,7 @@ func (s *Service) JoinRoom(ctx context.Context, gameToken, roomID string, req Jo
 		room.pruneReservations(now)
 		if i := room.memberIndex(account); i >= 0 {
 			room.Members[i].ReservedUntilUnix = s.reservedUntil(now)
+			room.clearLeaving(account)
 			return true, nil
 		}
 		switch {
@@ -194,6 +195,7 @@ func (s *Service) JoinRoom(ctx context.Context, gameToken, roomID string, req Jo
 			return false, ErrRoomFull
 		}
 		room.Members = append(room.Members, Member{Account: account, ReservedUntilUnix: s.reservedUntil(now)})
+		room.clearLeaving(account)
 		return true, nil
 	})
 	if err != nil {
@@ -230,6 +232,7 @@ func (s *Service) LeaveRoom(ctx context.Context, gameToken, roomID string, req L
 				return false, nil
 			}
 			room.Members[i].Connected = false
+			room.markLeaving(account)
 			return true, nil
 		}
 		i := room.memberIndex(account)
@@ -238,6 +241,9 @@ func (s *Service) LeaveRoom(ctx context.Context, gameToken, roomID string, req L
 		}
 		room.Members = append(room.Members[:i], room.Members[i+1:]...)
 		notifyRelay = room.RelaySeq > 0
+		if notifyRelay {
+			room.markLeaving(account)
+		}
 		return true, nil
 	})
 	if err != nil {

@@ -995,3 +995,146 @@ func TestNewRefusesIncompleteConfig(t *testing.T) {
 		t.Error("NewMemoryRooms accepted a zero ttl")
 	}
 }
+
+// 离开之后迟到的在线名单不能把人加回来（交接 A1，evidence/client-relay-flake-20261117；2026-11-17 修复前两种目录都红）。
+//
+// 顺序：成员经 lobby 离开之后，才处理到 relay 在他离开之前发出的一条在线名单（序号更大、名单里还有他）。
+// 期望（LeaveRoom 的文档与现有用例“bob after leaving”）：离开的人席位让出，之后再 join 是新人；房间已开始时
+// 新人被拒（ErrRoomStarted）。
+func TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack(t *testing.T) {
+	// 情形一：房间还没开始时离开，随后房主开局（client/relay 的 TestRoomLifecycle 里出问题的顺序）。
+	t.Run("leave_then_start", func(t *testing.T) {
+		backends(t, time.Hour, func(t *testing.T, h *harness) {
+			ctx := context.Background()
+			id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+			relay := h.room(t, id).Relay.Instance
+			h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 1, Host: "acc-host", Online: []string{"acc-host"}})
+			if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+				t.Fatal(err)
+			}
+			h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: relay, Seq: 2, Host: "acc-host", Account: "acc-bob",
+				Online: []string{"acc-host", "acc-bob"}})
+
+			if _, err := h.svc.LeaveRoom(ctx, "gt-bob", id, LeaveRequest{Game: "party"}); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("seats right after bob's leave:            %q", seats(h.room(t, id)))
+
+			// relay 在处理 leave 命令之前发出的报告（例如一条心跳），在 lobby 这边排在 LeaveRoom 之后。
+			h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 3, Host: "acc-host", Online: []string{"acc-host", "acc-bob"}})
+			afterStale := seats(h.room(t, id))
+			t.Logf("seats after the in-flight report (seq 3):  %q", afterStale)
+
+			if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := h.join("gt-bob", id, JoinRequest{})
+			t.Logf("bob joins the started room:                err = %v", err)
+
+			// relay 处理完 leave 之后的报告。
+			h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: relay, Seq: 4, Host: "acc-host", Account: "acc-bob", Reason: ReasonLeft,
+				Online: []string{"acc-host"}})
+			t.Logf("seats after relay's member_left (seq 4):   %q", seats(h.room(t, id)))
+
+			if afterStale != "acc-host:online" {
+				t.Errorf("the in-flight report undid the leave: seats = %q, want only the host", afterStale)
+			}
+			if !errors.Is(err, ErrRoomStarted) {
+				t.Errorf("bob after leaving, room started: err = %v, want ErrRoomStarted", err)
+			}
+		})
+	})
+
+	// 情形二：房间已经开始，连上过的成员主动离开。
+	t.Run("leave_a_started_room", func(t *testing.T) {
+		backends(t, time.Hour, func(t *testing.T, h *harness) {
+			ctx := context.Background()
+			id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+			relay := h.room(t, id).Relay.Instance
+			h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 1, Host: "acc-host", Online: []string{"acc-host"}})
+			if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+				t.Fatal(err)
+			}
+			h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: relay, Seq: 2, Host: "acc-host", Account: "acc-bob",
+				Online: []string{"acc-host", "acc-bob"}})
+			if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.svc.LeaveRoom(ctx, "gt-bob", id, LeaveRequest{Game: "party"}); err != nil {
+				t.Fatal(err)
+			}
+			h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 3, Host: "acc-host", Online: []string{"acc-host", "acc-bob"}})
+			afterStale := seats(h.room(t, id))
+			t.Logf("seats after the in-flight report (seq 3):  %q", afterStale)
+			_, err := h.join("gt-bob", id, JoinRequest{})
+			t.Logf("bob joins again:                           err = %v", err)
+			h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: relay, Seq: 4, Host: "acc-host", Account: "acc-bob", Reason: ReasonLeft,
+				Online: []string{"acc-host"}})
+			h.lapse()
+			h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 5, Host: "acc-host", Online: []string{"acc-host"}})
+			t.Logf("seats after member_left, lapse, heartbeat: %q", seats(h.room(t, id)))
+
+			if afterStale != "acc-host:online" {
+				t.Errorf("the in-flight report undid the leave: seats = %q, want only the host", afterStale)
+			}
+			if !errors.Is(err, ErrRoomStarted) {
+				t.Errorf("bob after leaving a started room: err = %v, want ErrRoomStarted", err)
+			}
+		})
+	})
+}
+
+// “正在离开”的记录怎么清（交接 A1 修法 A）：更新的报告仍说他在线时，lobby 再发一次 leave 命令（leave 命令丢了也能自愈）；
+// relay 报告他 member_left 后清掉；他重新 join 成功也清掉，之后 relay 的在线名单照常把他记成连上过。
+func TestLeavingRecordIsResentAndCleared(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+		relay := h.room(t, id).Relay.Instance
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 1, Host: "acc-host", Online: []string{"acc-host"}})
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: relay, Seq: 2, Host: "acc-host", Account: "acc-bob", Online: []string{"acc-host", "acc-bob"}})
+		if _, err := h.svc.LeaveRoom(ctx, "gt-bob", id, LeaveRequest{Game: "party"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.room(t, id).Leaving; fmt.Sprint(got) != "[acc-bob]" {
+			t.Fatalf("leaving after bob's leave = %v", got)
+		}
+		// 更新的报告仍说 bob 在线：不补回席位，再发一次 leave。
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 3, Host: "acc-host", Online: []string{"acc-host", "acc-bob"}})
+		leave := published{"roost.test.lobby.relay." + relay, RelayCommand{Type: CommandLeave, Room: id, Account: "acc-bob"}}
+		if got := h.commands.commands(); fmt.Sprint(got) != fmt.Sprint([]published{leave, leave}) {
+			t.Fatalf("relay commands = %+v, want the leave sent twice", got)
+		}
+		if got := seats(h.room(t, id)); got != "acc-host:online" {
+			t.Fatalf("seats after a report that still lists bob = %q", got)
+		}
+		// relay 确认：清掉记录。
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: relay, Seq: 4, Host: "acc-host", Account: "acc-bob", Reason: ReasonLeft, Online: []string{"acc-host"}})
+		if got := h.room(t, id).Leaving; got != nil {
+			t.Fatalf("leaving after relay's member_left = %v", got)
+		}
+
+		// 再离开一次，然后重新 join（房间还开着）：记录清掉，之后的在线名单照常把他记成连上过。
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: relay, Seq: 5, Host: "acc-host", Account: "acc-bob", Online: []string{"acc-host", "acc-bob"}})
+		if _, err := h.svc.LeaveRoom(ctx, "gt-bob", id, LeaveRequest{Game: "party"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.room(t, id).Leaving; got != nil {
+			t.Fatalf("leaving after bob joined again = %v", got)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 6, Host: "acc-host", Online: []string{"acc-host", "acc-bob"}})
+		room := h.room(t, id)
+		if i := room.memberIndex("acc-bob"); i < 0 || !room.Members[i].Connected {
+			t.Fatalf("bob after joining again and connecting: %+v", room.Members)
+		}
+	})
+}
