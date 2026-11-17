@@ -91,4 +91,4 @@ OK    entity-owner         4 owned entity kind(s); no other service sends to the
 OK    config-export:fresh  shared/config matches configs/schema and configs/table: 10 table(s), data version 41f9ec5c098a
 FAIL  generated            generated files are stale: configs/data/_manifest.json, configs/data/monster.json
 OK    project-templates    up to date
-2026/11/17 17:18:14 generated: generated files are stale: configs/data/_manifest.json, configs/data/monster.json
+2026/11/17 17:34:25 generated: generated files are stale: configs/data/_manifest.json, configs/data/monster.json

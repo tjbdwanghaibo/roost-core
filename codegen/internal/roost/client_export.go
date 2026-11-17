@@ -69,6 +69,9 @@ const (
 
 // ClientExportSpec 是 roost.yaml 的 client_export。
 type ClientExportSpec struct {
+	// Protocol 是协议导出的显式开关：写 false 表示不导出协议（只导出配置时用，不找 protoc，doctor 也不查协议导出）；
+	// 不写或写 true 照常导出。false 时不能再写 dir、languages、csharp。
+	Protocol *bool `yaml:"protocol,omitempty"`
 	// Dir 相对工程根，缺省 shared/protocol；产物提交进仓库。
 	Dir string `yaml:"dir,omitempty"`
 	// Languages 目前只支持 csharp；为空时只导出 proto 副本与 manifest.json。
@@ -101,16 +104,13 @@ func (spec *ClientExportSpec) dir() string {
 }
 
 func (spec *ClientExportSpec) csharp() bool {
-	return spec != nil && contains(spec.Languages, "csharp")
+	return spec.protocol() && contains(spec.Languages, "csharp")
 }
 
-// protocol 判断是否导出协议。client_export 下只写了 config（dir、languages、csharp 都没写）的工程只导出配置，
-// 不导出协议，也不需要 protoc；写了其中任何一项、或者整个 client_export 只有空声明时照旧导出协议。
+// protocol 判断是否导出协议：只看显式开关 client_export.protocol，写 false 才不导出（维护者 2026-11-17：不从别的键推断，
+// 已有的 client_export 加上 config 后协议照常导出）。
 func (spec *ClientExportSpec) protocol() bool {
-	if spec == nil {
-		return false
-	}
-	return spec.Config == nil || strings.TrimSpace(spec.Dir) != "" || len(spec.Languages) > 0 || spec.CSharp != nil
+	return spec != nil && (spec.Protocol == nil || *spec.Protocol)
 }
 
 func (spec *ClientExportSpec) namespaces() clientExportNamespaces {
@@ -126,6 +126,24 @@ func (spec *ClientExportSpec) validate() error {
 		return nil
 	}
 	joined := validateExportDir("client_export.dir", spec.Dir, DefaultClientExportDir)
+	if !spec.protocol() {
+		var set []string
+		if strings.TrimSpace(spec.Dir) != "" {
+			set = append(set, "dir")
+		}
+		if len(spec.Languages) > 0 {
+			set = append(set, "languages")
+		}
+		if spec.CSharp != nil {
+			set = append(set, "csharp")
+		}
+		if len(set) > 0 {
+			joined = errors.Join(joined, fmt.Errorf("client_export.protocol is false but client_export also sets %s, which only the protocol export reads; remove them or the protocol: false line", strings.Join(set, ", ")))
+		}
+		if spec.Config == nil {
+			joined = errors.Join(joined, errors.New("client_export.protocol is false and client_export.config is not declared, so nothing is exported; remove client_export or declare config"))
+		}
+	}
 	seen := map[string]bool{}
 	for _, language := range spec.Languages {
 		if language != "csharp" {

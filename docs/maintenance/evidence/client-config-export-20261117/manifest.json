@@ -2,7 +2,7 @@
   "kind": "roost-config-export",
   "schema": 1,
   "core": "v1.53.0",
-  "generator": "v1.53.1-0.20261117090013-dd78962fbf93+dirty",
+  "generator": "v1.53.1-0.20261117092759-9f4434e72bed+dirty",
   "data_version": "41f9ec5c098a465bde1f90c05236ad13dfa0ec47cc894f9f43e8d9af1646bf5d",
   "data_version_short": "41f9ec5c098a",
   "csharp_namespace": "Demo.Config",

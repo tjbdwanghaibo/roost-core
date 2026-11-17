@@ -20,7 +20,7 @@ import (
 // client_export.config（配置表导出给客户端，维护者 2026-11-17，docs/maintenance/FEATURE-2026-11-17-client-config-export.md）
 // 的回归用例。夹具：两张普通表（monster 带只给服务端的 drop_seed、只给客户端的 model、scene_id 上的 index、数组与字典字段、
 // parser 字段）、一张竖排键值表（balance）、一张 side=c 的表（tip）。C# 的编译与运行见 TestClientConfigCSharpRuntime
-// （要本机 dotnet，ROOST_TEST_DOTNET=1 时跑）。
+// （本机有 dotnet 时随 go test 运行，没有时 SKIP；设 ROOST_REQUIRE_DOTNET=1 时缺 dotnet 直接失败）。
 
 const configExportTestSchema = `package schema
 
@@ -75,7 +75,7 @@ var (
 	configExportServerOnlyValues = []string{"777", "888", "999"}
 )
 
-const configOnlyExportYAML = "client_export:\n  config: {}\n"
+const configOnlyExportYAML = "client_export:\n  protocol: false\n  config: {}\n"
 
 func newConfigExportProject(t *testing.T, exportYAML string) string {
 	t.Helper()
@@ -125,6 +125,7 @@ func snapshotDir(t *testing.T, dir string) map[string]string {
 
 func TestClientConfigExportSpecValidation(t *testing.T) {
 	t.Parallel()
+	on, off := true, false
 	for _, test := range []struct {
 		spec ClientExportSpec
 		want string
@@ -141,6 +142,13 @@ func TestClientConfigExportSpecValidation(t *testing.T) {
 		{ClientExportSpec{Dir: "shared/protocol", Config: &ClientConfigExportSpec{Dir: "shared/protocol"}}, "overlaps"},
 		{ClientExportSpec{Dir: "shared", Config: &ClientConfigExportSpec{}}, "overlaps"},
 		{ClientExportSpec{Languages: []string{"csharp"}, Config: &ClientConfigExportSpec{Dir: "shared/protocol/config"}}, "overlaps"},
+		// 只写 config 时协议照常导出（缺省 shared/protocol），配置目录不能占它。
+		{ClientExportSpec{Config: &ClientConfigExportSpec{Dir: "shared/protocol"}}, "overlaps"},
+		// protocol: false 与只给协议导出用的键冲突；protocol: false 而没有 config 什么都不导出。
+		{ClientExportSpec{Protocol: &off, Dir: "shared/protocol", Config: &ClientConfigExportSpec{}}, "client_export.protocol is false but client_export also sets dir"},
+		{ClientExportSpec{Protocol: &off, Languages: []string{"csharp"}, Config: &ClientConfigExportSpec{}}, "also sets languages"},
+		{ClientExportSpec{Protocol: &off, CSharp: &ClientExportCSharp{Namespace: "Game"}, Config: &ClientConfigExportSpec{}}, "also sets csharp"},
+		{ClientExportSpec{Protocol: &off}, "nothing is exported"},
 	} {
 		err := test.spec.validate()
 		if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -150,31 +158,32 @@ func TestClientConfigExportSpecValidation(t *testing.T) {
 	for _, spec := range []ClientExportSpec{
 		{Config: &ClientConfigExportSpec{}},
 		{Languages: []string{"csharp"}, Config: &ClientConfigExportSpec{Dir: "client/config", Tables: []string{"monster"}, CSharp: &ClientConfigCSharp{Namespace: "Game.Config"}}},
-		// 只开配置时协议不导出，协议目录的缺省值不与配置目录冲突。
-		{Config: &ClientConfigExportSpec{Dir: "shared/protocol"}},
+		// protocol: false 时协议不导出，协议目录的缺省值不与配置目录冲突。
+		{Protocol: &off, Config: &ClientConfigExportSpec{Dir: "shared/protocol"}},
+		{Protocol: &on, Languages: []string{"csharp"}, Config: &ClientConfigExportSpec{}},
 	} {
 		if err := spec.validate(); err != nil {
 			t.Errorf("validate(%+v) = %v", spec, err)
 		}
 	}
 
-	// 只写 config：只导出配置；写了 dir / languages / csharp 或没有 config：照旧导出协议。
+	// 协议导出只看显式开关 protocol：不写或 true 导出，false 不导出；只写 config 不影响协议导出。
 	for _, test := range []struct {
 		spec     *ClientExportSpec
 		protocol bool
 	}{
 		{nil, false},
 		{&ClientExportSpec{}, true},
-		{&ClientExportSpec{Config: &ClientConfigExportSpec{}}, false},
-		{&ClientExportSpec{Dir: "shared/protocol", Config: &ClientConfigExportSpec{}}, true},
-		{&ClientExportSpec{Languages: []string{"csharp"}, Config: &ClientConfigExportSpec{}}, true},
+		{&ClientExportSpec{Config: &ClientConfigExportSpec{}}, true},
+		{&ClientExportSpec{Protocol: &on, Config: &ClientConfigExportSpec{}}, true},
+		{&ClientExportSpec{Protocol: &off, Config: &ClientConfigExportSpec{}}, false},
 	} {
 		if got := test.spec.protocol(); got != test.protocol {
 			t.Errorf("protocol(%+v) = %v, want %v", test.spec, got, test.protocol)
 		}
 	}
 
-	spec := &ClientExportSpec{Config: &ClientConfigExportSpec{}}
+	spec := &ClientExportSpec{Protocol: &off, Config: &ClientConfigExportSpec{}}
 	for rel, want := range map[string]bool{
 		"shared/config/manifest.json":          true,
 		"shared/config/data/monster.json":      true,
@@ -227,8 +236,13 @@ func TestUndeclaredClientConfigExportChangesNothing(t *testing.T) {
 		t.Fatalf("protocol-only export runs %q", got)
 	}
 	manifest.ClientExport = &ClientExportSpec{Config: &ClientConfigExportSpec{}}
+	if got := names(manifest); got != "client-export,client-config-export" {
+		t.Fatalf("adding config to client_export runs %q; the protocol export must keep running", got)
+	}
+	off := false
+	manifest.ClientExport = &ClientExportSpec{Protocol: &off, Config: &ClientConfigExportSpec{}}
 	if got := names(manifest); got != "client-config-export" {
-		t.Fatalf("config-only export runs %q (protoc must not be needed)", got)
+		t.Fatalf("protocol: false runs %q (protoc must not be needed)", got)
 	}
 	manifest.ClientExport = nil
 	if got := names(manifest); got != "" {
@@ -254,7 +268,10 @@ func TestGenerateClientConfigExport(t *testing.T) {
 		t.Fatalf("export files = %s", got)
 	}
 	if _, err := os.Stat(filepath.Join(root, "shared", "protocol")); !os.IsNotExist(err) {
-		t.Fatalf("config-only export wrote the protocol export: %v", err)
+		t.Fatalf("protocol: false wrote the protocol export: %v", err)
+	}
+	if items := clientExportChecks(root, mustLoadManifest(t, root)); len(items) != 1 || items[0].Name != "config-export:fresh" {
+		t.Fatalf("protocol: false doctor items = %+v, want only config-export:fresh", items)
 	}
 
 	// 只给服务端的字段与值绝不出现在导出目录里；只给客户端的都在。
@@ -397,15 +414,43 @@ func TestGenerateClientConfigExport(t *testing.T) {
 	}
 }
 
+// 已有的 client_export 加上 config：协议照常导出（这里没有 languages，不要 protoc），两个目录各自齐全，doctor 两项都在、都通过。
+func TestClientConfigExportKeepsTheProtocolExport(t *testing.T) {
+	t.Parallel()
+	root := newConfigExportProject(t, "client_export:\n  config: {}\n")
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	if manifest := readExportManifest(t, root); manifest.Kind != clientExportKind {
+		t.Fatalf("protocol export manifest = %+v", manifest)
+	}
+	if manifest := readConfigManifest(t, root, "shared/config"); len(manifest.Tables) != 4 {
+		t.Fatalf("config export manifest = %+v", manifest)
+	}
+	m := mustLoadManifest(t, root)
+	items := clientExportChecks(root, m)
+	if len(items) != 2 || items[0].Name != "client-export:fresh" || items[0].Status != StatusOK || items[1].Name != "config-export:fresh" || items[1].Status != StatusOK {
+		t.Fatalf("doctor items = %+v", items)
+	}
+	if err := checkGenerated(context.Background(), root, m, io.Discard); err != nil {
+		t.Fatalf("generate --check: %v", err)
+	}
+	// 同一个工程改成 protocol: false 并加 languages：读 roost.yaml 时报冲突。
+	writeProjectFile(t, root, ManifestName, strings.Replace(readProjectFile(t, root, ManifestName), "client_export:\n  config: {}\n", "client_export:\n  protocol: false\n  languages: [csharp]\n  config: {}\n", 1))
+	if _, err := LoadManifest(root); err == nil || !strings.Contains(err.Error(), "client_export.protocol is false but client_export also sets languages") {
+		t.Fatalf("protocol: false with languages: %v", err)
+	}
+}
+
 func TestClientConfigExportTables(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		yaml, want string
 		tables     []string
 	}{
-		{yaml: "client_export:\n  config:\n    tables: [scene, tip]\n", tables: []string{"scene", "tip"}},
-		{yaml: "client_export:\n  config:\n    tables: [nope]\n", want: `lists "nope", which is not a table with client fields`},
-		{yaml: "client_export:\n  config:\n    tables: [monster]\n", want: "refs table scene, which is not exported"},
+		{yaml: "client_export:\n  protocol: false\n  config:\n    tables: [scene, tip]\n", tables: []string{"scene", "tip"}},
+		{yaml: "client_export:\n  protocol: false\n  config:\n    tables: [nope]\n", want: `lists "nope", which is not a table with client fields`},
+		{yaml: "client_export:\n  protocol: false\n  config:\n    tables: [monster]\n", want: "refs table scene, which is not exported"},
 	} {
 		root := newConfigExportProject(t, test.yaml)
 		var out bytes.Buffer
@@ -435,7 +480,7 @@ func TestClientConfigExportTables(t *testing.T) {
 		}
 	}
 	// side=s 的表不能列进 tables。
-	root := newConfigExportProject(t, "client_export:\n  config:\n    tables: [secret]\n")
+	root := newConfigExportProject(t, "client_export:\n  protocol: false\n  config:\n    tables: [secret]\n")
 	writeProjectFile(t, root, "configs/schema/secret.go", "package schema\n\n//roost:table name=secret side=s key=ID\ntype Secret struct {\n\tID int32 `csv:\"id\" json:\"id\"`\n}\n")
 	writeProjectFile(t, root, "configs/table/secret.csv", "id\n1\n")
 	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), `lists "secret"`) {
@@ -446,7 +491,7 @@ func TestClientConfigExportTables(t *testing.T) {
 // 暂存生成（roost generate 的正常路径）：导出随批次提交；去掉一张表后它的数据与 C# 文件被删；导出目录里别的文件不动。
 func TestClientConfigExportTransactionalRetirement(t *testing.T) {
 	t.Parallel()
-	root := newConfigExportProject(t, "client_export:\n  config:\n    dir: client/config\n    csharp:\n      namespace: Game.Config\n")
+	root := newConfigExportProject(t, "client_export:\n  protocol: false\n  config:\n    dir: client/config\n    csharp:\n      namespace: Game.Config\n")
 	writeProjectFile(t, root, "client/config/README.md", "client notes\n")
 	if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard, deferDependencies: true}, io.Discard); err != nil {
 		t.Fatal(err)
@@ -675,17 +720,20 @@ func configCSharpModel(table tablegen.ExportTable, data string) tablegen.ExportT
 
 // TestClientConfigCSharpRuntime 在 netstandard2.1 工程里编译导出的 C#（LangVersion 8、Nullable、警告即错误、XML 文档），
 // 再用一个 net 控制台程序跑：Load 读回全部数据、两次 Load 互不相干、CRLF 照常读、改任何一份 JSON 报出表名、
-// 违反 required / ref / unique / min / enum 报出表、行与字段、类型不对报出位置。要本机 dotnet（不下载依赖），
-// ROOST_TEST_DOTNET=1 时跑。
+// 违反 required / ref / unique / min / enum 报出表、行与字段、类型不对报出位置。与 TestClientSDKAgainstGeneratedPlayerTCP
+// 同一惯例：本机有 dotnet 就随 go test ./... 运行（不下载依赖），没有就 SKIP；ROOST_REQUIRE_DOTNET=1 时缺 dotnet 直接失败。
 func TestClientConfigCSharpRuntime(t *testing.T) {
-	if os.Getenv("ROOST_TEST_DOTNET") != "1" {
-		t.Skip("set ROOST_TEST_DOTNET=1 to compile and run the exported C# with the local dotnet SDK")
+	if testing.Short() {
+		t.Skip("builds and runs the exported C# with dotnet")
 	}
 	dotnet, err := exec.LookPath("dotnet")
 	if err != nil {
-		t.Fatalf("ROOST_TEST_DOTNET=1 but dotnet is not on PATH: %v", err)
+		if os.Getenv("ROOST_REQUIRE_DOTNET") == "1" {
+			t.Fatalf("ROOST_REQUIRE_DOTNET=1 but dotnet is not on PATH: %v", err)
+		}
+		t.Skip(".NET SDK unavailable; Go tests do not prove the exported C# compiles and loads (set ROOST_REQUIRE_DOTNET=1 to fail instead)")
 	}
-	root := newConfigExportProject(t, "client_export:\n  config:\n    csharp:\n      namespace: Good.Config\n")
+	root := newConfigExportProject(t, "client_export:\n  protocol: false\n  config:\n    csharp:\n      namespace: Good.Config\n")
 	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
 		t.Fatal(err)
 	}

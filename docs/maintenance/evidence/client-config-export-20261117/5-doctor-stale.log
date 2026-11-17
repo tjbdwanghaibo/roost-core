@@ -91,5 +91,5 @@ OK    entity-owner         4 owned entity kind(s); no other service sends to the
 FAIL  config-export:fresh  shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
 FAIL  generated            generated files are stale: shared/config/csharp/ConfigTables.cs, shared/config/data/monster.json, shared/config/manifest.json
 OK    project-templates    up to date
-2026/11/17 17:17:50 config-export:fresh: shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
+2026/11/17 17:34:07 config-export:fresh: shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
 generated: generated files are stale: shared/config/csharp/ConfigTables.cs, shared/config/data/monster.json, shared/config/manifest.json

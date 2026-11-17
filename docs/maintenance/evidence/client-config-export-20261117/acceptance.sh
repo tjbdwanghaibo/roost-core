@@ -62,20 +62,22 @@ printf 'key,value,note\nmax_level,60,玩家等级上限\nstart_gold,100,新角�
 printf 'id,text\n1,hello\n2,world\n' > configs/table/tip.csv
 cat >> roost.yaml <<'YAML'
 client_export:
+  protocol: false
   config:
     csharp:
       namespace: Demo.Config
 YAML
-log "roost.yaml 末尾："; tail -4 roost.yaml | tee -a "$out/acceptance.txt"
+log "roost.yaml 末尾："; tail -5 roost.yaml | tee -a "$out/acceptance.txt"
 
-step "2. roost generate（不要 protoc：PATH 上没有也能跑）"
+step "2. roost generate（protocol: false：不导出协议、不找 protoc，PATH 上没有 protoc 也能跑）"
 PATH="$(dirname "$(command -v go)"):/usr/bin:/bin" "$roost" generate > "$out/2-generate.log" 2>&1; log "generate rc=$?"
-grep -E "client config|omitted" "$out/2-generate.log" | tee -a "$out/acceptance.txt"
+grep -E "client config|omitted|client-export" "$out/2-generate.log" | tee -a "$out/acceptance.txt"
+log "shared/protocol 存在：$(test -e shared/protocol && echo yes || echo no)"
 (cd shared/config && find . -type f | sort) | tee -a "$out/acceptance.txt"
 cp shared/config/manifest.json "$out/manifest.json"
 log "go build ./... && go vet ./configs/...:"; go build ./... > "$out/2-build.log" 2>&1 && go vet ./configs/... >> "$out/2-build.log" 2>&1; log "rc=$?"
 "$roost" generate --check > "$out/2-check.log" 2>&1; log "generate --check rc=$? $(tail -1 "$out/2-check.log")"
-"$roost" project doctor > "$out/2-doctor.log" 2>&1; log "doctor: $(grep -E 'config-export:fresh' "$out/2-doctor.log")"
+"$roost" project doctor > "$out/2-doctor.log" 2>&1; log "doctor: $(grep -E 'config-export:fresh' "$out/2-doctor.log")"; log "doctor 里的 client-export:fresh 行数：$(grep -c 'client-export:fresh' "$out/2-doctor.log")"
 
 step "3. 只给服务端的字段不出现在导出目录里"
 for word in drop_seed server_tick 掉落种子 服务端心跳 只给服务端; do

@@ -393,6 +393,18 @@ func validConfigExportFileName(name string) bool {
 	return dir == "data/" && strings.HasSuffix(base, ".json") || dir == "csharp/" && strings.HasSuffix(base, ".cs")
 }
 
+// clientExportChecks 是 doctor 里前后端公共目录的两项：导出协议时 client-export:fresh，声明了 config 时 config-export:fresh。
+func clientExportChecks(root string, m Manifest) []CheckItem {
+	var items []CheckItem
+	if m.ClientExport.protocol() {
+		items = append(items, checkClientExport(root, m))
+	}
+	if m.ClientExport != nil && m.ClientExport.Config != nil {
+		items = append(items, checkClientConfigExport(root, m))
+	}
+	return items
+}
+
 // checkClientConfigExport 是 doctor 的 config-export:fresh：不重新生成（不写文件、不渲染 C#），只核对：
 //   - manifest.json 存在、每个登记文件的哈希一致（没有手改）；
 //   - 按 configs/schema 与 configs/table 现在的内容算出的客户端投影（tablegen.ClientExport，选表规则同生成），

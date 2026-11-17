@@ -45,13 +45,14 @@ M7-横排Convert不跳过注释: RED -run 'TestClientExportFixtureEndToEnd'
 M8a-没声明config也跑配置导出: RED -run 'TestUndeclaredClientConfigExportChangesNothing'
     --- FAIL: TestUndeclaredClientConfigExportChangesNothing (0.00s)
     client_config_export_test.go:227: protocol-only export runs "client-export,client-config-export"
-M8b-只写config也导出协议: RED -run 'TestUndeclaredClientConfigExportChangesNothing|TestClientConfigExportSpecValidation'
+（M8b 在显式开关改动后重新定义并重跑；原来的“只写 config 也导出协议”现在是要求的行为）
+M8b-protocol-false仍导出协议: RED -run 'TestUndeclaredClientConfigExportChangesNothing|TestClientConfigExportSpecValidation|TestGenerateClientConfigExport'
     --- FAIL: TestClientConfigExportSpecValidation (0.00s)
-    client_config_export_test.go:157: validate({Dir: Languages:[] CSharp:<nil> Config:0x75563caf9e0 projectRoot:}) = client_export.config.dir "shared/protocol" overlaps client_export.dir "shared/protocol"; the protocol and config exports each own their directory (both write manifest.json)
-    client_config_export_test.go:173: protocol(&{Dir: Languages:[] CSharp:<nil> Config:0x75563cafa70 projectRoot:}) = true, want false
-    client_config_export_test.go:192: owns(shared/protocol/manifest.json) = true, want false
-    client_config_export_test.go:192: owns(shared/protocol/csharp/MessageIds.cs) = true, want false
-    --- FAIL: TestUndeclaredClientConfigExportChangesNothing (0.00s)
+    client_config_export_test.go:155: validate({Protocol:0x24031d3b0c39 Dir:shared/protocol Languages:[] CSharp:<nil> Config:0x24031d6eb200 projectRoot:}) = <nil>, want "client_export.protocol is false but client_export also sets dir"
+    client_config_export_test.go:155: validate({Protocol:0x24031d3b0c39 Dir: Languages:[csharp] CSharp:<nil> Config:0x24031d6eb230 projectRoot:}) = <nil>, want "also sets languages"
+    client_config_export_test.go:155: validate({Protocol:0x24031d3b0c39 Dir: Languages:[] CSharp:0x24031d406020 Config:0x24031d6eb260 projectRoot:}) = client_export.csharp is set but client_export.languages does not list csharp, want "also sets csharp"
+    client_config_export_test.go:155: validate({Protocol:0x24031d3b0c39 Dir: Languages:[] CSharp:<nil> Config:<nil> projectRoot:}) = <nil>, want "nothing is exported"
+    client_config_export_test.go:166: validate({Protocol:0x24031d3b0c39 Dir: Languages:[] CSharp:<nil> Config:0x24031d6eb410 projectRoot:}) = client_export.config.dir "shared/protocol" overlaps client_export.dir "shared/protocol"; the protocol and config exports each own their directory (both write manifest.json)
 M9-sync不删上次写过这次没有的文件: RED -run 'TestClientConfigSync'
     --- FAIL: TestClientConfigSync (0.98s)
     client_config_export_test.go:562: incremental sync report lacks "removed data/tip.json":
@@ -76,3 +77,20 @@ M13-config目录可放在configs下: RED -run 'TestClientConfigExportSpecValidat
     --- FAIL: TestClientConfigExportSpecValidation (0.00s)
     client_config_export_test.go:147: validate({Dir: Languages:[] CSharp:<nil> Config:0x2a6e5c583c80 projectRoot:}) = <nil>, want "inside configs/"
     client_config_export_test.go:147: validate({Dir: Languages:[] CSharp:<nil> Config:0x2a6e5c583cb0 projectRoot:}) = <nil>, want "inside game/"
+M14-加了config协议导出就停: RED -run 'TestClientConfigExportKeepsTheProtocolExport|TestUndeclaredClientConfigExportChangesNothing|TestClientConfigExportSpecValidation'
+    --- FAIL: TestClientConfigExportSpecValidation (0.00s)
+    client_config_export_test.go:155: validate({Protocol:<nil> Dir:shared/protocol Languages:[] CSharp:<nil> Config:0x3a4fce95e450 projectRoot:}) = client_export.protocol is false but client_export also sets dir, which only the protocol export reads; remove them or the protocol: false line, want "overlaps"
+    client_config_export_test.go:155: validate({Protocol:<nil> Dir:shared Languages:[] CSharp:<nil> Config:0x3a4fce95e480 projectRoot:}) = client_export.protocol is false but client_export also sets dir, which only the protocol export reads; remove them or the protocol: false line, want "overlaps"
+    client_config_export_test.go:155: validate({Protocol:<nil> Dir: Languages:[csharp] CSharp:<nil> Config:0x3a4fce95e4b0 projectRoot:}) = client_export.protocol is false but client_export also sets languages, which only the protocol export reads; remove them or the protocol: false line, want "overlaps"
+    client_config_export_test.go:155: validate({Protocol:<nil> Dir: Languages:[] CSharp:<nil> Config:0x3a4fce95e4e0 projectRoot:}) = <nil>, want "overlaps"
+    client_config_export_test.go:166: validate({Protocol:<nil> Dir: Languages:[csharp] CSharp:<nil> Config:0x3a4fce95e6f0 projectRoot:}) = client_export.protocol is false but client_export also sets languages, which only the protocol export reads; remove them or the protocol: false line
+M15-protocol-false与协议键不报冲突: RED -run 'TestClientConfigExportSpecValidation|TestClientConfigExportKeepsTheProtocolExport'
+    --- FAIL: TestClientConfigExportSpecValidation (0.00s)
+    client_config_export_test.go:155: validate({Protocol:0x7dd44583651 Dir:shared/protocol Languages:[] CSharp:<nil> Config:0x7dd4427f560 projectRoot:}) = <nil>, want "client_export.protocol is false but client_export also sets dir"
+    client_config_export_test.go:155: validate({Protocol:0x7dd44583651 Dir: Languages:[csharp] CSharp:<nil> Config:0x7dd4427f590 projectRoot:}) = <nil>, want "also sets languages"
+    client_config_export_test.go:155: validate({Protocol:0x7dd44583651 Dir: Languages:[] CSharp:0x7dd44150020 Config:0x7dd4427f5c0 projectRoot:}) = client_export.csharp is set but client_export.languages does not list csharp, want "also sets csharp"
+    --- FAIL: TestClientConfigExportKeepsTheProtocolExport (0.77s)
+    client_config_export_test.go:441: protocol: false with languages: <nil>
+M16-ROOST_REQUIRE_DOTNET缺dotnet不失败: RED (变异后用例被跳过、go test 退出 0：门禁失效被抓到——用例本应失败)
+    client_config_export_test.go:734: .NET SDK unavailable; Go tests do not prove the exported C# compiles and loads (set ROOST_REQUIRE_DOTNET=1 to fail instead)
+    --- SKIP: TestClientConfigCSharpRuntime (0.00s)

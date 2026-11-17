@@ -1,22 +1,24 @@
 
 ### 环境
-roost: roost-codegen v1.53.1-0.20261117090013-dd78962fbf93+dirty  go: go1.27.3  dotnet: 10.0.302
+roost: roost-codegen v1.53.1-0.20261117092759-9f4434e72bed+dirty  go: go1.27.3  dotnet: 10.0.302
 
 ### 1. game-demo 工程 + 夹具表 + client_export.config
 project new rc=0
 roost.yaml 末尾：
 client_export:
+  protocol: false
   config:
     csharp:
       namespace: Demo.Config
 
-### 2. roost generate（不要 protoc：PATH 上没有也能跑）
+### 2. roost generate（protocol: false：不导出协议、不找 protoc，PATH 上没有 protoc 也能跑）
 generate rc=0
 tablegen: server side omitted 1 tables / 2 fields (client only)
 tablegen: server side omitted 1 tables / 2 fields (client only)
 tablegen: server side omitted 1 tables / 2 fields (client only)
 client config export: 10 tables, omitted 0 tables / 2 fields (server only or not listed in client_export.config.tables)
 client config data version: 41f9ec5c098a (41f9ec5c098a465bde1f90c05236ad13dfa0ec47cc894f9f43e8d9af1646bf5d)
+shared/protocol 存在：no
 ./csharp/ConfigJson.cs
 ./csharp/ConfigTables.Balance.cs
 ./csharp/ConfigTables.Building.cs
@@ -44,6 +46,7 @@ go build ./... && go vet ./configs/...:
 rc=0
 generate --check rc=0 generated files are up to date
 doctor: OK    config-export:fresh  shared/config matches configs/schema and configs/table: 10 table(s), data version 41f9ec5c098a
+doctor 里的 client-export:fresh 行数：0
 
 ### 3. 只给服务端的字段不出现在导出目录里
   drop_seed: 0 个文件
@@ -68,9 +71,9 @@ diff -r: 无差异
 
 ### 5. 改 CSV 不重新生成：--check 与 doctor 都报过期
 generate --check rc=1
-2026/11/17 17:17:29 generated files are stale: shared/config/csharp/ConfigTables.cs, shared/config/data/monster.json, shared/config/manifest.json
+2026/11/17 17:33:48 generated files are stale: shared/config/csharp/ConfigTables.cs, shared/config/data/monster.json, shared/config/manifest.json
 FAIL  config-export:fresh  shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
-2026/11/17 17:17:50 config-export:fresh: shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
+2026/11/17 17:34:07 config-export:fresh: shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
 只改只给服务端的列：OK    config-export:fresh  shared/config matches configs/schema and configs/table: 10 table(s), data version 41f9ec5c098a
 
 ### 6. C#：netstandard2.1 编译（LangVersion 8、Nullable、警告即错误、XML 文档），net 控制台 Load
@@ -113,7 +116,7 @@ files: 22 added, 0 updated, 0 removed, 0 unchanged
   added data/scene.json
   added data/spawn.json
   added data/tip.json
-first config sync: core v1.53.0, generator v1.53.1-0.20261117090013-dd78962fbf93+dirty; 10 table(s)
+first config sync: core v1.53.0, generator v1.53.1-0.20261117092759-9f4434e72bed+dirty; 10 table(s)
 config data version: none -> 41f9ec5c098a
 代码目录：ConfigJson.cs ConfigTables.Balance.cs ConfigTables.Building.cs ConfigTables.BuildingParam.cs ConfigTables.EquipmentItem.cs ConfigTables.FeatureFlag.cs ConfigTables.Item.cs ConfigTables.Monster.cs ConfigTables.Scene.cs ConfigTables.Spawn.cs ConfigTables.Tip.cs ConfigTables.cs config-manifest.json 
 数据目录：balance.json building.json building_param.json equipment_item.json featureflag.json item.json monster.json scene.json spawn.json tip.json 
@@ -144,7 +147,7 @@ config rows changed (1):
 同步记录 config-manifest.json 的 data_version：  "data_version": "cef6554809bb9b24a33835d91fadadfb15a521f44d01a781193841d5884d0ad3",
 
 ### 9. roost client sync：目录里手写的同名文件拒绝覆盖
-2026/11/17 17:18:26 refuse to overwrite /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Other/data/monster.json: it was not written by a previous roost client sync (no entry in /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Other/code/config-manifest.json); move it away or pick another directory
+2026/11/17 17:34:37 refuse to overwrite /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Other/data/monster.json: it was not written by a previous roost client sync (no entry in /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Other/code/config-manifest.json); move it away or pick another directory
 rc=1
 手写文件：{"mine":true}；代码目录被创建：no
 done

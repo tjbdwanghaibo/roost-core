@@ -2,12 +2,12 @@
 
 方案：[FEATURE-2026-11-17-client-config-export.md](../../FEATURE-2026-11-17-client-config-export.md)（决定 3、4 修订版、7，第 4 节导出约定，第 6 节验收，第 8 节第 2 组）。前置：tablegen 组 `bcc38217`（[证据](../client-config-export-tablegen-20261117/README.md)）。现行说明：[codegen 参考 §2.2](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)、`roost help client`。
 
-机器：本机 macOS，Go 1.27.3，`GOWORK=off`，.NET SDK 10.0.302（netstandard2.1 的引用包取自本机 NuGet 缓存，没有下载）。这是功能实施，不是缺陷修复：没有“修前红”，每个新行为有回归用例，另做 17 个变异证明用例能抓到。codebase-memory-mcp 本会话连不上，代码阅读按当前源码与 rg。
+机器：本机 macOS，Go 1.27.3，`GOWORK=off`，.NET SDK 10.0.302（netstandard2.1 的引用包取自本机 NuGet 缓存，没有下载）。这是功能实施，不是缺陷修复：没有“修前红”，每个新行为有回归用例，另做 20 个变异证明用例能抓到。codebase-memory-mcp 本会话连不上，代码阅读按当前源码与 rg。
 
 ## 设计
 
 - **配置**：`client_export.config`（`ClientConfigExportSpec`）：`dir` 缺省 `shared/config`，`tables` 可选，`csharp.namespace` 缺省 `Roost.Config`。读 `roost.yaml` 时核对：目录相对、在工程内、不在 `configs/ game/ protocol/ db/ internal/ service/ cmd/ deploy/` 下、不用生成时跳过的名字（与协议目录共用 `validateExportDir`），不与协议导出目录相同或互相包含（两边都写 `manifest.json`）；`tables` 不空、不重复；命名空间合法；要 `config` feature。`tables` 里的表是否存在、是否带客户端字段要读 schema，生成与 doctor 时核对（`selectConfigTables`），被导出表 `ref` 到的表也必须导出。
-- **只开 config**（最简单的写法）：`client_export` 下只写 `config`（不写 `dir`、`languages`、`csharp`）就只导出配置。`ClientExportSpec.protocol()` 判断是否导出协议：没有 `config`、或写了这三项之一时导出（所以已有的 `client_export: {}` 行为不变）。协议的生成步骤、doctor 项、`owns`、`client sync --to` 都按它走；配置导出不碰 protoc。
+- **协议导出的显式开关**（协调者 2026-11-17 改定，见第二笔提交）：`client_export.protocol: false` 表示不导出协议，不写（或 `true`）照常导出。`ClientExportSpec.protocol()` 只看这个键：`client_export` 下只写 `config` 时协议照常用缺省值导出，已有工程加上 `config` 不会让协议导出停下。只要配置的工程写 `protocol: false`：不跑协议导出步骤、不找 protoc（`csharp()` 也要求 `protocol()`），doctor 只有 `config-export:fresh`（`clientExportChecks`）。`protocol: false` 与 `dir`、`languages`、`csharp` 同时出现，或 `protocol: false` 而没有 `config`，读 `roost.yaml` 时报错。第一笔提交里的隐式推断（只写 config 即不导出协议）已撤掉。
 - **生成**：`generatorsFor` 在声明了 `config` 时最后追加 `client-config-export`（Always），只读 `configs/schema` 与 `configs/table`：`tablegen.ClientExport` → 按 `tables` 选表 → `tablegen.DataVersion`（选表后重算）→ 渲染 C# → 写 `data/<表>.json`（直接用模型的 Data）、`csharp/*.cs`、`manifest.json`。`data/*.json`、`csharp/*.cs`（只认这一层）与 `manifest.json` 由 `ClientConfigExportSpec.owns` 认领，所以 `--check` 快照、暂存提交、退役删除、业务输入快照都覆盖它们；本轮不产出的删掉，别的文件不动。打印 `client config export: N tables, omitted N tables / M fields` 与 `client config data version: <12 位> (<完整值>)`。
 - **manifest.json**：`kind: roost-config-export`、`schema: 1`、`core`、`generator`、`data_version` / `data_version_short`、`csharp_namespace`、`omitted`、`tables`（名字、类型、种类、主键 JSON 名、文件、行数、`schema_hash`、`data_hash`、字段名 / 类型 / parser）、`files`（每个导出文件按 LF 的 sha256，与协议导出同一个 `contentHash`）。
 - **C#**：每张表一个文件 `ConfigTables.<类型>.cs`（行类型 + `<类型>Table`，或单例类型 + internal `<类型>Reader`），加上入口 `ConfigTables.cs`（`Load`、`DataVersion` / `ShortDataVersion`、`DataFiles()`、`ConfigLoadException`）与运行部分 `ConfigJson.cs`（`client_config_csharp_runtime.go`：JSON 解析器、强类型读取、规则检查、哈希核对，全部 internal、无静态可变状态）。按表拆文件满足“单个文件太大就拆”，且改一张表只动它自己的文件。生成代码里引用生成的类型一律 `global::<ns>.<类型>`，避免表名、字段名同名的成员遮住类型；类型名与固定类型、`ConfigTables` 成员冲突、字段名不是 C# 标识符或等于类型名时生成报错；C# 关键字字段写 `@名字`。类型对应见参考 §2.2；不认识的类型（具名类型、结构体、`time.Duration`、`[]byte`、非 string 键的 map）报错并提示 parser 或 `side:"s"`。
@@ -19,7 +19,7 @@
 ## 文件
 
 - 代码（新）：`codegen/internal/roost/client_config_export.go`、`client_config_csharp.go`、`client_config_csharp_runtime.go`。
-- 代码（改）：`codegen/internal/roost/client_export.go`（`Config` 字段、`protocol()`、`validateExportDir`、`owns`）、`client_sync.go`（共用计划、配置同步与报告）、`generate.go`、`doctor.go`、`manifest.go`（config feature 校验一行）、`help.go`；`codegen/internal/tablegen/main.go`（一行）、`export.go`（`DataVersion`）。
+- 代码（改）：`codegen/internal/roost/client_export.go`（`Config` 字段、`protocol()`、`validateExportDir`、`owns`）、`client_sync.go`（共用计划、配置同步与报告）、`generate.go`、`doctor.go`（两项合并为 `clientExportChecks`）、`manifest.go`（config feature 校验一行）、`help.go`；`codegen/internal/tablegen/main.go`（一行）、`export.go`（`DataVersion`）。
 - 用例：`codegen/internal/roost/client_config_export_test.go`（新）；`codegen/internal/tablegen/export_test.go`（横排 `#` 注释、表名进版本号）。
 - 文档：`codegen/docs/CODEGEN_REFERENCE.zh-CN.md`（§2 顺序、新增 §2.2、§9.2 注释行与 DataVersion）、`codegen/docs/PROJECT_GENERATOR.zh-CN.md`（字段表、doctor 清单）。
 
@@ -40,7 +40,7 @@
 ```
 GOWORK=off go vet ./codegen/internal/roost/ ./codegen/internal/tablegen/        # 无输出
 GOWORK=off go test -count=1 ./codegen/internal/tablegen/ ./codegen/internal/marker/   # ok / ok
-ROOST_TEST_DOTNET=1 GOWORK=off go test -count=1 -v -run 'TestClientConfig|TestGenerateClientConfigExport|TestUndeclaredClientConfig|TestConfigCSharpTypes' ./codegen/internal/roost/
+GOWORK=off go test -count=1 -v -run 'TestClientConfig|TestGenerateClientConfigExport|TestUndeclaredClientConfig|TestConfigCSharpTypes|TestClientExport|TestClientSync|TestGenerateClientExport|TestUndeclaredClientExport' ./codegen/internal/roost/   # 第二笔提交后：16 个 PASS，含 C# 运行用例
 ```
 
     --- PASS: TestClientConfigCSharpRuntime (3.32s)
@@ -51,27 +51,29 @@ ROOST_TEST_DOTNET=1 GOWORK=off go test -count=1 -v -run 'TestClientConfig|TestGe
     --- PASS: TestGenerateClientConfigExport (3.51s)
     --- PASS: TestClientConfigExportTables (3.52s)
     --- PASS: TestClientConfigExportTransactionalRetirement (3.74s)
+    --- PASS: TestClientConfigExportKeepsTheProtocolExport（第二笔提交新增）
 
-改动波及的 roost 用例（`-run 'Generate|Staged|Snapshot|Doctor|Manifest|Retire|ClientExport|ClientSync|ClientConfig|ConfigCSharp|Help|Undeclared|Table|Orchestrator'`，含协议导出的 8 个用例）：166 个通过、5 个 SKIP（原有的环境门控用例 4 个，加上这一轮没开 `ROOST_TEST_DOTNET` 的 `TestClientConfigCSharpRuntime`），`ok … 691.920s`，见 [roost-targeted-tests.txt](roost-targeted-tests.txt)。另跑 `GOWORK=off go test -count=1 -run 'Link|Anchor|Doc' .`：ok。没跑 codegen 全量与 pretag（按本批规则）。
+改动波及的 roost 用例（`-run 'Generate|Staged|Snapshot|Doctor|Manifest|Retire|ClientExport|ClientSync|ClientConfig|ConfigCSharp|Help|Undeclared|Table|Orchestrator'`，含协议导出的 8 个用例）：166 个通过、5 个 SKIP（原有的环境门控用例 4 个，加上当时还要手动打开的 `TestClientConfigCSharpRuntime`；这一轮跑在第一笔提交上），`ok … 691.920s`，见 [roost-targeted-tests.txt](roost-targeted-tests.txt)。另跑 `GOWORK=off go test -count=1 -run 'Link|Anchor|Doc' .`：ok。没跑 codegen 全量与 pretag（按本批规则）。
 
 新增用例覆盖：
 
-- `TestClientConfigExportSpecValidation`：目录在 `configs/`、`game/`、绝对路径、工程外、跳过的名字，与协议目录三种重叠，`tables` 重复 / 空名，命名空间；`protocol()` 五种写法；`owns` 11 条路径；缺 config feature。
-- `TestUndeclaredClientConfigExportChangesNothing`：没声明 config 时 `roost.yaml` 不多键、生成器列表没有配置导出；只声明 config 时没有协议导出（不需要 protoc）。
+- `TestClientConfigExportSpecValidation`：目录在 `configs/`、`game/`、绝对路径、工程外、跳过的名字，与协议目录四种重叠（含只写 config 时配置目录占了协议的缺省目录），`protocol: false` 与 dir / languages / csharp 冲突、`protocol: false` 而没有 config，`tables` 重复 / 空名，命名空间；`protocol()` 五种写法；`owns` 11 条路径；缺 config feature。
+- `TestUndeclaredClientConfigExportChangesNothing`：没声明 config 时 `roost.yaml` 不多键、生成器列表没有配置导出；只加 config 时协议与配置两步都跑；`protocol: false` 加 config 时只有配置导出（不找 protoc）。
+- `TestClientConfigExportKeepsTheProtocolExport`：`client_export:` 下只写 `config: {}` 时协议导出目录与配置导出目录都写出，doctor 两项都在且 OK，`--check` 干净；改成 `protocol: false` 加 `languages` 读 `roost.yaml` 报冲突。
 - `TestGenerateClientConfigExport`（夹具：scene 带 unique / enum；monster 带只给服务端的 `drop_seed`、只给客户端的 `model`、`scene_id` 上的 index、`[]int64`、`map[string]int32`、parser 字段；balance 竖排键值，含只给服务端 / 只给客户端的 key；tip `side=c`，含带换行的值）：导出文件清单；只给服务端的字段名 / 标题 / note 不出现在导出目录任何文件里、它们的值不出现在数据里；manifest 与 tablegen 模型逐表一致、文件哈希正确；C# 内含数据版本与预期声明、不出现 UnityEngine / JsonUtility / 反射；打印 omitted 与版本号；`--force` 再生成逐字节相同；`--check` 与 doctor 干净；改 CSV 后 `--check` 点名 `data/monster.json` 与 `manifest.json`、doctor 点名表与数据版本；只改服务端列 doctor 仍 OK；改 schema 报 schema 变化；手改导出文件报出文件。
 - `TestClientConfigExportTables`：选表、未知表、ref 目标没选、`side=s` 的表。
 - `TestClientConfigExportTransactionalRetirement`：暂存生成随批次提交、自定义目录与命名空间、去掉一张表后它的数据与 C# 被删、目录里别的文件不动、`--check` 干净。
 - `TestClientConfigSync`：首次（10 个文件、`none -> 版本`、同步记录、无 `.meta`）；dry-run 不写；增量（版本旧 → 新、删 tip 两个文件、表删除、字段增 / 删 / 改类型、行数 3 → 4、没变的表不报）；再同步 `(unchanged)`；手写的同名文件拒绝覆盖且一个文件都不写；服务端导出被手改拒绝同步；两个配置参数必须一起给；只导出配置的工程不能用 `--to`。
 - `TestConfigCSharpTypes`：类型对应 21 种、parser、嵌套读法、5 种不支持的类型、C# 字符串转义、6 种命名冲突、关键字字段。
-- `TestClientConfigCSharpRuntime`（`ROOST_TEST_DOTNET=1` 才跑）：netstandard2.1 + LangVersion 8 + Nullable + 警告即错误 + XML 文档编译；`Load` 读回全部表全部行全部字段（与导出 JSON 逐字段比）；Get / TryGet / 不存在的键 / 非唯一 index；两次 `Load` 互不相干；CRLF 照读；四个 JSON 分别改动都报 `table <表名>: hash:`；readText 返回 null；可空 / 嵌套数组 / 字典里的数组 / float32 / uint64 最大值 / bool / 关键字字段的读回；required、ref、unique、min、enum、kv 的 required、数组元素类型错、int32 越界各报出表、行、主键、字段。
+- `TestClientConfigCSharpRuntime`（与 `TestClientSDKAgainstGeneratedPlayerTCP` 同一惯例：本机有 dotnet 就随 `go test` 运行，没有就 SKIP 并写明原因；`ROOST_REQUIRE_DOTNET=1` 时缺 dotnet 直接失败——在去掉 dotnet 的 PATH 下实测：设了它 `--- FAIL … ROOST_REQUIRE_DOTNET=1 but dotnet is not on PATH`，不设 `--- SKIP`）：netstandard2.1 + LangVersion 8 + Nullable + 警告即错误 + XML 文档编译；`Load` 读回全部表全部行全部字段（与导出 JSON 逐字段比）；Get / TryGet / 不存在的键 / 非唯一 index；两次 `Load` 互不相干；CRLF 照读；四个 JSON 分别改动都报 `table <表名>: hash:`；readText 返回 null；可空 / 嵌套数组 / 字典里的数组 / float32 / uint64 最大值 / bool / 关键字字段的读回；required、ref、unique、min、enum、kv 的 required、数组元素类型错、int32 越界各报出表、行、主键、字段。
 
 ## 验收（第 6 节）
 
-[acceptance.sh](acceptance.sh) `<roost> <本目录> <工作目录>`，结果 [acceptance.txt](acceptance.txt)：game-demo 工程（`-mods configdata,mongo,nats,dataengine,nest -template game-demo`）加四张夹具表，`client_export.config.csharp.namespace: Demo.Config`，导出全部带客户端字段的表（夹具 4 张 + demo 原有 6 张）。
+[acceptance.sh](acceptance.sh) `<roost> <本目录> <工作目录>`，结果 [acceptance.txt](acceptance.txt)：game-demo 工程（`-mods configdata,mongo,nats,dataengine,nest -template game-demo`）加四张夹具表，`client_export.protocol: false` 加 `config.csharp.namespace: Demo.Config`（第二笔提交后按显式开关重跑，结果与第一次相同），导出全部带客户端字段的表（夹具 4 张 + demo 原有 6 张）。
 
 | 项 | 结果 |
 | --- | --- |
-| `roost generate`（PATH 上只有 go 与系统目录，没有 protoc） | rc=0，`client config export: 10 tables, omitted 0 tables / 2 fields`，打印数据版本；23 个导出文件；`go build ./... && go vet ./configs/...` 通过；`--check` 干净；doctor `OK config-export:fresh … data version 41f9ec5c098a` |
+| `roost generate`（`protocol: false`；PATH 上只有 go 与系统目录，没有 protoc） | rc=0，没有 `shared/protocol`，doctor 没有 `client-export:fresh`，`client config export: 10 tables, omitted 0 tables / 2 fields`，打印数据版本；23 个导出文件；`go build ./... && go vet ./configs/...` 通过；`--check` 干净；doctor `OK config-export:fresh … data version 41f9ec5c098a` |
 | 只给服务端的字段不出现在导出目录 | `drop_seed`、`server_tick`、标题、note：0 个文件；`777001` 等值在数据里 0 个文件；服务端 `configs/data` 里没有只给客户端的值，没有 `tip.json` |
 | 两次生成逐字节相同 | `generate --force` 后 `diff -r` 无差异 |
 | 改 CSV 不重新生成 | `--check` rc=1，列出 `shared/config/csharp/ConfigTables.cs, data/monster.json, manifest.json`；doctor `FAIL config-export:fresh … table monster: data (configs/table/monster.csv) changed …; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table`；只改只给服务端的列 doctor 仍 OK |
@@ -85,7 +87,7 @@ ROOST_TEST_DOTNET=1 GOWORK=off go test -count=1 -v -run 'TestClientConfig|TestGe
 
 ## 变异
 
-[mutations.sh](mutations.sh)（用 [mutate.py](mutate.py)：改一处、跑对应用例、还原；C# 相关的带 `ROOST_TEST_DOTNET=1`），结果 [mutations.txt](mutations.txt)，17 个全部变红，红都落在承诺本身（M3b 第一次因 Go 编译错误不算，改写变异后重跑变红，见 mutations.txt）：
+[mutations.sh](mutations.sh)（用 [mutate.py](mutate.py)：改一处、跑对应用例、还原；C# 相关的用例在本机有 dotnet 时运行），结果 [mutations.txt](mutations.txt)，20 个全部变红，红都落在承诺本身（M3b 第一次因 Go 编译错误不算，改写变异后重跑变红；M8b 在显式开关改动后重新定义并重跑；M16 是反向核对：变异后 `ROOST_REQUIRE_DOTNET=1` 且没有 dotnet 时 `go test` 退出 0，而要求是失败）：
 
 | 变异 | 抓到它的用例 |
 | --- | --- |
@@ -100,18 +102,21 @@ ROOST_TEST_DOTNET=1 GOWORK=off go test -count=1 -v -run 'TestClientConfig|TestGe
 | M6 DataVersion 不含表名 | `TestClientExportDataVersionCoversTableNames` |
 | M7 横排 `Convert<Type>CSV` 不跳过 `#` | `TestClientExportFixtureEndToEnd` |
 | M8a 没声明 config 也跑配置导出 | `TestUndeclaredClientConfigExportChangesNothing` |
-| M8b 只写 config 也导出协议 | `TestUndeclaredClientConfigExportChangesNothing`、`TestClientConfigExportSpecValidation` |
+| M8b `protocol: false` 仍导出协议 | `TestClientConfigExportSpecValidation` |
 | M9 sync 不删上次写过、这次没有的文件 | `TestClientConfigSync` |
 | M10 sync 报告不比字段类型 | `TestClientConfigSync` |
 | M11 生成不删退役的数据与 C# | `TestClientConfigExportTransactionalRetirement` |
 | M12 `tables` 不过滤 | `TestClientConfigExportTables` |
 | M13 配置目录可以放在 `configs/`、`game/` 下 | `TestClientConfigExportSpecValidation` |
+| M14 加了 config 协议导出就停（第一笔的隐式写法） | `TestClientConfigExportSpecValidation` |
+| M15 `protocol: false` 与协议键不报冲突 | `TestClientConfigExportSpecValidation`、`TestClientConfigExportKeepsTheProtocolExport` |
+| M16 `ROOST_REQUIRE_DOTNET=1` 缺 dotnet 时不失败 | 去掉 dotnet 的 PATH 下跑 `TestClientConfigCSharpRuntime`：变异后变成 SKIP、`go test` 退出 0 |
 
 ## 拿不准的点
 
-1. **“只开 config”的写法是隐式的**：`client_export` 下只有 `config` 时不导出协议。已有工程若写的是 `client_export: {}`（只导 proto 副本）再加 `config`，协议导出会停下（旧文件留在原处、不再被 doctor 核对）；要两者都导出需把协议的 `dir` 或 `languages` 写出来。另一种写法是显式的 `protocol: false`，多一个键。
+1. ~~“只开 config”的写法是隐式的~~：已按协调者决定改为显式开关 `client_export.protocol: false`（第二笔提交）。
 2. **手改过的已同步文件**：按“规则与协议同步相同”，上次同步写过、之后在客户端被手改的文件照样覆盖并提示；拒绝的是目录里“不是上次同步写的同名文件”和服务端导出目录被手改。若第 6 节“手改过的文件拒绝覆盖”指前者，需要改成拒绝（协议同步也要一起改）。
-3. **C# 单测要显式打开**：`TestClientConfigCSharpRuntime` 要 `ROOST_TEST_DOTNET=1`（编译 + 运行约 3 秒），没有它时 Skip 并写明原因；不默认打开是因为 pretag 机器不一定有 .NET SDK 与 netstandard 引用包缓存。
+3. ~~C# 单测要显式打开~~：已按现有惯例改为有 dotnet 就跑、没有就 SKIP，`ROOST_REQUIRE_DOTNET=1` 时缺 dotnet 失败（第二笔提交）。
 4. **按表拆文件**：方案写的是 `ConfigTables.cs`“必要时再拆”，实施为每张表一个文件（加入口与运行部分），不按大小阈值拆，避免表增删时整片换文件。
 5. **类型范围**：只支持内建标量、指向标量的指针、切片与 `map[string]T`；具名类型（如 `type Kind int32`）、结构体、`time.Duration` 在客户端导出里报错，要改成 parser（客户端拿原文字符串）或 `side:"s"`。
 6. **浮点的规范形式**：unique / enum 对浮点值比较时，C# 用 `"R"` 格式、Go 用 `'g'`，极大 / 极小的指数写法不同（如 `1E+21` 与 `1e+21`）；只影响浮点列上的 unique / enum 报错文字与极端值比较。
@@ -120,7 +125,7 @@ ROOST_TEST_DOTNET=1 GOWORK=off go test -count=1 -v -run 'TestClientConfig|TestGe
 
 ## 建议写进 CHANGELOG 的文字（本组不改 CHANGELOG）
 
-- **配置表导出给客户端（`client_export.config`，配置表导出给客户端第 2 组，维护者 2026-11-17 决定 3、4、7）**：`roost.yaml` 的 `client_export.config`（`dir` 缺省 `shared/config`、`tables` 可选、`csharp.namespace` 缺省 `Roost.Config`；要 config feature，不要 protoc；`client_export` 下只写 `config` 时只导出配置）。`roost generate` 写出 `data/<表>.json`（只含客户端字段）、`csharp/`（netstandard2.1 纯 C#：每张表一个文件，`ConfigTables.Load(readText)` 返回实例，加载时核对每个文件的数据哈希与 required / unique / min / enum / ref，报出表、行、字段；自带 JSON 解析器，不用 JsonUtility、UnityEngine 与反射）与 `manifest.json`（`kind: roost-config-export`、数据版本、每张表的 schema / 数据哈希与行数、文件哈希），打印 omitted 表数 / 字段数与数据版本。`generate --check` 覆盖导出目录；doctor 新增 `config-export:fresh`；`roost client sync` 新增 `--config-code-to` / `--config-data-to`（同步记录 `config-manifest.json`，报告数据版本旧 → 新、表 / 字段 / 行数变化），`--to` 改为可选。数据版本只记录、可查看，登录时不核对；带 parser 的字段在客户端是 CSV 原文字符串。说明见 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md` §2.2；证据 `docs/maintenance/evidence/client-config-export-20261117/`。
+- **配置表导出给客户端（`client_export.config`，配置表导出给客户端第 2 组，维护者 2026-11-17 决定 3、4、7）**：`roost.yaml` 的 `client_export.config`（`dir` 缺省 `shared/config`、`tables` 可选、`csharp.namespace` 缺省 `Roost.Config`；要 config feature，配置导出不要 protoc）；新增协议导出的显式开关 `client_export.protocol`（写 `false` 只导出配置、不找 protoc、doctor 不查协议导出；不写照常导出协议，已有工程加上 `config` 协议导出不变；`protocol: false` 与 `dir`、`languages`、`csharp` 同时出现报错）。`roost generate` 写出 `data/<表>.json`（只含客户端字段）、`csharp/`（netstandard2.1 纯 C#：每张表一个文件，`ConfigTables.Load(readText)` 返回实例，加载时核对每个文件的数据哈希与 required / unique / min / enum / ref，报出表、行、字段；自带 JSON 解析器，不用 JsonUtility、UnityEngine 与反射）与 `manifest.json`（`kind: roost-config-export`、数据版本、每张表的 schema / 数据哈希与行数、文件哈希），打印 omitted 表数 / 字段数与数据版本。`generate --check` 覆盖导出目录；doctor 新增 `config-export:fresh`；`roost client sync` 新增 `--config-code-to` / `--config-data-to`（同步记录 `config-manifest.json`，报告数据版本旧 → 新、表 / 字段 / 行数变化），`--to` 改为可选。数据版本只记录、可查看，登录时不核对；带 parser 的字段在客户端是 CSV 原文字符串。说明见 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md` §2.2；证据 `docs/maintenance/evidence/client-config-export-20261117/`。
 - **横排表的 `Convert<Type>CSV` 忽略 `#` 注释行；数据版本把表名算进去**（第 0 项，协调者 2026-11-17 定）：已有工程重新生成后 `configs/generated/gen_table_config.go` 每张横排表多一行 `reader.Comment = '#'`（升级需重新生成）；`tablegen.ClientExport` 的 `DataVersion` 改为每张表 `name + "\x00" + hash + "\n"` 再取 sha256，表改名时版本号也变，新增 `tablegen.DataVersion(tables)`。
 
 ## 建议写进 KNOWN-LIMITS 的文字（本组不改 KNOWN-LIMITS）

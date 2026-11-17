@@ -168,6 +168,7 @@ client_export:
 
 ```yaml
 client_export:
+  protocol: false               # 可选；只要配置、不要协议时写，不写照常导出协议
   config:
     dir: shared/config          # 可选，缺省 shared/config；相对工程根，产物提交进仓库
     tables: [item, monster]     # 可选；空表示全部带客户端字段的表
@@ -175,7 +176,7 @@ client_export:
       namespace: Game.Config    # 可选，缺省 Roost.Config
 ```
 
-- **只要配置、不要协议**：`client_export` 下只写 `config`（不写 `dir`、`languages`、`csharp`）就只导出配置，不导出协议、不找 protoc。写了这三项之一（或者 `client_export` 里没有 `config`）时照旧导出协议；两者都要时把协议的 `dir` 或 `languages` 写出来。
+- **只要配置、不要协议**：协议导出只看显式开关 `client_export.protocol`。不写（或写 `true`）照常导出协议——`client_export` 下只写 `config` 时，协议也用缺省值照常导出，已有工程加上 `config` 不会让协议导出停下。只要配置的工程写 `protocol: false`：不导出协议、不找 protoc，doctor 也没有 `client-export:fresh`。`protocol: false` 与 `dir`、`languages`、`csharp` 同时出现，或者写了 `protocol: false` 却没有 `config`，读 `roost.yaml` 时报错。
 - **校验**（读 `roost.yaml` 时）：`config.dir` 相对工程根、在工程内，不在 `configs/`、`game/`、`protocol/`、`db/`、`internal/`、`service/`、`cmd/`、`deploy/` 下，不用生成时跳过的目录名，也不能与协议导出目录相同或互相包含（两边都写 `manifest.json`）；`tables` 不能有空名与重复；`namespace` 是点分 C# 标识符。生成与 doctor 时再核对 `tables` 里的表存在且带客户端字段（`side=s`、或字段全是 `side:"s"` 的表不行），以及被导出表 `ref` 到的表也在导出里。
 - **选表**：导出的是 tablegen 的客户端投影（§9.2：`side=s` 的表、`side:"s"` 的字段都不在），再按 `tables` 过滤。只给服务端的字段与表绝不出现在导出目录里。
 

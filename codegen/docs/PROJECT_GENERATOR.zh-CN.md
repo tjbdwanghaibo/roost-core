@@ -240,8 +240,8 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 | `ids` | 否 | protocol/entity/component/errcode 的编号空间 |
 | `ids.<kind>.min/max` | 视类型 | 普通编号空间的闭区间，必须 `min > 0` 且 `max >= min` |
 | `ids.protocol.groups.<name>.min/max` | 否 | Protocol 按业务组划分的独立闭区间 |
-| `client_export` | 否 | 前后端公共协议目录：`dir`（缺省 `shared/protocol`）、`languages`（目前只有 `csharp`）、`csharp.namespace` / `csharp.protoc`（可选）。声明后 `roost generate` 整份写出客户端要的 proto、C# 与 `manifest.json`，C# 要求 protoc 与 SDK 锁定的 Google.Protobuf 同版本（31.1）；不声明时生成结果不变。见[参考 §2.1](CODEGEN_REFERENCE.zh-CN.md#21-前后端公共协议目录client_export) |
-| `client_export.config` | 否 | 配置表导出给客户端：`dir`（缺省 `shared/config`）、`tables`（可选，缺省全部带客户端字段的表）、`csharp.namespace`（缺省 `Roost.Config`）。要 `config` feature，不要 protoc；`client_export` 下只写 `config` 时只导出配置。声明后 `roost generate` 写出 `data/<表>.json`（只含客户端字段）、C# 读取代码与 `manifest.json`（含数据版本）；不声明时生成结果不变。见[参考 §2.2](CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig) |
+| `client_export` | 否 | 前后端公共协议目录：`protocol`（显式开关，写 `false` 不导出协议，不写照常导出）、`dir`（缺省 `shared/protocol`）、`languages`（目前只有 `csharp`）、`csharp.namespace` / `csharp.protoc`（可选）。声明后 `roost generate` 整份写出客户端要的 proto、C# 与 `manifest.json`，C# 要求 protoc 与 SDK 锁定的 Google.Protobuf 同版本（31.1）；不声明时生成结果不变。见[参考 §2.1](CODEGEN_REFERENCE.zh-CN.md#21-前后端公共协议目录client_export) |
+| `client_export.config` | 否 | 配置表导出给客户端：`dir`（缺省 `shared/config`）、`tables`（可选，缺省全部带客户端字段的表）、`csharp.namespace`（缺省 `Roost.Config`）。要 `config` feature，配置导出不要 protoc；只要配置、不要协议时写 `client_export.protocol: false`（不写则协议照常导出）。声明后 `roost generate` 写出 `data/<表>.json`（只含客户端字段）、C# 读取代码与 `manifest.json`（含数据版本）；不声明时生成结果不变。见[参考 §2.2](CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig) |
 
 底层编码上限会 fail-fast：EntityKind 为 1..255，ComponentType 最大 65535，Protocol 消息 ID
 最大 4294967295。不要沿用旧脚手架曾给出的 Entity 1000..1999 区间；它无法转换为 core 的 uint8 EntityKind。
