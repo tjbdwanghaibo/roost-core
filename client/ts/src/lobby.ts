@@ -70,6 +70,8 @@ export type LobbyErrorCode =
   | "game_not_served"
   | "not_host"
   | "wrong_password"
+  /** 403：被房主踢出过这个房间（房间存续期间不能再进；自动重连到此为止）。 */
+  | "kicked"
   | "room_not_found"
   | "room_full"
   | "room_started"

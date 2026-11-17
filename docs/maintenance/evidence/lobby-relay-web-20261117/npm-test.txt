@@ -1,0 +1,57 @@
+✔ unknown control ops are dropped (or handed to onControl) and frames after the welcome are not lost
+✔ compression round trips: CompressionStream, zlib, default and no compression
+✔ decompression stops at the limit (inflate bomb)
+✔ browser CompressionStream bytes and node zlib bytes are interchangeable
+✔ TS and Go (compress/flate, the Go SDK's default Deflate) inflate each other's bytes
+✔ without CompressionStream the default falls back to node:zlib
+✔ a game-supplied compressor (stand-in for LZ4 / zstd) is what the SDK puts on the wire
+✔ TS encodes every relay golden frame byte for byte like Go
+✔ TS decodes the relay golden frames
+✔ TS decodes the host-change golden frames into the expected fields
+✔ the stream reader does not depend on message boundaries
+✔ TS refuses the same headers as Go's ValidateRelay
+✔ YouAreHost → candidate, HostReady after the callback, HostChanged{self} → host; seq continues from YouAreHost
+✔ a YouAreHost seq above epoch<<32 wins: the next snapshot continues from it
+✔ without autoHostReady the game answers hostReady() itself; only a candidate may
+✔ a candidate whose callback throws does not send HostReady
+✔ the host transfers with handoff data, declares successors, and becomes a member on YouAreMember
+✔ members see HostChanging, HostResumed and HostChanged; Rejected reaches onRejected; Leave is the golden frame
+✔ a YouAreHost larger than maxPayloadBytes is still read (read limit covers snapshotMaxBytes)
+✔ the host sends a Ping whenever it has been quiet for hostPingIntervalMs; members keep the slow ping
+✔ the SDK pushes snapshots on the interval while host, with consecutive seqs, and stops as a member
+✔ snapshots closer than snapshotMinIntervalMs are not sent and do not use up a seq; becoming host resets the clock
+✔ kicking an offline seat: the host's second MemberLeft{kicked} reaches the callback and the seat is gone
+✔ snapshots over snapshotMaxBytes are refused locally
+✔ kick semantics: reconnect retries lobby_unavailable with backoff and stops at lobby_rejected
+✔ kick semantics: lobby_unavailable then success reconnects
+✔ kick semantics: an old token refused with Closed{kicked} (same relay) stops reconnecting
+✔ kick semantics: the lobby's 403 kicked on join stops reconnecting
+✔ decoding a malformed host-change frame is a protocol error
+✔ lobby errors map to LobbyError codes
+✔ room lifecycle over WebSocket against the real relay and lobby
+✔ reconnect asks the lobby for a fresh token and resumes
+✔ heartbeat pongs reach onControl
+✔ transfer: handoff data reaches the chosen member, everyone sees HostChanged, the lobby follows
+✔ host disconnect: HostChanging while waiting, the snapshot goes to the successor after host_grace, seq continues
+✔ host heartbeat: an idle host is not replaced within 5s
+✔ refresh within host_grace: the same account is still host, members get HostResumed, state comes back from sessionStorage
+✔ kick: the lobby answers 403 kicked and an unused old token is refused; a left member's old token is lobby_rejected
+✔ after the start: a dropped member auto-reconnects to its seat; the host kicks an offline seat and the lobby bars it
+✔ reconnect against lobby admission: down is retried with backoff until it recovers, reject stops
+✔ catch-up: steps follow elapsed time and stop at the catch-up cap
+✔ LocalRunner restores, steps on its timer by elapsed time, and hands outputs to onStep
+✔ WorkerRunner drives rules served in a worker over a real MessageChannel (structured clone)
+✔ HostSessionStore keeps identity, seq and snapshot; only the same account resumes; storage failures are ignored
+✔ visibilitychange: a hidden host hands off to the first online successor with handoff data after hiddenHandoffMs
+✔ visibilitychange: back in time cancels the handoff; no online successor keeps the host; mobile hands off at once
+✔ the host's own rules output reaches the page; members' frames go to the rules; outputs go out over relay
+✔ refresh: sessionStorage keeps the snapshot; reconnecting within the grace as host restores it and continues the seq
+✔ a new host started by YouAreHost gets the decompressed snapshot and the SDK answers HostReady
+ℹ tests 49
+ℹ suites 0
+ℹ pass 49
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 22229.35725

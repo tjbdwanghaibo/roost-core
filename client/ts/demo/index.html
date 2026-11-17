@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roost relay 演示</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #222; --muted: #777; --line: #ddd; --accent: #2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #16181d; --fg: #e6e6e6; --muted: #999; --line: #333; --accent: #7aa2ff; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; max-width: 760px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 12px; padding: 8px 12px; }
+  legend { color: var(--muted); }
+  input { width: 12em; }
+  button { margin: 2px 4px 2px 0; }
+  #status { font-weight: 600; }
+  #role.host { color: var(--accent); }
+  table { border-collapse: collapse; }
+  td, th { border: 1px solid var(--line); padding: 2px 8px; text-align: left; }
+  #log { height: 220px; overflow: auto; font: 12px/1.4 ui-monospace, monospace; border: 1px solid var(--line); padding: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Roost relay 演示：房主做 host、换 host、刷新恢复</h1>
+<fieldset>
+  <legend>身份与房间</legend>
+  账号 <input id="account"> <button id="create">建房</button>
+  房间 <input id="room"> <button id="join">加入</button> <button id="list">列房</button>
+  <div id="rooms"></div>
+</fieldset>
+<fieldset>
+  <legend>状态</legend>
+  <div id="status">未连接</div>
+  <div>角色 <span id="role">-</span>，槽位 <span id="slot">-</span>，房主槽位 <span id="hostSlot">-</span>，epoch <span id="epoch">-</span>，快照 seq <span id="seq">-</span></div>
+  <div>在线成员（房主才知道）：<span id="members">-</span></div>
+  <button id="click">点一下 (+1)</button>
+  <button id="snapshot">立即推快照</button>
+  转交给槽位 <input id="target" style="width:4em"> <button id="transfer">转交</button>
+  <button id="handoff">按候选让出</button>
+  <button id="leave">离开</button>
+</fieldset>
+<fieldset>
+  <legend>房主广播的状态</legend>
+  <table id="counts"><tr><th>槽位</th><th>次数</th></tr></table>
+  <div>tick <span id="tick">-</span>，规则状态来源 <span id="from">-</span></div>
+</fieldset>
+<div id="log"></div>
+<script type="module" src="./demo.js"></script>
+</body>
+</html>

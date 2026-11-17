@@ -9,14 +9,25 @@ import {
   RelayOp,
   RelayProtocolError,
   RelayReason,
+  StateSource,
+  decodeEpoch,
+  decodeHostChanged,
   decodeMember,
+  decodeRejected,
   decodeWelcome,
+  decodeYouAreHost,
+  encodeEpoch,
   encodeFrame,
+  encodeSnapshot,
+  encodeSuccessors,
   encodeToken,
   type Member,
+  type Rejected,
   type RelayFrame,
   type Welcome,
+  type YouAreHost,
 } from "./codec.js";
+import { MAX_STATE_BYTES, defaultCompressor, type Compressor } from "./compress.js";
 import type { LobbyClient } from "./lobby.js";
 import { LobbyError } from "./lobby.js";
 
@@ -54,8 +65,62 @@ export interface RelayClientOptions {
   readTimeoutMs?: number;
   /** 收帧的载荷上限，缺省 1 MiB；要不小于 relay 的 max_payload_bytes。 */
   maxPayloadBytes?: number;
+  /**
+   * relay 的 snapshot_max_bytes，缺省 256 KiB。快照与交接数据（压缩后）超过它本地就拒绝；收帧上限至少放到它加 64 KiB
+   * （成员名单），装得下带满快照的 YouAreHost（它可以比 max_payload_bytes 大）。
+   */
+  snapshotMaxBytes?: number;
+  /** 当房主（含等 HostReady 的候选）时的心跳间隔，缺省 600ms：relay 的 host_idle_timeout 缺省 2s，取三分之一不到。 */
+  hostPingIntervalMs?: number;
+  /** 快照与交接数据的压缩，缺省 defaultCompressor()（raw deflate）。同一个房间里的客户端要用同一种。 */
+  compressor?: Compressor;
+  /** 当房主时定时推快照：take 返回当前状态（压缩前），每 intervalMs（缺省 3s，0 只手动推）推一次。 */
+  snapshot?: SnapshotOptions;
+  /**
+   * 两份快照之间的最小间隔，缺省 1000ms（relay.snapshot_min_interval 的缺省）：更密的 pushSnapshot 不发，
+   * 抛 SnapshotTooSoonError。当上房主时重新计算（relay 也是换了房主重新算）。
+   */
+  snapshotMinIntervalMs?: number;
+  /**
+   * true 时 onYouAreHost 的回调返回（返回 Promise 的等它完成）后 SDK 自动回 HostReady；缺省 false：游戏准备好后自己调
+   * hostReady()（与 Go 的 Options.AutoHostReady 相同）。
+   */
+  autoHostReady?: boolean;
   /** 断线后自动重连，缺省关闭。 */
   reconnect?: ReconnectPolicy;
+}
+
+export interface SnapshotOptions {
+  /** 当前要交出去的状态（压缩前）；返回 undefined 表示这一次不推。 */
+  take: () => Uint8Array | undefined | Promise<Uint8Array | undefined>;
+  /** 缺省 3000；0 表示只手动推（pushSnapshot）。relay 拒收间隔小于 snapshot_min_interval（缺省 1s）的快照。 */
+  intervalMs?: number;
+}
+
+/** 自己在换 host 里的角色：成员、等 HostReady 的候选、房主。 */
+export type HostRole = "member" | "candidate" | "host";
+
+/** onYouAreHost 的参数：YouAreHost 解好的字段，state 换成解压后的状态（来源为 None 或解压失败时为 null）。 */
+export interface HostTakeover extends Omit<YouAreHost, "state"> {
+  state: Uint8Array | null;
+  /** relay 交来的原始字节（压缩过的）。 */
+  rawState: Uint8Array;
+  /** 解压失败的原因；成功或没有状态时为 undefined。 */
+  stateError?: Error;
+}
+
+/** HostChanged：新房主已就绪。self 为 true 表示新房主就是自己。 */
+export interface HostChange {
+  epoch: bigint;
+  slot: number;
+  account: string;
+  self: boolean;
+}
+
+/** 推出去的一份快照（压缩后的字节）：sessionStorage 辅助据此存档。 */
+export interface SentSnapshot {
+  seq: bigint;
+  data: Uint8Array;
 }
 
 /**
@@ -66,6 +131,14 @@ export interface Disconnect {
   reason: RelayReason;
   error?: Error;
   reconnecting: boolean;
+}
+
+/** pushSnapshot 离上一份不到 snapshotMinIntervalMs，这一份没有发出。 */
+export class SnapshotTooSoonError extends Error {
+  constructor() {
+    super("relay: snapshot sent too soon after the previous one");
+    this.name = "SnapshotTooSoonError";
+  }
 }
 
 /** relay 发来 Closed 之后断开：令牌被拒、房间不存在、满员、被踢、房间关闭等。 */
@@ -98,6 +171,11 @@ class Session {
   pending: RelayFrame[] = [];
   earlyEnd: { reason: RelayReason; error?: Error } | undefined;
 
+  /** 最近一次发 Ping 的时刻（成员按它定期测 RTT）。 */
+  lastPing = now();
+  /** 最近一次发帧的时刻：任何一帧都重置 relay 的空闲计时，房主的心跳只在这么久没发东西时补一个 Ping。 */
+  lastSend = now();
+
   constructor(
     readonly ws: WebSocketLike,
     readonly reader: FrameReader,
@@ -107,6 +185,7 @@ class Session {
     if (this.ended || this.ws.readyState !== 1) return false;
     try {
       this.ws.send(data);
+      this.lastSend = now();
       return true;
     } catch {
       this.abort(RelayReason.Disconnected, new Error("relay: send failed"));
@@ -144,20 +223,58 @@ type Handler<T> = ((value: T) => void) | undefined;
 
 /**
  * relay 控制帧的内置处理：操作码 → 处理。返回非 None 时连接结束。
- * 扩展点：换 host 的控制帧（64～127：you_are_host、host_changing、host_changed、host_resumed、transfer、successors、snapshot）
- * 下一批在这里加一项、在 RelayClient 上加对应的回调；不在表里的操作码只交给 onControl 注册的回调，没有回调就丢弃。
+ * 不在表里的操作码只交给 onControl 注册的回调，没有回调就丢弃。换 host 的五个 relay → 客户端操作码（64～69）在这里
+ * 改角色状态，再调对应的强类型回调。
  */
-const builtinControl: Record<number, (client: RelayClient, frame: RelayFrame) => RelayReason> = {
+const builtinControl: Record<number, (client: RelayClient, frame: RelayFrame, session: Session) => RelayReason> = {
   [RelayOp.Welcome]: (client, frame) => {
-    client["role"] = decodeWelcome(frame.slot, frame.payload);
+    client["welcomed"](decodeWelcome(frame.slot, frame.payload));
     return RelayReason.None;
   },
   [RelayOp.MemberJoined]: (client, frame) => {
-    client["handlers"].memberJoined?.(decodeMember(frame.slot, frame.payload));
+    const member = decodeMember(frame.slot, frame.payload);
+    client["online"].set(member.slot, member.account);
+    client["handlers"].memberJoined?.(member);
     return RelayReason.None;
   },
   [RelayOp.MemberLeft]: (client, frame) => {
-    client["handlers"].memberLeft?.(decodeMember(frame.slot, frame.payload));
+    const member = decodeMember(frame.slot, frame.payload);
+    client["online"].delete(member.slot);
+    client["handlers"].memberLeft?.(member);
+    return RelayReason.None;
+  },
+  [RelayOp.YouAreMember]: (client, frame) => {
+    const epoch = decodeEpoch(frame.payload);
+    client["epochValue"] = epoch;
+    client["becomeMember"]();
+    client["handlers"].youAreMember?.(epoch);
+    return RelayReason.None;
+  },
+  [RelayOp.YouAreHost]: (client, frame, session) => {
+    client["takeOver"](session, decodeYouAreHost(frame.payload));
+    return RelayReason.None;
+  },
+  [RelayOp.HostChanging]: (client, frame) => {
+    const epoch = decodeEpoch(frame.payload);
+    client["changing"] = true;
+    client["handlers"].hostChanging?.(epoch);
+    return RelayReason.None;
+  },
+  [RelayOp.HostChanged]: (client, frame) => {
+    const { epoch, account } = decodeHostChanged(frame.payload);
+    client["hostChanged"]({ epoch, slot: frame.slot, account, self: frame.slot === client["role"].slot });
+    return RelayReason.None;
+  },
+  [RelayOp.HostResumed]: (client, frame) => {
+    const epoch = decodeEpoch(frame.payload);
+    client["epochValue"] = epoch;
+    client["changing"] = false;
+    client["role"] = { ...client["role"], hostSlot: frame.slot };
+    client["handlers"].hostResumed?.({ epoch, slot: frame.slot });
+    return RelayReason.None;
+  },
+  [RelayOp.Rejected]: (client, frame) => {
+    client["handlers"].rejected?.(decodeRejected(frame.payload));
     return RelayReason.None;
   },
   [RelayOp.Closed]: (_client, frame) => {
@@ -188,9 +305,10 @@ const builtinControl: Record<number, (client: RelayClient, frame: RelayFrame) =>
  * relay 停机都不重连。
  */
 export class RelayClient {
-  private readonly opts: Required<Omit<RelayClientOptions, "password" | "reconnect">> & {
+  private readonly opts: Required<Omit<RelayClientOptions, "password" | "reconnect" | "compressor" | "snapshot">> & {
     password?: string;
     reconnect: Required<ReconnectPolicy>;
+    snapshot?: SnapshotOptions;
   };
   private readonly handlers: {
     game?: Handler<RelayFrame>;
@@ -200,10 +318,13 @@ export class RelayClient {
     muted?: Handler<boolean>;
     disconnected?: Handler<Disconnect>;
     reconnected?: Handler<Welcome>;
-    youAreHost?: Handler<RelayFrame>;
-    hostChanging?: Handler<RelayFrame>;
-    hostChanged?: Handler<RelayFrame>;
-    hostResumed?: Handler<RelayFrame>;
+    youAreHost?: (takeover: HostTakeover) => void | Promise<void>;
+    youAreMember?: Handler<bigint>;
+    hostChanging?: Handler<bigint>;
+    hostChanged?: Handler<HostChange>;
+    hostResumed?: Handler<{ epoch: bigint; slot: number }>;
+    rejected?: Handler<Rejected>;
+    snapshotSent?: Handler<SentSnapshot>;
     control: Map<number, (frame: RelayFrame) => void>;
   } = { control: new Map() };
   private closed = false;
@@ -211,6 +332,20 @@ export class RelayClient {
   private current: Session | undefined;
   private roomId = "";
   private role: Welcome = { slot: 0, host: false, hostSlot: 0 };
+  /** 换 host 的角色：Welcome 定初值，YouAreHost / HostChanged / YouAreMember 改它。 */
+  private stage: HostRole = "member";
+  private epochValue = 0n;
+  /** 收到 HostChanging 之后、HostChanged / HostResumed 之前：发给房主的游戏帧会被 relay 丢掉。 */
+  private changing = false;
+  /** 最近用过的快照 seq：新的一份取它加 1；当上房主时抬到 YouAreHost 里的 seq（跨房主递增）。 */
+  private seq = 0n;
+  /** 最近一份快照发出的时刻；当上房主时清零（relay 换了房主重新算最小间隔）。 */
+  private lastSnapshotAt: number | undefined;
+  private successorList: number[] = [];
+  /** 当房主时在线的成员（槽位 → 账号），来自 YouAreHost 的名单与 MemberJoined / MemberLeft。 */
+  private readonly online = new Map<number, string>();
+  private snapshotTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly compressor: Compressor;
   private rttMs = 0;
   private finished: Promise<void> = Promise.resolve();
   private finish: () => void = () => {};
@@ -237,12 +372,18 @@ export class RelayClient {
       pingIntervalMs,
       readTimeoutMs,
       maxPayloadBytes: options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD,
+      snapshotMaxBytes: options.snapshotMaxBytes ?? 256 * 1024,
+      hostPingIntervalMs: options.hostPingIntervalMs ?? 600,
+      snapshot: options.snapshot,
+      snapshotMinIntervalMs: options.snapshotMinIntervalMs ?? 1000,
+      autoHostReady: options.autoHostReady ?? false,
       reconnect: {
         maxAttempts: options.reconnect?.maxAttempts ?? 0,
         minBackoffMs: options.reconnect?.minBackoffMs ?? 500,
         maxBackoffMs: options.reconnect?.maxBackoffMs ?? 5_000,
       },
     };
+    this.compressor = options.compressor ?? defaultCompressor();
   }
 
   /** 游戏通道：房主收到成员的帧（slot 是成员槽位），成员收到房主的帧（slot 是房主槽位）。 */
@@ -272,24 +413,38 @@ export class RelayClient {
   onReconnected(fn: Handler<Welcome>): void {
     this.handlers.reconnected = fn;
   }
-  // 换 host 的回调位置（方案 §4.6、§4.7.5）。操作码在 64～127，由 host 组定编码表并追加进 client/spec/relay-packets.json；
-  // 这一批还没有接线：relay 发来这些操作码时按“不认识的操作码”丢弃（注册了 onControl 的照样交给它）。接线时在
-  // builtinControl 里加对应操作码、把载荷解成结构，再调用下面的回调（参数会从原始帧换成解好的结构）。
-  /** 换 host：自己成了新房主（you_are_host）。尚未接线。 */
-  onYouAreHost(fn: Handler<RelayFrame>): void {
+  // 换 host（方案 §4.6、§4.7.5；docs/framework/RELAY.md §2.3、§4A）。
+  /**
+   * 自己被选为新房主候选（YouAreHost）。fn 用 takeover.state 恢复玩法状态，准备好后调 hostReady()；开了 autoHostReady
+   * 时 fn 返回（返回 Promise 的等它完成）后 SDK 自动回 HostReady，fn 抛错或 Promise 失败则不回。之后收到
+   * HostChanged{self} 才算正式当上房主。候选在 relay 的 host_ready_timeout 内不回 HostReady，relay 换下一个候选。
+   */
+  onYouAreHost(fn: ((takeover: HostTakeover) => void | Promise<void>) | undefined): void {
     this.handlers.youAreHost = fn;
   }
-  /** 换 host 开始：暂停发给房主的游戏帧（host_changing）。尚未接线。 */
-  onHostChanging(fn: Handler<RelayFrame>): void {
+  /** 自己不再是房主（主动转交之后的旧房主），或候选没在时限内回 HostReady（YouAreMember）。 */
+  onYouAreMember(fn: Handler<bigint>): void {
+    this.handlers.youAreMember = fn;
+  }
+  /** 房主不在（宽限期或选人）：自己发给房主的游戏帧被丢了，暂停发送，等 HostChanged / HostResumed。 */
+  onHostChanging(fn: Handler<bigint>): void {
     this.handlers.hostChanging = fn;
   }
-  /** 换 host 完成：新房主是谁（host_changed）。尚未接线。 */
-  onHostChanged(fn: Handler<RelayFrame>): void {
+  /** 新房主已就绪（HostChanged），游戏帧恢复转发；self 为 true 时自己就是新房主。 */
+  onHostChanged(fn: Handler<HostChange>): void {
     this.handlers.hostChanged = fn;
   }
-  /** 房主在宽限期内回来了（host_resumed）。尚未接线。 */
-  onHostResumed(fn: Handler<RelayFrame>): void {
+  /** 房主在宽限期内回来了，仍是原来的房主（HostResumed，只有成员收到）。 */
+  onHostResumed(fn: Handler<{ epoch: bigint; slot: number }>): void {
     this.handlers.hostResumed = fn;
+  }
+  /** 快照或转交被 relay 拒收（连接保留）。 */
+  onRejected(fn: Handler<Rejected>): void {
+    this.handlers.rejected = fn;
+  }
+  /** 一份快照发出去了（压缩后的字节与 seq）：sessionStorage 辅助据此存档。 */
+  onSnapshotSent(fn: Handler<SentSnapshot>): void {
+    this.handlers.snapshotSent = fn;
   }
 
   /**
@@ -306,6 +461,30 @@ export class RelayClient {
   }
   get isHost(): boolean {
     return this.role.host;
+  }
+  /** 换 host 里的角色（成员 / 候选 / 房主）。 */
+  get hostRole(): HostRole {
+    return this.stage;
+  }
+  /** 最近一次见到的 host_epoch（YouAreHost / HostChanged / HostChanging / HostResumed / YouAreMember 里的）。 */
+  get epoch(): bigint {
+    return this.epochValue;
+  }
+  /** 收到 HostChanging 之后、HostChanged / HostResumed 之前为 true。 */
+  get hostChanging(): boolean {
+    return this.changing;
+  }
+  /** 最近用过的快照 seq。 */
+  get snapshotSeq(): bigint {
+    return this.seq;
+  }
+  /** 最近一次 setSuccessors 声明的候选顺序。 */
+  get successors(): readonly number[] {
+    return this.successorList;
+  }
+  /** 当房主时在线的成员（槽位 → 账号）；不是房主时为空。 */
+  get onlineMembers(): ReadonlyMap<number, string> {
+    return this.online;
   }
   get connected(): boolean {
     return this.current !== undefined;
@@ -372,9 +551,78 @@ export class RelayClient {
     return this.sendControl(RelayOp.Mute, slot, Uint8Array.of(on ? 1 : 0));
   }
 
-  /** 发一个控制帧：控制帧的扩展口，换 host 的控制帧（host_ready、transfer、successors、snapshot 等）下一批经它发出。 */
+  /** 发一个控制帧（控制帧的扩展口）。 */
   sendControl(op: number, slot: number, payload: Uint8Array): boolean {
     return this.send({ channel: RelayChannel.Control, slot, msgId: op, flags: 0, payload });
+  }
+
+  /**
+   * 主动把房主转交给 slot 上的在线成员（只有房主能发）。handoff 是交接数据（压缩前），压缩后随 Transfer 交给新房主，
+   * 不超过 snapshotMaxBytes。发出后 relay 回 YouAreMember、再广播 HostChanged；目标不对时回 Rejected{bad_target}。
+   */
+  async transfer(slot: number, handoff: Uint8Array = new Uint8Array(0)): Promise<boolean> {
+    this.requireHost("transfer");
+    const data = handoff.length > 0 ? await this.compressor.compress(handoff) : handoff;
+    this.checkStateSize(data.length);
+    if (!this.role.host) return false; // 压缩期间已不是房主
+    return this.sendBig(RelayOp.Transfer, slot, data);
+  }
+
+  /** 声明候选顺序（只有房主能发，至多 256 个）。relay 只记最新一份；换 host 之后清空，由新房主重新声明。 */
+  setSuccessors(slots: readonly number[]): boolean {
+    this.requireHost("set successors");
+    this.successorList = [...slots];
+    return this.sendControl(RelayOp.Successors, 0, encodeSuccessors(slots));
+  }
+
+  /**
+   * 推一份快照（只有房主能推）：data 缺省取 snapshot.take()，压缩后带上递增的 seq 发给 relay。返回用的 seq；
+   * 没东西可推、没有连接或已不是房主时返回 undefined；离上一份不到 snapshotMinIntervalMs 时抛 SnapshotTooSoonError
+   * （relay 仍可能拒收，经 onRejected 通知）。之后的定时推送从现在重新计时。
+   */
+  async pushSnapshot(data?: Uint8Array): Promise<bigint | undefined> {
+    this.requireHost("push a snapshot");
+    this.restartSnapshotTimer();
+    const state = data ?? (await this.opts.snapshot?.take());
+    if (state === undefined) return undefined;
+    const compressed = await this.compressor.compress(state);
+    this.checkStateSize(compressed.length);
+    if (!this.role.host || !this.current) return undefined;
+    const t = now();
+    if (this.lastSnapshotAt !== undefined && t - this.lastSnapshotAt < this.opts.snapshotMinIntervalMs) throw new SnapshotTooSoonError();
+    const seq = this.seq + 1n; // 压缩完再取 seq：并发的几次推送按发出顺序递增
+    if (!this.sendBig(RelayOp.Snapshot, 0, encodeSnapshot(seq, compressed))) return undefined;
+    this.seq = seq;
+    this.lastSnapshotAt = t;
+    this.handlers.snapshotSent?.({ seq, data: compressed });
+    return seq;
+  }
+
+  /**
+   * 告诉 relay 自己已接手（只有候选能发；epoch 缺省是 YouAreHost 里的）。relay 广播 HostChanged 之后自己才是房主；
+   * 迟到的、epoch 不对的 HostReady 被 relay 忽略。不是候选或没有连接时返回 false。
+   */
+  hostReady(epoch: bigint = this.epochValue): boolean {
+    if (this.stage !== "candidate") return false;
+    return this.sendControl(RelayOp.HostReady, 0, encodeEpoch(epoch));
+  }
+
+  /** 快照 seq 至少从 seq 往上接：刷新页面后从 sessionStorage 恢复时用（relay 拒收不大于它存着的 seq 的快照）。 */
+  raiseSnapshotSeq(seq: bigint): void {
+    if (seq > this.seq) this.seq = seq;
+  }
+
+  /** 经 relay 离开房间（Leave 控制帧）：relay 回 Closed{left} 后断开，不重连。房主离开立即换 host。 */
+  sendLeave(): boolean {
+    return this.sendControl(RelayOp.Leave, 0, new Uint8Array(0));
+  }
+
+  /**
+   * 现在检查一次心跳（到期就发 Ping、读超时就断开）。SDK 自己每隔一小段检查一次；后台标签页的主线程计时器被限流时，
+   * 由 Worker 发来的消息驱动这里（web.ts 的 WebHost），房主的心跳不至于断。
+   */
+  pulse(): void {
+    if (this.current) this.heartbeat(this.current);
   }
 
   /** 发一帧（每帧一条 WebSocket 二进制消息）。没有连接时返回 false。 */
@@ -399,8 +647,127 @@ export class RelayClient {
     this.current?.abort(RelayReason.None, new RelayClientClosedError());
   }
 
-  private requireHost(): void {
-    if (!this.role.host) throw new Error("relay: only the room host may kick or mute");
+  private requireHost(what = "kick or mute"): void {
+    if (!this.role.host) throw new Error(`relay: only the room host may ${what}`);
+  }
+
+  private checkStateSize(size: number): void {
+    if (size > this.opts.snapshotMaxBytes) {
+      throw new Error(`relay: state of ${size} bytes after compression exceeds snapshotMaxBytes ${this.opts.snapshotMaxBytes}`);
+    }
+  }
+
+  /** 快照与转交帧不受 max_payload_bytes 限制，上限是 snapshot_max_bytes（加 seq 的 8 字节）。 */
+  private sendBig(op: number, slot: number, payload: Uint8Array): boolean {
+    const data = encodeFrame({ channel: RelayChannel.Control, slot, msgId: op, payload }, Math.max(this.opts.maxPayloadBytes, this.opts.snapshotMaxBytes + 8));
+    return this.current?.send(data) ?? false;
+  }
+
+  /** 收帧上限：装得下带满快照的 YouAreHost（快照上限加 64 KiB 的成员名单）。 */
+  private get readLimit(): number {
+    return Math.max(this.opts.maxPayloadBytes, this.opts.snapshotMaxBytes + 64 * 1024);
+  }
+
+  /** 进房（含重连）：角色以这条连接的 Welcome 为准。 */
+  private welcomed(welcome: Welcome): void {
+    this.role = welcome;
+    this.stage = welcome.host ? "host" : "member";
+    if (welcome.host) this.lastSnapshotAt = undefined;
+    this.changing = !welcome.host && welcome.hostSlot === 0; // 正在选新房主
+    this.online.clear(); // 房主重连后 relay 用 MemberJoined 把在线成员再告诉一遍
+    this.syncSnapshotTimer();
+  }
+
+  private becomeMember(): void {
+    this.stage = "member";
+    this.role = { ...this.role, host: false };
+    this.online.clear();
+    this.syncSnapshotTimer();
+  }
+
+  /** YouAreHost：成为候选，解压状态交给游戏，游戏接手后回 HostReady。 */
+  private takeOver(session: Session, info: YouAreHost): void {
+    this.stage = "candidate";
+    this.epochValue = info.epoch;
+    // 与 Go / C# 相同：seq 取 max(本地, YouAreHost 的 seq, epoch<<32)，下一份加 1。epoch<<32 保证大于以前任何房主
+    // 用本 SDK 发过的 seq（每个房主 2^32 份以内），旧房主最后一份快照没到 relay 时也不会 stale_seq。
+    this.raiseSnapshotSeq(info.snapshotSeq);
+    this.raiseSnapshotSeq(info.epoch << 32n);
+    this.online.clear();
+    for (const seat of info.members) {
+      if (seat.online && seat.slot !== this.role.slot) this.online.set(seat.slot, seat.account);
+    }
+    const stillCandidate = () => this.current === session && this.stage === "candidate" && this.epochValue === info.epoch;
+    void (async () => {
+      const takeover: HostTakeover = { ...info, state: null, rawState: info.state };
+      if (info.source !== StateSource.None) {
+        try {
+          takeover.state = info.state.length > 0 ? await this.compressor.decompress(info.state, MAX_STATE_BYTES) : info.state;
+        } catch (error) {
+          takeover.stateError = error as Error;
+        }
+      }
+      if (!stillCandidate()) return;
+      try {
+        await this.handlers.youAreHost?.(takeover);
+      } catch {
+        return; // 游戏接不了手：不回 HostReady，relay 超时后换下一个候选
+      }
+      if (this.opts.autoHostReady && stillCandidate()) this.hostReady(info.epoch);
+    })();
+  }
+
+  private hostChanged(change: HostChange): void {
+    this.epochValue = change.epoch;
+    this.changing = false;
+    this.successorList = []; // relay 换 host 后清空候选顺序，由新房主重新声明
+    if (change.self) {
+      this.stage = "host";
+      this.lastSnapshotAt = undefined;
+      this.role = { ...this.role, host: true, hostSlot: change.slot };
+      this.syncSnapshotTimer();
+    } else {
+      this.role = { ...this.role, hostSlot: change.slot };
+      if (this.stage !== "member") this.becomeMember();
+    }
+    this.handlers.hostChanged?.(change);
+  }
+
+  /** 定时快照只在“有连接、是房主、配了 take 且间隔大于 0”时开着。 */
+  private syncSnapshotTimer(): void {
+    const interval = this.opts.snapshot?.intervalMs ?? 3000;
+    const want = this.current !== undefined && this.stage === "host" && this.opts.snapshot !== undefined && interval > 0;
+    if (want && this.snapshotTimer === undefined) {
+      this.snapshotTimer = setInterval(() => void this.pushSnapshot().catch(() => {}), interval);
+    } else if (!want && this.snapshotTimer !== undefined) {
+      clearInterval(this.snapshotTimer);
+      this.snapshotTimer = undefined;
+    }
+  }
+
+  private restartSnapshotTimer(): void {
+    if (this.snapshotTimer === undefined) return;
+    clearInterval(this.snapshotTimer);
+    this.snapshotTimer = undefined;
+    this.syncSnapshotTimer();
+  }
+
+  /** 心跳：读超时断开；房主（含候选）在 hostPingIntervalMs 内没发过帧、成员在 pingIntervalMs 内没发过 Ping 就发一个。 */
+  private heartbeat(session: Session): void {
+    const t = now();
+    if (t - session.lastReceive > this.opts.readTimeoutMs) {
+      session.abort(RelayReason.Disconnected, new Error("relay: no frame within the read timeout"));
+      return;
+    }
+    const hosting = this.stage !== "member";
+    const due = hosting
+      ? t - session.lastSend >= Math.min(this.opts.hostPingIntervalMs, this.opts.pingIntervalMs)
+      : t - session.lastPing >= this.opts.pingIntervalMs;
+    if (!due) return;
+    session.lastPing = t;
+    const payload = new Uint8Array(8);
+    new DataView(payload.buffer).setBigUint64(0, BigInt(Math.round(t * 1000)));
+    session.send(encodeFrame({ channel: RelayChannel.Control, slot: 0, msgId: RelayOp.Ping, payload }, MAX_PING_BYTES));
   }
 
   private reserve(): void {
@@ -423,25 +790,14 @@ export class RelayClient {
   /** 把进房的连接接到本客户端：处理积压的帧、开心跳、接上结束处理。 */
   private attach(session: Session): void {
     this.current = session;
-    this.role = session.welcome;
+    this.welcomed(session.welcome);
     const pending = session.pending;
     session.pending = [];
     session.onFrame = (frame) => this.dispatch(session, frame);
     session.onEnd = (reason, error) => void this.ended(session, reason, error);
-    const tick = Math.max(1, Math.min(this.opts.pingIntervalMs, this.opts.readTimeoutMs / 4));
-    let lastPing = now();
-    session.timer = session.ended ? undefined : setInterval(() => {
-      const t = now();
-      if (t - session.lastReceive > this.opts.readTimeoutMs) {
-        session.abort(RelayReason.Disconnected, new Error("relay: no frame within the read timeout"));
-        return;
-      }
-      if (t - lastPing < this.opts.pingIntervalMs) return;
-      lastPing = t;
-      const payload = new Uint8Array(8);
-      new DataView(payload.buffer).setBigUint64(0, BigInt(Math.round(t * 1000)));
-      session.send(encodeFrame({ channel: RelayChannel.Control, slot: 0, msgId: RelayOp.Ping, payload }, MAX_PING_BYTES));
-    }, tick);
+    // 检查间隔取房主心跳的一半：当上房主后不用重开计时器。
+    const tick = Math.max(1, Math.min(this.opts.pingIntervalMs, this.opts.readTimeoutMs / 4, this.opts.hostPingIntervalMs / 2));
+    session.timer = session.ended ? undefined : setInterval(() => this.heartbeat(session), tick);
     for (const frame of pending) {
       this.dispatch(session, frame);
     }
@@ -462,7 +818,7 @@ export class RelayClient {
           return;
         case RelayChannel.Control: {
           const builtin = builtinControl[frame.msgId];
-          const reason = builtin ? builtin(this, frame) : RelayReason.None;
+          const reason = builtin ? builtin(this, frame, session) : RelayReason.None;
           if (reason !== RelayReason.None) {
             session.closedReason = reason;
             session.abort(reason, new RelayClosedError(reason));
@@ -483,6 +839,7 @@ export class RelayClient {
   /** 一条连接结束：通知，按策略自动重连。 */
   private async ended(session: Session, reason: RelayReason, error?: Error): Promise<void> {
     if (this.current === session) this.current = undefined;
+    this.syncSnapshotTimer();
     if (this.closed) {
       this.handlers.disconnected?.({ reason: RelayReason.None, error: new RelayClientClosedError(), reconnecting: false });
       this.stop();
@@ -564,7 +921,7 @@ export class RelayClient {
         return;
       }
       ws.binaryType = "arraybuffer";
-      const session = new Session(ws, new FrameReader(this.opts.maxPayloadBytes));
+      const session = new Session(ws, new FrameReader(this.readLimit));
       let settled = false;
       const fail = (error: Error) => {
         if (settled) return;
@@ -640,9 +997,14 @@ function retryableReason(reason: RelayReason): boolean {
   return reason === RelayReason.Disconnected || reason === RelayReason.IdleTimeout;
 }
 
-/** 一次重连尝试的失败值不值得再试：lobby 的 5xx、网络错误值得；lobby 的 4xx 与 relay 的终止性 Closed 不值得。 */
+/**
+ * 一次重连尝试的失败值不值得再试：lobby 的 5xx、网络错误、relay 向 lobby 验权失败（lobby_unavailable）值得；
+ * lobby 的 4xx（含被踢的 403 kicked）与 relay 的终止性 Closed（含 lobby_rejected）不值得。
+ */
 function retryableError(error: unknown): boolean {
   if (error instanceof LobbyError) return error.temporary;
-  if (error instanceof RelayClosedError) return retryableReason(error.reason) || error.reason === RelayReason.TokenRejected;
+  if (error instanceof RelayClosedError) {
+    return retryableReason(error.reason) || error.reason === RelayReason.TokenRejected || error.reason === RelayReason.LobbyUnavailable;
+  }
   return !(error instanceof RelayClientClosedError);
 }

@@ -1,0 +1,19 @@
+# 变异（每处撤一行关键代码；RED 后面是变红的用例；脚本跑完恢复原文）
+# 命令：cd client/ts && source ~/.roost-it/roost-dataengine-it/env.sh 后，逐处改 src、tsc、node --test 受影响的测试文件（--test-timeout=60000），对端 ROOST_RELAYPEER_BIN=go test -c ./client/relay 的产物
+
+M1 YouAreHost 的 seq 不接续: RED -> ✖ a YouAreHost seq above epoch<<32 wins: the next snapshot continues from it
+M2 房主心跳用成员间隔: RED -> ✖ the host sends a Ping whenever it has been quiet for hostPingIntervalMs; members keep the slow ping | ✖ host heartbeat: an idle host is not replaced within 5s
+M3 收帧上限不放大: RED -> ✖ a YouAreHost larger than maxPayloadBytes is still read
+M4 lobby_unavailable 不重试: RED -> ✖ kick semantics: reconnect retries lobby_unavailable with backoff and stops at lobby_rejected | ✖ kick semantics: lobby_unavailable then success reconnects
+M5 补帧不设上限: RED -> ✖ catch-up: steps follow elapsed time and stop at the catch-up cap
+M6 回到前台不取消让出: RED -> ✖ visibilitychange: back in time cancels the handoff; no online successor keeps the host; mobile hands off at once
+M7 刷新后不从存档恢复状态: RED -> ✖ refresh within host_grace: the same account is still host, members get HostResumed, state comes back from sessionStorage | ✖ refresh: sessionStorage keeps the snapshot; reconnecting within the grace as host restores it and continues the seq
+M8 候选不看在线: RED -> ✖ visibilitychange: a hidden host hands off to the first online successor with handoff data after hiddenHandoffMs
+M9 不回 HostReady: RED -> ✖ YouAreHost → candidate, HostReady after the callback, HostChanged{self} → host; seq continues from YouAreHost | ✖ reconnect asks the lobby for a fresh token and resumes | ✖ transfer: handoff data reaches the chosen member, everyone sees HostChanged, the lobby follows | ✖ host disconnect: HostChanging while waiting, the snapshot goes to the successor after 
+M12 不限快照最小间隔: RED -> ✖ snapshots closer than snapshotMinIntervalMs are not sent and do not use up a seq; becoming host resets the clock
+M13 当上房主不重置快照间隔: RED -> ✖ snapshots closer than snapshotMinIntervalMs are not sent and do not use up a seq; becoming host resets the clock
+M14 seq 不取 epoch<<32 下限: RED -> ✖ YouAreHost → candidate, HostReady after the callback, HostChanged{self} → host; seq continues from YouAreHost | ✖ snapshots closer than snapshotMinIntervalMs are not sent and do not use up a seq; becoming host resets the clock | ✖ host disconnect: HostChanging while waiting, the snapshot goes to the successor after host_grace, seq continues | ✖
+M16 kicked 也重连: RED -> ✖ kick semantics: an old token refused with Closed{kicked}
+M10 解压用压缩流: RED -> ✖ dist-test/test/compress.test.js
+M11 sessionStorage 不存快照: RED -> ✖ refresh within host_grace: the same account is still host, members get HostResumed, state comes back from sessionStorage | ✖ refresh: sessionStorage keeps the snapshot; reconnecting within the grace as host restores it and continues the seq
+M15 解压不设上限: RED -> ✖ decompression stops at the limit

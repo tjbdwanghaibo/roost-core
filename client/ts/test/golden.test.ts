@@ -14,13 +14,27 @@ import {
   RelayOp,
   RelayProtocolError,
   RelayReason,
+  RejectCode,
+  StateSource,
+  decodeEpoch,
   decodeFrame,
+  decodeHostChanged,
   decodeMember,
+  decodeRejected,
+  decodeSnapshot,
+  decodeSuccessors,
   decodeWelcome,
+  decodeYouAreHost,
+  encodeEpoch,
   encodeFrame,
+  encodeHostChanged,
   encodeMember,
+  encodeRejected,
+  encodeSnapshot,
+  encodeSuccessors,
   encodeToken,
   encodeWelcome,
+  encodeYouAreHost,
   type RelayFrame,
 } from "../src/index.js";
 import { REPO_ROOT } from "./peer.js";
@@ -52,6 +66,50 @@ const sent: Record<string, RelayFrame> = {
   relay_mute: frame(RelayChannel.Control, 3, RelayOp.Mute, [1]),
   relay_ping: frame(RelayChannel.Control, 0, RelayOp.Ping, [0, 0, 0, 42]),
   relay_pong: frame(RelayChannel.Control, 0, RelayOp.Pong, [0, 0, 0, 42]),
+  // 换 host（docs/framework/RELAY.md §2.3），共 13 条
+  relay_you_are_member: frame(RelayChannel.Control, 1, RelayOp.YouAreMember, encodeEpoch(2n)),
+  relay_you_are_host_snapshot: frame(
+    RelayChannel.Control,
+    3,
+    RelayOp.YouAreHost,
+    encodeYouAreHost({
+      epoch: 2n,
+      source: StateSource.Snapshot,
+      snapshotSeq: 7n,
+      snapshotAgeMs: 1500,
+      members: [
+        { slot: 1, online: false, account: "a1" },
+        { slot: 3, online: true, account: "a3" },
+      ],
+      state: Uint8Array.of(0xab, 0xcd),
+    }),
+  ),
+  relay_you_are_host_handoff: frame(
+    RelayChannel.Control,
+    2,
+    RelayOp.YouAreHost,
+    encodeYouAreHost({
+      epoch: 1n,
+      source: StateSource.Handoff,
+      snapshotSeq: 0n,
+      snapshotAgeMs: 0,
+      members: [
+        { slot: 1, online: true, account: "a1" },
+        { slot: 2, online: true, account: "a2" },
+      ],
+      state: new TextEncoder().encode("h"),
+    }),
+  ),
+  relay_host_changing: frame(RelayChannel.Control, 0, RelayOp.HostChanging, encodeEpoch(2n)),
+  relay_host_changed: frame(RelayChannel.Control, 3, RelayOp.HostChanged, encodeHostChanged(2n, "a3")),
+  relay_host_resumed: frame(RelayChannel.Control, 1, RelayOp.HostResumed, encodeEpoch(0n)),
+  relay_rejected_snapshot_too_soon: frame(RelayChannel.Control, 0, RelayOp.Rejected, encodeRejected({ op: RelayOp.Snapshot, code: RejectCode.TooSoon, seq: 8n })),
+  relay_transfer: frame(RelayChannel.Control, 3, RelayOp.Transfer, new TextEncoder().encode("handoff")),
+  relay_leave: frame(RelayChannel.Control, 0, RelayOp.Leave, []),
+  relay_successors: frame(RelayChannel.Control, 0, RelayOp.Successors, encodeSuccessors([3, 2])),
+  relay_snapshot: frame(RelayChannel.Control, 0, RelayOp.Snapshot, encodeSnapshot(7n, Uint8Array.of(0xab, 0xcd))),
+  relay_host_ready: frame(RelayChannel.Control, 0, RelayOp.HostReady, encodeEpoch(2n)),
+  relay_closed_lobby_rejected: frame(RelayChannel.Control, 0, RelayOp.Closed, [RelayReason.LobbyRejected]),
 };
 
 test("TS encodes every relay golden frame byte for byte like Go", () => {
@@ -79,6 +137,43 @@ test("TS decodes the relay golden frames", () => {
   assert.deepEqual(decodeWelcome(welcome.slot, welcome.payload), { slot: 3, host: false, hostSlot: 1 });
   const left = decodeFrame(bytes(golden.get("relay_member_left")!));
   assert.deepEqual(decodeMember(left.slot, left.payload), { slot: 3, account: "a3", reason: RelayReason.Kicked });
+});
+
+test("TS decodes the host-change golden frames into the expected fields", () => {
+  const payload = (name: string) => decodeFrame(bytes(golden.get(name)!)).payload;
+  assert.equal(golden.size, 27, "14 base frames + 13 host-change frames");
+  assert.equal(decodeEpoch(payload("relay_you_are_member")), 2n);
+  assert.deepEqual(decodeYouAreHost(payload("relay_you_are_host_snapshot")), {
+    epoch: 2n,
+    source: StateSource.Snapshot,
+    snapshotSeq: 7n,
+    snapshotAgeMs: 1500,
+    members: [
+      { slot: 1, online: false, account: "a1" },
+      { slot: 3, online: true, account: "a3" },
+    ],
+    state: Uint8Array.of(0xab, 0xcd),
+  });
+  const handoff = decodeYouAreHost(payload("relay_you_are_host_handoff"));
+  assert.deepEqual([handoff.epoch, handoff.source, handoff.snapshotSeq, new TextDecoder().decode(handoff.state)], [1n, StateSource.Handoff, 0n, "h"]);
+  assert.deepEqual(handoff.members.map((m) => [m.slot, m.online, m.account]), [[1, true, "a1"], [2, true, "a2"]]);
+  assert.equal(decodeEpoch(payload("relay_host_changing")), 2n);
+  const changed = decodeFrame(bytes(golden.get("relay_host_changed")!));
+  assert.deepEqual([changed.slot, decodeHostChanged(changed.payload)], [3, { epoch: 2n, account: "a3" }]);
+  assert.equal(decodeEpoch(payload("relay_host_resumed")), 0n);
+  assert.deepEqual(decodeRejected(payload("relay_rejected_snapshot_too_soon")), { op: RelayOp.Snapshot, code: RejectCode.TooSoon, seq: 8n });
+  assert.deepEqual(decodeSuccessors(payload("relay_successors")), [3, 2]);
+  const snapshot = decodeSnapshot(payload("relay_snapshot"));
+  assert.deepEqual([snapshot.seq, [...snapshot.data]], [7n, [0xab, 0xcd]]);
+  assert.equal(decodeEpoch(payload("relay_host_ready")), 2n);
+  assert.deepEqual([...payload("relay_closed_lobby_rejected")], [RelayReason.LobbyRejected]);
+  // 截断的 YouAreHost、非法来源、长度不对的 epoch 都当协议错误
+  const youAreHost = payload("relay_you_are_host_snapshot");
+  assert.throws(() => decodeYouAreHost(youAreHost.subarray(0, 30)), RelayProtocolError);
+  const badSource = youAreHost.slice();
+  badSource[8] = 3;
+  assert.throws(() => decodeYouAreHost(badSource), RelayProtocolError);
+  assert.throws(() => decodeEpoch(Uint8Array.of(1, 2, 3)), RelayProtocolError);
 });
 
 test("the stream reader does not depend on message boundaries", () => {

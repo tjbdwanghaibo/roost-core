@@ -19,14 +19,21 @@ export interface Peer {
   relayWs: string;
   backend: string;
   gameToken(account: string): Promise<string>;
+  /** relay 向 lobby 验权的故障注入：ok 照 lobby 答复，reject 一律拒绝（lobby_rejected），down 一律不可用（lobby_unavailable）。 */
+  admission(mode: "ok" | "reject" | "down"): Promise<void>;
   close(): Promise<void>;
 }
 
 export async function startPeer(): Promise<Peer> {
   const dir = mkdtempSync(join(tmpdir(), "roost-relaypeer-"));
-  const binary = join(dir, "relaypeer");
-  // 对端是 client/relay 的测试二进制（peer_test.go）：ROOST_RELAYPEER_SERVE=1 时它不跑用例，只当对端。
-  execFileSync("go", ["test", "-c", "-o", binary, "./client/relay"], { cwd: REPO_ROOT, stdio: "inherit" });
+  let binary = join(dir, "relaypeer");
+  if (process.env.ROOST_RELAYPEER_BIN) {
+    // 事先编好的对端（同样的协议：ROOST_RELAYPEER_SERVE=1、stdout 一行地址 JSON、stdin 关闭就退出）
+    binary = process.env.ROOST_RELAYPEER_BIN;
+  } else {
+    // 对端是 client/relay 的测试二进制（peer_test.go）：ROOST_RELAYPEER_SERVE=1 时它不跑用例，只当对端。
+    execFileSync("go", ["test", "-c", "-o", binary, "./client/relay"], { cwd: REPO_ROOT, stdio: "inherit" });
+  }
   const child: ChildProcessWithoutNullStreams = spawn(binary, [], {
     cwd: REPO_ROOT,
     stdio: ["pipe", "pipe", "pipe"],
@@ -49,6 +56,10 @@ export async function startPeer(): Promise<Peer> {
       const reply = await fetch(`${info.lobby_url}/harness/game-token`, { method: "POST", body: JSON.stringify({ account }) });
       if (!reply.ok) throw new Error(`game token: HTTP ${reply.status}`);
       return ((await reply.json()) as { token: string }).token;
+    },
+    async admission(mode: "ok" | "reject" | "down"): Promise<void> {
+      const reply = await fetch(`${info.lobby_url}/harness/admission`, { method: "POST", body: JSON.stringify({ mode }) });
+      if (!reply.ok) throw new Error(`admission: HTTP ${reply.status}`);
     },
     async close(): Promise<void> {
       child.stdin.end();

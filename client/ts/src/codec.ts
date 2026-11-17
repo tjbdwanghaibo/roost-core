@@ -25,7 +25,10 @@ export enum RelayChannel {
   Control = 3,
 }
 
-/** 控制帧操作码。1～15 由 relay 发出，16～31 由房主发出，32～ 任何一端；64～127 留给换 host。 */
+/**
+ * 控制帧操作码。1～15 由 relay 发出，16～31 由房主发出，32～ 任何一端；64～127 是换 host（docs/framework/RELAY.md §2.3）：
+ * 64～79 由 relay 发出，80～95 由客户端发出。
+ */
 export const RelayOp = {
   Welcome: 1,
   MemberJoined: 2,
@@ -36,7 +39,32 @@ export const RelayOp = {
   Mute: 17,
   Ping: 32,
   Pong: 33,
+  /** relay → 被换下的旧房主、没在时限内回 HostReady 的候选。载荷 [epoch 8B]。 */
+  YouAreMember: 64,
+  /** relay → 新房主候选。载荷见 YouAreHost。 */
+  YouAreHost: 65,
+  /** relay → 成员：它发给房主的游戏帧被丢了（房主不在）。载荷 [epoch 8B]。 */
+  HostChanging: 66,
+  /** relay → 在线的每个人（含新房主）：新房主已就绪。seq 是新房主槽位，载荷 [epoch 8B][账号]。 */
+  HostChanged: 67,
+  /** relay → 成员：房主在宽限期内回来了。seq 是房主槽位，载荷 [epoch 8B]。 */
+  HostResumed: 68,
+  /** relay → 发快照或转交的连接：被拒（连接保留）。载荷见 Rejected。 */
+  Rejected: 69,
+  /** 房主 → relay：转交给 seq 上的在线成员，载荷是交接数据。 */
+  Transfer: 80,
+  /** 任何人 → relay：离开房间，relay 回 Closed{left} 后断开。 */
+  Leave: 81,
+  /** 房主 → relay：候选顺序，每个槽位 4B。 */
+  Successors: 82,
+  /** 房主 → relay：[seq 8B][快照字节]。 */
+  Snapshot: 83,
+  /** 新房主候选 → relay：[epoch 8B]，等于 YouAreHost 里的 epoch。 */
+  HostReady: 84,
 } as const;
+
+/** Successors 里槽位个数的上限。 */
+export const MAX_SUCCESSORS = 256;
 
 /** Ping 载荷上限；超出的 Ping 被 relay 当协议错误断开。 */
 export const MAX_PING_BYTES = 16;
@@ -58,6 +86,10 @@ export enum RelayReason {
   RoomFull = 12,
   Shutdown = 13,
   Left = 14,
+  /** lobby 验权不让进（被踢、席位已让出、房间已关）：不重连。 */
+  LobbyRejected = 15,
+  /** 向 lobby 验权失败或超时：稍后可以重试。 */
+  LobbyUnavailable = 16,
 }
 
 /**
@@ -236,4 +268,173 @@ export function encodeMember(member: Member): Uint8Array {
   payload[0] = member.reason;
   payload.set(account, 1);
   return payload;
+}
+
+// ---- 换 host 的控制帧（docs/framework/RELAY.md §2.3；Go 的 client/wire/relay.go）。整数都是大端。----
+
+/** YouAreHost 里状态字节的来源。 */
+export enum StateSource {
+  /** 没有可交的状态：新房主用自己本地的状态，或由游戏决定重开。 */
+  None = 0,
+  /** 主动转交时旧房主随 Transfer 带来的交接数据。 */
+  Handoff = 1,
+  /** relay 存的最新快照（房主离开或断线）。 */
+  Snapshot = 2,
+}
+
+/** YouAreHost 里的一个座位：房间存续期间进过房、没被踢的账号，含离线的。 */
+export interface Seat {
+  slot: number;
+  account: string;
+  online: boolean;
+}
+
+/** YouAreHost 的载荷。snapshotSeq / snapshotAgeMs 只在来源为快照时有值（其余为 0）；state 是原样的字节（游戏压缩过的）。 */
+export interface YouAreHost {
+  epoch: bigint;
+  source: StateSource;
+  snapshotSeq: bigint;
+  snapshotAgeMs: number;
+  members: Seat[];
+  state: Uint8Array;
+}
+
+/** Rejected 的原因。 */
+export enum RejectCode {
+  /** 快照或交接数据超过 snapshot_max_bytes。 */
+  TooBig = 1,
+  /** 离上一份快照不到 snapshot_min_interval。 */
+  TooSoon = 2,
+  /** 快照 seq 不大于 relay 存着的那一份。 */
+  StaleSeq = 3,
+  /** 转交的目标不在线，或是房主自己。 */
+  BadTarget = 4,
+  /** 发送者此刻不是房主。 */
+  NotHost = 5,
+}
+
+/** Rejected 的载荷：被拒的操作码、原因、被拒快照的 seq（转交为 0）。 */
+export interface Rejected {
+  op: number;
+  code: RejectCode;
+  seq: bigint;
+}
+
+function view(payload: Uint8Array): DataView {
+  return new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+}
+
+/** 只带 epoch 的载荷：YouAreMember、HostChanging、HostResumed、HostReady。 */
+export function encodeEpoch(epoch: bigint): Uint8Array {
+  const payload = new Uint8Array(8);
+  view(payload).setBigUint64(0, epoch);
+  return payload;
+}
+
+export function decodeEpoch(payload: Uint8Array): bigint {
+  if (payload.length !== 8) throw new RelayProtocolError("invalid epoch payload");
+  return view(payload).getBigUint64(0);
+}
+
+/** HostChanged 的载荷：[epoch 8B][新房主账号 UTF-8]。新房主槽位在帧的 seq。 */
+export function encodeHostChanged(epoch: bigint, account: string): Uint8Array {
+  const name = new TextEncoder().encode(account);
+  const payload = new Uint8Array(8 + name.length);
+  view(payload).setBigUint64(0, epoch);
+  payload.set(name, 8);
+  return payload;
+}
+
+export function decodeHostChanged(payload: Uint8Array): { epoch: bigint; account: string } {
+  if (payload.length < 9) throw new RelayProtocolError("invalid host changed payload");
+  return { epoch: view(payload).getBigUint64(0), account: new TextDecoder().decode(payload.subarray(8)) };
+}
+
+/**
+ * YouAreHost 的载荷：[epoch 8B][来源 1B][快照 seq 8B][快照年龄 ms 4B][成员数 2B]，
+ * 成员数 × {[槽位 4B][在线 1B][账号长度 2B][账号]}，最后是状态字节（剩下的全部）。
+ */
+export function encodeYouAreHost(host: YouAreHost): Uint8Array {
+  const names = host.members.map((m) => new TextEncoder().encode(m.account));
+  const size = 23 + names.reduce((n, name) => n + 7 + name.length, 0) + host.state.length;
+  const payload = new Uint8Array(size);
+  const v = view(payload);
+  v.setBigUint64(0, host.epoch);
+  payload[8] = host.source;
+  v.setBigUint64(9, host.snapshotSeq);
+  v.setUint32(17, host.snapshotAgeMs >>> 0);
+  v.setUint16(21, host.members.length);
+  let at = 23;
+  host.members.forEach((m, i) => {
+    v.setUint32(at, m.slot >>> 0);
+    payload[at + 4] = m.online ? 1 : 0;
+    v.setUint16(at + 5, names[i].length);
+    payload.set(names[i], at + 7);
+    at += 7 + names[i].length;
+  });
+  payload.set(host.state, at);
+  return payload;
+}
+
+export function decodeYouAreHost(payload: Uint8Array): YouAreHost {
+  if (payload.length < 23 || payload[8] > StateSource.Snapshot) throw new RelayProtocolError("invalid you_are_host");
+  const v = view(payload);
+  const count = v.getUint16(21);
+  const members: Seat[] = [];
+  let at = 23;
+  for (let i = 0; i < count; i++) {
+    if (payload.length - at < 7 || payload[at + 4] > 1) throw new RelayProtocolError("invalid you_are_host");
+    const n = v.getUint16(at + 5);
+    if (payload.length - at < 7 + n) throw new RelayProtocolError("invalid you_are_host");
+    members.push({ slot: v.getUint32(at), online: payload[at + 4] === 1, account: new TextDecoder().decode(payload.subarray(at + 7, at + 7 + n)) });
+    at += 7 + n;
+  }
+  return {
+    epoch: v.getBigUint64(0),
+    source: payload[8] as StateSource,
+    snapshotSeq: v.getBigUint64(9),
+    snapshotAgeMs: v.getUint32(17),
+    members,
+    state: payload.slice(at),
+  };
+}
+
+/** Snapshot 的载荷：[seq 8B][快照字节]。 */
+export function encodeSnapshot(seq: bigint, data: Uint8Array): Uint8Array {
+  const payload = new Uint8Array(8 + data.length);
+  view(payload).setBigUint64(0, seq);
+  payload.set(data, 8);
+  return payload;
+}
+
+export function decodeSnapshot(payload: Uint8Array): { seq: bigint; data: Uint8Array } {
+  if (payload.length < 8) throw new RelayProtocolError("invalid snapshot payload");
+  return { seq: view(payload).getBigUint64(0), data: payload.subarray(8) };
+}
+
+/** Successors 的载荷：槽位列表，每个 4B，至多 MAX_SUCCESSORS 个。 */
+export function encodeSuccessors(slots: readonly number[]): Uint8Array {
+  if (slots.length > MAX_SUCCESSORS) throw new RelayProtocolError(`at most ${MAX_SUCCESSORS} successors`);
+  const payload = new Uint8Array(4 * slots.length);
+  slots.forEach((slot, i) => view(payload).setUint32(4 * i, slot >>> 0));
+  return payload;
+}
+
+export function decodeSuccessors(payload: Uint8Array): number[] {
+  if (payload.length % 4 !== 0 || payload.length / 4 > MAX_SUCCESSORS) throw new RelayProtocolError("invalid successors payload");
+  return Array.from({ length: payload.length / 4 }, (_, i) => view(payload).getUint32(4 * i));
+}
+
+/** Rejected 的载荷：[被拒的操作码 1B][原因 1B][seq 8B]。 */
+export function encodeRejected(rejected: Rejected): Uint8Array {
+  const payload = new Uint8Array(10);
+  payload[0] = rejected.op;
+  payload[1] = rejected.code;
+  view(payload).setBigUint64(2, rejected.seq);
+  return payload;
+}
+
+export function decodeRejected(payload: Uint8Array): Rejected {
+  if (payload.length !== 10) throw new RelayProtocolError("invalid rejected payload");
+  return { op: payload[0], code: payload[1] as RejectCode, seq: view(payload).getBigUint64(2) };
 }

@@ -2,5 +2,17 @@
 // （RelayClient）。方案 FEATURE-2026-11-16-lobby-relay §4.7.5；帧格式与 Go 的 client/wire 相同（client/spec/relay-packets.json）。
 export * from "./codec.js";
 export * from "./lobby.js";
-export { RelayClient, RelayClosedError, RelayClientClosedError } from "./client.js";
-export type { Disconnect, ReconnectPolicy, RelayClientOptions, WebSocketLike } from "./client.js";
+export * from "./compress.js";
+export { RelayClient, RelayClosedError, RelayClientClosedError, SnapshotTooSoonError } from "./client.js";
+export type {
+  Disconnect,
+  HostChange,
+  HostRole,
+  HostTakeover,
+  ReconnectPolicy,
+  RelayClientOptions,
+  SentSnapshot,
+  SnapshotOptions,
+  WebSocketLike,
+} from "./client.js";
+export * from "./web.js";
