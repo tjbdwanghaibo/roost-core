@@ -11,6 +11,7 @@ package main
 //	go run ./cmd/accountctl transfer-role begin -player 1000001 -to 1001 -note "ticket 4711" [-id ID] [-ttl 600]
 //	go run ./cmd/accountctl transfer-role commit -player 1000001 -id ID -note "1000 exited, wal-drained ok"
 //	go run ./cmd/accountctl transfer-role abort -player 1000001 -id ID -note "source never drained"
+//	go run ./cmd/accountctl transfer-role list [-from 1000]
 //
 // merge-server records that server -from is merged into -into (alias merge,
 // roost-core docs/framework/PLAYER-MIGRATION.md §6): the roles of -from keep
@@ -28,7 +29,11 @@ package main
 // player: it has unloaded the player, or its process has exited AND
 // `sidmove wal-drained` passes on its WAL directory — committing earlier lets
 // two processes write one player. Every transfer-role step requires -note,
-// which is recorded on the role.
+// which is recorded on the role. transfer-role list prints the transfers in
+// flight (all of them, or those begun on -from), earliest deadline first: the
+// account service keeps an index of them, aborts the ones past their deadline
+// by itself, and the source game process resumes its own (D8) — the list is
+// what an operator reads before stepping in.
 //
 // Like the module's commands, these open the account service's own store
 // with Redis credentials: none of them is on the account RPC interface,
@@ -52,8 +57,15 @@ func init() {
 	registerCommand("show-role", "show-role -player P", func(ctx context.Context, service *svcaccount.Service, args []string, out io.Writer) error {
 		return printBinding(out, "show-role", showRole, ctx, service, args)
 	})
-	registerCommand("transfer-role", "transfer-role begin -player P -to B -note TEXT [-id ID] [-ttl SECONDS] | transfer-role commit|abort -player P -id ID -note TEXT",
+	registerCommand("transfer-role", "transfer-role begin -player P -to B -note TEXT [-id ID] [-ttl SECONDS] | transfer-role commit|abort -player P -id ID -note TEXT | transfer-role list [-from SID]",
 		func(ctx context.Context, service *svcaccount.Service, args []string, out io.Writer) error {
+			if len(args) > 0 && args[0] == "list" {
+				listed, err := listTransfers(ctx, service, args[1:])
+				if err != nil {
+					return fmt.Errorf("transfer-role list: %w", err)
+				}
+				return printJSON(out, listed)
+			}
 			return printBinding(out, "transfer-role", transferRole, ctx, service, args)
 		})
 }
@@ -82,6 +94,24 @@ type roleTransfers interface {
 	BeginRoleTransfer(ctx context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error)
 	CommitRoleTransferWithNote(ctx context.Context, playerID int64, transferID, note string) (svcaccount.RoleBinding, error)
 	AbortRoleTransfer(ctx context.Context, playerID int64, transferID, reason string) (svcaccount.RoleBinding, error)
+	ListRoleTransfers(ctx context.Context, fromServerID int32) ([]svcaccount.RoleBinding, error)
+}
+
+// listTransfers lists the transfers in flight (svcaccount.Service.ListRoleTransfers),
+// earliest deadline first; -from narrows them to one source server. Always a
+// list, empty when nothing is in flight.
+func listTransfers(ctx context.Context, service roleTransfers, args []string) ([]svcaccount.RoleBinding, error) {
+	fs := flag.NewFlagSet("transfer-role list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	from := fs.Int("from", 0, "only the transfers begun on this server (0: all)")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	listed, err := service.ListRoleTransfers(ctx, int32(*from))
+	if listed == nil {
+		listed = []svcaccount.RoleBinding{}
+	}
+	return listed, err
 }
 
 // showRole prints where a role is bound: its server, the server that serves
@@ -113,7 +143,7 @@ func showRole(ctx context.Context, service roleTransfers, args []string) (svcacc
 // command doc. abort leaves the role where it is and retires the id.
 func transferRole(ctx context.Context, service roleTransfers, args []string) (svcaccount.RoleBinding, error) {
 	if len(args) == 0 {
-		return svcaccount.RoleBinding{}, fmt.Errorf("want begin, commit or abort")
+		return svcaccount.RoleBinding{}, fmt.Errorf("want begin, commit, abort or list")
 	}
 	step := args[0]
 	fs := flag.NewFlagSet("transfer-role "+step, flag.ContinueOnError)

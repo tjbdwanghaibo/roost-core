@@ -27,7 +27,7 @@ func accountWithRole(t *testing.T) (*svcaccount.Service, svcaccount.Role) {
 		t.Fatal(err)
 	}
 	service, err := svcaccount.New(svcaccount.Config{
-		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Roles: versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Roles: svcaccount.NewMemoryRoles(),
 		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](), Slots: versionstore.NewMemoryStore[string, svcaccount.Slot](), Names: names,
 		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
 			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
@@ -126,7 +126,7 @@ func TestTransferRoleRefusesAnIncompleteCommand(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"no step", nil, "begin, commit or abort"},
+		{"no step", nil, "begin, commit, abort or list"},
 		{"unknown step", []string{"move", "-player", player, "-note", "x"}, "unknown step"},
 		{"begin without a note", []string{"begin", "-player", player, "-to", strconv.Itoa(targetSID)}, "-note is required"},
 		{"begin with a blank note", []string{"begin", "-player", player, "-to", strconv.Itoa(targetSID), "-note", "  "}, "-note is required"},
@@ -217,5 +217,46 @@ func TestTheDemoCommandsAreReachableBesideTheLoginModulesOwn(t *testing.T) {
 	// 在途时再 begin：拒绝，并把在途的绑定打印出来给操作者看。
 	if printed, err := run("transfer-role", "begin", "-player", playerFlag(role), "-to", strconv.Itoa(targetSID), "-id", "move-10", "-note", "again"); err == nil || !strings.Contains(err.Error(), "transfer-role:") {
 		t.Fatalf("a second begin while one is in flight printed %q, %v; want a refusal", printed, err)
+	}
+}
+
+// transfer-role list 列出在途的换服（D8）：发起之后列得出来、带期限，按源服过滤，了结之后列表为空（打印 []，不是 null）。
+func TestTransferRoleListShowsTheTransfersInFlight(t *testing.T) {
+	ctx := context.Background()
+	service, role := accountWithRole(t)
+	list := func(args ...string) []svcaccount.RoleBinding {
+		t.Helper()
+		var out bytes.Buffer
+		if err := dispatch(ctx, service, append([]string{"transfer-role", "list"}, args...), &out); err != nil {
+			t.Fatalf("transfer-role list %v: %v", args, err)
+		}
+		var listed []svcaccount.RoleBinding
+		if err := json.Unmarshal(out.Bytes(), &listed); err != nil || listed == nil {
+			t.Fatalf("transfer-role list %v printed %q (%v), want a JSON list", args, out.String(), err)
+		}
+		return listed
+	}
+	if listed := list(); len(listed) != 0 {
+		t.Fatalf("transfers in flight before any begin = %+v", listed)
+	}
+	if _, err := transferRole(ctx, service, []string{"begin", "-player", playerFlag(role), "-to", strconv.Itoa(targetSID), "-id", "listed-1", "-note", "ticket", "-ttl", "300"}); err != nil {
+		t.Fatal(err)
+	}
+	listed := list()
+	if len(listed) != 1 || listed[0].PlayerID != role.PlayerID || listed[0].Transfer == nil || listed[0].Transfer.ID != "listed-1" ||
+		listed[0].Transfer.From != sourceSID || listed[0].Transfer.DeadlineUnix != listed[0].Transfer.StartedAtUnix+300 {
+		t.Fatalf("transfers in flight = %+v, want listed-1 with its deadline", listed)
+	}
+	if fromSource := list("-from", strconv.Itoa(sourceSID)); len(fromSource) != 1 {
+		t.Fatalf("transfers from %d = %+v", sourceSID, fromSource)
+	}
+	if fromTarget := list("-from", strconv.Itoa(targetSID)); len(fromTarget) != 0 {
+		t.Fatalf("transfers from %d = %+v, want none", targetSID, fromTarget)
+	}
+	if _, err := transferRole(ctx, service, []string{"abort", "-player", playerFlag(role), "-id", "listed-1", "-note", "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if listed := list(); len(listed) != 0 {
+		t.Fatalf("transfers in flight after the abort = %+v", listed)
 	}
 }
