@@ -28,7 +28,7 @@ export class FakeRelay implements WebSocketLike {
   private waiters: (() => void)[] = [];
 
   constructor(
-    private readonly welcome: Welcome | undefined,
+    private readonly welcome: (Omit<Welcome, "epoch"> & { epoch?: bigint }) | undefined,
     private readonly closeWith?: number,
   ) {
     setTimeout(() => {
@@ -45,7 +45,7 @@ export class FakeRelay implements WebSocketLike {
           this.push(control(RelayOp.Closed, 0, Uint8Array.of(this.closeWith)));
           queueMicrotask(() => this.close());
         } else if (this.welcome) {
-          this.push(control(RelayOp.Welcome, this.welcome.slot, encodeWelcome(this.welcome)));
+          this.push(control(RelayOp.Welcome, this.welcome.slot, encodeWelcome({ ...this.welcome, epoch: this.welcome.epoch ?? 0n })));
         }
         continue;
       }

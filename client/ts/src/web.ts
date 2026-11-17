@@ -4,15 +4,16 @@
 //   - 后台标签页的计时器限流：规则循环可以放进 Web Worker（WorkerRunner + serveRules），并且按实际经过的时间补帧
 //     （FixedStepLoop，有补帧上限）；Worker 每一步发回的消息顺带驱动主线程的心跳（RelayClient.pulse）。
 //   - visibilitychange：房主页面隐藏超过 hiddenHandoffMs（桌面推荐 5s，手机推荐 0）还没回来，就用 Transfer 把房主
-//     连同交接数据让给候选里第一个在线的成员；回到前台不自动抢回。
+//     连同交接数据让给候选里第一个在线的成员；回到前台不自动抢回。每个页面（成员也一样）在 visibilitychange 上
+//     setForeground 上报自己在不在前台，房主据此把前台成员排在候选顺序前面（游戏显式 setSuccessors 过的以游戏为准）。
 //   - 刷新页面：sessionStorage 存最近一份快照与身份（HostSessionStore）；刷新后在 relay 的 host_grace 内重连，
 //     relay 认出同一账号仍是房主，WebHost 从存档恢复规则状态（方案 §4.7.4 的普通换 host 流程，relay 不回传快照）。
 //
 // 浏览器 API（document、sessionStorage、Worker、计时器、时钟）都可以注入，node 下测试用假的。
 
-import { RelayClient, internalHooks, type RelayClientOptions } from "./client.js";
+import { RelayClient, internalHooks, internalSuccessors, type RelayClientOptions } from "./client.js";
 import { ALL, RelayChannel, RelayReason, type RelayFrame, type Welcome } from "./codec.js";
-import { MAX_STATE_BYTES, defaultCompressor, type Compressor } from "./compress.js";
+import { MAX_STATE_BYTES, defaultCompressor, unpackState, type Compressor } from "./compress.js";
 import type { CreateRoomRequest, LobbyClient } from "./lobby.js";
 
 // ---- 规则模块 ----
@@ -459,7 +460,14 @@ export class WebHost {
   private roomId = "";
   private frameHandler: ((frame: RelayFrame) => void) | undefined;
   private handoffHandler: ((target: number | undefined) => void) | undefined;
-  private readonly onVisibility = () => this.visibilityChanged();
+  /** 当房主时各成员上报的前台状态（槽位 → 是否前台）；换 host 后清空，等成员重发。 */
+  private readonly presence = new Map<number, boolean>();
+  /** 最近一次自动声明的候选顺序：没变就不重发。 */
+  private autoSuccessors: number[] = [];
+  private readonly onVisibility = () => {
+    this.client.setForeground(this.doc?.visibilityState !== "hidden");
+    this.visibilityChanged();
+  };
 
   constructor(private readonly options: WebHostOptions) {
     this.runner = options.runner;
@@ -480,6 +488,8 @@ export class WebHost {
     });
     this.wire();
     this.doc?.addEventListener("visibilitychange", this.onVisibility);
+    // 进房前先记下当前的可见性：连上时 SDK 发出，之后换 host、重连都会重发
+    if (this.doc) this.client.setForeground(this.doc.visibilityState !== "hidden");
   }
 
   /** 要显示的帧：成员收到房主的帧；房主收到自己规则的输出（slot 是自己的槽位）。 */
@@ -527,8 +537,9 @@ export class WebHost {
   }
 
   /**
-   * 让出房主：给候选里第一个在线的成员（没声明候选时取在线成员里槽位最小的，与 relay 的兜底规则相同），
-   * 交接数据是规则当前的状态。target 给了就转交给它（必须在线）。没有可转交的成员时返回 undefined。
+   * 让出房主：游戏声明过候选顺序时给其中第一个在线的成员；没声明时给前台成员里槽位最小的，没有前台成员（或都没上报）
+   * 再取在线成员里槽位最小的（与 relay 的兜底规则相同）。交接数据是规则当前的状态。target 给了就转交给它（必须在线）。
+   * 没有可转交的成员时返回 undefined。
    */
   async handOff(target: number | undefined = this.pickSuccessor()): Promise<number | undefined> {
     if (this.client.hostRole !== "host") return undefined;
@@ -556,10 +567,26 @@ export class WebHost {
   private pickSuccessor(): number | undefined {
     const online = this.client.onlineMembers;
     const declared = this.client.successors;
-    if (declared.length > 0) return declared.find((slot) => online.has(slot));
-    let lowest: number | undefined;
-    for (const slot of online.keys()) if (lowest === undefined || slot < lowest) lowest = slot;
-    return lowest;
+    if (this.client.successorsDeclared && declared.length > 0) return declared.find((slot) => online.has(slot));
+    return this.foregroundFirst()[0];
+  }
+
+  /** 在线成员的候选顺序：上报在前台的按槽位升序在前，其余（后台、没上报的）按槽位升序在后。 */
+  private foregroundFirst(): number[] {
+    const slots = [...this.client.onlineMembers.keys()].sort((a, b) => a - b);
+    return [...slots.filter((slot) => this.presence.get(slot) === true), ...slots.filter((slot) => this.presence.get(slot) !== true)];
+  }
+
+  /**
+   * 游戏没有显式声明候选顺序时，按前台状态自动声明（relay 在房主断线、来不及转交时按它选人）。没有任何上报时不发：
+   * 这时的顺序与 relay 的兜底规则（槽位最小的在线成员）相同。
+   */
+  private declareForegroundFirst(): void {
+    if (this.client.hostRole !== "host" || this.client.successorsDeclared || this.presence.size === 0) return;
+    const order = this.foregroundFirst();
+    if (order.length === this.autoSuccessors.length && order.every((slot, i) => slot === this.autoSuccessors[i])) return;
+    this.autoSuccessors = order;
+    this.client[internalSuccessors](order);
   }
 
   private async enter(ticket: { room: { id: string }; relayAddr: string; token: string }): Promise<Welcome> {
@@ -582,7 +609,7 @@ export class WebHost {
     if (saved && saved.room === this.roomId && saved.state) {
       this.client.raiseSnapshotSeq(saved.seq);
       try {
-        state = await this.compressor.decompress(saved.state, MAX_STATE_BYTES);
+        state = await unpackState(this.compressor, saved.state, MAX_STATE_BYTES);
       } catch {
         state = null;
       }
@@ -633,11 +660,20 @@ export class WebHost {
       },
       youAreMember: () => this.runner.stop(),
       hostChanged: (change) => {
+        // 新房主等成员重发前台状态（它们收到同一条 HostChanged 后各自重发）；relay 已清空旧的候选顺序
+        this.presence.clear();
+        this.autoSuccessors = [];
         if (!change.self) {
           this.runner.stop();
           this.store?.clear();
         }
       },
+      memberPresence: (m) => {
+        this.presence.set(m.slot, m.foreground);
+        this.declareForegroundFirst();
+      },
+      memberJoined: () => this.declareForegroundFirst(),
+      memberLeft: () => this.declareForegroundFirst(),
       snapshotSent: (sent) => {
         this.store?.save({ room: this.roomId, game: this.options.relay.game, account: this.options.account, seq: sent.seq, state: sent.data, savedAt: Date.now() });
       },

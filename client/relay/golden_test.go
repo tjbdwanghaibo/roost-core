@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,8 +61,11 @@ func TestSDKFramesMatchRelayGolden(t *testing.T) {
 			t.Fatalf("%s: %v %v", name, reason, err)
 		}
 	}
-	if w := c.Welcome(); w != (Welcome{Slot: 3, Host: false, HostSlot: 1}) {
+	if w := c.Welcome(); w != (Welcome{Slot: 3, Host: false, HostSlot: 1, Epoch: 5}) {
 		t.Fatalf("welcome %+v", w)
+	}
+	if r := c.Role(); r.Epoch != 5 {
+		t.Fatalf("role after welcome %+v: epoch comes from the Welcome", r)
 	}
 	if len(joined) != 1 || joined[0] != (Member{Slot: 3, Account: "a3"}) ||
 		len(left) != 1 || left[0] != (Member{Slot: 3, Account: "a3", Reason: wire.RelayReasonKicked}) {
@@ -98,7 +103,8 @@ func loadGolden(t *testing.T) map[string]string {
 		"relay_welcome", "relay_member_joined", "relay_member_left", "relay_closed", "relay_muted", "relay_kick", "relay_mute", "relay_ping", "relay_pong",
 		"relay_you_are_member", "relay_you_are_host_snapshot", "relay_you_are_host_handoff", "relay_host_changing", "relay_host_changed",
 		"relay_host_resumed", "relay_rejected_snapshot_too_soon", "relay_transfer", "relay_leave", "relay_successors", "relay_snapshot",
-		"relay_host_ready", "relay_closed_lobby_rejected"} {
+		"relay_host_ready", "relay_closed_lobby_rejected", "relay_presence", "relay_member_presence", "relay_you_are_host_deflate",
+		"relay_you_are_host_unknown_compression"} {
 		if golden[name] == "" {
 			t.Fatalf("relay golden is missing %s", name)
 		}
@@ -169,6 +175,7 @@ func TestSDKHostFramesMatchRelayGolden(t *testing.T) {
 	expect("relay_successors", func() error { return c.SetSuccessors([]uint32{3, 2}) })
 	expect("relay_snapshot", func() error { return c.Snapshot([]byte{0xAB, 0xCD}) })
 	expect("relay_host_ready", func() error { return c.HostReady(2) })
+	expect("relay_presence", func() error { return c.SetForeground(true) })
 	expect("relay_leave", func() error { return c.Leave(context.Background()) })
 
 	// relay → 客户端。
@@ -183,6 +190,8 @@ func TestSDKHostFramesMatchRelayGolden(t *testing.T) {
 	d.OnHostChanged(func(e HostEvent) { changed = append(changed, e) })
 	d.OnHostResumed(func(e HostEvent) { resumed = append(resumed, e) })
 	d.OnRejected(func(r Rejected) { rejected = append(rejected, r) })
+	var presence []MemberPresence
+	d.OnMemberPresence(func(p MemberPresence) { presence = append(presence, p) })
 	step := func(name string, want Role) {
 		t.Helper()
 		if reason, err := d.dispatch(decodeGolden(t, golden[name])); reason != wire.RelayReasonNone {
@@ -192,7 +201,8 @@ func TestSDKHostFramesMatchRelayGolden(t *testing.T) {
 			t.Fatalf("after %s role %+v, want %+v", name, got, want)
 		}
 	}
-	step("relay_welcome", Role{Slot: 3, HostSlot: 1})
+	step("relay_welcome", Role{Slot: 3, HostSlot: 1, Epoch: 5})
+	step("relay_member_presence", Role{Slot: 3, HostSlot: 1, Epoch: 5})
 	step("relay_host_resumed", Role{Slot: 3, HostSlot: 1})
 	step("relay_host_changing", Role{Slot: 3, HostSlot: 1})
 	step("relay_you_are_host_snapshot", Role{Slot: 3, Candidate: true, Epoch: 2})
@@ -210,6 +220,9 @@ func TestSDKHostFramesMatchRelayGolden(t *testing.T) {
 	if len(offers) != 2 {
 		t.Fatalf("offers %+v", offers)
 	}
+	if len(presence) != 1 || presence[0] != (MemberPresence{Slot: 3, Foreground: false}) {
+		t.Fatalf("member presence %+v", presence)
+	}
 	snap, hand := offers[0], offers[1]
 	if snap.Epoch != 2 || snap.Source != StateSnapshot || snap.SnapshotSeq != 7 || snap.SnapshotAge != 1500*time.Millisecond ||
 		len(snap.Members) != 2 || snap.Members[0] != (Seat{Slot: 1, Account: "a1"}) || snap.Members[1] != (Seat{Slot: 3, Account: "a3", Online: true}) ||
@@ -223,6 +236,21 @@ func TestSDKHostFramesMatchRelayGolden(t *testing.T) {
 	reason, err := d.dispatch(decodeGolden(t, golden["relay_closed_lobby_rejected"]))
 	if reason != wire.RelayReasonLobbyRejected || err == nil {
 		t.Fatalf("closed lobby_rejected: %v %v", reason, err)
+	}
+
+	// 压缩方式标识：标识 1（原始 deflate）的状态字节哪种 Compressor 的客户端都解得开（内置的两种总认识）；
+	// 标识 0x7f 没有分配，State 为 nil、StateErr 是 ErrUnknownCompression。
+	offers = nil
+	for _, name := range []string{"relay_you_are_host_deflate", "relay_you_are_host_unknown_compression"} {
+		if reason, err := d.dispatch(decodeGolden(t, golden[name])); reason != wire.RelayReasonNone {
+			t.Fatalf("%s: %v %v", name, reason, err)
+		}
+	}
+	if len(offers) != 2 || string(offers[0].State) != "hi" || offers[0].StateErr != nil {
+		t.Fatalf("deflate-marked offer %+v", offers)
+	}
+	if offers[1].State != nil || !errors.Is(offers[1].StateErr, ErrUnknownCompression) {
+		t.Fatalf("unknown-marked offer: state %q err %v", offers[1].State, offers[1].StateErr)
 	}
 }
 
@@ -247,6 +275,78 @@ func TestSnapshotSeqContinuesAcrossHosts(t *testing.T) {
 	if got := nextSeq(); got != 3<<32+1 {
 		t.Fatalf("after a handoff offer next seq %d, want %d", got, uint64(3<<32+1))
 	}
+}
+
+// 快照字节的压缩方式标识（SDK 之间的约定，RELAY.md §2.3）：发出的非空状态以 Compressor.ID() 开头，空状态不带标识；
+// 收到时按标识选解压方式——自己的 Compressor 或内置的两种。标识不认识返回 ErrUnknownCompression；标识对、内容坏返回
+// 解压错误（不是 ErrUnknownCompression）。房间里混用了游戏自带的压缩方式时，新房主据此得到明确的错误。
+func TestStateCarriesTheCompressionMarker(t *testing.T) {
+	state := bytes.Repeat([]byte("seed=42 "), 64)
+	offer := func(receiver Compressor, data []byte) YouAreHost {
+		t.Helper()
+		c := NewClient(nil, Options{Compressor: receiver})
+		var got []YouAreHost
+		c.OnYouAreHost(func(e YouAreHost) { got = append(got, e) })
+		payload := wire.EncodeRelayYouAreHost(wire.RelayYouAreHost{Epoch: 1, Source: StateHandoff, State: data})
+		if reason, err := c.dispatch(&wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreHost, Seq: 2, Payload: payload}); reason != wire.RelayReasonNone {
+			t.Fatal(reason, err)
+		}
+		return got[0]
+	}
+	packed := func(sender Compressor, data []byte) []byte {
+		t.Helper()
+		c := NewClient(nil, Options{Compressor: sender})
+		out, err := c.compressState(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	deflated := packed(Deflate, state)
+	if deflated[0] != 1 || packed(NoCompression, []byte("ab"))[0] != 0 || string(packed(NoCompression, []byte("ab"))[1:]) != "ab" {
+		t.Fatalf("markers: deflate %x, none %x", deflated[:1], packed(NoCompression, []byte("ab")))
+	}
+	if empty := packed(Deflate, nil); len(empty) != 0 {
+		t.Fatalf("empty state packed to %x, want no bytes", empty)
+	}
+	custom := markerCompressor{id: 9}
+	for _, tc := range []struct {
+		name     string
+		receiver Compressor
+		data     []byte
+	}{
+		{"deflate → deflate", Deflate, deflated},
+		{"deflate → custom (built-in fallback)", custom, deflated},
+		{"none → deflate", Deflate, packed(NoCompression, state)},
+		{"custom → custom", custom, packed(custom, state)},
+	} {
+		if got := offer(tc.receiver, tc.data); got.StateErr != nil || !bytes.Equal(got.State, state) {
+			t.Fatalf("%s: state %d bytes, err %v", tc.name, len(got.State), got.StateErr)
+		}
+	}
+	if got := offer(Deflate, nil); got.StateErr != nil || len(got.State) != 0 {
+		t.Fatalf("empty state: %q %v", got.State, got.StateErr)
+	}
+	// 混用：发的人用游戏自带的 9 号，收的人只认 deflate 与不压缩。
+	if got := offer(Deflate, packed(custom, state)); got.State != nil || !errors.Is(got.StateErr, ErrUnknownCompression) ||
+		!strings.Contains(got.StateErr.Error(), "9") {
+		t.Fatalf("mixed compressors: state %q err %v", got.State, got.StateErr)
+	}
+	// 标识对、内容坏：解压错误，不是“不认识”。
+	broken := append([]byte{1}, 0xFF, 0xFF, 0xFF)
+	if got := offer(Deflate, broken); got.State != nil || got.StateErr == nil || errors.Is(got.StateErr, ErrUnknownCompression) {
+		t.Fatalf("corrupt deflate: state %q err %v", got.State, got.StateErr)
+	}
+}
+
+// markerCompressor 是游戏自带压缩方式的替身：不改字节，只换标识。
+type markerCompressor struct{ id byte }
+
+func (m markerCompressor) ID() byte                           { return m.id }
+func (markerCompressor) Compress(data []byte) ([]byte, error) { return data, nil }
+func (markerCompressor) Decompress(data []byte, limit int) ([]byte, error) {
+	return NoCompression.Decompress(data, limit)
 }
 
 // Deflate 与 NoCompression：压缩后解压得回原样；解压超过上限的报错（防解压炸弹）。

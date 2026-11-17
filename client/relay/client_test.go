@@ -63,6 +63,7 @@ type player struct {
 	hostChanged  chan relay.HostEvent
 	hostResumed  chan relay.HostEvent
 	rejected     chan relay.Rejected
+	presence     chan relay.MemberPresence // 当房主时收到的成员前台上报
 }
 
 func newPlayer(t *testing.T, peer *testPeer, account string, opts relay.Options) *player {
@@ -72,7 +73,8 @@ func newPlayer(t *testing.T, peer *testPeer, account string, opts relay.Options)
 		left: make(chan relay.Member, 64), muted: make(chan bool, 64), disconnected: make(chan relay.Disconnect, 64),
 		reconnected: make(chan relay.Welcome, 64), custom: make(chan relay.Frame, 64), conns: make(chan net.Conn, 64),
 		youAreHost: make(chan relay.YouAreHost, 64), youAreMember: make(chan uint64, 64), hostChanging: make(chan uint64, 64),
-		hostChanged: make(chan relay.HostEvent, 64), hostResumed: make(chan relay.HostEvent, 64), rejected: make(chan relay.Rejected, 64)}
+		hostChanged: make(chan relay.HostEvent, 64), hostResumed: make(chan relay.HostEvent, 64), rejected: make(chan relay.Rejected, 64),
+		presence: make(chan relay.MemberPresence, 64)}
 	httpClient := &http.Client{Transport: countJoins{p.joins, http.DefaultTransport}}
 	p.lobby = relay.NewLobby(peer.LobbyURL, relay.StaticGameToken(peer.IssueGameToken(account, game)), httpClient)
 	opts.Game = game
@@ -97,6 +99,7 @@ func newPlayer(t *testing.T, peer *testPeer, account string, opts relay.Options)
 	p.client.OnHostChanged(func(e relay.HostEvent) { p.hostChanged <- e })
 	p.client.OnHostResumed(func(e relay.HostEvent) { p.hostResumed <- e })
 	p.client.OnRejected(func(r relay.Rejected) { p.rejected <- r })
+	p.client.OnMemberPresence(func(m relay.MemberPresence) { p.presence <- m })
 	t.Cleanup(func() {
 		_ = p.client.Close()
 		select {

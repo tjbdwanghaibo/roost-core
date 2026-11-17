@@ -134,27 +134,35 @@ func (r RelayReason) String() string {
 	return fmt.Sprintf("reason_%d", byte(r))
 }
 
-// RelayWelcome 是 RelayOpWelcome 的载荷：[角色 1 字节：1 房主、2 成员][房主槽位 4 字节大端]。
+// RelayWelcome 是 RelayOpWelcome 的载荷：[角色 1 字节：1 房主、2 成员][房主槽位 4 字节大端][epoch 8 字节大端]，固定 13 字节。
+// Epoch 是 relay 此刻的 host_epoch：选人阶段进房的连接房主槽位为 0、Epoch 是新的那一轮（与 HostChanging 的约定相同），
+// 所以后进房、重连回来的客户端不用等到下一次换 host 就知道房间的 epoch。
 type RelayWelcome struct {
 	Host     bool
 	HostSlot uint32
+	Epoch    uint64
 }
 
+// relayWelcomeSize 是 Welcome 载荷的固定长度。
+const relayWelcomeSize = 13
+
 func EncodeRelayWelcome(welcome RelayWelcome) []byte {
-	payload := make([]byte, 5)
+	payload := make([]byte, relayWelcomeSize)
 	payload[0] = 2
 	if welcome.Host {
 		payload[0] = 1
 	}
 	binary.BigEndian.PutUint32(payload[1:], welcome.HostSlot)
+	binary.BigEndian.PutUint64(payload[5:], welcome.Epoch)
 	return payload
 }
 
 func DecodeRelayWelcome(payload []byte) (RelayWelcome, error) {
-	if len(payload) != 5 || (payload[0] != 1 && payload[0] != 2) {
+	if len(payload) != relayWelcomeSize || (payload[0] != 1 && payload[0] != 2) {
 		return RelayWelcome{}, fmt.Errorf("%w: relay welcome", ErrInvalidPacket)
 	}
-	return RelayWelcome{Host: payload[0] == 1, HostSlot: binary.BigEndian.Uint32(payload[1:])}, nil
+	return RelayWelcome{Host: payload[0] == 1, HostSlot: binary.BigEndian.Uint32(payload[1:]),
+		Epoch: binary.BigEndian.Uint64(payload[5:])}, nil
 }
 
 // RelayMember 是 RelayOpMemberJoined / RelayOpMemberLeft 的载荷：[原因 1 字节][账号 UTF-8]。
@@ -193,6 +201,9 @@ const (
 	RelayOpHostResumed uint32 = 68
 	// RelayOpRejected：relay → 房主，它发的快照或转交被拒（连接保留）。Seq=0；载荷见 RelayRejected。
 	RelayOpRejected uint32 = 69
+	// RelayOpMemberPresence：relay → 当前房主，转来某个成员上报的前台 / 后台状态（RelayOpPresence）。
+	// Seq=该成员的槽位；载荷同 RelayOpPresence（1 字节：1 前台、0 后台）。房主据此排候选顺序（successors）。
+	RelayOpMemberPresence uint32 = 70
 
 	// RelayOpTransfer：房主 → relay，主动把房主转交给槽位 Seq 上的在线成员。载荷是交接数据（不透明，
 	// 不超过 snapshot_max_bytes），relay 原样放进新房主的 RelayOpYouAreHost。
@@ -207,7 +218,26 @@ const (
 	RelayOpSnapshot uint32 = 83
 	// RelayOpHostReady：新房主候选 → relay，已接手。Seq=0；载荷 [epoch 8B]，必须等于 RelayOpYouAreHost 里的 epoch。
 	RelayOpHostReady uint32 = 84
+	// RelayOpPresence：任何成员 → relay，上报自己在前台还是后台。Seq=0；载荷 1 字节：1 前台、0 后台，别的长度或取值
+	// 按协议错误断开。relay 只检查格式，把它改写成 RelayOpMemberPresence 转给当前房主；没有已就绪的房主（宽限期、
+	// 选人阶段）或发送者就是房主时丢弃。计入每连接帧率限额。成员可以谎报：它只影响房主排的候选顺序。
+	RelayOpPresence uint32 = 85
 )
+
+// EncodeRelayPresence / DecodeRelayPresence 是 RelayOpPresence 与 RelayOpMemberPresence 的载荷：1 字节，1 前台、0 后台。
+func EncodeRelayPresence(foreground bool) []byte {
+	if foreground {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
+func DecodeRelayPresence(payload []byte) (bool, error) {
+	if len(payload) != 1 || payload[0] > 1 {
+		return false, fmt.Errorf("%w: relay presence", ErrInvalidPacket)
+	}
+	return payload[0] == 1, nil
+}
 
 // RelayMaxSuccessors 是 RelayOpSuccessors 里槽位的个数上限。
 const RelayMaxSuccessors = 256
@@ -323,7 +353,9 @@ func DecodeRelayYouAreHost(payload []byte) (RelayYouAreHost, error) {
 }
 
 // RelaySnapshot 是 RelayOpSnapshot 的载荷：[seq 8B][快照字节]。seq 在房间内必须递增（跨房主：新房主从
-// RelayYouAreHost.SnapshotSeq 往上接）；快照字节由房主客户端压缩，relay 不压缩、不解压、不解析。
+// RelayYouAreHost.SnapshotSeq 往上接）；快照字节由房主客户端压缩，relay 不压缩、不解压、不解析。三份 SDK 之间另有约定：
+// 非空的快照字节（与交接数据）以 1 字节压缩方式标识开头（0 不压缩、1 原始 deflate，见 docs/framework/RELAY.md §2.3），
+// relay 不看它。
 type RelaySnapshot struct {
 	Seq  uint64
 	Data []byte

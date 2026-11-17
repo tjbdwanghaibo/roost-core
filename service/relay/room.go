@@ -93,7 +93,7 @@ func newRoom(s *Server, claims token.Claims, host *conn, now time.Time) *room {
 		muted: map[string]bool{}, kicked: map[string]bool{}, aloneSince: now}
 	host.slot = firstSlot
 	host.setIdleLimit(s.config.HostIdleTimeout)
-	host.enqueueControl(wire.RelayOpWelcome, firstSlot, wire.EncodeRelayWelcome(wire.RelayWelcome{Host: true, HostSlot: firstSlot}))
+	host.enqueueControl(wire.RelayOpWelcome, firstSlot, wire.EncodeRelayWelcome(wire.RelayWelcome{Host: true, HostSlot: firstSlot, Epoch: r.epoch}))
 	r.opened = r.reportLocked(EventHeartbeat)
 	return r
 }
@@ -205,13 +205,14 @@ func (r *room) joinedLocked(c *conn, now time.Time, eff *effects) {
 	eff.report(report)
 }
 
-// welcomeLocked 告诉刚进房的连接它的槽位与角色、当前房主的槽位（选人阶段为 0）；被禁言的账号再告诉它一次禁言状态。
+// welcomeLocked 告诉刚进房的连接它的槽位与角色、当前房主的槽位（选人阶段为 0）与此刻的 epoch（选人阶段是已经加过 1 的
+// 新一轮，与 host_changing 相同）；被禁言的账号再告诉它一次禁言状态。
 func (r *room) welcomeLocked(c *conn) {
 	hostSlot := r.hostSlot
 	if r.phase == phaseMigrating {
 		hostSlot = 0
 	}
-	c.enqueueControl(wire.RelayOpWelcome, c.slot, wire.EncodeRelayWelcome(wire.RelayWelcome{Host: c == r.host, HostSlot: hostSlot}))
+	c.enqueueControl(wire.RelayOpWelcome, c.slot, wire.EncodeRelayWelcome(wire.RelayWelcome{Host: c == r.host, HostSlot: hostSlot, Epoch: r.epoch}))
 	if r.muted[c.account] {
 		c.enqueueControl(wire.RelayOpMuted, c.slot, []byte{1})
 	}
@@ -643,6 +644,18 @@ func (r *room) mute(from *conn, slot uint32, on bool) {
 		flag = 1
 	}
 	target.enqueueControl(wire.RelayOpMuted, slot, []byte{flag})
+}
+
+// presence 是成员的前台上报（RelayOpPresence，格式已在 conn.control 检查过）：改写成 MemberPresence{发送者槽位} 只转给
+// 当前已就绪的房主。宽限期与选人阶段没有房主，房主自己发的也没有收件人：都丢弃，relay 不记。新房主就绪后由成员的 SDK
+// 在收到 host_changed 时重发（relay 不替它补）。
+func (r *room) presence(from *conn, payload []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.members[from.slot] != from || r.phase != phaseStable || from == r.host {
+		return
+	}
+	r.host.enqueueControl(wire.RelayOpMemberPresence, from.slot, payload)
 }
 
 // scheduleLocked 排一个房间计时器（同一时刻只有一个：宽限期或 host_ready 期限）。fire 在计时器 goroutine 上调用，

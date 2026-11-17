@@ -350,6 +350,87 @@ func TestReconnectRetriesWhenTheLobbyIsDownAndStopsWhenItRejects(t *testing.T) {
 }
 
 // waitPong 发一个 Ping 并等它的 Pong：同一连接按序，之前发出的控制帧都已被 relay 处理。
+// Welcome 带 epoch：换过 host 之后才进房的人、离线期间换了 host 又回来的人（Rejoin），Role().Epoch 都是房间此刻的
+// epoch，不必等下一次换 host。
+func TestLateJoinerAndRejoinSeeTheRoomEpoch(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{})
+	host, members, roomID := openRoom(t, peer, "epoch", relay.Options{}, []relay.Options{{}, {}})
+	a, b := members[0], members[1]
+	_ = a.lastConn().Close() // a 掉线（不自动重连），座位还在
+	recv(t, a.disconnected, "a disconnected")
+	recv(t, host.left, "a left")
+
+	if err := host.client.Transfer(3, nil); err != nil {
+		t.Fatal(err)
+	}
+	offer := recv(t, b.youAreHost, "you are host")
+	if err := b.client.HostReady(offer.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, host.hostChanged, "old host sees host changed")
+
+	late := newPlayer(t, peer, "epoch-late", relay.Options{})
+	if w := late.join(roomID, ""); w != (relay.Welcome{Slot: 4, HostSlot: 3, Epoch: 1}) {
+		t.Fatalf("late welcome %+v", w)
+	}
+	mustRole(t, late, relay.Role{Slot: 4, HostSlot: 3, Epoch: 1})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := a.client.Rejoin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustRole(t, a, relay.Role{Slot: 2, HostSlot: 3, Epoch: 1})
+}
+
+// 前台上报：成员 SetForeground 经 relay 只到房主（OnMemberPresence 的槽位是成员的）；换 host 后每个设过状态的人
+// （含降为成员的旧房主）收到 HostChanged 自动重发一次，新房主拿到全部；成员自动重连成功后也重发。
+func TestPresenceIsResentAfterHostChangedAndReconnect(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{})
+	reconnect := relay.ReconnectPolicy{MaxAttempts: 5, MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond}
+	host, members, _ := openRoom(t, peer, "presence", relay.Options{}, []relay.Options{{}, {Reconnect: reconnect}})
+	a, b := members[0], members[1]
+	for _, step := range []struct {
+		p          *player
+		foreground bool
+	}{{host, true}, {a, false}, {b, true}} {
+		if err := step.p.client.SetForeground(step.foreground); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[uint32]bool{}
+	for range 2 {
+		m := recv(t, host.presence, "member presence at the host")
+		got[m.Slot] = m.Foreground
+	}
+	if len(got) != 2 || got[2] || !got[3] {
+		t.Fatalf("presence at the first host %v", got)
+	}
+	none(t, a.presence, "presence at a member")
+
+	if err := host.client.Transfer(2, nil); err != nil {
+		t.Fatal(err)
+	}
+	offer := recv(t, a.youAreHost, "you are host")
+	if err := a.client.HostReady(offer.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	got = map[uint32]bool{}
+	for range 2 {
+		m := recv(t, a.presence, "presence re-sent to the new host")
+		got[m.Slot] = m.Foreground
+	}
+	if len(got) != 2 || !got[1] || !got[3] {
+		t.Fatalf("presence at the new host %v", got)
+	}
+
+	_ = b.lastConn().Close()
+	recv(t, b.reconnected, "b reconnected")
+	if m := recv(t, a.presence, "presence after b reconnected"); m != (relay.MemberPresence{Slot: 3, Foreground: true}) {
+		t.Fatalf("presence after reconnect %+v", m)
+	}
+}
+
 func waitPong(t *testing.T, p *player) {
 	t.Helper()
 	got := make(chan struct{}, 1)
@@ -445,4 +526,39 @@ func TestReconnectAfterTheRoomStartedAndKickingAnOfflineSeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustFrame(t, recv(t, host.game, "a frame after the kick"), wire.RelayGame, 2, 7, "still in")
+}
+
+// ---- client/relay/README.md“接入自己的 zstd / LZ4”的示例代码：原样放在这里编一遍（SDK 不引第三方库，zstdCodec 是接口桩）。----
+
+// zstdCodec 代表游戏自带的 zstd 库（例如 klauspost/compress/zstd 的 Encoder 与 Decoder）；SDK 不带它。
+type zstdCodec interface {
+	EncodeAll(src, dst []byte) []byte
+	DecodeAll(src, dst []byte) ([]byte, error)
+}
+
+// zstdCompressor 把它接成 relay.Compressor。ID 取 2：0、1 归内置的 NoCompression 与 Deflate，LZ4 照样接、取 3。
+type zstdCompressor struct{ codec zstdCodec }
+
+func (zstdCompressor) ID() byte { return 2 }
+
+func (z zstdCompressor) Compress(data []byte) ([]byte, error) {
+	return z.codec.EncodeAll(data, nil), nil
+}
+
+// Decompress 要守住解压上限（防解压炸弹）：库自己能限就在库里限（klauspost 的 zstd.WithDecoderMaxMemory），这里再核一次。
+func (z zstdCompressor) Decompress(data []byte, limit int) ([]byte, error) {
+	out, err := z.codec.DecodeAll(data, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > limit {
+		return nil, fmt.Errorf("zstd: state exceeds %d bytes", limit)
+	}
+	return out, nil
+}
+
+// README 示例的最后一步（只编译，不连对端）：房间里每个客户端都配上同一个 Compressor（内置的 Deflate、NoCompression
+// 谁都解得开，游戏自带的要都配上，否则新房主拿到 relay.ErrUnknownCompression）。
+func newZstdClient(lobby *relay.Lobby, codec zstdCodec) *relay.Client {
+	return relay.NewClient(lobby, relay.Options{Game: "party", Compressor: zstdCompressor{codec}})
 }

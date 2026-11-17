@@ -24,6 +24,7 @@ import {
   type HostChange,
   type HostTakeover,
   type Member,
+  type MemberPresence,
   type RelayClientOptions,
   type RelayFrame,
   type Welcome,
@@ -87,6 +88,7 @@ class Player {
   readonly hostChanging = new Events<bigint>();
   readonly hostChanged = new Events<HostChange>();
   readonly hostResumed = new Events<{ epoch: bigint; slot: number }>();
+  readonly presence = new Events<MemberPresence>();
   readonly sockets: WebSocket[] = [];
   joins = 0;
   readonly lobby: LobbyClient;
@@ -119,6 +121,7 @@ class Player {
     this.client.onHostChanging(this.hostChanging.push);
     this.client.onHostChanged(this.hostChanged.push);
     this.client.onHostResumed(this.hostResumed.push);
+    this.client.onMemberPresence(this.presence.push);
     players.push(this);
   }
 
@@ -178,7 +181,7 @@ test("room lifecycle over WebSocket against the real relay and lobby", async () 
   assert.equal(ticket.relayAddr, peer.relayWs);
   assert.deepEqual(ticket.room.attrs, { map: "a" });
   const hostWelcome = await host.client.connect(ticket);
-  assert.deepEqual(hostWelcome, { slot: 1, host: true, hostSlot: 1 });
+  assert.deepEqual(hostWelcome, { slot: 1, host: true, hostSlot: 1, epoch: 0n });
   await until("room listed", async () => {
     const rooms = await host.lobby.listRooms(GAME, "duel");
     return rooms.length === 1 && rooms[0].id === ticket.room.id;
@@ -187,7 +190,7 @@ test("room lifecycle over WebSocket against the real relay and lobby", async () 
   const m1 = await Player.create("ts-m1", { password: "pw" });
   const m2 = await Player.create("ts-m2", { password: "pw" });
   assert.equal((await rejects(m1.lobby.joinRoom(ticket.room.id, { game: GAME, password: "bad" }), LobbyError)).code, "wrong_password");
-  assert.deepEqual(await m1.join(ticket.room.id, "pw"), { slot: 2, host: false, hostSlot: 1 });
+  assert.deepEqual(await m1.join(ticket.room.id, "pw"), { slot: 2, host: false, hostSlot: 1, epoch: 0n });
   assert.equal((await m2.join(ticket.room.id, "pw")).slot, 3);
   assert.deepEqual(await host.joined.next("m1 joined"), { slot: 2, account: "ts-m1", reason: RelayReason.None });
   assert.deepEqual(await host.joined.next("m2 joined"), { slot: 3, account: "ts-m2", reason: RelayReason.None });
@@ -268,7 +271,7 @@ test("reconnect asks the lobby for a fresh token and resumes", async () => {
   const lost = await member.disconnected.next("disconnect");
   assert.deepEqual([lost.reason, lost.reconnecting], [RelayReason.Disconnected, true]);
   const back = await member.reconnected.next("reconnected");
-  assert.deepEqual(back, { slot: first.slot, host: false, hostSlot: 1 });
+  assert.deepEqual(back, { slot: first.slot, host: false, hostSlot: 1, epoch: 0n });
   assert.equal(member.joins - joinsBefore, 1, "one lobby join per reconnect (a fresh relay token)");
   await until("host sees the member again", () => host.joined.drain().some((m) => m.account === "ts-member-r"));
   member.client.sendGame(ALL, 1, text("back"));
@@ -340,6 +343,51 @@ test("transfer: handoff data reaches the chosen member, everyone sees HostChange
   assertFrame(await host.game.next("new host → old host"), RelayChannel.Game, 3, 13, "from-new-host");
   await until("lobby sees the new host", async () => (await m2.lobby.listRooms(GAME, "ts-xfer"))[0]?.host === "ts-xfer-m2");
   assert.equal((await m2.lobby.setRoomState(roomId, { game: GAME, state: "started" })).state, "started", "the new host may change the room");
+  for (const p of [host, m1, m2]) p.client.close();
+});
+
+test("the Welcome carries the room's epoch: a member who joins after a transfer, and one who rejoins, see it", async () => {
+  const { host, roomId, others } = await room("ts-epoch", "ts-epoch-m1", "ts-epoch-m2");
+  const [m1, m2] = others;
+  m1.sockets[0].terminate(); // m1 掉线（不自动重连），座位还在
+  await m1.disconnected.next("m1 dropped");
+  await host.left.next("m1 left");
+  assert.ok(await host.client.transfer(3));
+  await m2.youAreHost.next("m2 chosen");
+  for (const p of [host, m2]) await p.hostChanged.next(`${p.account} host changed`);
+  const late = await Player.create("ts-epoch-late");
+  assert.deepEqual(await late.join(roomId), { slot: 4, host: false, hostSlot: 3, epoch: 1n });
+  assert.equal(late.client.epoch, 1n);
+  const back = await m1.client.rejoin();
+  assert.deepEqual([back.epoch, m1.client.epoch, back.hostSlot], [1n, 1n, 3]);
+  for (const p of [host, m1, m2, late]) p.client.close();
+});
+
+test("presence: members' foreground state reaches only the host, and is re-sent to a new host after HostChanged and after a reconnect", async () => {
+  const host = await Player.create("ts-presence-host");
+  const ticket = await host.lobby.createRoom({ game: GAME, mode: "ts-presence" });
+  await host.client.connect(ticket);
+  const m1 = await Player.create("ts-presence-m1");
+  await m1.join(ticket.room.id);
+  await host.joined.next("m1 joined");
+  const m2 = await Player.create("ts-presence-m2", { reconnect: { maxAttempts: 5, minBackoffMs: 20, maxBackoffMs: 100 } });
+  await m2.join(ticket.room.id);
+  await host.joined.next("m2 joined");
+  host.client.setForeground(true);
+  m1.client.setForeground(false);
+  m2.client.setForeground(true);
+  const first = [await host.presence.next("presence 1"), await host.presence.next("presence 2")].sort((a, b) => a.slot - b.slot);
+  assert.deepEqual(first, [{ slot: 2, foreground: false }, { slot: 3, foreground: true }]);
+  assert.ok(m1.presence.empty && m2.presence.empty, "members do not see each other's presence");
+
+  assert.ok(await host.client.transfer(2));
+  await m1.youAreHost.next("m1 chosen");
+  const resent = [await m1.presence.next("re-sent 1"), await m1.presence.next("re-sent 2")].sort((a, b) => a.slot - b.slot);
+  assert.deepEqual(resent, [{ slot: 1, foreground: true }, { slot: 3, foreground: true }], "the old host and m2 re-send after HostChanged");
+
+  m2.sockets[0].terminate();
+  await m2.reconnected.next("m2 back");
+  assert.deepEqual(await m1.presence.next("after m2 reconnected"), { slot: 3, foreground: true });
   for (const p of [host, m1, m2]) p.client.close();
 });
 
@@ -440,7 +488,7 @@ test("refresh within host_grace: the same account is still host, members get Hos
 
   const after = await makePage(); // 刷新后的同一个标签页
   const welcome = await after.webHost.resume();
-  assert.deepEqual(welcome, { slot: 1, host: true, hostSlot: 1 }, "still the host within host_grace");
+  assert.deepEqual(welcome, { slot: 1, host: true, hostSlot: 1, epoch: 0n }, "still the host within host_grace");
   assert.deepEqual(after.rules.restored, ["new|2:move"], "state restored from sessionStorage");
   const resumed = await m1.hostResumed.next("host resumed");
   assert.deepEqual([resumed.epoch, resumed.slot], [0n, 1]);
@@ -499,7 +547,7 @@ test("after the start: a dropped member auto-reconnects to its seat; the host ki
   // 开局后掉线：席位保留（满员也放行），自动重连回到原座
   m1.sockets.at(-1)!.terminate();
   assert.equal((await m1.disconnected.next("m1 dropped")).reconnecting, true);
-  assert.deepEqual(await m1.reconnected.next("m1 back"), { slot: w1.slot, host: false, hostSlot: 1 });
+  assert.deepEqual(await m1.reconnected.next("m1 back"), { slot: w1.slot, host: false, hostSlot: 1, epoch: 0n });
   m1.client.sendGame(ALL, 1, text("back-after-start"));
   assertFrame(await host.game.next("m1 after reconnect"), RelayChannel.Game, w1.slot, 1, "back-after-start");
 
@@ -626,7 +674,7 @@ test("transfer between WebHost pages that also register client callbacks: the ne
   b.webHost.close();
   const b2 = await webPage("ts-wh-b", storageB);
   const back = await b2.webHost.resume();
-  assert.deepEqual(back, { slot: 2, host: true, hostSlot: 2 });
+  assert.deepEqual(back, { slot: 2, host: true, hostSlot: 2, epoch: 1n });
   assert.ok(b2.rules.restored[0]! > 0, "refreshed B restored the stored tick");
   const atResume = b2.ticks.length;
   await until("refreshed B steps again", () => b2.ticks.length > atResume + 5);

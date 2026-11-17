@@ -13,21 +13,24 @@ import {
   decodeEpoch,
   decodeHostChanged,
   decodeMember,
+  decodePresence,
   decodeRejected,
   decodeWelcome,
   decodeYouAreHost,
   encodeEpoch,
   encodeFrame,
+  encodePresence,
   encodeSnapshot,
   encodeSuccessors,
   encodeToken,
   type Member,
+  type MemberPresence,
   type Rejected,
   type RelayFrame,
   type Welcome,
   type YouAreHost,
 } from "./codec.js";
-import { MAX_STATE_BYTES, defaultCompressor, type Compressor } from "./compress.js";
+import { MAX_STATE_BYTES, defaultCompressor, packState, unpackState, type Compressor } from "./compress.js";
 import type { LobbyClient } from "./lobby.js";
 import { LobbyError } from "./lobby.js";
 
@@ -72,7 +75,10 @@ export interface RelayClientOptions {
   snapshotMaxBytes?: number;
   /** 当房主（含等 HostReady 的候选）时的心跳间隔，缺省 600ms：relay 的 host_idle_timeout 缺省 2s，取三分之一不到。 */
   hostPingIntervalMs?: number;
-  /** 快照与交接数据的压缩，缺省 defaultCompressor()（raw deflate）。同一个房间里的客户端要用同一种。 */
+  /**
+   * 快照与交接数据的压缩，缺省 defaultCompressor()（raw deflate）。状态字节带压缩方式标识（Compressor.id）：内置的
+   * 不压缩与 raw deflate 谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上。
+   */
   compressor?: Compressor;
   /** 当房主时定时推快照：take 返回当前状态（压缩前），每 intervalMs（缺省 3s，0 只手动推）推一次。 */
   snapshot?: SnapshotOptions;
@@ -140,8 +146,17 @@ export interface Disconnect {
  */
 export const internalHooks = Symbol("roost.relay.internalHooks");
 
+/**
+ * WebHost 自动排候选顺序用的内部入口（不从 index 导出）：和 setSuccessors 一样发 Successors，但不算“游戏显式声明过”，
+ * 所以之后游戏自己调 setSuccessors 时以游戏为准。
+ */
+export const internalSuccessors = Symbol("roost.relay.internalSuccessors");
+
 export interface InternalHooks {
   game?: (frame: RelayFrame) => void;
+  memberJoined?: (member: Member) => void;
+  memberLeft?: (member: Member) => void;
+  memberPresence?: (presence: MemberPresence) => void;
   youAreHost?: (takeover: HostTakeover) => void | Promise<void>;
   youAreMember?: (epoch: bigint) => void;
   hostChanged?: (change: HostChange) => void;
@@ -183,7 +198,7 @@ class Session {
   onFrame: (frame: RelayFrame) => void = () => {};
   /** 结束时调用一次（onclose，或本地 abort）。 */
   onEnd: (reason: RelayReason, error?: Error) => void = () => {};
-  welcome: Welcome = { slot: 0, host: false, hostSlot: 0 };
+  welcome: Welcome = { slot: 0, host: false, hostSlot: 0, epoch: 0n };
   /** Welcome 之后、attach 之前到达的帧（同一条消息或紧接着的消息），attach 时按序处理。 */
   pending: RelayFrame[] = [];
   earlyEnd: { reason: RelayReason; error?: Error } | undefined;
@@ -251,12 +266,14 @@ const builtinControl: Record<number, (client: RelayClient, frame: RelayFrame, se
   [RelayOp.MemberJoined]: (client, frame) => {
     const member = decodeMember(frame.slot, frame.payload);
     client["online"].set(member.slot, member.account);
+    client["hooks"].memberJoined?.(member);
     client["handlers"].memberJoined?.(member);
     return RelayReason.None;
   },
   [RelayOp.MemberLeft]: (client, frame) => {
     const member = decodeMember(frame.slot, frame.payload);
     client["online"].delete(member.slot);
+    client["hooks"].memberLeft?.(member);
     client["handlers"].memberLeft?.(member);
     return RelayReason.None;
   },
@@ -289,6 +306,12 @@ const builtinControl: Record<number, (client: RelayClient, frame: RelayFrame, se
     client["changing"] = false;
     client["role"] = { ...client["role"], hostSlot: frame.slot };
     client["handlers"].hostResumed?.({ epoch, slot: frame.slot });
+    return RelayReason.None;
+  },
+  [RelayOp.MemberPresence]: (client, frame) => {
+    const presence: MemberPresence = { slot: frame.slot, foreground: decodePresence(frame.payload) };
+    client["hooks"].memberPresence?.(presence);
+    client["handlers"].memberPresence?.(presence);
     return RelayReason.None;
   },
   [RelayOp.Rejected]: (client, frame) => {
@@ -343,13 +366,14 @@ export class RelayClient {
     hostResumed?: Handler<{ epoch: bigint; slot: number }>;
     rejected?: Handler<Rejected>;
     snapshotSent?: Handler<SentSnapshot>;
+    memberPresence?: Handler<MemberPresence>;
     control: Map<number, (frame: RelayFrame) => void>;
   } = { control: new Map() };
   private closed = false;
   private running = false;
   private current: Session | undefined;
   private roomId = "";
-  private role: Welcome = { slot: 0, host: false, hostSlot: 0 };
+  private role: Welcome = { slot: 0, host: false, hostSlot: 0, epoch: 0n };
   /** 换 host 的角色：Welcome 定初值，YouAreHost / HostChanged / YouAreMember 改它。 */
   private stage: HostRole = "member";
   private epochValue = 0n;
@@ -360,6 +384,10 @@ export class RelayClient {
   /** 最近一份快照发出的时刻；当上房主时清零（relay 换了房主重新算最小间隔）。 */
   private lastSnapshotAt: number | undefined;
   private successorList: number[] = [];
+  /** 游戏自己调过 setSuccessors（换 host 后清零）：WebHost 的自动排序不覆盖它。 */
+  private declaredByGame = false;
+  /** setForeground 记下的前台状态；undefined 表示没设过（不发）。换 host、重连后重发。 */
+  private foreground: boolean | undefined;
   /** 当房主时在线的成员（槽位 → 账号），来自 YouAreHost 的名单与 MemberJoined / MemberLeft。 */
   private readonly online = new Map<number, string>();
   private snapshotTimer: ReturnType<typeof setInterval> | undefined;
@@ -465,6 +493,13 @@ export class RelayClient {
   onSnapshotSent(fn: Handler<SentSnapshot>): void {
     this.handlers.snapshotSent = fn;
   }
+  /**
+   * 成员上报了前台 / 后台（MemberPresence，只有房主收到；换 host 后新房主收到各成员重发的状态）。WebHost 据此自动排
+   * 候选顺序（游戏没有显式 setSuccessors 时）；直接用 RelayClient 的游戏自己决定怎么用。
+   */
+  onMemberPresence(fn: Handler<MemberPresence>): void {
+    this.handlers.memberPresence = fn;
+  }
 
   /**
    * 控制帧的扩展口：relay 发来的这个操作码的每一帧都交给 fn（内置处理过的操作码先做内置处理）。fn 为 undefined 时撤销。
@@ -490,7 +525,7 @@ export class RelayClient {
   get hostRole(): HostRole {
     return this.stage;
   }
-  /** 最近一次见到的 host_epoch（YouAreHost / HostChanged / HostChanging / HostResumed / YouAreMember 里的）。 */
+  /** 最近一次见到的 host_epoch（Welcome / YouAreHost / HostChanged / HostResumed / YouAreMember 里的）；进房时就是房间此刻的值。 */
   get epoch(): bigint {
     return this.epochValue;
   }
@@ -502,9 +537,13 @@ export class RelayClient {
   get snapshotSeq(): bigint {
     return this.seq;
   }
-  /** 最近一次 setSuccessors 声明的候选顺序。 */
+  /** 最近一次声明的候选顺序（游戏的 setSuccessors，或 WebHost 自动排的）。 */
   get successors(): readonly number[] {
     return this.successorList;
+  }
+  /** 游戏自己调过 setSuccessors（换 host 后清零）。WebHost 只在它为 false 时自动按前台状态排候选顺序。 */
+  get successorsDeclared(): boolean {
+    return this.declaredByGame;
   }
   /** 当房主时在线的成员（槽位 → 账号）；不是房主时为空。 */
   get onlineMembers(): ReadonlyMap<number, string> {
@@ -586,17 +625,36 @@ export class RelayClient {
    */
   async transfer(slot: number, handoff: Uint8Array = new Uint8Array(0)): Promise<boolean> {
     this.requireHost("transfer");
-    const data = handoff.length > 0 ? await this.compressor.compress(handoff) : handoff;
+    const data = await packState(this.compressor, handoff); // 空的交接数据不带压缩方式标识
     this.checkStateSize(data.length);
     if (!this.role.host) return false; // 压缩期间已不是房主
     return this.sendBig(RelayOp.Transfer, slot, data);
   }
 
-  /** 声明候选顺序（只有房主能发，至多 256 个）。relay 只记最新一份；换 host 之后清空，由新房主重新声明。 */
+  /**
+   * 声明候选顺序（只有房主能发，至多 256 个）。relay 只记最新一份；换 host 之后清空，由新房主重新声明。游戏声明过之后
+   * WebHost 不再自动排（successorsDeclared）。
+   */
   setSuccessors(slots: readonly number[]): boolean {
+    this.declaredByGame = true;
+    return this[internalSuccessors](slots);
+  }
+
+  /** WebHost 的自动排序：同 setSuccessors，但不算游戏声明过。 */
+  [internalSuccessors](slots: readonly number[]): boolean {
     this.requireHost("set successors");
     this.successorList = [...slots];
     return this.sendControl(RelayOp.Successors, 0, encodeSuccessors(slots));
+  }
+
+  /**
+   * 告诉当前房主自己在前台（true）还是后台（false）：发 Presence，relay 转给房主（房主自己发的被丢弃）。状态记在 SDK 里，
+   * 之后每次收到 HostChanged、每次连上（含自动重连、rejoin）都自动重发，新房主不用问；从没调过时 SDK 不发。
+   * 没有连接时返回 false（状态仍记下，连上时发出）。WebHost 在 visibilitychange 上自动调它。
+   */
+  setForeground(foreground: boolean): boolean {
+    this.foreground = foreground;
+    return this.sendControl(RelayOp.Presence, 0, encodePresence(foreground));
   }
 
   /**
@@ -609,7 +667,7 @@ export class RelayClient {
     this.restartSnapshotTimer();
     const state = data ?? (await this.opts.snapshot?.take());
     if (state === undefined) return undefined;
-    const compressed = await this.compressor.compress(state);
+    const compressed = await packState(this.compressor, state);
     this.checkStateSize(compressed.length);
     if (!this.role.host || !this.current) return undefined;
     const t = now();
@@ -693,9 +751,10 @@ export class RelayClient {
     return Math.max(this.opts.maxPayloadBytes, this.opts.snapshotMaxBytes + 64 * 1024);
   }
 
-  /** 进房（含重连）：角色以这条连接的 Welcome 为准。 */
+  /** 进房（含重连）：角色与 epoch 以这条连接的 Welcome 为准。 */
   private welcomed(welcome: Welcome): void {
     this.role = welcome;
+    this.epochValue = welcome.epoch;
     this.stage = welcome.host ? "host" : "member";
     if (welcome.host) this.lastSnapshotAt = undefined;
     this.changing = !welcome.host && welcome.hostSlot === 0; // 正在选新房主
@@ -727,7 +786,7 @@ export class RelayClient {
       const takeover: HostTakeover = { ...info, state: null, rawState: info.state };
       if (info.source !== StateSource.None) {
         try {
-          takeover.state = info.state.length > 0 ? await this.compressor.decompress(info.state, MAX_STATE_BYTES) : info.state;
+          takeover.state = await unpackState(this.compressor, info.state, MAX_STATE_BYTES);
         } catch (error) {
           takeover.stateError = error as Error;
         }
@@ -747,6 +806,7 @@ export class RelayClient {
     this.epochValue = change.epoch;
     this.changing = false;
     this.successorList = []; // relay 换 host 后清空候选顺序，由新房主重新声明
+    this.declaredByGame = false;
     if (change.self) {
       this.stage = "host";
       this.lastSnapshotAt = undefined;
@@ -756,8 +816,14 @@ export class RelayClient {
       this.role = { ...this.role, hostSlot: change.slot };
       if (this.stage !== "member") this.becomeMember();
     }
+    this.resendPresence(); // 新房主不知道之前的上报：设过状态的人各自再报一次
     this.hooks.hostChanged?.(change);
     this.handlers.hostChanged?.(change);
+  }
+
+  /** 重发 setForeground 记下的状态；没设过就不发。 */
+  private resendPresence(): void {
+    if (this.foreground !== undefined) this.sendControl(RelayOp.Presence, 0, encodePresence(this.foreground));
   }
 
   /** 定时快照只在“有连接、是房主、配了 take 且间隔大于 0”时开着。 */
@@ -825,6 +891,7 @@ export class RelayClient {
     // 检查间隔取房主心跳的一半：当上房主后不用重开计时器。
     const tick = Math.max(1, Math.min(this.opts.pingIntervalMs, this.opts.readTimeoutMs / 4, this.opts.hostPingIntervalMs / 2));
     session.timer = session.ended ? undefined : setInterval(() => this.heartbeat(session), tick);
+    this.resendPresence(); // 连上之前（或上一轮连接里）设过的前台状态告诉房主
     for (const frame of pending) {
       this.dispatch(session, frame);
     }

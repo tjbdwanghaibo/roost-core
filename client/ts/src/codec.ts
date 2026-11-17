@@ -26,8 +26,8 @@ export enum RelayChannel {
 }
 
 /**
- * 控制帧操作码。1～15 由 relay 发出，16～31 由房主发出，32～ 任何一端；64～127 是换 host（docs/framework/RELAY.md §2.3）：
- * 64～79 由 relay 发出，80～95 由客户端发出。
+ * 控制帧操作码。1～15 由 relay 发出，16～31 由房主发出，32～ 任何一端；64～127 是换 host 与前台上报
+ * （docs/framework/RELAY.md §2.3）：64～79 由 relay 发出，80～95 由客户端发出。
  */
 export const RelayOp = {
   Welcome: 1,
@@ -51,6 +51,8 @@ export const RelayOp = {
   HostResumed: 68,
   /** relay → 发快照或转交的连接：被拒（连接保留）。载荷见 Rejected。 */
   Rejected: 69,
+  /** relay → 当前房主：成员上报的前台状态。seq 是成员槽位，载荷 1 字节：1 前台、0 后台。 */
+  MemberPresence: 70,
   /** 房主 → relay：转交给 seq 上的在线成员，载荷是交接数据。 */
   Transfer: 80,
   /** 任何人 → relay：离开房间，relay 回 Closed{left} 后断开。 */
@@ -61,6 +63,11 @@ export const RelayOp = {
   Snapshot: 83,
   /** 新房主候选 → relay：[epoch 8B]，等于 YouAreHost 里的 epoch。 */
   HostReady: 84,
+  /**
+   * 任何成员 → relay：自己在前台（1）还是后台（0），1 字节，别的长度或取值被 relay 当协议错误断开。relay 转给当前房主
+   * （MemberPresence）；没有已就绪的房主、或发送者就是房主时丢弃。
+   */
+  Presence: 85,
 } as const;
 
 /** Successors 里槽位个数的上限。 */
@@ -104,11 +111,12 @@ export interface RelayFrame {
   payload: Uint8Array;
 }
 
-/** Welcome：自己的槽位（帧的 seq）、是不是房主、房主槽位。 */
+/** Welcome：自己的槽位（帧的 seq）、是不是房主、房主槽位（选人阶段为 0）、房间此刻的 host_epoch。 */
 export interface Welcome {
   slot: number;
   host: boolean;
   hostSlot: number;
+  epoch: bigint;
 }
 
 /** 成员上下线（只有房主收到）。上线时 reason 是 None（新加入）或 Replaced（同一账号重连，槽位不变）。 */
@@ -116,6 +124,12 @@ export interface Member {
   slot: number;
   account: string;
   reason: RelayReason;
+}
+
+/** 房主收到的成员前台上报（MemberPresence）：slot 是成员槽位，foreground 为 false 表示后台。成员可以谎报，只作排候选顺序的参考。 */
+export interface MemberPresence {
+  slot: number;
+  foreground: boolean;
 }
 
 export class RelayProtocolError extends Error {
@@ -239,19 +253,35 @@ export class FrameReader {
   }
 }
 
-/** Welcome 载荷：[角色 1 字节：1 房主、2 成员][房主槽位 4 字节大端]。 */
+/**
+ * Welcome 载荷：[角色 1 字节：1 房主、2 成员][房主槽位 4 字节大端][epoch 8 字节大端]，固定 13 字节。选人阶段进房的连接
+ * 房主槽位为 0、epoch 是新的一轮。
+ */
 export function decodeWelcome(slot: number, payload: Uint8Array): Welcome {
-  if (payload.length !== 5 || (payload[0] !== 1 && payload[0] !== 2)) {
+  if (payload.length !== 13 || (payload[0] !== 1 && payload[0] !== 2)) {
     throw new RelayProtocolError("invalid welcome");
   }
-  return { slot, host: payload[0] === 1, hostSlot: new DataView(payload.buffer, payload.byteOffset).getUint32(1) };
+  const view = new DataView(payload.buffer, payload.byteOffset);
+  return { slot, host: payload[0] === 1, hostSlot: view.getUint32(1), epoch: view.getBigUint64(5) };
 }
 
 export function encodeWelcome(welcome: Welcome): Uint8Array {
-  const payload = new Uint8Array(5);
+  const payload = new Uint8Array(13);
   payload[0] = welcome.host ? 1 : 2;
-  new DataView(payload.buffer).setUint32(1, welcome.hostSlot);
+  const view = new DataView(payload.buffer);
+  view.setUint32(1, welcome.hostSlot);
+  view.setBigUint64(5, welcome.epoch);
   return payload;
+}
+
+/** Presence 与 MemberPresence 的载荷：1 字节，1 前台、0 后台。 */
+export function encodePresence(foreground: boolean): Uint8Array {
+  return Uint8Array.of(foreground ? 1 : 0);
+}
+
+export function decodePresence(payload: Uint8Array): boolean {
+  if (payload.length !== 1 || payload[0] > 1) throw new RelayProtocolError("invalid presence");
+  return payload[0] === 1;
 }
 
 /** MemberJoined / MemberLeft 载荷：[原因 1 字节][账号 UTF-8，至少 1 字节]。 */

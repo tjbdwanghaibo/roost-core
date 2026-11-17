@@ -1,13 +1,21 @@
 // 快照与交接数据的压缩（方案 FEATURE-2026-11-16-lobby-relay §4.6.3）：压缩在房主客户端做，relay 不压缩、不解压、
 // 不解析。缺省用浏览器自带的 CompressionStream('deflate-raw')，不加依赖；node 里没有它时退到 node:zlib 的 raw deflate，
-// 两边字节互通。压缩方式可以换：实现 Compressor（LZ4、zstd 由游戏自带库实现），同一个房间里所有客户端要用同一种。
+// 两边字节互通。压缩方式可以换：实现 Compressor（LZ4、zstd 由游戏自带库实现，接法见 client/ts/README.md）。
+//
+// 压缩方式标识（三份 SDK 之间的约定，docs/framework/RELAY.md §2.3）：非空的状态字节在线上是 [标识 1B][压缩后的字节]
+// （packState），收到时按标识选解压方式（unpackState）：自己的 Compressor，或内置的不压缩（0）、raw deflate（1）。
+// 标识不认识抛 UnknownCompressionError，房间里混用了游戏自带的压缩方式时据此给出明确的错误。
 
 /** YouAreHost 里状态解压后的上限（16 MiB，与 Go 的 MaxStateBytes 相同）：防解压炸弹。 */
 export const MAX_STATE_BYTES = 16 << 20;
 
-/** 压缩方式。同一个房间里的客户端要用同一种：新房主用它解开旧房主的交接数据或 relay 存的快照。 */
+/**
+ * 压缩方式。id 是 1 字节的压缩方式标识：0 与 1 归内置的不压缩与 raw deflate，游戏自带的用 2～255（README 的示例里 zstd
+ * 用 2、LZ4 用 3）。内置的两种谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上。
+ */
 export interface Compressor {
   readonly name: string;
+  readonly id: number;
   compress(data: Uint8Array): Promise<Uint8Array>;
   /** 解压；结果超过 limit 字节时抛错（不把整个炸弹解出来）。 */
   decompress(data: Uint8Array, limit: number): Promise<Uint8Array>;
@@ -17,9 +25,14 @@ function checkLimit(size: number, limit: number): void {
   if (size > limit) throw new Error(`relay: inflated state exceeds ${limit} bytes`);
 }
 
+/** 内置压缩方式的标识。 */
+export const COMPRESSION_NONE = 0;
+export const COMPRESSION_DEFLATE_RAW = 1;
+
 /** 不压缩：字节原样（游戏自己已经压过，或快照本来就小）。 */
 export const identityCompressor: Compressor = {
   name: "identity",
+  id: COMPRESSION_NONE,
   compress: async (data) => data,
   decompress: async (data, limit) => {
     checkLimit(data.length, limit);
@@ -73,6 +86,7 @@ export function deflateRawCompressor(): Compressor {
   if (!Compress || !Decompress) throw new Error("relay: this environment has no CompressionStream");
   return {
     name: "deflate-raw",
+    id: COMPRESSION_DEFLATE_RAW,
     compress: (data) => pipeThrough(data, new Compress("deflate-raw")),
     decompress: (data, limit) => pipeThrough(data, new Decompress("deflate-raw"), limit),
   };
@@ -89,6 +103,7 @@ export function zlibCompressor(zlib: ZlibLike): Compressor {
   const plain = (data: Uint8Array) => new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   return {
     name: "deflate-raw",
+    id: COMPRESSION_DEFLATE_RAW,
     compress: async (data) => plain(zlib.deflateRawSync(data)),
     decompress: async (data, limit) => {
       try {
@@ -117,7 +132,47 @@ export function defaultCompressor(): Compressor {
   };
   return {
     name: "deflate-raw",
+    id: COMPRESSION_DEFLATE_RAW,
     compress: async (data) => (await zlib()).compress(data),
     decompress: async (data, limit) => (await zlib()).decompress(data, limit),
   };
+}
+
+/** 收到的状态字节的压缩方式标识不认识（既不是自己的 Compressor.id，也不是内置的两种）。 */
+export class UnknownCompressionError extends Error {
+  constructor(readonly method: number, own: number) {
+    super(`relay: state uses an unknown compression method ${method} (this client compresses with ${own})`);
+    this.name = "UnknownCompressionError";
+  }
+}
+
+/** 把状态打成线上的字节：[压缩方式标识 1B][压缩后的字节]；空状态就是空的（不带标识）。 */
+export async function packState(compressor: Compressor, state: Uint8Array): Promise<Uint8Array> {
+  if (state.length === 0) return new Uint8Array(0);
+  const packed = await compressor.compress(state);
+  const out = new Uint8Array(1 + packed.length);
+  out[0] = compressor.id;
+  out.set(packed, 1);
+  return out;
+}
+
+/**
+ * packState 的反面：按标识选解压方式（自己的 compressor 优先，再是内置的两种），解出的字节不超过 limit。标识不认识抛
+ * UnknownCompressionError；标识认识、内容解不开抛解压错误。空的就是空状态。
+ */
+export async function unpackState(compressor: Compressor, data: Uint8Array, limit: number): Promise<Uint8Array> {
+  if (data.length === 0) return data;
+  const id = data[0];
+  let method: Compressor;
+  if (id === compressor.id) method = compressor;
+  else if (id === COMPRESSION_DEFLATE_RAW) method = builtinDeflate();
+  else if (id === COMPRESSION_NONE) method = identityCompressor;
+  else throw new UnknownCompressionError(id, compressor.id);
+  return method.decompress(data.subarray(1), limit);
+}
+
+let sharedDeflate: Compressor | undefined;
+function builtinDeflate(): Compressor {
+  sharedDeflate ??= defaultCompressor();
+  return sharedDeflate;
 }

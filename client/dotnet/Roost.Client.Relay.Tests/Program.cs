@@ -55,6 +55,8 @@ internal static class Program
                 ("host heartbeat under host_idle_timeout", HostHeartbeat),
                 ("reconnect vs lobby_unavailable / lobby_rejected", ReconnectAdmission),
                 ("started room: reconnect, rejoin, kick an offline seat", StartedRoom),
+                ("welcome epoch for a late joiner and a rejoin", WelcomeEpoch),
+                ("presence re-sent after host changed and reconnect", Presence),
             };
             foreach (var (name, run) in cases)
             {
@@ -93,7 +95,7 @@ internal static class Program
             ["relay_game_to_host"] = new RelayFrame(RelayChannel.Game, 3, 101, new byte[] { 1, 2 }),
             ["relay_game_host_to_slot"] = new RelayFrame(RelayChannel.Game, 3, 202, new byte[] { 9 }, RelayCodec.FlagPush | RelayCodec.FlagSync),
             ["relay_room_broadcast"] = new RelayFrame(RelayChannel.Room, RelayCodec.All, 7, Encoding.ASCII.GetBytes("hi")),
-            ["relay_welcome"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.Welcome, RelayCodec.EncodeWelcome(new RelayWelcome(3, false, 1))),
+            ["relay_welcome"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.Welcome, RelayCodec.EncodeWelcome(new RelayWelcome(3, false, 1, 5))),
             ["relay_member_joined"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.MemberJoined, RelayCodec.EncodeMember(new RelayMember(3, "a3", RelayReason.None))),
             ["relay_member_left"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.MemberLeft, RelayCodec.EncodeMember(new RelayMember(3, "a3", RelayReason.Kicked))),
             ["relay_closed"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Closed, new[] { (byte)RelayReason.RoomClosed }),
@@ -105,19 +107,22 @@ internal static class Program
             // 换 host（RelayCodec 的载荷编码；SDK 公开方法的发送路径在 HostFramesAgainstFakeRelay 里核对）。
             ["relay_you_are_member"] = new RelayFrame(RelayChannel.Control, 1, RelayOps.YouAreMember, RelayCodec.EncodeEpoch(2)),
             ["relay_you_are_host_snapshot"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.YouAreHost, RelayCodec.EncodeYouAreHost(new RelayYouAreHost(2, RelayStateSource.Snapshot, 7,
-                TimeSpan.FromMilliseconds(1500), new[] { new RelaySeat(1, "a1", false), new RelaySeat(3, "a3", true) }, new byte[] { 0xAB, 0xCD }))),
+                TimeSpan.FromMilliseconds(1500), new[] { new RelaySeat(1, "a1", false), new RelaySeat(3, "a3", true) }, new byte[] { 0, 0xAB, 0xCD }))),
             ["relay_you_are_host_handoff"] = new RelayFrame(RelayChannel.Control, 2, RelayOps.YouAreHost, RelayCodec.EncodeYouAreHost(new RelayYouAreHost(1, RelayStateSource.Handoff, 0,
-                TimeSpan.Zero, new[] { new RelaySeat(1, "a1", true), new RelaySeat(2, "a2", true) }, Encoding.ASCII.GetBytes("h")))),
+                TimeSpan.Zero, new[] { new RelaySeat(1, "a1", true), new RelaySeat(2, "a2", true) }, new byte[] { 0, 0x68 }))),
             ["relay_host_changing"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.HostChanging, RelayCodec.EncodeEpoch(2)),
             ["relay_host_changed"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.HostChanged, RelayCodec.EncodeHostChanged(2, "a3")),
             ["relay_host_resumed"] = new RelayFrame(RelayChannel.Control, 1, RelayOps.HostResumed, RelayCodec.EncodeEpoch(0)),
             ["relay_rejected_snapshot_too_soon"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Rejected, RelayCodec.EncodeRejected(new RelayRejected(RelayOps.Snapshot, RelayRejectCode.TooSoon, 8))),
-            ["relay_transfer"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.Transfer, Encoding.ASCII.GetBytes("handoff")),
+            ["relay_transfer"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.Transfer, new byte[] { 0 }.Concat(Encoding.ASCII.GetBytes("handoff")).ToArray()),
             ["relay_leave"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Leave, ReadOnlyMemory<byte>.Empty),
             ["relay_successors"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Successors, RelayCodec.EncodeSuccessors(new uint[] { 3, 2 })),
-            ["relay_snapshot"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Snapshot, RelayCodec.EncodeSnapshot(7, new byte[] { 0xAB, 0xCD })),
+            ["relay_snapshot"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Snapshot, RelayCodec.EncodeSnapshot(7, new byte[] { 0, 0xAB, 0xCD })),
             ["relay_host_ready"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.HostReady, RelayCodec.EncodeEpoch(2)),
             ["relay_closed_lobby_rejected"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Closed, new[] { (byte)RelayReason.LobbyRejected }),
+            // 前台上报：成员 → relay 的 Presence{前台}，relay → 房主的 MemberPresence{槽位 3，后台}
+            ["relay_presence"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Presence, RelayCodec.EncodePresence(true)),
+            ["relay_member_presence"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.MemberPresence, RelayCodec.EncodePresence(false)),
         };
         // 金样以后可能追加：这里核对本 SDK 认识的每一条都在、都相同（换 host 的 13 条在内）。
         foreach (var entry in sent)
@@ -138,7 +143,13 @@ internal static class Program
         var room = RelayCodec.Decode(Convert.FromHexString(golden["relay_room_broadcast"]));
         Check(room.Channel == RelayChannel.Room && room.Slot == RelayCodec.All && room.MessageId == 7, "room frame header fields");
         var welcomeFrame = RelayCodec.Decode(Convert.FromHexString(golden["relay_welcome"]));
-        Check(RelayCodec.DecodeWelcome(welcomeFrame.Slot, welcomeFrame.Payload.Span).Equals(new RelayWelcome(3, false, 1)), "welcome payload");
+        Check(RelayCodec.DecodeWelcome(welcomeFrame.Slot, welcomeFrame.Payload.Span).Equals(new RelayWelcome(3, false, 1, 5)), "welcome payload (epoch 5)");
+        Refuses(() => RelayCodec.DecodeWelcome(3, welcomeFrame.Payload.Span.Slice(0, 5)), "the old 5-byte welcome");
+        Check(RelayCodec.DecodePresence(RelayCodec.Decode(Convert.FromHexString(golden["relay_presence"])).Payload.Span), "presence payload");
+        var presenceFrame = RelayCodec.Decode(Convert.FromHexString(golden["relay_member_presence"]));
+        Check(presenceFrame.Slot == 3 && !RelayCodec.DecodePresence(presenceFrame.Payload.Span), "member presence payload");
+        Refuses(() => RelayCodec.DecodePresence(new byte[] { 2 }), "presence 2");
+        Refuses(() => RelayCodec.DecodePresence(Array.Empty<byte>()), "empty presence");
         var left = RelayCodec.Decode(Convert.FromHexString(golden["relay_member_left"]));
         var member = RelayCodec.DecodeMember(left.Slot, left.Payload.Span);
         Check(member.Slot == 3 && member.Account == "a3" && member.Reason == RelayReason.Kicked, "member payload");
@@ -146,10 +157,17 @@ internal static class Program
         // 换 host：relay 发来的载荷解出预期字段。
         var snap = RelayCodec.DecodeYouAreHost(RelayCodec.Decode(Convert.FromHexString(golden["relay_you_are_host_snapshot"])).Payload.Span);
         Check(snap.Epoch == 2 && snap.Source == RelayStateSource.Snapshot && snap.SnapshotSeq == 7 && snap.SnapshotAge == TimeSpan.FromMilliseconds(1500) &&
-              snap.Members.SequenceEqual(new[] { new RelaySeat(1, "a1", false), new RelaySeat(3, "a3", true) }) && Hex(snap.State!) == "abcd", "you_are_host (snapshot) payload");
+              snap.Members.SequenceEqual(new[] { new RelaySeat(1, "a1", false), new RelaySeat(3, "a3", true) }) && Hex(snap.State!) == "00abcd", "you_are_host (snapshot) payload");
         var hand = RelayCodec.DecodeYouAreHost(RelayCodec.Decode(Convert.FromHexString(golden["relay_you_are_host_handoff"])).Payload.Span);
         Check(hand.Epoch == 1 && hand.Source == RelayStateSource.Handoff && hand.SnapshotSeq == 0 && hand.Members.Count == 2 && hand.Members[1].Online &&
-              Encoding.ASCII.GetString(hand.State!) == "h", "you_are_host (handoff) payload");
+              Hex(hand.State!) == "0068", "you_are_host (handoff) payload");
+        // 压缩方式标识：1（raw deflate）哪种 Compressor 都解得开；0x7f 没有分配。
+        var deflated = RelayCodec.DecodeYouAreHost(RelayCodec.Decode(Convert.FromHexString(golden["relay_you_are_host_deflate"])).Payload.Span).State!;
+        foreach (var compressor in new[] { RelayCompressors.Deflate, RelayCompressors.None })
+            Check(Encoding.ASCII.GetString(RelayCompressors.Unpack(compressor, deflated, 1 << 20)) == "hi", "deflate-marked golden state with compressor " + compressor.Id);
+        var unknown = RelayCodec.DecodeYouAreHost(RelayCodec.Decode(Convert.FromHexString(golden["relay_you_are_host_unknown_compression"])).Payload.Span).State!;
+        try { RelayCompressors.Unpack(RelayCompressors.Deflate, unknown, 1 << 20); throw new Exception("Check failed: unknown marker accepted"); }
+        catch (RelayUnknownCompressionException error) { Check(error.Method == 0x7f, "unknown marker 0x7f"); }
         var changedFrame = RelayCodec.Decode(Convert.FromHexString(golden["relay_host_changed"]));
         Check(RelayCodec.DecodeHostChanged(changedFrame.Slot, changedFrame.Payload.Span).Equals(new RelayHostEvent(2, 3, "a3")), "host_changed payload");
         Check(RelayCodec.DecodeRejected(RelayCodec.Decode(Convert.FromHexString(golden["relay_rejected_snapshot_too_soon"])).Payload.Span)
@@ -225,6 +243,43 @@ internal static class Program
         // 与 Go 的 compress/flate 互通：这是 Go relay.Deflate.Compress([]byte(strings.Repeat("hello ", 50))) 的输出。
         Check(Encoding.ASCII.GetString(RelayCompressors.Deflate.Decompress(Convert.FromHexString("ca48cdc9c95718258921010300"), 1000)) ==
               string.Concat(Enumerable.Repeat("hello ", 50)), "inflates Go deflate output");
+
+        // 压缩方式标识（RELAY.md §2.3）：[Id][压缩后的字节]，空状态不带标识；内置的两种谁都解得开；不认识的标识是
+        // RelayUnknownCompressionException，标识对、内容坏是解压错误（InvalidDataException，但不是“不认识”）。
+        var custom = new MarkerCompressor(9);
+        Check(RelayCompressors.Pack(RelayCompressors.Deflate, state)[0] == 1 && RelayCompressors.Pack(RelayCompressors.None, state)[0] == 0 &&
+              RelayCompressors.Pack(custom, state)[0] == 9 && RelayCompressors.Pack(RelayCompressors.Deflate, ReadOnlySpan<byte>.Empty).Length == 0, "markers");
+        Check(RelayCompressors.Unpack(custom, RelayCompressors.Pack(RelayCompressors.Deflate, state), 1 << 20).SequenceEqual(state), "a custom compressor still decodes deflate (1)");
+        Check(RelayCompressors.Unpack(RelayCompressors.Deflate, RelayCompressors.Pack(RelayCompressors.None, state), 1 << 20).SequenceEqual(state), "deflate decodes none (0)");
+        Check(RelayCompressors.Unpack(custom, RelayCompressors.Pack(custom, state), 1 << 20).SequenceEqual(state), "custom round trip");
+        try { RelayCompressors.Unpack(RelayCompressors.Deflate, RelayCompressors.Pack(custom, state), 1 << 20); throw new Exception("Check failed: mixed compressors accepted"); }
+        catch (RelayUnknownCompressionException error) { Check(error.Method == 9, "mixed compressors: unknown method 9"); }
+        try { RelayCompressors.Unpack(RelayCompressors.Deflate, new byte[] { 1, 0xFF, 0xFF, 0xFF }, 1 << 20); throw new Exception("Check failed: corrupt deflate accepted"); }
+        catch (InvalidDataException) { checks++; } // 解压错误；“不认识”是另一个类型（RelayUnknownCompressionException），不会落到这里
+
+        // README 的 zstd 示例：用接口桩（原样拷贝）走一遍 Pack / Unpack；只认 deflate 的客户端收到它是“不认识的压缩方式”。
+        var zstd = new ZstdRelayCompressor(new CopyCodec());
+        var options = new RelayClientOptions { Game = "party", Compressor = zstd };
+        Check(options.Compressor.Id == 2 && RelayCompressors.Unpack(zstd, RelayCompressors.Pack(zstd, state), 1 << 20).SequenceEqual(state), "README zstd example round trip");
+        try { RelayCompressors.Unpack(RelayCompressors.Deflate, RelayCompressors.Pack(zstd, state), 1 << 20); throw new Exception("Check failed: zstd state accepted by a deflate-only client"); }
+        catch (RelayUnknownCompressionException error) { Check(error.Method == 2, "zstd state at a deflate-only client: unknown method 2"); }
+        Refuses(() => zstd.Decompress(state, state.Length - 1), "README zstd example past the limit");
+    }
+
+    /// <summary>IZstdCodec 的桩：原样拷贝（测试只验接线与上限）。</summary>
+    private sealed class CopyCodec : IZstdCodec
+    {
+        public byte[] Wrap(ReadOnlySpan<byte> data) => data.ToArray();
+        public byte[] Unwrap(ReadOnlySpan<byte> data, int maxOutput) => data.Slice(0, Math.Min(data.Length, maxOutput)).ToArray();
+    }
+
+    /// <summary>游戏自带压缩方式的替身：不改字节，只换标识。</summary>
+    private sealed class MarkerCompressor : IRelayCompressor
+    {
+        public MarkerCompressor(byte id) { Id = id; }
+        public byte Id { get; }
+        public byte[] Compress(ReadOnlySpan<byte> data) => data.ToArray();
+        public byte[] Decompress(ReadOnlySpan<byte> data, int limit) => RelayCompressors.None.Decompress(data, limit);
     }
 
     /// <summary>
@@ -244,7 +299,7 @@ internal static class Program
         var options = new RelayClientOptions { Game = Game, Compressor = RelayCompressors.None, SnapshotMinInterval = TimeSpan.FromTicks(1) };
 
         // ---- 发送 ----
-        var sentNames = new[] { "relay_transfer", "relay_successors", "relay_snapshot", "relay_host_ready", "relay_leave" };
+        var sentNames = new[] { "relay_transfer", "relay_successors", "relay_snapshot", "relay_host_ready", "relay_presence", "relay_leave" };
         var fake = Task.Run(async () =>
         {
             using var socket = await listener.AcceptTcpClientAsync();
@@ -275,6 +330,7 @@ internal static class Program
         Check(client.SetSuccessors(new uint[] { 3, 2 }), "successors sent");
         Check(client.Snapshot(new byte[] { 0xAB, 0xCD }) == RelaySnapshotResult.Sent, "snapshot sent");
         Check(client.HostReady(2), "host ready sent");
+        Check(client.SetForeground(true), "presence sent");
         await client.LeaveAsync();
         var sent = await fake;
         for (int i = 0; i < sentNames.Length; i++)
@@ -283,7 +339,8 @@ internal static class Program
         // ---- 接收 ----
         var steps = new (string name, RelayRole role)[]
         {
-            ("relay_welcome", new RelayRole(3, false, false, 1, 0)),
+            ("relay_welcome", new RelayRole(3, false, false, 1, 5)),
+            ("relay_member_presence", new RelayRole(3, false, false, 1, 5)),
             ("relay_host_resumed", new RelayRole(3, false, false, 1, 0)),
             ("relay_host_changing", new RelayRole(3, false, false, 1, 0)),
             ("relay_you_are_host_snapshot", new RelayRole(3, false, true, 0, 2)),
@@ -291,6 +348,8 @@ internal static class Program
             ("relay_rejected_snapshot_too_soon", new RelayRole(3, true, false, 3, 2)),
             ("relay_you_are_host_handoff", new RelayRole(2, false, true, 0, 1)),
             ("relay_you_are_member", new RelayRole(2, false, false, 0, 2)),
+            ("relay_you_are_host_deflate", new RelayRole(3, false, true, 0, 2)),
+            ("relay_you_are_host_unknown_compression", new RelayRole(3, false, true, 0, 2)),
         };
         var next = new SemaphoreSlim(0);
         var feeder = Task.Run(async () =>
@@ -316,12 +375,13 @@ internal static class Program
         receiver.OnHostChanged(e => seen.Enqueue("changed " + e));
         receiver.OnRejected(e => seen.Enqueue("rejected " + e));
         receiver.OnYouAreMember(e => seen.Enqueue("member " + e));
+        receiver.OnMemberPresence(e => seen.Enqueue("presence " + e));
         receiver.Disconnected += disconnects.Enqueue;
         var welcome = await receiver.ConnectAsync(new RoomTicket(new RoomInfo(), "127.0.0.1:" + port, "rt1.fake", 0));
         var expected = new[]
         {
-            "", "resumed " + new RelayHostEvent(0, 1, ""), "changing 2", "offer 2 Snapshot", "changed " + new RelayHostEvent(2, 3, "a3"),
-            "rejected " + new RelayRejected(RelayOps.Snapshot, RelayRejectCode.TooSoon, 8), "offer 1 Handoff", "member 2",
+            "", "presence " + new RelayMemberPresence(3, false), "resumed " + new RelayHostEvent(0, 1, ""), "changing 2", "offer 2 Snapshot", "changed " + new RelayHostEvent(2, 3, "a3"),
+            "rejected " + new RelayRejected(RelayOps.Snapshot, RelayRejectCode.TooSoon, 8), "offer 1 Handoff", "member 2", "offer 2 Snapshot", "offer 2 Snapshot",
         };
         for (int i = 0; i < steps.Length; i++)
         {
@@ -332,10 +392,14 @@ internal static class Program
                 while (!seen.TryDequeue(out item) && DateTime.UtcNow < until) { receiver.Pump(); await Task.Delay(2); }
                 Check(item == expected[i], $"after {steps[i].name}: callback {item} == {expected[i]}");
             }
-            else Check(welcome.Equals(new RelayWelcome(3, false, 1)), "fake welcome");
+            else Check(welcome.Equals(new RelayWelcome(3, false, 1, 5)), "fake welcome (epoch 5)");
             Check(receiver.Role.Equals(steps[i].role), $"after {steps[i].name}: role {receiver.Role} == {steps[i].role}");
             if (steps[i].name == "relay_you_are_host_snapshot")
                 Check(lastOffer!.SnapshotSeq == 7 && lastOffer.SnapshotAge == TimeSpan.FromMilliseconds(1500) && Hex(lastOffer.State!) == "abcd" && lastOffer.StateError == null, "snapshot offer fields");
+            if (steps[i].name == "relay_you_are_host_deflate")
+                Check(Encoding.ASCII.GetString(lastOffer!.State!) == "hi" && lastOffer.StateError == null, "deflate-marked offer decodes with Compressor None");
+            if (steps[i].name == "relay_you_are_host_unknown_compression")
+                Check(lastOffer!.State == null && lastOffer.StateError is RelayUnknownCompressionException, "unknown-marked offer: " + lastOffer.StateError);
             next.Release();
         }
         var end = DateTime.UtcNow.AddSeconds(5);
@@ -786,6 +850,54 @@ internal static class Program
         Dispose(host, members);
     }
 
+    // Welcome 带 epoch：换过 host 之后才进房的人、离线期间换了 host 又回来的人（RejoinAsync），Role.Epoch 都是房间此刻的 epoch。
+    private static async Task WelcomeEpoch(Peer peer)
+    {
+        var (host, members, room) = await OpenRoom(peer, "cs-epoch", Opts(), Opts(), Opts());
+        var (a, b) = (members[0], members[1]);
+        a.Client.AbortTransportForTest(); // a 掉线（不自动重连），座位还在
+        await a.Next(a.Disconnected, "a transport lost");
+        await host.Next(host.Left, "a left");
+        await a.Client.Completion;
+        Check(host.Client.Transfer(3, ReadOnlySpan<byte>.Empty), "transfer to b");
+        var offer = await b.Next(b.YouAreHost, "you are host");
+        Check(b.Client.HostReady(offer.Epoch), "host ready");
+        await host.Next(host.HostChanged, "old host sees host changed");
+        var late = await Player.CreateAsync(peer, "cs-epoch-late", Opts());
+        var welcome = await late.JoinAsync(room, null);
+        Check(welcome.Equals(new RelayWelcome(4, false, 3, 1)), "late welcome " + welcome);
+        Check(late.Client.Role.Equals(new RelayRole(4, false, false, 3, 1)), "late role " + late.Client.Role);
+        var back = await a.Client.RejoinAsync();
+        Check(back.Epoch == 1 && a.Client.Role.Equals(new RelayRole(2, false, false, 3, 1)), "rejoin role " + a.Client.Role);
+        late.Dispose();
+        Dispose(host, members);
+    }
+
+    // 前台上报：成员 SetForeground 经 relay 只到房主；换 host 后每个设过状态的人（含降为成员的旧房主）收到 HostChanged 自动重发，
+    // 新房主拿到全部；成员自动重连成功后也重发。
+    private static async Task Presence(Peer peer)
+    {
+        var (host, members, _) = await OpenRoom(peer, "cs-presence", Opts(), Opts(), Opts(o =>
+        {
+            o.ReconnectAttempts = 5; o.ReconnectMinBackoff = TimeSpan.FromMilliseconds(20); o.ReconnectMaxBackoff = TimeSpan.FromMilliseconds(100);
+        }));
+        var (a, b) = (members[0], members[1]);
+        Check(host.Client.SetForeground(true) && a.Client.SetForeground(false) && b.Client.SetForeground(true), "presence sent");
+        var first = new[] { await host.Next(host.Presence, "presence 1"), await host.Next(host.Presence, "presence 2") }.OrderBy(p => p.Slot).ToArray();
+        Check(first.SequenceEqual(new[] { new RelayMemberPresence(2, false), new RelayMemberPresence(3, true) }), "presence at the first host: " + string.Join(", ", first));
+        Player.PumpAll();
+        Check(a.Presence.IsEmpty && b.Presence.IsEmpty, "members do not see each other's presence");
+        Check(host.Client.Transfer(2, ReadOnlySpan<byte>.Empty), "transfer to a");
+        var offer = await a.Next(a.YouAreHost, "you are host");
+        Check(a.Client.HostReady(offer.Epoch), "host ready");
+        var resent = new[] { await a.Next(a.Presence, "re-sent 1"), await a.Next(a.Presence, "re-sent 2") }.OrderBy(p => p.Slot).ToArray();
+        Check(resent.SequenceEqual(new[] { new RelayMemberPresence(1, true), new RelayMemberPresence(3, true) }), "re-sent to the new host: " + string.Join(", ", resent));
+        b.Client.AbortTransportForTest();
+        await b.Next(b.Reconnected, "b reconnected");
+        Check((await a.Next(a.Presence, "after b reconnected")).Equals(new RelayMemberPresence(3, true)), "presence after a reconnect");
+        Dispose(host, members);
+    }
+
     private static void Frame(RelayFrame frame, RelayChannel channel, uint slot, uint messageId, string payload) =>
         Check(frame.Channel == channel && frame.Slot == slot && frame.MessageId == messageId && Encoding.UTF8.GetString(frame.Payload.Span) == payload,
             $"frame {frame.Channel}/{frame.Slot}/{frame.MessageId}/{Encoding.UTF8.GetString(frame.Payload.Span)} == {channel}/{slot}/{messageId}/{payload}");
@@ -832,6 +944,7 @@ internal static class Program
         public readonly ConcurrentQueue<ulong> YouAreMember = new ConcurrentQueue<ulong>(), HostChanging = new ConcurrentQueue<ulong>();
         public readonly ConcurrentQueue<RelayHostEvent> HostChanged = new ConcurrentQueue<RelayHostEvent>(), HostResumed = new ConcurrentQueue<RelayHostEvent>();
         public readonly ConcurrentQueue<RelayRejected> Rejected = new ConcurrentQueue<RelayRejected>();
+        public readonly ConcurrentQueue<RelayMemberPresence> Presence = new ConcurrentQueue<RelayMemberPresence>();
         /// <summary>最近一次 join 拿到的票据（测旧令牌）。</summary>
         public RoomTicket? Ticket;
         private readonly JoinCounter counter;
@@ -854,6 +967,7 @@ internal static class Program
             client.OnHostChanged(HostChanged.Enqueue);
             client.OnHostResumed(HostResumed.Enqueue);
             client.OnRejected(Rejected.Enqueue);
+            client.OnMemberPresence(Presence.Enqueue);
             lock (Live) Live.Add(this);
         }
 
@@ -971,5 +1085,30 @@ internal static class Program
             process.Dispose();
             try { Directory.Delete(directory, true); } catch (IOException) { }
         }
+    }
+}
+
+// ---- Roost.Client.Relay/README.md“接入自己的 zstd / LZ4”的示例代码：原样放在这里编一遍（SDK 不引第三方库，IZstdCodec 是接口桩）。----
+
+/// <summary>代表游戏自带的 zstd 库（例如 ZstdSharp 的 Compressor / Decompressor）；SDK 不带它。</summary>
+public interface IZstdCodec
+{
+    byte[] Wrap(ReadOnlySpan<byte> data);
+    /// <summary>解压，至多解出 maxOutput 字节（库自己能限就在库里限）。</summary>
+    byte[] Unwrap(ReadOnlySpan<byte> data, int maxOutput);
+}
+
+/// <summary>把它接成 IRelayCompressor。Id 取 2：0、1 归内置的 None 与 Deflate，LZ4 照样接、取 3。</summary>
+public sealed class ZstdRelayCompressor : IRelayCompressor
+{
+    private readonly IZstdCodec codec;
+    public ZstdRelayCompressor(IZstdCodec codec) { this.codec = codec; }
+    public byte Id => 2;
+    public byte[] Compress(ReadOnlySpan<byte> data) => codec.Wrap(data);
+    public byte[] Decompress(ReadOnlySpan<byte> data, int limit)
+    {
+        var output = codec.Unwrap(data, limit + 1);
+        if (output.Length > limit) throw new InvalidDataException($"Inflated relay state exceeds {limit} bytes.");
+        return output;
     }
 }

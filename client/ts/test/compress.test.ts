@@ -16,7 +16,10 @@ import {
   deflateRawCompressor,
   identityCompressor,
   noCompression,
+  packState,
+  unpackState,
   zlibCompressor,
+  UnknownCompressionError,
   type Compressor,
 } from "../src/index.js";
 import { FakeRelay, TICKET } from "./fake.js";
@@ -122,6 +125,7 @@ test("without CompressionStream the default falls back to node:zlib", async () =
 test("a game-supplied compressor (stand-in for LZ4 / zstd) is what the SDK puts on the wire", async () => {
   const tagged: Compressor = {
     name: "tagged",
+    id: 7,
     compress: async (data) => Uint8Array.from([0xee, ...data]),
     decompress: async (data) => data.subarray(1),
   };
@@ -129,6 +133,43 @@ test("a game-supplied compressor (stand-in for LZ4 / zstd) is what the SDK puts 
   const client = new RelayClient(undefined, { game: "party", compressor: tagged, webSocket: () => fake });
   await client.connect(TICKET);
   await client.pushSnapshot(Uint8Array.of(1, 2));
-  assert.deepEqual([...decodeSnapshot(fake.controls(RelayOp.Snapshot)[0].payload).data], [0xee, 1, 2]);
+  assert.deepEqual([...decodeSnapshot(fake.controls(RelayOp.Snapshot)[0].payload).data], [7, 0xee, 1, 2], "marker 7, then the game's bytes");
+  client.close();
+});
+
+// ---- client/ts/README.md“接入自己的 zstd / LZ4”的示例代码：原样放在这里编一遍（SDK 不引第三方库，ZstdCodec 是接口桩）。----
+
+/** 代表游戏自带的 zstd 库（例如某个 zstd 的 wasm 包）；SDK 不带它。 */
+interface ZstdCodec {
+  compress(data: Uint8Array): Uint8Array;
+  /** 解压，至多解出 maxSize 字节（库自己能限就在库里限）。 */
+  decompress(data: Uint8Array, maxSize: number): Uint8Array;
+}
+
+/** 把它接成 Compressor。id 取 2：0、1 归内置的不压缩与 raw deflate，LZ4 照样接、取 3。 */
+function zstdCompressor(codec: ZstdCodec): Compressor {
+  return {
+    name: "zstd",
+    id: 2,
+    compress: async (data) => codec.compress(data),
+    decompress: async (data, limit) => {
+      const out = codec.decompress(data, limit + 1);
+      if (out.length > limit) throw new Error(`relay: inflated state exceeds ${limit} bytes`);
+      return out;
+    },
+  };
+}
+
+test("the README's zstd example: its id goes on the wire, a client with the same compressor decodes it, a deflate-only client gets UnknownCompressionError", async () => {
+  const copy: ZstdCodec = { compress: (data) => data.slice(), decompress: (data, maxSize) => data.slice(0, maxSize) }; // 桩：原样拷贝
+  const zstd = zstdCompressor(copy);
+  const state = sample(4096);
+  const packed = await packState(zstd, state);
+  assert.equal(packed[0], 2);
+  assert.deepEqual(await unpackState(zstd, packed, LIMIT), state);
+  await assert.rejects(unpackState(defaultCompressor(), packed, LIMIT), UnknownCompressionError);
+  await assert.rejects(zstd.decompress(state, state.length - 1), /exceeds/);
+  // README 的最后一行：房间里每个客户端都配上同一个 compressor
+  const client = new RelayClient(undefined, { game: "party", compressor: zstd });
   client.close();
 });

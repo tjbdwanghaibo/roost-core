@@ -15,6 +15,10 @@ import {
   decodeSnapshot,
   encodeEpoch,
   encodeMember,
+  encodePresence,
+  decodeSuccessors,
+  packState,
+  unpackState,
   serveRules,
   type DocumentLike,
   type HostOutput,
@@ -264,7 +268,7 @@ test("visibilitychange: a hidden host hands off to the first online successor wi
   await fake.waitFor("transfer", () => fake.controls(RelayOp.Transfer).length === 1);
   const transfer = fake.controls(RelayOp.Transfer)[0];
   assert.equal(transfer.slot, 3, "first online successor");
-  assert.equal(str(await p.host.client["compressor"].decompress(transfer.payload, 1 << 20)), "fresh|1:mine", "handoff carries the rules state");
+  assert.equal(str(await unpackState(p.host.client["compressor"], transfer.payload, 1 << 20)), "fresh|1:mine", "handoff carries the rules state");
   await sleep(0);
   assert.deepEqual(handoffs, [3]);
 
@@ -344,7 +348,7 @@ test("refresh: sessionStorage keeps the snapshot; reconnecting within the grace 
 
   const second = page({ storage }); // 同一个标签页、同一个账号
   const welcome = await second.host.resume();
-  assert.deepEqual(welcome, { slot: 1, host: true, hostSlot: 1 }, "relay recognises the host within host_grace");
+  assert.deepEqual(welcome, { slot: 1, host: true, hostSlot: 1, epoch: 0n }, "relay recognises the host within host_grace");
   assert.equal(second.lobby.joins, 1, "rejoin via the lobby for a fresh token");
   assert.deepEqual(second.rules.restored, ["fresh|1:a|1:b"], "rules restored from the stored snapshot");
   assert.ok(second.runner.running);
@@ -354,7 +358,7 @@ test("refresh: sessionStorage keeps the snapshot; reconnecting within the grace 
 
   // 宽限期过了才回来：relay 已换了房主，以成员身份进房，存档作废
   const late = page({ storage, welcome: { slot: 1, host: false, hostSlot: 2 } });
-  assert.deepEqual(await late.host.resume(), { slot: 1, host: false, hostSlot: 2 });
+  assert.deepEqual(await late.host.resume(), { slot: 1, host: false, hostSlot: 2, epoch: 0n });
   assert.equal(late.runner.running, false);
   assert.equal(new HostSessionStore(storage).load("a1"), undefined);
   late.host.close();
@@ -369,7 +373,7 @@ test("refresh: sessionStorage keeps the snapshot; reconnecting within the grace 
 test("a new host started by YouAreHost gets the decompressed snapshot and the SDK answers HostReady", async () => {
   const p = page({ welcome: { slot: 2, host: false, hostSlot: 1 } });
   await p.host.join("r1");
-  const state = await p.host.client["compressor"].compress(text("seed=42"));
+  const state = await packState(p.host.client["compressor"], text("seed=42"));
   const fake = p.sockets[0];
   const { encodeYouAreHost, StateSource } = await import("../src/index.js");
   fake.push(
@@ -403,7 +407,7 @@ test("the app's own client callbacks do not displace WebHost (YouAreHost starts 
   fake.push({ channel: RelayChannel.Game, slot: 1, msgId: 2, flags: 0, payload: text("from-host") });
   assert.deepEqual(p.frames.map((f) => str(f.payload)), ["from-host"], "member frames still reach onFrame");
   const { encodeYouAreHost, encodeHostChanged, StateSource } = await import("../src/index.js");
-  const handoff = await p.host.client["compressor"].compress(text("handed"));
+  const handoff = await packState(p.host.client["compressor"], text("handed"));
   fake.push(control(RelayOp.YouAreHost, 2, encodeYouAreHost({ epoch: 1n, source: StateSource.Handoff, snapshotSeq: 3n, snapshotAgeMs: 0, members: [], state: handoff })));
   await fake.waitFor("host ready", () => fake.controls(RelayOp.HostReady).length === 1);
   assert.ok(p.runner.running, "rules started although the app registered onYouAreHost");
@@ -412,5 +416,55 @@ test("the app's own client callbacks do not displace WebHost (YouAreHost starts 
   assert.equal(await p.host.client.pushSnapshot(), (1n << 32n) + 1n);
   assert.equal(new HostSessionStore(storage).load("a1")?.seq, (1n << 32n) + 1n, "snapshot stored although the app registered onSnapshotSent");
   assert.deepEqual(seen, ["game", "you are host", "host changed", "snapshot"], "the app's callbacks run too");
+  p.host.close();
+});
+
+test("foreground first: a hidden host hands off to the member in the foreground; WebHost declares that order unless the game declared its own", async (t) => {
+  const p = page();
+  t.after(() => p.host.close());
+  await p.host.create({ game: "party", mode: "m" });
+  const fake = p.sockets[0];
+  joinMember(fake, 2);
+  joinMember(fake, 3);
+  fake.push(control(RelayOp.MemberPresence, 2, encodePresence(false))); // 槽位 2 在后台
+  fake.push(control(RelayOp.MemberPresence, 3, encodePresence(true)));
+  const declared = fake.controls(RelayOp.Successors).map((f) => decodeSuccessors(f.payload));
+  assert.deepEqual(declared.at(-1), [3, 2], "foreground members first (by slot), then the rest");
+  assert.equal(p.host.client.successorsDeclared, false, "WebHost's own order does not count as the game's");
+  p.doc.set("hidden");
+  p.timers.tick(5000);
+  await fake.waitFor("transfer", () => fake.controls(RelayOp.Transfer).length === 1);
+  assert.equal(fake.controls(RelayOp.Transfer)[0].slot, 3, "the foreground member, not the lowest slot");
+  fake.push(control(RelayOp.YouAreMember, 1, encodeEpoch(1n)));
+  p.host.close();
+
+  // 游戏显式声明过的以游戏为准：不改它的顺序，让出时也按它
+  const q = page();
+  t.after(() => q.host.close());
+  await q.host.create({ game: "party", mode: "m" });
+  const qf = q.sockets[0];
+  joinMember(qf, 2);
+  joinMember(qf, 3);
+  q.host.client.setSuccessors([2, 3]);
+  qf.push(control(RelayOp.MemberPresence, 2, encodePresence(false)));
+  qf.push(control(RelayOp.MemberPresence, 3, encodePresence(true)));
+  assert.deepEqual(qf.controls(RelayOp.Successors).map((f) => decodeSuccessors(f.payload)), [[2, 3]], "the game's order stands");
+  q.doc.set("hidden");
+  q.timers.tick(5000);
+  await qf.waitFor("transfer", () => qf.controls(RelayOp.Transfer).length === 1);
+  assert.equal(qf.controls(RelayOp.Transfer)[0].slot, 2);
+  qf.push(control(RelayOp.YouAreMember, 1, encodeEpoch(1n)));
+  q.host.close();
+});
+
+test("a member page reports visibilitychange as Presence (and its state when it connects)", async (t) => {
+  const p = page({ welcome: { slot: 2, host: false, hostSlot: 1 } });
+  t.after(() => p.host.close());
+  await p.host.join("r1");
+  const fake = p.sockets[0];
+  await fake.waitFor("presence on connect", () => fake.controls(RelayOp.Presence).length === 1);
+  p.doc.set("hidden");
+  p.doc.set("visible");
+  assert.deepEqual(fake.controls(RelayOp.Presence).map((f) => f.payload[0]), [1, 0, 1]);
   p.host.close();
 });

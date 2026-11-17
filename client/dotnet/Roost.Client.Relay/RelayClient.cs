@@ -49,7 +49,10 @@ namespace Roost.Client.Relay
         public TimeSpan SnapshotMinInterval { get; set; } = TimeSpan.FromSeconds(1);
         /// <summary>快照与交接数据压缩后的上限（relay.snapshot_max_bytes 的缺省，要与 relay 一致）；收帧上限至少是它加 16 KiB。</summary>
         public int SnapshotMaxBytes { get; set; } = 256 << 10;
-        /// <summary>压缩快照与交接数据（发出前压缩，YouAreHost 交来时解压）；房间里每个客户端要用同一种。</summary>
+        /// <summary>
+        /// 压缩快照与交接数据（发出前压缩并在前面加 Id 这 1 字节标识，YouAreHost 交来时按标识解压）。内置的 None / Deflate 谁都解得开；
+        /// 游戏自带的压缩方式（Id 2～255）房间里每个客户端都要配上，否则新房主拿到 RelayUnknownCompressionException。
+        /// </summary>
         public IRelayCompressor Compressor { get; set; } = RelayCompressors.Deflate;
 
         internal RelayClientOptions Snapshot()
@@ -76,9 +79,9 @@ namespace Roost.Client.Relay
     }
 
     /// <summary>
-    /// SDK 记录的当前角色，只按 relay 的控制帧更新：Welcome 给出角色与房主槽位；YouAreHost → 候选；HostChanged → 槽位是
+    /// SDK 记录的当前角色，只按 relay 的控制帧更新：Welcome 给出角色、房主槽位与 epoch；YouAreHost → 候选；HostChanged → 槽位是
     /// 自己就是房主、否则成员；YouAreMember → 成员（房主槽位 0，还在选人）；HostResumed → 房主槽位。HostChanging 不改角色。
-    /// Epoch 是最近一次见到的 host_epoch（Welcome 不带 epoch，连上之后还没见过换 host 时为 0）。
+    /// Epoch 是最近一次见到的 host_epoch：Welcome 带着进房时房间的 epoch，换过 host 之后才进房、或重连回来的客户端也拿到房间此刻的值。
     /// </summary>
     public readonly struct RelayRole : IEquatable<RelayRole>
     {
@@ -227,15 +230,15 @@ namespace Roost.Client.Relay
                     var offer = RelayCodec.DecodeYouAreHost(frame.Payload.Span);
                     lock (client.gate)
                     {
-                        client.role = new RelayWelcome(frame.Slot, false, 0);
-                        client.epoch = offer.Epoch; client.candidate = true;
+                        client.role = new RelayWelcome(frame.Slot, false, 0, offer.Epoch);
+                        client.candidate = true;
                         // 新房主的快照 seq 从 relay 存着的那份往上接（§4.6.3），也不低于这一轮 epoch 的下限（见 SeqFloor）。
                         client.snapshotSeq = Math.Max(client.snapshotSeq, Math.Max(offer.SnapshotSeq, SeqFloor(offer.Epoch)));
                     }
                     client.RoleChanged();
                     if (offer.Source != RelayStateSource.None)
                     {
-                        try { offer = offer.WithState(client.options.Compressor.Decompress(offer.State, RelayCompressors.MaxStateBytes), null); }
+                        try { offer = offer.WithState(RelayCompressors.Unpack(client.options.Compressor, offer.State, RelayCompressors.MaxStateBytes), null); }
                         catch (Exception error) { offer = offer.WithState(null, error); }
                     }
                     else offer = offer.WithState(null, null);
@@ -253,8 +256,8 @@ namespace Roost.Client.Relay
                     ulong epoch = RelayCodec.DecodeEpoch(frame.Payload.Span);
                     lock (client.gate)
                     {
-                        client.role = new RelayWelcome(client.role.Slot, false, 0); // 还在选人
-                        client.epoch = epoch; client.candidate = false;
+                        client.role = new RelayWelcome(client.role.Slot, false, 0, epoch); // 还在选人
+                        client.candidate = false;
                     }
                     client.RoleChanged();
                     client.Post(() => { Action<ulong>? h; lock (client.gate) h = client.youAreMember; h?.Invoke(epoch); });
@@ -272,11 +275,12 @@ namespace Roost.Client.Relay
                     lock (client.gate)
                     {
                         bool wasHost = client.role.IsHost, isHost = frame.Slot == client.role.Slot;
-                        client.role = new RelayWelcome(client.role.Slot, isHost, frame.Slot);
-                        client.epoch = changed.Epoch; client.candidate = false;
+                        client.role = new RelayWelcome(client.role.Slot, isHost, frame.Slot, changed.Epoch);
+                        client.candidate = false;
                         if (isHost && !wasHost) client.BecomeHostLocked();
                     }
                     client.RoleChanged();
+                    client.ResendPresence(); // 新房主不知道之前的上报：设过状态的人各自再报一次
                     client.Post(() => { Action<RelayHostEvent>? h; lock (client.gate) h = client.hostChanged; h?.Invoke(changed); });
                     return RelayReason.None;
                 },
@@ -285,10 +289,15 @@ namespace Roost.Client.Relay
                     var resumed = new RelayHostEvent(RelayCodec.DecodeEpoch(frame.Payload.Span), frame.Slot, "");
                     lock (client.gate)
                     {
-                        client.role = new RelayWelcome(client.role.Slot, client.role.IsHost, frame.Slot);
-                        client.epoch = resumed.Epoch;
+                        client.role = new RelayWelcome(client.role.Slot, client.role.IsHost, frame.Slot, resumed.Epoch);
                     }
                     client.Post(() => { Action<RelayHostEvent>? h; lock (client.gate) h = client.hostResumed; h?.Invoke(resumed); });
+                    return RelayReason.None;
+                },
+                [RelayOps.MemberPresence] = (client, frame) =>
+                {
+                    var presence = new RelayMemberPresence(frame.Slot, RelayCodec.DecodePresence(frame.Payload.Span));
+                    client.Post(() => { Action<RelayMemberPresence>? h; lock (client.gate) h = client.memberPresence; h?.Invoke(presence); });
                     return RelayReason.None;
                 },
                 [RelayOps.Rejected] = (client, frame) =>
@@ -318,7 +327,7 @@ namespace Roost.Client.Relay
         private bool disposed, running, pumping;
         private string? roomId;
         private RelaySession? current;
-        private RelayWelcome role; // 当前角色：Welcome 给出，换 host 的控制帧更新
+        private RelayWelcome role; // 当前角色与 epoch：Welcome 给出，换 host 的控制帧更新
         private TimeSpan rtt;
 
         // 换 host（由 gate 保护）。
@@ -326,8 +335,9 @@ namespace Roost.Client.Relay
         private Action<ulong>? youAreMember, hostChanging;
         private Action<RelayHostEvent>? hostChanged, hostResumed;
         private Action<RelayRejected>? rejected;
-        private ulong epoch;
+        private Action<RelayMemberPresence>? memberPresence;
         private bool candidate;
+        private int presence = -1;     // SetForeground 记下的前台状态：-1 没设过（不发），0 后台，1 前台；换 host、重连后重发
         private ulong snapshotSeq;     // 最近发出（或从 YouAreHost 接过来）的快照 seq；下一份是它加 1
         private long snapshotAt = -1;  // 最近一次发出快照的时刻（Clock tick）；-1 表示当上房主之后还没发过
         private long autoAt = -1;      // 最近一次定时推送的尝试（State 返回 null 也算）
@@ -366,7 +376,7 @@ namespace Roost.Client.Relay
         /// <summary>自己是不是已就绪的房主（以 relay 的 Welcome 与换 host 的控制帧为准，见 Role）。</summary>
         public bool IsHost => Welcome.IsHost;
         /// <summary>SDK 记录的当前角色。</summary>
-        public RelayRole Role { get { lock (gate) return new RelayRole(role.Slot, role.IsHost, candidate, role.HostSlot, epoch); } }
+        public RelayRole Role { get { lock (gate) return new RelayRole(role.Slot, role.IsHost, candidate, role.HostSlot, role.Epoch); } }
         public bool IsConnected { get { lock (gate) return current != null; } }
         public string? RoomId { get { lock (gate) return roomId; } }
         /// <summary>最近一次心跳的往返时延；还没收到 Pong 时为 0。</summary>
@@ -388,6 +398,22 @@ namespace Roost.Client.Relay
         public void OnHostResumed(Action<RelayHostEvent>? handler) { lock (gate) hostResumed = handler; }
         /// <summary>relay 拒收了自己发的快照或转交（连接保留）。</summary>
         public void OnRejected(Action<RelayRejected>? handler) { lock (gate) rejected = handler; }
+        /// <summary>
+        /// 成员上报了前台 / 后台（MemberPresence，只有房主收到；换 host 后新房主收到各成员重发的状态）。要不要据此调 SetSuccessors
+        /// 由游戏决定，C# SDK 不自动排候选顺序。
+        /// </summary>
+        public void OnMemberPresence(Action<RelayMemberPresence>? handler) { lock (gate) memberPresence = handler; }
+
+        /// <summary>
+        /// 告诉当前房主自己在前台（true）还是后台（false）：发 Presence，relay 转给房主（房主自己发的被丢弃）。Unity 在
+        /// OnApplicationPause / OnApplicationFocus 里调。状态记在 SDK 里，之后每次收到 HostChanged、每次连上（含自动重连、RejoinAsync）
+        /// 都自动重发；从没调过时 SDK 不发。没有连接时返回 false（状态仍记下，连上时发出）。
+        /// </summary>
+        public bool SetForeground(bool foreground)
+        {
+            lock (gate) presence = foreground ? 1 : 0;
+            return SendControl(RelayOps.Presence, 0, RelayCodec.EncodePresence(foreground));
+        }
 
         /// <summary>
         /// 注册某个控制帧操作码的回调，是控制帧的扩展口：relay 发来的这个操作码的每一帧都经 Pump 交给它
@@ -478,7 +504,7 @@ namespace Roost.Client.Relay
         public bool HostReady(ulong epoch) => SendControl(RelayOps.HostReady, 0, RelayCodec.EncodeEpoch(epoch));
 
         /// <summary>
-        /// 把房主主动转交给槽位上的在线成员（只有房主能发，否则抛 InvalidOperationException）。handoff 经 Compressor 压缩后不超过
+        /// 把房主主动转交给槽位上的在线成员（只有房主能发，否则抛 InvalidOperationException）。handoff 经 Compressor 压缩（带标识）后不超过
         /// SnapshotMaxBytes（否则抛 ArgumentException），relay 原样放进新房主的 YouAreHost；目标不在线或是自己时 relay 回 Rejected{BadTarget}。
         /// </summary>
         public bool Transfer(uint slot, ReadOnlySpan<byte> handoff)
@@ -514,11 +540,20 @@ namespace Roost.Client.Relay
             return SendControl(RelayOps.Snapshot, 0, RelayCodec.EncodeSnapshot(seq, data)) ? RelaySnapshotResult.Sent : RelaySnapshotResult.NotConnected;
         }
 
+        /// <summary>打成线上的状态字节（[压缩方式标识][压缩后的字节]，空状态为空）；上限 SnapshotMaxBytes 算上标识。</summary>
         private byte[] CompressState(ReadOnlySpan<byte> state)
         {
-            var data = options.Compressor.Compress(state);
+            var data = RelayCompressors.Pack(options.Compressor, state);
             if (data.Length > options.SnapshotMaxBytes) throw new ArgumentException($"Compressed state is {data.Length} bytes, over SnapshotMaxBytes {options.SnapshotMaxBytes}.");
             return data;
+        }
+
+        /// <summary>重发 SetForeground 记下的状态；没设过就不发。发不出去（连接刚断）不报错：下次连上还会发。</summary>
+        private void ResendPresence()
+        {
+            int state;
+            lock (gate) state = presence;
+            if (state >= 0) SendControl(RelayOps.Presence, 0, RelayCodec.EncodePresence(state == 1));
         }
 
         /// <summary>发一个控制帧：控制帧的扩展口（踢人、禁言、心跳、换 host 都有专门的方法）。</summary>
@@ -577,7 +612,7 @@ namespace Roost.Client.Relay
             if (!IsHost) throw new InvalidOperationException("Only the room host may do this.");
         }
 
-        /// <summary>按一条 Welcome 记角色：不再是候选；当上房主（建房，或宽限期内回来）时重新算快照的最小间隔。epoch 保留（Welcome 不带）。</summary>
+        /// <summary>按一条 Welcome 记角色与 epoch：不再是候选；当上房主（建房，或宽限期内回来）时重新算快照的最小间隔。</summary>
         private void SetWelcomeLocked(RelayWelcome welcome)
         {
             bool wasHost = role.IsHost;
@@ -622,6 +657,7 @@ namespace Roost.Client.Relay
                 roomId = room; current = session; SetWelcomeLocked(session.Welcome);
                 completion = Task.Run(() => RunAsync(session));
             }
+            ResendPresence(); // 连上之前（或上一轮连接里）设过的前台状态告诉房主
         }
 
         /// <summary>把业务通知放进 Pump 的队列；积压超过上限时断开当前连接。</summary>
@@ -665,6 +701,7 @@ namespace Roost.Client.Relay
                         if (disposed) { next.Abort(); return; }
                         current = next; SetWelcomeLocked(next.Welcome);
                     }
+                    ResendPresence();
                     var welcome = next.Welcome;
                     Post(() => Reconnected?.Invoke(welcome));
                     session = next;

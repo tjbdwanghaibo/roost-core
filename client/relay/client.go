@@ -59,11 +59,13 @@ type Frame struct {
 	Payload []byte
 }
 
-// Welcome 是连上 relay 后的身份：自己的槽位、是不是房主、房主的槽位。
+// Welcome 是连上 relay 后的身份：自己的槽位、是不是房主、房主的槽位（选人阶段为 0）、房间此刻的 host_epoch。
+// 进房之后换 host 的控制帧会更新 Client.Welcome() 返回的值（见 Role）。
 type Welcome struct {
 	Slot     uint32
 	Host     bool
 	HostSlot uint32
+	Epoch    uint64
 }
 
 // Member 是成员上下线的通知（只有房主收到）。Reason 在上线时是 0（新加入）或 wire.RelayReasonReplaced
@@ -154,7 +156,7 @@ type Options struct {
 	// 收帧上限至少是它加 16 KiB（YouAreHost 的成员名单），装得下带满快照的 YouAreHost。
 	SnapshotMaxBytes int
 	// Compressor 压缩快照与交接数据（发出前压缩，YouAreHost 交来时解压）；nil 用 Deflate，NoCompression 不压缩。
-	// 房间里每个客户端要用同一种。
+	// 状态字节带压缩方式标识（Compressor.ID）：内置的两种谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上。
 	Compressor Compressor
 }
 
@@ -204,6 +206,7 @@ type handlers struct {
 	youAreMember, hostChanging func(epoch uint64)
 	hostChanged, hostResumed   func(HostEvent)
 	rejected                   func(Rejected)
+	memberPresence             func(MemberPresence)
 }
 
 // session 是一条已进房的 relay 连接。
@@ -232,10 +235,12 @@ type Client struct {
 	roomID  string
 	current *session
 	role    Welcome   // 当前角色：Welcome 给出，换 host 的控制帧更新（host.go）
-	host    hostState // epoch、候选、快照 seq 与时刻
-	rtt     time.Duration
-	done    chan struct{}
-	h       handlers
+	host    hostState // 候选、快照 seq 与时刻
+	// presence 是 SetForeground 记下的前台状态，换 host、重连后重发（host.go）。
+	presence presenceState
+	rtt      time.Duration
+	done     chan struct{}
+	h        handlers
 }
 
 // NewClient 建一个 Client。lobby 用于断线后重新要令牌；只用 Connect、不重连时可以为 nil。
@@ -349,6 +354,7 @@ func (c *Client) start(roomID string, sess *session) error {
 	c.done = done
 	c.mu.Unlock()
 	go c.run(sess, done)
+	c.resendPresence() // 连上之前（或上一轮连接里）设过的前台状态告诉房主
 	return nil
 }
 
@@ -365,8 +371,8 @@ func (c *Client) Welcome() Welcome { c.mu.Lock(); defer c.mu.Unlock(); return c.
 // IsHost 报告自己是不是已就绪的房主（以 relay 的 Welcome 与换 host 的控制帧为准，见 Role）。
 func (c *Client) IsHost() bool { return c.Welcome().Host }
 
-// setWelcomeLocked 按一条 Welcome 记角色：不再是候选（候选被顶号时 relay 会在 Welcome 之后重发 YouAreHost）；
-// 当上房主（建房，或宽限期内回来）时重新算快照的最小间隔。epoch 保留（Welcome 不带）。
+// setWelcomeLocked 按一条 Welcome 记角色与 epoch：不再是候选（候选被顶号时 relay 会在 Welcome 之后重发 YouAreHost）；
+// 当上房主（建房，或宽限期内回来）时重新算快照的最小间隔。
 func (c *Client) setWelcomeLocked(w Welcome) {
 	wasHost := c.role.Host
 	c.role = w
@@ -553,7 +559,7 @@ func (c *Client) handshake(netConn net.Conn, relayToken string) (*session, error
 		return nil, err
 	}
 	return &session{netConn: netConn, reader: reader, stop: make(chan struct{}), wake: make(chan struct{}, 1),
-		welcome: Welcome{Slot: p.Seq, Host: welcome.Host, HostSlot: welcome.HostSlot}}, nil
+		welcome: Welcome{Slot: p.Seq, Host: welcome.Host, HostSlot: welcome.HostSlot, Epoch: welcome.Epoch}}, nil
 }
 
 // run 是一轮连接的读 goroutine：收帧直到连接结束，按策略自动重连，最后关闭 done。
@@ -601,6 +607,7 @@ func (c *Client) run(sess *session, done chan struct{}) {
 			c.release()
 			return
 		}
+		c.resendPresence()
 		c.mu.Lock()
 		fn := c.h.reconnected
 		c.mu.Unlock()
@@ -709,7 +716,7 @@ var controlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.Rela
 			return wire.RelayReasonProtocol, err
 		}
 		c.mu.Lock()
-		c.setWelcomeLocked(Welcome{Slot: f.Slot, Host: welcome.Host, HostSlot: welcome.HostSlot})
+		c.setWelcomeLocked(Welcome{Slot: f.Slot, Host: welcome.Host, HostSlot: welcome.HostSlot, Epoch: welcome.Epoch})
 		c.mu.Unlock()
 		c.roleChanged()
 		return wire.RelayReasonNone, nil

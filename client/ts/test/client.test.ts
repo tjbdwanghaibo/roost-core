@@ -33,7 +33,7 @@ class FakeRelay implements WebSocketLike {
 const concat = (...parts: Uint8Array[]) => Uint8Array.from(parts.flatMap((p) => [...p]));
 
 test("unknown control ops are dropped (or handed to onControl) and frames after the welcome are not lost", async () => {
-  const welcome = encodeFrame({ channel: RelayChannel.Control, slot: 2, msgId: 1, payload: encodeWelcome({ slot: 2, host: false, hostSlot: 1 }) });
+  const welcome = encodeFrame({ channel: RelayChannel.Control, slot: 2, msgId: 1, payload: encodeWelcome({ slot: 2, host: false, hostSlot: 1, epoch: 4n }) });
   const unknown = encodeFrame({ channel: RelayChannel.Control, slot: 2, msgId: 120, payload: Uint8Array.of(7) }); // 没有定义的操作码（64～127 里还空着的）
   const game = encodeFrame({ channel: RelayChannel.Game, slot: 1, msgId: 9, payload: Uint8Array.of(1) });
   const fake = new FakeRelay([concat(welcome, unknown), game]); // Welcome 与后面的帧在同一条消息里
@@ -43,7 +43,7 @@ test("unknown control ops are dropped (or handed to onControl) and frames after 
   client.onGame((f) => games.push(f));
   client.onControl(120, (f) => unknowns.push(f));
   const w = await client.connect({ room: { id: "r" }, relayAddr: "ws://fake/relay", token: "rt1.t" });
-  assert.deepEqual(w, { slot: 2, host: false, hostSlot: 1 });
+  assert.deepEqual(w, { slot: 2, host: false, hostSlot: 1, epoch: 4n });
   assert.equal(unknowns.length, 1, "op 120 reached onControl");
   assert.equal(games.length, 1, "game frame after an unknown op still delivered");
   assert.ok(client.connected);

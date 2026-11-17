@@ -5,13 +5,17 @@ package relay
 //
 // 角色的变化只按 relay 的控制帧走（relay 是角色的权威，§4.6.5）：
 //
-//	Welcome            → 照 Welcome 的角色与房主槽位（Welcome 不带 epoch，Epoch 保留最近见到的值）
+//	Welcome            → 照 Welcome 的角色、房主槽位与 epoch（选人阶段房主槽位为 0、epoch 是新的一轮）
 //	YouAreHost{epoch}  → 候选（Candidate）：先交给 OnYouAreHost，游戏准备好后调 HostReady(epoch)；
 //	                     Options.AutoHostReady 为 true 时回调返回后 SDK 自动回
 //	HostChanged{epoch} → Seq 是新房主槽位：等于自己就是房主，否则是成员
 //	YouAreMember{epoch}→ 成员（被换下的旧房主、超时的候选），房主槽位记为 0（还在选人）
 //	HostResumed{epoch} → 房主槽位是 Seq（宽限期内原房主回来了）
 //	HostChanging{epoch}→ 角色不变；只通知游戏“发给房主的游戏帧被丢了”，SDK 不缓存、不重发，要不要重发由游戏决定
+//
+// 前台上报（RELAY.md §2.3）：SetForeground 记下自己在前台还是后台并经 relay 告诉当前房主（MemberPresence）；收到
+// HostChanged、以及每次连上（含自动重连、Rejoin）后，设过状态的 SDK 自动再发一次，新房主不用问。房主一侧只经
+// OnMemberPresence 交给游戏，Go SDK 不自动排候选顺序（游戏自己 SetSuccessors）。
 
 import (
 	"bytes"
@@ -84,9 +88,16 @@ type Role struct {
 	Candidate bool
 	// HostSlot 是当前房主的槽位；正在选新房主时为 0。
 	HostSlot uint32
-	// Epoch 是最近一次见到的 host_epoch（YouAreHost / YouAreMember / HostChanged / HostResumed 带来）。
-	// Welcome 不带 epoch：连上之后还没见过换 host 时为 0（不一定是房间真实的 epoch）。
+	// Epoch 是最近一次见到的 host_epoch（Welcome / YouAreHost / YouAreMember / HostChanged / HostResumed 带来）。
+	// Welcome 带着进房时房间的 epoch，所以换过 host 之后才进房、或重连回来的客户端也拿到房间此刻的值。
 	Epoch uint64
+}
+
+// MemberPresence 是房主收到的成员前台上报（RelayOpMemberPresence）：Slot 是成员槽位，Foreground 为 false 表示后台。
+// 成员可以谎报，它只是排候选顺序的参考。
+type MemberPresence struct {
+	Slot       uint32
+	Foreground bool
 }
 
 var (
@@ -96,12 +107,20 @@ var (
 	ErrStateTooBig = errors.New("relay: snapshot or handoff exceeds SnapshotMaxBytes after compression")
 	// ErrTooManySuccessors：候选顺序超过 wire.RelayMaxSuccessors 个槽位。
 	ErrTooManySuccessors = errors.New("relay: too many successors")
+	// ErrUnknownCompression：收到的快照或交接数据的压缩方式标识既不是自己的 Compressor.ID()，也不是内置的两种
+	// （房间里有人用了别的压缩方式）。YouAreHost.StateErr 用 errors.Is 认它。
+	ErrUnknownCompression = errors.New("relay: state uses an unknown compression method")
 )
 
-// Compressor 压缩快照与交接数据（房主发出前压缩，新房主收到 YouAreHost 时解压）。relay 不压缩、不解压、不解析，
-// 房间里每个客户端要用同一种。缺省 Deflate；游戏可以换成 LZ4 或 zstd 的实现（SDK 不带第三方依赖）。
+// Compressor 压缩快照与交接数据（房主发出前压缩，新房主收到 YouAreHost 时解压）。relay 不压缩、不解压、不解析。
+// 缺省 Deflate；游戏可以换成 LZ4 或 zstd 的实现（SDK 不带第三方依赖，接法见 client/relay/README.md）。
+//
+// ID 是压缩方式标识（SDK 之间的约定，docs/framework/RELAY.md §2.3）：SDK 把它作为 1 个字节写在压缩后的状态字节前面，
+// 收到时按它选解压方式——自己的 Compressor，或内置的 NoCompression（0）、Deflate（1）。0 与 1 归内置的两种，游戏自带的
+// 用 2～255（README 的示例里 zstd 用 2、LZ4 用 3）。标识不认识时 YouAreHost.StateErr 是 ErrUnknownCompression。
 // Decompress 解出的字节超过 limit 时返回错误（防解压炸弹）。
 type Compressor interface {
+	ID() byte
 	Compress(data []byte) ([]byte, error)
 	Decompress(data []byte, limit int) ([]byte, error)
 }
@@ -115,7 +134,15 @@ var NoCompression Compressor = noCompression{}
 // MaxStateBytes 是 YouAreHost 里状态字节解压后的上限。
 const MaxStateBytes = 16 << 20
 
+// 内置压缩方式的标识。
+const (
+	compressionNone    byte = 0
+	compressionDeflate byte = 1
+)
+
 type deflateCompressor struct{}
+
+func (deflateCompressor) ID() byte { return compressionDeflate }
 
 func (deflateCompressor) Compress(data []byte) ([]byte, error) {
 	var out bytes.Buffer
@@ -147,6 +174,8 @@ func (deflateCompressor) Decompress(data []byte, limit int) ([]byte, error) {
 
 type noCompression struct{}
 
+func (noCompression) ID() byte { return compressionNone }
+
 func (noCompression) Compress(data []byte) ([]byte, error) { return data, nil }
 func (noCompression) Decompress(data []byte, limit int) ([]byte, error) {
 	if len(data) > limit {
@@ -161,7 +190,6 @@ const youAreHostOverhead = 16 << 10
 
 // hostState 是换 host 相关的状态，由 Client.mu 保护。
 type hostState struct {
-	epoch     uint64
 	candidate bool
 	snapSeq   uint64    // 最近发出（或从 YouAreHost 接过来）的快照 seq；下一份是它加 1
 	snapAt    time.Time // 最近一次发出快照的时刻；零值表示当上房主之后还没发过
@@ -195,11 +223,52 @@ func (c *Client) OnHostResumed(fn func(HostEvent)) { c.mu.Lock(); c.h.hostResume
 // OnRejected 注册“relay 拒收了自己发的快照或转交”的回调（连接保留）。
 func (c *Client) OnRejected(fn func(Rejected)) { c.mu.Lock(); c.h.rejected = fn; c.mu.Unlock() }
 
+// OnMemberPresence 注册“成员上报了前台 / 后台”的回调（只有房主收到；换 host 后新房主收到各成员重发的状态）。
+// 要不要据此调 SetSuccessors 由游戏决定。
+func (c *Client) OnMemberPresence(fn func(MemberPresence)) {
+	c.mu.Lock()
+	c.h.memberPresence = fn
+	c.mu.Unlock()
+}
+
+// SetForeground 记下自己在前台（true）还是后台（false），并经 relay 告诉当前房主（RelayOpPresence）。Unity 可以在
+// OnApplicationPause 里调。状态记在 SDK 里：没有连接时返回 ErrNotConnected，状态仍然记下，下次连上时发出；之后每次
+// 收到 HostChanged、每次连上都自动重发。从没调过时 SDK 不发。房主自己发的 relay 丢弃（降为成员后由重发补上）。
+func (c *Client) SetForeground(foreground bool) error {
+	c.mu.Lock()
+	c.presence = presenceBackground
+	if foreground {
+		c.presence = presenceForeground
+	}
+	c.mu.Unlock()
+	return c.SendControl(wire.RelayOpPresence, 0, wire.EncodeRelayPresence(foreground))
+}
+
+// resendPresence 在收到 HostChanged、连上之后重发记下的前台状态；没设过就不发。发不出去（连接刚断）不报错：
+// 下次连上还会发。
+func (c *Client) resendPresence() {
+	c.mu.Lock()
+	presence := c.presence
+	c.mu.Unlock()
+	if presence != presenceUnset {
+		_ = c.SendControl(wire.RelayOpPresence, 0, wire.EncodeRelayPresence(presence == presenceForeground))
+	}
+}
+
+// presenceState 是 SetForeground 记下的状态。
+type presenceState byte
+
+const (
+	presenceUnset presenceState = iota
+	presenceForeground
+	presenceBackground
+)
+
 // Role 返回 SDK 记录的当前角色。
 func (c *Client) Role() Role {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return Role{Slot: c.role.Slot, Host: c.role.Host, Candidate: c.host.candidate, HostSlot: c.role.HostSlot, Epoch: c.host.epoch}
+	return Role{Slot: c.role.Slot, Host: c.role.Host, Candidate: c.host.candidate, HostSlot: c.role.HostSlot, Epoch: c.role.Epoch}
 }
 
 // HostReady 告诉 relay 自己已接手（epoch 是 YouAreHost 里的）。relay 广播 HostChanged 之后自己才是房主；
@@ -258,15 +327,45 @@ func (c *Client) Snapshot(state []byte) error {
 	return c.SendControl(wire.RelayOpSnapshot, 0, wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: seq, Data: data}))
 }
 
+// compressState 把状态打成线上的字节：[压缩方式标识 1B][压缩后的字节]；空状态就是空的（不带标识，收到时也当空状态）。
+// 上限 SnapshotMaxBytes 算上标识这 1 个字节（relay 的 snapshot_max_bytes 管的就是这些字节）。
 func (c *Client) compressState(state []byte) ([]byte, error) {
-	data, err := c.opts.Compressor.Compress(state)
+	if len(state) == 0 {
+		return nil, nil
+	}
+	packed, err := c.opts.Compressor.Compress(state)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > c.opts.SnapshotMaxBytes {
+	if 1+len(packed) > c.opts.SnapshotMaxBytes {
 		return nil, ErrStateTooBig
 	}
-	return data, nil
+	return append([]byte{c.opts.Compressor.ID()}, packed...), nil
+}
+
+// decompressState 是 compressState 的反面：按标识选解压方式（自己的 Compressor 优先，再是内置的两种），解出的字节
+// 不超过 limit。标识不认识返回 ErrUnknownCompression；标识认识、内容解不开返回解压错误。
+func (c *Client) decompressState(data []byte, limit int) ([]byte, error) {
+	if len(data) == 0 {
+		return []byte{}, nil
+	}
+	id := data[0]
+	var method Compressor
+	switch {
+	case id == c.opts.Compressor.ID():
+		method = c.opts.Compressor
+	case id == compressionDeflate:
+		method = Deflate
+	case id == compressionNone:
+		method = NoCompression
+	default:
+		return nil, fmt.Errorf("%w: marker %d (this client compresses with %d)", ErrUnknownCompression, id, c.opts.Compressor.ID())
+	}
+	state, err := method.Decompress(data[1:], limit)
+	if err != nil {
+		return nil, fmt.Errorf("relay: decompress state (method %d): %w", id, err)
+	}
+	return state, nil
 }
 
 // autoSnapshot 是当房主时的定时快照（心跳 goroutine 上调用）：Options.SnapshotState 返回 nil 时这一轮不推。
@@ -333,8 +432,8 @@ var hostControlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.
 			return wire.RelayReasonProtocol, err
 		}
 		c.mu.Lock()
-		c.role.Slot, c.role.Host, c.role.HostSlot = f.Slot, false, 0
-		c.host.epoch, c.host.candidate = offer.Epoch, true
+		c.role.Slot, c.role.Host, c.role.HostSlot, c.role.Epoch = f.Slot, false, 0, offer.Epoch
+		c.host.candidate = true
 		// 新房主的快照 seq 从 relay 存着的那份往上接（§4.6.3），也不低于这一轮 epoch 的下限（见 seqFloor）。
 		c.host.snapSeq = max(c.host.snapSeq, offer.SnapshotSeq, seqFloor(offer.Epoch))
 		c.mu.Unlock()
@@ -345,7 +444,7 @@ var hostControlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.
 			event.Members[i] = Seat(seat)
 		}
 		if offer.Source != StateNone {
-			event.State, event.StateErr = c.opts.Compressor.Decompress(offer.State, MaxStateBytes)
+			event.State, event.StateErr = c.decompressState(offer.State, MaxStateBytes)
 		}
 		if h.youAreHost != nil {
 			h.youAreHost(event)
@@ -361,8 +460,8 @@ var hostControlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.
 			return wire.RelayReasonProtocol, err
 		}
 		c.mu.Lock()
-		c.role.Host, c.role.HostSlot = false, 0 // 还在选人
-		c.host.epoch, c.host.candidate = epoch, false
+		c.role.Host, c.role.HostSlot, c.role.Epoch = false, 0, epoch // 还在选人
+		c.host.candidate = false
 		c.mu.Unlock()
 		c.roleChanged()
 		if h.youAreMember != nil {
@@ -387,15 +486,26 @@ var hostControlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.
 		}
 		c.mu.Lock()
 		wasHost := c.role.Host
-		c.role.HostSlot, c.role.Host = f.Slot, f.Slot == c.role.Slot
-		c.host.epoch, c.host.candidate = changed.Epoch, false
+		c.role.HostSlot, c.role.Host, c.role.Epoch = f.Slot, f.Slot == c.role.Slot, changed.Epoch
+		c.host.candidate = false
 		if c.role.Host && !wasHost {
 			c.becomeHostLocked()
 		}
 		c.mu.Unlock()
 		c.roleChanged()
+		c.resendPresence() // 新房主不知道之前的上报：设过状态的人各自再报一次
 		if h.hostChanged != nil {
 			h.hostChanged(HostEvent{Epoch: changed.Epoch, HostSlot: f.Slot, Account: changed.Account})
+		}
+		return wire.RelayReasonNone, nil
+	},
+	wire.RelayOpMemberPresence: func(_ *Client, h handlers, f Frame) (wire.RelayReason, error) {
+		foreground, err := wire.DecodeRelayPresence(f.Payload)
+		if err != nil {
+			return wire.RelayReasonProtocol, err
+		}
+		if h.memberPresence != nil {
+			h.memberPresence(MemberPresence{Slot: f.Slot, Foreground: foreground})
 		}
 		return wire.RelayReasonNone, nil
 	},
@@ -405,7 +515,7 @@ var hostControlHandlers = map[uint32]func(c *Client, h handlers, f Frame) (wire.
 			return wire.RelayReasonProtocol, err
 		}
 		c.mu.Lock()
-		c.role.HostSlot, c.host.epoch = f.Slot, epoch
+		c.role.HostSlot, c.role.Epoch = f.Slot, epoch
 		c.mu.Unlock()
 		if h.hostResumed != nil {
 			h.hostResumed(HostEvent{Epoch: epoch, HostSlot: f.Slot})

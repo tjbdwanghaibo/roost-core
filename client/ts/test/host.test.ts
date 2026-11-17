@@ -13,15 +13,21 @@ import {
   RejectCode,
   SnapshotTooSoonError,
   StateSource,
+  UnknownCompressionError,
   decodeEpoch,
   decodeSnapshot,
   encodeEpoch,
   encodeFrame,
   encodeHostChanged,
   encodeMember,
+  encodePresence,
   encodeRejected,
   encodeYouAreHost,
+  defaultCompressor,
   identityCompressor,
+  packState,
+  type Compressor,
+  type MemberPresence,
   type Disconnect,
   type HostChange,
   type HostTakeover,
@@ -37,10 +43,10 @@ const golden = new Map<string, string>(
 const hex = (data: Uint8Array) => Buffer.from(data).toString("hex");
 const text = (s: string) => new TextEncoder().encode(s);
 
-async function connect(options: Partial<RelayClientOptions> & { slot?: number; host?: boolean; hostSlot?: number } = {}) {
+async function connect(options: Partial<RelayClientOptions> & { slot?: number; host?: boolean; hostSlot?: number; epoch?: bigint } = {}) {
   const slot = options.slot ?? 2;
   const host = options.host ?? false;
-  const fake = new FakeRelay({ slot, host, hostSlot: options.hostSlot ?? (host ? slot : 1) });
+  const fake = new FakeRelay({ slot, host, hostSlot: options.hostSlot ?? (host ? slot : 1), epoch: options.epoch });
   const sockets: FakeRelay[] = [fake];
   const client = new RelayClient(undefined, { game: "party", compressor: identityCompressor, ...options, webSocket: () => fake });
   await client.connect(TICKET);
@@ -78,7 +84,7 @@ test("YouAreHost → candidate, HostReady after the callback, HostChanged{self} 
   client.onHostChanged((c) => changes.push(c));
   assert.equal(client.hostRole, "member");
 
-  fake.push(youAreHost(3, 2n, StateSource.Snapshot, 7n, text("state-7")));
+  fake.push(youAreHost(3, 2n, StateSource.Snapshot, 7n, await packState(identityCompressor, text("state-7"))));
   assert.equal(client.hostRole, "candidate");
   assert.equal(client.epoch, 2n);
   await fake.waitFor("callback", () => takeovers.length === 1);
@@ -193,7 +199,7 @@ test("a YouAreHost larger than maxPayloadBytes is still read (read limit covers 
   const { client, fake } = await connect({ slot: 2, maxPayloadBytes: 1024, snapshotMaxBytes: 64 * 1024 });
   const takeovers: HostTakeover[] = [];
   client.onYouAreHost((t) => void takeovers.push(t));
-  fake.push(youAreHost(2, 1n, StateSource.Handoff, 0n, new Uint8Array(32 * 1024).fill(7)));
+  fake.push(youAreHost(2, 1n, StateSource.Handoff, 0n, await packState(identityCompressor, new Uint8Array(32 * 1024).fill(7))));
   await fake.waitFor("takeover", () => takeovers.length === 1);
   assert.equal(takeovers[0].state!.length, 32 * 1024);
   assert.ok(client.connected);
@@ -231,7 +237,7 @@ test("the SDK pushes snapshots on the interval while host, with consecutive seqs
   const seqs = fake.controls(RelayOp.Snapshot).map((f) => decodeSnapshot(f.payload).seq);
   assert.deepEqual(seqs.slice(0, 3), [1n, 2n, 3n]);
   assert.deepEqual(sent.slice(0, 3), [1n, 2n, 3n]);
-  assert.equal(new TextDecoder().decode(decodeSnapshot(fake.controls(RelayOp.Snapshot)[0].payload).data), "s1");
+  assert.deepEqual(decodeSnapshot(fake.controls(RelayOp.Snapshot)[0].payload).data, await packState(identityCompressor, text("s1")));
   fake.push(control(RelayOp.YouAreMember, 1, encodeEpoch(1n)));
   const count = fake.controls(RelayOp.Snapshot).length;
   await sleep(200);
@@ -319,7 +325,7 @@ test("kick semantics: lobby_unavailable then success reconnects", async () => {
   const lobby = new FakeLobby();
   const { client, sockets } = await reconnecting(lobby, [RelayReason.LobbyUnavailable, "welcome"]);
   const back = await new Promise((resolve) => client.onReconnected(resolve));
-  assert.deepEqual(back, { slot: 2, host: false, hostSlot: 1 });
+  assert.deepEqual(back, { slot: 2, host: false, hostSlot: 1, epoch: 0n });
   assert.equal(sockets.length, 3);
   client.close();
   await client.done;
@@ -353,4 +359,108 @@ test("decoding a malformed host-change frame is a protocol error", async () => {
   await client.done;
   assert.equal(ended[0].reason, RelayReason.Protocol);
   assert.equal(decodeEpoch(encodeEpoch(5n)), 5n);
+});
+
+// 新加的用例用 t.after 关客户端：断言失败时也不留下心跳计时器（否则测试文件的子进程不退出）。
+test("the Welcome's epoch is the room's: client.epoch follows it on connect and on every reconnect", async (t) => {
+  const lobby = new FakeLobby();
+  const sockets: FakeRelay[] = [];
+  let epoch = 3n;
+  const client = new RelayClient(lobby.client, {
+    game: "party",
+    compressor: identityCompressor,
+    reconnect: { maxAttempts: 3, minBackoffMs: 5, maxBackoffMs: 10 },
+    webSocket: () => {
+      const fake = new FakeRelay({ slot: 2, host: false, hostSlot: 4, epoch });
+      sockets.push(fake);
+      return fake;
+    },
+  });
+  t.after(() => client.close());
+  assert.deepEqual(await client.connect(TICKET), { slot: 2, host: false, hostSlot: 4, epoch: 3n });
+  assert.equal(client.epoch, 3n, "a member who joins after host changes knows the room's epoch");
+  epoch = 7n; // 离线期间又换了 host
+  const back = new Promise((resolve) => client.onReconnected(resolve));
+  sockets[0].close();
+  assert.deepEqual(await back, { slot: 2, host: false, hostSlot: 4, epoch: 7n });
+  assert.equal(client.epoch, 7n, "the reconnect's Welcome updates the epoch");
+  client.close();
+  await client.done;
+});
+
+test("setForeground sends Presence (the golden frame), re-sent after HostChanged and after a reconnect; MemberPresence reaches the host", async (t) => {
+  const lobby = new FakeLobby();
+  const sockets: FakeRelay[] = [];
+  const client = new RelayClient(lobby.client, {
+    game: "party",
+    compressor: identityCompressor,
+    reconnect: { maxAttempts: 3, minBackoffMs: 5, maxBackoffMs: 10 },
+    webSocket: () => {
+      const fake = new FakeRelay({ slot: 2, host: false, hostSlot: 1 });
+      sockets.push(fake);
+      return fake;
+    },
+  });
+  t.after(() => client.close());
+  await client.connect(TICKET);
+  const fake = sockets[0];
+  fake.push(control(RelayOp.HostChanged, 3, encodeHostChanged(1n, "a3")));
+  assert.equal(fake.controls(RelayOp.Presence).length, 0, "never set: nothing to re-send");
+  assert.ok(client.setForeground(true));
+  assert.equal(hex(encodeFrame(fake.controls(RelayOp.Presence)[0])), golden.get("relay_presence"));
+  client.setForeground(false);
+  fake.push(control(RelayOp.HostChanged, 4, encodeHostChanged(2n, "a4")));
+  assert.deepEqual(fake.controls(RelayOp.Presence).map((f) => f.payload[0]), [1, 0, 0], "re-sent (background) after HostChanged");
+  const back = new Promise((resolve) => client.onReconnected(resolve));
+  fake.close();
+  await back;
+  await sockets[1].waitFor("presence after reconnect", () => sockets[1].controls(RelayOp.Presence).length === 1);
+  assert.equal(sockets[1].controls(RelayOp.Presence)[0].payload[0], 0);
+  client.close();
+  await client.done;
+
+  const host = await connect({ slot: 1, host: true });
+  t.after(() => host.client.close());
+  const seen: MemberPresence[] = [];
+  host.client.onMemberPresence((m) => seen.push(m));
+  host.fake.push(control(RelayOp.MemberPresence, 3, encodePresence(false)));
+  assert.deepEqual(seen, [{ slot: 3, foreground: false }]);
+  host.client.close();
+});
+
+test("the compression marker: an unknown method is UnknownCompressionError, a corrupt body a decompression error, built-ins always decode", async (t) => {
+  const tagged: Compressor = {
+    name: "tagged",
+    id: 9,
+    compress: async (data) => data,
+    decompress: async (data) => data,
+  };
+  const takeovers: HostTakeover[] = [];
+  const receiver = await connect({ slot: 3, compressor: defaultCompressor() });
+  t.after(() => receiver.client.close());
+  receiver.client.onYouAreHost((t) => void takeovers.push(t));
+  const offer = async (state: Uint8Array) => {
+    receiver.fake.push(youAreHost(3, 1n, StateSource.Handoff, 0n, state));
+    await receiver.fake.waitFor("takeover", () => takeovers.length > 0);
+    return takeovers.shift()!;
+  };
+  const state = text("seed=42 deck=[7,1,9]");
+  // 混用：发的人用游戏自带的 9 号，收的人用缺省的 deflate
+  const mixed = await offer(await packState(tagged, state));
+  assert.equal(mixed.state, null);
+  assert.ok(mixed.stateError instanceof UnknownCompressionError, String(mixed.stateError));
+  const corrupt = await offer(Uint8Array.of(1, 0xff, 0xff, 0xff));
+  assert.equal(corrupt.state, null);
+  assert.ok(corrupt.stateError && !(corrupt.stateError instanceof UnknownCompressionError), String(corrupt.stateError));
+  const fine = await offer(await packState(identityCompressor, state));
+  assert.deepEqual([fine.state, fine.stateError], [state, undefined], "none (0) is built in");
+  receiver.client.close();
+
+  const custom = await connect({ slot: 3, compressor: tagged });
+  t.after(() => custom.client.close());
+  custom.client.onYouAreHost((t) => void takeovers.push(t));
+  custom.fake.push(youAreHost(3, 1n, StateSource.Handoff, 0n, await packState(defaultCompressor(), state)));
+  await custom.fake.waitFor("takeover", () => takeovers.length > 0);
+  assert.deepEqual(takeovers[0].state, state, "a client with its own compressor still decodes deflate (1)");
+  custom.client.close();
 });

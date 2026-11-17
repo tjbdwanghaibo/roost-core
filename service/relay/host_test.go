@@ -415,3 +415,83 @@ func TestCandidateReconnectGetsTheOfferAgain(t *testing.T) {
 	a2.expectHostChanged(1, 2, "acc-a")
 	host.expectHostChanged(1, 2, "acc-a")
 }
+
+// Welcome 带上房间此刻的 host_epoch（固定 13 字节）：换过两次 host 之后才进房的成员拿到 epoch 2；选人阶段进房的，
+// 房主槽位为 0、epoch 是新的那一轮（与 host_changing 的约定相同）。
+func TestWelcomeCarriesTheRoomEpoch(t *testing.T) {
+	h := newHarness(t, false, func(c *relay.Config) { c.HostReadyTimeout = time.Hour })
+	host, a, b := h.room3("room-epoch")
+	early, welcome := h.connect("room-epoch", "acc-early", token.RoleMember, 8)
+	if welcome != (wire.RelayWelcome{HostSlot: 1}) {
+		t.Fatalf("welcome before any host change %+v", welcome)
+	}
+	host.expectMember(wire.RelayOpMemberJoined, 4, wire.RelayReasonNone, "acc-early")
+
+	// 第一次换 host：房主转交给 b（epoch 1）；第二次：b 转交给 a（epoch 2）。
+	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 3, nil)
+	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
+	b.expectYouAreHost(1)
+	b.ready(1)
+	for _, c := range []*client{host, a, b, early} {
+		c.expectHostChanged(1, 3, "acc-b")
+	}
+	b.send(wire.FlagRelayControl, wire.RelayOpTransfer, 2, nil)
+	b.expectEpoch(wire.RelayOpYouAreMember, 3, 2)
+	a.expectYouAreHost(2)
+	a.ready(2)
+	for _, c := range []*client{host, a, b, early} {
+		c.expectHostChanged(2, 2, "acc-a")
+	}
+
+	late, welcome := h.connect("room-epoch", "acc-late", token.RoleMember, 8)
+	if welcome != (wire.RelayWelcome{HostSlot: 2, Epoch: 2}) || late.slot != 5 {
+		t.Fatalf("welcome after two host changes %+v slot %d, want host slot 2 epoch 2", welcome, late.slot)
+	}
+	a.expectMember(wire.RelayOpMemberJoined, 5, wire.RelayReasonNone, "acc-late")
+
+	// 选人阶段：房主 a 离开，epoch 加到 3；这时进房的拿到房主槽位 0、epoch 3。
+	a.send(wire.FlagRelayControl, wire.RelayOpLeave, 0, nil)
+	a.expectClosed(wire.RelayReasonLeft)
+	host.expectYouAreHost(3) // 槽位最小的在线成员（原房主 host，槽位 1）当候选
+	_, welcome = h.connect("room-epoch", "acc-migrating", token.RoleMember, 8)
+	if welcome != (wire.RelayWelcome{HostSlot: 0, Epoch: 3}) {
+		t.Fatalf("welcome while picking a new host %+v, want host slot 0 epoch 3", welcome)
+	}
+}
+
+// 前台上报（RelayOpPresence）：relay 只检查格式，改写成 MemberPresence{槽位} 只转给当前房主，别的成员收不到；
+// 房主自己发的、选人阶段（没有已就绪的房主）发的丢弃；载荷不是 1 字节 0 / 1 的按协议错误断开（与 Mute 一致）。
+func TestPresenceReachesOnlyTheHost(t *testing.T) {
+	h := newHarness(t, false, func(c *relay.Config) { c.HostReadyTimeout = time.Hour })
+	host, a, b := h.room3("room-presence")
+	a.send(wire.FlagRelayControl, wire.RelayOpPresence, 0, wire.EncodeRelayPresence(false))
+	host.expect(wire.RelayControl, wire.RelayOpMemberPresence, 2, "\x00")
+	b.send(wire.FlagRelayControl, wire.RelayOpPresence, 0, wire.EncodeRelayPresence(true))
+	host.expect(wire.RelayControl, wire.RelayOpMemberPresence, 3, "\x01")
+	host.send(wire.FlagRelayControl, wire.RelayOpPresence, 0, wire.EncodeRelayPresence(true)) // 房主自己的：丢弃
+	host.ping("own-dropped")
+	a.expectSilence(quiet)
+	b.expectSilence(quiet)
+
+	// 选人阶段没有房主：上报丢弃，候选也收不到；新房主就绪后上报转给它。
+	host.send(wire.FlagRelayControl, wire.RelayOpLeave, 0, nil)
+	host.expectClosed(wire.RelayReasonLeft)
+	a.expectYouAreHost(1)
+	b.send(wire.FlagRelayControl, wire.RelayOpPresence, 0, wire.EncodeRelayPresence(false))
+	b.ping("picking")
+	a.expectSilence(quiet)
+	a.ready(1)
+	a.expectHostChanged(1, 2, "acc-a")
+	b.expectHostChanged(1, 2, "acc-a")
+	b.send(wire.FlagRelayControl, wire.RelayOpPresence, 0, wire.EncodeRelayPresence(false))
+	a.expect(wire.RelayControl, wire.RelayOpMemberPresence, 3, "\x00")
+
+	// 格式不对：断开。
+	b.send(wire.FlagRelayControl, wire.RelayOpPresence, 0, []byte{2})
+	b.expectClosed(wire.RelayReasonProtocol)
+	a.expectMember(wire.RelayOpMemberLeft, 3, wire.RelayReasonProtocol, "acc-b")
+	c, _ := h.connect("room-presence", "acc-c", token.RoleMember, 8)
+	a.expectMember(wire.RelayOpMemberJoined, 4, wire.RelayReasonNone, "acc-c")
+	c.send(wire.FlagRelayControl, wire.RelayOpPresence, 0, nil)
+	c.expectClosed(wire.RelayReasonProtocol)
+}

@@ -60,12 +60,27 @@ func TestRelayHeaderValidation(t *testing.T) {
 }
 
 func TestRelayControlPayloads(t *testing.T) {
-	welcome := wire.RelayWelcome{Host: true, HostSlot: 1}
-	if got, err := wire.DecodeRelayWelcome(wire.EncodeRelayWelcome(welcome)); err != nil || got != welcome {
-		t.Fatalf("welcome %+v %v", got, err)
+	welcome := wire.RelayWelcome{Host: true, HostSlot: 1, Epoch: 1<<40 + 3}
+	encoded := wire.EncodeRelayWelcome(welcome)
+	if got, err := wire.DecodeRelayWelcome(encoded); err != nil || got != welcome || len(encoded) != 13 {
+		t.Fatalf("welcome %+v %v (%d bytes)", got, err, len(encoded))
 	}
-	if _, err := wire.DecodeRelayWelcome([]byte{3, 0, 0, 0, 1}); !errors.Is(err, wire.ErrInvalidPacket) {
-		t.Fatalf("bad role accepted: %v", err)
+	// 载荷固定 13 字节：旧的 5 字节、多一个字节、角色不是 1 / 2 的都当协议错误。
+	bad := append([]byte{3}, encoded[1:]...)
+	for _, payload := range [][]byte{bad, encoded[:5], append(append([]byte{}, encoded...), 0)} {
+		if _, err := wire.DecodeRelayWelcome(payload); !errors.Is(err, wire.ErrInvalidPacket) {
+			t.Fatalf("bad welcome %x accepted: %v", payload, err)
+		}
+	}
+	for _, foreground := range []bool{true, false} {
+		if got, err := wire.DecodeRelayPresence(wire.EncodeRelayPresence(foreground)); err != nil || got != foreground {
+			t.Fatalf("presence %v: %v %v", foreground, got, err)
+		}
+	}
+	for _, payload := range [][]byte{nil, {2}, {1, 0}} {
+		if _, err := wire.DecodeRelayPresence(payload); !errors.Is(err, wire.ErrInvalidPacket) {
+			t.Fatalf("bad presence %x accepted: %v", payload, err)
+		}
 	}
 	member := wire.RelayMember{Reason: wire.RelayReasonKicked, Account: "acc-7"}
 	if got, err := wire.DecodeRelayMember(wire.EncodeRelayMember(member)); err != nil || got != member {
@@ -139,7 +154,7 @@ func TestRelayProtocolGolden(t *testing.T) {
 		{"relay_game_to_host", &wire.Packet{Flags: wire.FlagRelayGame, MsgID: 101, Seq: 3, Payload: []byte{1, 2}}},
 		{"relay_game_host_to_slot", &wire.Packet{Flags: wire.FlagRelayGame | wire.FlagPush | wire.FlagSync, MsgID: 202, Seq: 3, Payload: []byte{9}}},
 		{"relay_room_broadcast", &wire.Packet{Flags: wire.FlagRelayRoom, MsgID: 7, Seq: wire.RelayAll, Payload: []byte("hi")}},
-		{"relay_welcome", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpWelcome, Seq: 3, Payload: wire.EncodeRelayWelcome(wire.RelayWelcome{HostSlot: 1})}},
+		{"relay_welcome", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpWelcome, Seq: 3, Payload: wire.EncodeRelayWelcome(wire.RelayWelcome{HostSlot: 1, Epoch: 5})}},
 		{"relay_member_joined", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpMemberJoined, Seq: 3, Payload: wire.EncodeRelayMember(wire.RelayMember{Account: "a3"})}},
 		{"relay_member_left", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpMemberLeft, Seq: 3, Payload: wire.EncodeRelayMember(wire.RelayMember{Reason: wire.RelayReasonKicked, Account: "a3"})}},
 		{"relay_closed", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpClosed, Payload: []byte{byte(wire.RelayReasonRoomClosed)}}},
@@ -152,19 +167,30 @@ func TestRelayProtocolGolden(t *testing.T) {
 		{"relay_you_are_member", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreMember, Seq: 1, Payload: wire.EncodeRelayEpoch(2)}},
 		{"relay_you_are_host_snapshot", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreHost, Seq: 3, Payload: wire.EncodeRelayYouAreHost(wire.RelayYouAreHost{
 			Epoch: 2, Source: wire.RelayStateSnapshot, SnapshotSeq: 7, SnapshotAgeMillis: 1500,
-			Members: []wire.RelaySeat{{Slot: 1, Account: "a1"}, {Slot: 3, Account: "a3", Online: true}}, State: []byte{0xAB, 0xCD}})}},
+			Members: []wire.RelaySeat{{Slot: 1, Account: "a1"}, {Slot: 3, Account: "a3", Online: true}}, State: []byte{0x00, 0xAB, 0xCD}})}},
 		{"relay_you_are_host_handoff", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreHost, Seq: 2, Payload: wire.EncodeRelayYouAreHost(wire.RelayYouAreHost{
-			Epoch: 1, Source: wire.RelayStateHandoff, Members: []wire.RelaySeat{{Slot: 1, Account: "a1", Online: true}, {Slot: 2, Account: "a2", Online: true}}, State: []byte("h")})}},
+			Epoch: 1, Source: wire.RelayStateHandoff, Members: []wire.RelaySeat{{Slot: 1, Account: "a1", Online: true}, {Slot: 2, Account: "a2", Online: true}}, State: []byte("\x00h")})}},
 		{"relay_host_changing", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostChanging, Payload: wire.EncodeRelayEpoch(2)}},
 		{"relay_host_changed", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostChanged, Seq: 3, Payload: wire.EncodeRelayHostChanged(wire.RelayHostChanged{Epoch: 2, Account: "a3"})}},
 		{"relay_host_resumed", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostResumed, Seq: 1, Payload: wire.EncodeRelayEpoch(0)}},
 		{"relay_rejected_snapshot_too_soon", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpRejected, Payload: wire.EncodeRelayRejected(wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectTooSoon, Seq: 8})}},
-		{"relay_transfer", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 3, Payload: []byte("handoff")}},
+		{"relay_transfer", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 3, Payload: []byte("\x00handoff")}},
 		{"relay_leave", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpLeave}},
 		{"relay_successors", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpSuccessors, Payload: wire.EncodeRelaySuccessors([]uint32{3, 2})}},
-		{"relay_snapshot", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpSnapshot, Payload: wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: 7, Data: []byte{0xAB, 0xCD}})}},
+		{"relay_snapshot", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpSnapshot, Payload: wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: 7, Data: []byte{0x00, 0xAB, 0xCD}})}},
 		{"relay_host_ready", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostReady, Payload: wire.EncodeRelayEpoch(2)}},
 		{"relay_closed_lobby_rejected", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpClosed, Payload: []byte{byte(wire.RelayReasonLobbyRejected)}}},
+		// 前台上报（2026-11-17）：成员 → relay 的 Presence{前台}，relay → 房主的 MemberPresence{槽位 3，后台}。
+		{"relay_presence", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpPresence, Payload: wire.EncodeRelayPresence(true)}},
+		{"relay_member_presence", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpMemberPresence, Seq: 3, Payload: wire.EncodeRelayPresence(false)}},
+		// 快照字节的压缩方式标识（SDK 之间的约定，relay 不解析）：标识 1 是原始 deflate，后面是一个不压缩的 deflate 块
+		// （BFINAL=1、BTYPE=00、LEN=2、NLEN=^2、"hi"），三份 SDK 都解出 "hi"；标识 0x7f 没有分配，三份 SDK 都报“不认识的压缩方式”。
+		{"relay_you_are_host_deflate", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreHost, Seq: 3, Payload: wire.EncodeRelayYouAreHost(wire.RelayYouAreHost{
+			Epoch: 2, Source: wire.RelayStateSnapshot, SnapshotSeq: 7, Members: []wire.RelaySeat{{Slot: 3, Account: "a3", Online: true}},
+			State: []byte{0x01, 0x01, 0x02, 0x00, 0xFD, 0xFF, 'h', 'i'}})}},
+		{"relay_you_are_host_unknown_compression", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpYouAreHost, Seq: 3, Payload: wire.EncodeRelayYouAreHost(wire.RelayYouAreHost{
+			Epoch: 2, Source: wire.RelayStateSnapshot, SnapshotSeq: 7, Members: []wire.RelaySeat{{Slot: 3, Account: "a3", Online: true}},
+			State: []byte{0x7F, 'h', 'i'}})}},
 	}
 	want := []golden{}
 	for _, entry := range entries {

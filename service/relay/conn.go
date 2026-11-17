@@ -171,7 +171,7 @@ func stateFrameLimit(cfg Config, op uint32) int {
 func stateFrameHardLimit(cfg Config) int { return 2*cfg.SnapshotMaxBytes + 8 }
 
 // control 处理客户端发来的控制帧。踢人、禁言、转交、候选顺序、快照只认当前房主，host_ready 只认当前候选
-// （都在 room 里核对）；不认识的操作码丢弃，留给以后的协议扩展。
+// （都在 room 里核对）；前台上报只检查格式、转给房主；不认识的操作码丢弃，留给以后的协议扩展。
 func (c *conn) control(r *room, p *wire.Packet) wire.RelayReason {
 	switch p.MsgID {
 	case wire.RelayOpPing:
@@ -208,6 +208,11 @@ func (c *conn) control(r *room, p *wire.Packet) wire.RelayReason {
 			return wire.RelayReasonProtocol
 		}
 		r.hostReady(c, epoch)
+	case wire.RelayOpPresence:
+		if _, err := wire.DecodeRelayPresence(p.Payload); err != nil {
+			return wire.RelayReasonProtocol
+		}
+		r.presence(c, p.Payload)
 	}
 	return wire.RelayReasonNone
 }

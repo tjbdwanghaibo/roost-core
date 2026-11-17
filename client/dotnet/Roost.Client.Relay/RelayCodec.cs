@@ -22,7 +22,7 @@ namespace Roost.Client.Relay
     }
 
     /// <summary>控制帧操作码（控制帧的 message_id）。1～15 由 relay 发出，16～31 由房主发出，32～ 任何一端；
-    /// 换 host（docs/framework/RELAY.md §2.3）：64～79 由 relay 发出，80～95 由客户端发出。</summary>
+    /// 换 host 与前台上报（docs/framework/RELAY.md §2.3）：64～79 由 relay 发出，80～95 由客户端发出。</summary>
     public static class RelayOps
     {
         public const uint Welcome = 1;
@@ -46,6 +46,8 @@ namespace Roost.Client.Relay
         public const uint HostResumed = 68;
         /// <summary>relay → 发快照或转交的连接：被拒（连接保留）。载荷见 <see cref="RelayRejected"/>。</summary>
         public const uint Rejected = 69;
+        /// <summary>relay → 当前房主：成员上报的前台状态。Slot=成员槽位；载荷 1 字节：1 前台、0 后台。</summary>
+        public const uint MemberPresence = 70;
         /// <summary>房主 → relay：主动转交给槽位 Slot。载荷是交接数据。</summary>
         public const uint Transfer = 80;
         /// <summary>任何人 → relay：离开房间，relay 回 Closed{left} 后断开。无载荷。</summary>
@@ -56,6 +58,11 @@ namespace Roost.Client.Relay
         public const uint Snapshot = 83;
         /// <summary>新房主候选 → relay：已接手，载荷 [epoch 8B]（等于 YouAreHost 里的）。</summary>
         public const uint HostReady = 84;
+        /// <summary>
+        /// 任何成员 → relay：自己在前台（1）还是后台（0），1 字节；别的长度或取值被 relay 当协议错误断开。relay 转给当前房主
+        /// （MemberPresence）；没有已就绪的房主、或发送者就是房主时丢弃。
+        /// </summary>
+        public const uint Presence = 85;
         /// <summary>Ping 载荷的上限；超出的 Ping 被 relay 当协议错误断开。</summary>
         public const int MaxPingBytes = 16;
         /// <summary>Successors 里槽位的个数上限。</summary>
@@ -200,17 +207,33 @@ namespace Roost.Client.Relay
         }
     }
 
-    /// <summary>Welcome 的载荷：自己的槽位（帧的 seq）、是不是房主、房主的槽位。</summary>
+    /// <summary>
+    /// Welcome 的载荷：自己的槽位（帧的 seq）、是不是房主、房主的槽位（选人阶段为 0）、房间此刻的 host_epoch。
+    /// RelayClient.Welcome 返回的值会随换 host 的控制帧更新（见 RelayRole）。
+    /// </summary>
     public readonly struct RelayWelcome : IEquatable<RelayWelcome>
     {
         public uint Slot { get; }
         public bool IsHost { get; }
         public uint HostSlot { get; }
-        public RelayWelcome(uint slot, bool isHost, uint hostSlot) { Slot = slot; IsHost = isHost; HostSlot = hostSlot; }
-        public bool Equals(RelayWelcome other) => Slot == other.Slot && IsHost == other.IsHost && HostSlot == other.HostSlot;
+        public ulong Epoch { get; }
+        public RelayWelcome(uint slot, bool isHost, uint hostSlot, ulong epoch = 0) { Slot = slot; IsHost = isHost; HostSlot = hostSlot; Epoch = epoch; }
+        public bool Equals(RelayWelcome other) => Slot == other.Slot && IsHost == other.IsHost && HostSlot == other.HostSlot && Epoch == other.Epoch;
         public override bool Equals(object? obj) => obj is RelayWelcome other && Equals(other);
-        public override int GetHashCode() => HashCode.Combine(Slot, IsHost, HostSlot);
-        public override string ToString() => $"slot {Slot}, host {IsHost}, host slot {HostSlot}";
+        public override int GetHashCode() => HashCode.Combine(Slot, IsHost, HostSlot, Epoch);
+        public override string ToString() => $"slot {Slot}, host {IsHost}, host slot {HostSlot}, epoch {Epoch}";
+    }
+
+    /// <summary>房主收到的成员前台上报（MemberPresence）：Slot 是成员槽位，Foreground 为 false 表示后台。成员可以谎报，只作排候选顺序的参考。</summary>
+    public readonly struct RelayMemberPresence : IEquatable<RelayMemberPresence>
+    {
+        public uint Slot { get; }
+        public bool Foreground { get; }
+        public RelayMemberPresence(uint slot, bool foreground) { Slot = slot; Foreground = foreground; }
+        public bool Equals(RelayMemberPresence other) => Slot == other.Slot && Foreground == other.Foreground;
+        public override bool Equals(object? obj) => obj is RelayMemberPresence other && Equals(other);
+        public override int GetHashCode() => HashCode.Combine(Slot, Foreground);
+        public override string ToString() => $"slot {Slot} {(Foreground ? "foreground" : "background")}";
     }
 
     /// <summary>成员上下线（只有房主收到）。上线时 Reason 是 None（新加入）或 Replaced（同一账号重连，槽位不变）。</summary>
@@ -342,19 +365,32 @@ namespace Roost.Client.Relay
             }
         }
 
-        /// <summary>Welcome 载荷：[角色 1 字节：1 房主、2 成员][房主槽位 4 字节大端]。slot 是帧的 seq。</summary>
+        /// <summary>
+        /// Welcome 载荷：[角色 1 字节：1 房主、2 成员][房主槽位 4 字节大端][epoch 8 字节大端]，固定 13 字节。slot 是帧的 seq。
+        /// 选人阶段进房的连接房主槽位为 0、epoch 是新的一轮。
+        /// </summary>
         public static RelayWelcome DecodeWelcome(uint slot, ReadOnlySpan<byte> payload)
         {
-            if (payload.Length != 5 || (payload[0] != 1 && payload[0] != 2)) throw new InvalidDataException("Invalid relay welcome.");
-            return new RelayWelcome(slot, payload[0] == 1, BinaryPrimitives.ReadUInt32BigEndian(payload.Slice(1)));
+            if (payload.Length != 13 || (payload[0] != 1 && payload[0] != 2)) throw new InvalidDataException("Invalid relay welcome.");
+            return new RelayWelcome(slot, payload[0] == 1, BinaryPrimitives.ReadUInt32BigEndian(payload.Slice(1)), BinaryPrimitives.ReadUInt64BigEndian(payload.Slice(5)));
         }
 
         public static byte[] EncodeWelcome(RelayWelcome welcome)
         {
-            var payload = new byte[5];
+            var payload = new byte[13];
             payload[0] = welcome.IsHost ? (byte)1 : (byte)2;
             BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), welcome.HostSlot);
+            BinaryPrimitives.WriteUInt64BigEndian(payload.AsSpan(5), welcome.Epoch);
             return payload;
+        }
+
+        /// <summary>Presence 与 MemberPresence 的载荷：1 字节，1 前台、0 后台。</summary>
+        public static byte[] EncodePresence(bool foreground) => new[] { foreground ? (byte)1 : (byte)0 };
+
+        public static bool DecodePresence(ReadOnlySpan<byte> payload)
+        {
+            if (payload.Length != 1 || payload[0] > 1) throw new InvalidDataException("Invalid relay presence.");
+            return payload[0] == 1;
         }
 
         /// <summary>MemberJoined / MemberLeft 载荷：[原因 1 字节][账号 UTF-8，至少 1 字节]。slot 是帧的 seq。</summary>
