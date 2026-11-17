@@ -1,0 +1,26 @@
+=== mutation: wiring/modulehost/mod.go: [	return m.loadConfigs(cfg)] -> [	return nil]
+--- FAIL: TestModuleConfigIsLoadedAtInitAndHandedToTheModule (0.00s)
+    config_test.go:82: after Init: {PerLevel:100 Max:100 HardCap:999 Regen:5m0s}, want per_level 7 and regen 1m from the config, max from the default
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/modulehost	0.859s
+FAIL
+=== mutation: wiring/modulehost/config.go: [		if err := module.Config.check(cfg); err != nil {] -> [		if err := error(nil); err != nil {]
+--- FAIL: TestModuleConfigDeclarationsAreCheckedLikeAModsOwn (0.00s)
+    config_test.go:67: CheckConfig with hard_cap below max = <nil>, want the module's own cross-key rule
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/modulehost	0.501s
+FAIL
+=== mutation: wiring/modulehost/config.go: [			schemas = append(schemas, module.Config.schema)] -> [			_ = module.Config.schema]
+--- FAIL: TestModuleConfigDeclarationsAreCheckedLikeAModsOwn (0.00s)
+    config_test.go:55: the module host Mod does not declare rules.per_level; declared: map[]
+--- FAIL: TestModuleConfigIsLoadedAtInitAndHandedToTheModule (0.00s)
+    config_test.go:90: a declaration without a receiver is still a declaration
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/modulehost	0.497s
+FAIL
+=== mutation: wiring/modulehost/config.go: [		use(value)] -> [		_ = value]
+--- FAIL: TestModuleConfigIsLoadedAtInitAndHandedToTheModule (0.00s)
+    config_test.go:82: after Init: {PerLevel:100 Max:100 HardCap:999 Regen:5m0s}, want per_level 7 and regen 1m from the config, max from the default
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/modulehost	1.631s
+FAIL

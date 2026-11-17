@@ -1,0 +1,10 @@
+--- FAIL: TestModuleConfigCheckRed (40.87s)
+    module_config_red_test.go:77: config check with "exp_per_level: 0" in config.game.yaml = exit 0 <nil>; want exit 2 naming "profile.exp_per_level"
+    module_config_red_test.go:77: config check with "ledger_prune_grace: 30s" in config.game.yaml = exit 0 <nil>; want exit 2 naming "mailbox.ledger_prune_grace"
+    module_config_red_test.go:77: config check with "hard_cap: 50" in config.game.yaml = exit 0 <nil>; want exit 3 naming "stamina.hard_cap must not be below stamina.max"
+    module_config_red_test.go:77: config check with "board_id: \"no:colons\"" in config.game.yaml = exit 0 <nil>; want exit 3 naming "leaderboard.board_id"
+    module_config_red_test.go:77: config check with "max_top: 5" in config.game.yaml = exit 0 <nil>; want exit 3 naming "leaderboard.default_top must not exceed leaderboard.max_top"
+    module_config_red_test.go:77: config check with "portal:\n  servers:\n    \"007\": 203.0.113.7:7000" in config.account.yaml = exit 0 <nil>; want exit 3 naming "portal.servers key \"007\""
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	41.532s
+FAIL

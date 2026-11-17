@@ -6,8 +6,9 @@ import (
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
 )
 
-// 这个文件把 leaderboard_board.go 里的规则钉住，和它一起归工程所有：工程改了榜名、范围、周期、
-// 分数范围或一屏的长度，就把下面写死的数改成自己的。数是故意写死的——照抄常量名的断言拦不住改错的规则。
+// 这个文件把 leaderboard_board.go 与配置声明（leaderboard_config.go）的缺省规则钉住，和它们一起归工程所有：
+// 工程改了缺省的榜名、范围、周期、分数范围或一屏的长度，就把下面写死的数改成自己的。数是故意写死的——照抄字段名的
+// 断言拦不住改错的规则。用例没有装载工程的配置：读到的是声明的缺省值。
 
 func TestLeaderboardBoardIsOneGlobalTotalBoardInSeasonOne(t *testing.T) {
 	if season := CurrentSeason(); season != 1 {
@@ -46,7 +47,7 @@ func TestLeaderboardTopLimitDefaultsToTenAndStopsAtFifty(t *testing.T) {
 			t.Errorf("TopLimit(%d) = %d, want %d", requested, got, want)
 		}
 	}
-	if MaxTop > svcrank.MaxPageSize {
-		t.Fatalf("MaxTop %d exceeds what the rank service serves in one page (%d)", MaxTop, svcrank.MaxPageSize)
+	if maxTop := CurrentConfig().MaxTop; maxTop > svcrank.MaxPageSize {
+		t.Fatalf("max_top %d exceeds what the rank service serves in one page (%d)", maxTop, svcrank.MaxPageSize)
 	}
 }

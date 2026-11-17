@@ -1,0 +1,58 @@
+package leaderboard
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+
+	"github.com/tjbdwanghaibo/roost-core/wiring/modulehost"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// Config 是排行榜模块的配置（清单的 config:，D19 B）：榜名、现在的周期、分数的合法范围与一屏的长度。键、缺省值与
+// 范围只写在这里的 tag 上，跨键规则写在 ValidateConfig。安装器把它们写进业务服务的配置（configs/service/config.<服务>.yaml
+// 的 leaderboard: 段）；生成的 bootstrap 把它接进 App 的配置声明，`--check-config` 与 `roost config check` 查得出写错的值，
+// 进程启动时在任何 Mod Start 之前按它装载一次（UseConfig）。没有装载过的进程（模块场景测试）读到的是这里的缺省值：
+// 一张全服总分榜、只有一个周期。
+//
+// 每个数的含义与取舍写在 leaderboard_board.go（归工程所有：榜的范围、周期怎么算要改函数时改那里）。
+type Config struct {
+	BoardID    string `config:"leaderboard.board_id" default:"total" example:"total" help:"榜在 rank 服务里的名字（小写字母、数字、_ 或 -，至多 64 字节）；它是存储键的一部分，上线后改它等于换一张空榜"`
+	Season     int64  `config:"leaderboard.season" default:"1" min:"1" example:"1" help:"现在的周期号（正数）：改了之后读与写都落到这个周期的新空榜上，旧榜原样留在 rank 里"`
+	MinScore   int64  `config:"leaderboard.min_score" default:"1" example:"1" help:"能上榜的最小总分（含）；缺省 1：0 分等于还没有成绩，不上榜"`
+	MaxScore   int64  `config:"leaderboard.max_score" default:"1000000000000" example:"1000000000000" help:"能上榜的最大总分（含），只用来挡住算错的值：榜只升不降，错的大数提交上去后面压不下来"`
+	DefaultTop int    `config:"leaderboard.default_top" default:"10" min:"1" example:"10" help:"查前 N 名不填条数时给几条"`
+	MaxTop     int    `config:"leaderboard.max_top" default:"50" min:"1" max:"200" example:"50" help:"查前 N 名的条数上限（一屏榜单的长度），不超过 rank 服务的页上限 200"`
+}
+
+// boardIDPattern 是 leaderboard.board_id 的写法：rank 服务把它拼进存储键（"<榜名>:<范围>:..."），不能带冒号与空白。
+var boardIDPattern = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+
+// ValidateConfig 是跨键规则：榜名的写法、rank 服务肯收的榜、分数范围不为空、缺省条数不超过上限、上限不超过 rank 服务的页上限。
+func (c *Config) ValidateConfig(bool) error {
+	var problems []error
+	if !boardIDPattern.MatchString(c.BoardID) {
+		problems = append(problems, fmt.Errorf("config: leaderboard.board_id %q must be 1-64 lowercase letters, digits, '_' or '-'", c.BoardID))
+	} else if err := (svcrank.Board{ID: c.BoardID, Scope: svcrank.ScopeGlobal, Season: c.Season}).Validate(); err != nil {
+		problems = append(problems, fmt.Errorf("config: leaderboard: %w", err))
+	}
+	if c.MinScore > c.MaxScore {
+		problems = append(problems, errors.New("config: leaderboard.min_score must not exceed leaderboard.max_score"))
+	}
+	if c.DefaultTop > c.MaxTop {
+		problems = append(problems, errors.New("config: leaderboard.default_top must not exceed leaderboard.max_top"))
+	}
+	if c.MaxTop > svcrank.MaxPageSize {
+		problems = append(problems, fmt.Errorf("config: leaderboard.max_top must not exceed the rank service's page size %d", svcrank.MaxPageSize))
+	}
+	return errors.Join(problems...)
+}
+
+// currentConfig 是当前的配置。
+var currentConfig modulehost.Value[Config]
+
+// UseConfig 换上一份配置：进程启动时由 bootstrap 调一次；测试换配置时调它，结束时换回 CurrentConfig 读到的旧值。
+func UseConfig(value Config) { currentConfig.Use(value) }
+
+// CurrentConfig 返回当前的配置。
+func CurrentConfig() Config { return currentConfig.Get() }

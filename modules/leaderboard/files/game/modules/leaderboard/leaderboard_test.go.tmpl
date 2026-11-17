@@ -61,8 +61,8 @@ func leaderboardRegistryWith(t *testing.T, client svcrank.Rank) *app.Registry {
 	return registry
 }
 
-// 这个文件的用例只按名字引用榜的规则（BoardID、CurrentSeason、MinScore、MaxScore、DefaultTop、MaxTop），
-// 工程改了 leaderboard_board.go 之后不用动它；规则具体是多少由 leaderboard_board_test.go 钉住。
+// 这个文件的用例只按名字引用榜的规则（CurrentSeason、Board 与配置 CurrentConfig 的各项），
+// 工程改了 leaderboard_board.go 或配置之后不用动它；规则具体是多少由 leaderboard_board_test.go 钉住。
 
 func TestLeaderboardCurrentBoardIsTheBoardOfTheCurrentSeason(t *testing.T) {
 	season := CurrentSeason()
@@ -84,12 +84,13 @@ func TestLeaderboardCurrentBoardIsTheBoardOfTheCurrentSeason(t *testing.T) {
 }
 
 func TestLeaderboardValidateScoreAcceptsExactlyTheRange(t *testing.T) {
-	for _, total := range []int64{MinScore, MaxScore} {
+	rules := CurrentConfig()
+	for _, total := range []int64{rules.MinScore, rules.MaxScore} {
 		if err := ValidateScore(total); err != nil {
 			t.Errorf("total %d (an end of the range) refused: %v", total, err)
 		}
 	}
-	for _, total := range []int64{MinScore - 1, MaxScore + 1} {
+	for _, total := range []int64{rules.MinScore - 1, rules.MaxScore + 1} {
 		err := ValidateScore(total)
 		if err == nil {
 			t.Errorf("total %d (just outside the range) accepted", total)
@@ -102,22 +103,24 @@ func TestLeaderboardValidateScoreAcceptsExactlyTheRange(t *testing.T) {
 }
 
 func TestLeaderboardTopLimitIsClampedIntoOneToMaxTop(t *testing.T) {
+	rules := CurrentConfig()
+	defaultTop, maxTop := rules.DefaultTop, rules.MaxTop
 	for _, c := range []struct {
 		requested int32
 		want      int
 	}{
-		{0, DefaultTop}, {-1, DefaultTop}, {-2147483648, DefaultTop},
-		{1, 1}, {MaxTop, MaxTop},
-		{MaxTop + 1, MaxTop}, {2147483647, MaxTop},
+		{0, defaultTop}, {-1, defaultTop}, {-2147483648, defaultTop},
+		{1, 1}, {int32(maxTop), maxTop},
+		{int32(maxTop) + 1, maxTop}, {2147483647, maxTop},
 	} {
 		if got := TopLimit(c.requested); got != c.want {
 			t.Errorf("TopLimit(%d) = %d, want %d", c.requested, got, c.want)
 		}
 	}
 	// 收进范围之后的每个值都是 rank 服务肯收的条数。
-	for requested := int32(-2); requested <= MaxTop+2; requested++ {
-		if got := TopLimit(requested); got < 1 || got > MaxTop || got > svcrank.MaxPageSize {
-			t.Fatalf("TopLimit(%d) = %d, outside [1, %d]", requested, got, MaxTop)
+	for requested := int32(-2); requested <= int32(maxTop)+2; requested++ {
+		if got := TopLimit(requested); got < 1 || got > maxTop || got > svcrank.MaxPageSize {
+			t.Fatalf("TopLimit(%d) = %d, outside [1, %d]", requested, got, maxTop)
 		}
 	}
 }
@@ -142,12 +145,12 @@ func TestLeaderboardStandingIsOffBoardUnlessFoundWithARank(t *testing.T) {
 }
 
 func TestLeaderboardSubmitSendsASnapshotWithMaxAndNoRequestID(t *testing.T) {
-	fake := &leaderboardRecordingRank{entry: svcrank.Entry{Rank: 4, Score: svcrank.Score{OwnerID: 1001, Value: MinScore + 119}}}
-	standing, err := Submit(context.Background(), leaderboardRegistryWith(t, fake), 1001, MinScore+119)
+	fake := &leaderboardRecordingRank{entry: svcrank.Entry{Rank: 4, Score: svcrank.Score{OwnerID: 1001, Value: CurrentConfig().MinScore + 119}}}
+	standing, err := Submit(context.Background(), leaderboardRegistryWith(t, fake), 1001, CurrentConfig().MinScore+119)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if standing != (Standing{OnBoard: true, Rank: 4, Score: MinScore + 119}) {
+	if standing != (Standing{OnBoard: true, Rank: 4, Score: CurrentConfig().MinScore + 119}) {
 		t.Fatalf("standing = %+v", standing)
 	}
 	if len(fake.calls) != 1 {
@@ -160,8 +163,8 @@ func TestLeaderboardSubmitSendsASnapshotWithMaxAndNoRequestID(t *testing.T) {
 	if call.mode != svcrank.UpdateMax {
 		t.Errorf("mode = %q: a total is a snapshot and must be submitted with max, never add or set", call.mode)
 	}
-	if call.score.OwnerID != 1001 || call.score.Value != MinScore+119 {
-		t.Errorf("score = %+v, want owner 1001 value %d", call.score, MinScore+119)
+	if call.score.OwnerID != 1001 || call.score.Value != CurrentConfig().MinScore+119 {
+		t.Errorf("score = %+v, want owner 1001 value %d", call.score, CurrentConfig().MinScore+119)
 	}
 	if call.score.Tie != 0 {
 		t.Errorf("tie = %d: it must stay zero so the rank service stamps the time the score was reached", call.score.Tie)
@@ -176,26 +179,26 @@ func TestLeaderboardSubmitSendsASnapshotWithMaxAndNoRequestID(t *testing.T) {
 }
 
 func TestLeaderboardSubmitSeasonGoesToTheSeasonTheCallerNamed(t *testing.T) {
-	fake := &leaderboardRecordingRank{entry: svcrank.Entry{Rank: 1, Score: svcrank.Score{OwnerID: 1001, Value: MinScore}}}
+	fake := &leaderboardRecordingRank{entry: svcrank.Entry{Rank: 1, Score: svcrank.Score{OwnerID: 1001, Value: CurrentConfig().MinScore}}}
 	registry := leaderboardRegistryWith(t, fake)
 	// 调用方按它记账用的周期提交：不管现在是哪个周期，分数进的是它说的那一期的榜。
 	other := CurrentSeason() + 3
-	standing, err := SubmitSeason(context.Background(), registry, other, 1001, MinScore)
+	standing, err := SubmitSeason(context.Background(), registry, other, 1001, CurrentConfig().MinScore)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if standing != (Standing{OnBoard: true, Rank: 1, Score: MinScore}) {
+	if standing != (Standing{OnBoard: true, Rank: 1, Score: CurrentConfig().MinScore}) {
 		t.Fatalf("standing = %+v", standing)
 	}
 	if len(fake.calls) != 1 || fake.calls[0].board != Board(other) || fake.calls[0].board == CurrentBoard() {
 		t.Fatalf("calls = %+v, want one submit to Board(%d) = %+v", fake.calls, other, Board(other))
 	}
-	if call := fake.calls[0]; call.mode != svcrank.UpdateMax || call.requestID != "" || call.score.Value != MinScore {
+	if call := fake.calls[0]; call.mode != svcrank.UpdateMax || call.requestID != "" || call.score.Value != CurrentConfig().MinScore {
 		t.Fatalf("SubmitSeason must submit exactly like Submit: %+v", call)
 	}
 	// 周期号不为正在发出调用之前被拒：0 多半是调用方忘了取。
 	for _, season := range []int64{0, -1} {
-		if _, err := SubmitSeason(context.Background(), registry, season, 1001, MinScore); !errors.Is(err, svcrank.ErrBoardInvalid) {
+		if _, err := SubmitSeason(context.Background(), registry, season, 1001, CurrentConfig().MinScore); !errors.Is(err, svcrank.ErrBoardInvalid) {
 			t.Errorf("season %d: error %v, want it to carry the board-invalid code", season, err)
 		}
 	}
@@ -214,11 +217,11 @@ func TestLeaderboardSubmitRefusesBadInputBeforeCallingRank(t *testing.T) {
 		want     error
 	}
 	for _, c := range []refusal{
-		{"player zero", 0, MinScore, svcrank.ErrOwnerInvalid},
-		{"negative player", -5, MinScore, svcrank.ErrOwnerInvalid},
-		{"total below the range", 1001, MinScore - 1, svcrank.ErrScoreInvalid},
-		{"total far below the range", 1001, MinScore - 11, svcrank.ErrScoreInvalid},
-		{"total above the range", 1001, MaxScore + 1, svcrank.ErrScoreInvalid},
+		{"player zero", 0, CurrentConfig().MinScore, svcrank.ErrOwnerInvalid},
+		{"negative player", -5, CurrentConfig().MinScore, svcrank.ErrOwnerInvalid},
+		{"total below the range", 1001, CurrentConfig().MinScore - 1, svcrank.ErrScoreInvalid},
+		{"total far below the range", 1001, CurrentConfig().MinScore - 11, svcrank.ErrScoreInvalid},
+		{"total above the range", 1001, CurrentConfig().MaxScore + 1, svcrank.ErrScoreInvalid},
 	} {
 		standing, err := Submit(context.Background(), registry, c.playerID, c.total)
 		if err == nil {
@@ -236,7 +239,7 @@ func TestLeaderboardSubmitRefusesBadInputBeforeCallingRank(t *testing.T) {
 		t.Fatalf("refused submits reached the rank service %d times: %+v", len(fake.calls), fake.calls)
 	}
 	// 边界内侧：范围两端的总分都能提交。
-	for _, total := range []int64{MinScore, MaxScore} {
+	for _, total := range []int64{CurrentConfig().MinScore, CurrentConfig().MaxScore} {
 		if _, err := Submit(context.Background(), registry, 1001, total); err != nil {
 			t.Fatalf("total %d (an end of the range): %v", total, err)
 		}
@@ -249,10 +252,10 @@ func TestLeaderboardSubmitRefusesBadInputBeforeCallingRank(t *testing.T) {
 func TestLeaderboardSubmitReturnsRankFailureToTheCaller(t *testing.T) {
 	fake := &leaderboardRecordingRank{
 		// 失败时 rank 可能仍带回一个值；调用方不该把它当成榜上的位置。
-		entry: svcrank.Entry{Rank: 9, Score: svcrank.Score{OwnerID: 1001, Value: MinScore}},
+		entry: svcrank.Entry{Rank: 9, Score: svcrank.Score{OwnerID: 1001, Value: CurrentConfig().MinScore}},
 		err:   svcrank.ErrConflict,
 	}
-	standing, err := Submit(context.Background(), leaderboardRegistryWith(t, fake), 1001, MinScore)
+	standing, err := Submit(context.Background(), leaderboardRegistryWith(t, fake), 1001, CurrentConfig().MinScore)
 	if !errors.Is(err, svcrank.ErrConflict) {
 		t.Fatalf("error = %v, want the rank service's own error so the caller can log and move on", err)
 	}
@@ -265,10 +268,10 @@ func TestLeaderboardSubmitReturnsRankFailureToTheCaller(t *testing.T) {
 }
 
 func TestLeaderboardSubmitNeedsTheRankCapability(t *testing.T) {
-	if _, err := Submit(context.Background(), nil, 1001, MinScore); err == nil {
+	if _, err := Submit(context.Background(), nil, 1001, CurrentConfig().MinScore); err == nil {
 		t.Fatal("a nil registry was accepted")
 	}
-	_, err := Submit(context.Background(), app.NewRegistry(nil), 1001, MinScore)
+	_, err := Submit(context.Background(), app.NewRegistry(nil), 1001, CurrentConfig().MinScore)
 	if err == nil {
 		t.Fatal("a registry without the rank client was accepted")
 	}

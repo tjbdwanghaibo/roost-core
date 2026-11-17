@@ -9,6 +9,9 @@ runtime:
   package: services/account/portal
   start: Start
   framework: account
+config:
+  package: services/account/portal
+  type: Config
 errcodes: [portal_request_invalid]
 next:
   - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter、/portal/game-token；请求与响应见 roost-core 的 modules/portal/README.md"

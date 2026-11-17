@@ -70,7 +70,7 @@ const cardTablesDir = "../../configs/data"
 // cardFirstWinTask 是生成脚本追加的永久任务“首胜”（事件 card.won，奖 10 钻石）。
 const cardFirstWinTask int64 = 101
 
-// cardRegenMillis 是 stamina 缺省规则（game/components/stamina/rules.go）恢复 1 点体力的毫秒数。
+// cardRegenMillis 是 stamina 缺省规则（配置 stamina.regen_interval 的缺省值 5m）恢复 1 点体力的毫秒数。
 const cardRegenMillis int64 = 5 * 60 * 1000
 
 // writeCardCatalog 把工程的表与卡牌规则 cards.json 放进同一个目录：卡牌规则与 gacha / bag / task 的表同一个

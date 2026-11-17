@@ -56,7 +56,7 @@
 - **账号 ↔ 玩家号的映射在握手时才建**：拿了进服票据而没有去握手的新号，在 account 里没有角色，清单里仍是 `role: null`。反过来，握手过而没有在游戏服新建的账号，清单里已经有 `role`（“老号”），推荐规则把那个服当作他玩过的服；游戏服那边仍告知要新建。清单里的 `role` 说的是 account 的映射，不是游戏服的玩家数据。
 - **地址可以是空的**：零配置时清单与进服结果里 `addr` 为空、`addr_source` 是 `none`，票据照发。
 - **动态地址的新鲜度**：game 每 `login.presence.interval`（缺省 10 秒）报一次，期限是三倍（30 秒）。进程死了、断网了，它的地址最多还会被发出去一个期限；正常停机时立刻撤销。上报者自报服号，account 不核对（总线只在内网，调用方可信）。没写 `login.presence.addr` 的 game 不上报，那个服只有静态地址。
-- **`portal.servers` 不在 App 的配置声明里**：`--print-config` 不打印、`--check-config` 与 `roost config check` 不检查，写错了要等进程启动到入口这一步才报错退出。
+- **`portal.servers` / `portal.services` 在 account 进程的配置声明里**（清单的 `config:`，D19 B，结构体是 `services/account/portal/portal_config.go` 的 `Config`）：`--print-config` 打印、`go run ./cmd/account --check-config` 与 `roost config check --service account` 按声明与 `ValidateConfig`（服号写法、地址带主机、条数上限）检查，写错了在检查时就报、进程不启动；入口仍在 Start 里读它。两个键都没有缺省值也没有 example，安装器不往配置里写段。
 - **前提**：依赖 `account_auth`（account 的登录协作者；开发登录、渠道入口、玩家号计数器都在那里），不依赖 `login`：`/portal/enter` 给的握手票据 `enter:<进服票据>` 由入口自己拼（`EnterTicketPrefix`），与 login 的认证器认的前缀是两边各写一份的约定，两个都装着时由联动场景 `TestWithPortalLogin` 核对；握手那一侧要 login（或工程自己的认证器）。托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`ListServices`、`ListServerPresence`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`IssueGameToken`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
 - **已知限制**：[KNOWN-LIMITS“portal 的边界”](../../docs/maintenance/KNOWN-LIMITS.md)，以及同一处的“login 的边界”“game-demo 接入登录链路的边界”（demo 渠道经入口对外、生成依赖没发布的 `wiring/modulehost`）。
 

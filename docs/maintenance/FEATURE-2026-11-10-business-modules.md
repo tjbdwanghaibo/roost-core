@@ -307,6 +307,8 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 
 首个使用者为 skillbook，demo 已迁移，详见 [modules 的服务级启动与停机](../../modules/README.md#服务级启动与停机)。不引入框架运行时包、不要求业务补两行调用，也不通过 doctor 提示代替自动接线。生命周期只支持单次启动，不支持在业务 Init 之后再启动一组模块。
 
+已实现（R5，D19 B，2026-11-17）：模块清单可声明 `config: {package, type, use}`，指出模块包里带 `config` tag 的结构体（写法同 Mod 的配置声明）。安装器从模板读出 tag，把标了 `example` 的键写进模块所在进程的配置；bootstrap 经 `wiring/modulehost` 的 Mod 把它接进 App 的配置声明（托管服务上随装入口的 Mod，业务服务上加一个只带配置的 Mod），`--check-config` / `roost config check` / doctor 按它检查，进程启动时在任何 Mod Start 之前装载一次交给模块。profile、stamina、leaderboard、mailbox 的规则常量与 portal 的 `portal.servers` 已迁成配置，详见 [模块的配置：config](../../modules/README.md#模块的配置config)。
+
 ### 11.7 安装器与四个命令
 
 - 新文件 `codegen/internal/roost/module.go`（命令实现）与 `module_install.go`（安装步骤）；`cli.go` 加顶层 `module` 分支；`help.go` 加 `module` 主题；`command_tree.go` 同步。

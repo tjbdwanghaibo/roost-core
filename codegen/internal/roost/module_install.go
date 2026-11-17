@@ -68,6 +68,9 @@ type ModulePlanItem struct {
 	Replaces []string       `json:"replaces,omitempty"`
 	Verify   ModuleVerify   `json:"verify"`
 	Runtime  *ModuleRuntime `json:"runtime,omitempty"`
+	// Config 是清单的 config:；ConfigKeys 是它声明的键（只有这次要装的模块带着）。
+	Config     *ModuleConfig `json:"config,omitempty"`
+	ConfigKeys []string      `json:"config_keys,omitempty"`
 	// Managers 是登记进 game/managers/managers.go 的 manager 构造函数（清单的 managers）。
 	Managers []string                 `json:"managers,omitempty"`
 	Sagas    []ModuleSaga             `json:"sagas,omitempty"`
@@ -176,6 +179,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 		item := ModulePlanItem{
 			Name: spec.Name, Summary: spec.Summary, Requires: append([]string{}, spec.Requires...), Runtime: spec.Runtime, Managers: spec.Managers,
 			IDs: map[string]map[string]int64{}, State: []string{}, Files: spec.ownedFiles(), Verify: spec.Verify, spec: spec,
+			Config: spec.Config, ConfigKeys: moduleConfigKeyNames(spec),
 		}
 		if installed, ok := manifest.Modules[spec.Name]; ok {
 			// 装在没有业务服务的工程里的模块（记录的 service 为空）不属于任何业务服务，工程后来有了业务服务也照样算已装。
@@ -183,6 +187,7 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 				return ModulePlan{}, fmt.Errorf("module %s belongs to service %s, not %s", spec.Name, installed.Service, service)
 			}
 			item.Runtime = installed.Runtime
+			item.Config, item.ConfigKeys = installed.Config, nil
 			item.Managers = installed.Managers
 			item.Requires = append([]string{}, installed.Requires...)
 			item.Status = moduleStatusInstalled
@@ -596,6 +601,9 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		for service := range item.Services {
 			touched = append(touched, moduleServiceConfig(service), "configs/service/config."+service+".prod.example.yaml", kubernetesSecretExampleRel(service))
 		}
+		if host := moduleSpecConfigHost(manifest, plan.Service, item.spec); host != "" {
+			touched = append(touched, moduleConfigTouchedFiles(host)...)
+		}
 		sagaPaths, err := moduleSagaTouchedFiles(root, item.spec, newEntities)
 		if err != nil {
 			return ModulePlan{}, err
@@ -670,6 +678,9 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		if err := writeModuleServiceConfigs(root, beforeServices, manifest, item.spec); err != nil {
 			return fail(err)
 		}
+		if err := writeModuleConfigSection(root, moduleSpecConfigHost(manifest, plan.Service, item.spec), item.spec, options.Stderr); err != nil {
+			return fail(fmt.Errorf("module %s config: %w", item.Name, err))
+		}
 		manifest.Modules[item.Name] = record
 	}
 	// 模块的实体与组件全部就位后补回执；多个 Saga 共用一个实体回执适配。
@@ -721,11 +732,22 @@ func AddModules(ctx context.Context, root string, names []string, options Module
 		return fail(err)
 	}
 	// 4. 生成。失败时生成物没有提交（暂存区），业务文件与 roost.yaml 恢复。
-	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || len(addedFrameworks) > 0 || modulePlanHasTimers(plan) || modulePlanHasHostedRuntime(plan) || modulePlanHasServices(plan)}, options.Stderr); err != nil {
+	if err := GenerateTransactional(ctx, root, GenerateOptions{Stdout: options.Stdout, deferDependencies: options.deferDependencies, syncProject: selfSyncChanged || len(newEntities) > 0 || len(addedFrameworks) > 0 || modulePlanHasTimers(plan) || modulePlanHasHostedRuntime(plan) || modulePlanHasServices(plan) || modulePlanHasConfig(plan)}, options.Stderr); err != nil {
 		return fail(fmt.Errorf("generate after installing modules: %w", err))
 	}
 	plan.Applied = true
 	return plan, nil
+}
+
+// modulePlanHasConfig 报告这次要装的模块里有没有声明配置的：bootstrap 要接上它的声明（业务服务因此多一个
+// modulehost Mod），停机预算与部署的宽限期要在同一次安装里刷新。
+func modulePlanHasConfig(plan ModulePlan) bool {
+	for _, item := range plan.Modules {
+		if item.Status == moduleStatusInstall && item.Config != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // modulePlanHasHostedRuntime 报告这次要装的模块里有没有入口落在托管服务上的（runtime.framework）：
@@ -839,7 +861,7 @@ func moduleTouchedFiles(root string, spec ModuleSpec, newEntity bool) ([]string,
 // writeModule 先写模板，再追加字段、接组件。所有写入都在外层回滚边界内。
 func writeModule(root string, manifest Manifest, service string, item ModulePlanItem) (InstalledModule, error) {
 	spec := item.spec
-	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: spec.ownedFiles(), Service: service, Runtime: spec.Runtime, Requires: append([]string(nil), spec.Requires...), Managers: append([]string(nil), spec.Managers...)}
+	record := InstalledModule{Digest: spec.Digest, IDs: item.IDs, Files: spec.ownedFiles(), Service: service, Runtime: spec.Runtime, Config: spec.Config, Requires: append([]string(nil), spec.Requires...), Managers: append([]string(nil), spec.Managers...)}
 	for host, declared := range spec.Services {
 		if len(declared.Managers) > 0 {
 			if record.ServiceManagers == nil {

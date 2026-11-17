@@ -19,6 +19,10 @@ state:
     comment: ProfilePrivate 是档案里只给玩家本人看的那一半（等级内经验），随同步下发；给别的玩家的视图不要列它。
 component: Profile
 component_package: game/components/profile
+config:
+  package: game/components/profile
+  type: Config
+  use: UseConfig
 protocols: [ProfileRename]
 errcodes: [profile_name_empty, profile_name_long, profile_name_invalid, profile_exp_invalid, profile_exp_overflow]
 verify:

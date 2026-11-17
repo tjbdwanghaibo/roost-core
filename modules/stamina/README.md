@@ -19,7 +19,7 @@
 - **实体事件**（`game/event/stamina.go`）
   - `event.StaminaSpent{Amount, NowUnixMilli}`：每次成功的 `Spend` 在 Player 上发布一次，`Amount` 是实际扣掉的点数；监听写成组件或实体方法上的 `//roost:listen`，在 Player 锁内、同一笔 Nest 事务里执行，只改同一个 Player，不做 I/O；返回错误时整笔回滚。`Grant` 与 `Refill` 不发布。
 - **状态**（`db/def/stamina.go`）：`PlayerDao.Stamina`（`StaminaState{Value, SettledAt, RefillDay, RefillCount}`），落库并同步，玩家本人可见。从没有过体力写入的玩家是零值，按公式就是满体力，不用初始化。
-- **配置**：没有配置表。规则写在留给工程的 `game/components/stamina/rules.go`：`staminaRules()` 返回 `StaminaRules{Max, HardCap, RegenMillis, RefillDailyLimit}`，缺省上限 100、硬顶 999、每 5 分钟恢复 1 点、每业务日能买 3 次补满；`staminaRefillPrice(nth)` 返回当日第 `nth` 次补满的金币价格，缺省 50、100、150。
+- **配置**（清单的 `config:`，声明在 `game/components/stamina/stamina_config.go`，安装器写进业务服务配置的 `stamina:` 段）：`stamina.max`（上限，缺省 100）、`stamina.hard_cap`（发放的硬顶，缺省 999，不低于 max）、`stamina.regen_interval`（恢复 1 点的时间，缺省 5m，整毫秒，0 表示不自然恢复）、`stamina.refill_daily_limit`（每业务日补满次数，缺省 3，0 表示不开放购买）、`stamina.refill_price_step`（第 n 次补满花 n 倍，缺省 50）。`--check-config` 与 `roost config check` 按声明与跨键规则检查，进程启动时装载一次；模块场景按缺省值写。留给工程的 `game/components/stamina/rules.go` 把配置换成一次读写用的 `StaminaRules{Max, HardCap, RegenMillis, RefillDailyLimit}`（`staminaRules()`）与价格（`staminaRefillPrice(nth)`）；规则要随玩家变化（按等级、接配置表）时改那里。
 - **错误码**（`internal/errors/stamina.go`）：`stamina_invalid`（点数不为正）、`stamina_short`（体力不够）、`stamina_full`（已满，不能买补满）、`stamina_refill_limit`（今天的购买次数用完）。补满时金币不够透出货币模块的 `wallet_short`。
 
 **日志**：付费补满确认，记录花费、次数、体力和余额；Spend 不记录。服务端 Grant 的实际截断数量仍由调用方记录。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/stamina.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。

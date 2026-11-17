@@ -1,0 +1,5 @@
+Running card-rpg: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/r5/genres/card-rpg
+card-rpg: passed
+Running merge-casual: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/r5/genres/merge-casual
+merge-casual: passed
+exit=0

@@ -449,11 +449,18 @@ func renderBootstrap(m Manifest) string {
 	if contains(allMods, "directory") {
 		imports["github.com/tjbdwanghaibo/roost-core/service/directory"] = "directory"
 	}
-	// 入口落在托管服务上的模块（runtime.framework）：wiring/modulehost 的 Mod 与各模块的入口包。
+	// 入口落在托管服务上的模块（runtime.framework）：wiring/modulehost 的 Mod 与各模块的入口包；声明了配置的模块
+	// （清单的 config:）还有配置结构体所在的包，业务服务上的配置也经 wiring/modulehost 的 Mod 接进声明。
 	for _, name := range services {
 		for _, module := range hostedModuleRuntimes(m, name) {
 			imports[moduleHostWiring] = "kitmodulehost"
 			imports[m.Project.Module+"/"+m.Modules[module].Runtime.Package] = module + "Module"
+		}
+		for _, module := range append(hostedModuleRuntimes(m, name), businessModuleConfigs(m, name)...) {
+			if record := m.Modules[module]; record.Config != nil {
+				imports[moduleHostWiring] = "kitmodulehost"
+				imports[m.Project.Module+"/"+record.Config.Package] = moduleConfigImportAlias(record, module)
+			}
 		}
 	}
 	if len(m.Timers) > 0 {
@@ -643,7 +650,12 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 		if hosted := hostedModuleRuntimes(m, name); len(hosted) > 0 {
 			var modules strings.Builder
 			for _, module := range hosted {
-				fmt.Fprintf(&modules, ", kitmodulehost.Module{Name: %q, Start: %sModule.%s}", module, module, m.Modules[module].Runtime.Start)
+				record := m.Modules[module]
+				config := ""
+				if record.Config != nil {
+					config = ", Config: " + renderModuleConfigOf(record, module)
+				}
+				fmt.Fprintf(&modules, ", kitmodulehost.Module{Name: %q, Start: %sModule.%s%s}", module, module, record.Runtime.Start, config)
 			}
 			out = append(out, fmt.Sprintf("kitmodulehost.NewMod(%q, domain%s.CapabilityName%s)", name, spec.Package, modules.String()))
 		}
@@ -691,6 +703,15 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 				out = append(out, "accessplayertcp.NewMod()")
 			}
 		}
+	}
+	// 装在这个业务服务上、声明了配置的模块（清单的 config:）：一个只带配置的 wiring/modulehost Mod，把它们的声明接进
+	// App 的配置声明，在本服务任何 Mod Start 之前装载并交给模块。模块入口仍由 modules_gen.go 启动。
+	if configs := businessModuleConfigs(m, name); len(configs) > 0 {
+		var modules strings.Builder
+		for _, module := range configs {
+			fmt.Fprintf(&modules, ", kitmodulehost.Module{Name: %q, Config: %s}", module, renderModuleConfigOf(m.Modules[module], module))
+		}
+		out = append(out, fmt.Sprintf("kitmodulehost.NewMod(%q, \"\"%s)", name, modules.String()))
 	}
 	return out
 }

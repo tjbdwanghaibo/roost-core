@@ -1,10 +1,14 @@
 name: leaderboard
-summary: 排行榜：前 N 名连同自己的名次（LeaderboardTop）、只查自己的名次（LeaderboardMe），经托管的 rank 服务；提交分数只给服务端别的功能调用；榜名、周期与分数范围写在 game/modules/leaderboard/leaderboard_board.go，缺省一张全服总分榜
+summary: 排行榜：前 N 名连同自己的名次（LeaderboardTop）、只查自己的名次（LeaderboardMe），经托管的 rank 服务；提交分数只给服务端别的功能调用；榜名、周期、分数范围与一屏长度在业务服务配置的 leaderboard 段（声明在 game/modules/leaderboard/leaderboard_config.go，榜的范围与周期的算法在 leaderboard_board.go），缺省一张全服总分榜
 requires: []
 conflicts: []
 needs:
   features: [protocol]
   uses: [rank]
+config:
+  package: game/modules/leaderboard
+  type: Config
+  use: UseConfig
 protocols: [LeaderboardTop, LeaderboardMe]
 verify:
   packages: [./game/modules/leaderboard, ./game/controllers]

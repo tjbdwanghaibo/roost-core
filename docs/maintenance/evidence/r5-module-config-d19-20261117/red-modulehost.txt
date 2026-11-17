@@ -1,0 +1,14 @@
+# github.com/tjbdwanghaibo/roost-core/wiring/modulehost [github.com/tjbdwanghaibo/roost-core/wiring/modulehost.test]
+wiring/modulehost/config_test.go:45:12: undefined: Value
+wiring/modulehost/config_test.go:46:12: undefined: Value
+wiring/modulehost/config_test.go:47:50: unknown field Config in struct literal of type Module
+wiring/modulehost/config_test.go:47:58: undefined: ConfigOf
+wiring/modulehost/config_test.go:47:102: unknown field Config in struct literal of type Module
+wiring/modulehost/config_test.go:47:110: undefined: ConfigOf
+wiring/modulehost/config_test.go:50:26: mod.ConfigSchema undefined (type *Mod has no field or method ConfigSchema)
+wiring/modulehost/config_test.go:73:12: undefined: Value
+wiring/modulehost/config_test.go:77:50: unknown field Config in struct literal of type Module
+wiring/modulehost/config_test.go:77:58: undefined: ConfigOf
+wiring/modulehost/config_test.go:77:50: too many errors
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/modulehost [build failed]
+FAIL

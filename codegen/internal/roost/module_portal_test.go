@@ -97,7 +97,7 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 		t.Fatal("config.game.yaml gained a web section; the login entry does not listen on the game process")
 	}
 	bootstrap := read("internal/bootstrap/generated.go")
-	const hosted = `kitmodulehost.NewMod("account", domainaccount.CapabilityName, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`
+	const hosted = `kitmodulehost.NewMod("account", domainaccount.CapabilityName, kitmodulehost.Module{Name: "portal", Start: portalModule.Start, Config: kitmodulehost.ConfigOf[portalModule.Config](nil)})`
 	if !strings.Contains(bootstrap, hosted) || !strings.Contains(bootstrap, `portalModule "example.com/studio/frontdoor/services/account/portal"`) ||
 		strings.Contains(bootstrap, "NewWithModules") {
 		t.Fatalf("the bootstrap does not start the portal on the account service (or wraps the business service):\n%s", bootstrap)

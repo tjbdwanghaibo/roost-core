@@ -327,6 +327,64 @@ func demoGiftRefundBudget(root, gameService string) error {
 	return nil
 }
 
+// demoLeaderboardConfig sets the demo's board in the leaderboard: section the
+// leaderboard module's installer wrote into the game service's dev config,
+// production example and k8s Secret example: the clears board, counts up to a
+// billion, pages of ten (game/modules/leaderboard/leaderboard_board.go says
+// why). The section is the module's declaration (leaderboard_config.go), so the
+// process checks these values with --check-config and loads them at start.
+func demoLeaderboardConfig(root, gameService string) error {
+	values := map[string]string{"board_id": "clears", "max_score": "1000000000", "default_top": "10", "max_top": "10"}
+	for _, rel := range []string{
+		"configs/service/config." + gameService + ".yaml",
+		"configs/service/config." + gameService + ".prod.example.yaml",
+		"deploy/k8s/base/secret." + gameService + ".example.yaml",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) && strings.HasPrefix(rel, "deploy/") {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		lines := strings.SplitAfter(string(raw), "\n")
+		section, indent := -1, ""
+		for i, line := range lines {
+			if trimmed := strings.TrimLeft(line, " "); trimmed == "leaderboard:\n" {
+				section, indent = i, line[:len(line)-len(trimmed)]
+				break
+			}
+		}
+		if section < 0 {
+			return fmt.Errorf("%s: expected the leaderboard: section the module's installer writes", rel)
+		}
+		set := map[string]bool{}
+		for i := section + 1; i < len(lines); i++ {
+			line := lines[i]
+			trimmed := strings.TrimLeft(line, " ")
+			if trimmed == "" || trimmed == "\n" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if len(line)-len(trimmed) <= len(indent) {
+				break
+			}
+			key, _, ok := strings.Cut(strings.TrimSpace(trimmed), ":")
+			if value, wanted := values[key]; ok && wanted {
+				lines[i] = line[:len(line)-len(trimmed)] + key + ": " + value + "\n"
+				set[key] = true
+			}
+		}
+		if len(set) != len(values) {
+			return fmt.Errorf("%s: the leaderboard: section lacks one of board_id, max_score, default_top, max_top", rel)
+		}
+		if err := writeAtomic(path, []byte(strings.Join(lines, "")), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // demoPaymentSecrets gives the platform service its two secrets in the DEV
 // configs and tells the game process the same payment secret.
 //
@@ -831,8 +889,9 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 排行榜是 leaderboard 模块：读榜的两条协议（LeaderboardTop 带自己的名次、LeaderboardMe）与提交入口
 		// SubmitSeason 都是模块的；demo 只覆盖模块留给工程的业务文件——哪张榜、哪个赛季、分数范围、一屏多长——
 		// 与钉住这些数的测试。副本结算（finish_dungeon）在事务之外调模块的提交，它 import game/modules/leaderboard。
-		{write: "game/modules/leaderboard/leaderboard_board.go", why: "the module's project-owned board rules with the demo's board: dungeon clears, global, per season, pages of ten; and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
-		{write: "game/modules/leaderboard/leaderboard_board_test.go", why: "the demo's board rules pinned with literal numbers, in place of the module's test of its default board"},
+		{run: demoLeaderboardConfig, why: "the demo's board in the game configs' leaderboard: section (the module declares it): the clears board, counts up to a billion, pages of ten"},
+		{write: "game/modules/leaderboard/leaderboard_board.go", why: "the module's project-owned board rules with the demo's reasons: dungeon clears, global, per season, pages of ten; and why a point is the clear count snapshot (UpdateMax) rather than +1 deduplicated on the run id"},
+		{write: "game/modules/leaderboard/leaderboard_board_test.go", why: "the demo's board rules as its dev config sets them, pinned with literal numbers, in place of the module's test of its default board"},
 		// 背包是 bag 模块：组件（Add / Remove / Count / Has）、PlayerDao.Bag、道具表、丢弃协议、服务端发放 handler、
 		// 错误码都来自模块，demo 不带自己的背包。demo 只换数据：道具表多两列（attack / hp，属性系统按它给穿着的装备算加成），
 		// 行是 demo 的四种道具。背包的规则文件 game/components/bag/items.go 用模块的缺省实现（读这张表），不覆盖。

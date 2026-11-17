@@ -14,6 +14,10 @@ state:
     comment: Stamina 是体力模块给玩家本人看的状态（上次结算后的体力、恢复时钟的起点、当日已买补满的次数），随同步下发；当前体力由客户端按 StaminaState 注释里的公式推算。
 component: Stamina
 component_package: game/components/stamina
+config:
+  package: game/components/stamina
+  type: Config
+  use: UseConfig
 protocols: [StaminaRefill, StaminaRules]
 errcodes: [stamina_invalid, stamina_short, stamina_full, stamina_refill_limit]
 verify:

@@ -41,7 +41,7 @@
 
 ### 配置
 
-没有配置表与配置键。业务服务要在 `roost.yaml` 里 `uses: [mail]`。代码里的常量：`DefaultExpiresInSeconds`（7 天）、`LedgerPruneGraceSeconds`（600 秒，账本在邮件过期后还记多久）。
+没有配置表。业务服务要在 `roost.yaml` 里 `uses: [mail]`。配置（清单的 `config:`，声明在 `game/modules/mailbox/mailbox_config.go`，安装器写进业务服务配置的 `mailbox:` 段）：`mailbox.ledger_prune_grace`（账本在邮件过期后还记多久，缺省 10m，至少 2m、整秒；`LedgerPruneGraceSeconds()` 读它），`--check-config` 与 `roost config check` 按声明检查，进程启动时装载一次。代码里的常量：`DefaultExpiresInSeconds`（7 天）。
 
 ### 错误码（`internal/errors/mailbox.go`）
 
@@ -86,7 +86,7 @@
   `errors.Is(err, mailbox.ErrLetterInvalid)` 表示这封信本身发不出去，不要重试；mail 服务的带码拒绝（邮箱已满、标题过长）重试也没用；其余错误用同一个 `RequestID` 重试是安全的。
 - **加一种附件**（例如体力、英雄碎片）：在 `game/modules/mailbox` 下新文件里 `RegisterType("stamina", validate)` 并给一个构造函数；在 `game/entities/player` 下新文件里 `RegisterMailboxGrant("stamina", MailboxGrant{Grant: …, Held: …})`。照 `with/bag` 的两个文件写。附件只有（种类，号，数量）三个字段，不要往 `Attachment` 里加字段。
 - **手拼附件字节的发件方**（不经 `Encode`）要注意：解码不认识的字段会被拒绝；Go 的 JSON 解码对键名大小写不敏感。
-- **不要改的：** `mailbox.Component.Claim` 里判断的顺序（请求合法 → 附件发得了 → 已在账本 → 已过期 → 发放并记账），以及 `ClaimWindowClosed` 与 `LedgerMayForget` 成对的定义——去掉其中一步会放出重复发放。调小 `LedgerPruneGraceSeconds` 到小于进程间时钟差同样会。
+- **不要改的：** `mailbox.Component.Claim` 里判断的顺序（请求合法 → 附件发得了 → 已在账本 → 已过期 → 发放并记账），以及 `ClaimWindowClosed` 与 `LedgerMayForget` 成对的定义——去掉其中一步会放出重复发放。调小 `mailbox.ledger_prune_grace` 到小于进程间时钟差同样会（声明的下限 2m 挡住明显的错值）。
 - **只适合借鉴的情形：** 邮件要存在游戏服自己的库里、要一封多附件、要玩家之间互发时，不适合直接用。值得借鉴的是“跨进程三步领取，中间那一步在游戏服的事务里记账本，账本的遗忘以邮件自己的过期时刻为界”。
 
 ## 联动

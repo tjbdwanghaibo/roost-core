@@ -1,0 +1,25 @@
+=== mutation: codegen/internal/roost/module_config.go: [			if prefix != "" && !strings.HasSuffix(prefix, "_") {] -> [			if prefix != "" {]
+--- FAIL: TestModuleConfigKeysReadFromTheSourceMatchTheRuntimeDeclaration (0.00s)
+    module_config_test.go:63: keys read from the source differ from the runtime declaration:
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.629s
+FAIL
+=== mutation: codegen/internal/roost/module_config.go: [	key.Example, key.Starter = tag.Lookup("example")
+	if enum] -> [	if enum]
+--- FAIL: TestModuleConfigKeysReadFromTheSourceMatchTheRuntimeDeclaration (0.00s)
+    module_config_test.go:63: keys read from the source differ from the runtime declaration:
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.628s
+FAIL
+=== mutation: codegen/internal/roost/module_install.go: [		if err := writeModuleConfigSection(root, moduleSpecConfigHost(manifest, plan.Service, item.spec), item.spec, options.Stderr); err != nil {] -> [		if err := error(nil); err != nil {]
+--- FAIL: TestModuleConfigIsWrittenCheckedAndLoaded (7.67s)
+    module_config_test.go:173: config.game.yaml lacks "\nprofile:\n" after installing the modules:
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	8.305s
+FAIL
+=== mutation: codegen/internal/roost/render.go: [	if configs := businessModuleConfigs(m, name); len(configs) > 0 {] -> [	if configs := businessModuleConfigs(m, name); len(configs) > 0 && false {]
+--- FAIL: TestModuleConfigIsWrittenCheckedAndLoaded (7.38s)
+    module_config_test.go:196: internal/bootstrap/generated.go lacks kitmodulehost.NewMod("game", "":
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	8.017s
+FAIL

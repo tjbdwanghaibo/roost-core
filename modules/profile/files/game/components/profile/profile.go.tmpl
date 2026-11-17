@@ -53,10 +53,6 @@ func (component *Component) Owner() Owner { return component.owner }
 // ProfileNameMaxRunes 是名字的长度上限，按字符（rune）数而不是字节数：一个汉字算一个。
 const ProfileNameMaxRunes = 16
 
-// ProfileExpPerLevel 是每升一级需要的经验。曲线是平的：每一级都要这么多。
-// 要换成按等级查表的曲线时改 planExp，并保持“不按升级数逐级循环”（见那里的说明）。
-const ProfileExpPerLevel int64 = 100
-
 // NormalizeProfileName 只校验并返回去掉首尾空白的名字，不写实体，也不执行 I/O。
 // 拒绝且不写任何字段的情况：不是合法 UTF-8（profile_name_invalid）、去掉首尾空白后为空
 // （profile_name_empty）、去掉首尾空白后超过 ProfileNameMaxRunes 个字符（profile_name_long）。
@@ -101,7 +97,7 @@ func (component *Component) CheckAddExp(amount int64) error {
 
 // planExp 只读地算出发放 amount 之后的等级内经验与升级数，不写任何字段。
 //
-// 经验是 int64、等级是 int32：先确认加法不溢出、升级后的等级仍在 int32 内，再按平的曲线除余。
+// 经验是 int64、等级是 int32：先确认加法不溢出、升级后的等级仍在 int32 内，再按平的曲线（ExpPerLevel，配置 profile.exp_per_level）除余。
 // 不按升级数逐级循环：一次大额发放若逐级减，会按数额大小占住业务 worker。
 // 已存的经验或等级为负说明存档已坏，一并拒绝，不在坏值上继续累加。
 func (component *Component) planExp(amount int64) (exp int64, gained int32, err error) {
@@ -114,12 +110,14 @@ func (component *Component) planExp(amount int64) (exp int64, gained int32, err 
 	if currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
 		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
 	}
+	// 每级经验取一次（profile.exp_per_level，进程启动时装载），除与余用同一个数。
+	perLevel := ExpPerLevel()
 	total := currentExp + amount
-	levels := total / ProfileExpPerLevel
+	levels := total / perLevel
 	if levels > int64(math.MaxInt32)-int64(currentLevel) {
 		return 0, 0, errcode.Wrap(apperrors.ErrProfileExpOverflow, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
 	}
-	return total % ProfileExpPerLevel, int32(levels), nil
+	return total % perLevel, int32(levels), nil
 }
 
 // AddExp 发放 amount 点经验，够升级就升（一次可以升多级），返回升了几级。

@@ -156,7 +156,7 @@ MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交
   邮件服务只能把它算作重复**尝试**（它无从知道游戏发没发），游戏这边知道：第二次发放在账本上撞到自己，什么也不做，回的还是同一组数字。
   没有账本时这里就是第二叠道具——模块的 `TestMailboxSameMailArrivingAgainPaysNothing`、`TestWithMailboxBagItemMailLandsInTheBagOnce`
   与端点一级的 `TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce` 把这条钉住了（去掉账本判断即红）。
-- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到（Nest 排队、Player 冷加载、重试）。`MailboxClaimReward` handler 的 `nowUnixMilli` 是执行时这条消息冻结的业务时间（生成的 Nest 分发包装从 `fctx.Now` 填，调用方不传时间；DESIGN-TODO D22-1），按它判 `gamemailbox.ClaimWindowClosed`（与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发奖；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`mail: mail has expired`），判断在任何 DAO 写入之前。账本在过期后再等 `gamemailbox.LedgerPruneGraceSeconds`（10 分钟）才清理（`gamemailbox.LedgerMayForget`）：宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着，只能靠账本还记得。没有到期时间的发放请求直接拒绝（`mailbox_invalid`；mail 服务要求每封邮件都有过期时刻，真实的预留不会走到这里），所以账本里不会有清不掉的记录。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/modules/mailbox`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。回归是模块的 `TestMailboxExpiredFirstGrantIsRefusedAtExecutionTime`、`TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused`、`TestMailboxRecordOutlivesTheExpiryByTheGrace`（`game/handler/mailbox_test.go`）。
+- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到（Nest 排队、Player 冷加载、重试）。`MailboxClaimReward` handler 的 `nowUnixMilli` 是执行时这条消息冻结的业务时间（生成的 Nest 分发包装从 `fctx.Now` 填，调用方不传时间；DESIGN-TODO D22-1），按它判 `gamemailbox.ClaimWindowClosed`（与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发奖；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`mail: mail has expired`），判断在任何 DAO 写入之前。账本在过期后再等 `gamemailbox.LedgerPruneGraceSeconds()`（配置的 `mailbox.ledger_prune_grace`，缺省 10 分钟）才清理（`gamemailbox.LedgerMayForget`）：宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着，只能靠账本还记得。没有到期时间的发放请求直接拒绝（`mailbox_invalid`；mail 服务要求每封邮件都有过期时刻，真实的预留不会走到这里），所以账本里不会有清不掉的记录。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/modules/mailbox`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。回归是模块的 `TestMailboxExpiredFirstGrantIsRefusedAtExecutionTime`、`TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused`、`TestMailboxRecordOutlivesTheExpiryByTheGrace`（`game/handler/mailbox_test.go`）。
 - **仍然开着的**：预留成功但发放前崩溃（邮件被占到租约到期，玩家等，什么都没丢）；`CommitClaim` 丢失（账本挡的是重复**发放**，不是重复尝试）。
 - `Claimable` 是“现在领会成功吗”：mail 服务说可以预留，并且附件是这一版发得了的奖励（解得出来、种类登记了发放方式）。
   客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
@@ -600,9 +600,11 @@ demo 在模块之上接的线：
 ## 排行榜：rank 服务，与领奖账本同一个准入
 
 排行榜用的是 [leaderboard 业务模块](../modules/README.md)（生成时由 `roost module add leaderboard` 装进工程）：读榜的两条协议、
-提交入口 `gameleaderboard.SubmitSeason` 与它们的场景测试都是模块的，demo 不再带自己的 `game/ranking` 与 `RankTop`。demo 只覆盖
-模块留给工程的业务文件 `game/modules/leaderboard/leaderboard_board.go`（连同钉住它的 `leaderboard_board_test.go`）——哪张榜（`clears`，
-副本通关次数，全服）、哪个赛季（`CurrentSeason()`）、分数范围、一屏十行；一分是什么、什么让提交可重试也写在这个文件头上。
+提交入口 `gameleaderboard.SubmitSeason` 与它们的场景测试都是模块的，demo 不再带自己的 `game/ranking` 与 `RankTop`。榜的数是模块声明的配置：demo 在 game
+服务配置的 `leaderboard:` 段写自己的榜——哪张榜（`board_id: clears`，副本通关次数，全服）、哪个赛季（`season`）、分数范围（至多十亿）、
+一屏十行（`max_top: 10`），`--check-config` 按模块的声明检查。demo 另覆盖模块留给工程的业务文件
+`game/modules/leaderboard/leaderboard_board.go`（连同按 demo 开发配置钉住这些数的 `leaderboard_board_test.go`）：一分是什么、
+什么让提交可重试写在这个文件头上。
 通关计数本身（`PlayerDao.DungeonClears`、领奖账本）是副本玩法，留在 demo。
 
 - 一分不是“+1”，是**通关数快照**：领奖事务（`handlerClaimDungeon`）在记账本、发经验的同一笔事务里给
@@ -614,7 +616,7 @@ demo 在模块之上接的线：
 - 提交**不**以"这次是否真的发了奖"为条件：重放发现奖励已发，恰恰是"分可能还没记上"的那种情况；下一局的快照也会把它带上。
 - 提交在事务**外**（榜在另一个服务），两者不原子。崩在中间会留下"已发奖但没记分"——可恢复的方向，重试这个端点只会把榜抬到同一个数。
   提交失败只打 Warn，不让结算失败。通关数为 0 时不提交（在别的赛季领过奖的一局重放到本赛季）：没有通关的玩家不上榜。
-- 通关数按赛季分开存：改 `leaderboard_board.go` 的 `CurrentSeason()` 后新榜从 0 开始，不把上一季的数带过去（维护者 2026-10-18 决定按
+- 通关数按赛季分开存：改配置的 `leaderboard.season`（或 `leaderboard_board.go` 的 `CurrentSeason()`）后新榜从 0 开始，不把上一季的数带过去（维护者 2026-10-18 决定按
   赛季，不做终身累计）。端点只取一次赛季号，领奖事务按它计数、`SubmitSeason` 按它提交，所以第 N 季的通关数只会进第 N 季的榜。
 - 回归（`game/controllers/player_finish_dungeon_test.go`）：`TestDungeonClearSubmitsTheSeasonCountAsASnapshot`（无外部依赖，看端点交给
   rank 的每一次提交：快照、`UpdateMax`、不带 requestID、重放照交、失败不影响结算、0 不交）与

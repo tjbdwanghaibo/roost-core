@@ -9,6 +9,10 @@ needs:
 runtime:
   package: game/modules/mailbox
   start: Start
+config:
+  package: game/modules/mailbox
+  type: Config
+  use: UseConfig
 entity: Player
 state:
   - field: MailboxLedger

@@ -35,7 +35,7 @@
 - `PlayerDao.Profile`（`ProfileState{Name, Level}`）：别的玩家也可以看的那一半。给别的玩家做视图时，字段白名单里列它。
 - `PlayerDao.ProfilePrivate`（`ProfilePrivateState{Exp}`）：只给本人的那一半。`Exp` 是当前等级内的经验，不是累计经验。
 
-**配置**：没有配置表与配置键。规则是代码常量（`game/components/profile/profile.go`）：`ProfileNameMaxRunes = 16`、`ProfileExpPerLevel = 100`。
+**配置**（清单的 `config:`，声明在 `game/components/profile/profile_config.go`，安装器写进业务服务配置的 `profile:` 段）：`profile.exp_per_level`（每升一级需要的经验，缺省 100，至少 1；`ExpPerLevel()` 读它）。`--check-config` 与 `roost config check` 按声明检查，进程启动时装载一次；模块场景按缺省值写。名字长度上限仍是代码常量 `ProfileNameMaxRunes = 16`（协议与错误码按它写）。
 
 **错误码**（`internal/errors/profile.go`）：`profile_name_empty`（去掉首尾空白后为空）、`profile_name_long`（超过 16 个字符）、`profile_name_invalid`（不是合法 UTF-8）、`profile_exp_invalid`（数额不是正数）、`profile_exp_overflow`（经验或等级超出存储范围，或存档里的值已坏）。
 

@@ -1,0 +1,27 @@
+package profile
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/wiring/modulehost"
+)
+
+// Config 是档案模块的配置（清单的 config:，D19 B）：键、缺省值与范围只写在这里的 tag 上。安装器把标了 example 的键
+// 写进业务服务的配置（configs/service/config.<服务>.yaml 的 profile: 段）；生成的 bootstrap 把它接进 App 的配置声明，
+// 所以 `go run ./cmd/<服务> --check-config` 与 `roost config check` 查得出写错的值，进程启动时在任何 Mod Start 之前
+// 按它装载一次（UseConfig）。没有装载过的进程（模块场景测试）读到的是这里的缺省值。
+type Config struct {
+	// ExpPerLevel 是每升一级需要的经验。曲线是平的：每一级都要这么多。
+	ExpPerLevel int64 `config:"profile.exp_per_level" default:"100" min:"1" example:"100" help:"每升一级需要的经验（平的曲线：每一级都要这么多）；改了对所有玩家立刻生效，已存的等级内经验不迁移"`
+}
+
+// currentConfig 是当前的配置。
+var currentConfig modulehost.Value[Config]
+
+// UseConfig 换上一份配置：进程启动时由 bootstrap 调一次；测试换配置时调它，结束时换回 CurrentConfig 读到的旧值。
+func UseConfig(value Config) { currentConfig.Use(value) }
+
+// CurrentConfig 返回当前的配置。
+func CurrentConfig() Config { return currentConfig.Get() }
+
+// ExpPerLevel 是每升一级需要的经验（profile.exp_per_level）。
+// 要换成按等级查表的曲线时改 planExp，并保持“不按升级数逐级循环”（见那里的说明）。
+func ExpPerLevel() int64 { return currentConfig.Get().ExpPerLevel }

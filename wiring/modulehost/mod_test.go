@@ -185,11 +185,12 @@ func TestTheModDeclaresItsPlaceInTheProcess(t *testing.T) {
 	}
 	start := func(*app.Registry) (func(context.Context) error, error) { return nil, nil }
 	for label, broken := range map[string]*Mod{
-		"no service":        NewMod("", owner),
-		"no owner":          NewMod("account", ""),
-		"a nameless module": NewMod("account", owner, Module{Start: start}),
-		"no start function": NewMod("account", owner, Module{Name: "x"}),
-		"a module twice":    NewMod("account", owner, Module{Name: "x", Start: start}, Module{Name: "x", Start: start}),
+		"no service":              NewMod("", owner),
+		"no owner":                NewMod("account", ""),
+		"no owner to start after": NewMod("game", "", Module{Name: "x", Start: start}),
+		"a nameless module":       NewMod("account", owner, Module{Start: start}),
+		"no start function":       NewMod("account", owner, Module{Name: "x"}),
+		"a module twice":          NewMod("account", owner, Module{Name: "x", Start: start}, Module{Name: "x", Start: start}),
 	} {
 		if err := broken.Init(viper.New()); err == nil {
 			t.Fatalf("%s: Init accepted it", label)

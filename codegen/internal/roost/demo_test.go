@@ -1069,8 +1069,17 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 			t.Errorf("the demo still ships its own leaderboard file %s (err=%v)", gone, err)
 		}
 	}
-	if board := read("game/modules/leaderboard/leaderboard_board.go"); !strings.Contains(board, `BoardID = "clears"`) || !strings.Contains(board, "func CurrentSeason() int64") {
+	if board := read("game/modules/leaderboard/leaderboard_board.go"); !strings.Contains(board, "board_id: clears") || !strings.Contains(board, "func CurrentSeason() int64") {
 		t.Errorf("the leaderboard module's board file is not the demo's clears board:\n%s", board)
+	}
+	// 榜的数是模块声明的配置（R5）：demo 写在 game 服务三份配置的 leaderboard: 段。
+	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml", "deploy/k8s/base/secret.game.example.yaml"} {
+		config := read(rel)
+		for _, want := range []string{"board_id: clears\n", "max_score: 1000000000\n", "default_top: 10\n", "max_top: 10\n"} {
+			if !strings.Contains(config, want) {
+				t.Errorf("%s lacks the demo's leaderboard value %q", rel, strings.TrimSpace(want))
+			}
+		}
 	}
 	if logic := read("game/modules/leaderboard/leaderboard.go"); !strings.Contains(logic, "func SubmitSeason(") || strings.Contains(logic, `"clears"`) {
 		t.Errorf("game/modules/leaderboard/leaderboard.go is not the module's own logic file:\n%s", logic)

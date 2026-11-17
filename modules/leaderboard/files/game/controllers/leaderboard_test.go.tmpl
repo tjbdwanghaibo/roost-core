@@ -23,9 +23,9 @@ import (
 // 排序编码、分页与名次都是它的代码），它背后的存储换成下面的内存实现 leaderboardMemoryRedis。
 // “只升不降”“同分先到在前”因此是 rank 服务自己算出来的，不是照文档模拟的。
 //
-// 这个文件的用例只按名字引用榜的规则（gameleaderboard.CurrentBoard、DefaultTop、MaxTop），工程改了
-// game/modules/leaderboard/leaderboard_board.go 之后不用动它——除了一点：用例提交的分数都在 1 到 1000 之间，
-// 分数范围不含这一段时要跟着改。
+// 这个文件的用例只按名字引用榜的规则（gameleaderboard.CurrentBoard 与配置 CurrentConfig 的 default_top、max_top），
+// 工程改了 game/modules/leaderboard/leaderboard_board.go 或配置的缺省值之后不用动它——除了一点：用例提交的分数都在
+// 1 到 1000 之间，分数范围不含这一段时要跟着改。
 
 // leaderboardMemoryRedis 是 RedisStore 用到的那一小块 Redis 的内存实现：有序集合（分值都是 0，
 // 名次全在成员的字节序里）、哈希，以及 RedisStore 的三段脚本——按脚本文本认出是哪一段，用 Go 实现它的语义
@@ -415,7 +415,9 @@ func TestLeaderboardTopCarriesTheCallersOwnStanding(t *testing.T) {
 
 func TestLeaderboardTopNeverAsksRankForMoreThanMaxTop(t *testing.T) {
 	fixture := newLeaderboardFixture(t)
-	const players = gameleaderboard.MaxTop + 10
+	rules := gameleaderboard.CurrentConfig()
+	defaultTop, maxTop := rules.DefaultTop, rules.MaxTop
+	players := int64(maxTop) + 10
 	for player := int64(1); player <= players; player++ {
 		fixture.submit(1000+player, player*10)
 	}
@@ -424,9 +426,9 @@ func TestLeaderboardTopNeverAsksRankForMoreThanMaxTop(t *testing.T) {
 		rows  int
 	}
 	cases := []limitCase{
-		{0, gameleaderboard.DefaultTop}, {-3, gameleaderboard.DefaultTop}, {1, 1},
-		{gameleaderboard.MaxTop, gameleaderboard.MaxTop}, {gameleaderboard.MaxTop + 1, gameleaderboard.MaxTop},
-		{gameleaderboard.MaxTop + 950, gameleaderboard.MaxTop}, {2147483647, gameleaderboard.MaxTop},
+		{0, defaultTop}, {-3, defaultTop}, {1, 1},
+		{int32(maxTop), maxTop}, {int32(maxTop) + 1, maxTop},
+		{int32(maxTop) + 950, maxTop}, {2147483647, maxTop},
 	}
 	wantLimits := ""
 	for _, c := range cases {

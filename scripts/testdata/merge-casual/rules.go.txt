@@ -23,7 +23,7 @@ const MaxTime int64 = 4000000000000
 const StartGold int64 = 30
 
 // 配置全部为值类型。玩家棋盘创建时冻结规则，升级存档规则需独立迁移，登录不静默换表。
-// 体力不在这里：体力跟 stamina 模块（Q1 A），上限、恢复周期在 game/components/stamina/rules.go，每次读写取当前值、
+// 体力不在这里：体力跟 stamina 模块（Q1 A），上限、恢复周期是 stamina 的配置（stamina.*，game/components/stamina/rules.go 读它），每次读写取当前值、
 // 改了立刻对所有玩家生效，不随棋盘冻结。AdEnergy（一次广告发几点体力）是合成自己的规则，仍随棋盘冻结。
 type Rules struct {
 	Version                                        string

@@ -199,6 +199,9 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 		} else if item.Runtime != nil {
 			fmt.Fprintf(stdout, "  runtime:   %s.%s (before service Init; stop after service Shutdown)\n", item.Runtime.Package, item.Runtime.Start)
 		}
+		if item.Config != nil {
+			fmt.Fprintf(stdout, "  config:    %s.%s declares %s (checked by --check-config and roost config check, loaded once at start; keys with an example are written to the service's configs)\n", item.Config.Package, item.Config.Type, strings.Join(item.ConfigKeys, ", "))
+		}
 		for _, manager := range item.Managers {
 			fmt.Fprintf(stdout, "  manager:   %s() in %s (started and stopped by the manager mod)\n", manager, gameManagersPath)
 		}

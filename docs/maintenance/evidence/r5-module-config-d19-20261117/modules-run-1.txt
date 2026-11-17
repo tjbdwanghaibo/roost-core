@@ -1,0 +1,2 @@
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	596.360s
+exit=0

@@ -1,0 +1,21 @@
+=== mutation: modules/profile/files/game/components/profile/profile.go.tmpl '\tperLevel := ExpPerLevel()' -> '\tperLevel := int64(100)'
+=== mutation: modules/stamina/files/game/components/stamina/rules.go.tmpl '\t\tMax:              config.Max,' -> '\t\tMax:              100,'
+=== mutation: modules/leaderboard/files/game/modules/leaderboard/leaderboard_board.go.tmpl 'svcrank.Board{ID: CurrentConfig().BoardID,' -> 'svcrank.Board{ID: "total",'
+=== mutation: modules/mailbox/files/game/modules/mailbox/mailbox.go.tmpl '\treturn int64(CurrentConfig().LedgerPruneGrace / time.Second)' -> '\treturn 600 + 0*int64(time.Second)'
+--- FAIL: TestModuleConfigIsWrittenCheckedAndLoaded (48.62s)
+    module_config_test.go:358: go test -count=1 -v -run ^TestR5Config ./game/handler ./game/components/stamina ./game/modules/leaderboard ./game/modules/mailbox in the generated project: exit status 1
+        === RUN   TestR5ConfigProfileExpPerLevelComesFromTheConfig
+            r5_config_runtime_test.go:14: add 15 exp: gained=0 err=<nil>, want 2 levels
+        --- FAIL: TestR5ConfigProfileExpPerLevelComesFromTheConfig (0.00s)
+        === RUN   TestR5ConfigStaminaRulesComeFromTheConfig
+            r5_config_runtime_test.go:14: rules = {Max:100 HardCap:20 RegenMillis:1500 RefillDailyLimit:1}
+        --- FAIL: TestR5ConfigStaminaRulesComeFromTheConfig (0.00s)
+        === RUN   TestR5ConfigLeaderboardRulesComeFromTheConfig
+            r5_config_runtime_test.go:14: board = total:global:0:3
+        --- FAIL: TestR5ConfigLeaderboardRulesComeFromTheConfig (0.00s)
+        === RUN   TestR5ConfigMailboxLedgerGraceComesFromTheConfig
+            r5_config_runtime_test.go:14: the ledger does not forget exactly 120s after the expiry
+        --- FAIL: TestR5ConfigMailboxLedgerGraceComesFromTheConfig (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	49.250s
+FAIL

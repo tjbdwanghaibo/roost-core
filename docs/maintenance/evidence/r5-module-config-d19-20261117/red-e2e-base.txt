@@ -1,0 +1,10 @@
+--- FAIL: TestModuleConfigIsWrittenCheckedAndLoaded (6.75s)
+    module_config_red_test.go:36: config.game.yaml lacks "\nprofile:\n" after installing the modules:
+        # Generated starter configuration; application-owned after project creation.
+        sid: 1000
+        log:
+...（生成的 config.game.yaml 全文略；其中没有 profile: / stamina: / leaderboard: / mailbox: 段）
+--- FAIL: TestModuleConfigIsWrittenCheckedAndLoaded (6.75s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	7.368s
+FAIL

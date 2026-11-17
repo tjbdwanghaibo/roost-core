@@ -1,0 +1,36 @@
+package mailbox
+
+import (
+	"errors"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/wiring/modulehost"
+)
+
+// Config 是邮件模块的配置（清单的 config:，D19 B）。键、缺省值与范围只写在这里的 tag 上，跨键规则写在 ValidateConfig。
+// 安装器把它写进业务服务的配置（configs/service/config.<服务>.yaml 的 mailbox: 段）；生成的 bootstrap 把它接进 App 的
+// 配置声明，`--check-config` 与 `roost config check` 查得出写错的值，进程启动时在任何 Mod Start 之前按它装载一次
+// （UseConfig）。没有装载过的进程（模块场景测试）读到的是这里的缺省值。
+type Config struct {
+	// LedgerPruneGrace 是邮件过期之后，领取账本还要记住“这封到过账”多久（论证见 LedgerPruneGraceSeconds）。
+	// 下限 2 分钟：App 允许进程启动时比部署的业务时间高水位慢 1 分钟，宽限要比进程间的时钟差多出若干倍；
+	// 调到小于时钟差，重复发放的口子就重新打开。
+	LedgerPruneGrace time.Duration `config:"mailbox.ledger_prune_grace" default:"10m" min:"2m" example:"10m" help:"邮件过期之后领取账本还记住它多久（整秒，至少 2m）：宕机重启后玩家可能落到业务时钟稍慢的进程上，晚到的重放只能靠账本挡住；调小到低于进程间的时钟差会放出重复发放"`
+}
+
+// ValidateConfig 是跨键规则：宽限按整秒算（账本与准入判断用秒级的 Unix 时间）。
+func (c *Config) ValidateConfig(bool) error {
+	if c.LedgerPruneGrace%time.Second != 0 {
+		return errors.New("config: mailbox.ledger_prune_grace must be a whole number of seconds")
+	}
+	return nil
+}
+
+// currentConfig 是当前的配置。
+var currentConfig modulehost.Value[Config]
+
+// UseConfig 换上一份配置：进程启动时由 bootstrap 调一次；测试换配置时调它，结束时换回 CurrentConfig 读到的旧值。
+func UseConfig(value Config) { currentConfig.Use(value) }
+
+// CurrentConfig 返回当前的配置。
+func CurrentConfig() Config { return currentConfig.Get() }

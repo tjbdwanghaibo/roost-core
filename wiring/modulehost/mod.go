@@ -1,4 +1,5 @@
-// Package modulehost 让业务模块（roost module）的服务级启动入口跑在一个**托管的框架服务**进程里。
+// Package modulehost 让业务模块（roost module）的服务级启动入口跑在一个**托管的框架服务**进程里，
+// 并把模块的配置声明（清单的 config:，见 config.go）接进 App 的配置声明——托管服务与业务服务都经它。
 //
 // 业务服务有自己的 Service：生成的适配层（internal/service/<服务>/modules_gen.go）在它的 Init 之前调模块的
 // Start。托管服务（account、mail……）的 Service 是框架给的 Server，没有可以包一层的业务 Init，所以换一种挂法：
@@ -12,6 +13,9 @@
 //   - 停机时它先于它依赖的 Mod 停（App 逆序停 Mod），模块按启动的反序停。
 //
 // 托管服务的固定装配（owner Mod、Server、它依赖的 Kit Mod）不因此改变：这个 Mod 只是多出来的最后一个。
+//
+// 业务服务的模块入口仍由生成的 modules_gen.go 启动；业务服务上有模块声明了配置时，bootstrap 给它加一个
+// 本包的 Mod（owner 为空、模块只带 Config），只负责配置的声明、检查与装载。
 package modulehost
 
 import (
@@ -34,8 +38,10 @@ type StartFunc func(*app.Registry) (func(context.Context) error, error)
 type Module struct {
 	// Name 是模块名，只用于日志与错误。
 	Name string
-	// Start 是它的启动入口。
+	// Start 是它的启动入口；只带配置的模块（业务服务上）为 nil。
 	Start StartFunc
+	// Config 是它的配置声明（清单的 config:，ConfigOf 构造），可以为 nil。Start 与 Config 至少有一个。
+	Config *Config
 }
 
 // stopFallback 是 Stop（不带 context 的停止入口）给模块停止函数的时限。App 走 StopWithContext，
@@ -65,7 +71,7 @@ type namedStop struct {
 
 // NewMod 返回托管服务 service 的模块 Mod。owner 是这个服务的 owner Mod 的名字（各托管服务的
 // CapabilityName）：模块要用它发布的本地服务，所以是硬依赖。modules 按启动顺序给出（生成器已经把
-// 模块的依赖排在前面）。
+// 模块的依赖排在前面）。业务服务上只带配置的 Mod 传空的 owner：它不启动入口，也不依赖别的 Mod。
 func NewMod(service string, owner app.ModName, modules ...Module) *Mod {
 	return &Mod{service: service, owner: owner, modules: append([]Module(nil), modules...)}
 }
@@ -73,8 +79,13 @@ func NewMod(service string, owner app.ModName, modules ...Module) *Mod {
 // Name 实现 app.Mod：modules.<服务名>。一个进程只有一个托管服务，所以不会重名。
 func (m *Mod) Name() app.ModName { return app.ModName("modules." + m.service) }
 
-// DependsOn 实现 app.ModDependencyProvider：托管服务的 owner Mod。
-func (m *Mod) DependsOn() []app.ModName { return []app.ModName{m.owner} }
+// DependsOn 实现 app.ModDependencyProvider：托管服务的 owner Mod（业务服务上只带配置时没有）。
+func (m *Mod) DependsOn() []app.ModName {
+	if m.owner == "" {
+		return nil
+	}
+	return []app.ModName{m.owner}
+}
 
 // OptionalDependsOn 实现 app.ModOptionalDependencyProvider：模块常用的 Kit Mod 在场时排在本 Mod 之前。
 // 是否必需由模块自己在 Start 里判断并报错（例如登录入口要 web Mod），这里只管顺序。
@@ -82,22 +93,30 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 	return []app.ModName{mods.ModWeb, mods.ModRedis, mods.ModNats}
 }
 
-// Init 实现 app.Mod。构造参数不对在这里报：进程不该带着一个没有入口的模块启动。
-func (m *Mod) Init(*viper.Viper) error {
-	if m.service == "" || m.owner == "" {
-		return errors.New("modulehost: the hosted service and its owner mod are required")
+// Init 实现 app.Mod。构造参数不对在这里报：进程不该带着一个没有入口的模块启动。参数无误时按声明装载
+// 各模块的配置并交给它们（loadConfigs）：Init 在本服务任何 Mod Start 之前，请求读到的已经是配置的值。
+func (m *Mod) Init(cfg *viper.Viper) error {
+	if m.service == "" {
+		return errors.New("modulehost: the service is required")
+	}
+	if m.owner == "" && len(m.modules) == 0 {
+		// 没有 owner 的 Mod 只为业务服务上的模块配置而建：一个模块都没有就是接线写错了。
+		return errors.New("modulehost: a mod without an owner only carries module configs, and lists none")
 	}
 	seen := map[string]bool{}
 	for _, module := range m.modules {
-		if module.Name == "" || module.Start == nil {
-			return fmt.Errorf("modulehost: service %s lists a module without a name or a start function", m.service)
+		if module.Name == "" || (module.Start == nil && module.Config == nil) {
+			return fmt.Errorf("modulehost: service %s lists a module without a name, or with neither a start function nor a config", m.service)
+		}
+		if module.Start != nil && m.owner == "" {
+			return fmt.Errorf("modulehost: module %s has a start function, but service %s names no owner mod to start it after", module.Name, m.service)
 		}
 		if seen[module.Name] {
 			return fmt.Errorf("modulehost: service %s lists module %s twice", m.service, module.Name)
 		}
 		seen[module.Name] = true
 	}
-	return nil
+	return m.loadConfigs(cfg)
 }
 
 // Provide 实现 app.Mod：只记下 Registry。模块在 Start 阶段才启动——那时本服务的其余 Mod 都已经 Start。
@@ -124,6 +143,9 @@ func (m *Mod) Start() error {
 	}
 	m.started = true
 	for _, module := range m.modules {
+		if module.Start == nil {
+			continue
+		}
 		stop, err := module.Start(m.registry)
 		if stop != nil {
 			m.stops = append(m.stops, namedStop{name: module.Name, stop: stop})

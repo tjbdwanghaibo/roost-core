@@ -1,0 +1,53 @@
+{
+  "started_utc": "2026-11-17T14:23:49.474948+00:00",
+  "git": "265adb58e7fdc97fc7fa6a4c14749abcbec9c39b",
+  "dirty": true,
+  "go": "go version go1.27.3 darwin/arm64",
+  "scope": "generated gameplay fixtures; persistence substitutes unless separately recorded; not a capacity certification",
+  "genres": [
+    {
+      "genre": "card-rpg",
+      "status": "passed",
+      "module": "example.com/acceptance/card-rpg",
+      "custom_module_verify": {
+        "bag": 20,
+        "enter": 29,
+        "gacha": 29,
+        "rules": 10,
+        "stamina": 26,
+        "stamina+rules": 2,
+        "task": 29,
+        "task+bag": 3,
+        "task+stamina": 3,
+        "task+wallet": 6,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 17,
+      "passed_tests": 17,
+      "skipped_tests": 0,
+      "elapsed_seconds": 145.56,
+      "log_sha256": "a1ab4df55c5941995d4fa77b56e78bbe80b8cb0598264fda7301720bacad2c84"
+    },
+    {
+      "genre": "merge-casual",
+      "status": "passed",
+      "module": "example.com/acceptance/merge-casual",
+      "custom_module_verify": {
+        "enter": 29,
+        "rules": 10,
+        "stamina": 26,
+        "stamina+rules": 2,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 16,
+      "passed_tests": 16,
+      "skipped_tests": 0,
+      "elapsed_seconds": 85.966,
+      "log_sha256": "3ea66632c9b1085cd1ec06193b332304ad5a5580c2246192bbc945cc7f741faa"
+    }
+  ]
+}

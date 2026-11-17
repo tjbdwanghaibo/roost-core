@@ -215,7 +215,11 @@ func generateModuleServices(root string, m Manifest) error {
 			services = append(services, name)
 		}
 	}
-	if len(services) == 0 && !hosted {
+	configs := false
+	for _, name := range sortedServiceNames(m) {
+		configs = configs || len(businessModuleConfigs(m, name)) > 0
+	}
+	if len(services) == 0 && !hosted && !configs {
 		return nil
 	}
 	// 与 project sync 使用同一份服务派生信息，不能重写 bootstrap 时丢掉实体 owner / 路由接线。

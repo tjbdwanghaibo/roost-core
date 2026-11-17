@@ -1,0 +1,84 @@
+package roost
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestModuleConfigCheckRed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project, compiles it and runs go test in it")
+	}
+	t.Parallel()
+	root, roost, _ := moduleProject(t, "tunables")
+	roost("module", "add", "profile", "stamina", "leaderboard", "mailbox")
+	roost("module", "add", "portal")
+	read := func(rel string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	_ = read
+	// 基线上安装器不写段：手工写进同样的段，只看 config check。
+	gamePath := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(gamePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := "profile:\n  exp_per_level: 100\nstamina:\n  max: 100\n  hard_cap: 999\n  regen_interval: 5m\n  refill_daily_limit: 3\n  refill_price_step: 50\nleaderboard:\n  board_id: total\n  season: 1\n  min_score: 1\n  max_score: 1000000000000\n  default_top: 10\n  max_top: 50\nmailbox:\n  ledger_prune_grace: 10m\n"
+	if err := os.WriteFile(gamePath, append(raw, []byte(sections)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 4. roost config check 按声明查出写错的值。
+	check := func(service string) error {
+		return Run([]string{"config", "check", "--root", root, "--service", service}, &strings.Builder{}, &strings.Builder{})
+	}
+	if err := check("game"); err != nil {
+		t.Errorf("config check on the fresh project: %v", err)
+	}
+	if err := check("account"); err != nil {
+		t.Fatalf("config check of account on the fresh project: %v", err)
+	}
+	for _, c := range []struct {
+		service, file, from, to string
+		code                    int
+		want                    string
+	}{
+		{"game", "config.game.yaml", "  exp_per_level: 100\n", "  exp_per_level: 0\n", configExitKeyErrors, "profile.exp_per_level"},
+		{"game", "config.game.yaml", "  ledger_prune_grace: 10m\n", "  ledger_prune_grace: 30s\n", configExitKeyErrors, "mailbox.ledger_prune_grace"},
+		{"game", "config.game.yaml", "  hard_cap: 999\n", "  hard_cap: 50\n", configExitCrossModErrors, "stamina.hard_cap must not be below stamina.max"},
+		{"game", "config.game.yaml", "  board_id: total\n", "  board_id: \"no:colons\"\n", configExitCrossModErrors, "leaderboard.board_id"},
+		{"game", "config.game.yaml", "  max_top: 50\n", "  max_top: 5\n", configExitCrossModErrors, "leaderboard.default_top must not exceed leaderboard.max_top"},
+		{"account", "config.account.yaml", "", "portal:\n  servers:\n    \"007\": 203.0.113.7:7000\n", configExitCrossModErrors, `portal.servers key "007"`},
+	} {
+		path := filepath.Join(root, "configs", "service", c.file)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mutated := string(raw) + c.to
+		if c.from != "" {
+			mutated = strings.Replace(string(raw), c.from, c.to, 1)
+		}
+		if mutated == string(raw) {
+			t.Fatalf("%s has no %q", c.file, c.from)
+		}
+		if err := os.WriteFile(path, []byte(mutated), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err = check(c.service)
+		if code := configCheckExitCode(err); code != c.code || err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("config check with %q in %s = exit %d %v; want exit %d naming %q", strings.TrimSpace(c.to), c.file, code, err, c.code, c.want)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+}

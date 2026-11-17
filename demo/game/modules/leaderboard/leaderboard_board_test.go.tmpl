@@ -1,18 +1,40 @@
 package leaderboard
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
 )
 
 // The demo's board rules, pinned with literal numbers: the clears board, one
-// global board, season 1, counts from 1 to a billion, pages of ten. This file
-// replaces the module's leaderboard_board_test.go together with
-// leaderboard_board.go; the module's other tests refer to the rules by name
-// and run unchanged (roost module verify counts all of them).
+// global board, season 1, counts from 1 to a billion, pages of ten. The
+// numbers are the game service's dev config (the leaderboard: section), read
+// the way the process reads it at start; this file replaces the module's
+// leaderboard_board_test.go together with leaderboard_board.go. The module's
+// other tests refer to the rules by name and run on the declared defaults
+// (roost module verify counts all of them).
+
+// useDemoBoardConfig loads the leaderboard: section of the game service's dev
+// config and puts it in place for one test.
+func useDemoBoardConfig(t *testing.T) {
+	t.Helper()
+	cfg, _, err := app.LoadConfigFile(filepath.Join("..", "..", "..", "configs", "service", "config.{{GAME_SERVICE}}.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config Config
+	if err := app.LoadConfig(cfg, &config); err != nil {
+		t.Fatalf("the dev config's leaderboard: section: %v", err)
+	}
+	previous := CurrentConfig()
+	UseConfig(config)
+	t.Cleanup(func() { UseConfig(previous) })
+}
 
 func TestLeaderboardBoardIsTheGlobalClearsBoardInSeasonOne(t *testing.T) {
+	useDemoBoardConfig(t)
 	if season := CurrentSeason(); season != 1 {
 		t.Fatalf("CurrentSeason() = %d, want 1", season)
 	}
@@ -32,6 +54,7 @@ func TestLeaderboardBoardIsTheGlobalClearsBoardInSeasonOne(t *testing.T) {
 }
 
 func TestLeaderboardClearCountRangeIsOneToABillion(t *testing.T) {
+	useDemoBoardConfig(t)
 	for _, clears := range []int64{1, 2, 999_999_999, 1_000_000_000} {
 		if err := ValidateScore(clears); err != nil {
 			t.Errorf("clear count %d refused: %v", clears, err)
@@ -45,6 +68,7 @@ func TestLeaderboardClearCountRangeIsOneToABillion(t *testing.T) {
 }
 
 func TestLeaderboardTopIsAtMostTenRows(t *testing.T) {
+	useDemoBoardConfig(t)
 	for requested, want := range map[int32]int{
 		0: 10, -1: 10, -2147483648: 10,
 		1: 1, 9: 9, 10: 10,

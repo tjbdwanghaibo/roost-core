@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao"
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 	"github.com/tjbdwanghaibo/roost-core/modules"
 	"gopkg.in/yaml.v3"
 )
@@ -35,6 +36,10 @@ type ModuleSpec struct {
 	Needs     ModuleNeeds    `yaml:"needs" json:"needs"`
 	Access    ModuleAccess   `yaml:"access" json:"access"`
 	Runtime   *ModuleRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	// Config 指出模块的配置结构体（D19 B，见 module_config.go）：安装器把它标了 example 的键写进模块所在进程的配置，
+	// bootstrap 把它接进 App 的配置声明（wiring/modulehost），`--check-config` / `roost config check` 按它检查，
+	// 进程启动时装载一次交给模块。
+	Config *ModuleConfig `yaml:"config,omitempty" json:"config,omitempty"`
 	// Managers 是模块的后台 manager（D22）：构造函数名（func() app.IManager），定义在 files/game/managers/ 下的模板里
 	// （package managers）。安装器把 "<名字>()," 加到 game/managers/managers.go 的 Managers() 列表末尾，由 manager Mod
 	// 统一启停。不在 runtime: 里的后台循环（会话激活后的告知、换服的后台步骤）放在这里。见 module_managers.go。
@@ -90,6 +95,8 @@ type ModuleSpec struct {
 	Files []string `yaml:"-" json:"files"`
 	// Digest 是清单与全部模板内容的摘要，记进 roost.yaml：之后能看出已装的是不是这一版。
 	Digest string `yaml:"-" json:"digest"`
+	// ConfigSchema 是 Config 指出的结构体声明的键（从模板的 tag 读出，validateModuleConfig），不写在清单里。
+	ConfigSchema configschema.Schema `yaml:"-" json:"-"`
 }
 
 // ModuleRuntime 声明模块的服务级启动入口。函数返回 stop（可为 nil）与 error；
@@ -166,10 +173,12 @@ type ModuleVerify struct {
 // InstalledModule 是 roost.yaml 里 modules.<name> 的记录：这个模块在本工程里拥有什么。
 // 它是归属清单的数据来源，也是重复安装判等的依据；分配过的号与存储键不回收。
 type InstalledModule struct {
-	Digest   string         `yaml:"digest"`
-	Service  string         `yaml:"service,omitempty"`
-	Runtime  *ModuleRuntime `yaml:"runtime,omitempty"`
-	Requires []string       `yaml:"requires,omitempty"`
+	Digest  string         `yaml:"digest"`
+	Service string         `yaml:"service,omitempty"`
+	Runtime *ModuleRuntime `yaml:"runtime,omitempty"`
+	// Config 是清单的 config:（配置结构体的包、类型与接收函数），bootstrap 按它接线。
+	Config   *ModuleConfig `yaml:"config,omitempty"`
+	Requires []string      `yaml:"requires,omitempty"`
 	// Managers 是它登记进 game/managers/managers.go 的 manager 构造函数（清单的 managers）。
 	Managers []string `yaml:"managers,omitempty"`
 	// ServiceManagers 是它登记进别的服务 manager 列表的构造函数（清单的 services.<服务>.managers），按服务名。
@@ -350,6 +359,9 @@ func loadModuleSpec(source fs.FS, dir string) (ModuleSpec, error) {
 	}
 	spec.Digest = hex.EncodeToString(digest.Sum(nil))[:16]
 	if err := spec.validate(source); err != nil {
+		return ModuleSpec{}, fmt.Errorf("module %s: %w", dir, err)
+	}
+	if spec.ConfigSchema, err = validateModuleConfig(source, spec); err != nil {
 		return ModuleSpec{}, fmt.Errorf("module %s: %w", dir, err)
 	}
 	return spec, nil

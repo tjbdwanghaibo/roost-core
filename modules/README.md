@@ -124,7 +124,7 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
 3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
 4. **组件与附加 DAO**：把模块组件接到实体上；`daos: [{field: combatState, type: CombatDAO, tag: combat_state}]` 追加独立 DAO 的聚合声明，复用同一份实例的加载、事务与恢复。字段/集合被占用时拒绝。`sync_packer` 只接明确的模块视图工厂，已有业务 packer 时拒绝覆盖。
-5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires`、可选 `runtime` 与登记的 `managers`（清单的 `managers` 在第 2 步之后加进 `game/managers/managers.go` 的 `Managers()` 列表，见“后台循环：manager”）。
+5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires`、可选 `runtime` 与 `config` 与登记的 `managers`（清单的 `managers` 在第 2 步之后加进 `game/managers/managers.go` 的 `Managers()` 列表，见“后台循环：manager”）。
 6. **生成**：运行全部生成器。自带实体时同时刷新 owner / handler / shutdown 接线；有 `runtime` 时生成服务适配层。自身同步在 packer、附加 DAO 与模块文件全部就位后开启，并在同一暂存树补齐推送协议。全部生成物与需刷新配置一起暂存、提交，失败不会留下半套接线。
 
 模块可用 `services` 声明独占的新业务服务；`existing: true` 只给已存在服务追加 Mod/RPC 及缺少的配置段，不能接管实体所有权或覆盖 `service.go`。新服务模板、开发/生产示例配置及 Kubernetes Secret 示例的修改都纳入安装失败回滚。
@@ -177,6 +177,37 @@ runtime:
 ```
 
 这时安装器不动业务服务的 `modules_gen.go`：bootstrap 在托管那个框架服务的 Mod 列表末尾加一个 `wiring/modulehost` 的 Mod（`kitmodulehost.NewMod("account", …, kitmodulehost.Module{Name: "portal", Start: portalModule.Start})`），在全部 Mod 启动之后、`Service.Init` 之前调入口，停机按反序。清单的 `needs.mods` 这时是对那个托管服务的要求（portal 的 `web` 加在 account 上，开发端口取 8080 + 它的端口块号），不是对业务服务的；模块的文件仍按落点写进工程，安装记录的 `service` 仍是业务服务。工程里没有托管那个框架服务的服务时，安装器在同一次安装里声明它（名字与种类相同，带上 `needs.mods` 里可代办的 Mod）；名字被业务服务占着时拒绝安装。自己手写 bootstrap 的工程要照着加这一个 Mod。
+
+### 模块的配置：config
+
+模块的规则数（每级经验、体力上限、榜名与周期、账本宽限、区服地址……）写成配置，不写成代码常量（维护者 D19 B，2026-11-14；R5 起）。清单用 `config:` 指出模块包里一个带 `config` tag 的结构体，写法与 Mod 的配置声明相同（`framework/app` 的 `SchemaOf` / `LoadConfig`，tag 见 `internal/configschema`）：
+
+```yaml
+config:
+  package: game/components/profile   # 结构体所在的包：本模块 files/ 里的 game/components/<包>、game/modules/<包>，
+                                     # 或入口在托管服务上的模块的 services/<框架服务>/<包>
+  type: Config                       # 带 config tag 的结构体（导出）；跨键规则写在它的 ValidateConfig
+  use: UseConfig                     # 同包的 func(Config)：进程启动时接收装载好的值；不写时只声明，模块在入口里自己读
+```
+
+```go
+type Config struct {
+	ExpPerLevel int64 `config:"profile.exp_per_level" default:"100" min:"1" example:"100" help:"每升一级需要的经验"`
+}
+
+var currentConfig modulehost.Value[Config] // wiring/modulehost：零值可用，没装载过时读到声明的缺省值
+
+func UseConfig(value Config) { currentConfig.Use(value) }
+func CurrentConfig() Config  { return currentConfig.Get() }
+```
+
+规则只在这个结构体里声明一次，之后：
+
+- **安装器写配置**：从模板读出结构体的 tag（不编译；结构体与它用到的同包类型要写在能按 Go 解析的模板里，占位只放在字符串里），把标了 `example` 的键写进模块所在进程的开发配置、生产示例与 k8s Secret 示例（已有同名顶层段的文件不动）。`roost module plan` 列出声明的键（JSON 的 `config_keys`）。
+- **接进 App 的配置声明**：bootstrap 把它交给 `wiring/modulehost` 的 Mod——入口在托管服务上的模块，就是装入口的那个 Mod（`kitmodulehost.Module{…, Config: kitmodulehost.ConfigOf[portalModule.Config](nil)}`）；装在业务服务上的模块，bootstrap 给这个服务加一个只带配置的 Mod（`kitmodulehost.NewMod("game", "", kitmodulehost.Module{Name: "profile", Config: kitmodulehost.ConfigOf[profileConfig.Config](profileConfig.UseConfig)}, …)`，按模块名排序）。于是 `--print-config`、`--print-config-schema`、`go run ./cmd/<服务> --check-config`、`roost config check` 与 doctor 都按它检查：键的类型、范围、枚举在键检查里，`ValidateConfig` 在 App 的跨 Mod 检查里（`app.ModConfigCrossChecker`），错误点名键；`roost config check` 对模块的键与业务服务自己声明的键一样经编译出的进程判断（退出码 3）。
+- **装载一次**：进程启动时，这个 Mod 的 Init（本服务任何 Mod Start 之前）按声明解码一次，经 `use` 交给模块；模块代码只从 `CurrentConfig()` 读。没有装载过的进程（模块场景测试、工具）读到声明的缺省值，所以模块场景按缺省值写；测试换配置用 `UseConfig`，结束时换回旧值。
+
+配置装在模块入口所在的进程：`runtime.framework` 的托管服务上的模块，结构体必须在 `services/<那个服务>/` 下；其余在 `game/` 下，装进模块的业务服务。业务服务因此多一个 Mod，停机预算（`shutdown.total_timeout`、部署的宽限期）多算一份 Mod 的保底，安装时一并刷新。只对新生成 / 新装模块的工程负责：旧工程的手写常量不迁移。现有使用者：profile（`profile.*`）、stamina（`stamina.*`）、leaderboard（`leaderboard.*`）、mailbox（`mailbox.*`）、portal（`portal.servers` / `portal.services`，只声明，入口在 Start 里读）。
 
 ### 后台循环：manager
 
@@ -233,6 +264,10 @@ component: Wallet            # 挂在实体上的组件
 components: []               # 自带实体的其他组件名，安装时分配类型号
 services: {}                 # 模块独占的新服务；mods/rpcs/entities/managers，已有同名服务拒绝接管
 sagas: []                    # name/steps/routed/receipts；定义与实体回执原子安装，业务由 runtime 提供
+config:                      # 模块的配置结构体（见“模块的配置：config”），可以不写
+  package: game/components/wallet
+  type: Config
+  use: UseConfig
 managers: []                 # 后台 manager 的构造函数（见“后台循环：manager”），安装时登记进 game/managers/managers.go；
                              # 跑在模块声明的别的服务里的写在 services.<服务>.managers
 timer_types: []              # 实体内的持久定时器类型名，例如 turn 的 [TurnDeadline]

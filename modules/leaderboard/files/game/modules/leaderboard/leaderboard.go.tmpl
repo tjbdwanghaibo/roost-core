@@ -4,7 +4,8 @@
 // rank 服务只给数字排名，不关心数字代表什么（它是通用的：榜名、周期、合并方式都由调用方每次带上）。
 // 与游戏有关的决定分在两个文件里：
 //
-//   - leaderboard_board.go：榜的身份与规则（榜名、范围、周期、分数范围、一屏多长），归工程所有，工程改它；
+//   - leaderboard_board.go 与配置（leaderboard: 段，声明在 leaderboard_config.go）：榜的身份与规则（榜名、范围、周期、
+//     分数范围、一屏多长），归工程所有，工程改它们；
 //   - 本文件：提交与读取的逻辑，只按名字取上面的规则，自己不带数字。
 //
 // 端点（game/controllers/leaderboard.go）与提交分数的功能都 import 这个包，因此读榜和写榜用的是
@@ -29,23 +30,25 @@ func CurrentBoard() svcrank.Board {
 	return Board(CurrentSeason())
 }
 
-// ValidateScore 检查一个总分能不能上榜：在 [MinScore, MaxScore] 之内。
+// ValidateScore 检查一个总分能不能上榜：在配置的 [min_score, max_score] 之内。
 func ValidateScore(total int64) error {
-	if total < MinScore || total > MaxScore {
-		return fmt.Errorf("%w: total score %d is outside [%d, %d]", svcrank.ErrScoreInvalid, total, MinScore, MaxScore)
+	config := CurrentConfig()
+	if total < config.MinScore || total > config.MaxScore {
+		return fmt.Errorf("%w: total score %d is outside [%d, %d]", svcrank.ErrScoreInvalid, total, config.MinScore, config.MaxScore)
 	}
 	return nil
 }
 
-// TopLimit 把客户端要的条数收进 [1, MaxTop]：0 或负数按 DefaultTop，超过 MaxTop 按 MaxTop。
+// TopLimit 把客户端要的条数收进 [1, max_top]：0 或负数按 default_top，超过 max_top 按 max_top（配置的 leaderboard.*）。
 // 收而不拒：客户端多要只是少拿几行，没有哪种取值值得让这条只读请求失败；
 // 但也绝不把 0 原样交给下游当“不限”。
 func TopLimit(requested int32) int {
+	config := CurrentConfig()
 	if requested <= 0 {
-		return DefaultTop
+		return config.DefaultTop
 	}
-	if requested > MaxTop {
-		return MaxTop
+	if int64(requested) > int64(config.MaxTop) {
+		return config.MaxTop
 	}
 	return int(requested)
 }
