@@ -26,8 +26,9 @@ import (
 //
 // MaxServers 是索引的容量。到了上限，登记**新的**服号被拒绝（ErrRangeInvalid），已登记的照常更新；所以
 // ListServers 给出的永远是全部，不会悄悄截断。上限不是配置：清单是一次读全部（1 次索引 + 每个服 1 次记录），
-// 区服比这多的部署该换成分页的目录，而不是把这个数调大。
-const MaxServers = 256
+// 区服比这多的部署该换成分页的目录，而不是把这个数调大。2026-11-17 由 256 放宽到 1024（方案 §4.1.2：几个 game
+// 服务的区服共用一个全局号段与这一条索引）。
+const MaxServers = 1024
 
 // serverIndexKey 是索引记录在 Servers 存储里的键。
 const serverIndexKey int32 = 0
@@ -54,7 +55,9 @@ func (s *Service) ListServers(ctx context.Context) ([]GameServer, error) {
 		if !found || record.Value.ID != id {
 			continue
 		}
-		servers = append(servers, record.Value.clone())
+		server := record.Value.clone()
+		server.Service = s.serviceOf(server)
+		servers = append(servers, server)
 	}
 	return servers, nil
 }

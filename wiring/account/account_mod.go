@@ -38,6 +38,8 @@ type Mod struct {
 	sessionTTL    time.Duration
 	ticketTTL     time.Duration
 	claimTTL      time.Duration
+	games         []domain.GameSpec
+	services      []domain.ServiceSpec
 	service       *domain.Service
 }
 
@@ -87,7 +89,38 @@ type config struct {
 		// 不带 example：缺省值够用，不写进生成的配置文件；要改时在 account: 段里加 ticket_ttl。
 		TicketTTL time.Duration `config:"ticket_ttl" default:"10m" min:"10s" max:"24h" help:"账号票据的有效期（登录之后多久之内可以拿区服清单、要进服票据）；进服票据与角色会话令牌用 session_ttl"`
 		ClaimTTL  time.Duration `config:"claim_ttl" default:"30s" min:"1ns" example:"5m"`
+		// games 与 services 不带 example：没有它们的工程（只有 game 区服）行为不变，生成的配置文件里也不写。
+		Games    map[string]gameConfig    `config:"games" help:"游戏账号 token 服务的游戏：games.<游戏名>.token_ttl（必填，至多 24h）。不在这里的游戏不签发 token"`
+		Services map[string]serviceConfig `config:"services" help:"接受本账号体系的服务：services.<服务名>.kind（game | lobby | relay）。不写时按单一 game 服务处理"`
 	} `config:"account"`
+}
+
+// gameConfig 是 account.games.<游戏名>。
+type gameConfig struct {
+	// 必填：一个游戏的条目里至少要有一个键，配置加载器才看得见它（空的 `party: {}` 读不出来）。
+	TokenTTL time.Duration `config:"token_ttl" required:"true" min:"1s" max:"24h" help:"这个游戏的游戏账号 token 寿命（例如 2h，至多 24h）"`
+}
+
+// serviceConfig 是 account.services.<服务名>。
+type serviceConfig struct {
+	Kind string `config:"kind" required:"true" enum:"game|lobby|relay" help:"服务类型：game（传统区服）、lobby（大厅）、relay（转发）"`
+}
+
+// gameSpecs 与 serviceSpecs 把配置的 map 交给领域层；名字的写法、寿命的范围在 domain.New 里检查一次。
+func gameSpecs(games map[string]gameConfig) []domain.GameSpec {
+	specs := make([]domain.GameSpec, 0, len(games))
+	for name, game := range games {
+		specs = append(specs, domain.GameSpec{Name: name, TokenTTL: game.TokenTTL})
+	}
+	return specs
+}
+
+func serviceSpecs(services map[string]serviceConfig) []domain.ServiceSpec {
+	specs := make([]domain.ServiceSpec, 0, len(services))
+	for name, service := range services {
+		specs = append(specs, domain.ServiceSpec{Name: name, Kind: domain.ServiceKind(service.Kind)})
+	}
+	return specs
 }
 
 // ConfigSchema 声明 account.* 与 service_metrics.enabled。
@@ -101,6 +134,12 @@ func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 //	  session_ttl: 30m            # optional
 //	  ticket_ttl: 10m             # optional：账号票据的有效期
 //	  claim_ttl: 30s              # optional
+//	  games:                      # optional：游戏账号 token 服务的游戏（game_token.go）
+//	    party: {token_ttl: 2h}
+//	  services:                   # optional：接受本账号体系的服务（services.go）
+//	    lobby: {kind: lobby}
+//	    relay: {kind: relay}
+//	    slg:   {kind: game}
 func (m *Mod) Init(cfg *viper.Viper) error {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
@@ -127,6 +166,10 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			"was absent in the implementation this replaces, and the absence looked like a default", missing)
 	}
 	m.prefix, m.sessionSecret, m.sessionTTL, m.ticketTTL, m.claimTTL = c.KeyPrefix, c.SessionSecret, c.SessionTTL, c.TicketTTL, c.ClaimTTL
+	m.games, m.services = gameSpecs(c.Games), serviceSpecs(c.Services)
+	if err := domain.CheckGamesAndServices(m.games, m.services); err != nil {
+		return fmt.Errorf("account mod: %w", err)
+	}
 	return nil
 }
 
@@ -151,6 +194,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 		Slots: stores.Slots, Names: stores.Names, Presence: stores.Presence,
 		Verifier: m.verifier, Allocator: m.allocator, NameRules: m.nameRules,
 		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL, AccountTicketTTL: m.ticketTTL, ClaimTTL: m.claimTTL,
+		Games: m.games, Services: m.services,
 		Metrics: m.metrics,
 		// Creation and login times are business time; session tokens and
 		// operator stamps are system time.

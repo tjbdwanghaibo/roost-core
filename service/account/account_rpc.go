@@ -118,6 +118,23 @@ type Accounts interface {
 	// 同一张票据重放或并发只会有一个映射。
 	EnterServer(ctx context.Context, ticket string) (entry ServerEntry, err error)
 
+	// 游戏账号 token（game_token.go，方案 2026-11-16 §4.1.1）：开房间类游戏的大厅凭它认“哪个账号、玩哪个游戏”。
+	// 签发与校验都在 account，大厅不持有密钥、不自己验签。
+
+	// IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt1，寿命 account.games.<game>.token_ttl）。
+	// 只读。账号只取自票据：票据无效 ErrSessionInvalid；账号不在、被封 ErrAccountMissing / ErrIdentityDenied；
+	// game 不在 account.games 里 ErrGameInvalid。
+	IssueGameToken(ctx context.Context, accountTicket string, game string) (token GameToken, err error)
+
+	// ValidateGameToken 校验一张游戏账号 token，返回账号、游戏与过期时刻。只读。token 无效（过期、被改、
+	// 拿别的票据冒充）一律 ErrSessionInvalid；游戏已经不在 account.games 里 ErrGameInvalid；账号不在、被封
+	// ErrAccountMissing / ErrIdentityDenied（封号当场生效）。它不核对调用方的游戏：调用方用 GameAccount.RequireGame。
+	ValidateGameToken(ctx context.Context, token string) (account GameAccount, err error)
+
+	// ListServices 返回 account.services（services.go），按服务名升序；没有配置时为空（单一 game 服务的工程）。
+	// 只读、不需要调用方身份。登录入口用它按服务列出清单。
+	ListServices(ctx context.Context) (services []ServiceSpec, err error)
+
 	// 单个角色换服（transfer.go）。四个接口都在总线上：发起与提交的是源服的 game 进程（它知道自己什么
 	// 时候停写、卸载完），冷准入时任何 game 进程都要读绑定。它们改的是一个角色自己的绑定，不是
 	// UpsertServer / MergeServer 那样改变所有玩家能登录到哪里的控制面写；调用方可信的前提与本接口其余

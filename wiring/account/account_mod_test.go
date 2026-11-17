@@ -177,3 +177,61 @@ func TestGeneratedClientModRefusesANegativeCallTimeout(t *testing.T) {
 		t.Fatalf("zero means default and must be accepted: %v", err)
 	}
 }
+
+// account.games 与 account.services（方案 2026-11-16 §4.1）：配置里的 map 原样交给领域层；写错的名字、类型与寿命在
+// Init 就拒绝，点名是哪一项；都不写时两者为空，行为与只有 game 区服的工程相同。
+func TestModReadsGamesAndServices(t *testing.T) {
+	newMod := func() *Mod { return NewMod(acceptingVerifier(), &durableAllocator{}, simpleNameRules(), nil) }
+
+	plain := newMod()
+	if err := plain.Init(modConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if len(plain.games) != 0 || len(plain.services) != 0 {
+		t.Fatalf("a config without games and services read games %v, services %v", plain.games, plain.services)
+	}
+
+	cfg := modConfig()
+	cfg.Set("account.games", map[string]any{"party": map[string]any{"token_ttl": "90m"}, "brawl": map[string]any{"token_ttl": "2h"}})
+	cfg.Set("account.services", map[string]any{"lobby": map[string]any{"kind": "lobby"}, "relay": map[string]any{"kind": "relay"}, "slg": map[string]any{"kind": "game"}})
+	mod := newMod()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	games := map[string]time.Duration{}
+	for _, game := range mod.games {
+		games[game.Name] = game.TokenTTL
+	}
+	if len(games) != 2 || games["party"] != 90*time.Minute || games["brawl"] != 2*time.Hour {
+		t.Fatalf("games = %v, want party 90m and brawl 2h", games)
+	}
+	kinds := map[string]domain.ServiceKind{}
+	for _, service := range mod.services {
+		kinds[service.Name] = service.Kind
+	}
+	if len(kinds) != 3 || kinds["lobby"] != domain.ServiceKindLobby || kinds["relay"] != domain.ServiceKindRelay || kinds["slg"] != domain.ServiceKindGame {
+		t.Fatalf("services = %v", kinds)
+	}
+
+	for name, tc := range map[string]struct {
+		key   string
+		value any
+		want  string
+	}{
+		"game name with a dash first": {"account.games", map[string]any{"-party": map[string]any{"token_ttl": "1h"}}, "-party"},
+		"token ttl missing":           {"account.games", map[string]any{"party": map[string]any{"token_ttl": nil}}, "token_ttl"},
+		"token ttl too long":          {"account.games", map[string]any{"party": map[string]any{"token_ttl": "25h"}}, "token_ttl"},
+		"unknown kind":                {"account.services", map[string]any{"chat": map[string]any{"kind": "chat"}}, "kind"},
+		"kind missing":                {"account.services", map[string]any{"chat": map[string]any{"kind": nil}}, "kind"},
+		"service name upper":          {"account.services", map[string]any{"9lobby": map[string]any{"kind": "lobby"}}, "9lobby"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := modConfig()
+			cfg.Set(tc.key, tc.value)
+			err := newMod().Init(cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Init = %v, want a refusal naming %q", err, tc.want)
+			}
+		})
+	}
+}

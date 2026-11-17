@@ -52,6 +52,9 @@ const (
 	MethodValidateAccountTicket  = "account.ValidateAccountTicket"
 	MethodIssueEnterTicket       = "account.IssueEnterTicket"
 	MethodEnterServer            = "account.EnterServer"
+	MethodIssueGameToken         = "account.IssueGameToken"
+	MethodValidateGameToken      = "account.ValidateGameToken"
+	MethodListServices           = "account.ListServices"
 	MethodRoleBinding            = "account.RoleBinding"
 	MethodBeginRoleTransfer      = "account.BeginRoleTransfer"
 	MethodCommitRoleTransfer     = "account.CommitRoleTransfer"
@@ -79,6 +82,9 @@ var Methods = []string{
 	MethodValidateAccountTicket,
 	MethodIssueEnterTicket,
 	MethodEnterServer,
+	MethodIssueGameToken,
+	MethodValidateGameToken,
+	MethodListServices,
 	MethodRoleBinding,
 	MethodBeginRoleTransfer,
 	MethodCommitRoleTransfer,
@@ -374,6 +380,54 @@ type rpcEnterServerResponse struct {
 	Entry ServerEntry `json:"entry"`
 }
 
+// rpcIssueGameTokenRequest is the IssueGameToken request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcIssueGameTokenRequest struct {
+	AccountTicket string `json:"account_ticket"`
+	Game          string `json:"game"`
+}
+
+// rpcIssueGameTokenResponse is the IssueGameToken response on the wire.
+type rpcIssueGameTokenResponse struct {
+	rpcStatus
+	Token GameToken `json:"token"`
+}
+
+// rpcValidateGameTokenRequest is the ValidateGameToken request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcValidateGameTokenRequest struct {
+	Token string `json:"token"`
+}
+
+// rpcValidateGameTokenResponse is the ValidateGameToken response on the wire.
+type rpcValidateGameTokenResponse struct {
+	rpcStatus
+	Account GameAccount `json:"account"`
+}
+
+// rpcListServicesRequest is the ListServices request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcListServicesRequest struct {
+}
+
+// rpcListServicesResponse is the ListServices response on the wire.
+type rpcListServicesResponse struct {
+	rpcStatus
+	Services []ServiceSpec `json:"services"`
+}
+
 // rpcRoleBindingRequest is the RoleBinding request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -585,6 +639,30 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			entry, err := service.EnterServer(ctx.Context(), wire.Ticket)
 			return rpcEnterServerResponse{rpcStatus: statusOf(err), Entry: entry}, nil
+		},
+		MethodIssueGameToken: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcIssueGameTokenRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcIssueGameTokenResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			token, err := service.IssueGameToken(ctx.Context(), wire.AccountTicket, wire.Game)
+			return rpcIssueGameTokenResponse{rpcStatus: statusOf(err), Token: token}, nil
+		},
+		MethodValidateGameToken: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcValidateGameTokenRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcValidateGameTokenResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			account, err := service.ValidateGameToken(ctx.Context(), wire.Token)
+			return rpcValidateGameTokenResponse{rpcStatus: statusOf(err), Account: account}, nil
+		},
+		MethodListServices: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcListServicesRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcListServicesResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			services, err := service.ListServices(ctx.Context())
+			return rpcListServicesResponse{rpcStatus: statusOf(err), Services: services}, nil
 		},
 		MethodRoleBinding: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcRoleBindingRequest
@@ -868,6 +946,40 @@ func (c *BusClient) EnterServer(ctx context.Context, ticket string) (ServerEntry
 	return resp.Entry, err
 }
 
+// IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt1，寿命 account.games.<game>.token_ttl）。
+// 只读。账号只取自票据：票据无效 ErrSessionInvalid；账号不在、被封 ErrAccountMissing / ErrIdentityDenied；
+// game 不在 account.games 里 ErrGameInvalid。
+// IssueGameToken implements Accounts.
+func (c *BusClient) IssueGameToken(ctx context.Context, accountTicket string, game string) (GameToken, error) {
+	var resp rpcIssueGameTokenResponse
+	err := c.call(ctx, MethodIssueGameToken, rpcIssueGameTokenRequest{
+		AccountTicket: accountTicket,
+		Game:          game,
+	}, &resp)
+	return resp.Token, err
+}
+
+// ValidateGameToken 校验一张游戏账号 token，返回账号、游戏与过期时刻。只读。token 无效（过期、被改、
+// 拿别的票据冒充）一律 ErrSessionInvalid；游戏已经不在 account.games 里 ErrGameInvalid；账号不在、被封
+// ErrAccountMissing / ErrIdentityDenied（封号当场生效）。它不核对调用方的游戏：调用方用 GameAccount.RequireGame。
+// ValidateGameToken implements Accounts.
+func (c *BusClient) ValidateGameToken(ctx context.Context, token string) (GameAccount, error) {
+	var resp rpcValidateGameTokenResponse
+	err := c.call(ctx, MethodValidateGameToken, rpcValidateGameTokenRequest{
+		Token: token,
+	}, &resp)
+	return resp.Account, err
+}
+
+// ListServices 返回 account.services（services.go），按服务名升序；没有配置时为空（单一 game 服务的工程）。
+// 只读、不需要调用方身份。登录入口用它按服务列出清单。
+// ListServices implements Accounts.
+func (c *BusClient) ListServices(ctx context.Context) ([]ServiceSpec, error) {
+	var resp rpcListServicesResponse
+	err := c.call(ctx, MethodListServices, rpcListServicesRequest{}, &resp)
+	return resp.Services, err
+}
+
 // RoleBinding returns where a role is bound right now: its server, the
 // server that serves it, the bind epoch, the transfer seq, and the
 // transfer in flight or last settled. Read-only.
@@ -1014,6 +1126,18 @@ func (c capability) IssueEnterTicket(ctx context.Context, accountID string, serv
 
 func (c capability) EnterServer(ctx context.Context, ticket string) (ServerEntry, error) {
 	return c.inner.EnterServer(ctx, ticket)
+}
+
+func (c capability) IssueGameToken(ctx context.Context, accountTicket string, game string) (GameToken, error) {
+	return c.inner.IssueGameToken(ctx, accountTicket, game)
+}
+
+func (c capability) ValidateGameToken(ctx context.Context, token string) (GameAccount, error) {
+	return c.inner.ValidateGameToken(ctx, token)
+}
+
+func (c capability) ListServices(ctx context.Context) ([]ServiceSpec, error) {
+	return c.inner.ListServices(ctx)
 }
 
 func (c capability) RoleBinding(ctx context.Context, playerID int64) (RoleBinding, error) {

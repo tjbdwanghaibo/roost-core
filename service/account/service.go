@@ -53,6 +53,12 @@ type Config struct {
 	// 它与 SessionTTL 是两个量：账号票据只用来在登录之后拿清单、要进服票据，几分钟就够；
 	// 进服票据与角色会话令牌是“凭它握手”的凭证，用 SessionTTL。
 	AccountTicketTTL time.Duration
+	// Games 是这套 account 服务的游戏（account.games，game_token.go）：只给列出的游戏签发游戏账号 token。
+	// 空表示一个都没有，IssueGameToken 一律拒绝。
+	Games []GameSpec
+	// Services 是接受本账号体系的服务（account.services，services.go）。空表示单一 game 服务的工程，
+	// 区服记录不带服务名，行为与没有这一项时相同。
+	Services []ServiceSpec
 	// RolesPerServer is how many roles one account may hold on one server;
 	// zero selects one. It is configuration, not a compiled-in constant.
 	RolesPerServer int
@@ -100,6 +106,11 @@ type Service struct {
 	cfg      Config
 	presence PresenceStore
 	report   servicemetrics.Sink
+	// games 是 游戏名 -> token 寿命（Config.Games 检查过的）。
+	games map[string]time.Duration
+	// services 是 Config.Services 检查过、按名字排好的；defaultGameService 是没写服务名的区服归属的服务。
+	services           []ServiceSpec
+	defaultGameService string
 }
 
 // New validates the configuration and returns a Service.
@@ -165,11 +176,22 @@ func New(cfg Config) (*Service, error) {
 	if cfg.SystemNow == nil {
 		cfg.SystemNow = time.Now
 	}
+	games, err := newGameTable(cfg.Games)
+	if err != nil {
+		return nil, err
+	}
+	services, defaultGameService, err := newServiceTable(cfg.Services)
+	if err != nil {
+		return nil, err
+	}
 	presence := cfg.Presence
 	if presence == nil {
 		presence = NewMemoryPresenceStore(cfg.SystemNow)
 	}
-	return &Service{cfg: cfg, presence: presence, report: servicemetrics.Wrap(cfg.Metrics)}, nil
+	return &Service{
+		cfg: cfg, presence: presence, report: servicemetrics.Wrap(cfg.Metrics),
+		games: games, services: services, defaultGameService: defaultGameService,
+	}, nil
 }
 
 // Login verifies an identity with its channel and returns the account,
@@ -501,6 +523,9 @@ func (s *Service) MarkLogout(ctx context.Context, accountID string, playerID int
 //
 // 它同时把服号登记进区服索引（ListServers 读的那一条，servers.go）：先索引、后记录。索引已满
 // （MaxServers）而这是一个新服号时答 ErrRangeInvalid，什么也不写；已登记的服照常更新。
+//
+// 服务名（GameServer.Service，services.go）：没写时沿用记录里已有的，再没有就归到唯一的 game 服务；
+// 没有配置 account.services 时不能写，配置了时必须是一个 kind=game 的服务，否则 ErrServerInvalid。
 func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServer, error) {
 	if server.ID <= 0 {
 		return GameServer{}, fmt.Errorf("%w: id is zero or negative", ErrServerInvalid)
@@ -513,19 +538,33 @@ func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServ
 	default:
 		return GameServer{}, fmt.Errorf("%w: unsupported status %q", ErrServerInvalid, server.Status)
 	}
+	// 服务名不对在动索引之前拒绝（索引里不留一个写不进记录的服号）；记录里的服务名在下面的版本比较里再核对一次。
+	existing, _, err := s.cfg.Servers.Get(ctx, server.ID)
+	if err != nil {
+		return GameServer{}, err
+	}
+	if _, err := s.checkServerService(server.Service, existing.Value.Service); err != nil {
+		return GameServer{}, err
+	}
 	if err := s.ensureServerListed(ctx, server.ID); err != nil {
 		return GameServer{}, err
 	}
 	now := s.cfg.SystemNow() // an operator record, not game time
 	var result GameServer
-	_, _, err := s.cfg.Servers.Update(ctx, server.ID, func(current GameServer, _ bool) (GameServer, bool, error) {
+	_, _, err = s.cfg.Servers.Update(ctx, server.ID, func(current GameServer, _ bool) (GameServer, bool, error) {
 		next := server
+		service, err := s.checkServerService(server.Service, current.Service)
+		if err != nil {
+			return current, false, err
+		}
+		next.Service = service
 		next.Listed = nil // 索引只在保留键上，调用方带进来的不算
 		// 合服字段只由 MergeServer / UnmergeServer 写：改名、改状态不能把别名抹掉。
 		next.MergedInto, next.MergedFrom = current.MergedInto, append([]int32(nil), current.MergedFrom...)
 		next.MergedAtUnix, next.MergeNote = current.MergedAtUnix, current.MergeNote
 		next.UpdatedAtUnix = now.Unix()
 		result = next.clone()
+		result.Service = s.serviceOf(result)
 		return next, true, nil
 	})
 	if err != nil {

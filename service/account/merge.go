@@ -83,6 +83,10 @@ func (s *Service) MergeServer(ctx context.Context, request MergeRequest) (MergeR
 	if err := refuseMergeTarget(from, target); err != nil {
 		return result, err
 	}
+	// 合服只在同一个 game 服务里（services.go）：别的服务的服承载不了这里的角色。
+	if s.serviceOf(source) != s.serviceOf(target) {
+		return result, fmt.Errorf("%w: server %d belongs to service %q and server %d to %q; merge only within one game service", ErrServerInvalid, from, s.serviceOf(source), into, s.serviceOf(target))
+	}
 	if source.MergedInto != 0 && source.MergedInto != into {
 		return result, fmt.Errorf("%w: server %d is already merged into %d; unmerge-server -from %d first", ErrConflict, from, source.MergedInto, from)
 	}
@@ -255,7 +259,12 @@ func (s *Service) GetServer(ctx context.Context, serverID int32) (GameServer, er
 	if serverID <= 0 {
 		return GameServer{}, fmt.Errorf("%w: server id %d is not positive", ErrServerInvalid, serverID)
 	}
-	return s.mustServer(ctx, serverID)
+	server, err := s.mustServer(ctx, serverID)
+	if err != nil {
+		return GameServer{}, err
+	}
+	server.Service = s.serviceOf(server)
+	return server, nil
 }
 
 // servingServer 是承载服的唯一解析点：原服没有合服（或没有记录）时就是原服；已并入时是 MergedInto，且

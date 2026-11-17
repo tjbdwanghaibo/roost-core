@@ -93,6 +93,9 @@ const (
 	// 要调用方先重读绑定（RoleBinding）再决定。
 	CodeTransferStale      int32 = 560118
 	CodeTransferInProgress int32 = 560119
+	// CodeGameInvalid 属于游戏账号 token（game_token.go）：要签发或校验的游戏不在 account.games 里。
+	// token 本身无效仍是 CodeSessionInvalid。
+	CodeGameInvalid int32 = 560120
 )
 
 var (
@@ -136,6 +139,9 @@ var (
 	ErrTransferStale = errcode.Define(CodeTransferStale, "account: role binding or transfer id is stale", "")
 	// ErrTransferInProgress：这个角色正有另一次换服在途（另一个 ID，或同一个 ID 但目标不同）。
 	ErrTransferInProgress = errcode.Define(CodeTransferInProgress, "account: another role transfer is in progress", "")
+	// ErrGameInvalid：游戏不在 account.games 里——IssueGameToken 不签发；ValidateGameToken 遇到配置里已经去掉的
+	// 游戏的 token 也这样答。
+	ErrGameInvalid = errcode.Define(CodeGameInvalid, "account: game is not served by this account service", "")
 )
 
 // Error maps an error to the code and reason a client sees.
@@ -271,6 +277,9 @@ type GameServer struct {
 	// Region groups servers for display; opaque here.
 	Region        string `json:"region"`
 	UpdatedAtUnix int64  `json:"updated_at_unix"`
+	// Service 是区服归属的 game 服务（account.services，services.go）。没有配置 account.services 的工程里总是空；
+	// 配置了的，存储里可以是空（归到唯一的 game 服务），ListServers / GetServer 交出去的记录上已经填好。
+	Service string `json:"service,omitempty"`
 
 	// 别名合服（Admin.MergeServer）。下面四个字段只由 MergeServer / UnmergeServer 写，UpsertServer
 	// 原样保留它们。

@@ -275,34 +275,34 @@ func TestListServersWhenTheIndexAndTheRecordsDisagree(t *testing.T) {
 	}
 }
 
-// 索引有容量：第 MaxServers 个之后的新服号被拒绝、什么也不写；已登记的照常更新；清单从不截断。
+// 索引有容量（2026-11-17 起 1024，方案 §4.1.2 放宽）：第 MaxServers 个之后的新服号被拒绝、什么也不写；已登记的照常更新；清单从不截断。
 func TestTheServerIndexRefusesNewServersWhenFull(t *testing.T) {
 	s, cfg := freshAccount(t)
 	ctx := context.Background()
-	full := make([]int32, 0, 256)
-	for id := int32(1); id <= 256; id++ {
+	full := make([]int32, 0, 1024)
+	for id := int32(1); id <= 1024; id++ {
 		full = append(full, id)
 	}
-	// 直接把索引写满（逐个登记 256 个服只是慢，不多证明什么）；记录只放头尾几条。
+	// 直接把索引写满（逐个登记 1024 个服只是慢，不多证明什么）；记录只放头尾几条。
 	if _, _, err := cfg.Servers.Update(ctx, serverIndexKey, func(GameServer, bool) (GameServer, bool, error) {
 		return GameServer{Listed: full}, true, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpsertServer(ctx, GameServer{ID: 256, Name: "last"}); err != nil {
+	if _, err := s.UpsertServer(ctx, GameServer{ID: 1024, Name: "last"}); err != nil {
 		t.Fatalf("updating a server that is already indexed while the index is full: %v", err)
 	}
-	_, err := s.UpsertServer(ctx, GameServer{ID: 257, Name: "one too many"})
+	_, err := s.UpsertServer(ctx, GameServer{ID: 1025, Name: "one too many"})
 	if !errors.Is(err, ErrRangeInvalid) || Code(err) != CodeRangeInvalid {
-		t.Fatalf("the 257th server: %v, want ErrRangeInvalid", err)
+		t.Fatalf("the 1025th server: %v, want ErrRangeInvalid", err)
 	}
-	if _, found, _ := cfg.Servers.Get(ctx, 257); found {
+	if _, found, _ := cfg.Servers.Get(ctx, 1025); found {
 		t.Fatal("a refused registration wrote the server record")
 	}
-	if index := serverIndex(t, cfg); len(index) != 256 || slices.Contains(index, 257) {
+	if index := serverIndex(t, cfg); len(index) != 1024 || slices.Contains(index, 1025) {
 		t.Fatalf("a refused registration changed the index: %d ids", len(index))
 	}
-	if ids := listedIDs(t, s); !slices.Equal(ids, []int32{1, 256}) {
+	if ids := listedIDs(t, s); !slices.Equal(ids, []int32{1, 1024}) {
 		t.Fatalf("ListServers with a full index = %v, want the two servers that have records", ids)
 	}
 	// 合服也不能把新服号挤进满了的索引：两边都必须已经登记过，这里 300 没有记录，先被“服不存在”拒绝。
