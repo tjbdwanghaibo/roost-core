@@ -1,0 +1,28 @@
+relay1 pid 85879; args: -prefix L1 -rooms 20 -members 8 -hz 30 -warm 5s -dur 60s
+before:   0:00.32  31712
+driver pid 89098
+21:47:05 SAMPLE relay %cpu,rss_kb:   0.0  31712  driver %cpu,rss_kb:   0.0  11856
+21:47:05.657 READY rooms=20 members=8 connections=160 relay_addrs=map[127.0.0.1:19410:20]
+21:47:10 SAMPLE relay %cpu,rss_kb:  11.8  38704  driver %cpu,rss_kb:  12.8  20896
+21:47:10.659 MEASURE start
+21:47:15 SAMPLE relay %cpu,rss_kb:  11.9  39520  driver %cpu,rss_kb:  13.2  21600
+21:47:20 SAMPLE relay %cpu,rss_kb:  10.7  39856  driver %cpu,rss_kb:  13.3  22208
+21:47:20.660 RATE delivered/s=8407 (to members 4200, to hosts 4207) send_err=0 disconnects=0
+21:47:25 SAMPLE relay %cpu,rss_kb:  13.4  40224  driver %cpu,rss_kb:  15.5  23296
+21:47:30 SAMPLE relay %cpu,rss_kb:  11.2  40400  driver %cpu,rss_kb:  12.2  23776
+21:47:30.659 RATE delivered/s=8406 (to members 4205, to hosts 4201) send_err=0 disconnects=0
+21:47:35 SAMPLE relay %cpu,rss_kb:   6.3  40416  driver %cpu,rss_kb:   6.2  24944
+21:47:40.660 RATE delivered/s=8386 (to members 4195, to hosts 4191) send_err=0 disconnects=0
+21:47:40 SAMPLE relay %cpu,rss_kb:  12.4  40944  driver %cpu,rss_kb:  13.0  26032
+21:47:45 SAMPLE relay %cpu,rss_kb:   8.2  40960  driver %cpu,rss_kb:   8.3  27440
+21:47:50.660 RATE delivered/s=8401 (to members 4200, to hosts 4200) send_err=0 disconnects=0
+21:47:50 SAMPLE relay %cpu,rss_kb:  11.9  41008  driver %cpu,rss_kb:  12.8  27456
+21:47:55 SAMPLE relay %cpu,rss_kb:  15.2  41152  driver %cpu,rss_kb:  15.9  27456
+21:48:00.660 RATE delivered/s=8399 (to members 4200, to hosts 4200) send_err=0 disconnects=0
+21:48:00 SAMPLE relay %cpu,rss_kb:   9.7  41168  driver %cpu,rss_kb:  10.6  27456
+21:48:05 SAMPLE relay %cpu,rss_kb:  13.4  41184  driver %cpu,rss_kb:  14.0  28128
+21:48:10.660 RATE delivered/s=8429 (to members 4214, to hosts 4214) send_err=0 disconnects=0
+21:48:10.680 SUMMARY rooms=20 members=8 hz=30 payload=64 secs=60.0 sent/s=4800 expect_delivered/s=8400 delivered/s=8405 (to members 4202, to hosts 4202) latency p50=1.708ms p90=2.868ms p99=4.793ms max=14.781ms samples=252140 send_err=0 disconnects=0
+21:48:10.683 FINAL load done
+after:   0:07.84  41216
+loadavg: { 7.31 5.66 5.89 }

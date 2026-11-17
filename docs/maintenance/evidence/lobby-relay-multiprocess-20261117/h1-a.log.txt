@@ -1,0 +1,14 @@
+21:38:31.309 TICKET room=ef5be5bdea41e1d1 relay_addr=127.0.0.1:19410 host=dev:h1-a members=1
+21:38:31.309 WELCOME slot=1 host=true host_slot=1
+21:38:31.510 EVENT member_joined slot=2 account=dev:h1-b reason=none
+21:38:32.037 EVENT member_joined slot=3 account=dev:h1-c reason=none
+21:38:32.310 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=20 by= recv_ticks=0 inputs=20 send_err=0
+21:38:33.311 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=40 by= recv_ticks=0 inputs=60 send_err=0
+21:38:34.311 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=60 by= recv_ticks=0 inputs=100 send_err=0
+21:38:35.310 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=80 by= recv_ticks=0 inputs=140 send_err=0
+21:38:36.311 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=100 by= recv_ticks=0 inputs=181 send_err=0
+21:38:37.311 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=120 by= recv_ticks=0 inputs=221 send_err=0
+21:38:38.311 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=140 by= recv_ticks=0 inputs=260 send_err=0
+21:38:39.311 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=160 by= recv_ticks=0 inputs=300 send_err=0
+21:38:40.310 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=180 by= recv_ticks=0 inputs=340 send_err=0
+21:38:41.311 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=200 by= recv_ticks=0 inputs=380 send_err=0

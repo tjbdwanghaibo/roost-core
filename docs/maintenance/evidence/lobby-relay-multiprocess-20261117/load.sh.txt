@@ -1,0 +1,22 @@
+#!/bin/sh
+# 吞吐基线：drill load 跑在前台，同时每 5 秒采一次 relay1 与驱动进程的 %CPU / RSS；前后各记一次累计 CPU 时间。
+# 用法：load.sh <标签> <drill load 的参数...>
+set -u
+D=$(cd "$(dirname "$0")/.." && pwd)
+cd "$D"
+label=$1; shift
+rp=$(cat lrmp/.drill/relay1.pid)
+out=out/load-$label.txt
+echo "relay1 pid $rp; args: $*" > "$out"
+echo "before: $(ps -o time=,rss= -p "$rp")" >> "$out"
+lrmp/bin/drill load "$@" >> "$out" 2>&1 &
+dp=$!
+echo "driver pid $dp" >> "$out"
+while kill -0 "$dp" 2>/dev/null; do
+  echo "$(date +%T) SAMPLE relay %cpu,rss_kb: $(ps -o %cpu=,rss= -p "$rp")  driver %cpu,rss_kb: $(ps -o %cpu=,rss= -p "$dp" 2>/dev/null)" >> "$out"
+  sleep 5
+done
+wait "$dp"
+echo "after: $(ps -o time=,rss= -p "$rp")" >> "$out"
+echo "loadavg: $(sysctl -n vm.loadavg)" >> "$out"
+cat "$out"

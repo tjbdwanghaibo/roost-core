@@ -1,0 +1,50 @@
+21:55:54.619 TICKET room=cbc47496ae717340 relay_addr=127.0.0.1:19410 host=dev:h5-a members=2
+21:55:54.620 WELCOME slot=2 host=false host_slot=1
+21:55:55.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=23 by=h5-a recv_ticks=20 inputs=0 send_err=0
+21:55:56.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=43 by=h5-a recv_ticks=40 inputs=0 send_err=0
+21:55:57.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=63 by=h5-a recv_ticks=60 inputs=0 send_err=0
+21:55:58.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=83 by=h5-a recv_ticks=80 inputs=0 send_err=0
+21:55:59.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=103 by=h5-a recv_ticks=100 inputs=0 send_err=0
+21:56:00.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=123 by=h5-a recv_ticks=120 inputs=0 send_err=0
+21:56:01.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=143 by=h5-a recv_ticks=140 inputs=0 send_err=0
+21:56:02.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=163 by=h5-a recv_ticks=160 inputs=0 send_err=0
+21:56:03.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=183 by=h5-a recv_ticks=180 inputs=0 send_err=0
+21:56:04.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=203 by=h5-a recv_ticks=200 inputs=0 send_err=0
+21:56:05.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=223 by=h5-a recv_ticks=220 inputs=0 send_err=0
+21:56:06.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=243 by=h5-a recv_ticks=240 inputs=0 send_err=0
+21:56:06.943 EVENT disconnected reason=disconnected reconnecting=true err=EOF
+21:56:07.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=14
+21:56:08.627 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=34
+21:56:09.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=54
+21:56:10.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=73
+21:56:11.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=94
+21:56:12.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=113
+21:56:13.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=133
+21:56:14.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=154
+21:56:15.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=174
+21:56:16.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=194
+21:56:17.622 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=214
+21:56:18.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=234
+21:56:19.627 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=254
+21:56:20.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=273
+21:56:21.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=294
+21:56:22.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=314
+21:56:23.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=334
+21:56:24.624 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=354
+21:56:25.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=374
+21:56:26.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=394
+21:56:27.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=413
+21:56:28.623 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=434
+21:56:29.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=454
+21:56:30.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=474
+21:56:31.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=494
+21:56:32.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=513
+21:56:33.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=533
+21:56:34.620 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=554
+21:56:35.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=574
+21:56:36.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=594
+21:56:37.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=614
+21:56:38.621 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=634
+21:56:39.463 EVENT disconnected reason=disconnected reconnecting=false err=lobby: room_not_found (HTTP 404): lobby: room not found
+21:56:39.463 DONE client finished
+21:56:39.463 FINAL role={Slot:2 Host:false Candidate:false HostSlot:1 Epoch:0} tick=249 by=h5-a recv_ticks=246 inputs=0 send_err=650 tick_backward=0 tick_gap_max=1

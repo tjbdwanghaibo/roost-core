@@ -1,0 +1,13 @@
+21:51:12.854 TICKET room=e743d99c4397b672 relay_addr=127.0.0.1:19410 host=dev:h4-a members=3
+21:51:12.855 WELCOME slot=3 host=false host_slot=1
+21:51:13.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=33 by=h4-a recv_ticks=20 inputs=0 send_err=0
+21:51:14.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=53 by=h4-a recv_ticks=40 inputs=0 send_err=0
+21:51:15.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=72 by=h4-a recv_ticks=59 inputs=0 send_err=0
+21:51:16.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=92 by=h4-a recv_ticks=79 inputs=0 send_err=0
+21:51:17.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=112 by=h4-a recv_ticks=99 inputs=0 send_err=0
+21:51:18.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=132 by=h4-a recv_ticks=119 inputs=0 send_err=0
+21:51:19.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=153 by=h4-a recv_ticks=140 inputs=0 send_err=0
+21:51:20.856 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=172 by=h4-a recv_ticks=159 inputs=0 send_err=0
+21:51:20.857 EVENT disconnected reason=left reconnecting=false err=relay: closed by relay: left
+21:51:20.859 LEAVE via relay Leave + lobby leave: err=<nil>
+21:51:20.859 FINAL role={Slot:3 Host:false Candidate:false HostSlot:1 Epoch:0} tick=173 by=h4-a recv_ticks=160 inputs=0 send_err=0 tick_backward=0 tick_gap_max=1

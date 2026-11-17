@@ -1,0 +1,4 @@
+#!/bin/sh
+# 读隔离环境的变量（只读进环境，不打印），再执行参数里的命令。
+. "$HOME/.roost-it/roost-dataengine-it/env.sh"
+exec "$@"

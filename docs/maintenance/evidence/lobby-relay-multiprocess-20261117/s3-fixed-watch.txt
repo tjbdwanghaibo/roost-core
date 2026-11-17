@@ -1,0 +1,22 @@
+21:56:06 cbc47496ae717340 pttl_ms=28286	21:56:06 9fc20ee1f8f218e8 pttl_ms=28667	21:56:06 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 	21:56:07.034 ROOMS 2
+21:56:09 cbc47496ae717340 pttl_ms=29389	21:56:09 9fc20ee1f8f218e8 pttl_ms=26582	21:56:09 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 	21:56:09.119 ROOMS 2
+21:56:11 cbc47496ae717340 pttl_ms=29317	21:56:11 9fc20ee1f8f218e8 pttl_ms=29509	21:56:11 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 	21:56:11.164 ROOMS 2
+21:56:13 cbc47496ae717340 pttl_ms=27263	21:56:13 9fc20ee1f8f218e8 pttl_ms=27451	21:56:13 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 	21:56:13.228 ROOMS 2
+21:56:15 cbc47496ae717340 pttl_ms=29206	21:56:15 9fc20ee1f8f218e8 pttl_ms=25397	21:56:15 etcd relays: /lrmp/relays/relay-1001 	21:56:15.277 ROOMS 2
+21:56:17 cbc47496ae717340 pttl_ms=27073	21:56:17 9fc20ee1f8f218e8 pttl_ms=28259	21:56:17 etcd relays: /lrmp/relays/relay-1001 	21:56:17.423 ROOMS 2
+21:56:19 cbc47496ae717340 pttl_ms=25003	21:56:19 9fc20ee1f8f218e8 pttl_ms=26194	21:56:19 etcd relays: /lrmp/relays/relay-1001 	21:56:19.478 ROOMS 2
+21:56:21 cbc47496ae717340 pttl_ms=27961	21:56:21 9fc20ee1f8f218e8 pttl_ms=29149	21:56:21 etcd relays: /lrmp/relays/relay-1001 	21:56:21.521 ROOMS 2
+21:56:23 cbc47496ae717340 pttl_ms=25916	21:56:23 9fc20ee1f8f218e8 pttl_ms=27105	21:56:23 etcd relays: /lrmp/relays/relay-1001 	21:56:23.563 ROOMS 2
+21:56:25 cbc47496ae717340 pttl_ms=28884	21:56:25 9fc20ee1f8f218e8 pttl_ms=25071	21:56:25 etcd relays: /lrmp/relays/relay-1001 	21:56:25.600 ROOMS 2
+21:56:27 cbc47496ae717340 pttl_ms=26846	21:56:27 9fc20ee1f8f218e8 pttl_ms=28033	21:56:27 etcd relays: /lrmp/relays/relay-1001 	21:56:27.640 ROOMS 2
+21:56:29 cbc47496ae717340 pttl_ms=29807	21:56:29 9fc20ee1f8f218e8 pttl_ms=25993	21:56:29 etcd relays: /lrmp/relays/relay-1001 	21:56:29.676 ROOMS 2
+21:56:31 cbc47496ae717340 pttl_ms=27752	21:56:31 9fc20ee1f8f218e8 pttl_ms=28932	21:56:31 etcd relays: /lrmp/relays/relay-1001 	21:56:31.744 ROOMS 2
+21:56:33 cbc47496ae717340 pttl_ms=25700	21:56:33 9fc20ee1f8f218e8 pttl_ms=26884	21:56:33 etcd relays: /lrmp/relays/relay-1001 	21:56:33.785 ROOMS 2
+21:56:35 cbc47496ae717340 pttl_ms=28666	21:56:35 9fc20ee1f8f218e8 pttl_ms=29850	21:56:35 etcd relays: /lrmp/relays/relay-1001 	21:56:35.821 ROOMS 1
+21:56:37 cbc47496ae717340 pttl_ms=26629	21:56:37 9fc20ee1f8f218e8 pttl_ms=27813	21:56:37 etcd relays: /lrmp/relays/relay-1001 	21:56:37.857 ROOMS 1
+21:56:39 cbc47496ae717340 pttl_ms=24595	21:56:39 9fc20ee1f8f218e8 pttl_ms=25779	21:56:39 etcd relays: /lrmp/relays/relay-1001 	21:56:39.891 ROOMS 1
+21:56:41 cbc47496ae717340 pttl_ms=22560	21:56:41 9fc20ee1f8f218e8 pttl_ms=28744	21:56:41 etcd relays: /lrmp/relays/relay-1001 	21:56:41.925 ROOMS 1
+21:56:43 cbc47496ae717340 pttl_ms=20526	21:56:43 9fc20ee1f8f218e8 pttl_ms=26704	21:56:43 etcd relays: /lrmp/relays/relay-1001 	21:56:43.968 ROOMS 1
+21:56:45 cbc47496ae717340 pttl_ms=18484	21:56:45 9fc20ee1f8f218e8 pttl_ms=29663	21:56:45 etcd relays: /lrmp/relays/relay-1001 	21:56:46.009 ROOMS 1
+21:56:48 cbc47496ae717340 pttl_ms=16443	21:56:48 9fc20ee1f8f218e8 pttl_ms=27621	21:56:48 etcd relays: /lrmp/relays/relay-1001 	21:56:48.052 ROOMS 1
+21:56:50 cbc47496ae717340 pttl_ms=14397	21:56:50 9fc20ee1f8f218e8 pttl_ms=25575	21:56:50 etcd relays: /lrmp/relays/relay-1001 	21:56:50.089 ROOMS 1

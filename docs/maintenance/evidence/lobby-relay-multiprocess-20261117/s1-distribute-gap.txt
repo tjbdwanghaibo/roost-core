@@ -1,0 +1,9 @@
+21:37:55.338 CREATED #0 room=473b92702d0b1190 host=dA0 relay_addr=127.0.0.1:19410
+21:37:56.845 CREATED #1 room=a529723619fed004 host=dA1 relay_addr=127.0.0.1:19411
+21:37:58.349 CREATED #2 room=4e5507bed6b73b8a host=dA2 relay_addr=127.0.0.1:19410
+21:37:59.855 CREATED #3 room=c45e59e681755e4e host=dA3 relay_addr=127.0.0.1:19411
+21:38:01.361 CREATED #4 room=f4d404001bc11203 host=dA4 relay_addr=127.0.0.1:19410
+21:38:02.866 CREATED #5 room=864d491cae7b8ca3 host=dA5 relay_addr=127.0.0.1:19411
+21:38:04.368 DIST relay_addr=127.0.0.1:19410 rooms=3
+21:38:04.368 DIST relay_addr=127.0.0.1:19411 rooms=3
+21:38:05.370 FINAL distribute done

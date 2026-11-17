@@ -1,0 +1,42 @@
+# 演练配置：隔离环境的 Redis / NATS（从环境变量读，不打印）、私有 etcd 127.0.0.1:23891、
+# 端口 194xx；两个 relay（sid 1000 / 1001，实例名 relay-1000 / relay-1001）。输出到 <工程>/.drill/configs/。
+import os, re, sys
+
+root = sys.argv[1]
+out = os.path.join(root, ".drill", "configs")
+os.makedirs(out, exist_ok=True)
+redis = os.environ["ROOST_DATAENGINE_IT_REDIS_ADDR"]
+nats = os.environ["ROOST_DATAENGINE_IT_NATS_URL"]
+etcd = "127.0.0.1:23891"
+
+
+def relay(n, sid):
+    return ("relay", [("sid: 1000", "sid: %d" % sid),
+            ("  addr: 127.0.0.1:9102", "  addr: 127.0.0.1:%d" % (19402 + n)),
+            ("  advertise_addr: 127.0.0.1:9002", "  advertise_addr: 127.0.0.1:%d" % (19502 + n)),
+            ("  listen: 0.0.0.0:7102", "  listen: 127.0.0.1:%d" % (19410 + n)),
+            ("  advertise_addr: 127.0.0.1:7102", "  advertise_addr: 127.0.0.1:%d" % (19410 + n)),
+            ("  ws_listen: 0.0.0.0:7202", "  ws_listen: 127.0.0.1:%d" % (19420 + n)),
+            ("  ws_advertise_addr: ws://127.0.0.1:7202/relay", "  ws_advertise_addr: ws://127.0.0.1:%d/relay" % (19420 + n))])
+
+
+outputs = {
+    "account": ("account", [("  addr: 127.0.0.1:9100", "  addr: 127.0.0.1:19400"), ("  addr: 127.0.0.1:8080", "  addr: 127.0.0.1:19480")]),
+    "lobby": ("lobby", [("  addr: 127.0.0.1:9101", "  addr: 127.0.0.1:19401"), ("  listen: 0.0.0.0:8081", "  listen: 127.0.0.1:19481")]),
+    "relay1": relay(0, 1000),
+    "relay2": relay(1, 1001),
+}
+for name, (src, pairs) in outputs.items():
+    text = open(os.path.join(root, "configs/service/config.%s.yaml" % src), encoding="utf-8").read()
+    for old, new in pairs:
+        if old not in text:
+            sys.exit("%s: %r not found" % (name, old))
+        text = text.replace(old, new, 1)
+    text = text.replace("  addr: 127.0.0.1:6379", "  addr: " + redis, 1)
+    text = text.replace("  url: nats://127.0.0.1:4222", "  url: " + nats, 1)
+    text = text.replace("  endpoints: [127.0.0.1:2379]", "  endpoints: [%s]" % etcd, 1)
+    text = re.sub(r"(?m)^  dir: log$", "  dir: .drill/log/" + name, text)
+    if src == "account":
+        text = text.replace("  session_secret: CHANGE_ME", "  session_secret: lrmp-drill-session-secret-0123456789", 1)
+    open(os.path.join(out, "config.%s.yaml" % name), "w", encoding="utf-8").write(text)
+print("configs written to", out)

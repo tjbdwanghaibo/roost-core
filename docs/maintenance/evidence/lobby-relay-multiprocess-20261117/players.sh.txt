@@ -1,0 +1,17 @@
+#!/bin/sh
+# 起一个房间的 3 个玩家进程：<前缀>-a 建房（房主），<前缀>-b、<前缀>-c 加入。各自一个进程，PID 记在 out/<前缀>-*.pid。
+# 用法：players.sh <前缀>
+set -u
+D=$(cd "$(dirname "$0")/.." && pwd)
+cd "$D"
+pre=$1
+rm -f "out/$pre.room"
+nohup lrmp/bin/drill player -name "$pre-a" -create -roomfile "out/$pre.room" ${ARGS_A:-} > "out/$pre-a.log" 2>&1 &
+echo $! > "out/$pre-a.pid"
+i=0; while [ ! -s "out/$pre.room" ] && [ $i -lt 50 ]; do i=$((i+1)); sleep 0.2; done
+for m in b c; do
+  nohup lrmp/bin/drill player -name "$pre-$m" -roomfile "out/$pre.room" $(eval echo \${ARGS_$m:-}) > "out/$pre-$m.log" 2>&1 &
+  echo $! > "out/$pre-$m.pid"
+  sleep 0.5
+done
+echo "room $(cat "out/$pre.room") pids a=$(cat "out/$pre-a.pid") b=$(cat "out/$pre-b.pid") c=$(cat "out/$pre-c.pid")"

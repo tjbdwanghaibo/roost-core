@@ -108,6 +108,7 @@ func (s *Service) CreateRoom(ctx context.Context, gameToken string, req CreateRe
 		Attrs: req.Attrs, Host: account, Relay: relay, CreatedAtUnix: now.Unix(),
 		Members: []Member{{Account: account, ReservedUntilUnix: s.reservedUntil(now)}},
 	}
+	room.keepAlive(now, s.cfg.Rooms.TTL())
 	// 房间号随机生成；撞上已有的（64 位随机数，实际不会发生）换一个再试。
 	for attempt := 0; ; attempt++ {
 		if room.ID, err = s.cfg.NewID(); err != nil {
@@ -148,7 +149,7 @@ func (s *Service) ListRooms(ctx context.Context, gameToken, game, mode string, l
 	views := make([]RoomView, 0, len(rooms))
 	for _, room := range rooms {
 		room.pruneReservations(now)
-		if room.listable() {
+		if !room.gone(now) && room.listable() {
 			views = append(views, room.View())
 		}
 	}
@@ -171,7 +172,7 @@ func (s *Service) JoinRoom(ctx context.Context, gameToken, roomID string, req Jo
 	}
 	now := s.cfg.Now()
 	room, err := s.cfg.Rooms.Update(ctx, roomID, func(room *Room) (bool, error) {
-		if room.Game != req.Game || room.Closed {
+		if room.Game != req.Game || room.gone(now) {
 			return false, ErrRoomMissing
 		}
 		if room.Relay.Addr(transport) == "" {
@@ -216,9 +217,10 @@ func (s *Service) LeaveRoom(ctx context.Context, gameToken, roomID string, req L
 		return Ticket{}, err
 	}
 	notifyRelay := false
+	now := s.cfg.Now()
 	room, err := s.cfg.Rooms.Update(ctx, roomID, func(room *Room) (bool, error) {
 		notifyRelay = false
-		if room.Game != req.Game || room.Closed {
+		if room.Game != req.Game || room.gone(now) {
 			return false, ErrRoomMissing
 		}
 		if account == room.Host {
@@ -270,8 +272,9 @@ func (s *Service) SetRoomState(ctx context.Context, gameToken, roomID string, re
 	if err := checkAttrs(req.Attrs); err != nil {
 		return Ticket{}, err
 	}
+	now := s.cfg.Now()
 	room, err := s.cfg.Rooms.Update(ctx, roomID, func(room *Room) (bool, error) {
-		if room.Game != req.Game || room.Closed {
+		if room.Game != req.Game || room.gone(now) {
 			return false, ErrRoomMissing
 		}
 		if room.Host != account {

@@ -4,7 +4,8 @@
 // 报告维护房间目录（人数、房主、关房）。不做玩法校验：只看人数、密码和房主身份。
 //
 // 结构：
-//   - 房间目录在 Redis（RoomStore），每条记录带 TTL，由 relay 的心跳续期；relay 不再报告（崩溃、房间关闭）时记录自己过期。
+//   - 房间目录在 Redis（RoomStore），每条记录带 TTL，只由 relay 的报告续命（Room.AliveUntilUnixMilli）；relay 不再报告
+//     （崩溃、房间关闭）时房间在 room TTL 后不在了，客户端反复 join 也不续命。
 //     lobby 进程无状态，可以多开；同一个房间的并发修改（加入、relay 报告、房主改状态）都经 RoomStore.Update 的
 //     compare-and-set，不存在“读、判断、写”的窗口。
 //   - 身份只认 account 签发的游戏账号 token（gt1），校验交给 account 的 ValidateGameToken（GameTokenValidator），
@@ -210,6 +211,12 @@ type Room struct {
 	// RelaySeq 是已应用的 relay 报告的最大序号；0 表示 relay 还没报告过（房主还没连上）。
 	RelaySeq      uint64 `json:"relay_seq,omitempty"`
 	CreatedAtUnix int64  `json:"created_at_unix"`
+	// AliveUntilUnixMilli 是房间的寿命：建房时与每条被接受的 relay 报告时设为此刻加 room TTL（RoomStore.TTL），
+	// 过了这一刻房间按不存在处理（gone）。只有 relay 的报告续命：加入、离开、改状态也写记录（存储的键 TTL 随之重置），
+	// 但不改它。否则 relay 崩溃后，按 SDK 重连策略反复 join 的客户端会让房间一直留在目录里、一直列在大厅里
+	// （2026-11-17 多进程演练，evidence/lobby-relay-multiprocess-20261117）。按 lobby 的系统时间比较，多个 lobby
+	// 实例之间的时钟差直接算进寿命。
+	AliveUntilUnixMilli int64 `json:"alive_until_unix_ms"`
 }
 
 // Member 是一个席位。
@@ -262,6 +269,17 @@ func (r Room) View() RoomView {
 // listable 报告房间能不能出现在列表里：可加入、未满、relay 已报告房主连上、没关。
 func (r Room) listable() bool {
 	return !r.Closed && r.State == StateOpen && r.RelaySeq > 0 && len(r.Members) < r.MaxMembers
+}
+
+// gone 报告房间对客户端与 relay 来说已经不在：已关闭，或最后一条 relay 报告（没有报告过就是建房）之后过了 room TTL。
+// 存储里的记录可能还在（加入、离开等写入重置了键的 TTL），等键自己过期。
+func (r Room) gone(now time.Time) bool {
+	return r.Closed || now.UnixMilli() >= r.AliveUntilUnixMilli
+}
+
+// keepAlive 把寿命延长到 now 起一个 room TTL：只在建房与接受 relay 报告时调用。
+func (r *Room) keepAlive(now time.Time, ttl time.Duration) {
+	r.AliveUntilUnixMilli = now.Add(ttl).UnixMilli()
 }
 
 func (r Room) kicked(account string) bool { return slices.Contains(r.Kicked, account) }

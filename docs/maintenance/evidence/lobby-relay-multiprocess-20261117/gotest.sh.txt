@@ -1,0 +1,6 @@
+#!/bin/sh
+# 在本 worktree 里跑 go test，Redis 用隔离环境的那一个（只读进环境变量，不打印）。参数原样交给 go test。
+. "$HOME/.roost-it/roost-dataengine-it/env.sh"
+export ROOST_REDIS_TEST_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR"
+cd /Users/whb/roost/roost-core/.claude/worktrees/agent-ac8ec82d2c245312a || exit 1
+GOWORK=off exec go test "$@"

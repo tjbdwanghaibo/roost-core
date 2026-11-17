@@ -8,7 +8,7 @@
 
 - 只做三件事：让玩家找到房间（建房、列房）；把玩家连到同一个 relay 实例（给地址、签 relay 令牌）；跟着 relay 的报告维护房间目录（人数、房主、关房）。
 - 不做玩法校验，只看人数、密码和房主身份。玩法逻辑只在房主客户端。
-- 进程无状态，可以多开。房间目录在 Redis，每条记录带 TTL，由 relay 的报告续期。
+- 进程无状态，可以多开。房间目录在 Redis，每条记录带 TTL；房间的寿命只由 relay 的报告续（§4“过期”）。
 - 一个 lobby 服务可以服务多个游戏（`lobby.games`），房间按 `game` 隔开；`mode` 只是标签。
 
 ## 2. HTTP 接口
@@ -99,13 +99,15 @@ gt1 由 account 签发（`IssueGameToken`，寿命 `account.games.<游戏>.token
 
 | 键 | 内容 |
 |---|---|
-| `<key_prefix>:room:<id>` | 房间记录（versionstore 信封 + JSON），PX = `lobby.room_ttl`，每次写入重置 |
+| `<key_prefix>:room:<id>` | 房间记录（versionstore 信封 + JSON），PX = `lobby.room_ttl`，每次写入重置；房间本身的寿命是记录里的 `alive_until_unix_ms` |
 | `<key_prefix>:rooms:<game>:<mode>` | 可列出房间的索引（ZSET，分数是负的建房秒），与记录在同一个脚本里增删 |
 
 - **写入**：每次修改都走 versionstore 的 compare-and-set。加入、离开、改状态、relay 报告之间没有“读、判断、写”的窗口。
 - **Redis Cluster**：记录与索引在同一个脚本里，`key_prefix` 要带 hash tag，例如 `roost:{party}:lobby`。
 - **过期**：
-  - relay 不再报告（崩溃、房间关闭）时，记录随 TTL 消失。
+  - relay 不再报告（崩溃、房间关闭）时，房间在最后一条报告之后 `room_ttl` 内不在了：列表看不到，join、leave、改状态答 `room_not_found`，验权答 `room_not_found`。
+  - **只有 relay 的报告续命**：建房与每一条被接受的报告把 `alive_until_unix_ms` 设为此刻加 `room_ttl`。join（含断线重连的幂等 join）、leave、改状态也写记录、重置键的 PX，但不改寿命；过了寿命的记录等键自己过期。原因：relay 崩溃后，按 SDK 重连策略反复 join 的客户端曾让房间一直留在目录、一直列在大厅里，直到它们放弃重连（2026-11-17 多进程演练里续了 87 秒；[证据](../maintenance/evidence/lobby-relay-multiprocess-20261117/README.md)）。
+  - 寿命按处理请求的 lobby 的系统时间比较，多个 lobby 实例之间的时钟差直接算进寿命。
   - 迟到的报告不会让过期的房间复活：Update 遇到不存在的房间直接返回。
   - 房间号是 64 位随机数，从不复用。所以列表读到记录已经不在的索引项时，直接删掉它。
 - **关闭的房间**：标成已关闭并撤出索引，记录等 TTL 到期。
@@ -153,12 +155,12 @@ gt1 由 account 签发（`IssueGameToken`，寿命 `account.games.<游戏>.token
 
 lobby 的处理：
 - 房主按 epoch 做 CAS，只接受更大的 epoch，与消息类型无关：心跳也带着，丢了一条 `host_changed` 下一次心跳补上。之后 `/rooms/{id}/state` 只认新房主，令牌角色也跟着变。
-- 在线名单只认 `seq` 更大的报告；迟到的旧报告不改名单，只续 TTL。
+- 在线名单只认 `seq` 更大的报告；迟到的旧报告不改名单，只续命。
 - `member_left` 带 `kicked`：账号记进被踢名单、让出席位，与 `seq` 无关（踢出是永久的事实，迟到也照记）；之后 relay 的在线名单里再出现它也不补回席位。
 - `member_left` 带 `left`：清掉这个账号的 `connected`（主动离开）。只认 `seq` 更大的：迟到的旧 `left` 不能清掉回座后又连上的人。
 - 按名单重算席位：在线的记下 `connected`、清掉预留；不在线的按 §2.1 的席位规则决定留不留；名单里有、目录里没有的人补上（relay 是“谁连着”的权威）。例外是 `leaving` 名单里的人（§2.1“离开”）：不补回、不记 `connected`，仍在线就再发一次 `leave` 命令。
 - `member_left`（任何原因，`seq` 更大）清掉这个账号的 `leaving`。
-- 每一条被接受的报告都写一次记录，也就续了一次 TTL。房间已经不在、已关闭、或不是这个 relay 的报告，静默忽略。
+- 每一条被接受的报告都写一次记录，并给房间续命（§4“过期”）。房间已经不在（含过了寿命）、已关闭、或不是这个 relay 的报告，静默忽略。
 
 `RelayCommand`：`{"type":"leave","room":"<id>","account":"<账号>"}`。relay 把这个账号移出房间，等同于他自己 leave；是房主时 relay 走换 host。命令是尽力而为，发不出去只记日志：席位已经在目录里让出；客户端调完 leave 也应自己断开 relay 连接（单纯断开在已开始的房间里只算掉线，见 §2.1）。
 
@@ -229,6 +231,7 @@ lobby:
 
 ## 7. 限制
 
-- 选 relay 用的是 etcd 里的房间数，它由 relay 定时更新，有延迟。几个 lobby 实例同时建房，可能都选中同一个实例。
+- 选 relay 用的是 etcd 里的房间数，它由 relay 定时更新（每秒至多一次），而且只算房主已经连上的房间，有延迟。几个 lobby 实例同时建房，可能都选中同一个实例；一个 lobby 实例在一秒内连续建房也一样（2026-11-17 演练：两个 relay、间隔 0 连建 6 个房间，全部进了实例名较小的那个；间隔 1.5s 时 3 / 3）。
+- relay 进程没了之后，它的 etcd 键要到租约（`relay.registry_ttl`，缺省 10s）过期才消失；这段时间里新房间仍可能分给它（演练里 kill -9 后约 8s 键才消失）。
 - 索引里过期房间的项只在列表时清理；没人列的 game/mode，它的索引会留着这些项（每项一个房间号）。
 - 一个 `subject` 只能对应一份房间目录（§5.2 末尾）；两个目录用了同一个 `subject`，事件会被另一个目录的实例收走、丢掉。

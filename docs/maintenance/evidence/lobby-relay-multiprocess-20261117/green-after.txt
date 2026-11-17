@@ -1,0 +1,29 @@
+$ go test -count=1 -race -v -run "TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports|TestRoomsExpireWithoutRelayReports" ./service/lobby/   (ROOST_REDIS_TEST_ADDR = 隔离环境 Redis)
+=== RUN   TestRoomsExpireWithoutRelayReports
+=== RUN   TestRoomsExpireWithoutRelayReports/memory
+=== RUN   TestRoomsExpireWithoutRelayReports/redis
+--- PASS: TestRoomsExpireWithoutRelayReports (3.96s)
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/memory
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/redis
+--- PASS: TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports (1.61s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	6.869s
+
+$ go test -count=1 -race ./service/lobby/ ./wiring/lobby/ ./wiring/relay/ ./client/relay/
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	7.429s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lobby	1.552s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	4.066s
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	10.762s
+
+$ go test -tags integration -count=1 -race -run "TestRealRelay|TestRelayMatchesTheLobbyContract|TestKickIsRecorded" -v ./wiring/relay/   (真实 NATS + 用例自起的 etcd)
+--- PASS: TestRelayMatchesTheLobbyContract (0.00s)
+--- PASS: TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection (0.01s)
+--- PASS: TestRealRelayReportsCommandsAndAdvertisement (1.30s)
+--- PASS: TestRealRelayHostChangeKickAndVerification (0.30s)
+--- PASS: TestRealRelayStartedRoomKeepsADroppedMembersSeat (0.44s)
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.495s
+
+$ go vet ./service/lobby/ ./wiring/lobby/ ./wiring/relay/ ./client/relay/; gofmt -l service/lobby
+vet ok
+gofmt: (no files listed)

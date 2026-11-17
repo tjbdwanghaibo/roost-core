@@ -1,0 +1,37 @@
+21:44:29.156 TICKET room=323dc69ba0d98a8a relay_addr=127.0.0.1:19410 host=dev:h3-a members=2
+21:44:29.157 WELCOME slot=2 host=false host_slot=1
+21:44:30.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=24 by=h3-a recv_ticks=20 inputs=0 send_err=0
+21:44:31.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=44 by=h3-a recv_ticks=40 inputs=0 send_err=0
+21:44:32.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=64 by=h3-a recv_ticks=60 inputs=0 send_err=0
+21:44:33.158 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=84 by=h3-a recv_ticks=80 inputs=0 send_err=0
+21:44:34.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=104 by=h3-a recv_ticks=100 inputs=0 send_err=0
+21:44:35.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=124 by=h3-a recv_ticks=120 inputs=0 send_err=0
+21:44:36.158 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=144 by=h3-a recv_ticks=140 inputs=0 send_err=0
+21:44:37.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=164 by=h3-a recv_ticks=160 inputs=0 send_err=0
+21:44:38.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=184 by=h3-a recv_ticks=180 inputs=0 send_err=0
+21:44:39.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=204 by=h3-a recv_ticks=200 inputs=0 send_err=0
+21:44:40.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=224 by=h3-a recv_ticks=220 inputs=0 send_err=0
+21:44:41.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=244 by=h3-a recv_ticks=240 inputs=0 send_err=0
+21:44:42.158 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=264 by=h3-a recv_ticks=260 inputs=0 send_err=0
+21:44:43.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=284 by=h3-a recv_ticks=280 inputs=0 send_err=0
+21:44:44.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=304 by=h3-a recv_ticks=300 inputs=0 send_err=0
+21:44:45.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=324 by=h3-a recv_ticks=320 inputs=0 send_err=0
+21:44:46.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=344 by=h3-a recv_ticks=340 inputs=0 send_err=0
+21:44:47.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=364 by=h3-a recv_ticks=360 inputs=0 send_err=0
+21:44:48.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=384 by=h3-a recv_ticks=380 inputs=0 send_err=0
+21:44:49.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=404 by=h3-a recv_ticks=400 inputs=0 send_err=0
+21:44:50.158 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=424 by=h3-a recv_ticks=420 inputs=0 send_err=0
+21:44:51.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=444 by=h3-a recv_ticks=440 inputs=0 send_err=0
+21:44:52.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=464 by=h3-a recv_ticks=460 inputs=0 send_err=0
+21:44:53.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=484 by=h3-a recv_ticks=480 inputs=0 send_err=0
+21:44:54.158 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=504 by=h3-a recv_ticks=500 inputs=0 send_err=0
+21:44:55.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=524 by=h3-a recv_ticks=520 inputs=0 send_err=0
+21:44:56.158 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=544 by=h3-a recv_ticks=540 inputs=0 send_err=0
+21:44:57.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=564 by=h3-a recv_ticks=560 inputs=0 send_err=0
+21:44:58.159 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=584 by=h3-a recv_ticks=580 inputs=0 send_err=0
+21:44:59.158 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=604 by=h3-a recv_ticks=600 inputs=0 send_err=0
+21:45:00.157 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=624 by=h3-a recv_ticks=620 inputs=0 send_err=0
+21:45:00.226 EVENT disconnected reason=disconnected reconnecting=true err=EOF
+21:45:00.731 EVENT disconnected reason=room_not_found reconnecting=false err=relay: closed by relay: room_not_found
+21:45:00.731 DONE client finished
+21:45:00.731 FINAL role={Slot:2 Host:false Candidate:false HostSlot:1 Epoch:0} tick=625 by=h3-a recv_ticks=621 inputs=0 send_err=10 tick_backward=0 tick_gap_max=1

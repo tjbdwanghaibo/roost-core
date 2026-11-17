@@ -1,0 +1,38 @@
+# 变异：逐个撤掉修复的关键行，跑 lobby 的相关用例，期望变红；每次跑完还原文件。
+import subprocess, sys
+
+ROOT = "/Users/whb/roost/roost-core/.claude/worktrees/agent-ac8ec82d2c245312a/"
+GOTEST = "/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/mp/tools/gotest.sh"
+RUN = "TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports|TestRoomsExpireWithoutRelayReports|TestListShowsOnlyJoinableConfirmedRoomsOfTheMode"
+
+mutations = [
+    ("M1 join 不看寿命（只看 Closed）", "service/lobby/rooms.go",
+     "if room.Game != req.Game || room.gone(now) {\n\t\t\treturn false, ErrRoomMissing\n\t\t}\n\t\tif room.Relay.Addr(transport)",
+     "if room.Game != req.Game || room.Closed {\n\t\t\treturn false, ErrRoomMissing\n\t\t}\n\t\tif room.Relay.Addr(transport)"),
+    ("M2 relay 报告不续命", "service/lobby/events.go",
+     "\t\troom.keepAlive(now, s.cfg.Rooms.TTL())\n", ""),
+    ("M3 建房不设寿命", "service/lobby/rooms.go",
+     "\troom.keepAlive(now, s.cfg.Rooms.TTL())\n", ""),
+    ("M4 验权不看寿命", "service/lobby/events.go",
+     "case !found || room.gone(now):", "case !found || room.Closed:"),
+    ("M5 列表不看寿命", "service/lobby/rooms.go",
+     "if !room.gone(now) && room.listable() {", "if room.listable() {"),
+    ("M6 迟到的报告复活过期房间（报告入口只看 Closed）", "service/lobby/events.go",
+     "if room.gone(now) || room.Relay.Instance != event.Relay {", "if room.Closed || room.Relay.Instance != event.Relay {"),
+]
+
+for name, path, old, new in mutations:
+    full = ROOT + path
+    src = open(full, encoding="utf-8").read()
+    if src.count(old) != 1:
+        sys.exit("%s: pattern found %d times" % (name, src.count(old)))
+    open(full, "w", encoding="utf-8").write(src.replace(old, new, 1))
+    try:
+        r = subprocess.run(["sh", GOTEST, "-count=1", "-run", RUN, "./service/lobby/"], capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        fails = [l.strip() for l in out.splitlines() if l.strip().startswith("lobby_test.go:")]
+        print("%s -> %s" % (name, "RED" if r.returncode != 0 else "GREEN (mutation survived)"))
+        for l in fails[:3]:
+            print("    " + l)
+    finally:
+        open(full, "w", encoding="utf-8").write(src)

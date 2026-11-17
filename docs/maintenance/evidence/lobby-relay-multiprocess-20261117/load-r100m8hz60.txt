@@ -1,0 +1,29 @@
+relay1 pid 85879; args: -prefix L3 -rooms 100 -members 8 -hz 60 -warm 5s -dur 60s
+before:   0:55.30  49232
+driver pid 93551
+21:49:36 SAMPLE relay %cpu,rss_kb:   0.0  49232  driver %cpu,rss_kb:   0.0  11856
+21:49:37.509 READY rooms=100 members=8 connections=800 relay_addrs=map[127.0.0.1:19410:100]
+21:49:41 SAMPLE relay %cpu,rss_kb: 103.2  57984  driver %cpu,rss_kb:  86.3  41696
+21:49:42.513 MEASURE start
+21:49:46 SAMPLE relay %cpu,rss_kb: 135.1  58752  driver %cpu,rss_kb: 130.2  43456
+21:49:51 SAMPLE relay %cpu,rss_kb: 137.6  58928  driver %cpu,rss_kb: 142.0  48480
+21:49:52.513 RATE delivered/s=84023 (to members 42012, to hosts 42010) send_err=0 disconnects=0
+21:49:56 SAMPLE relay %cpu,rss_kb: 126.3  58976  driver %cpu,rss_kb: 128.2  55360
+21:50:01 SAMPLE relay %cpu,rss_kb: 130.6  59008  driver %cpu,rss_kb: 118.7  62384
+21:50:02.515 RATE delivered/s=83951 (to members 41974, to hosts 41978) send_err=0 disconnects=0
+21:50:06 SAMPLE relay %cpu,rss_kb: 136.4  59008  driver %cpu,rss_kb: 131.4  62512
+21:50:11 SAMPLE relay %cpu,rss_kb: 130.1  59472  driver %cpu,rss_kb: 131.6  65696
+21:50:12.513 RATE delivered/s=84046 (to members 42021, to hosts 42025) send_err=0 disconnects=0
+21:50:16 SAMPLE relay %cpu,rss_kb: 136.6  59472  driver %cpu,rss_kb: 133.5  84512
+21:50:21 SAMPLE relay %cpu,rss_kb: 139.6  59472  driver %cpu,rss_kb: 130.9  84576
+21:50:22.513 RATE delivered/s=83994 (to members 41994, to hosts 42000) send_err=0 disconnects=0
+21:50:26 SAMPLE relay %cpu,rss_kb: 115.4  59472  driver %cpu,rss_kb: 118.6  96224
+21:50:31 SAMPLE relay %cpu,rss_kb: 140.4  59488  driver %cpu,rss_kb: 139.8  96256
+21:50:32.514 RATE delivered/s=84003 (to members 42007, to hosts 41996) send_err=0 disconnects=0
+21:50:36 SAMPLE relay %cpu,rss_kb: 134.1  59488  driver %cpu,rss_kb: 137.1 110224
+21:50:41 SAMPLE relay %cpu,rss_kb: 125.4  59504  driver %cpu,rss_kb: 124.1 110304
+21:50:42.515 RATE delivered/s=84008 (to members 41999, to hosts 42009) send_err=0 disconnects=0
+21:50:42.641 SUMMARY rooms=100 members=8 hz=60 payload=64 secs=60.0 sent/s=48000 expect_delivered/s=84000 delivered/s=84004 (to members 42001, to hosts 42003) latency p50=3.722ms p90=4.912ms p99=5.942ms max=11.872ms samples=2520242 send_err=0 disconnects=0
+21:50:42.646 FINAL load done
+after:   2:22.27  59536
+loadavg: { 8.09 6.88 6.37 }

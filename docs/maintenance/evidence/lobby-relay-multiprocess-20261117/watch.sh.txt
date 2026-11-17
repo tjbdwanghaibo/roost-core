@@ -1,0 +1,11 @@
+#!/bin/sh
+# 每 2 秒记一次：两个房间记录的 PTTL、etcd 里的 relay 广播、lobby 列表。参数：次数 房间号...
+D=$(cd "$(dirname "$0")/.." && pwd)
+n=$1; shift
+i=0
+while [ $i -lt "$n" ]; do
+  sh "$D/tools/redisroom.sh" "$@"
+  echo "$(date +%T) etcd relays: $(etcdctl --endpoints=127.0.0.1:23891 get --prefix /lrmp/relays/ --keys-only | grep . | tr '\n' ' ')"
+  "$D/lrmp/bin/drill" rooms -name observer | grep -E "ROOMS|ROOM "
+  i=$((i+1)); sleep 2
+done

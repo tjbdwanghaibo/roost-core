@@ -1,0 +1,9 @@
+#!/bin/sh
+# 看 lobby 目录里一个房间记录的剩余寿命（PTTL）与内容；参数是房间号。地址取隔离环境的变量，不打印。
+. "$HOME/.roost-it/roost-dataengine-it/env.sh"
+h=${ROOST_DATAENGINE_IT_REDIS_ADDR%:*}; p=${ROOST_DATAENGINE_IT_REDIS_ADDR##*:}
+for room in "$@"; do
+  k="roost:lrmp:lobby:room:$room"
+  echo "$(date +%T) $room pttl_ms=$(redis-cli -h "$h" -p "$p" PTTL "$k")"
+done
+if [ "${SHOW:-}" = 1 ]; then redis-cli -h "$h" -p "$p" GET "roost:lrmp:lobby:room:$1" | tr -cd '[:print:]\n' | cut -c1-600; echo; fi

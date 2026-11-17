@@ -1,0 +1,549 @@
+// Command drill 是 lobby + relay 多进程演练的客户端驱动（Go SDK client/relay）。每个子命令是一个独立进程：
+//
+//	drill player     -name A -create -roomfile F      房主：建房，把房间号写进 F，按 -hz 向全体广播 tick，定时推快照
+//	drill player     -name B -roomfile F              成员：等 F 出现后加入，按 -hz 给房主发输入，记下收到的 tick
+//	drill rooms      -name X                          列 lobby 的房间（id、房主、epoch、人数）
+//	drill distribute -prefix d -rooms 6 -gap 1500ms   连续建 6 个房间（每个一个房主连接），打印每个房间分到的 relay
+//	drill load       -prefix l -rooms 20 -members 8 -hz 30 -dur 60s   吞吐基线：游戏通道持续收发，统计帧数与时延
+//
+// 所有输出是带时刻的一行一条（HH:MM:SS.mmm），进程退出前打印 FINAL。
+// 换 host：成员收到 YouAreHost 后从快照（或交接数据）里取 tick，回 HostReady，当上房主后从那个 tick 接着广播。
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/relay"
+)
+
+var (
+	portalURL = "http://127.0.0.1:19480"
+	lobbyURL  = "http://127.0.0.1:19481"
+	game      = "lrmp"
+	devToken  = "dev-lrmp-drill"
+	mode      = "coop"
+)
+
+const (
+	msgTick  = 1 // 房主 → 全体：tick=<n> by=<账号> ts=<UnixNano>
+	msgInput = 2 // 成员 → 房主：input <账号> <seq>
+)
+
+func logf(format string, args ...any) {
+	fmt.Printf("%s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+}
+
+func die(format string, args ...any) {
+	logf("FAIL "+format, args...)
+	os.Exit(1)
+}
+
+// login 经 portal 的 /portal/login（带 game）拿 gt1。
+func login(openID string) string {
+	raw, _ := json.Marshal(map[string]any{"channel": "dev", "open_id": openID, "credential": devToken, "game": game})
+	resp, err := http.Post(portalURL+"/portal/login", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		die("login %s: %v", openID, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	var out map[string]any
+	_ = json.Unmarshal(data, &out)
+	token, _ := out["game_token"].(string)
+	if resp.StatusCode != 200 || token == "" {
+		die("login %s: %d %s", openID, resp.StatusCode, data)
+	}
+	return token
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		die("usage: drill player|rooms|distribute|load ...")
+	}
+	cmd, args := os.Args[1], os.Args[2:]
+	switch cmd {
+	case "player":
+		runPlayer(args)
+	case "rooms":
+		runRooms(args)
+	case "distribute":
+		runDistribute(args)
+	case "load":
+		runLoad(args)
+	default:
+		die("unknown command %s", cmd)
+	}
+}
+
+// ---------------------------------------------------------------- player
+
+type player struct {
+	name   string
+	client *relay.Client
+
+	mu        sync.Mutex
+	tick      uint64 // 房主：当前 tick；成员：最近收到的 tick
+	tickBy    string // 最近一个 tick 是谁广播的
+	recvTicks int    // 收到的 tick 帧数
+	inputs    int    // 当房主时收到的输入帧数
+	sendErr   int    // 发送失败次数（断线、重连中）
+	gapMax    uint64 // 成员：相邻两个 tick 的最大跳变（换 host 时看回退 / 跳变）
+	backward  int    // 成员：tick 比上一个小的次数（新房主从快照接着走时会回退）
+}
+
+func runPlayer(args []string) {
+	fs := flag.NewFlagSet("player", flag.ExitOnError)
+	name := fs.String("name", "", "账号（open_id）")
+	create := fs.Bool("create", false, "建房（房主）")
+	roomFile := fs.String("roomfile", "", "建房时写房间号、加入时读房间号的文件")
+	hz := fs.Int("hz", 20, "房主广播 / 成员输入的频率")
+	reconnect := fs.Int("reconnect", 20, "自动重连的最多次数（0 不重连）")
+	dur := fs.Duration("dur", 10*time.Minute, "最长运行时间")
+	leaveAfter := fs.Duration("leave-after", 0, "这么久之后经 Client.Leave 离开（relay 的 Leave 控制帧 + lobby 的 leave）；0 不离开")
+	_ = fs.Parse(args)
+	if *name == "" || *roomFile == "" {
+		die("player needs -name and -roomfile")
+	}
+
+	gt := login(*name)
+	lobby := relay.NewLobby(lobbyURL, relay.StaticGameToken(gt), nil)
+	ctx := context.Background()
+	var ticket relay.Ticket
+	var err error
+	if *create {
+		ticket, err = lobby.CreateRoom(ctx, relay.CreateRoomRequest{Game: game, Mode: mode, Name: *name + "-room"})
+		if err != nil {
+			die("create room: %v", err)
+		}
+	} else {
+		var room string
+		for i := 0; i < 100; i++ {
+			if data, err := os.ReadFile(*roomFile); err == nil && len(data) > 0 {
+				room = strings.TrimSpace(string(data))
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if room == "" {
+			die("no room id in %s", *roomFile)
+		}
+		ticket, err = lobby.JoinRoom(ctx, room, relay.JoinRoomRequest{Game: game})
+		if err != nil {
+			die("join room %s: %v", room, err)
+		}
+	}
+	logf("TICKET room=%s relay_addr=%s host=%s members=%d", ticket.Room.ID, ticket.RelayAddr, ticket.Room.Host, ticket.Room.Members)
+
+	p := &player{name: *name}
+	p.client = relay.NewClient(lobby, relay.Options{
+		Game:      game,
+		Reconnect: relay.ReconnectPolicy{MaxAttempts: *reconnect},
+		SnapshotState: func() []byte {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			return []byte(fmt.Sprintf("tick=%d by=%s", p.tick, p.name))
+		},
+	})
+	p.hook()
+	welcome, err := p.client.Connect(ctx, ticket)
+	if err != nil {
+		die("connect relay: %v", err)
+	}
+	logf("WELCOME slot=%d host=%v host_slot=%d", welcome.Slot, welcome.Host, welcome.HostSlot)
+	if *create {
+		if err := os.WriteFile(*roomFile, []byte(ticket.Room.ID+"\n"), 0o644); err != nil {
+			die("write room file: %v", err)
+		}
+	}
+
+	stopLoop := make(chan struct{})
+	go p.loop(*hz, stopLoop)
+	go p.status(stopLoop)
+	var leaveC <-chan time.Time
+	if *leaveAfter > 0 {
+		leaveC = time.After(*leaveAfter)
+	}
+	select {
+	case <-leaveC:
+		err := p.client.Leave(ctx)
+		logf("LEAVE via relay Leave + lobby leave: err=%v", err)
+		<-p.client.Done()
+	case <-p.client.Done():
+		logf("DONE client finished")
+	case <-time.After(*dur):
+		logf("DONE duration reached")
+		_ = p.client.Close()
+	}
+	close(stopLoop)
+	p.mu.Lock()
+	logf("FINAL role=%+v tick=%d by=%s recv_ticks=%d inputs=%d send_err=%d tick_backward=%d tick_gap_max=%d",
+		p.client.Role(), p.tick, p.tickBy, p.recvTicks, p.inputs, p.sendErr, p.backward, p.gapMax)
+	p.mu.Unlock()
+}
+
+func (p *player) hook() {
+	c := p.client
+	c.OnGame(func(f relay.Frame) {
+		switch f.MsgID {
+		case msgTick:
+			var tick uint64
+			var by string
+			var ts int64
+			_, _ = fmt.Sscanf(string(f.Payload), "tick=%d by=%s ts=%d", &tick, &by, &ts)
+			p.mu.Lock()
+			if p.recvTicks > 0 {
+				if tick < p.tick {
+					p.backward++
+					logf("TICK_BACKWARD from %d (by %s) to %d (by %s)", p.tick, p.tickBy, tick, by)
+				} else if tick-p.tick > p.gapMax {
+					p.gapMax = tick - p.tick
+				}
+			}
+			if by != p.tickBy && p.recvTicks > 0 {
+				logf("TICK_SOURCE changed %s@%d -> %s@%d", p.tickBy, p.tick, by, tick)
+			}
+			p.tick, p.tickBy = tick, by
+			p.recvTicks++
+			p.mu.Unlock()
+		case msgInput:
+			p.mu.Lock()
+			p.inputs++
+			p.mu.Unlock()
+		}
+	})
+	c.OnMemberJoined(func(m relay.Member) { logf("EVENT member_joined slot=%d account=%s reason=%s", m.Slot, m.Account, m.Reason) })
+	c.OnMemberLeft(func(m relay.Member) { logf("EVENT member_left slot=%d account=%s reason=%s", m.Slot, m.Account, m.Reason) })
+	c.OnDisconnected(func(d relay.Disconnect) {
+		logf("EVENT disconnected reason=%s reconnecting=%v err=%v", d.Reason, d.Reconnecting, d.Err)
+	})
+	c.OnReconnected(func(w relay.Welcome) {
+		logf("EVENT reconnected slot=%d host=%v host_slot=%d", w.Slot, w.Host, w.HostSlot)
+	})
+	c.OnYouAreHost(func(e relay.YouAreHost) {
+		var tick uint64
+		_, _ = fmt.Sscanf(string(e.State), "tick=%d", &tick)
+		p.mu.Lock()
+		lastSeen := p.tick
+		p.tick = tick
+		p.tickBy = p.name
+		p.mu.Unlock()
+		online := 0
+		for _, s := range e.Members {
+			if s.Online {
+				online++
+			}
+		}
+		logf("EVENT you_are_host epoch=%d source=%d snapshot_seq=%d snapshot_age=%s members=%d online=%d state=%q state_err=%v last_seen_tick=%d",
+			e.Epoch, e.Source, e.SnapshotSeq, e.SnapshotAge, len(e.Members), online, e.State, e.StateErr, lastSeen)
+		if err := c.HostReady(e.Epoch); err != nil {
+			logf("EVENT host_ready error %v", err)
+		} else {
+			logf("EVENT host_ready sent epoch=%d", e.Epoch)
+		}
+	})
+	c.OnYouAreMember(func(epoch uint64) { logf("EVENT you_are_member epoch=%d", epoch) })
+	c.OnHostChanging(func(epoch uint64) { logf("EVENT host_changing epoch=%d", epoch) })
+	c.OnHostChanged(func(e relay.HostEvent) {
+		logf("EVENT host_changed epoch=%d host_slot=%d account=%s", e.Epoch, e.HostSlot, e.Account)
+	})
+	c.OnHostResumed(func(e relay.HostEvent) { logf("EVENT host_resumed epoch=%d host_slot=%d", e.Epoch, e.HostSlot) })
+	c.OnRejected(func(r relay.Rejected) { logf("EVENT rejected op=%d code=%d seq=%d", r.Op, r.Code, r.Seq) })
+}
+
+// loop：房主按 hz 广播 tick；成员按 hz 给房主发输入。
+func (p *player) loop(hz int, stop <-chan struct{}) {
+	t := time.NewTicker(time.Second / time.Duration(hz))
+	defer t.Stop()
+	var seq uint64
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		role := p.client.Role()
+		var err error
+		if role.Host {
+			p.mu.Lock()
+			p.tick++
+			payload := fmt.Sprintf("tick=%d by=%s ts=%d", p.tick, p.name, time.Now().UnixNano())
+			p.mu.Unlock()
+			err = p.client.SendGame(relay.All, msgTick, []byte(payload))
+		} else {
+			seq++
+			err = p.client.SendGame(relay.All, msgInput, []byte(fmt.Sprintf("input %s %d", p.name, seq)))
+		}
+		if err != nil {
+			p.mu.Lock()
+			p.sendErr++
+			p.mu.Unlock()
+		}
+	}
+}
+
+func (p *player) status(stop <-chan struct{}) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		role := p.client.Role()
+		p.mu.Lock()
+		logf("STAT host=%v cand=%v slot=%d host_slot=%d epoch=%d tick=%d by=%s recv_ticks=%d inputs=%d send_err=%d",
+			role.Host, role.Candidate, role.Slot, role.HostSlot, role.Epoch, p.tick, p.tickBy, p.recvTicks, p.inputs, p.sendErr)
+		p.mu.Unlock()
+	}
+}
+
+// ---------------------------------------------------------------- rooms
+
+func runRooms(args []string) {
+	fs := flag.NewFlagSet("rooms", flag.ExitOnError)
+	name := fs.String("name", "observer", "列房间用的账号")
+	_ = fs.Parse(args)
+	lobby := relay.NewLobby(lobbyURL, relay.StaticGameToken(login(*name)), nil)
+	rooms, err := lobby.ListRooms(context.Background(), game, mode, 100)
+	if err != nil {
+		die("list rooms: %v", err)
+	}
+	logf("ROOMS %d", len(rooms))
+	for _, r := range rooms {
+		logf("ROOM id=%s name=%s host=%s host_epoch=%d members=%d state=%s", r.ID, r.Name, r.Host, r.HostEpoch, r.Members, r.State)
+	}
+}
+
+// ---------------------------------------------------------------- distribute
+
+func runDistribute(args []string) {
+	fs := flag.NewFlagSet("distribute", flag.ExitOnError)
+	prefix := fs.String("prefix", "d", "账号前缀")
+	n := fs.Int("rooms", 6, "房间数")
+	gap := fs.Duration("gap", 1500*time.Millisecond, "两次建房之间的间隔（relay 的房间数每秒最多更新一次）")
+	hold := fs.Duration("hold", 3*time.Second, "建完后保持连接的时间")
+	_ = fs.Parse(args)
+	ctx := context.Background()
+	count := map[string]int{}
+	var clients []*relay.Client
+	for i := 0; i < *n; i++ {
+		acc := fmt.Sprintf("%s%d", *prefix, i)
+		lobby := relay.NewLobby(lobbyURL, relay.StaticGameToken(login(acc)), nil)
+		ticket, err := lobby.CreateRoom(ctx, relay.CreateRoomRequest{Game: game, Mode: mode})
+		if err != nil {
+			die("create %d: %v", i, err)
+		}
+		c := relay.NewClient(lobby, relay.Options{Game: game})
+		if _, err := c.Connect(ctx, ticket); err != nil {
+			die("connect %d: %v", i, err)
+		}
+		clients = append(clients, c)
+		count[ticket.RelayAddr]++
+		logf("CREATED #%d room=%s host=%s relay_addr=%s", i, ticket.Room.ID, acc, ticket.RelayAddr)
+		time.Sleep(*gap)
+	}
+	addrs := make([]string, 0, len(count))
+	for a := range count {
+		addrs = append(addrs, a)
+	}
+	sort.Strings(addrs)
+	for _, a := range addrs {
+		logf("DIST relay_addr=%s rooms=%d", a, count[a])
+	}
+	time.Sleep(*hold)
+	for _, c := range clients {
+		_ = c.Close()
+	}
+	logf("FINAL distribute done")
+}
+
+// ---------------------------------------------------------------- load
+
+type loadStats struct {
+	recvTicks  atomic.Int64 // 成员收到的房主广播
+	recvInputs atomic.Int64 // 房主收到的成员输入
+	sendErr    atomic.Int64
+	disconn    atomic.Int64
+	mu         sync.Mutex
+	lat        []time.Duration // 房主广播的端到端时延（发出时刻写在载荷里，同一台机器同一时钟）
+}
+
+func runLoad(args []string) {
+	fs := flag.NewFlagSet("load", flag.ExitOnError)
+	prefix := fs.String("prefix", "l", "账号前缀")
+	rooms := fs.Int("rooms", 20, "房间数")
+	members := fs.Int("members", 8, "每房人数（含房主）")
+	hz := fs.Int("hz", 30, "房主广播与成员输入的频率")
+	payload := fs.Int("payload", 64, "游戏帧载荷字节数（至少能放下 tick 文本）")
+	warm := fs.Duration("warm", 5*time.Second, "预热时间（不计入统计）")
+	dur := fs.Duration("dur", 60*time.Second, "统计时间")
+	_ = fs.Parse(args)
+	ctx := context.Background()
+	st := &loadStats{}
+	var all []*relay.Client
+	relayAddrs := map[string]int{}
+
+	newClient := func(lobby *relay.Lobby, host bool) *relay.Client {
+		c := relay.NewClient(lobby, relay.Options{Game: game})
+		c.OnGame(func(f relay.Frame) {
+			if host {
+				st.recvInputs.Add(1)
+				return
+			}
+			st.recvTicks.Add(1)
+			if i := bytes.LastIndex(f.Payload, []byte("ts=")); i >= 0 {
+				end := i + 3
+				for end < len(f.Payload) && f.Payload[end] >= '0' && f.Payload[end] <= '9' {
+					end++
+				}
+				if ts, err := strconv.ParseInt(string(f.Payload[i+3:end]), 10, 64); err == nil {
+					d := time.Duration(time.Now().UnixNano() - ts)
+					st.mu.Lock()
+					st.lat = append(st.lat, d)
+					st.mu.Unlock()
+				}
+			}
+		})
+		c.OnDisconnected(func(d relay.Disconnect) {
+			if errors.Is(d.Err, relay.ErrClosed) {
+				return // 收尾时本地 Close
+			}
+			st.disconn.Add(1)
+			logf("DISCONNECT reason=%s err=%v", d.Reason, d.Err)
+		})
+		return c
+	}
+
+	type room struct {
+		host    *relay.Client
+		members []*relay.Client
+	}
+	var rs []room
+	for r := 0; r < *rooms; r++ {
+		hostAcc := fmt.Sprintf("%s-r%d-0", *prefix, r)
+		lobby := relay.NewLobby(lobbyURL, relay.StaticGameToken(login(hostAcc)), nil)
+		ticket, err := lobby.CreateRoom(ctx, relay.CreateRoomRequest{Game: game, Mode: mode, MaxMembers: *members})
+		if err != nil {
+			die("create room %d: %v", r, err)
+		}
+		relayAddrs[ticket.RelayAddr]++
+		host := newClient(lobby, true)
+		if _, err := host.Connect(ctx, ticket); err != nil {
+			die("host connect %d: %v", r, err)
+		}
+		all = append(all, host)
+		rm := room{host: host}
+		for m := 1; m < *members; m++ {
+			acc := fmt.Sprintf("%s-r%d-%d", *prefix, r, m)
+			ml := relay.NewLobby(lobbyURL, relay.StaticGameToken(login(acc)), nil)
+			t, err := ml.JoinRoom(ctx, ticket.Room.ID, relay.JoinRoomRequest{Game: game})
+			if err != nil {
+				die("join room %d member %d: %v", r, m, err)
+			}
+			c := newClient(ml, false)
+			if _, err := c.Connect(ctx, t); err != nil {
+				die("member connect %d/%d: %v", r, m, err)
+			}
+			all = append(all, c)
+			rm.members = append(rm.members, c)
+		}
+		rs = append(rs, rm)
+	}
+	logf("READY rooms=%d members=%d connections=%d relay_addrs=%v", *rooms, *members, len(all), relayAddrs)
+
+	pad := make([]byte, *payload)
+	for i := range pad {
+		pad[i] = 'x'
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for ri := range rs {
+		rm := rs[ri]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := time.NewTicker(time.Second / time.Duration(*hz))
+			defer t.Stop()
+			var tick uint64
+			for {
+				select {
+				case <-stop:
+					return
+				case <-t.C:
+				}
+				tick++
+				head := fmt.Sprintf("tick=%d by=h ts=%d", tick, time.Now().UnixNano())
+				// 载荷凑到 -payload 字节，tick 文本放在末尾（时延解析取最后一个 ts=）
+				buf := make([]byte, 0, len(pad)+len(head))
+				buf = append(buf, pad[:max(0, len(pad)-len(head))]...)
+				buf = append(buf, head...)
+				if err := rm.host.SendGame(relay.All, msgTick, buf); err != nil {
+					st.sendErr.Add(1)
+				}
+				for _, m := range rm.members {
+					if err := m.SendGame(relay.All, msgInput, pad); err != nil {
+						st.sendErr.Add(1)
+					}
+				}
+			}
+		}()
+	}
+
+	time.Sleep(*warm)
+	t0, i0 := st.recvTicks.Load(), st.recvInputs.Load()
+	st.mu.Lock()
+	st.lat = st.lat[:0]
+	st.mu.Unlock()
+	start := time.Now()
+	logf("MEASURE start")
+	ticker := time.NewTicker(10 * time.Second)
+	lastT, lastI, lastAt := t0, i0, start
+	for time.Since(start) < *dur {
+		<-ticker.C
+		ct, ci, now := st.recvTicks.Load(), st.recvInputs.Load(), time.Now()
+		sec := now.Sub(lastAt).Seconds()
+		logf("RATE delivered/s=%.0f (to members %.0f, to hosts %.0f) send_err=%d disconnects=%d",
+			float64(ct-lastT+ci-lastI)/sec, float64(ct-lastT)/sec, float64(ci-lastI)/sec, st.sendErr.Load(), st.disconn.Load())
+		lastT, lastI, lastAt = ct, ci, now
+	}
+	ticker.Stop()
+	elapsed := time.Since(start).Seconds()
+	t1, i1 := st.recvTicks.Load(), st.recvInputs.Load()
+	close(stop)
+	wg.Wait()
+	st.mu.Lock()
+	lat := append([]time.Duration(nil), st.lat...)
+	st.mu.Unlock()
+	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+	q := func(p float64) time.Duration {
+		if len(lat) == 0 {
+			return 0
+		}
+		return lat[min(len(lat)-1, int(p*float64(len(lat))))]
+	}
+	sentPerSec := float64(*rooms**members**hz) // 每个连接每秒发 hz 帧
+	expectDelivered := float64(*rooms*(*members-1)**hz) * 2
+	logf("SUMMARY rooms=%d members=%d hz=%d payload=%d secs=%.1f sent/s=%.0f expect_delivered/s=%.0f delivered/s=%.0f (to members %.0f, to hosts %.0f) latency p50=%s p90=%s p99=%s max=%s samples=%d send_err=%d disconnects=%d",
+		*rooms, *members, *hz, *payload, elapsed, sentPerSec, expectDelivered,
+		float64(t1-t0+i1-i0)/elapsed, float64(t1-t0)/elapsed, float64(i1-i0)/elapsed,
+		q(0.50), q(0.90), q(0.99), q(1), len(lat), st.sendErr.Load(), st.disconn.Load())
+	for _, c := range all {
+		_ = c.Close()
+	}
+	logf("FINAL load done")
+}

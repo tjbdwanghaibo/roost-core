@@ -14,7 +14,8 @@ import (
 //
 // 键：
 //
-//	<prefix>:room:<房间号>              房间记录（versionstore 信封 + JSON），PX = room TTL，每次写入重置
+//	<prefix>:room:<房间号>              房间记录（versionstore 信封 + JSON），PX = room TTL，每次写入重置；
+//	                                    房间本身的寿命是记录里的 alive_until_unix_ms，只由 relay 的报告续命
 //	<prefix>:rooms:<game>:<mode>        可加入房间的索引（ZSET，成员是房间号，分数是 -建房秒，新房在前）
 //
 // 记录与索引在同一个脚本里写，所以 Redis Cluster 上两者必须同槽：prefix 带 hash tag（例如 roost:{party}:lobby）。
@@ -23,6 +24,7 @@ import (
 type RedisRooms struct {
 	store  *versionstore.RedisStore[string, Room]
 	prefix string
+	ttl    time.Duration
 }
 
 // NewRedisRooms 建 Redis 房间目录。prefix 必填；ttl 是房间记录的寿命，必须为正。
@@ -33,7 +35,7 @@ func NewRedisRooms(client versionstore.RedisClient, prefix string, ttl time.Dura
 	if ttl <= 0 {
 		return nil, fmt.Errorf("lobby: room ttl must be positive; a room record without expiry outlives a crashed relay")
 	}
-	rooms := &RedisRooms{prefix: prefix}
+	rooms := &RedisRooms{prefix: prefix, ttl: ttl}
 	store, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[string, Room]{
 		Prefix: prefix + ":room:",
 		KeyOf:  func(id string) string { return id },
@@ -113,5 +115,7 @@ func (r *RedisRooms) List(ctx context.Context, game, mode string, limit int) ([]
 	}
 	return out, nil
 }
+
+func (r *RedisRooms) TTL() time.Duration { return r.ttl }
 
 var _ RoomStore = (*RedisRooms)(nil)

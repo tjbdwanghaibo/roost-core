@@ -952,6 +952,69 @@ func TestRoomsExpireWithoutRelayReports(t *testing.T) {
 	})
 }
 
+// relay 崩溃之后（不再报告），房间的寿命从最后一条报告算起：成员断线重连时反复 join、新人 join、房主改状态、
+// 成员离开都会写记录，但不续命，过了 room TTL 房间就不在了。2026-11-17 多进程演练（kill -9 relay）里，
+// 两个客户端按 SDK 的重连策略每隔几秒 join 一次，房间记录被续了 87 秒、一直列在大厅里，直到它们放弃重连
+// （evidence/lobby-relay-multiprocess-20261117）。
+func TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports(t *testing.T) {
+	const ttl = 1500 * time.Millisecond
+	backends(t, ttl, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		wait := func(d time.Duration) {
+			if h.redisAddr != "" {
+				time.Sleep(d)
+			}
+			h.clock.Advance(d)
+		}
+		ticket := h.create(t, "gt-host", CreateRequest{})
+		id := ticket.Room.ID
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 1, Host: "acc-host", Online: []string{"acc-host", "acc-bob"}})
+		// relay 在这里崩溃：之后再没有报告。
+
+		wait(ttl / 2)
+		if _, err := h.join("gt-host", id, JoinRequest{}); err != nil { // 房主重连
+			t.Fatalf("host rejoin within the ttl: %v", err)
+		}
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil { // 成员重连
+			t.Fatalf("member rejoin within the ttl: %v", err)
+		}
+		if _, err := h.join("gt-carol", id, JoinRequest{}); err != nil { // 新人从列表里看到它、加入
+			t.Fatalf("newcomer join within the ttl: %v", err)
+		}
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", Attrs: json.RawMessage(`{"map":"x"}`)}); err != nil {
+			t.Fatalf("set state within the ttl: %v", err)
+		}
+		if _, err := h.svc.LeaveRoom(ctx, "gt-carol", id, LeaveRequest{Game: "party"}); err != nil {
+			t.Fatalf("leave within the ttl: %v", err)
+		}
+
+		wait(ttl/2 + 100*time.Millisecond) // 最后一条报告之后已过了 room TTL
+		if _, err := h.join("gt-host", id, JoinRequest{}); !errors.Is(err, ErrRoomMissing) {
+			t.Fatalf("host rejoin after the ttl since the last relay report: err = %v, want ErrRoomMissing", err)
+		}
+		if _, err := h.join("gt-bob", id, JoinRequest{}); !errors.Is(err, ErrRoomMissing) {
+			t.Fatalf("member rejoin after the ttl since the last relay report: err = %v, want ErrRoomMissing", err)
+		}
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); !errors.Is(err, ErrRoomMissing) {
+			t.Fatalf("set state after the ttl: err = %v, want ErrRoomMissing", err)
+		}
+		if listed := h.list(t, "duel"); len(listed) != 0 {
+			t.Fatalf("listed = %+v, want no room after the ttl since the last relay report", listed)
+		}
+		if got := h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id, Account: "acc-bob", Relay: "relay-b"}); got.Reason != VerifyRoomNotFound {
+			t.Fatalf("verify after the ttl: %+v, want %s", got, VerifyRoomNotFound)
+		}
+		// 迟到的报告也不让它复活。
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Online: []string{"acc-host"}})
+		if _, err := h.join("gt-host", id, JoinRequest{}); !errors.Is(err, ErrRoomMissing) {
+			t.Fatalf("rejoin after a late report: err = %v, want ErrRoomMissing", err)
+		}
+	})
+}
+
 func assertIndexHolds(t *testing.T, h *harness, want []string) {
 	t.Helper()
 	redis := h.rooms.(*RedisRooms)

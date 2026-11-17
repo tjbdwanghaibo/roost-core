@@ -1,0 +1,33 @@
+# h6（relay-1001 上的房间，修复后第二次 kill -9 relay-1000 期间）
+## h6-a
+21:55:57.676 TICKET room=9fc20ee1f8f218e8 relay_addr=127.0.0.1:19411 host=dev:h6-a members=1
+21:55:57.680 WELCOME slot=1 host=true host_slot=1
+21:55:57.887 EVENT member_joined slot=2 account=dev:h6-b reason=none
+21:55:58.398 EVENT member_joined slot=3 account=dev:h6-c reason=none
+21:55:58.684 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=20 by= recv_ticks=0 inputs=20 send_err=0
+21:56:08.684 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=220 by= recv_ticks=0 inputs=420 send_err=0
+21:56:18.687 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=420 by= recv_ticks=0 inputs=820 send_err=0
+21:56:28.684 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=620 by= recv_ticks=0 inputs=1220 send_err=0
+21:56:38.684 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=819 by= recv_ticks=0 inputs=1620 send_err=0
+21:56:48.674 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=1020 by= recv_ticks=0 inputs=2020 send_err=0
+21:56:58.663 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=1220 by= recv_ticks=0 inputs=2420 send_err=0
+## h6-b
+21:55:57.886 TICKET room=9fc20ee1f8f218e8 relay_addr=127.0.0.1:19411 host=dev:h6-a members=2
+21:55:57.887 WELCOME slot=2 host=false host_slot=1
+21:55:58.887 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=24 by=h6-a recv_ticks=20 inputs=0 send_err=0
+21:56:08.887 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=224 by=h6-a recv_ticks=220 inputs=0 send_err=0
+21:56:18.889 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=424 by=h6-a recv_ticks=420 inputs=0 send_err=0
+21:56:28.887 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=624 by=h6-a recv_ticks=620 inputs=0 send_err=0
+21:56:38.888 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=824 by=h6-a recv_ticks=820 inputs=0 send_err=0
+21:56:48.878 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=1024 by=h6-a recv_ticks=1020 inputs=0 send_err=0
+21:56:58.867 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=1224 by=h6-a recv_ticks=1220 inputs=0 send_err=0
+## h6-c
+21:55:58.397 TICKET room=9fc20ee1f8f218e8 relay_addr=127.0.0.1:19411 host=dev:h6-a members=3
+21:55:58.398 WELCOME slot=3 host=false host_slot=1
+21:55:59.402 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=34 by=h6-a recv_ticks=20 inputs=0 send_err=0
+21:56:09.402 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=234 by=h6-a recv_ticks=220 inputs=0 send_err=0
+21:56:19.402 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=434 by=h6-a recv_ticks=420 inputs=0 send_err=0
+21:56:29.402 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=634 by=h6-a recv_ticks=620 inputs=0 send_err=0
+21:56:39.402 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=834 by=h6-a recv_ticks=820 inputs=0 send_err=0
+21:56:49.391 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=1034 by=h6-a recv_ticks=1020 inputs=0 send_err=0
+21:56:59.381 STAT host=false cand=false slot=3 host_slot=1 epoch=0 tick=1234 by=h6-a recv_ticks=1220 inputs=0 send_err=0

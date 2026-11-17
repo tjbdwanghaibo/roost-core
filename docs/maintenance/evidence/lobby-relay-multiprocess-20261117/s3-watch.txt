@@ -1,0 +1,120 @@
+21:39:44 ef5be5bdea41e1d1 pttl_ms=29117
+21:39:44 f5973c3cce0620a5 pttl_ms=25143
+21:39:44 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 
+21:39:44.805 ROOMS 2
+21:39:44.805 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:44.805 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:39:46 ef5be5bdea41e1d1 pttl_ms=29442
+21:39:46 f5973c3cce0620a5 pttl_ms=28095
+21:39:46 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 
+21:39:46.857 ROOMS 2
+21:39:46.857 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:46.857 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:39:48 ef5be5bdea41e1d1 pttl_ms=29377
+21:39:48 f5973c3cce0620a5 pttl_ms=26022
+21:39:48 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 
+21:39:48.932 ROOMS 2
+21:39:48.932 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:48.932 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:39:50 ef5be5bdea41e1d1 pttl_ms=27303
+21:39:50 f5973c3cce0620a5 pttl_ms=28951
+21:39:50 etcd relays: /lrmp/relays/relay-1000 /lrmp/relays/relay-1001 
+21:39:51.004 ROOMS 2
+21:39:51.004 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:51.004 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:39:53 ef5be5bdea41e1d1 pttl_ms=29257
+21:39:53 f5973c3cce0620a5 pttl_ms=26907
+21:39:53 etcd relays: /lrmp/relays/relay-1001 
+21:39:53.042 ROOMS 2
+21:39:53.042 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:53.042 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:39:55 ef5be5bdea41e1d1 pttl_ms=27195
+21:39:55 f5973c3cce0620a5 pttl_ms=29839
+21:39:55 etcd relays: /lrmp/relays/relay-1001 
+21:39:55.115 ROOMS 2
+21:39:55.115 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:55.115 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:39:57 ef5be5bdea41e1d1 pttl_ms=25126
+21:39:57 f5973c3cce0620a5 pttl_ms=27771
+21:39:57 etcd relays: /lrmp/relays/relay-1001 
+21:39:57.186 ROOMS 2
+21:39:57.186 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:57.186 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:39:59 ef5be5bdea41e1d1 pttl_ms=28054
+21:39:59 f5973c3cce0620a5 pttl_ms=25696
+21:39:59 etcd relays: /lrmp/relays/relay-1001 
+21:39:59.257 ROOMS 2
+21:39:59.257 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:39:59.257 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:01 ef5be5bdea41e1d1 pttl_ms=26000
+21:40:01 f5973c3cce0620a5 pttl_ms=28644
+21:40:01 etcd relays: /lrmp/relays/relay-1001 
+21:40:01.308 ROOMS 2
+21:40:01.309 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:01.309 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:03 ef5be5bdea41e1d1 pttl_ms=28948
+21:40:03 f5973c3cce0620a5 pttl_ms=26586
+21:40:03 etcd relays: /lrmp/relays/relay-1001 
+21:40:03.366 ROOMS 2
+21:40:03.367 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:03.367 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:05 ef5be5bdea41e1d1 pttl_ms=26881
+21:40:05 f5973c3cce0620a5 pttl_ms=29515
+21:40:05 etcd relays: /lrmp/relays/relay-1001 
+21:40:05.440 ROOMS 2
+21:40:05.440 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:05.440 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:07 ef5be5bdea41e1d1 pttl_ms=29812
+21:40:07 f5973c3cce0620a5 pttl_ms=27444
+21:40:07 etcd relays: /lrmp/relays/relay-1001 
+21:40:07.511 ROOMS 2
+21:40:07.511 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:07.511 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:09 ef5be5bdea41e1d1 pttl_ms=27739
+21:40:09 f5973c3cce0620a5 pttl_ms=25371
+21:40:09 etcd relays: /lrmp/relays/relay-1001 
+21:40:09.580 ROOMS 2
+21:40:09.580 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:09.580 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:11 ef5be5bdea41e1d1 pttl_ms=25679
+21:40:11 f5973c3cce0620a5 pttl_ms=28310
+21:40:11 etcd relays: /lrmp/relays/relay-1001 
+21:40:11.644 ROOMS 2
+21:40:11.644 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:11.644 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:13 ef5be5bdea41e1d1 pttl_ms=28614
+21:40:13 f5973c3cce0620a5 pttl_ms=26242
+21:40:13 etcd relays: /lrmp/relays/relay-1001 
+21:40:13.712 ROOMS 2
+21:40:13.712 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:13.712 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:15 ef5be5bdea41e1d1 pttl_ms=26560
+21:40:15 f5973c3cce0620a5 pttl_ms=29192
+21:40:15 etcd relays: /lrmp/relays/relay-1001 
+21:40:15.754 ROOMS 2
+21:40:15.754 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:15.754 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:17 ef5be5bdea41e1d1 pttl_ms=29513
+21:40:17 f5973c3cce0620a5 pttl_ms=27138
+21:40:17 etcd relays: /lrmp/relays/relay-1001 
+21:40:17.814 ROOMS 2
+21:40:17.814 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:17.814 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:19 ef5be5bdea41e1d1 pttl_ms=27449
+21:40:19 f5973c3cce0620a5 pttl_ms=25072
+21:40:19 etcd relays: /lrmp/relays/relay-1001 
+21:40:19.881 ROOMS 2
+21:40:19.881 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:19.881 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:21 ef5be5bdea41e1d1 pttl_ms=25382
+21:40:21 f5973c3cce0620a5 pttl_ms=28006
+21:40:21 etcd relays: /lrmp/relays/relay-1001 
+21:40:21.947 ROOMS 2
+21:40:21.947 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:21.947 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open
+21:40:23 ef5be5bdea41e1d1 pttl_ms=28318
+21:40:23 f5973c3cce0620a5 pttl_ms=25938
+21:40:23 etcd relays: /lrmp/relays/relay-1001 
+21:40:24.014 ROOMS 2
+21:40:24.014 ROOM id=f5973c3cce0620a5 name=h2-a-room host=dev:h2-a host_epoch=0 members=3 state=open
+21:40:24.014 ROOM id=ef5be5bdea41e1d1 name=h1-a-room host=dev:h1-b host_epoch=1 members=2 state=open

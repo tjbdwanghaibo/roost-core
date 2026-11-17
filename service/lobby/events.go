@@ -20,7 +20,7 @@ import (
 const (
 	EventQueue = "lobby"
 
-	// EventHeartbeat 每个房间定时发一次（间隔要明显短于 lobby.room_ttl，推荐 room_ttl/3）：续房间记录的 TTL，带全量快照。
+	// EventHeartbeat 每个房间定时发一次（间隔要明显短于 lobby.room_ttl，推荐 room_ttl/3）：给房间续命（再活一个 room TTL），带全量快照。
 	EventHeartbeat = "room.heartbeat"
 	// EventMemberJoined / EventMemberLeft 在成员进出时立即发（Account 是进出的人），同样带全量快照。
 	EventMemberJoined = "room.member_joined"
@@ -102,7 +102,7 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 	var stillOnline []string // 经 lobby 离开、更新的报告里仍在线的人：放锁后再发一次 leave 命令
 	_, err := s.cfg.Rooms.Update(ctx, event.Room, func(room *Room) (bool, error) {
 		stillOnline = stillOnline[:0]
-		if room.Closed || room.Relay.Instance != event.Relay {
+		if room.gone(now) || room.Relay.Instance != event.Relay {
 			return false, nil
 		}
 		if event.Type == EventClosed {
@@ -144,7 +144,8 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 		if room.memberIndex(room.Host) < 0 {
 			room.Members = append(room.Members, Member{Account: room.Host})
 		}
-		// 每一条报告都写：写入就是续 TTL。
+		// 每一条被接受的报告都续命（只有 relay 的报告续命，见 Room.AliveUntilUnixMilli），也写一次记录。
+		room.keepAlive(now, s.cfg.Rooms.TTL())
 		return true, nil
 	})
 	if errors.Is(err, ErrRoomMissing) {
@@ -229,11 +230,12 @@ func (s *Service) VerifyRelayConnection(ctx context.Context, req RelayVerifyRequ
 		return RelayVerifyReply{Reason: VerifyBadRequest}
 	}
 	room, found, err := s.cfg.Rooms.Get(ctx, req.Room)
+	now := s.cfg.Now()
 	switch {
 	case err != nil:
 		slog.Warn("lobby: relay verification could not read the room", "room", req.Room, "err", err)
 		return RelayVerifyReply{Reason: VerifyUnavailable}
-	case !found || room.Closed:
+	case !found || room.gone(now):
 		return RelayVerifyReply{Reason: VerifyRoomNotFound}
 	case room.Relay.Instance != req.Relay:
 		return RelayVerifyReply{Reason: VerifyWrongRelay}
@@ -242,7 +244,7 @@ func (s *Service) VerifyRelayConnection(ctx context.Context, req RelayVerifyRequ
 	case req.Create && req.Account != room.Host:
 		return RelayVerifyReply{Reason: VerifyNotHost}
 	}
-	room.pruneReservations(s.cfg.Now())
+	room.pruneReservations(now)
 	if room.memberIndex(req.Account) < 0 {
 		return RelayVerifyReply{Reason: VerifyNotMember}
 	}

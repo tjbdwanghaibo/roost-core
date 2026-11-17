@@ -1,0 +1,24 @@
+21:51:12.202 TICKET room=e743d99c4397b672 relay_addr=127.0.0.1:19410 host=dev:h4-a members=1
+21:51:12.204 WELCOME slot=1 host=true host_slot=1
+21:51:12.336 EVENT member_joined slot=2 account=dev:h4-b reason=none
+21:51:12.855 EVENT member_joined slot=3 account=dev:h4-c reason=none
+21:51:13.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=19 by= recv_ticks=0 inputs=23 send_err=0
+21:51:14.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=39 by= recv_ticks=0 inputs=63 send_err=0
+21:51:15.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=59 by= recv_ticks=0 inputs=103 send_err=0
+21:51:16.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=80 by= recv_ticks=0 inputs=144 send_err=0
+21:51:17.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=100 by= recv_ticks=0 inputs=183 send_err=0
+21:51:18.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=120 by= recv_ticks=0 inputs=223 send_err=0
+21:51:19.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=139 by= recv_ticks=0 inputs=263 send_err=0
+21:51:20.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=160 by= recv_ticks=0 inputs=303 send_err=0
+21:51:20.857 EVENT member_left slot=3 account=dev:h4-c reason=left
+21:51:21.205 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=180 by= recv_ticks=0 inputs=337 send_err=0
+21:51:22.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=199 by= recv_ticks=0 inputs=357 send_err=0
+21:51:23.205 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=219 by= recv_ticks=0 inputs=377 send_err=0
+21:51:24.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=240 by= recv_ticks=0 inputs=397 send_err=0
+21:51:25.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=259 by= recv_ticks=0 inputs=417 send_err=0
+21:51:26.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=280 by= recv_ticks=0 inputs=437 send_err=0
+21:51:27.206 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=299 by= recv_ticks=0 inputs=457 send_err=0
+21:51:28.205 STAT host=true cand=false slot=1 host_slot=1 epoch=0 tick=319 by= recv_ticks=0 inputs=477 send_err=0
+21:51:28.206 EVENT disconnected reason=left reconnecting=false err=relay: closed by relay: left
+21:51:28.207 LEAVE via relay Leave + lobby leave: err=<nil>
+21:51:28.207 FINAL role={Slot:1 Host:true Candidate:false HostSlot:1 Epoch:0} tick=320 by= recv_ticks=0 inputs=477 send_err=0 tick_backward=0 tick_gap_max=0

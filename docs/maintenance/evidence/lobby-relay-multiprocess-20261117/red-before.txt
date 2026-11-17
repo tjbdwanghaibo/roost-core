@@ -1,0 +1,11 @@
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/memory
+    lobby_test.go:996: host rejoin after the ttl since the last relay report: err = <nil>, want ErrRoomMissing
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/redis
+    lobby_test.go:996: host rejoin after the ttl since the last relay report: err = <nil>, want ErrRoomMissing
+--- FAIL: TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports (1.61s)
+    --- FAIL: TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/memory (0.00s)
+    --- FAIL: TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/redis (1.61s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.896s
+FAIL

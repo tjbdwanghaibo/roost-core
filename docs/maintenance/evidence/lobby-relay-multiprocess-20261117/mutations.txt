@@ -1,0 +1,19 @@
+M1 join 不看寿命（只看 Closed） -> RED
+    lobby_test.go:996: host rejoin after the ttl since the last relay report: err = <nil>, want ErrRoomMissing
+    lobby_test.go:996: host rejoin after the ttl since the last relay report: err = <nil>, want ErrRoomMissing
+M2 relay 报告不续命 -> RED
+    lobby_test.go:938: listed = [], want only the room kept alive by heartbeats
+    lobby_test.go:938: listed = [], want only the room kept alive by heartbeats
+M3 建房不设寿命 -> RED
+    lobby_test.go:411: listed = [], want [newer, older] only (unconfirmed 4de24866448493d8, full c04dadca23a69736, closed ef52a0284b1b8e94 excluded)
+    lobby_test.go:411: listed = [], want [newer, older] only (unconfirmed ebe41d7ad7986b8f, full caf484b72f523693, closed 7da2ec454e93eb25 excluded)
+    lobby_test.go:938: listed = [], want only the room kept alive by heartbeats
+M4 验权不看寿命 -> RED
+    lobby_test.go:1008: verify after the ttl: {OK:true Reason:}, want room_not_found
+    lobby_test.go:1008: verify after the ttl: {OK:true Reason:}, want room_not_found
+M5 列表不看寿命 -> RED
+    lobby_test.go:1005: listed = [{ID:89a547a9ea0e6c1b Game:party Mode:duel Name: MaxMembers:4 Members:2 HasPassword:false State:open Host:acc-host HostEpoch:0 Attrs:{"map":"x"} CreatedAtUnix:1794923671}], want no room after the ttl since the last relay report
+    lobby_test.go:1005: listed = [{ID:f37546819dff6cd1 Game:party Mode:duel Name: MaxMembers:4 Members:2 HasPassword:false State:open Host:acc-host HostEpoch:0 Attrs:{"map":"x"} CreatedAtUnix:1794923671}], want no room after the ttl since the last relay report
+M6 迟到的报告复活过期房间（报告入口只看 Closed） -> RED
+    lobby_test.go:1013: rejoin after a late report: err = <nil>, want ErrRoomMissing
+    lobby_test.go:1013: rejoin after a late report: err = <nil>, want ErrRoomMissing

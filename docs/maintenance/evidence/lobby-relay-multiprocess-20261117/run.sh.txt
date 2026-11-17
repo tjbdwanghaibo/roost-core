@@ -1,0 +1,53 @@
+#!/bin/sh
+# 起停演练进程：私有 etcd、account、lobby、relay1（sid 1000）、relay2（sid 1001）。
+# 用法：run.sh start | stop | start1 <名> | kill9 <名> | pids
+set -u
+D=$(cd "$(dirname "$0")/.." && pwd)
+P=$D/lrmp
+cd "$P"
+export ROOST_RELAY_TOKEN_KEY="drill-relay-token-key-0123456789"
+port() { case $1 in account) echo 19400;; lobby) echo 19401;; relay1) echo 19402;; relay2) echo 19403;; esac; }
+svcof() { case $1 in relay1|relay2) echo relay;; *) echo "$1";; esac; }
+sidof() { case $1 in relay2) echo 1001;; *) echo 1000;; esac; }
+start1() {
+  name=$1; svc=$(svcof "$name"); p=$(port "$name")
+  nohup bin/app "$svc" --sid "$(sidof "$name")" --config ".drill/configs/config.$name.yaml" >> ".drill/log/$name.out" 2>&1 &
+  echo $! > ".drill/$name.pid"
+  i=0
+  while [ $i -lt 60 ]; do
+    if curl -fsS -o /dev/null "http://127.0.0.1:$p/readyz" 2>/dev/null; then echo "$name: ready (pid $(cat ".drill/$name.pid"))"; return 0; fi
+    if ! kill -0 "$(cat ".drill/$name.pid")" 2>/dev/null; then echo "$name exited"; tail -20 ".drill/log/$name.out"; exit 1; fi
+    i=$((i+1)); sleep 1
+  done
+  echo "$name not ready"; tail -20 ".drill/log/$name.out"; exit 1
+}
+stop1() {
+  name=$1
+  if [ -f ".drill/$name.pid" ]; then
+    pid=$(cat ".drill/$name.pid")
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid"
+      i=0; while kill -0 "$pid" 2>/dev/null && [ $i -lt 40 ]; do i=$((i+1)); sleep 1; done
+      if kill -0 "$pid" 2>/dev/null; then echo "$name still running, kill -9"; kill -9 "$pid"; else echo "$name stopped (pid $pid)"; fi
+    fi
+    rm -f ".drill/$name.pid"
+  fi
+}
+case "$1" in
+start)
+  mkdir -p .drill/log .drill/etcd
+  nohup etcd --name lrmp --data-dir .drill/etcd/data --listen-client-urls http://127.0.0.1:23891 --advertise-client-urls http://127.0.0.1:23891 \
+    --listen-peer-urls http://127.0.0.1:23892 --initial-advertise-peer-urls http://127.0.0.1:23892 --initial-cluster lrmp=http://127.0.0.1:23892 \
+    > .drill/log/etcd.out 2>&1 &
+  echo $! > .drill/etcd.pid; echo "etcd pid $(cat .drill/etcd.pid)"; sleep 2
+  for n in account lobby relay1 relay2; do start1 $n; done
+  ;;
+start1) start1 "$2" ;;
+stop1) stop1 "$2" ;;
+kill9) pid=$(cat ".drill/$2.pid"); kill -9 "$pid"; echo "kill -9 $2 (pid $pid) at $(date +%T)"; rm -f ".drill/$2.pid" ;;
+stop)
+  for n in relay2 relay1 lobby account; do stop1 $n; done
+  stop1 etcd
+  ;;
+pids) for f in .drill/*.pid; do echo "$f $(cat "$f")"; done ;;
+esac

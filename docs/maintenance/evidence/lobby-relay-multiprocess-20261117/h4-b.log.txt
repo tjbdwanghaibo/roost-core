@@ -1,0 +1,42 @@
+21:51:12.335 TICKET room=e743d99c4397b672 relay_addr=127.0.0.1:19410 host=dev:h4-a members=2
+21:51:12.336 WELCOME slot=2 host=false host_slot=1
+21:51:13.337 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=22 by=h4-a recv_ticks=20 inputs=0 send_err=0
+21:51:14.339 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=42 by=h4-a recv_ticks=40 inputs=0 send_err=0
+21:51:15.339 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=62 by=h4-a recv_ticks=60 inputs=0 send_err=0
+21:51:16.339 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=82 by=h4-a recv_ticks=80 inputs=0 send_err=0
+21:51:17.338 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=102 by=h4-a recv_ticks=100 inputs=0 send_err=0
+21:51:18.338 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=122 by=h4-a recv_ticks=120 inputs=0 send_err=0
+21:51:19.339 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=142 by=h4-a recv_ticks=140 inputs=0 send_err=0
+21:51:20.338 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=162 by=h4-a recv_ticks=160 inputs=0 send_err=0
+21:51:21.338 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=182 by=h4-a recv_ticks=180 inputs=0 send_err=0
+21:51:22.337 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=202 by=h4-a recv_ticks=200 inputs=0 send_err=0
+21:51:23.339 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=222 by=h4-a recv_ticks=220 inputs=0 send_err=0
+21:51:24.337 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=242 by=h4-a recv_ticks=240 inputs=0 send_err=0
+21:51:25.337 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=262 by=h4-a recv_ticks=260 inputs=0 send_err=0
+21:51:26.338 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=282 by=h4-a recv_ticks=280 inputs=0 send_err=0
+21:51:27.338 STAT host=false cand=false slot=2 host_slot=1 epoch=0 tick=302 by=h4-a recv_ticks=300 inputs=0 send_err=0
+21:51:28.206 EVENT you_are_host epoch=1 source=2 snapshot_seq=6 snapshot_age=995ms members=3 online=1 state="tick=300 by=h4-a" state_err=<nil> last_seen_tick=319
+21:51:28.206 EVENT host_ready sent epoch=1
+21:51:28.206 EVENT host_changed epoch=1 host_slot=2 account=dev:h4-b
+21:51:28.337 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=302 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:29.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=322 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:30.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=343 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:31.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=362 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:32.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=383 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:33.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=402 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:34.339 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=422 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:35.339 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=442 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:36.337 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=462 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:37.337 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=483 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:38.339 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=503 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:39.339 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=522 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:40.337 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=543 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:41.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=563 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:42.339 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=583 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:43.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=603 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:44.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=623 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:45.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=643 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:46.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=662 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:47.339 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=683 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:48.339 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=703 by=h4-b recv_ticks=317 inputs=0 send_err=0
+21:51:49.338 STAT host=true cand=false slot=2 host_slot=2 epoch=1 tick=723 by=h4-b recv_ticks=317 inputs=0 send_err=0

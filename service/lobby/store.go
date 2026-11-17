@@ -11,7 +11,8 @@ import (
 
 // RoomStore 是房间目录。
 //
-// 每次写入都把记录的寿命重置为 room TTL：relay 的报告（心跳）就是靠写入续期的；不再有人写，记录到期自己消失。
+// 每次写入都把记录的键寿命重置为 room TTL；房间本身的寿命另记在 Room.AliveUntilUnixMilli，只由 relay 的报告续命
+// （Service 按 TTL() 设），过了它 Service 按房间不在处理，记录等键寿命到期自己消失。
 // 列表用的是按 game/mode 的索引，索引项与记录在同一次写入里增删（不在列表里的房间——已开始、满员、已关、
 // relay 还没报告——写入时就从索引撤下）。记录过期不会撤索引项，List 读到时顺手清掉。
 type RoomStore interface {
@@ -24,6 +25,8 @@ type RoomStore interface {
 	Update(ctx context.Context, id string, mutate func(room *Room) (save bool, err error)) (Room, error)
 	// List 返回 game/mode 索引里的房间，新建的在前，最多 limit 个。返回的房间仍要由调用方按当前时刻再筛一次。
 	List(ctx context.Context, game, mode string, limit int) ([]Room, error)
+	// TTL 是 room TTL：记录的键寿命，也是一条 relay 报告给房间续的命。
+	TTL() time.Duration
 }
 
 // copyRoom 让 mutate 改的是副本：Members 是切片，就地修改会改到存储读出来的那一份。
@@ -124,5 +127,7 @@ func (m *MemoryRooms) List(_ context.Context, game, mode string, limit int) ([]R
 	}
 	return out, nil
 }
+
+func (m *MemoryRooms) TTL() time.Duration { return m.ttl }
 
 var _ RoomStore = (*MemoryRooms)(nil)
