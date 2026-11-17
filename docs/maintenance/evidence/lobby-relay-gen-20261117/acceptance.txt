@@ -1,0 +1,54 @@
+### 1. roost project new party -template lobby（不带 game）
+services: account: lobby: relay: 
+-- 工程自己实现 account 协作者之前：
+FAIL  collaborators:account services/account/collaborators.go still has generated fail-closed stubs ("is not configured"
+-- 实现之后：
+== go build ./...
+ok
+== roost generate --check
+generated files are up to date
+== roost id check
+IDs are valid
+== roost project doctor (non-OK lines)
+doctor exit 0
+OK lines: 44
+OK    lobby-relay:account-services config.account lists lobby, relay
+OK    lobby-relay:token-key-env every lobby and relay reads the relay token key from ROOST_RELAY_TOKEN_KEY
+OK    lobby-relay:advertise-addr relay.advertise_addr is not loopback in configs/service/config.relay.prod.example.yaml
+
+### 2. roost project new arena -template game; module add login portal; add lobby; add relay
+module add exit 0
+created/updated: roost.yaml
+created/updated: configs/service/config.lobby.yaml
+created/updated: configs/service/config.lobby.prod.example.yaml
+created/updated: internal/bootstrap/generated.go
+created/updated: deploy/dev/run.sh
+created/updated: deploy/k8s/base/lobby.yaml
+created/updated: docs/SERVICES.zh-CN.md
+created/updated: services/lobby/collaborators.go
+created/updated: configs/service/config.account.yaml
+created/updated: configs/service/config.account.prod.example.yaml
+created/updated: deploy/k8s/base/secret.account.example.yaml
+created/updated: roost.yaml
+created/updated: configs/service/config.relay.yaml
+created/updated: configs/service/config.relay.prod.example.yaml
+created/updated: internal/bootstrap/generated.go
+created/updated: deploy/dev/run.sh
+created/updated: deploy/k8s/base/relay.yaml
+created/updated: docs/SERVICES.zh-CN.md
+created/updated: configs/service/config.account.yaml
+created/updated: configs/service/config.account.prod.example.yaml
+created/updated: deploy/k8s/base/secret.account.example.yaml
+services: account: game: lobby: relay: player: 
+== go build ./...
+ok
+== roost generate --check
+generated files are up to date
+== roost id check
+IDs are valid
+== roost project doctor (non-OK lines)
+doctor exit 0
+OK lines: 49
+OK    lobby-relay:account-services config.account lists game, lobby, relay
+OK    lobby-relay:token-key-env every lobby and relay reads the relay token key from ROOST_RELAY_TOKEN_KEY
+OK    lobby-relay:advertise-addr relay.advertise_addr is not loopback in configs/service/config.relay.prod.example.yaml

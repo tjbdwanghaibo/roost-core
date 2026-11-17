@@ -56,6 +56,7 @@ func renderDevRun(m Manifest) string {
 	b.WriteString("set -eu\n\n")
 	b.WriteString("SERVICES=\"" + strings.Join(services, " ") + "\"\n")
 	b.WriteString("SID=\"${SID:-1000}\"\nREADY_TIMEOUT=\"${READY_TIMEOUT:-90}\"\nDEV_DIR=\".dev\"\nBIN=\"bin/app\"\n\n")
+	b.WriteString(devRunRelayTokenKey(m))
 	b.WriteString(`name_of() { printf '%s' "$1" | cut -d: -f1; }
 port_of() { printf '%s' "$1" | cut -d: -f2; }
 grace_of() { printf '%s' "$1" | cut -d: -f3; }

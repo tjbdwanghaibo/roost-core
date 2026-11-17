@@ -1,0 +1,32 @@
+import subprocess, sys
+root = sys.argv[1] + '/codegen/internal/roost/'
+muts = [
+ ("M1 account.services 不核对 kind", "lobby_relay.go", "if kind != required[service] {", "if false && kind != required[service] {", "TestDoctorLobbyRelayAccountServices"),
+ ("M2 account.services 漏项不报", "lobby_relay.go", "problems = append(problems, fmt.Sprintf(\"%s: account.services has no %s (kind %s)\", rel, service, required[service]))", "_ = rel", "TestDoctorLobbyRelayAccountServices"),
+ ("M3 token_key_env 不比较两边", "lobby_relay.go", "if len(values) > 1 {", "if len(values) > 2 {", "TestDoctorLobbyRelayTokenKeyEnv"),
+ ("M4 token_key_env 空值不报", "lobby_relay.go", "if env == \"\" {", "if false {", "TestDoctorLobbyRelayTokenKeyEnv"),
+ ("M5 advertise_addr 不查回环", "lobby_relay.go", "if addr == \"\" || isLoopbackHost(addr) {", "if addr == \"\" {", "TestDoctorLobbyRelayAdvertiseAddr"),
+ ("M6 localhost 不算回环", "lobby_relay.go", "if strings.EqualFold(host, \"localhost\") {", "if false {", "TestDoctorLobbyRelayAdvertiseAddr|TestIsLoopbackHost"),
+ ("M7 add lobby 不补 account 配置", "lobby_relay.go", "edited, err = configureAccountForLobbyRelay(root, m, options.Warnings)", "edited, err = nil, nil", "TestAddLobbyAndRelayToAGameProject"),
+ ("M8 template 不补 account 配置", "project.go", "if _, err := configureAccountForLobbyRelay(stage, manifest, io.Discard); err != nil {", "if _, err := configureAccountForLobbyRelay(stage, Manifest{}, io.Discard); err != nil {", "TestLobbyTemplateHostsAccountLobbyAndRelayWithoutGame"),
+ ("M9 lobby 进程不装 account ClientMod", "render.go", "out = append(out, fmt.Sprintf(\"svc%s.NewClientMod()\", frameworkCatalog[client].Package))", "_ = client", "TestLobbyTemplateHostsAccountLobbyAndRelayWithoutGame"),
+ ("M10 relay 端口不按端口块改写", "lobby_relay.go", "overrides[\"relay.listen\"] = \"0.0.0.0:\" + strconv.Itoa(tcp)", "_ = tcp", "TestLobbyTemplateHostsAccountLobbyAndRelayWithoutGame"),
+ ("M11 -framework all 带上 lobby/relay", "framework_services.go", "		if !spec.Direct {\n			names = append(names, name)", "		if true || !spec.Direct {\n			names = append(names, name)", "TestLobbyAndRelayAreNotBusServices"),
+ ("M12 业务服务可以 uses lobby", "framework_services.go", "} else if frameworkCatalog[strings.TrimSpace(target.Framework)].Direct {", "} else if false {", "TestLobbyAndRelayAreNotBusServices"),
+ ("M13 lobby 不要求托管 account", "framework_services.go", "if hostedServiceOf(m, client) == \"\" {", "if false {", "TestLobbyAndRelayAreNotBusServices"),
+ ("M14 没有 lobby/relay 也要求 account.services", "lobby_relay.go", "	if !hostsLobbyOrRelay(m) {\n		return required\n	}", "", "TestProjectsWithoutLobbyOrRelayHaveNoLobbyRelayChecks"),
+]
+for name, f, old, new, run in muts:
+    p = root + f
+    src = open(p).read()
+    assert src.count(old) == 1, (name, src.count(old))
+    open(p, 'w').write(src.replace(old, new))
+    try:
+        r = subprocess.run(['go', 'test', '-count=1', '-run', run, '.'], cwd=root, capture_output=True, text=True, env={**__import__('os').environ, 'GOWORK': 'off'})
+        verdict = 'RED' if r.returncode != 0 else 'GREEN(!)'
+        fails = [l.strip() for l in r.stdout.splitlines() if l.startswith('--- FAIL') or 'build failed' in l or l.startswith('#')]
+        print(f"{name}: {verdict}  [{run}]  {'; '.join(fails[:3])}", flush=True)
+    finally:
+        open(p, 'w').write(src)
+r = subprocess.run(['go', 'test', '-count=1', '-run', 'Lobby|LoopbackHost|NotBusServices', '.'], cwd=root, capture_output=True, text=True)
+print('restored:', r.stdout.strip().splitlines()[-1])

@@ -1,0 +1,12 @@
+# roost project new party -template lobby; make dev-run equivalent
+account: running (pid 19905, http://127.0.0.1:9100/readyz)
+lobby: running (pid 19957, http://127.0.0.1:9101/readyz)
+relay: running (pid 19996, http://127.0.0.1:9102/readyz)
+lobby GET /rooms without token:
+401
+lobby GET /rooms with forged gt1 (validated through account RPC):
+{"error":"unauthorized","message":"lobby: unauthorized: remote.560111: account: session token is invalid"}
+ 401
+etcd relay advertisement:
+/party/relays/relay-1000
+{"instance":"relay-1000","tcp_addr":"127.0.0.1:7102","ws_addr":"ws://127.0.0.1:7202/relay","rooms":0}

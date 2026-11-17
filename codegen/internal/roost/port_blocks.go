@@ -23,6 +23,9 @@ import (
 //	etcd.advertise_addr         9000 + N   （9000–9099）
 //	second-game.sh 的 ops       9200 + N   （9200–9299，第二个 game 进程）
 //	second-game.sh 的 advertise 8900 + N   （8900–8999）
+//	lobby.listen                8080 + N   （托管 lobby 没有 web Mod，用这个服务自己的 web 段）
+//	relay.listen / advertise    7100 + N   （7100–7199，托管 relay；lobby_relay.go）
+//	relay.ws_listen             7200 + N   （7200–7299）
 //
 // 块号上限 99，五段端口互不重叠；改用块号之前 second-game 用 +10，第 11 个服务的端口就会撞上。玩家 TCP（7000，第二个
 // game 7001）只有一个服务持有，不按服务派生。web 原先也按“只有一个服务持有”固定 8080；模块可以把登录入口装在托管的

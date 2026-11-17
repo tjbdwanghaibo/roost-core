@@ -404,6 +404,9 @@ func TestDoctorReportsUnimplementedCollaborators(t *testing.T) {
 func TestFrameworkCatalogAffinityMatchesTheGeneratedClients(t *testing.T) {
 	repo := filepath.Join("..", "..", "..")
 	for name, spec := range frameworkCatalog {
+		if spec.Direct {
+			continue // lobby、relay 不在总线上，没有生成的 transport
+		}
 		var transports []string
 		for _, dir := range []string{filepath.Join(repo, "wiring", spec.ImportPath()), filepath.Join(repo, "service", spec.Package)} {
 			matches, _ := filepath.Glob(filepath.Join(dir, "*_rpc_gen.go"))
@@ -524,7 +527,10 @@ func TestActivityConfigCarriesTheTTLItsModRequires(t *testing.T) {
 // 每个托管服务的 collaborators 文件里，每一个 import 都被正文里的选择表达式引用（注释里出现的 `match.Grouping` 不算）：
 // 无条件 import 服务包会让生成文件 "imported and not used"、整个工程编译不过。
 func TestFrameworkCollaboratorsImportOnlyWhatTheyUse(t *testing.T) {
-	for framework := range frameworkCatalog {
+	for framework, spec := range frameworkCatalog {
+		if !spec.hasCollaborators() {
+			continue // relay 没有协作者文件
+		}
 		m := DefaultManifest("planet", "example.com/planet", []string{framework}, nil, nil)
 		m.Services[framework] = ServiceSpec{Framework: framework}
 		src := renderFrameworkCollaborators(m, framework)

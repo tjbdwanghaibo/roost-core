@@ -143,8 +143,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 			// A hosted framework service has no business Service; its
 			// process is the roost-service Server plus the collaborators the
 			// owner Mod needs, which are the project's to write.
-			if err := addGo(m.serviceDir(name)+"/collaborators.go", renderFrameworkCollaborators(m, name), false); err != nil {
-				return nil, err
+			if frameworkCatalog[m.Services[name].Framework].hasCollaborators() {
+				if err := addGo(m.serviceDir(name)+"/collaborators.go", renderFrameworkCollaborators(m, name), false); err != nil {
+					return nil, err
+				}
 			}
 			add("configs/service/config."+name+".yaml", renderServiceConfig(m, name, false), false)
 			add("configs/service/config."+name+".prod.example.yaml", renderServiceConfig(m, name, true), false)
@@ -393,10 +395,15 @@ func renderBootstrap(m Manifest) string {
 	}
 	services := sortedServiceNames(m)
 	for _, name := range services {
-		imports[m.Project.Module+"/"+m.serviceDir(name)] = "service" + safeIdent(name)
-		if spec, ok := frameworkCatalog[m.Services[name].Framework]; ok {
+		spec, hosted := frameworkCatalog[m.Services[name].Framework]
+		if !hosted || spec.hasCollaborators() {
+			imports[m.Project.Module+"/"+m.serviceDir(name)] = "service" + safeIdent(name)
+		}
+		if hosted {
 			imports[frameworkServiceModule+"/"+spec.ImportPath()] = "svc" + spec.Package
-			imports[frameworkDomainModule+"/"+spec.ImportPath()] = "domain" + spec.Package
+			if !spec.Direct {
+				imports[frameworkDomainModule+"/"+spec.ImportPath()] = "domain" + spec.Package
+			}
 		}
 		for _, used := range m.Services[name].Uses {
 			if spec, ok := frameworkCatalog[m.Services[used].Framework]; ok {
@@ -531,7 +538,10 @@ func renderBootstrap(m Manifest) string {
 		b.WriteString("\t)\n")
 	}
 	for _, name := range services {
-		if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
+		if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted && spec.Direct {
+			// lobby、relay 不在总线上应答，没有 ServiceType：子命令名取 wiring 包的 ServiceName。
+			fmt.Fprintf(&b, "\ta.RegisterServer(svc%s.ServiceName, svc%s.NewServer()", spec.Package, spec.Package)
+		} else if hosted {
 			// The roost-service Server is the process's Service; the owner Mod
 			// is built from the project's collaborators file.
 			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(domain%s.ServiceType), svc%s.NewServer()", spec.Package, spec.Package)
@@ -612,6 +622,10 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 		out = append(out, localPreloadModCall(name))
 	}
 	if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
+		// 托管进程自己调用的框架服务（lobby → account）：ClientMod 排在 owner Mod 之前。
+		for _, client := range spec.Clients {
+			out = append(out, fmt.Sprintf("svc%s.NewClientMod()", frameworkCatalog[client].Package))
+		}
 		args := make([]string, 0, len(spec.ModArgs))
 		for _, arg := range spec.ModArgs {
 			args = append(args, "service"+safeIdent(name)+"."+arg)
@@ -878,7 +892,9 @@ func serviceConfigSections(m Manifest, service string) []string {
 	for _, name := range serviceConfigMods(m, service) {
 		add(modConfigSection(name, m.Project.Name))
 	}
-	if _, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
+	if spec, hosted := frameworkCatalog[m.Services[service].Framework]; hosted && spec.Direct {
+		add(directServiceConfigSection(m, service))
+	} else if hosted {
 		add(frameworkConfigSection(m.Services[service].Framework, m.Project.Name))
 	}
 	if isPlayerGateService(m, service) {

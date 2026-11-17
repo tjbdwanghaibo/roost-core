@@ -95,8 +95,12 @@ func NewProjectContext(ctx context.Context, options NewOptions) (SyncResult, str
 		if err := applyDemoTemplate(&manifest, templateGameService(options)); err != nil {
 			return SyncResult{}, "", err
 		}
+	case lobbyTemplateName:
+		if err := applyLobbyTemplate(&manifest, options); err != nil {
+			return SyncResult{}, "", err
+		}
 	default:
-		return SyncResult{}, "", fmt.Errorf("unknown template %q; supported: game, %s", options.Template, demoTemplateName)
+		return SyncResult{}, "", fmt.Errorf("unknown template %q; supported: game, %s, %s", options.Template, demoTemplateName, lobbyTemplateName)
 	}
 	if err := manifest.Validate(); err != nil {
 		return SyncResult{}, "", err
@@ -136,6 +140,12 @@ func NewProjectContext(ctx context.Context, options NewOptions) (SyncResult, str
 	}
 	if err := generate(ctx, stage, GenerateOptions{Stdout: io.Discard}); err != nil {
 		return SyncResult{}, "", fmt.Errorf("generate initial artifacts: %w", err)
+	}
+	if hostsLobbyOrRelay(manifest) {
+		// lobby / relay 要 account 配置里的 account.services 与 account.games（与 roost add lobby / relay 相同）。
+		if _, err := configureAccountForLobbyRelay(stage, manifest, io.Discard); err != nil {
+			return SyncResult{}, "", fmt.Errorf("configure account for lobby and relay: %w", err)
+		}
 	}
 	switch strings.TrimSpace(options.Template) {
 	case "game":

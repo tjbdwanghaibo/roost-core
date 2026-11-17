@@ -79,6 +79,10 @@ func Add(root string, options AddOptions) ([]string, error) {
 		// roost add effect player.level_up：名字是点分的 effect 主题，按自己的规则校验。
 		return addEffect(root, m, options)
 	}
+	if options.Kind == "lobby" || options.Kind == "relay" {
+		// roost add lobby / relay [name]：托管服务名缺省与命令同名（lobby_relay.go）。
+		return addDirectService(root, m, options)
+	}
 	name := strings.TrimSpace(options.Name)
 	if !validName(toSnake(name)) {
 		return nil, fmt.Errorf("invalid %s name %q", options.Kind, name)

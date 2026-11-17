@@ -19,6 +19,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/directory"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
 	"github.com/tjbdwanghaibo/roost-core/wiring/global"
+	"github.com/tjbdwanghaibo/roost-core/wiring/lobby"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/match"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
@@ -29,6 +30,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/platform"
 	"github.com/tjbdwanghaibo/roost-core/wiring/rank"
 	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/relay"
 	"github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	"github.com/tjbdwanghaibo/roost-core/wiring/saga"
@@ -56,7 +58,7 @@ func everyKitMod() []declaredMod {
 		kitremoteentity.NewRemoteEntityMod(1000), kitremoteentity.NewRemoteMirrorMod(1000),
 		kitnest.NewMod(entity.NewManagerAccess(entity.NewEntityManager())), kitdataengine.NewMod(), kitsaga.NewMod(),
 		new(account.Mod), new(chat.Mod), new(directory.Mod), new(global.Mod), new(activity.Mod), new(mail.Mod),
-		new(match.Mod), new(platform.Mod), new(rank.Mod), new(session.Mod),
+		new(match.Mod), new(platform.Mod), new(rank.Mod), new(session.Mod), new(lobby.Mod), relay.NewMod(),
 		account.NewClientMod(), chat.NewClientMod(), global.NewClientMod(), activity.NewClientMod(), mail.NewClientMod(),
 		match.NewClientMod(), platform.NewClientMod(), rank.NewClientMod(), session.NewClientMod(),
 		physicsroom.NewEntityHostMod(),

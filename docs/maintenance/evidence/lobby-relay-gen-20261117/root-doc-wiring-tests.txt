@@ -1,0 +1,20 @@
+$ GOWORK=off go test -count=1 -run "Link|Anchor|Doc" .  (干净树：HEAD 37bf7c2e + gen 组改动)
+--- FAIL: TestObservabilityDocNamesExistingMetrics (0.73s)
+    metric_names_gate_test.go:969: docs/framework/OBSERVABILITY.md does not document player_tcp_websocket_rejected_total (infra/network/gateway/tcp.go:IncCounter); every collected metric belongs in its metric list
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	1.887s
+FAIL
+$ go test -count=1 -run "TestEveryKitMod|TestKitMods|Config" ./wiring/
+ok  	github.com/tjbdwanghaibo/roost-core/wiring	0.758s
+$ go run ./wiring/internal/configschemagen -out codegen/internal/roost/kitconfig_gen.go -check
+snapshot current
+$ go vet ./codegen/internal/roost/ ./wiring/internal/configschemagen/
+vet ok
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	1.412s
+FAIL
+$ ... -skip TestObservabilityDocNamesExistingMetrics -v
+--- PASS: TestCoreContractsDoNotLinkDrivers (0.14s)
+--- PASS: TestDocumentedCommitsAreReachableFromHEAD (0.24s)
+--- PASS: TestTrackedMarkdownRelativeLinksResolve (0.14s)
+ok  	github.com/tjbdwanghaibo/roost-core	0.935s

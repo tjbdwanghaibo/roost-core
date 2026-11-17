@@ -49,6 +49,15 @@ type frameworkServiceSpec struct {
 	// define it too.
 	ModChain []string
 	Collabs  string
+	// Direct 标记直接面向客户端的托管服务（lobby：HTTP；relay：TCP / WebSocket）：它们不在总线上应答，
+	// 没有 Interface、ClientMod 与 service 包的 ServiceType，业务服务不能 uses 它们。bootstrap 按 wiring 包的
+	// ServiceName 注册 Server，owner Mod 是 svc<Package>.NewMod(<ModArgs>)；ModArgs 为空时（relay）不生成
+	// collaborators.go。-framework all、game-demo 与模块安装器只认总线服务（frameworkServiceNames）；Direct 服务
+	// 用 roost add lobby / roost add relay 加（lobby_relay.go）。
+	Direct bool
+	// Clients 是托管进程自己要装的框架 ClientMod（排在 owner Mod 之前）：lobby 经 account 的 ValidateGameToken
+	// 认游戏账号 token，所以装 account.NewClientMod()。被指向的服务必须托管在同一工程里（validateFrameworkServices）。
+	Clients []string
 }
 
 // ImportPath 是服务域和接线模块各自根目录下的路径。
@@ -233,6 +242,22 @@ func Release() session.Releaser {
 }
 `,
 	},
+	// lobby、relay（方案 FEATURE-2026-11-16-lobby-relay §4.2、§4.4）：开房间场景的大厅与转发，直接面向客户端。
+	"lobby": {
+		Package: "lobby", Direct: true, Depends: []string{"redis", "nats", "etcd"}, Clients: []string{"account"},
+		ModArgs: []string{"Tokens()"},
+		Collabs: `// Tokens validates the game account token (gt1) a client sends to the lobby.
+// nil is the default and the usual answer: the lobby asks the account service
+// (account.ValidateGameToken through the account ClientMod this process
+// assembles), and the game in the token must be the game of the request.
+// Return your own implementation only when this project authenticates lobby
+// players with another account system.
+func Tokens() lobby.GameTokenValidator { return nil }
+`,
+	},
+	"relay": {
+		Package: "relay", Direct: true, Depends: []string{"nats", "etcd"},
+	},
 	"chat": {
 		Package: "chat", Interface: "Messaging", Depends: []string{"redis", "nats"},
 		ModArgs: []string{"Policy()", "Bodies()", "System()", "Rules()", "Metrics()"},
@@ -268,7 +293,21 @@ func Rules() []chat.ChannelRule { return chat.DefaultChannelRules() }
 	},
 }
 
+// frameworkServiceNames 是总线上的托管服务（业务服务可以 uses 的九个），按名字排序：-framework all、game-demo、
+// 模块安装器与“九个框架服务”的说明按它。直接面向客户端的 lobby、relay（Direct）不在其中，见 hostedFrameworkNames。
 func frameworkServiceNames() []string {
+	names := make([]string, 0, len(frameworkCatalog))
+	for name, spec := range frameworkCatalog {
+		if !spec.Direct {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// hostedFrameworkNames 是 services.<name>.framework 能写的全部服务（总线服务加 lobby、relay），按名字排序。
+func hostedFrameworkNames() []string {
 	names := make([]string, 0, len(frameworkCatalog))
 	for name := range frameworkCatalog {
 		names = append(names, name)
@@ -276,6 +315,9 @@ func frameworkServiceNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// hasCollaborators 报告托管服务有没有 collaborators.go：owner Mod 有参数才有（relay 的 NewMod() 不取任何协作者）。
+func (spec frameworkServiceSpec) hasCollaborators() bool { return len(spec.ModArgs) > 0 }
 
 // isFrameworkService reports whether the named service hosts a roost-service
 // service instead of business code.
@@ -333,8 +375,14 @@ func (m Manifest) validateFrameworkServices() error {
 		service := m.Services[name]
 		framework := strings.TrimSpace(service.Framework)
 		if framework != "" {
-			if _, ok := frameworkCatalog[framework]; !ok {
-				joined = errors.Join(joined, fmt.Errorf("service %s: unknown framework service %q; known: %s", name, framework, strings.Join(frameworkServiceNames(), ", ")))
+			spec, ok := frameworkCatalog[framework]
+			if !ok {
+				joined = errors.Join(joined, fmt.Errorf("service %s: unknown framework service %q; known: %s", name, framework, strings.Join(hostedFrameworkNames(), ", ")))
+			}
+			for _, client := range spec.Clients {
+				if hostedServiceOf(m, client) == "" {
+					joined = errors.Join(joined, fmt.Errorf("service %s hosts %s, which calls the %s service; host %s in this project too (roost add %s declares it)", name, framework, client, client, framework))
+				}
 			}
 			if len(service.Uses) > 0 {
 				joined = errors.Join(joined, fmt.Errorf("service %s hosts %s and cannot also declare uses; call other services from a business service", name, framework))
@@ -352,6 +400,8 @@ func (m Manifest) validateFrameworkServices() error {
 			target, ok := m.Services[used]
 			if !ok || strings.TrimSpace(target.Framework) == "" {
 				joined = errors.Join(joined, fmt.Errorf("service %s uses %q, which is not a framework service declared in services", name, used))
+			} else if frameworkCatalog[strings.TrimSpace(target.Framework)].Direct {
+				joined = errors.Join(joined, fmt.Errorf("service %s uses %q, but %s answers clients directly and has no bus client; drop it from uses", name, used, target.Framework))
 			}
 		}
 	}
@@ -485,8 +535,8 @@ func parseFrameworkSelection(raw string) ([]string, error) {
 		if name == frameworkSelectionAll {
 			return nil, fmt.Errorf("-framework all cannot be combined with other names")
 		}
-		if _, ok := frameworkCatalog[name]; !ok {
-			return nil, fmt.Errorf("unknown framework service %q in -framework; known: %s, or all", name, strings.Join(frameworkServiceNames(), ", "))
+		if spec, ok := frameworkCatalog[name]; !ok || spec.Direct {
+			return nil, fmt.Errorf("unknown framework service %q in -framework; known: %s, or all (lobby and relay: roost add lobby / roost add relay)", name, strings.Join(frameworkServiceNames(), ", "))
 		}
 		names = append(names, name)
 	}
@@ -497,7 +547,7 @@ func parseFrameworkSelection(raw string) ([]string, error) {
 // 已经托管着的照旧复用；同名的是业务服务时报错（不能把业务代码的进程改成托管进程）。返回这次是否新声明。
 // -template game 与模块安装器（需要的托管服务按需补上）共用这一条规则。
 func declareFrameworkService(m *Manifest, business, name string) (bool, error) {
-	if _, ok := frameworkCatalog[name]; !ok {
+	if spec, ok := frameworkCatalog[name]; !ok || spec.Direct {
 		return false, fmt.Errorf("unknown framework service %q; known: %s", name, strings.Join(frameworkServiceNames(), ", "))
 	}
 	service, ok := m.Services[business]
@@ -721,6 +771,15 @@ func renderFrameworkServicesGuide(m Manifest) string {
 		if !ok {
 			continue
 		}
+		if spec.Direct {
+			// lobby、relay 直接面向客户端：没有总线客户端；relay 没有协作者文件。
+			collaborators := "—"
+			if spec.hasCollaborators() {
+				collaborators = "services/" + name + "/collaborators.go"
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | configs/service/config.%s.yaml | %s | %s |\n", name, spec.Package, name, directServiceRequiredKeys(spec.Package), collaborators)
+			continue
+		}
 		required := spec.Package + ".key_prefix"
 		if spec.Package == "account" {
 			required += ", account.session_secret"
@@ -757,6 +816,7 @@ func renderFrameworkServicesGuide(m Manifest) string {
 		}
 		fmt.Fprintf(&b, "\n在 Service.Init 里取一次并保存：\n\n    svc, err := %s.%s(registry)\n\n访问器在 capability 不存在时返回错误：说明对应进程没起、或者总线不通。\n\n", m.servicePackage(name), safeIdent(example))
 	}
+	b.WriteString(directServicesGuide(m))
 	b.WriteString("## 本地运行顺序\n\n")
 	b.WriteString("    docker compose -f deploy/dev/docker-compose.yaml up -d\n    go build -o bin/app .\n")
 	for _, name := range sortedServiceNames(m) {

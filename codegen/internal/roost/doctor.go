@@ -125,6 +125,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	report.Items = append(report.Items, checkEntityOwnerUse(root, m)...)
 	report.Items = append(report.Items, checkWebRouteServing(root, m)...)
 	report.Items = append(report.Items, checkPlayerGate(root, m)...)
+	report.Items = append(report.Items, checkLobbyRelay(root, m)...)
 	if m.ClientExport != nil {
 		report.Items = append(report.Items, checkClientExport(root, m))
 	}
@@ -299,7 +300,7 @@ const collaboratorUnconfiguredMarker = "is not configured"
 func checkFrameworkCollaborators(root string, manifest Manifest) []CheckItem {
 	var items []CheckItem
 	for _, name := range sortedServiceNames(manifest) {
-		if !manifest.isFrameworkService(name) {
+		if !manifest.isFrameworkService(name) || !frameworkCatalog[manifest.Services[name].Framework].hasCollaborators() {
 			continue
 		}
 		rel := manifest.serviceDir(name) + "/collaborators.go"

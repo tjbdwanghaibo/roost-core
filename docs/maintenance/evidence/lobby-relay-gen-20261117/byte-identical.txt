@@ -1,0 +1,5 @@
+# 同一组命令分别用 HEAD 37bf7c2e 的生成器（wt-base）与 HEAD + gen 组改动的生成器（wt-new）生成，diff -r 整个目录
+$ roost project new plain|game(-template game)|gameall(-template game -framework all)|demo(-template game-demo) --skip-deps
+diff -r base new: 无输出（IDENTICAL-4-CASES），base 侧 1708 个文件
+$ roost project new login -template game; go mod edit -replace（各指向自己的树）; roost module add login portal
+diff -r -x go.mod -x go.sum base/login new/login: 无输出；两边 module add 的输出（48 行）也相同（IDENTICAL-LOGIN-PORTAL）

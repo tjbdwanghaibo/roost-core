@@ -1,0 +1,33 @@
+#!/bin/sh
+# 验收：两个工程（不带 game 的 account+lobby+relay；game+login 加 lobby/relay），用只含 gen 组改动的干净树生成。
+set -u
+S=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-lr-gen
+R=$S/roost-new; CORE=$S/wt-new; export GOWORK=off
+rm -rf $S/acc && mkdir -p $S/acc && cd $S/acc
+check() {
+  echo "== go build ./..."; go build ./... && echo ok
+  echo "== roost generate --check"; $R generate --check 2>&1 | tail -1
+  echo "== roost id check"; $R id check 2>&1 | tail -1
+  echo "== roost project doctor (non-OK lines)"; $R project doctor > doctor.txt 2>&1; echo "doctor exit $?"; grep -v '^OK' doctor.txt | grep -v '^[0-9]\{4\}/' ; echo "OK lines: $(grep -c '^OK' doctor.txt)"; grep 'lobby-relay' doctor.txt
+}
+echo "### 1. roost project new party -template lobby（不带 game）"
+$R project new party -module example.com/party -out party -template lobby --skip-deps > /dev/null 2>&1 || echo NEW-FAILED
+cd party; go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE; go mod tidy >/dev/null 2>&1
+echo "services: $(sed -n '/^services:/,/^features:/p' roost.yaml | grep -E '^    [a-z]' | tr -d ' ' | tr '\n' ' ')"
+echo "-- 工程自己实现 account 协作者之前："; $R project doctor 2>&1 | grep '^FAIL' | cut -c1-120
+# 模拟工程实现 account 的协作者（用登录模块同样的开发登录写法：dev 渠道 + Redis 计数器 + 渠道桩）
+cp $CORE/modules/login/files/services/account/collaborators.go.tmpl services/account/collaborators.go
+cp $CORE/modules/login/files/services/account/login_dev.go.tmpl services/account/login_dev.go
+cp $CORE/modules/login/files/services/account/login_player_id.go.tmpl services/account/login_player_id.go
+cp $CORE/modules/login/files/services/account/login_channels.go.tmpl services/account/login_channels.go
+echo "-- 实现之后："
+check
+cd ..
+echo
+echo "### 2. roost project new arena -template game; module add login portal; add lobby; add relay"
+$R project new arena -module example.com/arena -out arena -template game --skip-deps > /dev/null 2>&1 || echo NEW-FAILED
+cd arena; go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE; go mod tidy >/dev/null 2>&1
+$R module add login portal > module-add.log 2>&1; echo "module add exit $?"
+$R add lobby | grep -v '^next'; $R add relay | grep -v '^next'
+echo "services: $(sed -n '/^services:/,/^features:/p' roost.yaml | grep -E '^    [a-z]' | tr -d ' ' | tr '\n' ' ')"
+check

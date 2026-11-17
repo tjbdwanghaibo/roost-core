@@ -821,8 +821,13 @@ func validateModuleRuntime(runtime *ModuleRuntime) error {
 		return fmt.Errorf("runtime.package %q must be a module package under game/modules/ (or services/<framework>/... with runtime.framework)", runtime.Package)
 	}
 	if runtime.Framework != "" {
-		if _, known := frameworkCatalog[runtime.Framework]; !known {
+		spec, known := frameworkCatalog[runtime.Framework]
+		if !known {
 			return fmt.Errorf("runtime.framework %q is not a framework service; known: %s", runtime.Framework, strings.Join(frameworkServiceNames(), ", "))
+		}
+		if spec.Direct {
+			// lobby、relay 没有 domain 包的 CapabilityName，模块入口装不上去。
+			return fmt.Errorf("runtime.framework %q answers clients directly and cannot host a module runtime; known: %s", runtime.Framework, strings.Join(frameworkServiceNames(), ", "))
 		}
 	}
 	if rest, ok := strings.CutPrefix(runtime.Package, frameworkServicesDir); ok {

@@ -1,0 +1,4 @@
+127.0.0.1:9102 readyz 200
+127.0.0.1:9103 readyz 200
+/arena/relays/relay-1000
+{"instance":"relay-1000","tcp_addr":"127.0.0.1:7103","ws_addr":"ws://127.0.0.1:7203/relay","rooms":0}

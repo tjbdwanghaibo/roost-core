@@ -29,6 +29,7 @@ import (
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
 	"github.com/tjbdwanghaibo/roost-core/wiring/global"
 	kitheartbeat "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/wiring/lobby"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/match"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
@@ -38,6 +39,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/platform"
 	"github.com/tjbdwanghaibo/roost-core/wiring/rank"
 	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/relay"
 	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
@@ -84,6 +86,10 @@ func groups() map[string][]app.ConfigSchema {
 		"platform":  {new(platform.Mod).ConfigSchema()},
 		"rank":      {new(rank.Mod).ConfigSchema()},
 		"session":   {new(session.Mod).ConfigSchema()},
+		// lobby、relay 直接面向客户端（framework_services.go 的 Direct）：没有总线客户端，单元就是托管进程读的键——
+		// lobby 进程还装 account 的 ClientMod（经它校验游戏账号 token），所以并进 account.client 的声明。
+		"lobby": {new(lobby.Mod).ConfigSchema(), new(account.ClientMod).ConfigSchema()},
+		"relay": {relay.NewMod().ConfigSchema()},
 
 		"account.client":  {new(account.ClientMod).ConfigSchema()},
 		"chat.client":     {new(chat.ClientMod).ConfigSchema()},

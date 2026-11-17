@@ -122,7 +122,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		newSkipDeps := fs.Bool("skip-deps", false, "write the project but do not resolve framework dependencies")
 		core := fs.String("roost-core-version", "", "roost-core version")
 		recipe := fs.String("recipe", "", "business composition on template game: casual or turn-pvp")
-		template := fs.String("template", "", "opt-in starting shape: game (the first service with the Nest runtime and the Player / World entities; framework services only as -framework names them or modules need them), or game-demo (game plus all nine framework services and a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
+		template := fs.String("template", "", "opt-in starting shape: game (the first service with the Nest runtime and the Player / World entities; framework services only as -framework names them or modules need them), or game-demo (game plus all nine framework services and a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint), or lobby (no business service: the hosted account, lobby and relay of a room-based game, see roost help lobby)")
 		frameworks := fs.String("framework", "", "framework services -template game hosts from the start: all, or a comma-separated list of "+strings.Join(frameworkServiceNames(), ",")+"; default none (roost module add declares the ones a module uses)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
@@ -283,12 +283,12 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		// roost add timer --entity Player：实体用 --entity 给出时不需要名字。
 		args = append([]string{args[0], ""}, args[1:]...)
 	}
-	if len(args) >= 1 && args[0] == "gate" && (len(args) == 1 || strings.HasPrefix(args[1], "-")) {
-		// roost add gate：Gate 服务缺省叫 gate。
-		args = append([]string{args[0], "gate"}, args[1:]...)
+	if len(args) >= 1 && (args[0] == "gate" || args[0] == "lobby" || args[0] == "relay") && (len(args) == 1 || strings.HasPrefix(args[1], "-")) {
+		// roost add gate / lobby / relay：服务缺省与命令同名。
+		args = append([]string{args[0], args[0]}, args[1:]...)
 	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|gate|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|gate|lobby|relay|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -321,7 +321,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	allowed := map[string][]string{
 		"service": {"root", "mods"}, "mod": {"root", "service"}, "access": {"root", "service"},
-		"transport": {"root", "service"}, "gate": {"root", "service"},
+		"transport": {"root", "service"}, "gate": {"root", "service"}, "lobby": {"root"}, "relay": {"root"},
 		"protocol": {"root", "group", "handler", "id"}, "entity": {"root", "id"},
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle", "target"},
@@ -355,6 +355,9 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "gate" {
 		printGateNext(stdout, root, toSnake(args[1]), len(paths) == 0)
+	}
+	if args[0] == "lobby" || args[0] == "relay" {
+		printDirectServiceNext(stdout, args[0], toSnake(args[1]), len(paths) == 0)
 	}
 	if args[0] == "timer" {
 		fmt.Fprintln(stdout, "next: define the timer types and callbacks in the generated *_handlers.go, arm them with <Component>Comp().NewTimer(...) inside a Nest handler, then roost generate")
