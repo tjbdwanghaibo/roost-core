@@ -341,6 +341,33 @@ dirtyMeshes.Clear();
 
 验证：`dotnet run --project client/dotnet/Roost.Client.Terrain.Tests -- client/spec`（`scripts/test-client-dotnet.sh` 与 pretag 也跑）。它核对 Go 写出的 [terrain-golden.pack](spec/terrain-golden.pack) 的整包与 6 块校验和、区域水位表、[terrain-queries.json](spec/terrain-queries.json) 全部 246 个位置的高度 / 材质 / 水 / 所在块的水位线 / 水深；坏包头、索引、截断、坏块；覆盖块规则与通知；网格顶点与接缝；以及 Go 生成 DAO 写出的 `TerrainChunk` 全量、按下标的高度增量、按下标的材质增量、材质整字段、高度整字段五步经 C# 生成 Apply 合并后与 Go 的合并结果相等、与 Go `View` 的 650 次查询逐点相等（材质在 DAO 里是 `[]uint16` / `repeated uint32`，取值 0～255，方案 D11）；`Building` 的放置全量、只带参数的增量、换成无槽配置、拆除四步经 C# 生成 Apply 合并后与 Go 全量逐字节相等、摆放字段一致（方案 §27）。岸线与重建（方案 §31）：判定规则（等于水位、整边等高、鞍点三种、线性格、侧壁）与圆形池塘单元；Go 生成的 [terrain-shore.pack](spec/terrain-shore.pack) / [terrain-shore.json](spec/terrain-shore.json)（`go test ./gameplay/terrain -run TestClientShoreGolden`，`-update` 重写）7 个窗口 70,000 点 C# 权威查询与 Go 相同，全图视觉分类只在误差带内不同、跨块岸线端点逐位相接；LOD 全部级别组合；块重建的依赖读取表；调度器用手动推进的执行器覆盖邻块晚到、未确认、公共边成批发布、乱序、卸载重装、重连、换水位、LOD 与随机步骤。这份同步夹具在 `dotnet/Roost.Client.Terrain.Tests/Fixtures/`，由 `regen.sh` 用正式 DAO 生成器从 demo 的 `TerrainChunkDao` 与 `BuildingDao` 定义生成（`-update` 覆盖，缺省只核对，`scripts/test-client-dotnet.sh` 的完整模式会核对它与当前生成器一致）。没有在 Unity Editor、IL2CPP 或移动设备上运行过；没有经过真实 entitysync 链路（服务端 `TerrainChunk` 接 entitysync 是 P2 服务端部分）。C++ 客户端没有地形实现。
 
+## 开房间 SDK（lobby + relay）
+
+开房间场景（房主的客户端就是 host，服务器只转发）的三份客户端 SDK，方案 [FEATURE-2026-11-16-lobby-relay](../docs/maintenance/FEATURE-2026-11-16-lobby-relay.md) §4.5、§4.7.5；服务端契约见 [LOBBY](../docs/framework/LOBBY.md)、[RELAY](../docs/framework/RELAY.md)。
+
+| SDK | 位置 | 接入 relay | 通知线程 |
+|---|---|---|---|
+| Go | [client/relay](relay/README.md) | TCP | 连接的读 goroutine 上依次调用 |
+| C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP | `Pump` 的调用线程（Unity 主线程） |
+| TS | [ts](ts/README.md)（浏览器；node 测试用 `ws` 包） | WebSocket，每条二进制消息一帧，收的时候按字节流解 | 事件循环 |
+
+三份共同的做法：
+
+- **lobby**：建房、列房、加入、离开、改状态，请求带 `Authorization: Bearer gt1…`，可选 `transport`（tcp / ws）；lobby 的错误名映射成各语言自己的错误类型（Go `*LobbyError` + `errors.Is(err, relay.ErrRoomFull)`，C# `LobbyException.Code`，TS `LobbyError.code`）。
+- **relay 帧**：直接是 RS v2 帧，通道在 flags bits3..4、seq 是槽位（上行目标，0 = 全体；下行发送者），编码与 [relay-packets.json](spec/relay-packets.json) 逐字节相同（Go 用 `client/wire`，C# / TS 各自实现并用这份金样核对）。连接后首帧发令牌，等 Welcome；收发游戏通道与房间通道；房主收成员上下线，房主可以踢人、禁言。
+- **心跳与断线**：缺省每 10s 一个 Ping（relay 的 `idle_timeout` 缺省 30s），Pong 测 RTT；30s 一帧都没收到就当断线。断线后重连先调 lobby 的 join（对已在房间里的人幂等）拿新令牌，再连 relay；自动重连缺省关闭，打开后只在连接自己断掉或 relay 判 `idle_timeout` 时重连，被踢、房间关闭、被顶号、经 lobby 离开、relay 停机都不重连。
+- **扩展点**：不认识的控制帧操作码丢弃，不断开；`OnControl(op, …)` 给任意操作码注册回调；`OnYouAreHost` / `OnHostChanging` / `OnHostChanged` / `OnHostResumed` 是换 host 的回调位置（操作码 64～127 由 host 组定稿后接线，这一批不触发）；发控制帧用 `SendControl`。
+
+验证（Redis 用 `~/.roost-it`：先 `source ~/.roost-it/roost-dataengine-it/env.sh`，没有时对端用内存房间目录）：
+
+```sh
+go test -race ./client/relay
+dotnet run --project client/dotnet/Roost.Client.Relay.Tests      # 跑完 dotnet build-server shutdown
+(cd client/ts && npm ci && npm test)
+```
+
+C# 与 TS 的用例把 `client/relay` 的测试二进制（`go test -c`，`ROOST_RELAYPEER_SERVE=1`）当对端进程：进程里是真实的 `service/relay` 与 `service/lobby`，只把 account、NATS、etcd 换成进程内的等价物（见 `client/relay/peer_test.go`）。
+
 ## Unity接入与其他引擎
 
 按 [Unity 构建入口](unity/README.md) 生成完整 UPM 包，再从输出目录导入 `package.json`；不要直接导入未构建的 `client/unity`，也不要重复放置 `Roost.Client.dll`。Unity 项目选择支持 .NET Standard 2.1 的兼容级别。C# 业务 PB 类型及 Google.Protobuf 依赖由游戏工程管理。包内保留纯 C# 适配，同时提供复用 native 网络线程的 `RoostNativeDriver`；同一连接选择一种路径。

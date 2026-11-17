@@ -1,0 +1,20 @@
+{
+  "name": "@roost/relay-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Roost 开房间场景的浏览器 SDK：lobby 的 HTTP 调用与 relay 的 WebSocket 连接（帧格式同 client/wire）",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test --test-concurrency=1 dist-test/test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.3",
+    "ws": "8.23.0"
+  }
+}

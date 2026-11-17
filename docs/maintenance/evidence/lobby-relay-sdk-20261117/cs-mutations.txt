@@ -1,0 +1,27 @@
+=== MUTATION cs-channel-bits: Roost.Client.Relay/RelayCodec.cs
+--- old: private const byte ChannelShift = 3;
++++ new: private const byte ChannelShift = 4;
+FAILED: System.Exception: Check failed: C# encodes relay_game_member_up like Go
+=== result: exit=1 (RED)
+=== MUTATION cs-welcome-role: Roost.Client.Relay/RelayCodec.cs
+--- old: return new RelayWelcome(slot, payload[0] == 1,
++++ new: return new RelayWelcome(slot, payload[0] == 2,
+FAILED: System.Exception: Check failed: welcome payload
+=== result: exit=1 (RED)
+=== MUTATION cs-game-flags-dropped: Roost.Client.Relay/RelayCodec.cs
+--- old: flags = (byte)(((byte)frame.Channel << ChannelShift) | (frame.GameFlags & GameBits));
++++ new: flags = (byte)((byte)frame.Channel << ChannelShift);
+FAILED: System.Exception: Check failed: C# encodes relay_game_host_to_slot like Go
+=== result: exit=1 (RED)
+=== MUTATION cs-no-reconnect: Roost.Client.Relay/RelayClient.cs
+--- old: private static bool Retryable(RelayReason reason) => reason == RelayReason.Disconnected || reason == RelayReason.IdleTimeout;
++++ new: private static bool Retryable(RelayReason reason) => reason == RelayReason.IdleTimeout;
+lobby errors: ok
+FAILED: System.Exception: Check failed: transport loss → reconnecting
+=== result: exit=1 (RED)
+=== MUTATION cs-no-ping: Roost.Client.Relay/RelayClient.cs
+--- old: if (now - lastPing < options.PingInterval.Ticks) continue;
++++ new: if (now >= 0) continue;
+lobby errors: ok
+FAILED: System.Exception: Timed out waiting for rtt measured
+=== result: exit=1 (RED)

@@ -1,0 +1,18 @@
+=== RUN   TestSDKFramesMatchRelayGolden
+--- PASS: TestSDKFramesMatchRelayGolden (0.00s)
+=== RUN   TestUnknownControlOpIsDroppedOrHandedToOnControl
+--- PASS: TestUnknownControlOpIsDroppedOrHandedToOnControl (0.00s)
+=== RUN   TestRoomLifecycleAgainstRealRelayAndLobby
+    client_test.go:157: peer: lobby http://127.0.0.1:55606, relay 127.0.0.1:55600, room directory redis
+--- PASS: TestRoomLifecycleAgainstRealRelayAndLobby (0.04s)
+=== RUN   TestReconnectAsksTheLobbyForAFreshToken
+    client_test.go:286: peer: lobby http://127.0.0.1:55621, relay 127.0.0.1:55618, room directory redis
+--- PASS: TestReconnectAsksTheLobbyForAFreshToken (0.05s)
+=== RUN   TestHeartbeatKeepsTheConnectionAlive
+    client_test.go:348: peer: lobby http://127.0.0.1:55635, relay 127.0.0.1:55633, room directory redis
+--- PASS: TestHeartbeatKeepsTheConnectionAlive (1.42s)
+=== RUN   TestLobbyErrorsMapToSentinels
+    client_test.go:377: peer: lobby http://127.0.0.1:55651, relay 127.0.0.1:55650, room directory redis
+--- PASS: TestLobbyErrorsMapToSentinels (0.01s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	3.204s

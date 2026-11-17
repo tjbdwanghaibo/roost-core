@@ -1,0 +1,65 @@
+=== MUTATION go-game-flags: client/relay/client.go
+--- old: flags = wire.FlagRelayGame | f.Flags&gameFlags
++++ new: flags = wire.FlagRelayGame
+--- FAIL: TestSDKFramesMatchRelayGolden (0.00s)
+--- FAIL: TestRoomLifecycleAgainstRealRelayAndLobby (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	1.967s
+FAIL
+=== result: exit=1 (RED)
+=== MUTATION go-room-channel-bits: client/relay/client.go
+--- old: flags = wire.FlagRelayRoom | f.Flags&gameFlags
++++ new: flags = wire.FlagRelayGame | f.Flags&gameFlags
+--- FAIL: TestSDKFramesMatchRelayGolden (0.00s)
+--- FAIL: TestRoomLifecycleAgainstRealRelayAndLobby (5.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	6.975s
+FAIL
+=== result: exit=1 (RED)
+=== MUTATION go-no-heartbeat: client/relay/client.go
+--- old: 			if err != nil || c.write(sess, data) != nil {
++++ new: 			if err != nil || len(data) > 0 {
+--- FAIL: TestHeartbeatKeepsTheConnectionAlive (5.41s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	5.926s
+FAIL
+=== result: exit=1 (RED)
+=== MUTATION go-no-reconnect-on-disconnect: client/relay/client.go
+--- old: 	return reason == wire.RelayReasonDisconnected || reason == wire.RelayReasonIdleTimeout
++++ new: 	return reason == wire.RelayReasonIdleTimeout
+--- FAIL: TestReconnectAsksTheLobbyForAFreshToken (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.514s
+FAIL
+=== result: exit=1 (RED)
+=== MUTATION go-reconnect-without-lobby: client/relay/client.go
+--- old: 	ticket, err := c.lobby.JoinRoom(ctx, room, JoinRoomRequest{Game: c.opts.Game, Password: c.opts.Password, Transport: TransportTCP})
++++ new: 	ticket, err := Ticket{}, error(nil)
+--- FAIL: TestReconnectAsksTheLobbyForAFreshToken (5.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	5.520s
+FAIL
+=== result: exit=1 (RED)
+=== MUTATION go-lobby-error-is: client/relay/lobby.go
+--- old: 	return ok && known == target
++++ new: 	return ok && known != nil && target != nil
+--- FAIL: TestLobbyErrorsMapToSentinels (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.516s
+FAIL
+=== result: exit=1 (RED)
+=== MUTATION go-unknown-op-ends-connection: client/relay/client.go
+--- old: 		if user != nil {
+			user(f)
+		}
++++ new: 		if builtin := controlHandlers[f.MsgID]; builtin == nil {
+			return wire.RelayReasonProtocol, nil
+		}
+		if user != nil {
+			user(f)
+		}
+--- FAIL: TestUnknownControlOpIsDroppedOrHandedToOnControl (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.513s
+FAIL
+=== result: exit=1 (RED)

@@ -1,0 +1,22 @@
+
+> @roost/relay-client@0.1.0 test
+> tsc -p tsconfig.test.json && node --test --test-concurrency=1 dist-test/test/*.test.js
+
+✔ unknown control ops are dropped (or handed to onControl) and frames after the welcome are not lost (1.898916ms)
+✔ TS encodes every relay golden frame byte for byte like Go (0.452417ms)
+✔ TS decodes the relay golden frames (0.477291ms)
+✔ the stream reader does not depend on message boundaries (0.096583ms)
+✔ TS refuses the same headers as Go's ValidateRelay (0.196083ms)
+peer: lobby http://127.0.0.1:55700, relay ws ws://127.0.0.1:55699/relay, room directory redis
+✔ lobby errors map to LobbyError codes (326.379708ms)
+✔ room lifecycle over WebSocket against the real relay and lobby (11.463667ms)
+✔ reconnect asks the lobby for a fresh token and resumes (584.180083ms)
+✔ heartbeat pongs reach onControl (72.011584ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1517.984292

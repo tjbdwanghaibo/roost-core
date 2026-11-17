@@ -1,0 +1,71 @@
+=== MUTATION ts-channel-bits: src/codec.ts
+--- old: const CHANNEL_SHIFT = 3;
++++ new: const CHANNEL_SHIFT = 4;
+✖ TS encodes every relay golden frame byte for byte like Go (1.530625ms)
+✖ TS decodes the relay golden frames (0.320625ms)
+✖ TS refuses the same headers as Go's ValidateRelay (0.384792ms)
+✖ lobby errors map to LobbyError codes (3673.403791ms)
+✖ room lifecycle over WebSocket against the real relay and lobby (4.716542ms)
+✖ reconnect asks the lobby for a fresh token and resumes (4.966542ms)
+✖ heartbeat pongs reach onControl (3.1405ms)
+ℹ fail 7
+✖ failing tests:
+✖ TS encodes every relay golden frame byte for byte like Go (1.530625ms)
+✖ TS decodes the relay golden frames (0.320625ms)
+✖ TS refuses the same headers as Go's ValidateRelay (0.384792ms)
+=== result: exit=1 (RED)
+=== MUTATION ts-welcome-role: src/codec.ts
+--- old: return { slot, host: payload[0] === 1,
++++ new: return { slot, host: payload[0] === 2,
+✖ TS decodes the relay golden frames (2.628333ms)
+✔ lobby errors map to LobbyError codes (840.50875ms)
+✖ room lifecycle over WebSocket against the real relay and lobby (4.507459ms)
+✖ reconnect asks the lobby for a fresh token and resumes (474.717083ms)
+ℹ fail 3
+✖ failing tests:
+✖ TS decodes the relay golden frames (2.628333ms)
+✖ room lifecycle over WebSocket against the real relay and lobby (4.507459ms)
+✖ reconnect asks the lobby for a fresh token and resumes (474.717083ms)
+=== result: exit=1 (RED)
+=== MUTATION ts-stream-partial: src/codec.ts
+--- old:       if (data.length < HEADER_SIZE + size) {
++++ new:       if (data.length < HEADER_SIZE) {
+✖ the stream reader does not depend on message boundaries (0.324875ms)
+✔ lobby errors map to LobbyError codes (304.392834ms)
+ℹ fail 1
+✖ failing tests:
+✖ the stream reader does not depend on message boundaries (0.324875ms)
+=== result: exit=1 (RED)
+=== MUTATION ts-no-reconnect: src/client.ts
+--- old:   return reason === RelayReason.Disconnected || reason === RelayReason.IdleTimeout;
++++ new:   return reason === RelayReason.IdleTimeout;
+✔ lobby errors map to LobbyError codes (294.624792ms)
+✖ reconnect asks the lobby for a fresh token and resumes (2.860958ms)
+ℹ fail 1
+✖ failing tests:
+✖ reconnect asks the lobby for a fresh token and resumes (2.860958ms)
+=== result: exit=1 (RED)
+=== MUTATION ts-reconnect-without-lobby: src/client.ts
+--- old:     const ticket = await this.lobby.joinRoom(this.roomId, { game: this.opts.game, password: this.opts.password, transport: "ws" });
++++ new:     const ticket = { relayAddr: "ws://127.0.0.1:1/relay", token: "" };
+✔ lobby errors map to LobbyError codes (390.762ms)
+✖ room lifecycle over WebSocket against the real relay and lobby (11.890792ms)
+✖ reconnect asks the lobby for a fresh token and resumes (5005.10925ms)
+ℹ fail 2
+✖ failing tests:
+✖ room lifecycle over WebSocket against the real relay and lobby (11.890792ms)
+✖ reconnect asks the lobby for a fresh token and resumes (5005.10925ms)
+=== result: exit=1 (RED)
+=== MUTATION ts-no-ping: src/client.ts
+--- old:       if (t - lastPing < this.opts.pingIntervalMs) return;
++++ new:       if (t - lastPing < this.opts.pingIntervalMs || lastPing >= 0) return;
+✔ lobby errors map to LobbyError codes (298.601791ms)
+✖ reconnect asks the lobby for a fresh token and resumes (5485.651791ms)
+✖ heartbeat pongs reach onControl (5026.88775ms)
+ℹ fail 2
+✖ failing tests:
+✖ reconnect asks the lobby for a fresh token and resumes (5485.651791ms)
+    operator: 'fail',
+✖ heartbeat pongs reach onControl (5026.88775ms)
+    operator: 'fail',
+=== result: exit=1 (RED)

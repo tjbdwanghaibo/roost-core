@@ -1,0 +1,7 @@
+golden: ok
+unknown control op: ok
+peer: lobby http://127.0.0.1:55669, relay 127.0.0.1:55668, room directory redis
+lobby errors: ok
+room lifecycle: ok
+reconnect: ok
+all 125 checks passed
