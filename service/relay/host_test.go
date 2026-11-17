@@ -259,6 +259,35 @@ func TestCandidateFallsBackToTheSmallestOnlineSlot(t *testing.T) {
 	c.expectSilence(quiet)
 }
 
+// 踢离线座位（方案 §6 第 12 条）：有座位但不在线的账号也能踢——记下账号、删座位、报 member_left{kicked}，房主收到
+// MemberLeft{kicked} 确认；它再来被拒。换 host 时候选顺序里的这个槽位选不到它，you_are_host 的成员名单里也没有它。
+func TestKickingAnOfflineSeat(t *testing.T) {
+	h := newHarness(t, false, nil)
+	host, a, b := h.room3("room-kick-offline")
+	c, _ := h.connect("room-kick-offline", "acc-c", token.RoleMember, 8)
+	host.expectMember(wire.RelayOpMemberJoined, 4, wire.RelayReasonNone, "acc-c")
+	host.send(wire.FlagRelayControl, wire.RelayOpSuccessors, 0, wire.EncodeRelaySuccessors([]uint32{2, 4}))
+	_ = a.conn.Close()
+	host.expectMember(wire.RelayOpMemberLeft, 2, wire.RelayReasonDisconnected, "acc-a")
+
+	host.send(wire.FlagRelayControl, wire.RelayOpKick, 2, nil)
+	host.expectMember(wire.RelayOpMemberLeft, 2, wire.RelayReasonKicked, "acc-a")
+	h.reports.wait(t, func(r relay.Report) bool {
+		return r.Type == relay.EventMemberLeft && r.Account == "acc-a" && r.Slot == 2 && r.Reason == "kicked"
+	})
+	h.rejected(h.token("room-kick-offline", "acc-a", token.RoleMember, 8), wire.RelayReasonKicked)
+	host.send(wire.FlagRelayControl, wire.RelayOpKick, 2, nil) // 座位已经没了：再踢什么也不做
+	host.ping("kick2")
+
+	host.send(wire.FlagRelayControl, wire.RelayOpLeave, 0, nil)
+	host.expectClosed(wire.RelayReasonLeft)
+	offer := c.expectYouAreHost(1) // 候选顺序 [2, 4]：2 被踢，轮到 4
+	if seatsOf(offer) != "host@1:off acc-b@3:on acc-c@4:on" {
+		t.Fatalf("offer seats %s, want the kicked acc-a gone", seatsOf(offer))
+	}
+	b.expectSilence(quiet)
+}
+
 // 新房主不在时限内回 host_ready：它收到 you_are_member，换下一个；候选断开也换下一个；都不行就关房。迟到的
 // host_ready 不生效。
 func TestHostReadyTimeoutMovesOnAndAllFailingCloses(t *testing.T) {

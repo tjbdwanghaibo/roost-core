@@ -1,0 +1,27 @@
+$ GOWORK=off go test -race -count=3 ./service/relay/... ./wiring/relay/
+ok  	github.com/tjbdwanghaibo/roost-core/service/relay	25.014s
+ok  	github.com/tjbdwanghaibo/roost-core/service/relay/token	1.904s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	7.359s
+$ GOWORK=off go test -race -count=3 -run "TestKickingAnOfflineSeat|TestSlotsKickAndReplace|Successors|Candidate" -v ./service/relay/ （按次数计）
+   3 --- PASS: TestCandidateFallsBackToTheSmallestOnlineSlot (0.15s)
+   3 --- PASS: TestCandidateReconnectGetsTheOfferAgain (0.00s)
+   3 --- PASS: TestGraceExpiresAndSuccessorsAreHonoured (0.20s)
+   2 --- PASS: TestKickingAnOfflineSeat (0.15s)
+   1 --- PASS: TestKickingAnOfflineSeat (0.16s)
+   3 --- PASS: TestSlotsKickAndReplace (0.00s)
+$ source env.sh && GOWORK=off go test -tags integration -race -count=3 -run TestRealRelay -v ./wiring/relay/
+   1 --- PASS: TestRealRelayHostChangeKickAndVerification (0.51s)
+   1 --- PASS: TestRealRelayHostChangeKickAndVerification (0.63s)
+   1 --- PASS: TestRealRelayHostChangeKickAndVerification (0.70s)
+   1 --- PASS: TestRealRelayReportsCommandsAndAdvertisement (1.41s)
+   1 --- PASS: TestRealRelayReportsCommandsAndAdvertisement (2.00s)
+   1 --- PASS: TestRealRelayReportsCommandsAndAdvertisement (2.22s)
+   1 --- PASS: TestRealRelayStartedRoomKeepsADroppedMembersSeat (0.76s)
+   1 --- PASS: TestRealRelayStartedRoomKeepsADroppedMembersSeat (1.15s)
+   1 --- PASS: TestRealRelayStartedRoomKeepsADroppedMembersSeat (1.24s)
+   1 PASS
+   1 ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	12.314s
+$ go vet ./service/relay/... ./wiring/relay/ && go vet -tags integration ./wiring/relay/
+vet ok
+$ go test -count=1 -run TestTrackedMarkdown .
+ok  	github.com/tjbdwanghaibo/roost-core	0.516s

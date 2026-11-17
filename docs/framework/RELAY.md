@@ -47,7 +47,7 @@
 | 3 `MemberLeft` | relay → 房主 | 成员槽位 | `[原因 1B][账号]` |
 | 4 `Closed` | relay → 某条连接，随后断开 | 0 | `[原因 1B]`；发送队列满被断开的连接收不到 |
 | 5 `Muted` | relay → 被禁言 / 解除的成员 | 自己的槽位 | `[1 禁言 / 0 解除]`；被禁言的账号重连后在 Welcome 之后再收到一次 |
-| 16 `Kick` | 房主 → relay | 要踢的槽位 | 无；该账号在房间存续期间不能再进 |
+| 16 `Kick` | 房主 → relay | 要踢的槽位（在线或有座位但离线的都行） | 无；该账号在房间存续期间不能再进 |
 | 17 `Mute` | 房主 → relay | 要禁言的槽位 | `[1 禁言 / 0 解除]` |
 | 32 `Ping` | 客户端 → relay | 0 | 不透明，至多 16 字节；重置空闲计时 |
 | 33 `Pong` | relay → 客户端 | 0 | 原样带回 Ping 的载荷 |
@@ -97,6 +97,8 @@
 5. 同一账号已在线：新连接顶掉旧连接（旧的收到 `Closed{replaced}`），槽位与角色不变；房主收到 `MemberJoined{replaced}`。lobby 不收到进出报告（在线名单没变）。正在等 `HostReady` 的候选被顶号时，`YouAreHost` 重新发给新连接、重新计时。
 6. **槽位属于账号**，房间存续期间不变：成员下线后座位留着，同一账号回来拿回原来的槽位；新账号取下一个没用过的槽位，所以槽位小的就是进房早的（换 host 兜底选人靠这一点），房主声明的候选顺序也不会因为槽位复用指错人。在线人数（含房主；宽限期内含断线的房主）已到上限：`Closed{room_full}`。
 7. 被踢：被踢的连接收到 `Closed{kicked}` 后断开，座位删掉；报告里 `room.member_left` 的原因是 `kicked`，lobby 据此把账号记进被踢名单（权威），之后 join 与验权都拒绝它。relay 本地也记一份，只挡“踢出”报到 lobby 之前的那一小段时间。
+   - 有座位但不在线的槽位也能踢（方案 §6 第 12 条：已开始的房间里掉线的人一直占着 lobby 的席位，要房主踢掉才空出来）：同样记下账号、删座位、报 `member_left{kicked}`，房主收到 `MemberLeft{kicked}` 作为确认。槽位上没有座位（没人用过、已经踢过）时什么也不做。
+   - 被踢的人不会再当候选：座位删了就不在 `YouAreHost` 的成员名单里；槽位不复用、账号进不来，这个槽位不会再有在线连接，房主声明的候选顺序（`Successors`）里留着它也会被跳过。
 8. 房间结束：
    - 房主走了而没有在线成员：立即关房（`Closed{room_closed}`）；
    - 换 host 时候选都不行（都超时或断开）：关房，在线的人收到 `Closed{room_closed}`；
@@ -183,7 +185,7 @@
 
 - 类型：`room.heartbeat`（建房时立即一条，之后每 `heartbeat_interval` 一条）、`room.member_joined`、`room.member_left`、`room.host_changed`（新房主回了 `HostReady`，`account`、`slot` 是新房主）、`room.closed`。房主断线进宽限期报 `member_left`（account 是房主），宽限期内回来报 `member_joined`。
 - 每条带 `seq`（同一房间严格递增，从 1 开始）与全量快照 `online`（在线账号，按槽位排列，含房主）、`host`、`epoch`。`host` / `epoch` 是**最近一个已就绪的房主**：选人期间仍是旧房主与旧 epoch，新房主回 `HostReady` 之后才变；所以 lobby 只按 epoch 做 CAS 就不会被半途的状态带偏。lobby 只用序号更大的报告改写在线名单，所以丢一条、乱序都不要紧。
-- `reason`（原因码的名字）：lobby 只读 `member_left` 上的 `kicked`，把账号记进被踢名单；其余只给日志与排查。`slot` lobby 不读。
+- `reason`（原因码的名字）：lobby 读 `member_left` 上的 `kicked`（把账号记进被踢名单）与 `left`（主动离开，已开始的房间也不再留席位，见 LOBBY.md §2.1）；其余按掉线处理，只给日志与排查。`slot` lobby 不读。
 - 发送是尽力而为的（`PublishOnce`）：发不出去只记日志。
 
 etcd 广播：Serve 开始后申请租约写键，房间数变了重写（每秒最多一次）；租约丢了重新申请；停机时撤销租约，键随之删除。

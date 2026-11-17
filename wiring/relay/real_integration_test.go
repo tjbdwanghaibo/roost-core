@@ -379,7 +379,8 @@ func TestRealRelayHostChangeKickAndVerification(t *testing.T) {
 
 // 开局后掉线的席位（方案 §6 第 12 条）在真实 NATS（+ 私有 etcd，有 ROOST_DATAENGINE_IT_REDIS_ADDR 时目录放真实 Redis）上：
 // 房间已开始，alice 断开连接，relay 报 member_left；lobby 的时钟拨过预留期后她仍占着席位——新人 join 被拒（room_started），
-// 她再 join 回到原座、拿新令牌，relay 向 lobby 验权通过，她重新连上，房主收到 member_joined。
+// 她再 join 回到原座、拿新令牌，relay 向 lobby 验权通过，她重新连上，房主收到 member_joined。之后她又掉线不回来，
+// 房主踢她的离线座位：lobby 收到 kicked，join 答 kicked，席位空出来。
 //
 //	source ~/.roost-it/roost-dataengine-it/env.sh && go test -tags integration -run TestRealRelay ./wiring/relay/
 func TestRealRelayStartedRoomKeepsADroppedMembersSeat(t *testing.T) {
@@ -550,6 +551,29 @@ func TestRealRelayStartedRoomKeepsADroppedMembersSeat(t *testing.T) {
 	returned.expectControl(t, wire.RelayOpWelcome, nil)
 	host.expectControl(t, wire.RelayOpMemberJoined, nil)
 	waitRoom(id, func(r lobby.Room) bool { m, ok := member(r, "acc-alice"); return ok && m.Online && len(r.Members) == 2 })
+
+	// 她又掉线、不回来：房主踢她的离线座位（槽位 2），relay 报 member_left{kicked}，lobby 记进被踢名单、让出席位；
+	// 她 join 答 kicked。房间改回 open 后，空出来的席位能让 bob 进（上限 2）。
+	_ = returned.conn.Close()
+	host.expectControl(t, wire.RelayOpMemberLeft, wire.EncodeRelayMember(wire.RelayMember{Reason: wire.RelayReasonDisconnected, Account: "acc-alice"}))
+	waitRoom(id, func(r lobby.Room) bool { m, ok := member(r, "acc-alice"); return ok && !m.Online })
+	if err := wire.WriteRelay(host.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpKick, Seq: 2}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	host.expectControl(t, wire.RelayOpMemberLeft, wire.EncodeRelayMember(wire.RelayMember{Reason: wire.RelayReasonKicked, Account: "acc-alice"}))
+	waitRoom(id, func(r lobby.Room) bool {
+		_, seated := member(r, "acc-alice")
+		return slices.Contains(r.Kicked, "acc-alice") && !seated && len(r.Members) == 1
+	})
+	if _, err := service.JoinRoom(ctx, "gt-alice", id, lobby.JoinRequest{Game: "party"}); !errors.Is(err, lobby.ErrKicked) {
+		t.Fatalf("kicked member returning: %v, want ErrKicked", err)
+	}
+	if _, err := service.SetRoomState(ctx, "gt-host", id, lobby.StateRequest{Game: "party", State: lobby.StateOpen}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.JoinRoom(ctx, "gt-bob", id, lobby.JoinRequest{Game: "party"}); err != nil {
+		t.Fatalf("bob into the seat freed by the kick: %v", err)
+	}
 }
 
 // rawPublisher 把 lobby 的命令经 NATS 发出（wiring/lobby 用 IClient.Publish，这里只有 RawClient）。

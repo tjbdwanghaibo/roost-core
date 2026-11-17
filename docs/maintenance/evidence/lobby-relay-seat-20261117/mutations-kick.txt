@@ -1,0 +1,29 @@
+== K1 撤掉“离线座位也能踢”（kick 不再遍历 r.seats）
+$ GOWORK=off go test -count=1 -run TestKickingAnOfflineSeat ./service/relay/
+--- FAIL: TestKickingAnOfflineSeat (2.00s)
+    host_test.go:274: slot 1 got channel 3 msg 4 seq 0 payload "\b"; want channel 3 msg 3 seq 2 payload "\x02acc-a"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay	2.568s
+$ source env.sh && GOWORK=off go test -tags integration -count=1 -run TestRealRelayStartedRoomKeepsADroppedMembersSeat ./wiring/relay/
+--- FAIL: TestRealRelayStartedRoomKeepsADroppedMembersSeat (4.26s)
+    real_integration_test.go:563: waiting for op 3: read tcp 127.0.0.1:63791->127.0.0.1:63784: i/o timeout
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/relay	4.908s
+== 恢复后
+ok  	github.com/tjbdwanghaibo/roost-core/service/relay	0.374s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	1.128s
+== K2 离线踢不删座位
+--- FAIL: TestKickingAnOfflineSeat (0.00s)
+    host_test.go:280: slot 1 got channel 3 msg 3 seq 2 payload "\x02acc-a"; want channel 3 msg 33 seq 0 payload "kick2"
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay	0.439s
+
+== K3 离线踢不记本地被踢
+--- FAIL: TestKickingAnOfflineSeat (0.00s)
+    host_test.go:278: slot 0 got channel 3 msg 1 seq 5 payload "\x02\x00\x00\x00\x01"; want channel 3 msg 4 seq 0 payload "\x02"
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay	0.460s
+
+== K4 离线踢不报 lobby
+--- FAIL: TestKickingAnOfflineSeat (3.00s)
+    host_test.go:275: no matching report among [{Type:room.heartbeat Room:room-kick-offline Relay:relay-1 Seq:1 Online:[host] Host:host Epoch:0 Account: Slot:0 Reason:} {Type:room.member_joined Room:room-kick-offline Relay:relay-1 Seq:2 Online:[host acc-a] Host:host Epoch:0 Account:acc-a Slot:2 Reason:} {Type:room.member_joined Room:room-kick-offline Relay:relay-1 Seq:3 Online:[host acc-a acc-b] Host:host Epoch:0 Account:acc-b Slot:3 Reason:} {Type:room.member_joined Room:room-kick-offline Relay:relay-1 Seq:4 Online:[host acc-a acc-b acc-c] Host:host Epoch:0 Account:acc-c Slot:4 Reason:} {Type:room.member_left Room:room-kick-offline Relay:relay-1 Seq:5 Online:[host acc-b acc-c] Host:host Epoch:0 Account:acc-a Slot:2 Reason:disconnected} {Type:room.member_left Room:room-kick-offline Relay:relay-1 Seq:7 Online:[acc-b acc-c] Host:host Epoch:0 Account:host Slot:1 Reason:idle_timeout}]
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay	3.482s
+

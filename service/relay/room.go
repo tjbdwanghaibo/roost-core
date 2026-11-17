@@ -586,6 +586,10 @@ func (r *room) sendLocked(from *conn, target uint32, data []byte) {
 
 // kick 是房主的踢人控制帧：踢出槽位 slot 上的成员，删掉它的座位并记下账号，房间存续期间不让它再进。
 // 报告里的原因是 kicked，lobby 据此把账号写进被踢名单（之后 join 与验权都拒绝它）。
+//
+// 有座位但不在线的账号也能踢（方案 §6 第 12 条：已开始的房间里掉线的人一直占着 lobby 的席位，要房主踢掉才空出来）：
+// 同样记下账号、删座位、报 member_left{kicked}，房主收到 MemberLeft{kicked} 作为确认。座位删掉后它的槽位不会再
+// 有连接（槽位不复用、账号进不来），所以候选顺序里留着这个槽位也选不到它。
 func (r *room) kick(from *conn, slot uint32) {
 	r.do(func(eff *effects) {
 		if r.closed || r.phase != phaseStable || from != r.host || slot == r.hostSlot {
@@ -596,6 +600,19 @@ func (r *room) kick(from *conn, slot uint32) {
 			delete(r.seats, target.account)
 			target.finish(wire.RelayReasonKicked, true)
 			r.removeLocked(target, wire.RelayReasonKicked, eff)
+			return
+		}
+		for account, seat := range r.seats {
+			if seat != slot {
+				continue
+			}
+			r.kicked[account] = true
+			delete(r.seats, account)
+			from.enqueueControl(wire.RelayOpMemberLeft, slot, wire.EncodeRelayMember(wire.RelayMember{Reason: wire.RelayReasonKicked, Account: account}))
+			report := r.reportLocked(EventMemberLeft)
+			report.Slot, report.Account, report.Reason = slot, account, wire.RelayReasonKicked.String()
+			eff.report(report)
+			return
 		}
 	})
 }

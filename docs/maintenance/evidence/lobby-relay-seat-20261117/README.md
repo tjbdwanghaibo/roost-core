@@ -56,7 +56,7 @@ seat 组证据（2026-11-17，大厅 / relay 实施：开局后掉线成员的�
 
 拿不准
 ------
-1. 【需要协调者 / 维护者定，阻塞决定的最后一句】relay 的踢人只作用于在线连接（service/relay/room.go 的 kick 用
+1. 【已定：协调者回复按 A 做，见文末“补充：踢离线座位”】relay 的踢人只作用于在线连接（service/relay/room.go 的 kick 用
    r.members[slot]，只含在线连接），房主踢掉线成员的离线槽位是空操作，relay 不报 member_left{kicked}（probe-offline-kick.txt
    实测）。所以“掉线不回来的人要房主踢掉才空出来”目前端到端做不到：这个席位要等房间关闭。lobby 侧已经就绪
    （member_left{kicked} 对任何非房主账号都记名单、让出席位，TestStartedRoomsReleaseSeatsOnKickLeaveAndClose 覆盖）。
@@ -84,4 +84,28 @@ seat 组证据（2026-11-17，大厅 / relay 实施：开局后掉线成员的�
 
 给协调者：KNOWN-LIMITS 建议
 --------------------------
-- 遗留（不是框架限制，等“拿不准”第 1 条定了再修）：relay 踢不动离线槽位，已开始房间里掉线不回来的人的席位只能等关房。
+- 无（“拿不准”第 1 条的离线踢人已按 A 修掉，见下）。
+
+补充：踢离线座位（协调者按“拿不准”第 1 条 A 授权，2026-11-17）
+--------------------------------------------------------------
+- service/relay/room.go kick：槽位上没有在线连接时，在 r.seats 里找这个槽位的账号：记本地被踢、删座位、
+  报 member_left{kicked}（Slot、Account），房主收到 MemberLeft{kicked} 作为确认。在线的情况不变。槽位上没有座位
+  （没人用过、已经踢过）时什么也不做。
+- 换 host 不会选到被踢的人：现有逻辑已经保证——pickCandidateLocked 只从 r.members（在线连接）里选，座位删掉后
+  you_are_host 的成员名单（seatsLocked 读 r.seats）不含它；槽位不复用、被踢账号进不来，successors 里留着这个槽位
+  也永远选不到。没有改换 host 的代码。
+- 测试：
+  - service/relay TestKickingAnOfflineSeat：successors [2,4]，2 掉线后被踢 → 房主收到 MemberLeft{kicked}、报告
+    member_left{kicked}、它再来被拒、再踢一次无事发生；房主离开后 you_are_host 给 4（不是 2），成员名单
+    "host@1:off acc-b@3:on acc-c@4:on" 不含被踢的。
+  - wiring/relay TestRealRelayStartedRoomKeepsADroppedMembersSeat 续了一段：alice 回座后又掉线，房主踢她的离线槽位 2
+    → lobby 记进 Kicked、席位让出（1 人）→ join 答 kicked → 改回 open 后 bob 进得来（上限 2）。
+- 变异（mutations-kick.txt）：K1 撤掉“离线座位也能踢”（单测与真实依赖用例都红）、K2 不删座位、K3 不记本地被踢、
+  K4 不报 lobby，全部变红后恢复。
+- tests-kick-race-count3.txt：service/relay/...、wiring/relay -race -count=3，集成用例 -race -count=3，vet，根包文档链接。
+- 文档：docs/framework/RELAY.md 控制帧表的 Kick、§3 第 7 步、§5 报告 reason（lobby 现在也读 left）。
+- CHANGELOG 建议追加：relay 的踢人控制帧对有座位但不在线的槽位也生效（记被踢、删座位、报 member_left{kicked}，
+  房主收到 MemberLeft{kicked} 确认）。
+- 拿不准：离线踢人时给房主发一条 MemberLeft{kicked} 确认（在线踢人本来就发）。协调者的要求只列了三件事，这一条是
+  为了让房主一侧（SDK）知道座位已删；如果不要，删掉 kick 里那一行 enqueueControl，并把单测与集成用例里等这条确认
+  的断言改成等报告。
