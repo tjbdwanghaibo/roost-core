@@ -411,6 +411,10 @@ func register{{.Entity.Name}}Entity() {
 			},
 {{- end}}
 		})
+{{- if and .RemoteV2 .Entity.SharedOwnership}}
+		// ownership=shared: the first claim of every entity of this kind writes a shared ownership record.
+		entity.DeclareRemoteSharedKind({{.Entity.EntityKind}})
+{{- end}}
 {{- if and .RemoteV2 .Entity.NoSnapshots}}
 		// snapshots=none: no Remote snapshot is written or published for this kind.
 		entity.DisableRemoteSnapshots({{.Entity.EntityKind}})

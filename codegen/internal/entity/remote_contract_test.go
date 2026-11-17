@@ -244,6 +244,62 @@ func TestSnapshotsNoneDropsTheRemoteSnapshots(t *testing.T) {
 	}
 }
 
+// ownership=shared（Remote 托管 kind 级选项，维护者 2026-11-18）：登记时把 kind 声明为共享 kind（首次认领一条插入就是
+// 共享记录），不写就不声明；exclusive 是缺省值的显式写法；不是 remote=managed 的实体、拼错的值在生成前被拒。
+func TestOwnershipSharedDeclaresASharedKind(t *testing.T) {
+	entities, pkg, err := parseDir(filepath.Join("testdata", "remote"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := func(ent EntityDef) string {
+		t.Helper()
+		out := filepath.Join(t.TempDir(), "guild_gen_wire.go")
+		if _, err := generate(ent, pkg, out, true); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	const declare = "entity.DeclareRemoteSharedKind(EntityKindGuild)"
+	if strings.Contains(render(entities[0]), declare) {
+		t.Fatalf("an entity without ownership=shared declares a shared kind")
+	}
+	shared := entities[0]
+	shared.SharedOwnership = true
+	if code := render(shared); !strings.Contains(code, declare) {
+		t.Fatalf("ownership=shared lacks %q", declare)
+	}
+
+	dir := t.TempDir()
+	source := "package inbox\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKindInbox entity.EntityKind = 241\n\n" +
+		"//roost:entity entityKind=EntityKindInbox category=entity.EntityCategoryRemote remote=managed ownership=shared\ntype Inbox struct {\n\t*entity.RemoteEntityBase\n\tentity.DaoManager\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "inbox.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := parseDir(dir)
+	if err != nil || len(parsed) != 1 || !parsed[0].SharedOwnership {
+		t.Fatalf("parsed ownership=shared: %+v err=%v", parsed, err)
+	}
+	for _, tc := range []struct {
+		params map[string]string
+		want   string
+	}{
+		{map[string]string{"ownership": "shared"}, "ownership=shared applies to a remote=managed entity"},
+		{map[string]string{"remote": "none", "ownership": "shared"}, "ownership=shared applies to a remote=managed entity"},
+		{map[string]string{"remote": "managed", "ownership": "public"}, `ownership="public" is not one of exclusive|shared`},
+	} {
+		if err := validateMarkerValues(tc.params); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: err = %v, want %q", tc.params, err, tc.want)
+		}
+	}
+	if err := validateMarkerValues(map[string]string{"remote": "managed", "ownership": "exclusive"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // 指向 snapshots=none kind 的 //roost:mirror 永远读不到东西：工程扫描时拒绝（跨包按常量名匹配）。
 func TestMirrorOfASnapshotlessKindIsRefused(t *testing.T) {
 	root := t.TempDir()

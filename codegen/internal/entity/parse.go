@@ -54,6 +54,12 @@ type EntityDef struct {
 	// _remote_entity_snapshots document, no L2 entry, no interest broadcast),
 	// and nothing can read it as a //roost:mirror or a RemoteViewRef.
 	NoSnapshots bool
+	// SharedOwnership: ownership=shared on a remote=managed entity — every
+	// entity of the kind is shared from its first claim: the claim inserts a
+	// shared ownership record in one write (no exclusive claim followed by a
+	// switch to shared), and the kind cannot leave shared mode. The generated
+	// register<Entity>Entity calls entity.DeclareRemoteSharedKind.
+	SharedOwnership bool
 	// Preload: preload=startup. On a local entity (no remote=managed) the
 	// startup preload loads this server's documents of the kind
 	// (wiring/dataengine.LocalPreloadMod); every DAO must then be dbscope=sid.
@@ -282,6 +288,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					}
 					ent.RemotePolicy = parseRemoteParam(m.params["remote"])
 					ent.NoSnapshots = m.params["snapshots"] == "none"
+					ent.SharedOwnership = m.params["ownership"] == "shared"
 					if pool := m.params["businessPool"]; pool != "" {
 						if pool != "short" && pool != "long" {
 							return nil, fmt.Errorf("invalid businessPool %q: want short or long", pool)
@@ -374,6 +381,17 @@ func validateMarkerValues(params map[string]string) error {
 			}
 		default:
 			return fmt.Errorf(`snapshots=%q is not one of published|none`, v)
+		}
+	}
+	if v, ok := params["ownership"]; ok {
+		switch v {
+		case "exclusive":
+		case "shared":
+			if parseRemoteParam(params["remote"]) != "entity.RemotePolicyManaged" {
+				return errors.New(`ownership=shared applies to a remote=managed entity (only those have Remote ownership records)`)
+			}
+		default:
+			return fmt.Errorf(`ownership=%q is not one of exclusive|shared`, v)
 		}
 	}
 	if v, ok := params["category"]; ok && !validCategoryParam(v) {

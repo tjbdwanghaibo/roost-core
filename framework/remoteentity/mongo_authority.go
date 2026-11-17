@@ -18,12 +18,13 @@ import (
 // 权威；兜底是投影元数据 CAS 上的 _ver == BaseVersion 与所有权代际（authorityCommitFilter）。
 //
 // ClaimAuthorityState 是带回权威状态的认领：认领之后的对齐直接用它，不再读一次（取得归属这个对齐时刻不另发命令）。
+// shared 为 true（实体的 kind 声明了 ownership=shared，entity.RemoteKindShared）时插入的第一代记录就是共享的。
 //
 // GrantWrite 只用于共享模式（分布式锁之下），每次调用必须使用全新的 token；未知结果不能换 token 自动重试。
 type WriteAuthority interface {
 	entity.IRemoteEntityOwnershipStore
 	ReadAuthorityState(context.Context, int64) (AuthorityState, bool, error)
-	ClaimAuthorityState(ctx context.Context, id int64, owner int32) (AuthorityState, error)
+	ClaimAuthorityState(ctx context.Context, id int64, owner int32, shared bool) (AuthorityState, error)
 	GrantWrite(context.Context, int64, string) (WriteGrant, error)
 }
 
@@ -118,9 +119,10 @@ func (s *MongoCommitter) ReadAuthorityState(ctx context.Context, id int64) (Auth
 	return AuthorityState{Version: d.Version, Ownership: d.lease()}, true, nil
 }
 
-// ClaimOwnership 见 ClaimAuthorityState；只返回认领后的所有权。
+// ClaimOwnership 见 ClaimAuthorityState（独占认领）；只返回认领后的所有权。Manager 的认领（写准入与
+// ClaimRemoteOwnership）都经 ClaimAuthorityState，按 kind 的共享声明选模式，不经这里。
 func (s *MongoCommitter) ClaimOwnership(ctx context.Context, id int64, owner int32) (entity.RemoteEntityMarkerLease, error) {
-	state, err := s.ClaimAuthorityState(ctx, id, owner)
+	state, err := s.ClaimAuthorityState(ctx, id, owner, false)
 	return state.Ownership, err
 }
 
@@ -130,11 +132,15 @@ func (s *MongoCommitter) ClaimOwnership(ctx context.Context, id int64, owner int
 // 就是刚插入的这份，不必再读。插入失败——撞上已有记录（并发认领赢了，或记录早已存在），或结果未知——读回一次：
 // 记录的 owner 是别人返回 ErrRemoteFenced；是 owner（自己早先认领过，或这次插入其实已经成功）就返回读到的状态，
 // 版本可能比调用方的本地实例新，由对齐路径换掉落后的实例。
-func (s *MongoCommitter) ClaimAuthorityState(ctx context.Context, id int64, owner int32) (AuthorityState, error) {
+//
+// shared 为 true 时插入的记录 _owner_shared 就是 true（共享 kind，一条插入、原子，没有独占的中间态），owner 只是第一个
+// 认领者、不再参与写准入；撞上已有记录时读回的是共享记录就照样返回它（并发首写输了的一方据此按共享模式准入，不 fence），
+// 读回的是别人的独占记录仍 fence。
+func (s *MongoCommitter) ClaimAuthorityState(ctx context.Context, id int64, owner int32, shared bool) (AuthorityState, error) {
 	if id == 0 || owner == 0 {
 		return AuthorityState{}, entity.ErrRemoteFenced
 	}
-	d := mongoAuthority{ID: id, Enabled: true, Owner: owner, Marker: 1, Route: 1}
+	d := mongoAuthority{ID: id, Enabled: true, Owner: owner, Shared: shared, Marker: 1, Route: 1}
 	inserted := true
 	if _, err := s.controlDB().Collection(remoteMetaCollection).InsertOne(ctx, d); err != nil {
 		inserted = false
@@ -142,7 +148,7 @@ func (s *MongoCommitter) ClaimAuthorityState(ctx context.Context, id int64, owne
 			return AuthorityState{}, err
 		}
 	}
-	if d.Owner != owner {
+	if d.Owner != owner && !(shared && d.Shared) {
 		return AuthorityState{}, entity.ErrRemoteFenced
 	}
 	return AuthorityState{Version: d.Version, Ownership: d.lease(), Claimed: inserted}, nil

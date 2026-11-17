@@ -450,10 +450,26 @@ func newWriterNodesOn(t *testing.T, db fmongo.IMongo, rawID int64, wrap func(int
 	t.Helper()
 	const kind entity.EntityKind = 125
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	redis := &authorityLockRedis{unlockEvalStub: newUnlockEvalStub()}
+	return newWriterNodes(t, writerNodesSetup{db: db, database: "control", redis: &authorityLockRedis{unlockEvalStub: newUnlockEvalStub()}, kind: kind}, rawID, wrap, sids...)
+}
+
+// writerNodesSetup 是一组写者进程共用的依赖：Mongo 与库名（权威）、Redis（版本锁）与 kind（调用方先登记好）。
+// 替身组合见 newWriterNodesOn；真实依赖用例换成真实 Mongo / Redis。
+type writerNodesSetup struct {
+	db       fmongo.IMongo
+	database string
+	redis    fredis.IRedis
+	kind     entity.EntityKind
+	// configure 在构造 Manager 之前改各进程的配置（例如真实 Redis 上的锁键前缀）；nil 不改。
+	configure func(*Config)
+}
+
+func newWriterNodes(t *testing.T, setup writerNodesSetup, rawID int64, wrap func(int32, *MongoCommitter) StorageBackend, sids ...int32) []sharedWriterNode {
+	t.Helper()
+	kind, redis := setup.kind, setup.redis
 	nodes := make([]sharedWriterNode, 0, len(sids))
 	for _, sid := range sids {
-		store := newBoundMongoCommitter(db, "control", sid, 0)
+		store := newBoundMongoCommitter(setup.db, setup.database, sid, 0)
 		manager := entity.NewEntityManager()
 		access := entity.NewManagerAccess(manager)
 		loader := &authorityLoader{store: store, manager: manager, kind: kind, rawID: rawID}
@@ -472,6 +488,9 @@ func newWriterNodesOn(t *testing.T, db fmongo.IMongo, rawID int64, wrap func(int
 		cfg.FinalizeRetryInterval = 10 * time.Millisecond
 		// 所有权在两个进程之间来回转，热 marker 缓存会让刚被转回的一方在 TTL 内仍按旧所有者拒绝；每次准入都读权威。
 		cfg.MarkerCacheTTL = time.Nanosecond
+		if setup.configure != nil {
+			setup.configure(cfg)
+		}
 		mgr := NewManager(NewVersionedLockFactory(redis, store), cfg, sid)
 		mgr.SetBackend(backend)
 		mgr.SetOwnershipStore(store)
@@ -1589,4 +1608,192 @@ func TestReadsBeforeWritesOnSharedAndExclusiveEntities(t *testing.T) {
 			t.Fatalf("A read=%q", got)
 		}
 	})
+}
+
+// ---- 共享 kind（//roost:entity … ownership=shared，维护者 2026-11-18 定 A）----
+//
+// 声明共享的 kind，第一次认领一条插入就写成共享的所有权记录：没有“先独占认领、再切共享”的中间态。修前伴生实体（facebook）
+// 要在业务里“认领 → 切共享”两步：两个进程并发首写时输的一方被 fence（facebook 报 ErrOpening），赢的一方在两步之间崩溃时
+// 别的进程无限期写不进来。
+
+// sharedKindForTest 是本包测试里唯一声明为共享 kind 的种类（声明是进程级的，别的用例不要用它）。
+const sharedKindForTest entity.EntityKind = 147
+
+var registerSharedKindForTest = sync.OnceFunc(func() {
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: sharedKindForTest, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	entity.DeclareRemoteSharedKind(sharedKindForTest)
+})
+
+// newSharedKindNodes 建共用一个 Mongo 权威替身与 Redis 版本锁替身的几个进程（sid 可重复：同 sid 重启），各带正式 Nest。
+func newSharedKindNodes(t *testing.T, rawID int64, sids ...int32) []exclusiveNestNode {
+	t.Helper()
+	registerSharedKindForTest()
+	setup := writerNodesSetup{db: newRemoteMongoFake(), database: "control", redis: &authorityLockRedis{unlockEvalStub: newUnlockEvalStub()}, kind: sharedKindForTest}
+	nodes := newWriterNodes(t, setup, rawID, nil, sids...)
+	out := make([]exclusiveNestNode, len(nodes))
+	for i, node := range nodes {
+		out[i] = startExclusiveNest(t, node)
+	}
+	return out
+}
+
+// 两个进程都把实体建进内存（业务的 GetOrCreate），都看到“没有所有权记录”，先后首写：先插入的一方的记录直接是共享的
+// （代际 1，没有切共享那一步的代际推进）；后到的一方插入撞上已有记录、读回是共享记录，照常按共享模式准入（落后的本地
+// 实例从权威重载），不被 fence。之后两边都能读写，读到对方的修改。另跑一组真正并发的首写，都成功。
+func TestSharedKindFirstWritesFromTwoProcessesBothSucceed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodes := newSharedKindNodes(t, 2341, 1000, 1001)
+	a, b := nodes[0], nodes[1]
+	id := testRemoteFullIDWithKind(2341, 1, sharedKindForTest)
+	for _, n := range nodes {
+		if _, err := n.loader.LoadEntity(ctx, id, sharedKindForTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// B 已经读到“没有记录”并缓存（一小时内准入不再读权威，直接认领）：等价于两个进程并发首写时都在对方插入之前查过。
+	b.mgr.cfg.MarkerCacheTTL = time.Hour
+	meta := entity.ResolveEntityID(id)
+	wrapper := b.mgr.getOrCreate(meta.FullID, meta.Category, meta.Kind)
+	if err := wrapper.refreshMarked(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := wrapper.cachedOwnership(); found {
+		t.Fatal("B cached an ownership record before anyone claimed")
+	}
+	wrapper.release()
+
+	if err := a.writeNest(ctx, id, "A1", ""); err != nil {
+		t.Fatalf("A first write: %v", err)
+	}
+	if doc, ok := readMeta(t, a.sharedWriterNode, id); !ok || !doc.Shared || doc.Owner != a.sid || doc.Marker != 1 || doc.Version != 1 {
+		t.Fatalf("ownership record after A's first write: %+v found=%v; want shared from the claim (owner %d, epoch 1, version 1)", doc, ok, a.sid)
+	}
+	if err := b.writeNest(ctx, id, "", "B1"); err != nil {
+		t.Fatalf("B first write after A's claim: %v", err)
+	}
+	for _, n := range nodes {
+		if got := n.read(t, ctx, id); got != "a=A1;b=B1@2" {
+			t.Fatalf("sid %d read=%q, want both first writes %q", n.sid, got, "a=A1;b=B1@2")
+		}
+	}
+	if err := a.writeNest(ctx, id, "A2", ""); err != nil {
+		t.Fatalf("A second write: %v", err)
+	}
+	if got := b.read(t, ctx, id); got != "a=A2;b=B1@3" {
+		t.Fatalf("B read after A's second write=%q", got)
+	}
+	if lease, found, err := b.mgr.GetRemoteOwnership(ctx, id); err != nil || !found || !lease.Shared {
+		t.Fatalf("ownership: %+v found=%v err=%v; want shared", lease, found, err)
+	}
+
+	t.Run("concurrent", func(t *testing.T) {
+		for i := range int64(8) {
+			raw := 2350 + i
+			id := testRemoteFullIDWithKind(raw, 1, sharedKindForTest)
+			nodes := newSharedKindNodes(t, raw, 1000, 1001)
+			for _, n := range nodes {
+				if _, err := n.loader.LoadEntity(ctx, id, sharedKindForTest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			changes := [][2]string{{"A", ""}, {"", "B"}}
+			errs := make(chan error, len(nodes))
+			start := make(chan struct{})
+			for j, n := range nodes {
+				go func() {
+					<-start
+					errs <- n.writeNest(ctx, id, changes[j][0], changes[j][1])
+				}()
+			}
+			close(start)
+			for range nodes {
+				if err := <-errs; err != nil {
+					t.Fatalf("entity %d: concurrent first write: %v", raw, err)
+				}
+			}
+			if got := nodes[0].read(t, ctx, id); got != "a=A;b=B@2" {
+				t.Fatalf("entity %d: read=%q after both first writes", raw, got)
+			}
+		}
+	})
+}
+
+// 首写的进程认领之后、提交之前崩溃（这里：准入认领后放弃这笔事务，进程不再出现）：记录已经是共享的空认领，没有
+// “切共享”这一步可以停在半路。从没碰过它的进程照常新建、写入；同 sid 重启的进程读到并接着写。
+func TestSharedKindClaimerCrashLeavesOthersWriting(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodes := newSharedKindNodes(t, 2342, 1000, 1001, 1000)
+	a, b, restarted := nodes[0], nodes[1], nodes[2]
+	id := testRemoteFullIDWithKind(2342, 1, sharedKindForTest)
+	if _, err := a.loader.LoadEntity(ctx, id, sharedKindForTest); err != nil {
+		t.Fatal(err)
+	}
+	batch, err := a.mgr.PrepareRemoteWriteBatch(ctx, []int64{id})
+	if err != nil {
+		t.Fatalf("A admission: %v", err)
+	}
+	_ = batch.Abort(ctx, errors.New("crashed before commit"))
+	_ = batch.Close(ctx)
+	if doc, ok := readMeta(t, a.sharedWriterNode, id); !ok || !doc.Shared || doc.Version != 0 {
+		t.Fatalf("ownership record left by A's claim: %+v found=%v; want a shared record without commits", doc, ok)
+	}
+
+	if _, err := b.loader.LoadEntity(ctx, id, sharedKindForTest); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.writeNest(ctx, id, "", "B1"); err != nil {
+		t.Fatalf("B write after A crashed holding the first claim: %v", err)
+	}
+	if got := restarted.read(t, ctx, id); got != "a=;b=B1@1" {
+		t.Fatalf("restarted A read=%q", got)
+	}
+	if err := restarted.writeNest(ctx, id, "A1", ""); err != nil {
+		t.Fatalf("restarted A write: %v", err)
+	}
+	if got := b.read(t, ctx, id); got != "a=A1;b=B1@2" {
+		t.Fatalf("B read=%q", got)
+	}
+}
+
+// 共享 kind 的其余所有权操作：ClaimRemoteOwnership 同样一条插入就是共享，别的进程再调答出这条共享记录（不 fence）；
+// 不能退出共享（LeaveRemoteSharedMode 拒绝，记录不变）；请求一个内存与权威里都不存在的共享 kind 实体仍不认领；
+// 非持久所有权存储（Redis marker 等兼容装配）不能原子地写共享记录，认领拒绝。
+func TestSharedKindOwnershipOperations(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodes := newSharedKindNodes(t, 2343, 1000, 1001)
+	a, b := nodes[0], nodes[1]
+	id := testRemoteFullIDWithKind(2343, 1, sharedKindForTest)
+	claimed, err := a.mgr.ClaimRemoteOwnership(ctx, id)
+	if err != nil || !claimed.Shared || claimed.OwnerSid != a.sid || claimed.MarkerEpoch != 1 {
+		t.Fatalf("A claim of a shared kind: %+v err=%v; want shared at epoch 1", claimed, err)
+	}
+	if again, err := b.mgr.ClaimRemoteOwnership(ctx, id); err != nil || again != claimed {
+		t.Fatalf("B claim after A: %+v err=%v; want A's shared record %+v", again, err, claimed)
+	}
+	if _, err := a.mgr.LeaveRemoteSharedMode(ctx, id); !errors.Is(err, entity.ErrRemoteOwnerTransition) {
+		t.Fatalf("leave shared mode on a shared kind: %v; want ErrRemoteOwnerTransition", err)
+	}
+	if doc, ok := readMeta(t, a.sharedWriterNode, id); !ok || !doc.Shared || doc.Marker != 1 {
+		t.Fatalf("ownership record after the refused leave: %+v found=%v", doc, ok)
+	}
+
+	absent := testRemoteFullIDWithKind(2344, 1, sharedKindForTest)
+	a.loader.absentIsNotFound = true
+	if _, err := a.engine.Request(ctx, exclusiveReadHandler, absent, nest.NewParams()); err == nil {
+		t.Fatal("read of a shared-kind entity that does not exist succeeded")
+	} else if code, _ := errcode.ClientError(err); code != errcode.CodeEntityNotFound {
+		t.Fatalf("read of a shared-kind entity that does not exist: code %d err=%v; want entity_not_found", code, err)
+	}
+	if doc, ok := readMeta(t, a.sharedWriterNode, absent); ok {
+		t.Fatalf("read of a shared-kind entity that does not exist claimed it: %+v", doc)
+	}
+
+	marker := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	marker.SetOwnershipStore(newMockMarkerStore())
+	if _, err := marker.ClaimRemoteOwnership(ctx, id); !errors.Is(err, entity.ErrRemoteWriteCapabilityDisabled) {
+		t.Fatalf("shared-kind claim on a non-durable ownership store: %v; want ErrRemoteWriteCapabilityDisabled", err)
+	}
 }

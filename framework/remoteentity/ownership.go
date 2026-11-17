@@ -75,6 +75,9 @@ func (m *Manager) heldOwnership(id int64) (entity.RemoteEntityMarkerLease, bool)
 }
 
 // ClaimRemoteOwnership 原子地创建第一代本地所有权。对本服务幂等；别的服务赢得认领时按 fence 失败。
+//
+// kind 声明了 ownership=shared 时创建的第一代记录就是共享的（与写准入的首写认领同一个 claimOwnership）；已有共享记录
+// （包括别的服务先认领的）时直接返回它，不 fence：共享模式下 owner 不参与写准入。
 func (m *Manager) ClaimRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, false)
 	if err != nil {
@@ -84,22 +87,28 @@ func (m *Manager) ClaimRemoteOwnership(ctx context.Context, id int64) (entity.Re
 
 	expected, found := wrapper.cachedOwnership()
 	if found {
-		if expected.OwnerSid == m.localSid {
+		if wrapper.acceptsClaimedLease(expected) {
 			return expected, nil
 		}
 		return entity.RemoteEntityMarkerLease{}, ownershipFenceError(wrapper.id, expected)
 	}
-	next, err := m.ownershipStore.ClaimOwnership(ctx, wrapper.id, m.localSid)
+	authority, _ := m.ownershipStore.(WriteAuthority)
+	claimed, err := wrapper.claimOwnership(ctx, authority)
 	if err != nil {
 		_ = wrapper.refreshMarked(ctx)
 		current, _ := wrapper.cachedOwnership()
 		return entity.RemoteEntityMarkerLease{}, errors.Join(ownershipFenceError(wrapper.id, current), err)
 	}
-	if !validOwnershipLease(next) || next.OwnerSid != m.localSid {
+	next := claimed.Ownership
+	if !wrapper.acceptsClaimedLease(next) {
 		return entity.RemoteEntityMarkerLease{}, fmt.Errorf("%w: invalid claimed lease for entity=%d", entity.ErrRemoteFenced, wrapper.id)
 	}
 	wrapper.applyOwnership(next)
-	if err := m.applyLiveOwnership(ctx, wrapper, next, entity.RemoteOwnershipLocalOwned, 0); err != nil {
+	state := entity.RemoteOwnershipLocalOwned
+	if next.Shared {
+		state = entity.RemoteOwnershipShared
+	}
+	if err := m.applyLiveOwnership(ctx, wrapper, next, state, 0); err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
 	}
 	m.registerRoute(ctx, wrapper.id, wrapper.kind, next)
@@ -137,7 +146,14 @@ func (m *Manager) EnterRemoteSharedMode(ctx context.Context, id int64) (entity.R
 }
 
 // LeaveRemoteSharedMode 在分布式锁下把实体从共享模式切回本服务独占；CAS 结果未知时按 settleIndeterminateOwnership 收敛。
+//
+// kind 声明了 ownership=shared 的实体不能退出共享：声明承诺它的每条记录都是共享的，退回独占就又回到“只有 owner 能写、
+// 别的进程被 fence”的状态。不取任何锁，直接返回 ErrRemoteOwnerTransition。
 func (m *Manager) LeaveRemoteSharedMode(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
+	if kind := entity.ResolveEntityID(id).Kind; entity.RemoteKindShared(kind) {
+		return entity.RemoteEntityMarkerLease{}, fmt.Errorf("%w: entity=%d kind=%d is declared ownership=shared and cannot leave shared mode",
+			entity.ErrRemoteOwnerTransition, id, kind)
+	}
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, true)
 	if err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
