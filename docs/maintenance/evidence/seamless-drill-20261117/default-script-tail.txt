@@ -1,0 +1,5 @@
+seamless: work dir /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T//roost-seamless.Wsh4HJ, evidence /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/seamless/out-default
+scripts/test-seamless-demo.sh: line 390: 54270 Killed: 9               ./bin/app game --sid "$1" --config "configs/service/config.game$1.yaml" >> ".dev/game$1.log" 2>&1
+scripts/test-seamless-demo.sh: line 390: 54329 Killed: 9               ./bin/app game --sid "$1" --config "configs/service/config.game$1.yaml" >> ".dev/game$1.log" 2>&1
+seamless: all steps passed; evidence in /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/seamless/out-default
+exit=0

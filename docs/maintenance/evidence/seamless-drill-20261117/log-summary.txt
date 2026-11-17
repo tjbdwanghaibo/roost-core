@@ -1,0 +1,21 @@
+== default: log levels across all processes
+3550 "level":"INFO"
+  26 "level":"WARN"
+-- WARN (grouped by the first 90 chars of msg)
+  16 saga steps: Mongo transactionLifetimeLimitSeconds exceeds the default step budget window; 
+   3 scene: subscribe
+   2 entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drai
+   2 async handler failed
+   1 slow dispatch
+   1 chat server: no prune channels configured (chat.prune_channels / Mod.WithPruneChannels); r
+   1 Msg{Name:handlerAllianceFound,Type:Multi,Tids:[4611686018427389985,4611686018529795109]}
+-- addresses the processes logged ("addr")
+"addr":"127.0.0.1:11081" "addr":"127.0.0.1:12100" "addr":"127.0.0.1:12101" "addr":"127.0.0.1:12102" "addr":"127.0.0.1:12103" "addr":"127.0.0.1:12104" "addr":"127.0.0.1:12105" "addr":"127.0.0.1:12106" "addr":"127.0.0.1:12107" "addr":"127.0.0.1:12108" "addr":"127.0.0.1:12109" "addr":"127.0.0.1:12110" "addr":"127.0.0.1:12201" "addr":"127.0.0.1:12202" "addr":"127.0.0.1:12203" "addr":"127.0.0.1:12204" "addr":"127.0.0.1:47379" "addr":"[::]:10000" "addr":"[::]:10001" "addr":"[::]:10002" "addr":"[::]:10003" "addr":"[::]:10004" 
+== terrain: log levels across all processes
+6423 "level":"INFO"
+  11 "level":"WARN"
+-- WARN (grouped by the first 90 chars of msg)
+  10 saga steps: Mongo transactionLifetimeLimitSeconds exceeds the default step budget window; 
+   1 chat server: no prune channels configured (chat.prune_channels / Mod.WithPruneChannels); r
+-- addresses the processes logged ("addr")
+"addr":"127.0.0.1:11081" "addr":"127.0.0.1:12100" "addr":"127.0.0.1:12101" "addr":"127.0.0.1:12102" "addr":"127.0.0.1:12103" "addr":"127.0.0.1:12104" "addr":"127.0.0.1:12105" "addr":"127.0.0.1:12106" "addr":"127.0.0.1:12107" "addr":"127.0.0.1:12108" "addr":"127.0.0.1:12109" "addr":"127.0.0.1:12110" "addr":"127.0.0.1:12201" "addr":"127.0.0.1:12202" "addr":"127.0.0.1:12204" "addr":"127.0.0.1:47379" "addr":"[::]:10000" "addr":"[::]:10001" "addr":"[::]:10002" "addr":"[::]:10004" 

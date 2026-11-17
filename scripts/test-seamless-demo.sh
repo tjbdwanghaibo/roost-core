@@ -21,6 +21,12 @@
 # game 进程配同一个 4 × 2 块的平地地形包（演练程序写出，70m 的带让每个格装下整张图）；起 sid 1001（格 A）、
 # 1002（格 B）、1004（只做 Base），不起普通场景 sid 1003、不跑它的机器人。最后一步 terrain_building_view：连在 1004 上的
 # 玩家在格 A 放一座建筑（转发给 A 执行），连在 A 上的玩家主视野收到它、拆除后收到 remove。不设（缺省）时是原来的演练，行为不变。
+# ROOST_SEAMLESS_PORT_OFFSET=N（缺省 0，行为与不设时完全一致）：本脚本用到的全部本机端口整体加 N——生成工程配置里的
+# 玩家 TCP 7000、ops 9100～9110、etcd 注册地址 9000～9010、account 的 web 8081（含 portal 目录里的 7000），派生的
+# sid 1001～1004（玩家 TCP 7001～7004、ops 9201～9204、注册地址 8901～8904），drill 的 -endpoints / -ops、loadtest
+# 的 -endpoint / -game-ops、Robot 快照的 ops，以及缺省的 etcd 端口（58379 / 58380；显式给 ROOST_SEAMLESS_ETCD_PORT
+# 时按给的用，不再加偏移）。端口被占时照旧拒绝跑；同一台机器上另有 demo 占着缺省端口时用它错开。改后的配置与
+# endpoints 是否一致由脚本在起进程前核对一遍。
 # ROOST_SEAMLESS_PROJECT_HOOK：生成工程之后、编译之前在工程目录里执行的一条 shell 命令（变异验证用：例如删掉装地面
 # 钩子的那一行，确认演练会变红）。
 # Optional Robot load after the fault drill: ROOST_SEAMLESS_ROBOTS=1000,
@@ -42,7 +48,11 @@ edit_file() {
 : "${ROOST_DATAENGINE_IT_NATS_URL:?private NATS required}"
 : "${ROOST_DATAENGINE_IT_REDIS_ADDR:?private Redis required}"
 : "${ROOST_SEAMLESS_OUT:?evidence directory required (absolute)}"
-etcd_port="${ROOST_SEAMLESS_ETCD_PORT:-58379}"
+port_offset="${ROOST_SEAMLESS_PORT_OFFSET:-0}"
+[[ "$port_offset" =~ ^[0-9]+$ ]] || { echo "ROOST_SEAMLESS_PORT_OFFSET must be a non-negative integer" >&2; exit 2; }
+# p 把生成配置里的缺省端口换成本次实际用的端口（加偏移）。
+p() { echo "$(($1 + port_offset))"; }
+etcd_port="${ROOST_SEAMLESS_ETCD_PORT:-$(p 58379)}"
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/roost-seamless.XXXXXX")"
 project="$work_dir/cwdemo"
@@ -60,8 +70,17 @@ fi
 extra_sids="1001 1002 1003 1004"
 [[ "$terrain" == 1 ]] && extra_sids="1001 1002 1004"
 
-# 固定端口（demo 生成配置）都要空着：别人的 demo 正在用时不跑。
-for port in 7000 7001 7002 7003 7004 9000 9010 9100 9101 9102 9103 9104 9105 9106 9107 9108 9109 9110 9201 9202 9203 9204 8901 8902 8903 8904 "$etcd_port" "$((etcd_port + 1))"; do
+# 固定端口（demo 生成配置，加偏移后）都要空着：别人的 demo 正在用时不跑。8081 是 account 的 web（portal）监听。
+ports=()
+for port in 7000 7001 7002 7003 7004 8081 9000 9010 9100 9101 9102 9103 9104 9105 9106 9107 9108 9109 9110 9201 9202 9203 9204 8901 8902 8903 8904; do
+	ports+=("$(p "$port")")
+done
+ports+=("$etcd_port" "$((etcd_port + 1))")
+for port in "${ports[@]}"; do
+	if [[ "$port" -lt 1 || "$port" -gt 65535 ]]; then
+		echo "port $port is out of range (ROOST_SEAMLESS_PORT_OFFSET=$port_offset); pick a smaller offset or set ROOST_SEAMLESS_ETCD_PORT" >&2
+		exit 2
+	fi
 	if nc -z 127.0.0.1 "$port" 2>/dev/null; then
 		echo "port $port is in use; refusing to run" >&2
 		exit 2
@@ -130,6 +149,11 @@ go build -mod=mod -o "$work_dir/drill" "$work_dir/drillsrc/drill.go" "$work_dir/
 # 全部配置指向私有依赖；JetStream 流缩到 64MB；单实例锁缩短（kill -9 后的重启只等 ttl）。
 for f in configs/service/config.*.yaml; do
 	case "$f" in *.prod.example.yaml) continue ;; esac
+	# 端口偏移先做（这时配置里只有生成的缺省地址，私有依赖的地址还没换进来，不会被误加）：demo 自己的端口是
+	# 127.0.0.1 / 0.0.0.0 上的 7xxx、80xx、90xx、91xx；依赖的缺省端口（27017、4222、6379、2379）不在这些段里。
+	if [[ "$port_offset" != 0 ]]; then
+		ROOST_PORT_OFFSET="$port_offset" perl -pi -e 's/\b(127\.0\.0\.1|0\.0\.0\.0):(7\d{3}|80\d{2}|9[01]\d{2})\b/"$1:".($2+$ENV{ROOST_PORT_OFFSET})/ge' "$f"
+	fi
 	edit_file \
 		-e "s#mongodb://127.0.0.1:27017/?replicaSet=rs0#$ROOST_DATAENGINE_IT_MONGO_URI#" \
 		-e "s#nats://127.0.0.1:4222#$nats_url#" \
@@ -246,16 +270,37 @@ edit_file -e "s/^    world: cwdemo$/    world: $world/" configs/service/config.g
 
 derive() { # sid ops client advertise source
 	sed -e "s/^\(  *\)sid: .*/\1sid: $1/" -e "s/^sid: .*/sid: $1/" \
-		-e "s#^\(  *\)addr: \(.*\):9100\$#\1addr: \2:$2#" \
-		-e "s#^\(  *\)addr: \(.*\):7000\$#\1addr: \2:$3#" \
-		-e "s#^\(  *\)advertise_addr: \(.*\):9000\$#\1advertise_addr: \2:$4#" \
+		-e "s#^\(  *\)addr: \(.*\):$(p 9100)\$#\1addr: \2:$2#" \
+		-e "s#^\(  *\)addr: \(.*\):$(p 7000)\$#\1addr: \2:$3#" \
+		-e "s#^\(  *\)advertise_addr: \(.*\):$(p 9000)\$#\1advertise_addr: \2:$4#" \
 		"$5" >"configs/service/config.game$1.yaml"
 }
-derive 1001 9201 7001 8901 configs/service/config.game.yaml
-derive 1002 9202 7002 8902 configs/service/config.game.yaml
-derive 1004 9204 7004 8904 configs/service/config.game.yaml
+derive 1001 "$(p 9201)" "$(p 7001)" "$(p 8901)" configs/service/config.game.yaml
+derive 1002 "$(p 9202)" "$(p 7002)" "$(p 8902)" configs/service/config.game.yaml
+derive 1004 "$(p 9204)" "$(p 7004)" "$(p 8904)" configs/service/config.game.yaml
 # sid 1003 没有 scene.partition：普通场景（开地形的演练不起它）。
-[[ "$terrain" == 1 ]] || derive 1003 9203 7003 8903 "$work_dir/config.game.ordinary.yaml"
+[[ "$terrain" == 1 ]] || derive 1003 "$(p 9203)" "$(p 7003)" "$(p 8903)" "$work_dir/config.game.ordinary.yaml"
+
+# 起进程前核对：每个 game 配置的玩家 TCP、ops、注册地址就是下面 endpoints / -ops 用的端口；其余服务的 ops 与 account
+# 的 web / portal 目录都已加偏移。不一致就停（偏移漏改一处时，演练会连到别人的进程或连不上）。
+check_port() { # file key port
+	grep -Eq "^ +$2: [0-9.]+:$3\$" "$1" || { echo "seamless: $1 has no '$2: …:$3' after the port offset" >&2; exit 1; }
+}
+for sid in 1000 1001 1002 1003 1004; do
+	[[ "$sid" == 1003 && "$terrain" == 1 ]] && continue
+	f=configs/service/config.game$sid.yaml
+	[[ "$sid" == 1000 ]] && f=configs/service/config.game.yaml
+	if [[ "$sid" == 1000 ]]; then ops=9100; else ops=$((9200 + sid - 1000)); fi
+	check_port "$f" addr "$(p "$ops")"
+	check_port "$f" addr "$(p $((7000 + sid - 1000)))"
+	if [[ "$sid" == 1000 ]]; then check_port "$f" advertise_addr "$(p 9000)"; else check_port "$f" advertise_addr "$(p $((8900 + sid - 1000)))"; fi
+done
+svc_ops=(account:9101 activity:9102 chat:9103 global:9104 mail:9105 match:9106 platform:9107 rank:9108 session:9109 alliance:9110)
+for entry in "${svc_ops[@]}"; do
+	check_port "configs/service/config.${entry%%:*}.yaml" addr "$(p "${entry##*:}")"
+done
+check_port configs/service/config.account.yaml addr "$(p 8081)"
+grep -Eq "^ +\"1000\": 127\.0\.0\.1:$(p 7000)\$" configs/service/config.account.yaml || { echo "seamless: portal directory of sid 1000 is not on port $(p 7000)" >&2; exit 1; }
 
 READY_TIMEOUT=120 sh deploy/dev/run.sh start >"$out/run-start.log" 2>&1 || { tail -40 "$out/run-start.log"; exit 1; }
 prefix="$(awk '/^account:/{a=1;next} a&&/^  key_prefix:/{print $2;exit} a&&/^[^ ]/{a=0}' configs/service/config.account.yaml | tr -d '"')"
@@ -269,7 +314,7 @@ start_game() { # sid ops
 	./bin/app game --sid "$1" --config "configs/service/config.game$1.yaml" >>".dev/game$1.log" 2>&1 &
 	echo $! >".dev/game$1.pid"
 	local i=0
-	until curl -fsS -o /dev/null "http://127.0.0.1:$2/readyz" 2>/dev/null; do
+	until curl -fsS -o /dev/null "http://127.0.0.1:$(p "$2")/readyz" 2>/dev/null; do
 		kill -0 "$(cat ".dev/game$1.pid")" 2>/dev/null || { echo "game $1 exited" >&2; tail -30 ".dev/game$1.log" >&2; return 1; }
 		i=$((i + 1))
 		[[ "$i" -lt 240 ]] || { echo "game $1 not ready" >&2; tail -30 ".dev/game$1.log" >&2; return 1; }
@@ -288,7 +333,7 @@ while kill -0 \$(cat .dev/game1002.pid) 2>/dev/null; do i=\$((i+1)); [ \$i -lt 5
 ./bin/app game --sid 1002 --config configs/service/config.game1002.yaml >>.dev/game1002.log 2>&1 &
 echo \$! > .dev/game1002.pid
 i=0
-until curl -fsS -o /dev/null http://127.0.0.1:9202/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
+until curl -fsS -o /dev/null http://127.0.0.1:$(p 9202)/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
 EOF
 cat >"$work_dir/restart-1004.sh" <<EOF
 cd "$project"
@@ -297,19 +342,19 @@ while kill -0 \$(cat .dev/game1004.pid) 2>/dev/null; do i=\$((i+1)); [ \$i -lt 5
 ./bin/app game --sid 1004 --config configs/service/config.game1004.yaml >>.dev/game1004.log 2>&1 &
 echo \$! > .dev/game1004.pid
 i=0
-until curl -fsS -o /dev/null http://127.0.0.1:9204/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
+until curl -fsS -o /dev/null http://127.0.0.1:$(p 9204)/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
 EOF
 drill_mode=()
-endpoints=1000=127.0.0.1:7000,1001=127.0.0.1:7001,1003=127.0.0.1:7003,1004=127.0.0.1:7004
+endpoints=1000=127.0.0.1:$(p 7000),1001=127.0.0.1:$(p 7001),1003=127.0.0.1:$(p 7003),1004=127.0.0.1:$(p 7004)
 if [[ "$terrain" == 1 ]]; then
 	drill_mode=(-terrain)
-	endpoints=1000=127.0.0.1:7000,1001=127.0.0.1:7001,1002=127.0.0.1:7002,1004=127.0.0.1:7004
+	endpoints=1000=127.0.0.1:$(p 7000),1001=127.0.0.1:$(p 7001),1002=127.0.0.1:$(p 7002),1004=127.0.0.1:$(p 7004)
 fi
 if [[ "${ROOST_SEAMLESS_ROBOT_ONLY:-0}" != 1 ]]; then
 set +e
 "$work_dir/drill" ${drill_mode[@]+"${drill_mode[@]}"} -account-nats "$nats_url" -prefix cwdemo \
 	-endpoints "$endpoints" \
-	-ops 1000=127.0.0.1:9100,1001=127.0.0.1:9201,1002=127.0.0.1:9202,1003=127.0.0.1:9203,1004=127.0.0.1:9204 \
+	-ops "1000=127.0.0.1:$(p 9100),1001=127.0.0.1:$(p 9201),1002=127.0.0.1:$(p 9202),1003=127.0.0.1:$(p 9203),1004=127.0.0.1:$(p 9204)" \
 	-kill "kill -9 \$(cat $project/.dev/game1002.pid)" -restart "sh $work_dir/restart-1002.sh" \
 	-kill-base "kill -9 \$(cat $project/.dev/game1004.pid)" -restart-base "sh $work_dir/restart-1004.sh" \
 	-out "$out/evidence.json" 2>&1 | tee "$out/drill.log"
@@ -336,7 +381,7 @@ done
 # saga 中写 Player 的步骤按发起方的 sid 确切路由（维护者 2026-11-11 方案 ③），只投给属主进程的 durable，
 # 不再在另外 4 个进程上各拒一次、按 nak 退避重投（11-10 时每步约 +3.75s、合计约 22s，p95 27.9～30.4s，
 # 当时临时放宽到 40s）。路由后实测 p95 5.0s，见 docs/maintenance/evidence/saga-step-sid-route-20261111/README.md。
-if ! go run -mod=mod ./cmd/loadtest -endpoint 127.0.0.1:7003 -server-id 1003 -count 2 -account-nats "$nats_url" -nats-prefix cwdemo \
+if ! go run -mod=mod ./cmd/loadtest -endpoint "127.0.0.1:$(p 7003)" -game-ops "127.0.0.1:$(p 9100)" -server-id 1003 -count 2 -account-nats "$nats_url" -nats-prefix cwdemo \
 	-report "$out/loadtest-1003.json" >"$out/loadtest-1003.log" 2>&1; then
 	echo "seamless: the demo robots failed on the ordinary scene (sid 1003); see $out/loadtest-1003.log" >&2
 	tail -20 "$out/loadtest-1003.log" >&2
@@ -354,10 +399,11 @@ if [[ "$robots" -gt 0 ]]; then
  go build -mod=mod -o "$work_dir/loadtest" ./cmd/loadtest
  snapshot() {
   local phase="$1"
+  # 文件名用缺省端口（不随偏移变），请求发到加偏移后的端口。
   for port in 9100 9201 9202; do
    curl -fsS --max-time 10 -H 'Content-Type: application/json' -H 'X-Admin-Token: dev-gm-token' \
-    -d '{"name":"gm.scene.partition"}' "http://127.0.0.1:$port/admin/execute" >"$out/partition-$port-$phase.json"
-   curl -fsS --max-time 10 "http://127.0.0.1:$port/metrics" >"$out/metrics-$port-$phase.txt"
+    -d '{"name":"gm.scene.partition"}' "http://127.0.0.1:$(p "$port")/admin/execute" >"$out/partition-$port-$phase.json"
+   curl -fsS --max-time 10 "http://127.0.0.1:$(p "$port")/metrics" >"$out/metrics-$port-$phase.txt"
   done
   python3 - "$out" "$phase" <<'PYSNAPSHOT'
 import json,sys
@@ -380,7 +426,7 @@ PYPIDS
  (while :; do date +%s; ps -p "$pids" -o pid=,time=,rss=; sleep 1; done) >"$out/resources.txt" 2>&1 &
  sampler_pid=$!
  set +e
- "$work_dir/loadtest" -scenario cellworld -endpoint 127.0.0.1:7000 -server-id 1000 \
+ "$work_dir/loadtest" -scenario cellworld -endpoint "127.0.0.1:$(p 7000)" -game-ops "127.0.0.1:$(p 9100)" -server-id 1000 \
   -count "$robots" -account-nats "$nats_url" -nats-prefix cwdemo -ramp-step 20 -ramp-interval 100ms \
   -cellworld-duration "${seconds}s" -cellworld-active "$active" -cellworld-warmup "$warmup" -cellworld-view-radius "$radius" -max-p95 "$((seconds + 120))" \
   -report "$out/robot.json" >"$out/robot.log" 2>&1
