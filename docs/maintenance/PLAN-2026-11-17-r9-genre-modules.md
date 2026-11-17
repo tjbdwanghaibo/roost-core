@@ -18,7 +18,7 @@
 
 | # | 玩法 | 脚本 | 夹具目录 | 缺省档（前缀 / 条数） | REAL 档（开关 → 依赖 → 用例） |
 | --- | --- | --- | --- | --- | --- |
-| 1 | SLG | `scripts/test-slg-generated.sh` | `scripts/testdata/slg/` | `TestSLG` 7（含 Robot）+ 联盟纯内存 2 条 | `ROOST_SLG_REAL=1` → Mongo + Redis + NATS（持 `remote-acceptance.lock`）→ `TestSLGAllianceActivity`、`…PlayerDelivery`、`…RemoteDelivery`、`…RPCReceiverBudget` |
+| 1 | SLG | `scripts/test-slg-generated.sh` | `scripts/testdata/slg/` | `TestSLG` 8（含 Robot；第 8 条是维护者 2026-11-17 加的原服奖励越过 wallet 窗口回归）+ 联盟纯内存 2 条 | `ROOST_SLG_REAL=1` → Mongo + Redis + NATS（持 `remote-acceptance.lock`）→ `TestSLGAllianceActivity`、`…PlayerDelivery`、`…RemoteDelivery`、`…RPCReceiverBudget` |
 | 2 | MOBA 帧同步 | `scripts/test-moba-generated.sh` | `scripts/testdata/moba/` | `TestMOBA` 28 | `ROOST_MOBA_REAL=1` → Mongo → `TestMOBARealSettlementAcrossProcesses`（write / recover）、`…ActiveRoundCrashRecovery`、`…ActiveRoundSnapshotRecoveryAfterSIGKILL`；再加 `ROOST_MOBA_ROUTING=1` → NATS → `…SnapshotDuringHostHandoff`、`…CrossSIDHostRouting` |
 | 3 | MMORPG | `scripts/test-mmorpg-generated.sh` | `scripts/testdata/mmorpg/` | `TestMMORPG(Party\|Trade\|Combat\|Buff\|Transfer\|Death\|Robot)` 14 | `ROOST_MMORPG_REAL=1` → Mongo → `TestMMORPGRealPersistenceAcrossProcesses`（write / recover）、`TestMMORPGRealCrashRecovery` |
 | 4 | 卡牌 RPG | `scripts/test-card-rpg-generated.sh` | `scripts/testdata/card-rpg/` | `TestCardRPG` 17 | `ROOST_CARD_RPG_REAL=1` → Mongo → `TestCardRPGRealCrashRecovery` |

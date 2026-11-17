@@ -1,0 +1,2 @@
+# python3 scripts/test-genres-generated.py --out <scratchpad>/b1117-slg-receipt/matrix-slg --genres slg -> exit 0
+{'genre': 'slg', 'status': 'passed', 'custom_module_verify': {'wallet': 17}, 'passed_tests': 8, 'custom_module_passed_tests': 10, 'skipped_tests': 0}

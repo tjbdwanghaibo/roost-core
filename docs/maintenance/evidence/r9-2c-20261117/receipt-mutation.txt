@@ -1,0 +1,18 @@
+# 在保留的缺省档工程（<scratchpad>/b1117-slg-receipt/default/project）里改 game/handler/alliance_rewards.go，
+# go test -mod=mod -race -count=1 -run '^TestSLGAllianceRewardOnceBeyondWalletWindow$' ./game/handler
+## M6 变异：去掉永久回执检查
+48,53d47
+< 	if old, ok := receipts[key.String()]; ok {
+< 		if old != amount {
+< 			return 0, errAllianceReward
+< 		}
+< 		return p.Wallet().Balance(), nil
+< 	}
+    alliance_rewards_test.go:41: redelivery after 129 keyed credits paid again: coins=199, want 189
+--- FAIL: TestSLGAllianceRewardOnceBeyondWalletWindow (0.06s)
+FAIL
+FAIL	example.com/slg-practice/game/handler	0.615s
+FAIL
+## 恢复
+--- PASS: TestSLGAllianceRewardOnceBeyondWalletWindow (0.06s)
+ok  	example.com/slg-practice/game/handler	1.398s

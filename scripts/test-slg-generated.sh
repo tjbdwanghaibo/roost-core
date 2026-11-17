@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SLG 业务接入纵切：正式生成器 + 业务模块（R9）+ 只手写模块没覆盖的部分。
-# 模块：wallet（玩家金币：建造 / 研究 / 抢地扣费、取消退款、离线收益、原服奖励到账都走它）。
+# 模块：wallet（玩家金币：建造 / 研究 / 抢地扣费、取消退款、离线收益、原服奖励到账都走它的 Add）。
 # 手写（scripts/testdata/slg）：Player / Tile / AllianceAuthority（Remote 托管）DAO 字段、建造 / 研究 / 行军队列与 Player 定时器、
 # 抢地（[Player, Tile] 多实体事务）、离线收益补发、联盟活动教学消费者（service/activity 协调器、Redis CAS 联盟、
-# AllianceAuthority Remote 托管、原服奖励义务账本；Q4 保留）。这些不是框架默认玩法，生成器也不生成这些文件。
+# AllianceAuthority Remote 托管、原服奖励义务账本与 Player 上的永久到账回执；Q4 保留）。这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身，离线恢复用 DAO 序列化；联盟活动的业务文件与 Remote Sender 参与编译与 vet，
 # 另跑两条纯内存用例（补报截止跟随协调器保留期、普通 Bus RPC 接收端预算）。
 # ROOST_SLG_REAL=1（并提供隔离 Mongo 副本集、Redis、NATS：ROOST_DATAENGINE_IT_MONGO_URI / _REDIS_ADDR / _NATS_URL）
@@ -52,7 +52,8 @@ bash "$modules_sh" add "$review_root/roost" "${genre_modules[@]}" >> "$review_ro
 "$review_root/roost" add entity AllianceAuthority >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add dao AllianceAuthority --entity AllianceAuthority >> "$review_root/generate.log" 2>&1
 # DAO 定义与实体注解是业务文件；只修改它们，生成组件、访问器与 Sender 由 CLI 生成。
-# SLG 的玩家字段追加在 PlayerDao 末尾（wallet 的 Wallet / WalletLedger 之后）；金币与原服奖励的到账回执在 wallet 里，不再手写。
+# SLG 的玩家字段追加在 PlayerDao 末尾（wallet 的 Wallet / WalletLedger 之后）；金币在 wallet 里。
+# 原服奖励的永久到账回执 SLGReceipts 手写（玩法前缀，不和模块字段撞名）：跨服奖励严格只发一次，不靠 wallet 的 128 条窗口。
 python3 - "$project_root" <<'DEFS'
 from pathlib import Path
 import sys
@@ -60,7 +61,8 @@ root = Path(sys.argv[1])
 for name, fields in {
     'player': [('BuildingLevel', 'int64', 'building_level'), ('ResearchLevel', 'int64', 'research_level'),
                ('PendingResearch', 'int64', 'pending_research'), ('PendingBuild', 'int64', 'pending_build'), ('Marches', 'int64', 'marches'),
-               ('ArrivedX', 'int64', 'arrived_x'), ('HomeSID', 'int32', 'home_sid')],
+               ('ArrivedX', 'int64', 'arrived_x'), ('HomeSID', 'int32', 'home_sid'),
+               ('SLGReceipts', 'string', 'slg_receipts')],
     'tile': [('OwnerID', 'int64', 'owner_id')],
     'alliance_authority': [('State', 'string', 'state')],
 }.items():
@@ -88,6 +90,8 @@ cp "$repo_root/scripts/testdata/slg/timer_handlers.go.txt" game/entities/player/
 cp "$repo_root/scripts/testdata/slg/tasks.go.txt" game/handler/slg_tasks.go
 cp "$repo_root/scripts/testdata/slg/tasks_test.go.txt" game/handler/slg_tasks_test.go
 cp "$repo_root/scripts/testdata/slg/alliance_rewards.go.txt" game/handler/alliance_rewards.go
+# 原服奖励越过 wallet 回执窗口仍只发一次（维护者 2026-11-17）：与建造场景同包、共用 newSLGFixture，算进 8 条 TestSLG。
+cp "$repo_root/scripts/testdata/slg/alliance_rewards_test.go.txt" game/handler/alliance_rewards_test.go
 cp "$repo_root/scripts/testdata/slg/alliance_authority.go.txt" game/handler/alliance_authority.go
 mkdir -p game/modules/alliance
 cp "$repo_root/scripts/testdata/slg/alliance/alliance.go" game/modules/alliance/alliance.go
@@ -96,10 +100,10 @@ gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go ga
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" slg
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler | tee "$review_root/test.log"
-# 7 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 8 条场景（含业务 Robot、原服奖励越过 wallet 窗口仍只发一次）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestSLG' "$review_root/test.log" || true)"
-if [[ "$passed" != 7 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 7 passing TestSLG scenarios, got $passed" >&2
+if [[ "$passed" != 8 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 8 passing TestSLG scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

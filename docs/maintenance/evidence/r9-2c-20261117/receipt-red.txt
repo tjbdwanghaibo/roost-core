@@ -1,0 +1,15 @@
+# 修前红（2026-11-17，HEAD 0a5dbdec 的 SLG 夹具 = 17952d07 版本：到账 Wallet().Apply、无 Player 永久回执；只加了回归用例）
+# ROOST_GENRE_OUTPUT=<scratchpad>/b1117-slg-receipt/red bash scripts/test-slg-generated.sh -> exit 1
+# 当时回归写在 slg_tasks_test.go 末尾；之后原样挪到 alliance_rewards_test.go.txt（函数体 diff 为空），只为 SKILL reference §3 基础版不引用联盟 handler
+--- PASS: TestSLGRobotBusiness (0.02s)
+--- PASS: TestSLGConstructionMarchAndReplay (0.00s)
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.00s)
+    slg_tasks_test.go:337: redelivery after 129 keyed credits paid again: coins=199, want 189
+--- FAIL: TestSLGAllianceRewardOnceBeyondWalletWindow (0.05s)
+FAIL
+FAIL	example.com/slg-practice/game/handler	1.460s
+FAIL

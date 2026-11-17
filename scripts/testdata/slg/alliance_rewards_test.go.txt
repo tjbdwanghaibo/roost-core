@@ -1,0 +1,46 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	sender "example.com/slg-practice/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/service/activity"
+)
+
+// 原服奖励到账只发一次，不依赖 wallet 的回执窗口（维护者 2026-11-17）：同一次活动奖励已到账、原服还没记 Delivered
+// 时重投；而重投之前这名玩家又有超过 128 笔带业务键的入账（这里用 wallet 自带的 WalletGrant 发 129 笔），
+// wallet 窗口里早已没有这次活动的回执。判重靠 Player 上的永久到账回执，重投不再加钱，换金额仍被拒。
+func TestSLGAllianceRewardOnceBeyondWalletWindow(t *testing.T) {
+	f := newSLGFixture(t)
+	RegisterAllianceRewardsNestHandlers()
+	RegisterWalletGrantNestHandlers()
+	ctx := context.Background()
+	s := sender.NewAllianceRewardsSender(f.engine)
+	if _, err := s.Sync_AllianceHomeInit(ctx, f.subject.ID(), 1000); err != nil {
+		t.Fatal(err)
+	}
+	key := activity.Key{GroupID: "alliance", ActivityID: "season-1-window-1", Phase: activity.PhaseSettle}
+	if coins, err := s.Sync_AllianceCredit(ctx, f.subject.ID(), 1000, key, 10); err != nil || coins != 60 {
+		t.Fatalf("first delivery coins=%d err=%v", coins, err)
+	}
+	grant := sender.NewWalletGrantSender(f.engine)
+	for i := 0; i < 129; i++ {
+		if _, err := grant.Sync_WalletGrant(ctx, f.subject.ID(), fmt.Sprintf("slg-other-%d", i), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if coins := f.subject.Dao().GetWallet().GetCoins(); coins != 189 {
+		t.Fatalf("other keyed credits coins=%d, want 189", coins)
+	}
+	if _, err := s.Sync_AllianceCredit(ctx, f.subject.ID(), 1000, key, 10); err != nil {
+		t.Fatal(err)
+	}
+	if coins := f.subject.Dao().GetWallet().GetCoins(); coins != 189 {
+		t.Fatalf("redelivery after 129 keyed credits paid again: coins=%d, want 189", coins)
+	}
+	if _, err := s.Sync_AllianceCredit(ctx, f.subject.ID(), 1000, key, 11); err == nil || f.subject.Dao().GetWallet().GetCoins() != 189 {
+		t.Fatalf("changed amount accepted: coins=%d err=%v", f.subject.Dao().GetWallet().GetCoins(), err)
+	}
+}

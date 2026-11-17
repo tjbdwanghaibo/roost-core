@@ -1,0 +1,18 @@
+# 修后缺省档（2026-11-17，检出 002ceca6 + 本次改动）：bash scripts/test-slg-generated.sh -> exit 0
+--- PASS: TestSLGAllianceRewardOnceBeyondWalletWindow (0.07s)
+--- PASS: TestSLGRobotBusiness (0.02s)
+--- PASS: TestSLGConstructionMarchAndReplay (0.00s)
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.01s)
+ok  	example.com/slg-practice/game/handler	2.473s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL (0.00s)
+ok  	example.com/slg-practice/game/modules/alliance	1.782s
+--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess (0.04s)
+ok  	example.com/slg-practice/game/modules/alliance	1.542s
+# SKIP 行数：0

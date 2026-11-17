@@ -1,0 +1,27 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh；持有 $ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock（mkdir 锁，trap 释放）；ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh -> exit 0
+--- PASS: TestSLGAllianceRewardOnceBeyondWalletWindow (0.07s)
+--- PASS: TestSLGRobotBusiness (0.01s)
+--- PASS: TestSLGConstructionMarchAndReplay (0.00s)
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.00s)
+ok  	example.com/slg-practice/game/handler	1.685s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL (0.00s)
+ok  	example.com/slg-practice/game/modules/alliance	1.731s
+--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess (0.04s)
+ok  	example.com/slg-practice/game/modules/alliance	1.837s
+--- PASS: TestSLGAllianceActivity (3.17s)
+ok  	example.com/slg-practice/game/modules/alliance	5.000s
+    player_delivery_test.go:231: same activity workflow: both static homes credit generated Player DAO; three unprojected strict WAL records (create, initialize, reward) per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 coins each; wrong home and changed amount refused
+--- PASS: TestSLGAlliancePlayerDelivery (8.42s)
+ok  	example.com/slg-practice/game/modules/alliance	9.889s
+--- PASS: TestSLGAllianceRemoteDelivery (9.64s)
+ok  	example.com/slg-practice/game/modules/alliance	11.280s
+--- PASS: TestSLGAllianceRPCReceiverBudget (0.62s)
+ok  	example.com/slg-practice/game/modules/alliance	2.329s
+# SKIP 行数：0

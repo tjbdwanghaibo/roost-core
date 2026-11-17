@@ -1,0 +1,6 @@
+# SKILL.md §3.2 公共前置（自定 module）+ references/slg.md 命令块原样抽出执行（2026-11-17，修正后）
+## §3（NAME=myslg）：TestSLG PASS 7、SKIP 0；next: roost module verify
+module verify: wallet 17/17 skipped=0；exit=0
+## §3.1 进阶（NAME=myslgadv）：TestSLG PASS 8、TestAlliance PASS 2、SKIP 0；next: roost module verify
+module verify: wallet 17/17 skipped=0；exit=0
+--- PASS: TestSLGAllianceRewardOnceBeyondWalletWindow (0.07s)

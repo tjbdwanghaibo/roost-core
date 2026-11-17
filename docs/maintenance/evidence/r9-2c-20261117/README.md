@@ -66,3 +66,45 @@ M4 第一次恢复跑红过一次：复用了变异那次留下的库与 WAL（�
 
 - CHANGELOG `[Unreleased]`：SLG 夹具改为装 wallet 模块（R9 批 2C）：建造 / 研究 / 抢地扣费、取消退款、离线收益、原服奖励到账都经 `Wallet()`；到账用 `Apply(活动身份的哈希键)`，Player 侧手写的永久到账回执删除，原服义务账本与联盟教学消费者保留；场景名与条数（7 + 2 + REAL 4）不变，旧断言 → 新断言见 SLG §3.5；脚本加跑 `module verify`（wallet 17）。
 - KNOWN-LIMITS：N1“模块化顺序”里 SLG 标为已模块化（wallet）；联盟活动按 Q4 A 留手写。无新增遗留问题。
+
+## 维护者决定后的修正（2026-11-17）
+
+**问题**：上面的改法把原服奖励到账换成 `Wallet().Apply(业务键)`、删掉了 Player 上的永久到账回执，判重只剩 wallet 最近 128 次带键加减的窗口。原服还没记 Delivered 就重投、而这期间这名玩家又有超过 128 笔带键入账时，这次活动的回执已被淘汰，金币会重复发。
+
+**维护者决定**：恢复 Player 上的永久到账回执，入账改回 `Wallet().Add`，跨服金币严格只发一次（与 §9.3“有自己事实的用 Add”、wallet README“长期只发一次由调用方记事实并改用 Add”一致；上文“拿不准的点”第一条即此）。
+
+### 改法
+
+- `alliance_rewards.go.txt`：照 `17952d07^` 的写法恢复永久回执——字段按 §9.2 加玩法前缀，`PlayerDao.SLGReceipts string store:"slg_receipts" dao:"nosync"`（JSON：活动身份 `Key.String()` → 金额）；建档写 `{}`；到账先查回执：同身份同金额返回当前余额、不加钱，同身份改金额拒绝，满 128 条拒新身份、不淘汰旧身份；没有才 `Wallet().Add(amount)` 再写回执（溢出由 wallet 答 `wallet_overflow`，原样返回、整笔回滚）。删掉 `allianceRewardKey`（SHA-256 业务键）与 `Apply`。
+- 内部核对 handler `AllianceWallet` 去掉 `key` 参数，返回 `{Home, Coins, Receipts}`（`Receipts` 是永久回执 JSON）；`player_delivery_test.go` 冷加载断言改回“永久回执恰好一条、该身份金额 10”，`Coins` 仍读 wallet。
+- `test-slg-generated.sh`：Player 字段加 `SLGReceipts`；拷新回归文件；`TestSLG` 断言 7 → 8。
+- 新回归 `scripts/testdata/slg/alliance_rewards_test.go.txt` → `game/handler/alliance_rewards_test.go`：`TestSLGAllianceRewardOnceBeyondWalletWindow`（缺省档，替身提交器，复用 `newSLGFixture`）。单独成文件是因为 skill reference §3 基础版不拷联盟 handler，放进 `tasks_test.go.txt` 会让基础版编译不过。
+
+### 场景数
+
+缺省档 `TestSLG` **7 → 8**，多的就是上面这条回归；联盟纯内存 2、REAL 4 不变（矩阵 passed 8 / custom 10）。同步：脚本断言、[SLG §3.4](../../../framework/SLG-INTEGRATION.md#34-八个场景各学什么)（标题“七个”→“八个”并加一行）、§3.5、§11；skill reference §3.1 期望（8 + 2 = 10）与 §7；[方案](../../PLAN-2026-11-17-r9-genre-modules.md) §1 表 SLG 行。skill reference §3 基础版仍是 7（不含联盟 handler）。
+
+### 旧断言 → 新断言
+
+| 场景 | 2C 第一版断言 | 修正后断言 |
+| --- | --- | --- |
+| `TestSLGAlliancePlayerDelivery`（REAL） | 冷加载 `{Home, Coins 10, wallet 回执窗口 1 条，该键 Delta 10 / Balance 10}`；改金额由 wallet 答 `wallet_conflict` | `{Home, Coins 10, Receipts{窗口: 10}}`：永久回执恰好一条、金额 10；改金额由回执检查拒绝（仍断言 `e != nil`） |
+| `TestSLGAllianceRewardOnceBeyondWalletWindow`（新增） | — | 到账 10（余额 60）→ `WalletGrant` 129 笔不同业务键（余额 189）→ 同身份重投余额仍 189 → 同身份改金额被拒、余额仍 189 |
+
+### 修前红 / 修后绿 / 变异
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 修前红 | 只加回归，夹具仍是 2C 第一版：`bash scripts/test-slg-generated.sh` | exit 1；`redelivery after 129 keyed credits paid again: coins=199, want 189`，其余 7 条 PASS（[receipt-red.txt](receipt-red.txt)） |
+| 修后缺省档 | `bash scripts/test-slg-generated.sh` | exit 0；`TestSLG` 8 PASS、联盟纯内存 2 PASS、0 SKIP；build / vet / `id check` / `generate --check`；`module verify: wallet 17/17 skipped=0`（[receipt-default.txt](receipt-default.txt)） |
+| 矩阵 | `python3 scripts/test-genres-generated.py --out <scratchpad>/matrix-slg --genres slg` | `status passed`，`custom_module_verify {'wallet': 17}`，passed 8 / custom 10 / skipped 0（[receipt-matrix.txt](receipt-matrix.txt)） |
+| REAL | `source ~/.roost-it/roost-dataengine-it/env.sh` + 持 `remote-acceptance.lock` + `ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh` | exit 0；四条 REAL 全过、0 SKIP（[receipt-real.txt](receipt-real.txt)） |
+| M6 变异 | 保留工程里删掉 `handlerAllianceCredit` 的永久回执检查（`if old, ok := receipts[...]` 整段） | 回归红 `coins=199, want 189`；恢复后绿（[receipt-mutation.txt](receipt-mutation.txt)） |
+| 命令块 | SKILL.md §3.2 + reference §3 / §3.1 原样抽出执行（自定 module `myslg` / `myslgadv`） | §3：7 PASS + wallet 17/17；§3.1：8 + 2 PASS + wallet 17/17；0 SKIP（[receipt-skill-block.txt](receipt-skill-block.txt)） |
+
+上文变异表的 M4（`Apply` 换成不带键的 `Add`）针对的是第一版写法，修正后不再适用；修正后的对应变异是 M6。
+
+### 交给协调者写进 CHANGELOG / KNOWN-LIMITS 的话（替换上面那两条里与到账有关的部分）
+
+- CHANGELOG `[Unreleased]`：SLG 原服奖励到账改回 Player 永久到账回执（`SLGReceipts`）+ `Wallet().Add`（维护者 2026-11-17）：2C 第一版用 `Wallet().Apply` 判重只有 128 条窗口，原服记 Delivered 之前重投、期间玩家又有超过 128 笔带键入账时会重复发金币；新增缺省档回归 `TestSLGAllianceRewardOnceBeyondWalletWindow`，`TestSLG` 7 → 8；内部核对 handler `AllianceWallet` 去掉 `key` 参数。
+- KNOWN-LIMITS：“游戏接入验收”表 SLG 行“脚本断言 7 条”改为 8 条（多一条原服奖励越过 wallet 窗口仍只发一次的回归）。无新增遗留问题。
