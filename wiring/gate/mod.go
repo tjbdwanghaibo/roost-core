@@ -270,6 +270,15 @@ func (mod *GateMod) Addr() string {
 	return mod.server.Addr().String()
 }
 
+// WebSocketAddr 是 Gate 的 WebSocket 监听实际地址（Options.TCP.WebSocket.Addr，GATEWAY.md“WebSocket 接入”）；
+// 没开或未启动时为空。WebSocket 连接与 TCP 连接走同一个 TCPServer：握手、票据、路由、出站预算都相同。
+func (mod *GateMod) WebSocketAddr() string {
+	if mod.server == nil || mod.server.WebSocketAddr() == nil {
+		return ""
+	}
+	return mod.server.WebSocketAddr().String()
+}
+
 type GameIngressMod struct {
 	options     Options
 	dispatch    gateway.TCPDispatch

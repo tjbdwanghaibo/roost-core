@@ -505,8 +505,7 @@ func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID
 	if err != nil {
 		return fmt.Errorf("%w: %w", errInvalidFrame, err)
 	}
-	buffers := net.Buffers{header[:], payload}
-	written, err = buffers.WriteTo(session.connection)
+	written, err = writeFrameBytes(session.connection, header[:], payload)
 	if err == nil {
 		return nil
 	}
@@ -524,7 +523,8 @@ func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID
 	// idle_timeout, is what finds and closes it. Only the direct writers pass
 	// such deadlines (the handshake ACK, standalone Gate's WritePacket); the
 	// embedded writeLoop writes with write_timeout alone.
-	if written == 0 && callerDeadline && errors.Is(err, os.ErrDeadlineExceeded) {
+	// WebSocket 连接（wsconn.Conn）上期限在写的过程中到期时库已关闭整条连接，错误包裹 net.ErrClosed，不算拒绝。
+	if written == 0 && callerDeadline && errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, net.ErrClosed) {
 		return fmt.Errorf("%w: nothing written before the caller's deadline: %w", context.DeadlineExceeded, err)
 	}
 	metrics.IncCounter("player_tcp_write_error_total", nil, 1)
@@ -539,6 +539,21 @@ func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID
 		return fmt.Errorf("%w: %s ran out after %d of %d bytes: %w", errConnectionBroken, what, written, int64(len(header))+int64(len(payload)), err)
 	}
 	return fmt.Errorf("%w: %w", errConnectionBroken, err)
+}
+
+// messageConn 是按消息成帧的连接（wsconn.Conn）：WriteMessage 的各段恰好成为一条消息。
+type messageConn interface {
+	WriteMessage(parts ...[]byte) (int64, error)
+}
+
+// writeFrameBytes 写出一帧。TCP 用 writev 一次交给 socket；WebSocket 连接把一帧写成一条二进制消息
+// （net.Buffers 在非 TCP 连接上逐段 Write，会把帧头与载荷拆成两条消息，浏览器就不能按消息取帧）。
+func writeFrameBytes(connection net.Conn, header, payload []byte) (int64, error) {
+	if framed, ok := connection.(messageConn); ok {
+		return framed.WriteMessage(header, payload)
+	}
+	buffers := net.Buffers{header, payload}
+	return buffers.WriteTo(connection)
 }
 
 func (session *tcpSession) Close(reason error) error {

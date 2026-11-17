@@ -1,0 +1,105 @@
+## M1 去掉单条消息上限（SetReadLimit）
+文件：infra/network/wsconn/wsconn.go
+命令：go test -count=1 -run 'TestAMessageOverTheLimitClosesTheConnection|TestWebSocketMessageLargerThanOneFrameIsRefused' ./infra/network/wsconn/ ./infra/network/gateway/
+结果：RED（用例变红）
+    --- FAIL: TestAMessageOverTheLimitClosesTheConnection (0.00s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	0.491s
+    --- FAIL: TestWebSocketMessageLargerThanOneFrameIsRefused (0.00s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.777s
+    FAIL
+
+## M2 去掉 Origin 检查
+文件：infra/network/wsconn/wsconn.go
+命令：go test -count=1 -run 'TestMountedListenerHandsOverAndStops|TestWebSocketOriginIsCheckedAgainstTheAllowList' ./infra/network/wsconn/ ./infra/network/gateway/
+结果：RED（用例变红）
+    --- FAIL: TestMountedListenerHandsOverAndStops (0.00s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	0.546s
+    --- FAIL: TestWebSocketOriginIsCheckedAgainstTheAllowList (0.01s)
+    tcp_transport_test.go:245: empty allow list: Origin "https://game.example.com" got status 101 (<nil>), want 403
+    tcp_transport_test.go:245: empty allow list: Origin "http://127.0.0.1:51515" got status 101 (<nil>), want 403
+    tcp_transport_test.go:249: origin rejections counted = 0, want 2
+    tcp_transport_test.go:268: allow list: Origin "http://eu.cdn.example.com" got status 101 (<nil>), want 403
+
+## M3 帧不按一条消息写（去掉 messageConn 分支）
+文件：infra/network/gateway/tcp_session.go
+命令：go test -count=1 -run 'TestWebSocketServerWritesOneFramePerMessage' ./infra/network/gateway/
+结果：RED（用例变红）
+    --- FAIL: TestWebSocketServerWritesOneFramePerMessage (0.00s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.598s
+    FAIL
+
+## M4 Close 走关闭握手而不是立即关闭
+文件：infra/network/wsconn/wsconn.go
+命令：go test -count=1 -run 'TestCloseInterruptsABlockedWriteAndRead|TestWebSocketSessionCloseInterruptsABlockedWrite' ./infra/network/wsconn/ ./infra/network/gateway/
+结果：RED（用例变红）
+    --- FAIL: TestCloseInterruptsABlockedWriteAndRead (5.30s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	5.868s
+    --- FAIL: TestWebSocketSessionCloseInterruptsABlockedWrite (5.30s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	6.229s
+    FAIL
+
+## M5 期限错误不映射成 os.ErrDeadlineExceeded
+文件：infra/network/wsconn/wsconn.go
+命令：go test -count=1 -run 'TestReadDeadlineEndsABlockedRead|TestAnAlreadyExpiredDeadlineRefusesWithoutClosing|TestWriteDeadlineEndsAWriteToAStalledPeer' ./infra/network/wsconn/
+结果：RED（用例变红）
+    --- FAIL: TestReadDeadlineEndsABlockedRead (0.10s)
+    wsconn_test.go:82: read past its deadline: failed to get reader: context canceled, want os.ErrDeadlineExceeded and net.ErrClosed
+    --- FAIL: TestAnAlreadyExpiredDeadlineRefusesWithoutClosing (0.02s)
+    wsconn_test.go:96: write with an expired deadline: failed to write: context deadline exceeded, want os.ErrDeadlineExceeded without net.ErrClosed
+    --- FAIL: TestWriteDeadlineEndsAWriteToAStalledPeer (0.20s)
+    wsconn_test.go:133: write to a stalled peer failed with failed to write msg: failed to write frame: context canceled, want os.ErrDeadlineExceeded
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	0.823s
+
+## M6 写到一半被期限打断仍当成拒绝
+文件：infra/network/gateway/tcp_session.go
+命令：go test -count=1 -run 'TestACallerDeadlineThatEndsAWebSocketWriteBreaksTheConnection' ./infra/network/gateway/
+结果：RED（用例变红）
+    --- FAIL: TestACallerDeadlineThatEndsAWebSocketWriteBreaksTheConnection (0.20s)
+    tcp_transport_test.go:464: a write cut off by the caller's deadline mid-message returned context deadline exceeded: nothing written before the caller's deadline: i/o timeout: the connection is closed: use of closed network connection: failed to write msg: failed to write frame: context canceled; want errConnectionBroken (the library closed the connection)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.708s
+    FAIL
+
+## M7 WebSocket 监听不进 accept 循环
+文件：infra/network/gateway/tcp.go
+命令：go test -count=1 -run 'TestFramesSplitAcrossWritesOrMergedIntoOneAreRead|TestAuthenticatedClockProbe' ./infra/network/gateway/
+结果：RED（用例变红）
+    --- FAIL: TestAuthenticatedClockProbe (2.00s)
+    --- FAIL: TestFramesSplitAcrossWritesOrMergedIntoOneAreRead (2.00s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	4.502s
+    FAIL
+## M8 嵌入 TCP 的 configFromViper 不透传 websocket
+文件：codegen/internal/roost/render_player_tcp.go
+命令：go test -count=1 -run TestPlayerWebSocketTransportPassesItsKeysThrough ./codegen/internal/roost/
+结果：RED（用例变红）
+    --- FAIL: TestPlayerWebSocketTransportPassesItsKeysThrough (0.00s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.585s
+    FAIL
+
+## M9 Gate Mod 不透传 websocket
+文件：codegen/internal/roost/gate.go
+命令：go test -count=1 -run TestPlayerWebSocketTransportPassesItsKeysThrough ./codegen/internal/roost/
+结果：RED（用例变红）
+    --- FAIL: TestPlayerWebSocketTransportPassesItsKeysThrough (0.00s)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.599s
+    FAIL
+
+## M10 manifest 允许 websocket 不带 tcp
+文件：codegen/internal/roost/manifest.go
+命令：go test -count=1 -run TestPlayerWebSocketTransportPassesItsKeysThrough ./codegen/internal/roost/
+结果：RED（用例变红）
+    --- FAIL: TestPlayerWebSocketTransportPassesItsKeysThrough (0.00s)
+    player_websocket_test.go:66: websocket without tcp: <nil>, want a refusal
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1.108s
+

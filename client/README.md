@@ -88,6 +88,8 @@ client.EntitiesReset += () => ClearVisibleEntities();
 
 固定16字节，整数大端；`payload_length`仅包含载荷，不包含头。
 
+浏览器经 WebSocket 连接（玩家接入或 relay 开了 WebSocket 监听时）：每条二进制消息装一个 RS v2 帧，服务端发来的每条消息也恰好是一帧，握手、票据与心跳和 TCP 相同，见 [GATEWAY.md §6](../docs/framework/GATEWAY.md#6-websocket-接入)。
+
 | 偏移 | 大小 | 字段 | 语义 |
 | --- | ---: | --- | --- |
 | 0 | 2 | magic | ASCII `RS` |

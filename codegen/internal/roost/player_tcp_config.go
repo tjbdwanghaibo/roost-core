@@ -70,8 +70,63 @@ type playerTCPDeclaration struct {
 
 var playerTCPSchemaOnce = sync.OnceValue(func() configschema.Schema { return configschema.MustOf(playerTCPDeclaration{}) })
 
-// playerTCPSchema is the declaration of everything the generated Mod reads.
+// playerTCPSchema is the declaration of everything the generated Mod reads
+// when the player access has no websocket transport.
 func playerTCPSchema() configschema.Schema { return playerTCPSchemaOnce() }
+
+// playerWebSocketDeclaration 是 access.player.transports 含 websocket 时玩家接入另外读的键（GATEWAY.md
+// “WebSocket 接入”）：嵌入 TCP 在 player_access.tcp.websocket 下，独立 Gate 在 player_access.gate.websocket 下。
+// 生成器只把它们透传进 gateway.TCPConfig.WebSocket，规则（地址、路径、来源写法）由 gateway.ValidateTCPConfig 检查。
+// 没有 websocket 传输时声明、生成代码与配置都与之前逐字节相同。addr 不标 listen：空串表示不开，端口冲突检查看不懂它。
+type playerWebSocketDeclaration struct {
+	Addr           string `config:"addr" help:"WebSocket 监听地址 host:port；空串不开。浏览器经它连接，每条二进制消息装一个 RS v2 帧，握手、票据、限额与 TCP 相同；TLS 由前置负载均衡终结（wss）"`
+	Path           string `config:"path" help:"接受 WebSocket 升级的 HTTP 路径（精确匹配）；不写取 /ws"`
+	AllowedOrigins string `config:"allowed_origins" help:"允许的浏览器页面来源，逗号分隔（game.example.com、https://*.cdn.example.com）；为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行"`
+}
+
+// playerWebSocketEnabled 报告 roost.yaml 的 access.player.transports 是否含 websocket。
+func playerWebSocketEnabled(m Manifest) bool {
+	access, ok := m.Access["player"]
+	return ok && contains(access.Transports, "websocket")
+}
+
+// withWebSocketSection 返回 declaration 的一个无名副本：名为 section 的嵌套结构末尾多一个
+// `WebSocket ... config:"websocket"` 字段。无名类型渲染进生成代码时是内联的结构体字面量，与原声明的写法一致。
+func withWebSocketSection(declaration reflect.Type, section string) reflect.Type {
+	fields := make([]reflect.StructField, declaration.NumField())
+	for i := range fields {
+		fields[i] = declaration.Field(i)
+		if fields[i].Name != section {
+			continue
+		}
+		inner := make([]reflect.StructField, fields[i].Type.NumField())
+		for j := range inner {
+			inner[j] = fields[i].Type.Field(j)
+		}
+		webSocket := reflect.TypeOf(playerWebSocketDeclaration{})
+		flat := make([]reflect.StructField, webSocket.NumField())
+		for j := range flat {
+			flat[j] = webSocket.Field(j)
+		}
+		fields[i].Type = reflect.StructOf(append(inner, reflect.StructField{
+			Name: "WebSocket", Type: reflect.StructOf(flat), Tag: `config:"websocket"`,
+		}))
+	}
+	return reflect.StructOf(fields)
+}
+
+// playerTCPDeclarationType 是生成的嵌入 TCP Mod 读的声明：有 websocket 传输时 TCP 段多一个 websocket 子段。
+func playerTCPDeclarationType(m Manifest) reflect.Type {
+	if !playerWebSocketEnabled(m) {
+		return reflect.TypeOf(playerTCPDeclaration{})
+	}
+	return withWebSocketSection(reflect.TypeOf(playerTCPDeclaration{}), "TCP")
+}
+
+// playerTCPSchemaFor 是 m 生成的嵌入 TCP Mod 读的全部键（doctor 的 config-schema 按它检查）。
+func playerTCPSchemaFor(m Manifest) configschema.Schema {
+	return configschema.MustOf(reflect.New(playerTCPDeclarationType(m)).Interface())
+}
 
 // playerTCPBlockSchema is the player_access.tcp part: what `add transport tcp`
 // and the reference copy write.
@@ -99,12 +154,12 @@ func playerTCPConfigDefaults() []struct{ key, value string } {
 
 // renderPlayerTCPDeclaration renders playerTCPDeclaration as the generated
 // tcpConfig type.
-func renderPlayerTCPDeclaration() string {
+func renderPlayerTCPDeclaration(m Manifest) string {
 	var b strings.Builder
 	b.WriteString("// tcpConfig is what this Mod reads (maintainer decision). Generated from the\n")
 	b.WriteString("// generator's declaration; the App checks it before any Mod Init.\n")
 	b.WriteString("type tcpConfig ")
-	writeGoStructType(&b, reflect.TypeOf(playerTCPDeclaration{}), "")
+	writeGoStructType(&b, playerTCPDeclarationType(m), "")
 	return b.String()
 }
 

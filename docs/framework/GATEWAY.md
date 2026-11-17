@@ -7,6 +7,7 @@ v1.25.0已实现嵌入 Game 的 TCP 与独立 Gate 两种正式接入。两者�
 | 位置 | 责任 |
 | --- | --- |
 | `infra/network/gateway` | TCP、鉴权边界、绑定、续期、有界转发/出站、广播、排空；不依赖 Nest/Entity/Service/Wiring |
+| `infra/network/wsconn` | WebSocket 接入适配器：升级后的连接包成 `net.Conn` 交给 TCP 会话（§6），Gate、嵌入 TCP 与 relay 共用 |
 | `wiring/gate` | App singleton、Account、发现、正式 dispatcher、Sync/Lockstep 的便捷接线 |
 | `codegen/internal/roost` | 生成协议和配置、嵌入 TCP Mod、Game `NewIngressMod`；不生成另一份 TCP 运行循环 |
 | `service/session` | 副本/试炼等运行记录，与 socket、Gate Binding、Sync SessionID 无关 |
@@ -112,6 +113,39 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 已验证正式生成 PB/Nest/双实体 DAO/文件 WAL/Sync、实际 NATS 双 Gate 双 Game、Lockstep 输入/追帧/重连、旧事件隔离、ACK 丢失、广播去重、控制容量与预算、真实 ACL、Stop 重试。测试使用本机隔离资源，鉴权权威、存储和进程范围按[功能验收记录](../release/v1.25.0-VALIDATION.md)逐项说明；不声称已完成独立多进程、真实 Mongo、Linux 实机或跨机完整矩阵。
 
 完整配置、协议、阶段验收和未验收项见[设计与实施契约](GATEWAY-IMPLEMENTATION.md)。目录升级没有旧 import alias，旧工程必须重新生成并编译；稳定基线历史性能不能替代新增 Gate 的结果。
+
+## 6. WebSocket 接入
+
+（2026-11-17，lobby-relay 方案 §4.7.1、§6 第 9 条）浏览器经 WebSocket 连玩家接入。维护者的要求是**只做接入层**：握手、票据与连接代号、路由、出站预算、空闲与写超时都沿用 TCP 那一套，不重做。
+
+**共用适配器** [`infra/network/wsconn`](../../infra/network/wsconn/wsconn.go)（Gate、嵌入 TCP 与 relay 共用，用 `github.com/coder/websocket`）：
+
+- `wsconn.Listen(address, Config) (*Listener, error)`：自己起一个 HTTP 服务，只在 `Config.Path` 上接受升级（精确匹配，别的路径 404）。
+- `wsconn.NewListener(Config, addr) (*Listener, error)`：不监听端口，`*Listener` 本身是 `http.Handler`，挂到调用方已有的 HTTP 服务上（路径由调用方的路由决定）。
+- `*Listener` 是 `net.Listener`：`Accept` 交出升级好的 `*wsconn.Conn`（`net.Conn`，内部是 `websocket.NetConn(ctx, conn, websocket.MessageBinary)`）；`Close` 之后 `Accept` 返回包裹 `net.ErrClosed` 的错误，新的升级请求得到 503，已交出的连接由调用方关闭。升级好却在 `HandshakeTimeout` 内没人 `Accept` 的连接被关闭。
+- `Config`：`Path`、`AllowedOrigins`、`MaxMessageBytes`（单条消息上限，必须为正）、`HandshakeTimeout`（升级请求的读写期限与等 `Accept` 的期限）、`Rejected`（升级被拒的回调，计数用）。
+- `(*Conn).WriteMessage(parts ...[]byte)`：各段拼成恰好一条二进制消息（多段时复制进一块缓冲，NetConn 没有分段写一条消息的入口）。
+
+**接进 TCPServer**：`TCPConfig.WebSocket.Addr` 非空时，`TCPServer.Start` 另开 `wsconn.Listen`，升级好的连接进**同一个** `acceptLoop`——连接上限、按 IP 上限、握手槽、`serveConnection`、会话登记、`Stop` 的排空都不分来源。唯一按连接类型分支的地方是写一帧（`writeFrameBytes`）：TCP 用 writev，WebSocket 连接用 `WriteMessage` 把帧头与载荷写成一条消息（`net.Buffers` 在非 TCP 连接上逐段 `Write`，会拆成两条）。`TCPServer.WebSocketAddr()`、`wiring/gate.GateMod.WebSocketAddr()` 报告实际地址。
+
+**帧格式**：客户端每条二进制消息装一个 RS v2 帧（`client/wire`）。服务端按字节流读，一帧拆成几条消息、几帧合在一条消息里都能读，但浏览器 SDK 应一帧一条。服务端写出的每一帧恰好是一条二进制消息。文本消息让连接以 1003 关闭。单条消息上限是一个最大帧（`max_payload_bytes + 16`）：库按流读、事先不知道消息长度，上限之内的字节照常处理，越过上限后下一次读失败、连接以 1009 关闭（超出部分最多先读出 1 个字节）。不用 WebSocket ping：浏览器不能主动发 ping，保活用 RS 心跳（MsgID=0），与 TCP 相同。
+
+**读写超时与关闭对齐**（出站预算与慢连接断开依赖它们）：
+
+- `SetReadDeadline` / `SetWriteDeadline` 真的生效，到期的读写返回 `errors.Is(err, os.ErrDeadlineExceeded)`：握手期限、`idle_timeout`、`write_timeout` 与独立 Gate 的单帧发送预算照常起作用。
+- 与 TCP 的差别：期限在一次读写**进行中**到期时，coder/websocket 取消它并关闭**整条连接**（TCP 只打断这一次）。这种错误同时包裹 `net.ErrClosed`；`writeFrame` 因此不把它当成“调用方期限到了、什么也没写、连接还在”的拒绝，而是 `errConnectionBroken`，连接被关闭——与 TCP 上写出半帧的结果相同。期限在读写开始前就已过去时什么也不做、连接仍可用，与 TCP 相同。
+- `Close` 立即关闭底层 socket（`CloseNow`），打断阻塞的读写，不做关闭握手、不等对端：会话关闭（慢连接断开、顶号、停机）不会被一个不读的浏览器拖住。浏览器看到的关闭码是 1006。
+
+**Origin**：不带 `Origin` 头的请求（原生客户端、工具）总是放行，身份仍由首帧票据认证。带 `Origin` 的请求必须匹配 `allowed_origins` 的一项，否则 403（`player_tcp_websocket_rejected_total{reason="origin"}`；其他不合法的升级计 `reason="upgrade"`）。**白名单为空时拒绝所有带 Origin 的请求，同源页面也不例外**（选择理由：失败即关闭；游戏页面通常与接入地址不同域，前置负载均衡还可能改写 Host，按 Host 判同源靠不住；不开白名单就不会有浏览器连上来）。每项按 `path.Match` 不分大小写匹配：不含 `://` 时匹配 Origin 的 `host[:port]`（`game.example.com`、`*.example.com`、`localhost:*`），含 `://` 时连 scheme 一起匹配（`https://*.cdn.example.com`）；`*` 放行任何来源，只用于开发。
+
+**配置**：`TCPConfig.WebSocket{Addr, Path, AllowedOrigins}`，`Addr` 为空不开；`Path` 缺省 `/ws`；`AllowedOrigins` 是逗号分隔的字符串（`TCPConfig` 要保持可比较，生成工程的测试用 `!=` 比较整份配置）。`ValidateTCPConfig` 只在 `Addr` 非空时按键检查 `websocket.addr / path / allowed_origins`。TLS 由前置负载均衡终结（wss），这一期不在进程里配证书。
+
+- 生成工程：`roost add transport websocket`（要求已有 tcp）在 roost.yaml 的 `access.player.transports` 加上 `websocket`，生成的嵌入 TCP Mod 多读 `player_access.tcp.websocket.{addr,path,allowed_origins}`、独立 Gate 多读 `player_access.gate.websocket.{addr,path,allowed_origins}`，原样透传进 `TCPConfig.WebSocket`；Game Ingress 不监听。命令不改配置文件：写上 `addr` 才开。不声明 websocket 的工程生成结果与之前逐字节相同（[证据](../maintenance/evidence/lobby-relay-ws-20261117/README.md)）。
+- 手工接线：`wiring/gate.Options.TCP.WebSocket`。
+
+**部署注意**：前置七层负载均衡时，连接的对端地址是负载均衡的地址，`max_connections_per_ip` 按它计数（全部 WebSocket 连接算一个 IP），要按负载均衡的数量调大；进程不读 `X-Forwarded-For`。生成的部署模板（k8s、docker）没有发布 WebSocket 端口，doctor 也不检查 `websocket.addr` 的端口冲突，开 WebSocket 时手工补上。
+
+**回归**（[tcp_transport_test.go](../../infra/network/gateway/tcp_transport_test.go)、[wsconn_test.go](../../infra/network/wsconn/wsconn_test.go)）：TCP 握手与收发的关键用例改成表驱动，同一组在 TCP 与 WebSocket 上各跑一遍——鉴权首包与连接代号信封（`TestTCPAuthEnvelopeCarries…`）、请求 / 应答与分发预算（`TestADispatchThatOutlivesItsBudget…`、`TestAuthenticatedClockProbe`）、服务器推送与慢连接被出站预算断开（`TestAConnectionThatCannotTakeAPushIsClosed…`、`TestAStalledConnectionDoesNotHoldPushes…`）、一帧拆成多条消息 / 多帧合在一条消息（`TestFramesSplitAcrossWritesOrMergedIntoOneAreRead`）、空闲超时（`TestHeartbeatKeepsAuthenticatedPushConnectionAlive`）；另有 Origin 被拒、超大消息被拒、一帧一条消息、会话 Close 打断阻塞写、调用方期限在写到一半时到期即断开。浏览器端到端验证放到 Web 端演练里一起做，本节只在 Go 客户端（coder/websocket 的 `Dial`）上验证。
 
 ## 生成工程与标准 C# 客户端联合链路
 

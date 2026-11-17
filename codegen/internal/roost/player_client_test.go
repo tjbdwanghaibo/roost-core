@@ -66,11 +66,12 @@ func TestGeneratedPlayerTCPTestsWaitForTheSessionsTheyUse(t *testing.T) {
 		}
 	}
 
-	dials := []string{"dialAuthenticated(t, server,", "stalled(t, server,"}
+	// 表驱动的用例（同一组在 TCP 与 WebSocket 上各跑一遍，GATEWAY.md §6）正文在小写的 test* 函数里，经 transport 拨号。
+	dials := []string{"dialAuthenticated(t, server,", "stalled(t, server,", "dialAuthenticatedOver(t, transport, server,", "stalledOver(t, transport, server,"}
 	uses := []string{"runtime.PushPlayer(", "runtime.PushSession(", "runtime.CloseSessions(", "runtime.ActiveSessions(", "fillUntilOneFails("}
 	checked := map[string]bool{}
 	for name, body := range bodies {
-		if !strings.HasPrefix(name, "Test") {
+		if !strings.HasPrefix(name, "Test") && !strings.HasPrefix(name, "test") {
 			continue
 		}
 		use := firstIndex(body, uses...)
@@ -89,7 +90,7 @@ func TestGeneratedPlayerTCPTestsWaitForTheSessionsTheyUse(t *testing.T) {
 		checked[name] = true
 	}
 	for _, name := range []string{
-		"TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt",
+		"testAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt",
 		"TestAPushNoConnectionTakesFailsAndClosesThemAll",
 		"TestAPushThatFailsBeforeWritingClosesNoConnection",
 		"TestASessionPushThatCannotBeWrittenClosesThatSession",

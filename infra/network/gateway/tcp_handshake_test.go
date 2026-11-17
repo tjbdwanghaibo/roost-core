@@ -199,10 +199,15 @@ func TestTCPCloseInterruptsBlockedWriteAndPushSequencesFollowStream(t *testing.T
 // 记在连接上（ConnectionSession.Generation）；票据原文没有代号（0）。以 0x00 开头却不是完整信封的首包按坏帧拒绝，
 // 不交给 Authenticator，也不回 ack。
 func TestTCPAuthEnvelopeCarriesTheConnectionGenerationAndHidesItFromAuthentication(t *testing.T) {
+	forEachTransport(t, testAuthEnvelopeCarriesTheConnectionGenerationAndHidesItFromAuthentication)
+}
+
+func testAuthEnvelopeCarriesTheConnectionGenerationAndHidesItFromAuthentication(t *testing.T, transport testTransport) {
 	tokens := make(chan string, 8)
 	generations := make(chan uint64, 8)
 	config := DefaultTCPConfig()
 	config.Addr = "127.0.0.1:0"
+	transport.configure(&config)
 	server, err := NewTCPServer(config, emptyTCPDispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
 		tokens <- token
 		return Principal{PlayerID: 7, SessionID: "session-" + token, ServerID: 2}, nil
@@ -232,10 +237,7 @@ func TestTCPAuthEnvelopeCarriesTheConnectionGenerationAndHidesItFromAuthenticati
 	})
 	handshake := func(payload []byte) (acked bool) {
 		t.Helper()
-		connection, err := net.Dial("tcp", server.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
+		connection := transport.dial(t, server, 0)
 		defer connection.Close()
 		if err := wire.Write(connection, []*wire.Packet{{Seq: 1, Payload: payload}}, 8192); err != nil {
 			t.Fatal(err)

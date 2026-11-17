@@ -31,7 +31,8 @@ import (
 //   - 部署模板：客户端端口 7000 跟到 Gate 服务上（k8s 的 player-tcp 端口、docker 示例）。
 //
 // Gate 的 TCP 资源上限与内部接入限额取 gatewiring.DefaultOptions()（与 scripts/testdata/demo-drill 的演练接法相同），
-// 配置只开放地址与命名空间；要调这些上限需要手工接线（docs/framework/GATEWAY.md §2）。
+// 配置只开放地址与命名空间（access.player.transports 含 websocket 时另有 player_access.gate.websocket 段，GATEWAY.md §6）；
+// 要调这些上限需要手工接线（docs/framework/GATEWAY.md §2）。
 
 // playerGateDeclaration 是生成的 Gate Mod（accessplayertcp.NewGateMod）读的键。
 type playerGateDeclaration struct {
@@ -51,6 +52,20 @@ type playerGateIngressDeclaration struct {
 }
 
 func playerGateSchema() configschema.Schema { return configschema.MustOf(playerGateDeclaration{}) }
+
+// playerGateDeclarationType 是生成的 Gate Mod 读的声明：access.player.transports 含 websocket 时 Gate 段多一个
+// websocket 子段（player_access.gate.websocket.*，键与嵌入 TCP 的 player_access.tcp.websocket.* 相同）。
+func playerGateDeclarationType(m Manifest) reflect.Type {
+	if !playerWebSocketEnabled(m) {
+		return reflect.TypeOf(playerGateDeclaration{})
+	}
+	return withWebSocketSection(reflect.TypeOf(playerGateDeclaration{}), "Gate")
+}
+
+// playerGateSchemaFor 是 m 生成的 Gate Mod 读的全部键。
+func playerGateSchemaFor(m Manifest) configschema.Schema {
+	return configschema.MustOf(reflect.New(playerGateDeclarationType(m)).Interface())
+}
 func playerGateIngressSchema() configschema.Schema {
 	return configschema.MustOf(playerGateIngressDeclaration{})
 }
@@ -250,7 +265,7 @@ func renderPlayerTCPGateMod(m Manifest) string {
 	writeGoStructType(&b, reflect.TypeOf(playerGateIngressDeclaration{}), "")
 	b.WriteString("\n\n// gateConfig 是独立 Gate（NewGateMod）读的键（生成器的声明渲染而来）。\n")
 	b.WriteString("type gateConfig ")
-	writeGoStructType(&b, reflect.TypeOf(playerGateDeclaration{}), "")
+	writeGoStructType(&b, playerGateDeclarationType(m), "")
 	b.WriteString(strings.Replace(`
 
 // NewGateMod 是 roost.yaml 的 access.player.gate 声明的独立 Gate 进程（roost add gate）的玩家接入：在
@@ -279,7 +294,7 @@ func (mod *GateMod) Init(cfg *viper.Viper) error {
  options:=gateOptions()
  if settings.Gate.Namespace!="" { options.Config.Namespace=settings.Gate.Namespace }
  options.TCP.Addr=settings.Gate.Addr
- options.AdvertiseAddr=settings.Gate.AdvertiseAddr
+@@GATE_WEBSOCKET@@ options.AdvertiseAddr=settings.Gate.AdvertiseAddr
  mod.inner=gatewiring.NewGateMod(options)
  return mod.inner.Init(cfg)
 }
@@ -295,7 +310,12 @@ var _ app.Mod = (*GateMod)(nil)
 var _ app.ModStopperWithContext = (*GateMod)(nil)
 var _ app.ModStopBudgetProvider = (*GateMod)(nil)
 `, "@@GATE_SERVICE_NAMES@@", renderGateServiceNames(m), 1))
-	return b.String()
+	webSocket := ""
+	if playerWebSocketEnabled(m) {
+		webSocket = " // access.player.transports 含 websocket：Gate 同一套会话另开 WebSocket 监听（addr 为空不开）。\n" +
+			" options.TCP.WebSocket=gateway.WebSocketConfig{Addr:settings.Gate.WebSocket.Addr,Path:settings.Gate.WebSocket.Path,AllowedOrigins:settings.Gate.WebSocket.AllowedOrigins}\n"
+	}
+	return strings.Replace(b.String(), "@@GATE_WEBSOCKET@@", webSocket, 1)
 }
 
 func withPlayerTCPGate(source string, m Manifest) string {

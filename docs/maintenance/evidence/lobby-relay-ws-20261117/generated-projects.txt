@@ -1,0 +1,41 @@
+# 生成工程（声明 websocket）的编译与测试
+
+go.mod replace 指向 HEAD + ws 组改动的源码树；GOFLAGS=-mod=mod go build ./... && go vet ./internal/access/player/tcp/ && go test -count=1 -v ./internal/access/player/tcp/
+另加两份只在 scratchpad 的证据用例（不提交）：configFromViper 把 player_access.tcp.websocket.* 透传进 TCPConfig.WebSocket、NewTCPServer 照它开监听、带 Origin 的客户端在 /play 上完成鉴权首包；生成的 Gate Mod 把 player_access.gate.websocket.* 交给 gateway.ValidateTCPConfig（写错的 path 按键被拒）。
+
+## 嵌入 TCP 工程
+--- PASS: TestAdminEntityKickClosesThePlayersConnections (0.00s)
+--- PASS: TestSessionObserverHearsEveryActivatedSession (0.15s)
+--- PASS: TestHandlerPanicHasErrorLevelStack (0.00s)
+--- PASS: TestDeclaredDefaultsAreDefaultConfig (0.00s)
+--- PASS: TestDispatchBudgetFollowsTheNestRequestTimeout (0.00s)
+--- PASS: TestConfigValuesOfTheWrongTypeAreRefusedByName (0.00s)
+--- PASS: TestAnOutOfBoundsSettingIsRefusedByName (0.00s)
+--- PASS: TestTheModDeclaresItsShutdownTimeoutAsTheStopBudget (0.00s)
+--- PASS: TestAModStopRetryKeepsTheServerUntilItDrains (0.15s)
+    ws_passthrough_scratch_test.go:42: embedded: websocket handshake acknowledged on 127.0.0.1:50383/play
+--- PASS: TestScratchWebSocketPassthrough (0.00s)
+ok  	example.com/wsp/internal/access/player/tcp	0.873s
+
+## 独立 Gate 工程
+--- PASS: TestLoginAuthenticatorValidatesTicketsThroughAccount (0.00s)
+--- PASS: TestLoginAuthenticatorRefusesEverythingWithoutAccount (0.00s)
+--- PASS: TestAdminEntityKickClosesThePlayersConnections (0.00s)
+--- PASS: TestSessionObserverHearsEveryActivatedSession (0.15s)
+--- PASS: TestHandlerPanicHasErrorLevelStack (0.00s)
+--- PASS: TestDeclaredDefaultsAreDefaultConfig (0.00s)
+--- PASS: TestDispatchBudgetFollowsTheNestRequestTimeout (0.00s)
+--- PASS: TestConfigValuesOfTheWrongTypeAreRefusedByName (0.00s)
+--- PASS: TestAnOutOfBoundsSettingIsRefusedByName (0.00s)
+--- PASS: TestTheModDeclaresItsShutdownTimeoutAsTheStopBudget (0.00s)
+--- PASS: TestAModStopRetryKeepsTheServerUntilItDrains (0.15s)
+    ws_gate_scratch_test.go:27: gate: websocket keys reach gateway.ValidateTCPConfig through the generated Gate Mod
+--- PASS: TestScratchGateWebSocketPassthrough (0.00s)
+    ws_passthrough_scratch_test.go:42: embedded: websocket handshake acknowledged on 127.0.0.1:50403/play
+--- PASS: TestScratchWebSocketPassthrough (0.00s)
+ok  	example.com/wsp/internal/access/player/tcp	0.842s
+
+## roost config check --service game（嵌入 TCP 工程，开发配置写了 websocket.addr / allowed_origins）
+config is valid: configs/service/config.game.yaml
+把 allowed_origins 拼错成 allowed_origin：
+  config: player_access.tcp.websocket.allowed_origin is not a key any framework mod declares (misspelled? nothing would read it)

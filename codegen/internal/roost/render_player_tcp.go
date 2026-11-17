@@ -127,12 +127,39 @@ func fail(format string, args ...any) {
 }
 
 func renderPlayerTCPServer(manifest Manifest) string {
-	source := strings.Replace(renderPlayerTCPServerSource(manifest), "@@TCP_CONFIG_DECLARATION@@", renderPlayerTCPDeclaration(), 1)
+	source := strings.Replace(renderPlayerTCPServerSource(manifest), "@@TCP_CONFIG_DECLARATION@@", renderPlayerTCPDeclaration(manifest), 1)
+	if playerWebSocketEnabled(manifest) {
+		source = applyAnchoredEdits(source, playerTCPWebSocketEdits)
+	}
 	if selfSyncEnabled(manifest) {
 		source = withPlayerTCPSelfSync(source)
 	}
 	if playerGateService(manifest) != "" {
 		source = withPlayerTCPGate(source, manifest)
+	}
+	return source
+}
+
+// playerTCPWebSocketEdits 是 access.player.transports 含 websocket 时对 server_gen.go 的增量：configFromViper 把
+// player_access.tcp.websocket 透传进 gateway.TCPConfig.WebSocket（嵌入 TCP 与 Game Ingress 共用 configFromViper）。
+var playerTCPWebSocketEdits = []struct{ anchor, replace string }{
+	{
+		anchor: "\t\tOutboundResidentBytes: tcp.OutboundResidentBytes,\n\t}\n",
+		replace: "\t\tOutboundResidentBytes: tcp.OutboundResidentBytes,\n" +
+			"\t\t// access.player.transports 含 websocket：同一套会话另开 WebSocket 监听（addr 为空不开）。\n" +
+			"\t\tWebSocket: gateway.WebSocketConfig{Addr: tcp.WebSocket.Addr, Path: tcp.WebSocket.Path, AllowedOrigins: tcp.WebSocket.AllowedOrigins},\n" +
+			"\t}\n",
+	},
+}
+
+// applyAnchoredEdits 把每个恰好出现一次的 anchor 换成 replace；anchor 找不到或不止一处是生成器自身的错误（模板改了
+// 而增量没跟上），直接 panic，生成这类工程的测试会变红。
+func applyAnchoredEdits(source string, edits []struct{ anchor, replace string }) string {
+	for _, edit := range edits {
+		if strings.Count(source, edit.anchor) != 1 {
+			panic(fmt.Sprintf("player tcp template anchor %q found %d times", edit.anchor, strings.Count(source, edit.anchor)))
+		}
+		source = strings.Replace(source, edit.anchor, edit.replace, 1)
 	}
 	return source
 }

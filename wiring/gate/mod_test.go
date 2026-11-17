@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,6 +62,12 @@ func TestGateModsRefuseIncompleteProductionAssembly(t *testing.T) {
 	if err := mod.Provide(app.NewRegistry(viper.New())); err == nil {
 		t.Fatal("started without singleton and real NATS")
 	}
+	// WebSocket 接入的配置随 Options.TCP 进 gateway.ValidateTCPConfig：写错的路径在 Init 被拒。
+	options.TCP.WebSocket = gateway.WebSocketConfig{Addr: "127.0.0.1:0", Path: "no-slash"}
+	if err := NewGateMod(options).Init(viper.New()); err == nil || !strings.Contains(err.Error(), "websocket.path") {
+		t.Fatalf("a bad websocket path: Init = %v, want a refusal naming websocket.path", err)
+	}
+	options.TCP.WebSocket = gateway.WebSocketConfig{}
 	options.TCP.MaxPayloadBytes++
 	if err := NewGateMod(options).Init(viper.New()); err == nil {
 		t.Fatal("payload mismatch silently shrank TCP")

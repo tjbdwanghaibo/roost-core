@@ -63,12 +63,14 @@ func TestTCPDefaultRequestBudgetsAreAppliedAtConstruction(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedClockProbe(t *testing.T) {
+func TestAuthenticatedClockProbe(t *testing.T) { forEachTransport(t, testAuthenticatedClockProbe) }
+
+func testAuthenticatedClockProbe(t *testing.T, transport testTransport) {
 	server := dispatchServer(t, "1s", func(*tcpTestContext, string) (string, error) {
 		t.Error("clock probe entered business handler")
 		return "", nil
-	})
-	conn := dialAuthenticated(t, server, "clock")
+	}, transport.configure)
+	conn := dialAuthenticatedOver(t, transport, server, "clock")
 	client := &tcpSession{connection: conn, writeTimeout: time.Second}
 	before := time.Now().UnixNano()
 	if err := client.writeFrame(context.Background(), 0, 0, 2, []byte("RCN1")); err != nil {
@@ -119,12 +121,17 @@ func TestTCPWriteTraceRecordsActualBytesAndSyncClock(t *testing.T) {
 	}
 }
 
+// 心跳续上空闲期限；之后不说话的连接在 idle_timeout 被断开（WebSocket 上靠 wsconn.Conn 的读期限真的生效）。
 func TestHeartbeatKeepsAuthenticatedPushConnectionAlive(t *testing.T) {
+	forEachTransport(t, testHeartbeatKeepsAuthenticatedPushConnectionAlive)
+}
+
+func testHeartbeatKeepsAuthenticatedPushConnectionAlive(t *testing.T, transport testTransport) {
 	server := dispatchServer(t, "1s", func(*tcpTestContext, string) (string, error) {
 		t.Error("heartbeat entered business handler")
 		return "", nil
-	}, func(c *TCPConfig) { c.IdleTimeout = 300 * time.Millisecond })
-	conn := dialAuthenticated(t, server, "heartbeat")
+	}, func(c *TCPConfig) { c.IdleTimeout = 300 * time.Millisecond }, transport.configure)
+	conn := dialAuthenticatedOver(t, transport, server, "heartbeat")
 	client := &tcpSession{connection: conn, writeTimeout: time.Second}
 	for seq := uint32(2); seq <= 5; seq++ {
 		time.Sleep(100 * time.Millisecond)
@@ -140,10 +147,15 @@ func TestHeartbeatKeepsAuthenticatedPushConnectionAlive(t *testing.T) {
 			t.Fatalf("heartbeat ack: %+v", ack)
 		}
 	}
+	silent := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, release, err := server.readFrame(conn); err == nil {
 		release()
 		t.Fatal("silent connection survived idle timeout")
+	} else if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the server never closed the silent connection (client gave up after %v)", time.Since(silent))
 	}
+	waitReleased(t, server, 0)
 }
 
 // lockedBuffer 收集服务端读循环 goroutine 写的日志。
@@ -395,14 +407,14 @@ const (
 // its own — the shape of a cold login waiting on a projection that keeps
 // failing. The handler honors its context the way the projection wait does and
 // answers once the context ends.
-func stuckDispatchServer(t *testing.T, dispatchTimeout string) (*TCPServer, <-chan context.Context) {
+func stuckDispatchServer(t *testing.T, dispatchTimeout string, configure ...func(*TCPConfig)) (*TCPServer, <-chan context.Context) {
 	t.Helper()
 	started := make(chan context.Context, 4)
 	server := dispatchServer(t, dispatchTimeout, func(ctx *tcpTestContext, _ string) (string, error) {
 		started <- ctx.Context()
 		<-ctx.Context().Done()
 		return "gave up: " + ctx.Context().Err().Error(), nil
-	})
+	}, configure...)
 	return server, started
 }
 
@@ -447,28 +459,7 @@ func dispatchServer(t testing.TB, dispatchTimeout string, handler func(*tcpTestC
 
 func dialAuthenticated(t testing.TB, server *TCPServer, token string) net.Conn {
 	t.Helper()
-	server.mu.RLock()
-	addr := server.listener.Addr().String()
-	server.mu.RUnlock()
-	connection, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = connection.Close() })
-	client := &tcpSession{connection: connection, writeTimeout: time.Second}
-	if err := client.writeFrame(context.Background(), 0, 0, 1, []byte(token)); err != nil {
-		t.Fatal(err)
-	}
-	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
-	ack, release, err := server.readFrame(connection)
-	if err != nil {
-		t.Fatalf("authentication ack: %v", err)
-	}
-	release()
-	if ack.messageID != 0 || ack.sequence != 1 {
-		t.Fatalf("unexpected ack %+v", ack)
-	}
-	return connection
+	return dialAuthenticatedOver(t, testTransports[0], server, token)
 }
 
 func sendStuckRequest(t *testing.T, connection net.Conn, sequence uint32) {
@@ -517,8 +508,12 @@ func waitReleased(t *testing.T, server *TCPServer, open int) {
 // 永远不结束的请求在分发预算处结束并得到应答；客户端离开后连接的槽位与按 IP 计数要归还（handler 的 context 不能是
 // 只有服务器停止才结束的连接 context）。
 func TestADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot(t *testing.T) {
-	server, started := stuckDispatchServer(t, "200ms")
-	connection := dialAuthenticated(t, server, "tcpSession-a")
+	forEachTransport(t, testADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot)
+}
+
+func testADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot(t *testing.T, transport testTransport) {
+	server, started := stuckDispatchServer(t, "200ms", transport.configure)
+	connection := dialAuthenticatedOver(t, transport, server, "tcpSession-a")
 	began := time.Now()
 	sendStuckRequest(t, connection, 2)
 	select {
@@ -823,9 +818,12 @@ func readPushes(t *testing.T, server *TCPServer, connection net.Conn, progress .
 // every write to it waits out write_timeout and fails.
 func stalled(t *testing.T, server *TCPServer, token string) net.Conn {
 	t.Helper()
-	connection := dialAuthenticated(t, server, token)
-	_ = connection.(*net.TCPConn).SetReadBuffer(4 << 10)
-	return connection
+	return stalledOver(t, testTransports[0], server, token)
+}
+
+func stalledOver(t *testing.T, transport testTransport, server *TCPServer, token string) net.Conn {
+	t.Helper()
+	return authenticate(t, server, transport.dial(t, server, 4<<10), token)
 }
 
 // fillUntilOneFails pushes filler to player 7 until a push to one of its
@@ -887,11 +885,15 @@ func waitClosed(t *testing.T, closed <-chan TCPSessionClosed, want ...string) {
 // 拆除流程，槽位、按 IP 计数与 tcpSession 关闭事件恰好释放一次。否则整次 push 失败、坏连接留到 idle_timeout，之后每次
 // push 同样失败，调用方分不清死玩家与带着死旧连接的活玩家。
 func TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T) {
-	server, runtime, closed := pushServer(t)
-	live := dialAuthenticated(t, server, "live")
+	forEachTransport(t, testAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt)
+}
+
+func testAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T, transport testTransport) {
+	server, runtime, closed := pushServer(t, transport.configure)
+	live := dialAuthenticatedOver(t, transport, server, "live")
 	var progress atomic.Int64
 	received := readPushes(t, server, live, &progress)
-	stalled(t, server, "stalled")
+	stalledOver(t, transport, server, "stalled")
 	waitReleased(t, server, 2)
 	waitRegistered(t, runtime, 7, 2)
 
@@ -922,11 +924,15 @@ func TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T) 
 // 对停读连接的推送若要等满 write_timeout，排在它后面的每个正常连接每轮都晚到 write_timeout。推送只能进入该连接的
 // 有界出站队列，收不下就关闭那一条，正常连接的帧照常按轮到达。
 func TestAStalledConnectionDoesNotHoldPushesToOtherConnections(t *testing.T) {
+	forEachTransport(t, testAStalledConnectionDoesNotHoldPushesToOtherConnections)
+}
+
+func testAStalledConnectionDoesNotHoldPushesToOtherConnections(t *testing.T, transport testTransport) {
 	const writeTimeout = 30 * time.Second
-	server, runtime, closed := pushServer(t, func(c *TCPConfig) { c.WriteTimeout = writeTimeout })
-	live := dialAuthenticated(t, server, "live")
+	server, runtime, closed := pushServer(t, func(c *TCPConfig) { c.WriteTimeout = writeTimeout }, transport.configure)
+	live := dialAuthenticatedOver(t, transport, server, "live")
 	received := readPushes(t, server, live)
-	stalled(t, server, "stalled")
+	stalledOver(t, transport, server, "stalled")
 	waitReleased(t, server, 2)
 	waitRegistered(t, runtime, 7, 2)
 

@@ -182,8 +182,8 @@ func Add(root string, options AddOptions) ([]string, error) {
 	}
 	if options.Kind == "transport" {
 		transport := toSnake(name)
-		if transport != "tcp" {
-			return nil, fmt.Errorf("unsupported player transport %q; supported: tcp", transport)
+		if transport != "tcp" && transport != "websocket" {
+			return nil, fmt.Errorf("unsupported player transport %q; supported: tcp, websocket", transport)
 		}
 		access, exists := m.Access["player"]
 		if !exists {
@@ -194,6 +194,9 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		if contains(access.Transports, transport) {
 			return nil, fmt.Errorf("player transport %s already exists", transport)
+		}
+		if transport == "websocket" {
+			return addPlayerWebSocket(root, m, access)
 		}
 		configPaths := []string{
 			"configs/service/config." + access.Service + ".yaml",
@@ -337,6 +340,25 @@ func restoreFilesIfCurrent(root string, backups, expected map[string]fileBackup,
 		}
 	}
 	return joined
+}
+
+// addPlayerWebSocket 是 roost add transport websocket：在已有的玩家 TCP 上声明 WebSocket 接入（transports 加 websocket），
+// 生成的嵌入 TCP Mod 与独立 Gate 多读 player_access.tcp.websocket.* / player_access.gate.websocket.*，透传进
+// gateway.TCPConfig.WebSocket。配置文件不改：websocket.addr 不写就不开，要开时写上地址（GATEWAY.md“WebSocket 接入”）。
+func addPlayerWebSocket(root string, m Manifest, access AccessSpec) ([]string, error) {
+	if !contains(access.Transports, "tcp") {
+		return nil, errors.New("the websocket transport is a second listener of player TCP; run: roost add transport tcp first")
+	}
+	manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
+	if err != nil {
+		return nil, err
+	}
+	access.Transports = uniqueSorted(append(access.Transports, "websocket"))
+	m.Access["player"] = access
+	if err := commitManifestSync(root, manifestBefore, m); err != nil {
+		return nil, err
+	}
+	return []string{"roost.yaml", "internal/access/player/tcp/server_gen.go"}, nil
 }
 
 func commitManifestSync(root string, manifestBefore []byte, manifest Manifest) error {

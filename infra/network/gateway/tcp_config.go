@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strings"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/wsconn"
 )
 
 type TCPConfig struct {
@@ -42,6 +45,46 @@ type TCPConfig struct {
 	// 一帧入队会超过它时被拒（ErrResidentBudgetExhausted），不关闭连接；读循环自己的回包与心跳 ACK 计入但不被拒。
 	// 0 表示取缺省值（NewTCPServer 补上，与 DispatchTimeout 相同）。
 	OutboundResidentBytes int64
+	// WebSocket 在同一个 TCPServer 上另开一个 WebSocket 监听（infra/network/wsconn，GATEWAY.md“WebSocket 接入”）。
+	// 升级后的连接包成 net.Conn，走与 TCP 连接完全相同的会话路径：同一个 accept 循环、连接与按 IP 上限、握手、票据
+	// 与连接代号、路由、出站预算、空闲与写超时。Addr 为空不开。
+	WebSocket WebSocketConfig
+}
+
+// WebSocketConfig 是玩家接入的 WebSocket 监听。单条消息上限取一个最大帧（MaxPayloadBytes + 帧头），升级请求的
+// 期限取 HandshakeTimeout；TLS 交给前置负载均衡，这里只监听明文 ws。
+type WebSocketConfig struct {
+	// Addr 是 WebSocket 监听地址 host:port；空串表示不开。
+	Addr string
+	// Path 是接受升级的路径（精确匹配）；空串取 /ws。缺省值不写进 DefaultTCPConfig：没开 WebSocket 的配置
+	// 与之前逐字段相同（生成工程的 TestDeclaredDefaultsAreDefaultConfig 比较整份配置）。
+	Path string
+	// AllowedOrigins 是允许的浏览器页面来源，逗号分隔（如 "game.example.com, https://*.cdn.example.com"）；
+	// 为空时拒绝所有带 Origin 头的请求（含同源页面），不带 Origin 的原生客户端总是放行。每一项的写法见
+	// wsconn.Config.AllowedOrigins。用字符串而不是切片：TCPConfig 要保持可比较（生成的测试用 != 比较整份配置）。
+	AllowedOrigins string
+}
+
+// Origins 是 AllowedOrigins 拆开、去掉空白与空项后的列表。
+func (config WebSocketConfig) Origins() []string {
+	var origins []string
+	for _, origin := range strings.Split(config.AllowedOrigins, ",") {
+		if origin = strings.TrimSpace(origin); origin != "" {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
+}
+
+// defaultWebSocketPath 是 WebSocketConfig.Path 为空时的路径。
+const defaultWebSocketPath = "/ws"
+
+// path 是实际接受升级的路径。
+func (config WebSocketConfig) path() string {
+	if config.Path == "" {
+		return defaultWebSocketPath
+	}
+	return config.Path
 }
 
 const (
@@ -147,6 +190,19 @@ func ValidateTCPConfig(result TCPConfig) error {
 		refuse("%soutbound.resident_bytes = %d is outside 1..%d", key, result.OutboundResidentBytes, int64(maxOutboundResidentBytes))
 	case result.OutboundResidentBytes > 0 && result.MaxPayloadBytes > 0 && result.OutboundResidentBytes < frameBytes:
 		refuse("%soutbound.resident_bytes = %d is below one largest frame (%smax_payload_bytes + %d = %d)", key, result.OutboundResidentBytes, key, headerSize, frameBytes)
+	}
+	if result.WebSocket.Addr != "" {
+		if _, port, err := net.SplitHostPort(result.WebSocket.Addr); err != nil {
+			refuse("%swebsocket.addr = %q is not host:port: %w", key, result.WebSocket.Addr, err)
+		} else if result.WebSocket.Addr == result.Addr && port != "0" {
+			refuse("%swebsocket.addr = %q is the same as %saddr; the two listeners need their own ports", key, result.WebSocket.Addr, key)
+		}
+		if err := wsconn.ValidatePath(result.WebSocket.path()); err != nil {
+			refuse("%swebsocket.path: %w", key, err)
+		}
+		if err := wsconn.ValidateOrigins(result.WebSocket.Origins()); err != nil {
+			refuse("%swebsocket.allowed_origins: %w", key, err)
+		}
 	}
 	return errors.Join(problems...)
 }

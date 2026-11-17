@@ -1,0 +1,54 @@
+# 生成器逐字节比对（不声明 websocket 的工程）
+
+生成器 A：git archive HEAD（44241b95 之后的 main HEAD）构建的 roost；生成器 B：HEAD + ws 组改动（只覆盖 ws 组的文件）构建的 roost。
+同一组命令，两个生成器各跑一遍：
+  roost project new wsp -module example.com/wsp -template game
+  roost add access player --service game --root wsp
+  roost add transport tcp --root wsp        # 快照 wsp-tcp：嵌入 TCP 工程（94 个文件）
+  roost module add login --root wsp
+  roost add gate --root wsp                 # 独立 Gate 工程（131 个文件）
+
+结果：diff -r gen-head gen-new（两份快照，命令输出去掉时间戳）
+  IDENTICAL-TREES
+  IDENTICAL out-access.txt / out-tcp.txt / out-login.txt / out-gate.txt
+
+# 声明 websocket 之后（roost add transport websocket）相对上面快照的差异
+
+## 嵌入 TCP 工程
+diff --color -r gen-new/wsp-tcp/internal/access/player/tcp/server_gen.go ws-embedded/internal/access/player/tcp/server_gen.go
+46a47,51
+> 		WebSocket             struct {
+> 			Addr           string `config:"addr" help:"WebSocket 监听地址 host:port；空串不开。浏览器经它连接，每条二进制消息装一个 RS v2 帧，握手、票据、限额与 TCP 相同；TLS 由前置负载均衡终结（wss）"`
+> 			Path           string `config:"path" help:"接受 WebSocket 升级的 HTTP 路径（精确匹配）；不写取 /ws"`
+> 			AllowedOrigins string `config:"allowed_origins" help:"允许的浏览器页面来源，逗号分隔（game.example.com、https://*.cdn.example.com）；为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行"`
+> 		} `config:"websocket"`
+84a90,91
+> 		// access.player.transports 含 websocket：同一套会话另开 WebSocket 监听（addr 为空不开）。
+> 		WebSocket: gateway.WebSocketConfig{Addr: tcp.WebSocket.Addr, Path: tcp.WebSocket.Path, AllowedOrigins: tcp.WebSocket.AllowedOrigins},
+diff --color -r gen-new/wsp-tcp/roost.yaml ws-embedded/roost.yaml
+42a43
+>             - websocket
+
+## 独立 Gate 工程
+diff --color -r gen-new/wsp/internal/access/player/tcp/server_gen.go ws-gate/internal/access/player/tcp/server_gen.go
+46a47,51
+> 		WebSocket             struct {
+> 			Addr           string `config:"addr" help:"WebSocket 监听地址 host:port；空串不开。浏览器经它连接，每条二进制消息装一个 RS v2 帧，握手、票据、限额与 TCP 相同；TLS 由前置负载均衡终结（wss）"`
+> 			Path           string `config:"path" help:"接受 WebSocket 升级的 HTTP 路径（精确匹配）；不写取 /ws"`
+> 			AllowedOrigins string `config:"allowed_origins" help:"允许的浏览器页面来源，逗号分隔（game.example.com、https://*.cdn.example.com）；为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行"`
+> 		} `config:"websocket"`
+84a90,91
+> 		// access.player.transports 含 websocket：同一套会话另开 WebSocket 监听（addr 为空不开）。
+> 		WebSocket: gateway.WebSocketConfig{Addr: tcp.WebSocket.Addr, Path: tcp.WebSocket.Path, AllowedOrigins: tcp.WebSocket.AllowedOrigins},
+475a483,487
+> 		WebSocket     struct {
+> 			Addr           string `config:"addr" help:"WebSocket 监听地址 host:port；空串不开。浏览器经它连接，每条二进制消息装一个 RS v2 帧，握手、票据、限额与 TCP 相同；TLS 由前置负载均衡终结（wss）"`
+> 			Path           string `config:"path" help:"接受 WebSocket 升级的 HTTP 路径（精确匹配）；不写取 /ws"`
+> 			AllowedOrigins string `config:"allowed_origins" help:"允许的浏览器页面来源，逗号分隔（game.example.com、https://*.cdn.example.com）；为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行"`
+> 		} `config:"websocket"`
+513a526,527
+> 	// access.player.transports 含 websocket：Gate 同一套会话另开 WebSocket 监听（addr 为空不开）。
+> 	options.TCP.WebSocket = gateway.WebSocketConfig{Addr: settings.Gate.WebSocket.Addr, Path: settings.Gate.WebSocket.Path, AllowedOrigins: settings.Gate.WebSocket.AllowedOrigins}
+diff --color -r gen-new/wsp/roost.yaml ws-gate/roost.yaml
+54a55
+>             - websocket

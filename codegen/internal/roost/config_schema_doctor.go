@@ -186,14 +186,14 @@ func serviceConfigSchema(m Manifest, service string) (configschema.Schema, error
 	if access, ok := m.Access["player"]; ok && access.Service == service {
 		schemas = append(schemas, playerAccessSchema())
 		if contains(access.Transports, "tcp") {
-			schemas = append(schemas, playerTCPSchema())
+			schemas = append(schemas, playerTCPSchemaFor(m))
 		}
 		if strings.TrimSpace(access.Gate) != "" {
 			schemas = append(schemas, playerGateIngressSchema())
 		}
 	}
 	if isPlayerGateService(m, service) {
-		schemas = append(schemas, playerGateSchema())
+		schemas = append(schemas, playerGateSchemaFor(m))
 	}
 	return configschema.Merge(schemas...)
 }
@@ -218,9 +218,11 @@ func allFrameworkConfigSchema() configschema.Schema {
 	for _, name := range names {
 		add(kitConfigSchemas[name])
 	}
-	add(playerTCPSchema())
+	// 带 websocket 传输的声明是不带的超集（多出 player_access.tcp / gate.websocket.*）。
+	webSocket := Manifest{Access: map[string]AccessSpec{"player": {Transports: []string{"tcp", "websocket"}}}}
+	add(playerTCPSchemaFor(webSocket))
 	add(playerAccessSchema())
-	add(playerGateSchema())
+	add(playerGateSchemaFor(webSocket))
 	return all
 }
 

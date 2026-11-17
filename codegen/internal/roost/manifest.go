@@ -414,13 +414,17 @@ func (m Manifest) Validate() error {
 		}
 		seenTransports := make(map[string]bool, len(access.Transports))
 		for _, transport := range access.Transports {
-			if transport != "tcp" {
-				joined = errors.Join(joined, fmt.Errorf("access.%s has unsupported transport %q; supported: tcp", name, transport))
+			if transport != "tcp" && transport != "websocket" {
+				joined = errors.Join(joined, fmt.Errorf("access.%s has unsupported transport %q; supported: tcp, websocket", name, transport))
 			}
 			if seenTransports[transport] {
 				joined = errors.Join(joined, fmt.Errorf("access.%s repeats transport %q", name, transport))
 			}
 			seenTransports[transport] = true
+		}
+		// websocket 不是独立的接入：它是玩家 TCP 会话的第二个监听（gateway.TCPConfig.WebSocket），配置跟着 TCP 走。
+		if seenTransports["websocket"] && !seenTransports["tcp"] {
+			joined = errors.Join(joined, fmt.Errorf("access.%s transport websocket needs tcp (it is a second listener of the player TCP session); run: roost add transport tcp", name))
 		}
 	}
 	for name, access := range m.Access {

@@ -9,12 +9,14 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/wsconn"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"golang.org/x/time/rate"
 )
@@ -128,6 +130,7 @@ type TCPServer struct {
 
 	mu              sync.RWMutex
 	listener        net.Listener
+	webSocket       net.Listener // TCPConfig.WebSocket 开着时的 WebSocket 监听（wsconn.Listener）
 	ctx             context.Context
 	cancel          context.CancelFunc
 	connections     map[net.Conn]struct{}
@@ -188,8 +191,18 @@ func (server *TCPServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("player tcp: listen %s: %w", server.config.Addr, err)
 	}
+	// WebSocket 监听只是第二个连接来源：升级好的连接进同一个 acceptLoop，之后与 TCP 连接没有区别。
+	var webSocket net.Listener
+	if server.config.WebSocket.Addr != "" {
+		webSocket, err = wsconn.Listen(server.config.WebSocket.Addr, server.webSocketConfig())
+		if err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("player tcp: websocket listen %s: %w", server.config.WebSocket.Addr, err)
+		}
+	}
 	server.ctx, server.cancel = context.WithCancel(context.Background())
 	server.listener = listener
+	server.webSocket = webSocket
 	server.stopping = false
 	server.started = true
 	if server.transport != nil {
@@ -200,7 +213,39 @@ func (server *TCPServer) Start() error {
 	server.wait.Add(1)
 	go server.acceptLoop(listener)
 	slog.Info("player tcp listener started", "addr", listener.Addr().String(), "max_connections", server.config.MaxConnections)
+	if webSocket != nil {
+		server.wait.Add(1)
+		go server.acceptLoop(webSocket)
+		slog.Info("player websocket listener started", "addr", webSocket.Addr().String(), "path", server.config.WebSocket.path())
+	}
 	return nil
+}
+
+// webSocketConfig 是 WebSocket 监听的接入规则：单条消息上限是一个最大帧，升级请求的期限是握手期限。
+func (server *TCPServer) webSocketConfig() wsconn.Config {
+	return wsconn.Config{
+		Path:             server.config.WebSocket.path(),
+		AllowedOrigins:   server.config.WebSocket.Origins(),
+		MaxMessageBytes:  int64(server.config.MaxPayloadBytes) + headerSize,
+		HandshakeTimeout: server.config.HandshakeTimeout,
+		Rejected: func(_ *http.Request, err error) {
+			reason := "upgrade"
+			if errors.Is(err, wsconn.ErrOriginRejected) {
+				reason = "origin"
+			}
+			metrics.IncCounter("player_tcp_websocket_rejected_total", map[string]string{"reason": reason}, 1)
+		},
+	}
+}
+
+// WebSocketAddr 是 WebSocket 监听的实际地址；没开或未启动时为 nil。
+func (server *TCPServer) WebSocketAddr() net.Addr {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	if server.webSocket == nil {
+		return nil
+	}
+	return server.webSocket.Addr()
 }
 
 // Stop closes the listener and every connection, then waits within ctx for
@@ -213,8 +258,8 @@ func (server *TCPServer) Stop(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	server.mu.Lock()
-	listener, cancel := server.listener, server.cancel
-	server.listener, server.cancel = nil, nil
+	listener, webSocket, cancel := server.listener, server.webSocket, server.cancel
+	server.listener, server.webSocket, server.cancel = nil, nil, nil
 	server.stopping = true
 	if server.transport != nil {
 		server.transport.server.CompareAndSwap(server, nil)
@@ -233,6 +278,9 @@ func (server *TCPServer) Stop(ctx context.Context) error {
 	}
 	if listener != nil {
 		_ = listener.Close()
+	}
+	if webSocket != nil {
+		_ = webSocket.Close()
 	}
 	for _, connection := range connections {
 		_ = connection.Close()
