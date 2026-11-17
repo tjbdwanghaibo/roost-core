@@ -1,0 +1,15 @@
+found
+  start path (answered -> record created): n=95 mean=532 p50=404 p95=1147 max=1357
+  coordinator lifetime (created -> terminal): n=95 mean=2006 p50=2109 p95=3753 max=4484
+  poll lag (terminal -> robot saw it): n=95 mean=368 p50=303 p95=759 max=966
+  total (answered -> robot saw it): n=95 mean=2906 p50=3194 p95=4868 max=5330
+donate
+  start path (answered -> record created): n=95 mean=528 p50=469 p95=1188 max=1713
+  coordinator lifetime (created -> terminal): n=95 mean=1709 p50=1720 p95=3766 max=4948
+  poll lag (terminal -> robot saw it): n=95 mean=377 p50=360 p95=820 max=1036
+  total (answered -> robot saw it): n=95 mean=2614 p50=2719 p95=5343 max=6650
+reward
+  start path (answered -> record created): n=95 mean=459 p50=372 p95=1006 max=1440
+  coordinator lifetime (created -> terminal): n=95 mean=1614 p50=1474 p95=3766 max=4251
+  poll lag (terminal -> robot saw it): n=95 mean=330 p50=252 p95=723 max=966
+  total (answered -> robot saw it): n=95 mean=2404 p50=2278 p95=5125 max=5655

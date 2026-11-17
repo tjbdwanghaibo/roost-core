@@ -1,0 +1,87 @@
+[
+  {
+    "file": "robot.log",
+    "line": 8,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 03:47:15 WARN robot runner: scenario failed robot=61 player=900061 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 9,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 03:47:16 WARN robot runner: scenario failed robot=23 player=900023 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 10,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 03:47:16 WARN robot runner: scenario failed robot=34 player=900034 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 11,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 03:47:17 WARN robot runner: scenario failed robot=21 player=900021 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 12,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 03:47:18 WARN robot runner: scenario failed robot=71 player=900071 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1184,
+    "matches": [
+      "saga_unknown_or_waiting"
+    ],
+    "text": "{\"time\":\"2026-11-18T03:47:03.523994+08:00\",\"level\":\"WARN\",\"msg\":\"saga: partition skipped an invalid input\",\"goId\":790,\"frame\":276,\"server_time_ms\":1794944823523,\"partition\":6,\"kind\":\"result\",\"reason\":\"not_waiting\",\"err\":\"saga: step is not waiting for a result: command a3c173daec69323ac55f546183d01c7e:IOEUUC7P76MDRCFSKUUDH3E7FF:1:1:1\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1358,
+    "matches": [
+      "saga_unknown_or_waiting"
+    ],
+    "text": "{\"time\":\"2026-11-18T03:47:06.341795+08:00\",\"level\":\"WARN\",\"msg\":\"saga: partition skipped an invalid input\",\"goId\":794,\"frame\":332,\"server_time_ms\":1794944826341,\"partition\":10,\"kind\":\"result\",\"reason\":\"not_waiting\",\"err\":\"saga: step is not waiting for a result: command 877aab3ddcf3146465981ab02e9b5eeb:4JIY5Y3KDICEZFXRHPCYJZBRDB:1:1:1\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1668,
+    "matches": [
+      "saga_unknown_or_waiting"
+    ],
+    "text": "{\"time\":\"2026-11-18T03:47:11.066441+08:00\",\"level\":\"WARN\",\"msg\":\"saga: partition skipped an invalid input\",\"goId\":794,\"frame\":427,\"server_time_ms\":1794944831066,\"partition\":10,\"kind\":\"result\",\"reason\":\"not_waiting\",\"err\":\"saga: step is not waiting for a result: command 94805e18c48307323f00d01d4dc1e666:65R7B35UHK6QOOMHZVOXPTX7FH:1:1:2\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1884,
+    "matches": [
+      "saga_unknown_or_waiting"
+    ],
+    "text": "{\"time\":\"2026-11-18T03:47:14.178265+08:00\",\"level\":\"WARN\",\"msg\":\"saga: partition skipped an invalid input\",\"goId\":794,\"frame\":489,\"server_time_ms\":1794944834178,\"partition\":10,\"kind\":\"result\",\"reason\":\"not_waiting\",\"err\":\"saga: step is not waiting for a result: command 7ae8beb714d59c6c3323b2d6a552cad9:CXWZNRI2ND6ZQLVSXZTOPKUX77:1:1:2\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 2012,
+    "matches": [
+      "saga_unknown_or_waiting"
+    ],
+    "text": "{\"time\":\"2026-11-18T03:47:15.561935+08:00\",\"level\":\"WARN\",\"msg\":\"saga: partition skipped an invalid input\",\"goId\":826,\"frame\":517,\"server_time_ms\":1794944835561,\"partition\":14,\"kind\":\"result\",\"reason\":\"not_waiting\",\"err\":\"saga: step is not waiting for a result: command 8c5bff9ac7c69aaddcc3f0d490515981:7JUJ4645OTHNYRP3RYUYV2THBV:1:1:3\"}"
+  }
+]

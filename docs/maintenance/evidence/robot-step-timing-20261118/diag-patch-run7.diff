@@ -1,0 +1,55 @@
+diff --git a/modules/alliance/files/game/controllers/alliance.go.tmpl b/modules/alliance/files/game/controllers/alliance.go.tmpl
+index 1642ea66..056bad7d 100644
+--- a/modules/alliance/files/game/controllers/alliance.go.tmpl
++++ b/modules/alliance/files/game/controllers/alliance.go.tmpl
+@@ -296,6 +296,9 @@ func (controller *Controller) HandleAllianceOpStatus(context *playeraccess.Conte
+ 		// completed saga is the alliance service's answer. Idempotent.
+ 		controller.showAlliance(context, state.AllianceID, 0)
+ 	}
++	if record.Status.Terminal() { // DIAGNOSTIC ONLY, not committed
++		slog.Info("diag saga lifetime", "op", request.Op, "saga_key", request.SagaKey,"created_ms", record.CreatedAt.UnixMilli(), "updated_ms", record.UpdatedAt.UnixMilli(), "seen_ms", time.Now().UnixMilli())
++	}
+ 	return &pb.AllianceOpStatusResponse{Status: record.Status.String(), Step: int32(record.Step), LastError: record.LastError, AllianceID: state.AllianceID}, nil
+ }
+ 
+@@ -325,6 +328,7 @@ func (controller *Controller) startAllianceOp(context *playeraccess.Context, op
+ 		}
+ 		return &pb.AllianceResponse{Code: code, Reason: reason}, nil
+ 	}
++	slog.Info("diag saga start answered", "op", op, "saga_key", started, "answered_ms", time.Now().UnixMilli()) // DIAGNOSTIC ONLY, not committed
+ 	return &pb.AllianceResponse{SagaKey: started}, nil
+ }
+ 
+diff --git a/scripts/perf/demo-robot.sh b/scripts/perf/demo-robot.sh
+index 94dbf2ef..49dd0f90 100755
+--- a/scripts/perf/demo-robot.sh
++++ b/scripts/perf/demo-robot.sh
+@@ -89,6 +89,8 @@ s = p.read_text()
+ assert s.count('max_connections_per_ip: 128') == 1, 'expected default per-IP connection limit'
+ p.write_text(s.replace('max_connections_per_ip: 128', 'max_connections_per_ip: 512'))
+ PY
++sed -i '' 's/start_effect_workers: 4$/start_effect_workers: 16/' configs/service/config.game.yaml # DIAGNOSTIC ONLY, not committed
++grep -q 'start_effect_workers: 16$' configs/service/config.game.yaml || drill_fail 'diag patch missed'
+ mkdir -p internal/demorobotcapacity
+ cp "$repo_dir/scripts/testdata/demo-robot/capacity_test.go.txt" internal/demorobotcapacity/capacity_test.go
+ go test -c -o "$out/capacity.test" ./internal/demorobotcapacity
+diff --git a/wiring/saga/steps.go b/wiring/saga/steps.go
+index 8415e0df..c887bcff 100644
+--- a/wiring/saga/steps.go
++++ b/wiring/saga/steps.go
+@@ -421,6 +421,7 @@ func (step *registeredStep) countedNative() coresaga.NativeStepBody {
+ 	body, durable := step.native, step.durable
+ 	return func(ctx context.Context, native coresaga.NativeStep) error {
+ 		started := time.Now()
++		metrics.ObserveHistogram("saga.step.diag_command_age", metrics.Labels{"consumer": durable}, started.Sub(native.Command().CreatedAt)) // DIAGNOSTIC ONLY
+ 		err := body(ctx, native)
+ 		observeStepRun(durable, started, stepResult(err, true))
+ 		return err
+@@ -433,6 +434,7 @@ func (step *registeredStep) countedMongo() coresaga.StepHandler {
+ 	handler, durable := step.mongo, step.durable
+ 	return func(ctx context.Context, command coresaga.Command) (coresaga.Completion, error) {
+ 		started := time.Now()
++		metrics.ObserveHistogram("saga.step.diag_command_age", metrics.Labels{"consumer": durable}, started.Sub(command.CreatedAt)) // DIAGNOSTIC ONLY
+ 		completion, err := handler(ctx, command)
+ 		observeStepRun(durable, started, stepResult(err, err != nil || completion.Success))
+ 		return completion, err

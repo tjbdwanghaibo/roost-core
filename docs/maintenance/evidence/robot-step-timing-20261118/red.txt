@@ -1,0 +1,27 @@
+ok  	github.com/tjbdwanghaibo/roost-core/robot	0.282s [no tests to run]
+ok  	github.com/tjbdwanghaibo/roost-core/robot/action	0.520s [no tests to run]
+2026/11/18 03:21:17 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-032117-001 profile=smoke scenario=ping count=1 endpoint=""
+2026/11/18 03:21:17 INFO robot loadtest: run done run_id=robot-smoke-20261118-032117-001 profile=smoke state=finished stop_reason=completed started=1 success=1 failure=0 canceled=0 elapsed=20.522916ms err=<nil>
+--- FAIL: TestManagerIncludesRequestAndTrafficReports (0.03s)
+    loadtest_test.go:348: step report missing: []
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/loadtest	0.795s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/protocol	1.458s [no tests to run]
+2026/11/18 03:21:19 INFO robot runner: start executor=pool count=4 rate=1 scenario=stepped transport=tcp endpoint=127.0.0.1:49888
+2026/11/18 03:21:19 INFO robot runner: stop started=4 success=4 failure=0 canceled=0
+--- FAIL: TestRunnerReportsNamedStepsOfEveryRobot (0.00s)
+    runner_test.go:94: steps = []
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/runner	2.102s
+--- FAIL: TestSpecTimesEachTopLevelStep (0.02s)
+    scenario_test.go:250: step names = []
+--- FAIL: TestNestedStepsAccumulateIntoEveryEnclosingStep (0.01s)
+    scenario_test.go:291: steps = []
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/scenario	1.026s
+--- FAIL: TestStepReportAggregatesTimeRetriesAndWaits (0.00s)
+    report_test.go:87: steps = []
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/session	1.859s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/transport	1.242s [no tests to run]
+FAIL

@@ -1,0 +1,5 @@
+=== RUN   TestDemoRobotCapacity
+    capacity_test.go:65: count=100 state=failed stats={Scheduled:100 Started:100 Success:100 Failure:0 Canceled:0 LaunchFailed:0 DroppedCapacity:0 DroppedSchedule:0}
+    capacity_test.go:68: loadtest=exit status 1; incomplete/failed whole scenarios; see robot.json and robot.log
+--- FAIL: TestDemoRobotCapacity (30.04s)
+FAIL
