@@ -388,8 +388,10 @@ type RoleTransfer struct {
 	// Epoch 是发起时的 BindEpoch；提交之后角色的 BindEpoch 是 Epoch+1。
 	Epoch         uint64 `json:"epoch"`
 	StartedAtUnix int64  `json:"started_at_unix"`
-	// DeadlineUnix 是发起方给的期限（系统时间）。一期 account 只记录它：不自动中止（account 不知道源服
-	// 卸载到了哪一步），也不拒绝迟到的提交（中途停下一律向前恢复）；过期的换服由运维或游戏侧模块中止。
+	// DeadlineUnix 是发起方给的期限（系统时间，TransferRequest.TTLSeconds，缺省 DefaultTransferTTL）。期限之前
+	// 中途停下的由源服向前恢复（rehome 模块起服与定期按 ListRoleTransfers 续做）；到了期限（now >= DeadlineUnix）
+	// 就不能再提交：迟到的 CommitRoleTransfer 答 ErrTransferStale 并把这一次记为已中止，没有人来提交的由 account
+	// 进程的清扫中止（transfer_index.go，D8）。中止对源服安全：角色一直绑在源服，源服按“没换成”收尾。
 	DeadlineUnix int64  `json:"deadline_unix"`
 	Note         string `json:"note,omitempty"`
 }

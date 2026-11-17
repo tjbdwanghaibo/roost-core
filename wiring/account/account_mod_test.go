@@ -53,6 +53,24 @@ func TestModRefusesWithoutItsRequiredCollaborators(t *testing.T) {
 
 // The session secret is refused when empty, at Init. A secret checked at call
 // time turns an unset value into a silent outage.
+// 角色记录与在途换服的索引同一个脚本写（D8），Redis Cluster 上两个键要在同一个 slot：key_prefix 不带 hash tag 的
+// 配置在 Init 就被拒绝，不拖到第一次换服才在服务端报 CROSSSLOT；单机 Redis 照旧接受普通前缀。
+func TestModRefusesAClusterPrefixWithoutAHashTag(t *testing.T) {
+	mod := NewMod(acceptingVerifier(), &durableAllocator{}, simpleNameRules(), nil)
+	cfg := modConfig()
+	cfg.Set("redis.cluster_addrs", "127.0.0.1:1")
+	if err := mod.Init(cfg); err == nil || !strings.Contains(err.Error(), "account.key_prefix") {
+		t.Fatalf("a cluster with an untagged prefix: %v, want the key_prefix refused", err)
+	}
+	cfg.Set("account.key_prefix", "{roost:account}")
+	if err := mod.Init(cfg); err != nil {
+		t.Fatalf("a cluster with a tagged prefix: %v", err)
+	}
+	if err := mod.Init(modConfig()); err != nil {
+		t.Fatalf("a single Redis with a plain prefix: %v", err)
+	}
+}
+
 func TestModRefusesAnEmptySessionSecret(t *testing.T) {
 	mod := NewMod(acceptingVerifier(), &durableAllocator{}, simpleNameRules(), nil)
 	cfg := viper.New()

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 )
@@ -82,6 +83,8 @@ func KeyPrefix(cfg *viper.Viper) (string, error) {
 // config 是 account.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
+	// redis.cluster_addrs：角色记录与在途换服的索引同一个脚本写（D8），Redis Cluster 上 key_prefix 要带 hash tag。
+	kitredis.ClusterConfig
 	Account struct {
 		keyPrefixConfig
 		SessionSecret string        `config:"session_secret" required:"true" secret:"true" example:"CHANGE_ME"`
@@ -149,6 +152,9 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	settings.ApplyServiceMetrics(&m.metrics)
 	c := settings.Account
 	if err := mods.CheckKeyPrefix("account", c.KeyPrefix); err != nil {
+		return err
+	}
+	if err := mods.ValidateClusterKeyPrefix(settings.ClusterAddrs, "account", c.KeyPrefix); err != nil {
 		return err
 	}
 	missing := []string{}

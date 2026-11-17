@@ -160,6 +160,7 @@ type Accounts interface {
 	// its bind epoch. The caller guarantees the source no longer writes the
 	// player. Idempotent per transferID; ErrTransferStale (with the current
 	// binding) when that transfer was aborted or is not the one in flight.
+	// 过了期限（RoleTransfer.DeadlineUnix）的提交也答 ErrTransferStale，并把这一次换服当场记为已中止（D8）。
 	CommitRoleTransfer(ctx context.Context, playerID int64, transferID string) (binding RoleBinding, err error)
 
 	// AbortRoleTransfer abandons a transfer: the role stays on its server,
@@ -169,6 +170,16 @@ type Accounts interface {
 	// ErrTransferStale (with the committed binding) when that transfer
 	// already committed.
 	AbortRoleTransfer(ctx context.Context, playerID int64, transferID string, reason string) (binding RoleBinding, err error)
+
+	// ListRoleTransfers 列出在途的换服（transfer_index.go，D8），按期限从早到晚，至多 MaxListedTransfers 条；
+	// fromServerID 非 0 时只列从那个服发起的。每条是角色当前的绑定（Transfer 非空）。只读。源服的 rehome 模块
+	// 起服与之后定期用它把自己受理过、没做完的换服接着做；角色存储没有索引时答 ErrNoTransferIndex（不带业务码）。
+	ListRoleTransfers(ctx context.Context, fromServerID int32) (bindings []RoleBinding, err error)
+
+	// RoleBindingsAway 回答 playerIDs（至多 MaxBindingBatch 个）里哪些角色此刻不由 serverID 承载，返回它们的绑定；
+	// 由它承载的、不存在的不返回。只读。game 进程起服时用它核对本服库里的玩家（D7）：被绑到别处的那份档是换服
+	// 提交之后、删源库之前崩溃留下的旧档。
+	RoleBindingsAway(ctx context.Context, serverID int32, playerIDs []int64) (bindings []RoleBinding, err error)
 }
 
 var _ Accounts = (*Service)(nil)

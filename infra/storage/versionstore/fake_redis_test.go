@@ -223,9 +223,18 @@ func (f *fakeRedis) indexDue(keys []string, args []any) (any, error) {
 		}
 		return due[i].member < due[j].member
 	})
+	offset := 0
+	if len(args) >= 3 {
+		if offset, err = strconv.Atoi(args[2].(string)); err != nil {
+			return nil, err
+		}
+	}
 	out := make([]any, 0, len(due))
 	for i, item := range due {
-		if i >= limit {
+		if i < offset {
+			continue
+		}
+		if len(out) >= limit {
 			break
 		}
 		out = append(out, item.member)

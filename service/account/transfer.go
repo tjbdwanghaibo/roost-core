@@ -39,8 +39,10 @@ import (
 // 必须带上当前值（TransferRequest.ExpectSeq）。一次换服被中止之后，那个 Begin 的原样重放带的是旧序号，
 // 无论后来又有多少次发起与中止把 LastTransfer 换掉，它都发起不了。
 //
-// 一期的边界：不涉及已并入另一服的服（角色的绑定服已并入别处、或目标服已并入别处都拒绝）；期限
-// （RoleTransfer.DeadlineUnix）只记录，不由 account 执行；没有在途换服的索引与列举，MergeServer 不检查
+// 期限（RoleTransfer.DeadlineUnix，D8 A）由 account 执行：过了期限的提交被拒绝并当场记为已中止，没有人提交的
+// 由清扫中止；在途的换服有索引、能列举（transfer_index.go）。
+//
+// 边界：不涉及已并入另一服的服（角色的绑定服已并入别处、或目标服已并入别处都拒绝）；MergeServer 不检查
 // 是否有在途的换服指向被合并的服（提交时会被拒绝，由调用方中止）。
 
 const (
@@ -244,6 +246,9 @@ func (s *Service) commitRoleTransfer(ctx context.Context, playerID int64, transf
 		s.report.Replayed("commit_role_transfer")
 	case transferInFlight:
 		transfer := *role.Transfer
+		if transferExpired(&transfer, s.cfg.SystemNow().Unix()) {
+			return s.refuseLateCommit(ctx, playerID, transfer)
+		}
 		if err := s.transferTarget(ctx, role, transfer.To, false); err != nil {
 			s.report.Refused("commit_role_transfer", refusalReason(err))
 			return s.withBinding(ctx, role, err)
@@ -265,6 +270,10 @@ func (s *Service) commitRoleTransfer(ctx context.Context, playerID int64, transf
 			switch standingOf(current, id) {
 			case transferInFlight:
 				flight := *current.Transfer
+				if transferExpired(&flight, nowUnix) {
+					// 期限在上面的检查与这次写入之间到了：同样不提交。
+					return current, false, errTransferExpired
+				}
 				next := current.clone()
 				next.ServerID, next.BindEpoch, next.Transfer = flight.To, current.BindEpoch+1, nil
 				next.LastTransfer = &RoleTransferRecord{
@@ -280,6 +289,9 @@ func (s *Service) commitRoleTransfer(ctx context.Context, playerID int64, transf
 				return current, false, commitRefusal(current, id)
 			}
 		})
+		if errors.Is(err, errTransferExpired) {
+			return s.refuseLateCommit(ctx, playerID, transfer)
+		}
 		if err != nil {
 			if errors.Is(err, ErrTransferStale) {
 				// 这次换服没有被提交（并发的中止先落了）：上面可能刚补建的占位没有人再认，撤掉。
@@ -306,6 +318,26 @@ func (s *Service) commitRoleTransfer(ctx context.Context, playerID int64, transf
 	return s.bindingOf(ctx, role)
 }
 
+// errTransferExpired：提交时这一次换服已经过了期限（内部用，对外答 ErrTransferStale）。
+var errTransferExpired = errors.New("account: the transfer is past its deadline")
+
+// refuseLateCommit 拒绝一个过了期限的提交，并把这一次换服当场记为已中止（与清扫做的相同）：迟到的提交不能让角色
+// 改绑，换服也不该继续停在在途。答 ErrTransferStale 并带回中止之后的绑定（LastTransfer 是这一次、未提交），调用方
+// （rehome 模块）按“仍在源服”收尾。中止没有写成、因为期限之前的一个提交先落了地时，这一次就是已提交：按同一个 ID
+// 的重发回答（成功）。
+func (s *Service) refuseLateCommit(ctx context.Context, playerID int64, transfer RoleTransfer) (RoleBinding, error) {
+	binding, _, err := s.abortRoleTransfer(ctx, playerID, transfer.ID, expiryNote(&transfer), true)
+	if err != nil {
+		return RoleBinding{}, err
+	}
+	if last := binding.LastTransfer; last != nil && last.ID == transfer.ID && last.Committed {
+		return s.commitRoleTransfer(ctx, playerID, transfer.ID, "")
+	}
+	s.report.Refused("commit_role_transfer", "expired")
+	return binding, fmt.Errorf("%w: transfer %s of role %d passed its deadline %d before it was committed; it is recorded as aborted",
+		ErrTransferStale, transfer.ID, playerID, transfer.DeadlineUnix)
+}
+
 // AbortRoleTransfer 中止一次换服：角色留在源服，目标服的占位撤掉，这个 ID 记为已中止——之后它既不能
 // 提交，也不能用来重新发起。reason 写进 LastTransfer.Note（可空，长度上限同备注）。
 //
@@ -330,15 +362,31 @@ func (s *Service) AbortRoleTransfer(ctx context.Context, playerID int64, transfe
 	if err != nil {
 		return RoleBinding{}, err
 	}
+	binding, _, err := s.abortRoleTransfer(ctx, playerID, id, reason, false)
+	return binding, err
+}
+
+// errTransferNotExpired 是 abortRoleTransfer(expiredOnly) 在写入那一刻发现换服还没过期（或已经不在途）：不中止。
+var errTransferNotExpired = errors.New("account: the transfer is not past its deadline")
+
+// abortRoleTransfer 是 AbortRoleTransfer 的实现。expiredOnly 是按期限的中止（清扫、迟到的提交）：只中止此刻仍在途、
+// 已经过期的这一次，角色记录的版本比较里再判一次——判定与写入之间换服被提交了、或者换成了另一次，都不动它
+// （applied=false，不报错）。applied 报告这一次调用是否把换服记为已中止。
+func (s *Service) abortRoleTransfer(ctx context.Context, playerID int64, id, reason string, expiredOnly bool) (RoleBinding, bool, error) {
 	role, err := s.loadRole(ctx, playerID)
 	if err != nil {
-		return RoleBinding{}, err
+		return RoleBinding{}, false, err
 	}
 	standing := standingOf(role, id)
+	if expiredOnly && (standing != transferInFlight || !transferExpired(role.Transfer, s.cfg.SystemNow().Unix())) {
+		binding, err := s.bindingOf(ctx, role)
+		return binding, false, err
+	}
+	applied := false
 	if standing == transferUnknown {
 		// 要把这个 ID 记进 LastTransfer：上一次换服的收尾先补完，否则它的记录被覆盖之后没有人再补。
 		if role, err = s.settleTransfer(ctx, role); err != nil {
-			return RoleBinding{}, err
+			return RoleBinding{}, false, err
 		}
 	}
 	switch standing {
@@ -347,12 +395,15 @@ func (s *Service) AbortRoleTransfer(ctx context.Context, playerID int64, transfe
 	case transferInFlight, transferUnknown:
 		nowUnix := s.cfg.SystemNow().Unix()
 		latest := role
-		stored, applied, err := s.cfg.Roles.Update(ctx, playerID, func(current Role, found bool) (Role, bool, error) {
+		stored, wrote, err := s.cfg.Roles.Update(ctx, playerID, func(current Role, found bool) (Role, bool, error) {
 			if !found {
 				return current, false, fmt.Errorf("%w: player %d", ErrRoleMissing, playerID)
 			}
 			latest = current
 			record := RoleTransferRecord{ID: id, From: current.ServerID, Epoch: current.BindEpoch, AtUnix: nowUnix, Note: reason}
+			if expiredOnly && (standingOf(current, id) != transferInFlight || !transferExpired(current.Transfer, nowUnix)) {
+				return current, false, errTransferNotExpired
+			}
 			switch standingOf(current, id) {
 			case transferInFlight:
 				record.From, record.To = current.Transfer.From, current.Transfer.To
@@ -370,14 +421,19 @@ func (s *Service) AbortRoleTransfer(ctx context.Context, playerID int64, transfe
 			next.Transfer, next.LastTransfer, next.TransferSeq = nil, &record, current.TransferSeq+1
 			return next, true, nil
 		})
+		if errors.Is(err, errTransferNotExpired) {
+			binding, err := s.bindingOf(ctx, latest)
+			return binding, false, err
+		}
 		if err != nil {
 			if errors.Is(err, ErrTransferStale) || errors.Is(err, ErrTransferInProgress) {
 				s.report.Refused("abort_role_transfer", refusalReason(err))
-				return s.withBinding(ctx, latest, err)
+				binding, err := s.withBinding(ctx, latest, err)
+				return binding, false, err
 			}
-			return RoleBinding{}, err
+			return RoleBinding{}, false, err
 		}
-		role = stored.Value.clone()
+		role, applied = stored.Value.clone(), wrote
 		if applied {
 			s.report.Accepted("abort_role_transfer")
 			slog.Info("account: role transfer aborted", "player_id", playerID, "transfer_id", id, "from", role.LastTransfer.From, "to", role.LastTransfer.To, "reason", reason)
@@ -387,12 +443,14 @@ func (s *Service) AbortRoleTransfer(ctx context.Context, playerID int64, transfe
 	default:
 		err := abortRefusal(role, id)
 		s.report.Refused("abort_role_transfer", refusalReason(err))
-		return s.withBinding(ctx, role, err)
+		binding, err := s.withBinding(ctx, role, err)
+		return binding, false, err
 	}
 	if role, err = s.settleTransfer(ctx, role); err != nil {
-		return RoleBinding{}, fmt.Errorf("account: transfer %s of role %d is recorded as aborted, but releasing its hold failed (re-send the same abort): %w", id, playerID, err)
+		return RoleBinding{}, applied, fmt.Errorf("account: transfer %s of role %d is recorded as aborted, but releasing its hold failed (re-send the same abort): %w", id, playerID, err)
 	}
-	return s.bindingOf(ctx, role)
+	binding, err := s.bindingOf(ctx, role)
+	return binding, applied, err
 }
 
 // transferStanding 是一个换服 ID 相对于一条角色记录的状态。三个写接口都先按它归类再决定，CAS 里对当前值

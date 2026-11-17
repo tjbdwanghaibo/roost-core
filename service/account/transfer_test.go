@@ -1646,3 +1646,198 @@ func TestAHoldOfAnotherBindGenerationIsReplaced(t *testing.T) {
 	mustCommit(t, s, role.PlayerID, "t-1")
 	mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
 }
+
+// --- 期限（D8 A，维护者 2026-11-14）：过期的换服不能停在在途，迟到的提交按期限拒绝 ---
+
+// transferDeadlineFixture 是 transferFixture 加上可拨的时钟（业务时钟与系统时钟是同一个）。
+func transferDeadlineFixture(t *testing.T, mutate ...func(*Config)) (*Service, Config, Role, *clock) {
+	t.Helper()
+	s, clock, cfg := pendingContractService(t, mutate...)
+	upsertOpen(t, s, awaySID, thirdSID)
+	role, _ := roleOn(t, s, "mover", homeSID, "Mover")
+	return s, cfg, role, clock
+}
+
+// 期限一到，提交被拒绝（ErrTransferStale），而且这一次换服当场了结为已中止：角色留在源服、目标服的占位撤掉、
+// 带回的绑定说明了结果。期限之前的提交照常生效。
+func TestACommitAfterTheDeadlineIsRefusedAndAbortsTheTransfer(t *testing.T) {
+	s, cfg, role, clock := transferDeadlineFixture(t)
+	ctx := context.Background()
+	mustBegin(t, s, role.PlayerID, TransferRequest{ID: "late-1", FromSID: homeSID, To: awaySID, TTLSeconds: 60})
+	clock.advance(60 * time.Second)
+
+	binding, err := s.CommitRoleTransfer(ctx, role.PlayerID, "late-1")
+	if !errors.Is(err, ErrTransferStale) {
+		t.Fatalf("commit after the deadline = %+v, %v; want ErrTransferStale", binding, err)
+	}
+	if binding.ServingServerID != homeSID || binding.BindEpoch != 0 || binding.Transfer != nil ||
+		binding.LastTransfer == nil || binding.LastTransfer.ID != "late-1" || binding.LastTransfer.Committed {
+		t.Fatalf("binding with the late commit refused = %+v, want the source server with late-1 recorded as aborted", binding)
+	}
+	if stored := storedRole(t, cfg, role.PlayerID).Value; stored.ServerID != homeSID || stored.Transfer != nil {
+		t.Fatalf("stored role after the late commit = %+v", stored)
+	}
+	if hold, found := slotAt(t, cfg, role.AccountID, awaySID); found {
+		t.Fatalf("the target hold of an expired transfer is still there: %+v", hold)
+	}
+
+	// 期限之前的提交照常生效。
+	next := nextTransfer(t, s, role.PlayerID, "late-2", awaySID)
+	next.TTLSeconds = 60
+	mustBegin(t, s, role.PlayerID, next)
+	clock.advance(59 * time.Second)
+	if committed := mustCommit(t, s, role.PlayerID, "late-2"); committed.ServingServerID != awaySID {
+		t.Fatalf("commit within the deadline = %+v, want server %d", committed, awaySID)
+	}
+}
+
+// withTransferIndex 让角色存储带在途换服的索引：Redis 存储本来就带；进程内换成 MemoryRoles。
+func withTransferIndex(c *Config) {
+	if _, ok := c.Roles.(TransferIndex); !ok {
+		c.Roles = NewMemoryRoles()
+	}
+}
+
+// 没有人再来提交的换服，期限一到由清扫中止（不靠登录、不靠源服）：期限之前清扫什么都不做，到了期限中止一次、
+// 撤掉目标服的占位，之后再清扫没有可做的。
+func TestAnExpiredTransferNobodyCommitsIsAbortedBySweep(t *testing.T) {
+	s, cfg, role, clock := transferDeadlineFixture(t, withTransferIndex)
+	ctx := context.Background()
+	mustBegin(t, s, role.PlayerID, TransferRequest{ID: "stuck-1", FromSID: homeSID, To: awaySID, TTLSeconds: 60})
+
+	clock.advance(59 * time.Second)
+	if swept, err := s.SweepExpiredTransfers(ctx, 10); err != nil || swept != 0 {
+		t.Fatalf("sweep before the deadline = %d, %v; want nothing swept", swept, err)
+	}
+	if binding, _ := s.RoleBinding(ctx, role.PlayerID); binding.Transfer == nil {
+		t.Fatalf("the transfer was ended before its deadline: %+v", binding)
+	}
+
+	clock.advance(time.Second)
+	if swept, err := s.SweepExpiredTransfers(ctx, 10); err != nil || swept != 1 {
+		t.Fatalf("sweep at the deadline = %d, %v; want the stuck transfer aborted", swept, err)
+	}
+	binding, err := s.RoleBinding(ctx, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.ServingServerID != homeSID || binding.Transfer != nil || binding.LastTransfer == nil ||
+		binding.LastTransfer.ID != "stuck-1" || binding.LastTransfer.Committed || !strings.HasPrefix(binding.LastTransfer.Note, "expired") {
+		t.Fatalf("binding after the sweep = %+v, want stuck-1 recorded as aborted on expiry", binding)
+	}
+	if hold, found := slotAt(t, cfg, role.AccountID, awaySID); found {
+		t.Fatalf("the sweep left the target hold: %+v", hold)
+	}
+	if swept, err := s.SweepExpiredTransfers(ctx, 10); err != nil || swept != 0 {
+		t.Fatalf("second sweep = %d, %v; want nothing left", swept, err)
+	}
+	if listed, err := s.ListRoleTransfers(ctx, 0); err != nil || len(listed) != 0 {
+		t.Fatalf("transfers in flight after the sweep = %+v, %v; want none", listed, err)
+	}
+	// 中止过的 ID 照常挡住迟到的提交。
+	if _, err := s.CommitRoleTransfer(ctx, role.PlayerID, "stuck-1"); !errors.Is(err, ErrTransferStale) {
+		t.Fatalf("commit of the swept transfer = %v, want ErrTransferStale", err)
+	}
+}
+
+// account 进程的周期工作（Server.Serve）真的在清扫：过期的换服不需要任何调用方就会被中止。
+func TestTheAccountServerSweepsExpiredTransfers(t *testing.T) {
+	saved := transferSweepEvery
+	transferSweepEvery = 10 * time.Millisecond
+	t.Cleanup(func() { transferSweepEvery = saved })
+	s, _, role, clock := transferDeadlineFixture(t, withTransferIndex)
+	mustBegin(t, s, role.PlayerID, TransferRequest{ID: "served-1", FromSID: homeSID, To: awaySID, TTLSeconds: 1})
+	clock.advance(time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- NewServer(s).Serve(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		binding, err := s.RoleBinding(context.Background(), role.PlayerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if binding.Transfer == nil && binding.LastTransfer != nil && binding.LastTransfer.ID == "served-1" && !binding.LastTransfer.Committed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the account server did not abort the expired transfer: %+v", binding)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-served; err != nil {
+		t.Fatalf("Serve returned %v", err)
+	}
+}
+
+// 在途的换服都列得出来（按期限从早到晚），能按发起服过滤；了结的不再列；经总线调用与本地一样。
+func TestListRoleTransfersListsTransfersInFlightByDeadline(t *testing.T) {
+	s, _, first, _ := transferDeadlineFixture(t, withTransferIndex)
+	ctx := context.Background()
+	second, _ := roleOn(t, s, "second", awaySID, "Second")
+	mustBegin(t, s, first.PlayerID, TransferRequest{ID: "a", FromSID: homeSID, To: awaySID, TTLSeconds: 120})
+	mustBegin(t, s, second.PlayerID, TransferRequest{ID: "b", FromSID: awaySID, To: thirdSID, TTLSeconds: 60})
+
+	ids := func(bindings []RoleBinding) []string {
+		var out []string
+		for _, binding := range bindings {
+			out = append(out, fmt.Sprintf("%d:%s:%d->%d", binding.PlayerID, binding.Transfer.ID, binding.Transfer.From, binding.Transfer.To))
+		}
+		return out
+	}
+	for name, accounts := range roleOnServerClients(t, s) {
+		all, err := accounts.ListRoleTransfers(ctx, 0)
+		if err != nil {
+			t.Fatalf("%s: list: %v", name, err)
+		}
+		want := []string{fmt.Sprintf("%d:b:%d->%d", second.PlayerID, awaySID, thirdSID), fmt.Sprintf("%d:a:%d->%d", first.PlayerID, homeSID, awaySID)}
+		if got := ids(all); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s: transfers in flight = %v, want %v (earliest deadline first)", name, got, want)
+		}
+		fromHome, err := accounts.ListRoleTransfers(ctx, homeSID)
+		if err != nil || len(fromHome) != 1 || fromHome[0].PlayerID != first.PlayerID || fromHome[0].ServingServerID != homeSID {
+			t.Fatalf("%s: transfers from %d = %v, %v; want only %d's", name, homeSID, ids(fromHome), err, first.PlayerID)
+		}
+	}
+	mustCommit(t, s, first.PlayerID, "a")
+	if all, err := s.ListRoleTransfers(ctx, 0); err != nil || len(all) != 1 || all[0].PlayerID != second.PlayerID {
+		t.Fatalf("transfers after committing a = %v, %v; want only b", ids(all), err)
+	}
+}
+
+// 没有索引的角色存储不假装列得出来。
+func TestListingTransfersNeedsTheIndex(t *testing.T) {
+	s, _, _ := newService(t)
+	if _, err := s.ListRoleTransfers(context.Background(), 0); !errors.Is(err, ErrNoTransferIndex) {
+		t.Fatalf("list without an index = %v, want ErrNoTransferIndex", err)
+	}
+	if _, err := s.SweepExpiredTransfers(context.Background(), 1); !errors.Is(err, ErrNoTransferIndex) {
+		t.Fatalf("sweep without an index = %v, want ErrNoTransferIndex", err)
+	}
+}
+
+// RoleBindingsAway 只答“此刻不由这个服承载”的角色：换走了的答，留在本服的、在途的（仍由源服承载）、不存在的不答。
+func TestRoleBindingsAwayNamesOnlyRolesServedElsewhere(t *testing.T) {
+	s, _, moved, _ := transferDeadlineFixture(t)
+	ctx := context.Background()
+	stays, _ := roleOn(t, s, "stays", homeSID, "Stays")
+	moving, _ := roleOn(t, s, "moving", homeSID, "Moving")
+	mustBegin(t, s, moved.PlayerID, TransferRequest{ID: "m", FromSID: homeSID, To: awaySID})
+	mustCommit(t, s, moved.PlayerID, "m")
+	mustBegin(t, s, moving.PlayerID, TransferRequest{ID: "n", FromSID: homeSID, To: awaySID})
+
+	for name, accounts := range roleOnServerClients(t, s) {
+		away, err := accounts.RoleBindingsAway(ctx, homeSID, []int64{stays.PlayerID, moved.PlayerID, moving.PlayerID, 987654})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(away) != 1 || away[0].PlayerID != moved.PlayerID || away[0].ServingServerID != awaySID || away[0].BindEpoch != 1 {
+			t.Fatalf("%s: roles away from %d = %+v, want only %d bound to %d", name, homeSID, away, moved.PlayerID, awaySID)
+		}
+		if _, err := accounts.RoleBindingsAway(ctx, homeSID, make([]int64, MaxBindingBatch+1)); !errors.Is(err, ErrRangeInvalid) {
+			t.Fatalf("%s: an oversized batch = %v, want ErrRangeInvalid", name, err)
+		}
+	}
+}

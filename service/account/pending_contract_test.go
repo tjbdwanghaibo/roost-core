@@ -57,6 +57,11 @@ func pendingContractService(t *testing.T, mutate ...func(*Config)) (*Service, *c
 	}
 	client := newAccountTestRedis(t, addr)
 	prefix := redistest.Prefix(t, addr, "revn06:account")
+	if os.Getenv("ROOST_REVIEW_CLUSTER") != "" {
+		// 角色记录与在途换服的索引同一个脚本写（transfer_index.go）：Cluster 上前缀要带 hash tag，与 wiring/account 的要求相同。
+		prefix = "{" + prefix + "}"
+		redistest.Cleanup(t, addr, prefix)
+	}
 	stores, err := NewRedisStores(client, prefix, time.Second)
 	if err != nil {
 		t.Fatal(err)

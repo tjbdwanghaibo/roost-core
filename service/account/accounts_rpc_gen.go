@@ -59,6 +59,8 @@ const (
 	MethodBeginRoleTransfer      = "account.BeginRoleTransfer"
 	MethodCommitRoleTransfer     = "account.CommitRoleTransfer"
 	MethodAbortRoleTransfer      = "account.AbortRoleTransfer"
+	MethodListRoleTransfers      = "account.ListRoleTransfers"
+	MethodRoleBindingsAway       = "account.RoleBindingsAway"
 )
 
 // Methods is every method on Accounts, in interface order.
@@ -89,6 +91,8 @@ var Methods = []string{
 	MethodBeginRoleTransfer,
 	MethodCommitRoleTransfer,
 	MethodAbortRoleTransfer,
+	MethodListRoleTransfers,
+	MethodRoleBindingsAway,
 }
 
 // rpcStatus is the envelope every response embeds.
@@ -496,6 +500,39 @@ type rpcAbortRoleTransferResponse struct {
 	Binding RoleBinding `json:"binding"`
 }
 
+// rpcListRoleTransfersRequest is the ListRoleTransfers request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcListRoleTransfersRequest struct {
+	FromServerID int32 `json:"from_server_id"`
+}
+
+// rpcListRoleTransfersResponse is the ListRoleTransfers response on the wire.
+type rpcListRoleTransfersResponse struct {
+	rpcStatus
+	Bindings []RoleBinding `json:"bindings"`
+}
+
+// rpcRoleBindingsAwayRequest is the RoleBindingsAway request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcRoleBindingsAwayRequest struct {
+	ServerID  int32   `json:"server_id"`
+	PlayerIDs []int64 `json:"player_ids"`
+}
+
+// rpcRoleBindingsAwayResponse is the RoleBindingsAway response on the wire.
+type rpcRoleBindingsAwayResponse struct {
+	rpcStatus
+	Bindings []RoleBinding `json:"bindings"`
+}
+
 // --- server ---
 
 // RegisterHandlers publishes Accounts on a bus.
@@ -695,6 +732,22 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			binding, err := service.AbortRoleTransfer(ctx.Context(), wire.PlayerID, wire.TransferID, wire.Reason)
 			return rpcAbortRoleTransferResponse{rpcStatus: statusOf(err), Binding: binding}, nil
+		},
+		MethodListRoleTransfers: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcListRoleTransfersRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcListRoleTransfersResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			bindings, err := service.ListRoleTransfers(ctx.Context(), wire.FromServerID)
+			return rpcListRoleTransfersResponse{rpcStatus: statusOf(err), Bindings: bindings}, nil
+		},
+		MethodRoleBindingsAway: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcRoleBindingsAwayRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcRoleBindingsAwayResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			bindings, err := service.RoleBindingsAway(ctx.Context(), wire.ServerID, wire.PlayerIDs)
+			return rpcRoleBindingsAwayResponse{rpcStatus: statusOf(err), Bindings: bindings}, nil
 		},
 	}
 	// Registered against Methods rather than by ranging the map, so a method
@@ -1015,6 +1068,7 @@ func (c *BusClient) BeginRoleTransfer(ctx context.Context, playerID int64, reque
 // its bind epoch. The caller guarantees the source no longer writes the
 // player. Idempotent per transferID; ErrTransferStale (with the current
 // binding) when that transfer was aborted or is not the one in flight.
+// 过了期限（RoleTransfer.DeadlineUnix）的提交也答 ErrTransferStale，并把这一次换服当场记为已中止（D8）。
 // CommitRoleTransfer implements Accounts.
 func (c *BusClient) CommitRoleTransfer(ctx context.Context, playerID int64, transferID string) (RoleBinding, error) {
 	var resp rpcCommitRoleTransferResponse
@@ -1040,6 +1094,31 @@ func (c *BusClient) AbortRoleTransfer(ctx context.Context, playerID int64, trans
 		Reason:     reason,
 	}, &resp)
 	return resp.Binding, err
+}
+
+// ListRoleTransfers 列出在途的换服（transfer_index.go，D8），按期限从早到晚，至多 MaxListedTransfers 条；
+// fromServerID 非 0 时只列从那个服发起的。每条是角色当前的绑定（Transfer 非空）。只读。源服的 rehome 模块
+// 起服与之后定期用它把自己受理过、没做完的换服接着做；角色存储没有索引时答 ErrNoTransferIndex（不带业务码）。
+// ListRoleTransfers implements Accounts.
+func (c *BusClient) ListRoleTransfers(ctx context.Context, fromServerID int32) ([]RoleBinding, error) {
+	var resp rpcListRoleTransfersResponse
+	err := c.call(ctx, MethodListRoleTransfers, rpcListRoleTransfersRequest{
+		FromServerID: fromServerID,
+	}, &resp)
+	return resp.Bindings, err
+}
+
+// RoleBindingsAway 回答 playerIDs（至多 MaxBindingBatch 个）里哪些角色此刻不由 serverID 承载，返回它们的绑定；
+// 由它承载的、不存在的不返回。只读。game 进程起服时用它核对本服库里的玩家（D7）：被绑到别处的那份档是换服
+// 提交之后、删源库之前崩溃留下的旧档。
+// RoleBindingsAway implements Accounts.
+func (c *BusClient) RoleBindingsAway(ctx context.Context, serverID int32, playerIDs []int64) ([]RoleBinding, error) {
+	var resp rpcRoleBindingsAwayResponse
+	err := c.call(ctx, MethodRoleBindingsAway, rpcRoleBindingsAwayRequest{
+		ServerID:  serverID,
+		PlayerIDs: playerIDs,
+	}, &resp)
+	return resp.Bindings, err
 }
 
 // --- capability ---
@@ -1154,6 +1233,14 @@ func (c capability) CommitRoleTransfer(ctx context.Context, playerID int64, tran
 
 func (c capability) AbortRoleTransfer(ctx context.Context, playerID int64, transferID string, reason string) (RoleBinding, error) {
 	return c.inner.AbortRoleTransfer(ctx, playerID, transferID, reason)
+}
+
+func (c capability) ListRoleTransfers(ctx context.Context, fromServerID int32) ([]RoleBinding, error) {
+	return c.inner.ListRoleTransfers(ctx, fromServerID)
+}
+
+func (c capability) RoleBindingsAway(ctx context.Context, serverID int32, playerIDs []int64) ([]RoleBinding, error) {
+	return c.inner.RoleBindingsAway(ctx, serverID, playerIDs)
 }
 
 // Capability wraps a Accounts for registration. Both Mods use it, so the

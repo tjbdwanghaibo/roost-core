@@ -495,6 +495,145 @@ func TestAccountRoleTransferRunsOnRedis(t *testing.T) {
 	}
 }
 
+// 在途换服的索引、列举与按期限了结（D8 A）在真实 Redis 上：索引是角色存储自带的有序集合
+// （<前缀>:transfers，分数是期限），与角色记录同一个脚本写——发起把角色放进去，提交、中止、清扫把它拿出来，
+// 不需要另一次写。两个 account 实例共用一套存储：一个发起，另一个列得出、按期限拒绝迟到的提交、清扫过期的。
+func TestAccountTransferDeadlinesAndIndexOnRedis(t *testing.T) {
+	c := client(t)
+	root := prefix(t, "accountdeadline")
+	stores, err := account.NewRedisStores(c, root, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clockMu sync.Mutex
+	now := time.Unix(1_900_000_000, 0)
+	systemNow := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); defer clockMu.Unlock(); now = now.Add(d) }
+	var next int64 = 9000
+	var idMu sync.Mutex
+	newService := func() *account.Service {
+		t.Helper()
+		service, err := account.New(account.Config{
+			Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
+			Slots: stores.Slots, Names: stores.Names,
+			Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
+				return account.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil
+			}),
+			Allocator: account.AllocatorFunc(func(context.Context, int32) (int64, error) {
+				idMu.Lock()
+				defer idMu.Unlock()
+				next++
+				return next, nil
+			}),
+			NameRules:     account.NameValidatorFunc(func(string) error { return nil }),
+			SessionSecret: "itest-secret",
+			SystemNow:     systemNow,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service
+	}
+	first, second := newService(), newService()
+	ctx := context.Background()
+	for _, sid := range []int32{1, 2, 3} {
+		if _, err := first.UpsertServer(ctx, account.GameServer{ID: sid, Status: account.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roleOn := func(openID string, sid int32) account.Role {
+		t.Helper()
+		acct, err := first.Login(ctx, account.Identity{Channel: "store", OpenID: openID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		role, err := first.CreateRole(ctx, acct.ID, sid, openID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return role
+	}
+	indexed := func() map[string]float64 {
+		t.Helper()
+		members, err := c.ZRangeWithScores(ctx, root+":transfers", 0, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]float64{}
+		for _, member := range members {
+			out[member.Member] = member.Score
+		}
+		return out
+	}
+
+	late, stuck, done := roleOn("late", 1), roleOn("stuck", 1), roleOn("done", 2)
+	start := systemNow().Unix()
+	for _, begin := range []struct {
+		role account.Role
+		id   string
+		from int32
+		to   int32
+		ttl  int64
+	}{{late, "late-1", 1, 2, 30}, {stuck, "stuck-1", 1, 3, 60}, {done, "done-1", 2, 3, 600}} {
+		if _, err := first.BeginRoleTransfer(ctx, begin.role.PlayerID, account.TransferRequest{ID: begin.id, FromSID: begin.from, To: begin.to, TTLSeconds: begin.ttl}); err != nil {
+			t.Fatalf("begin %s: %v", begin.id, err)
+		}
+	}
+	key := func(role account.Role) string { return fmt.Sprint(role.PlayerID) }
+	if got := indexed(); len(got) != 3 || got[key(late)] != float64(start+30) || got[key(stuck)] != float64(start+60) || got[key(done)] != float64(start+600) {
+		t.Fatalf("the transfer index on real Redis = %v, want the three roles scored by their deadlines", got)
+	}
+	listed, err := second.ListRoleTransfers(ctx, 1)
+	if err != nil || len(listed) != 2 || listed[0].PlayerID != late.PlayerID || listed[1].PlayerID != stuck.PlayerID {
+		t.Fatalf("transfers from server 1 listed by another instance = %+v, %v; want late then stuck", listed, err)
+	}
+
+	// 期限之内提交照常，索引里随之没有它。
+	if _, err := second.CommitRoleTransfer(ctx, done.PlayerID, "done-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, still := indexed()[key(done)]; still {
+		t.Fatal("a committed transfer is still in the index")
+	}
+
+	// 过了期限的提交被拒绝，当场记为已中止。
+	advance(30 * time.Second)
+	binding, err := second.CommitRoleTransfer(ctx, late.PlayerID, "late-1")
+	if !errors.Is(err, account.ErrTransferStale) || binding.ServingServerID != 1 || binding.Transfer != nil || binding.LastTransfer == nil || binding.LastTransfer.Committed {
+		t.Fatalf("a late commit on real Redis = %+v, %v; want ErrTransferStale and the role left on server 1", binding, err)
+	}
+	if _, still := indexed()[key(late)]; still {
+		t.Fatal("a transfer refused on its deadline is still in the index")
+	}
+
+	// 没人提交的，由清扫中止（另一个实例上跑）；期限之前不动。
+	if swept, err := first.SweepExpiredTransfers(ctx, 10); err != nil || swept != 0 {
+		t.Fatalf("sweep before stuck-1's deadline = %d, %v", swept, err)
+	}
+	advance(30 * time.Second)
+	if swept, err := first.SweepExpiredTransfers(ctx, 10); err != nil || swept != 1 {
+		t.Fatalf("sweep at stuck-1's deadline = %d, %v; want 1", swept, err)
+	}
+	if got := indexed(); len(got) != 0 {
+		t.Fatalf("the transfer index after the sweep = %v, want empty", got)
+	}
+	if binding, err := second.RoleBinding(ctx, stuck.PlayerID); err != nil || binding.ServingServerID != 1 || binding.Transfer != nil || binding.LastTransfer == nil || binding.LastTransfer.ID != "stuck-1" || binding.LastTransfer.Committed {
+		t.Fatalf("stuck after the sweep = %+v, %v", binding, err)
+	}
+	if listed, err := second.ListRoleTransfers(ctx, 0); err != nil || len(listed) != 0 {
+		t.Fatalf("transfers in flight after everything settled = %+v, %v", listed, err)
+	}
+	// 起服核对（D7）：done 已经从 2 服换去 3 服，2 服库里若还有他的档就是旧档；late、stuck 的中止没有动绑定，仍在 1 服。
+	away, err := second.RoleBindingsAway(ctx, 1, []int64{late.PlayerID, stuck.PlayerID})
+	if err != nil || len(away) != 0 {
+		t.Fatalf("roles away from server 1 = %+v, %v; want none", away, err)
+	}
+	away, err = second.RoleBindingsAway(ctx, 2, []int64{done.PlayerID})
+	if err != nil || len(away) != 1 || away[0].ServingServerID != 3 || away[0].BindEpoch != 1 {
+		t.Fatalf("roles away from server 2 = %+v, %v; want done bound to 3", away, err)
+	}
+}
+
 // --- match ---
 
 func TestMatchRunsOnRedis(t *testing.T) {

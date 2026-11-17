@@ -59,14 +59,19 @@ func NewRedisStores(client versionstore.RedisClient, prefix string, claimTTL tim
 	if err != nil {
 		return RedisStores{}, fmt.Errorf("account: account store: %w", err)
 	}
-	roles, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[int64, Role]{
+	// 角色存储带在途换服的索引（transfer_index.go）：Transfer 非空的角色按期限排在 <前缀>:transfers 里，
+	// 与角色记录同一个脚本写，所以角色键与索引键要在同一个 slot——Redis Cluster 上前缀要带 hash tag
+	// （wiring/account 的 Mod 用 ValidateClusterKeyPrefix 检查）。
+	roleStore, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[int64, Role]{
 		Prefix: prefix + ":role:",
 		KeyOf:  func(playerID int64) string { return strconv.FormatInt(playerID, 10) },
 		Codec:  versionstore.JSONCodec[Role]{},
+		Index:  &versionstore.RedisIndex[Role]{Key: prefix + ":transfers", Entry: transferIndexEntry},
 	})
 	if err != nil {
 		return RedisStores{}, fmt.Errorf("account: role store: %w", err)
 	}
+	roles := redisRoles{roleStore}
 	servers, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[int32, GameServer]{
 		Prefix: prefix + ":srv:",
 		KeyOf:  func(id int32) string { return strconv.FormatInt(int64(id), 10) },

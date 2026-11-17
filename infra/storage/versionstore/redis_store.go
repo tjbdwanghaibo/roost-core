@@ -189,6 +189,26 @@ func (s *RedisStore[K, T]) IndexDue(ctx context.Context, maxScore float64, limit
 
 // IndexDueIn reads one named index set, for a store whose index is per owner.
 func (s *RedisStore[K, T]) IndexDueIn(ctx context.Context, indexKey string, maxScore float64, limit int) ([]string, error) {
+	return s.indexRange(ctx, indexKey, maxScore, 0, limit)
+}
+
+// IndexPage 是 IndexDue 带偏移的版本：跳过分数不高于 maxScore 的前 offset 个条目，再取至多 limit 个，分数低的在前。
+// 给要把整个清单读完的读者用（列举、运维查看），不是给重试循环用——那里每次都该从最低分重新读（见 IndexDue）。
+// 读与读之间清单会变，按偏移翻页可能漏掉或重复个别条目；调用方按值再核对一次。
+func (s *RedisStore[K, T]) IndexPage(ctx context.Context, maxScore float64, offset, limit int) ([]string, error) {
+	if s.cfg.Index == nil {
+		return nil, fmt.Errorf("versionstore: this store has no index")
+	}
+	if s.cfg.Index.KeyOf != nil {
+		return nil, fmt.Errorf("versionstore: this store indexes per owner; page one owner's set with IndexDueIn")
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("versionstore: index offset %d is negative", offset)
+	}
+	return s.indexRange(ctx, s.cfg.Index.Key, maxScore, offset, limit)
+}
+
+func (s *RedisStore[K, T]) indexRange(ctx context.Context, indexKey string, maxScore float64, offset, limit int) ([]string, error) {
 	if s.cfg.Index == nil {
 		return nil, fmt.Errorf("versionstore: this store has no index")
 	}
@@ -199,7 +219,7 @@ func (s *RedisStore[K, T]) IndexDueIn(ctx context.Context, indexKey string, maxS
 		return nil, nil
 	}
 	raw, err := s.client.Eval(ctx, indexDueScript, []string{indexKey},
-		strconv.FormatFloat(maxScore, 'f', -1, 64), strconv.Itoa(limit))
+		strconv.FormatFloat(maxScore, 'f', -1, 64), strconv.Itoa(limit), strconv.Itoa(offset))
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +320,7 @@ return redis.call("ZREM", KEYS[2], ARGV[1])
 `
 
 const indexDueScript = `
-return redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2])
+return redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", ARGV[3], ARGV[2])
 `
 
 func (s *RedisStore[K, T]) key(key K) (string, error) {

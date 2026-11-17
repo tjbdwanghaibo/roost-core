@@ -9,6 +9,7 @@ import "github.com/tjbdwanghaibo/roost-core/internal/configschema"
 var kitConfigSchemas = map[string]configschema.Schema{
 	"account": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
+		{Name: "redis.cluster_addrs", Kind: "strings", Help: "Redis Cluster 种子地址（逗号分隔或 YAML 列表）；写了就按 Cluster 连接，redis.addr 不再使用"},
 		{Name: "account.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:account", Required: true},
 		{Name: "account.session_secret", Kind: "string", Starter: true, Example: "CHANGE_ME", Required: true, Secret: true},
 		{Name: "account.session_ttl", Kind: "duration", Default: "30m", Min: "1ns", Starter: true, Example: "30m"},
