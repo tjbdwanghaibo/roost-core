@@ -3,12 +3,14 @@ package handler
 import (
 	"errors"
 	db "example.com/mmorpg-practice/db"
+	"example.com/mmorpg-practice/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
+// IMMOEntity 是 MMORPG handler 收的 Player：生成的实体总接口（Dao 与 wallet / bag / task 组件），
+// 金币、材料与击杀任务都经模块组件改，与玩法字段同一笔 Nest 事务提交或回滚。
 type IMMOEntity interface {
-	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
+	view.PlayerEntity
 }
 type IMMOSceneEntity interface {
 	entity.IThreadSafeEntity
@@ -60,11 +62,12 @@ func handlerMMORPGTransfer(target IMMOEntity, from IMMOSceneEntity, to IMMOScene
 }
 
 // 串行单笔转账演示：单调序号与对手、金额绑定。旧交易拒绝，最新交易同身份重放成功。
-// 不是通用交易账本；确认窗口、物品交换和长期查询由业务建模。
+// 不是通用交易账本；确认窗口、物品交换和长期查询由业务建模。wallet 不做玩家间转账（README），这里照 friends 的
+// 两 Player 同事务写法：两边各调自己的 Wallet().Add，“这一笔做过没有”记在玩法自己的 TradeSeq 上，所以不用 Apply。
 //
 //roost:nest rollback=undo durability=strict
 func handlerMMORPGTrade(target IMMOEntity, peer IMMOEntity, seq int64, amount int64, reject bool) error {
-	d, p := target.Dao(), peer.Dao()
+	d := target.Dao()
 	if target.ID() == peer.ID() || seq <= 0 || amount <= 0 {
 		return errMMORule
 	}
@@ -74,11 +77,15 @@ func handlerMMORPGTrade(target IMMOEntity, peer IMMOEntity, seq int64, amount in
 		}
 		return errMMORule
 	}
-	if seq-1 != d.GetTradeSeq() || d.GetGold() < amount || p.GetGold() > 1000000-amount {
+	if seq-1 != d.GetTradeSeq() || peer.Wallet().Balance() > mmoGoldLimit-amount {
 		return errMMORule
 	}
-	d.SetGold(d.GetGold() - amount)
-	p.SetGold(p.GetGold() + amount)
+	if _, err := target.Wallet().Add(-amount); err != nil {
+		return err
+	}
+	if _, err := peer.Wallet().Add(amount); err != nil {
+		return err
+	}
 	d.SetTradeSeq(seq)
 	d.SetTradeBuyer(peer.ID())
 	d.SetTradeAmount(amount)

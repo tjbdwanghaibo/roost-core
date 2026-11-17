@@ -18,7 +18,8 @@
 
 | 业务 | 模块 |
 | --- | --- |
-| 角色资产、血量、任务、地图归属 | Player DAO + 组件；Nest 串行 |
+| 金币 / 材料道具 / 击杀任务（R9 起） | 业务模块 `wallet`、`bag`、`task`：状态是 Player 主 DAO 的嵌套字段，handler 收 `view.PlayerEntity`，在同一笔事务里调 `Wallet()` / `Bag()` / `Task()`（MMO §4.5） |
+| 血量、地图归属、队伍、冷却、Buff | Player DAO 的玩法字段；Nest 串行 |
 | 交易托管、怪物归属、副本事实 | 独立 Trade / Monster / Scene 实体（World 锁档）+ 多实体 Sender |
 | Buff 到期、复活 | `roost add timer --entity Player` |
 | 谁能看到谁 | 每张地图一个 `policy.Interest`（Block AOI、关系来源、Profile 白名单），一个连接一个 `entitysync.Manager` |
@@ -55,12 +56,12 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMMORPGTwoScenesTCPTran
 
 期望 1 条 PASS（两张地图、真实 TCP 客户端、切图重试与重连，MMO §12）。这两份夹具用 `MMO_MODULE` 占位，不需要 `fix_mod`。对应 `scripts/test-mmorpg-scenes.sh`（该脚本不跑 `generate`，模板已生成齐；多跑一次只做核对）。
 
-### 3.2 业务纵切：Player / Scene / Trade / Monster（v1.33.1 起可用）
+### 3.2 业务纵切：Player / Scene / Trade / Monster（v1.33.1 起可用；R9 起装模块）
 
-接在 SKILL.md §3.2（`-template game`）之后。对应 `scripts/test-mmorpg-generated.sh`。
+接在 SKILL.md §3.2（`-template game`）之后。对应 `scripts/test-mmorpg-generated.sh`。模块清单 `wallet bag task`（Q5 A：队伍 / 场景 / 怪物 / 战斗 / 副本留手写，到 CellWorld 进模块那一轮再定；交易托管借鉴 friends 的两 Player 同事务写法，MMO §4.5）；不再 `add dao Player`（game 模板已有），Player 不再加 `Gold` / `Items` / `QuestKills` / `QuestClaimed`。
 
 ```bash
-"$ROOST" add dao Player --entity Player
+bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet bag task   # = roost module add + 核对已登记
 "$ROOST" add timer --entity Player
 for e in Scene Trade Monster; do
   "$ROOST" add entity "$e"
@@ -68,12 +69,15 @@ for e in Scene Trade Monster; do
 done
 # dao_i64 <实体> <文件> 字段...：全部 int64、store 键取字段名小写（与脚本一致）
 dao_i64() { local t=$1 f=$2 x a=(); shift 2; for x in "$@"; do a+=("$x int64 $(printf %s "$x" | tr A-Z a-z)"); done; dao_add "$t" "$f" "${a[@]}"; }
-dao_i64 Player db/def/player.go Gold PartyID SceneID SceneVersion TradeSeq TradeBuyer TradeAmount HP Items \
-  AttackSeq LastAttackTarget CooldownUntil BuffValue BuffTimer ReviveTimer QuestKills QuestClaimed
+dao_i64 Player db/def/player.go PartyID SceneID SceneVersion TradeSeq TradeBuyer TradeAmount HP \
+  AttackSeq LastAttackTarget CooldownUntil BuffValue BuffTimer ReviveTimer
 dao_i64 Scene db/def/scene.go Occupants InstanceComplete
 dao_i64 Trade db/def/trade.go Status SellerID BuyerID Price Count Deadline SellerConfirmed BuyerConfirmed
 dao_i64 Monster db/def/monster.go HP SceneID LootOwner LootTaken
 world game/entities/scene/entity.go game/entities/trade/entity.go game/entities/monster/entity.go
+# 材料道具 3001（单种上限 1000）与击杀任务 201（事件 mmo.kill，奖 5 金币）追加在模块自带的表后面（MMO §4.1 第 3 步）
+printf '%s\n' '3001,MMO 材料,1000' >> configs/table/item.csv
+printf '%s\n' 201,mmo.kill,permanent,1,0,coins,0,5,false >> configs/table/task.csv
 F="$CORE/scripts/testdata/mmorpg"
 for n in tasks tasks_test gameplay gameplay_test; do cp "$F/$n.go.txt" "game/handler/mmo_$n.go"; done
 cp "$F/timer_handlers.go.txt" game/entities/player/timer_handlers.go
@@ -82,13 +86,16 @@ gofmt -w db/def/*.go game/handler/mmo_*.go game/entities/player/timer_handlers.g
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" mmorpg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Combat|Buff|Transfer|Death|Robot)' ./game/handler 2>&1 | tee "$WORK/test.log"
+bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" wallet bag task
 ```
 
-期望：`--- PASS: TestMMORPG` 恰好 **14** 条（13 条业务 + `TestMMORPGRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 收尾。
+期望：`--- PASS: TestMMORPG` 恰好 **14** 条（13 条业务 + `TestMMORPGRobotBusiness`）、0 skip；`modules.sh verify` 打印 `bag 20/20`、`task 29/29`、`task+bag 3/3`、`task+wallet 6/6`、`wallet 17/17`（每个模块通过数 == 检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip）；然后按 SKILL.md §3.4 收尾。
 
 ## 4. demo 的最小玩法范围（MMO §4.4，7 组 13 条业务 + 1 条 Robot）
 
 两人组队 / 解散；并发转账重放与拒绝重试；Trade 托管交易（确认、取消、到期、并发竞争）；战斗 → 掉落 → 任务 → 副本完成；Buff 刷新与回滚；死亡与复活期限；切图、返回与旧请求。最小可讲的玩法：进图 → 打怪 → 拾取 → Buff 到期，再加一次面对面交易。
+
+R9（2026-11-17）起：金币读 `PlayerDao.Wallet`、材料读 `PlayerDao.Bag` 的道具 3001、击杀任务读 `PlayerDao.Task` 的永久任务 201；击杀时 `Task().Report("mmo.kill")`，领奖 `MMORPGQuest` 调 `Task().Claim`（已领答 `task_claimed`，这里当重放成功）。场景名与条数不变，旧断言 → 新断言见 MMO §4.5。
 
 ## 5. 业务限制清单
 
@@ -114,6 +121,7 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Com
 
 - §3.1：1 条 PASS + SKILL.md §3.4。2026-10-31 在 v1.33.0 检出、自定 module 实测通过（含 `generate`、build / vet / `id check` / `generate --check`）。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：1 PASS、0 SKIP，§3.4 全过；game-demo 工程 `project doctor` 退出 0、无 FAIL。
 - §3.2：13 条 PASS。2026-10-31 在 v1.33.1 检出、自定 module `example.com/mymmo` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：13 PASS、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL。同日在 v1.33.0 上执行，唯一错误是 `mmo_gameplay_test.go` 两处 `Sync_TickPlayerTimer` 多传参数。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：13 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 FAIL。仓库脚本另把 `scripts/testdata/mmorpg/persistence/*_test.go` 复制为 `game/handler/mmo_*_test.go` 后 `go vet`（真实模式夹具只编译），一档 demo 可省。
+- §3.2（R9 装模块之后）：2026-11-17 在 main 检出、自定 module `example.com/mymmo` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：14 PASS（13 条业务 + Robot）、0 SKIP，`modules.sh verify` 五项 n/n，build / vet / `id check` / `generate --check` 通过，doctor 无 FAIL（[证据](../../../maintenance/evidence/r9-2b-20261117/README.md)）。
 - 二档：`ROOST_MMORPG_REAL=1`（隔离 Mongo 副本集）正常停机与 SIGKILL 后经投递循环恢复（MMO §11）；`scripts/test-mmorpg-cross-sid.sh` 双 sid 赠礼（需 Mongo + NATS，MMO §13）；game-demo `make dev-up && make dev-run && make dev-smoke`。
 
 ## 8. 手册指针

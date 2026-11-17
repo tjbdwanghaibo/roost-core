@@ -1,0 +1,25 @@
+# SKILL.md §3.2 公共前置（CORE=本检出，NAME=mymmo，MOD=example.com/mymmo）+ references/mmorpg.md §3.2 命令块 + SKILL.md §3.4 收尾，原样从 Markdown 抽出拼成脚本执行（2026-11-17）
+# exit 0；§3.4 计数：TestMMORPG PASS 14，SKIP 0
+--- PASS: TestMMORPGPartyDisbandRejectsTheOldParty (0.01s)
+--- PASS: TestMMORPGTradeBothConfirmAndReplay (0.01s)
+--- PASS: TestMMORPGTradeCancelAndExpiryRefundEscrow (0.01s)
+--- PASS: TestMMORPGTradeConfirmRacesWithCancel (0.01s)
+--- PASS: TestMMORPGCombatCooldownReplayLootAndQuest (0.01s)
+--- PASS: TestMMORPGCombatRefusesOtherScenesAndLivingBossCompletion (0.00s)
+--- PASS: TestMMORPGBuffRefreshAndDeadline (0.01s)
+--- PASS: TestMMORPGBuffFailureRollsBackAndOfflineExpiry (0.01s)
+--- PASS: TestMMORPGDeathAndDelayedRevive (0.01s)
+--- PASS: TestMMORPGPartyReplay (0.00s)
+--- PASS: TestMMORPGTradeConcurrentReplay (0.01s)
+--- PASS: TestMMORPGTradeRollback (0.00s)
+--- PASS: TestMMORPGTransferRollbackReplayAndStaleRequest (0.01s)
+--- PASS: TestMMORPGRobotBusiness (0.01s)
+ok  	example.com/mymmo/game/handler	1.730s
+module verify: bag 20/20 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0
+--- PASS: TestMMORPGPartyDisbandRejectsTheOldParty (0.01s)
+# SKILL.md §3.4 收尾：go build / go vet ./... 通过；roost id check -> IDs are valid；roost generate --check -> generated files are up to date；project doctor 无 FAIL 行
+# 手册 MMORPG-INTEGRATION §4.3 示例代码放进 run1/project/internal/mmoflow/trade.go：go build + go vet 通过（检查后删除）

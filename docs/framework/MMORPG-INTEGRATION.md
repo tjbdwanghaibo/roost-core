@@ -16,7 +16,7 @@
 
 | 状态 | 拥有者与框架能力 | 怎样使用 |
 | --- | --- | --- |
-| 角色资产、血量、任务、地图归属 | Player Entity 的 DAO；组件提供业务方法；Nest 串行修改 | 在 handler 内用生成的 mutator 写入，网络端点不能裸改 DAO |
+| 角色资产、血量、任务、地图归属 | Player Entity 的 DAO；组件提供业务方法；Nest 串行修改。纵切里金币、材料、击杀任务由业务模块 wallet / bag / task 的组件管（状态是 Player 主 DAO 的嵌套字段，§4.5） | 在 handler 内用生成的 mutator 或组件方法写入，网络端点不能裸改 DAO |
 | 交易托管、怪物归属、副本事实 | 独立 Trade / Monster / Scene Entity，必要时有自己的 DAO | 已知参与者一次传入多实体 Sender，由 Nest 排序取锁、同事务提交 |
 | 谁能看到谁 | `policy.Interest` 的地图 AOI、关系来源与同步 Profile | 由权威位置更新索引；它是派生索引，不能反向覆盖 DAO |
 | 客户端已经看到什么 | `entitysync.Manager` 的会话、epoch、基线与 ObjectRef；客户端 `entitysync.Decoder` | 收到 Full 先清旧视图，连续应用 Delta；旧 epoch 忽略，缺口重建全量 |
@@ -33,10 +33,10 @@
 | 切图后的视图切换 | 一个 Manager、每张地图一个 Interest、held / ready | [多地图接法](../../scripts/testdata/mmorpg/scene_runtime.go.txt)：按已提交归属重建索引，失败保持 held，成功 Ready 后发新 Full | 重试驱动与生命周期；持久提交与网络交付不是同一事务 |
 | 同屏观察与隐私 | Interest `BandLayer` + Player 同步 Profile | 自己看完整视图，空间来源用 `near`；[TCP 客户端场景](../../scripts/testdata/mmorpg/scene_runtime_test.go.txt)核对金币 / 经验 / 背包不外泄 | 队伍、敌我、隐身、观战等权限及对应字段集合 |
 | 组队、退出与解散 | 多 Player Sender；demo Scene `SetTeam` 关系来源 | `MMORPGParty`（[tasks](../../scripts/testdata/mmorpg/tasks.go.txt)）、`MMORPGDisband`（[gameplay](../../scripts/testdata/mmorpg/gameplay.go.txt)） | 邀请、队长、人数、跨地图信息权限；样例是两人队伍，解散带预期队伍 ID |
-| 面对面交易 | 独立 Trade DAO + 三实体 Nest | `MMORPGOffer` 托管双方资产，`MMORPGResolveTrade` 处理确认 / 取消 / 到期；交易实体 ID 是幂等身份 | 物品唯一性、容量、报价、确认规则、掉线政策；样例掉线选择取消 |
+| 面对面交易 | 独立 Trade DAO + 三实体 Nest；资产经 wallet / bag 组件（没有交易模块，托管借鉴 friends 的两 Player 同事务写法） | `MMORPGOffer` 经卖家 `Bag().Remove`、买家 `Wallet().Add(-价)` 托管双方资产，`MMORPGResolveTrade` 处理确认 / 取消 / 到期；交易实体 ID 是幂等身份 | 物品唯一性、容量、报价、确认规则、掉线政策；样例掉线选择取消 |
 | 权威战斗与冷却 | 多实体 Nest、本条消息冻结的业务时间（handler 的 `nowUnixMilli` 从 fctx 填）、单调输入序号 | `MMORPGStrike` 校验存活、同地图、顺序、冷却，再改怪物血量与击杀归属 | 战斗公式、命中、距离和预测；样例不是完整即时战斗系统 |
 | Buff、死亡与复活 | 持久实体定时器（`roost add timer`，`entitytimer.Host` / `Driver`） | `MMORPGBuff` / `MMORPGRevive` 与[到期回调](../../scripts/testdata/mmorpg/timer_handlers.go.txt)；回调只改自己已锁的实体 | 叠加、驱散、刷新、死亡损失、复活点；离线到期在加载后补触发一次 |
-| 掉落、任务与副本结算 | Player / Monster / Scene 同事务的业务事实 | `MMORPGLoot` / `MMORPGQuest` / `MMORPGCompleteInstance`：领奖与领取事实一起写，Boss 死亡才完成副本 | 掉落分配、任务条件、进度锁定、重置和奖励政策 |
+| 掉落、任务与副本结算 | Player / Monster / Scene 同事务的业务事实；task 模块（击杀任务）、bag 模块（掉落进背包） | `MMORPGLoot`（`Bag().Add`，拾取事实在 Monster）/ `MMORPGQuest`（`Task().Claim`，奖励经 wallet）/ `MMORPGCompleteInstance`：领奖与领取事实一起写，Boss 死亡才完成副本 | 掉落分配、任务条件、进度锁定、重置和奖励政策 |
 | 背包、装备与属性 | Player 组件、嵌套 DAO、Nest rollback | [EquipItem](../../modules/equipment/files/game/handler/equipment_equip.go.tmpl)：背包扣新装备、换装、归还旧装备、刷新属性同事务 | 格数、绑定、强化与数值；派生属性不能成为另一份权威 |
 | 技能与配置 | `gameplay/skill`、configdata、不可变 Program | [技能指南](guide/08-skill.md)、[配置指南](guide/07-config.md)；Parse → Compile → Host → Runtime | Host 的权威副作用、配置版本、跨 tick 状态与恢复；Skill Runtime 不自动进入 Nest undo |
 | 匹配、聊天与战斗房间 | match / chat / session、Lockstep | game-demo 正式机器人执行聊天、组队匹配、房间战斗和状态同步（`cmd/loadtest`） | MMORPG 世界状态同步不必采用 Lockstep；按具体玩法选择 |
@@ -58,8 +58,8 @@ ROOST_MMORPG_KEEP=1 bash scripts/test-mmorpg-generated.sh   # 保留生成工程
 脚本打印临时目录，生成工程在其中的 `project/`。它的步骤就是一个新工程的接入方式：
 
 1. `roost project new mmorpg-practice -module example.com/mmorpg-practice -template game`；
-2. `roost add dao Player --entity Player`、`roost add timer --entity Player`，对 Scene / Trade / Monster 各执行 `roost add entity <名>` 与 `roost add dao <名> --entity <名>`；
-3. 业务只改这几处：在 `db/def/*.go` 填 DAO 字段，骨架的逻辑库 `db=main` 不改（真实依赖模式的唯一物理库由测试夹具的库映射给出）；把 `game/entities/scene|trade|monster/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些是被多名玩家争用的世界对象，锁序要低于 Player）；写到期回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/mmo_*.go`；
+2. 装模块 `roost module add wallet bag task`（脚本经 `scripts/testdata/genre-common/modules.sh add`，装完核对都已登记；Player 主 DAO 由 game 模板给出，不再 `add dao Player`），再 `roost add timer --entity Player`，对 Scene / Trade / Monster 各执行 `roost add entity <名>` 与 `roost add dao <名> --entity <名>`；
+3. 业务只改这几处：在 `db/def/*.go` 填 DAO 字段（Player 只加玩法字段，金币 / 材料 / 任务在模块状态里），骨架的逻辑库 `db=main` 不改（真实依赖模式的唯一物理库由测试夹具的库映射给出）；把 `game/entities/scene|trade|monster/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些是被多名玩家争用的世界对象，锁序要低于 Player）；往模块自带的表后面追加两行——`configs/table/item.csv` 加材料道具 `3001,MMO 材料,1000`（单种上限 1000），`configs/table/task.csv` 加击杀任务 `201,mmo.kill,permanent,1,0,coins,0,5,false`；写到期回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/mmo_*.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> mmorpg`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器和 Sender。
 
@@ -119,6 +119,34 @@ func confirmTrade(ctx context.Context, client nest.Client, tradeID, sellerID, bu
 | 公共 Robot 网络闭环（`TestMMORPGRobotBusiness`） | 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 表中 7 行展开为 13 条顶层测试；实际证明到哪一步见 §10。
+
+#### 4.5 装了哪些模块、哪些留手写（R9，2026-11-17）
+
+按[玩法模块化方案](../maintenance/PLAN-2026-11-17-r9-genre-modules.md) 3.11 与维护者 Q5 A，本轮只换玩家经济，世界玩法留手写：
+
+| 夹具里的块 | 现在 | 说明 |
+| --- | --- | --- |
+| 金币（转账、托管、任务奖励） | **wallet** | handler 收 `view.PlayerEntity`（夹具的 `IMMOEntity` 嵌它），调 `Wallet().Add`；“这一笔做过没有”记在玩法自己的事实上（转账的 `TradeSeq`、Trade 的 `Status`），所以不用 `Apply`。1,000,000 的持有上限是玩法规则，读 `Balance()` 判（wallet 只防 int64 溢出） |
+| 材料 `Items` | **bag** 道具 3001 | 托管 `Bag().Remove`、成交 / 退还 / 拾取 `Bag().Add`；单种上限 1000 写在道具表，托管时仍按 `mmoItemLimit` 预留买家容量 |
+| 击杀任务 `QuestKills` / `QuestClaimed` | **task** 永久任务 201 | 怪物血量归零的那一笔 `Task().Report("mmo.kill", 1, now)`；`MMORPGQuest` 调 `Task().Claim(201, now)`，奖励 5 金币由 task 的 `coins` 奖励经 wallet 发；已领答 `task_claimed`，夹具当作重放成功 |
+| 两人队伍 `PartyID` | 手写 | team 是 Remote 实体，REAL 档要多 Redis / NATS；夹具是两人同事务样例 |
+| Scene（人数、切图版本、`InstanceComplete`） | 手写 | 与 scene 模块撞名；副本完成留到 CellWorld 那一轮与 dungeon 一起看 |
+| Monster 血量、掉落归属 | 手写 | monster 模块不持久、无掉落（其 README） |
+| 攻击、冷却、Buff / 复活定时器 | 手写 | combat 只限两名玩家 |
+| Trade 托管 | 借鉴 friends | 没有交易模块；照 friends 的“两 Player 同一笔事务，先检查全部容量与余额、再写两边” |
+
+生成工程与测试要装载工程的配置表（`configs/data`，bag 按道具表放行 3001、task 按任务表推进与发奖；没装表时两者都拒绝）：离线场景的 fixture 与真实依赖用例的每个进程（含 SIGKILL 的写入子进程、第三个核对进程）各装一次。
+
+场景名与条数（14）不变，下面几条的断言改成读模块状态，旧断言 → 新断言：
+
+| 场景 | 旧断言 | 新断言 |
+| --- | --- | --- |
+| `TradeConcurrentReplay`、`TradeRollback`、`RobotBusiness` | `Player.Gold` 40 / 60、50 / 50、43 / 57 / 48 | wallet 的 `Wallet.Coins` 同样的数（转账两边各调 `Wallet().Add`）；余额不足由 wallet 答 `wallet_short`（原为玩法规则错误），断言只看“被拒、零写入” |
+| `TradeBothConfirmAndReplay`、`TradeCancelAndExpiryRefundEscrow`、`TradeConfirmRacesWithCancel` | `Player.Items` / `Player.Gold` 的托管、成交、退款与守恒 | bag 的道具 3001 数量与 wallet 余额，数值不变 |
+| `CombatCooldownReplayLootAndQuest`、`RobotBusiness` | `Player.QuestKills == 1`；拾取后 `Items == 4`、领奖后 `Gold == 55`（重放不变） | task 永久任务 201 的进度 == 1；bag 的 3001 == 4；wallet == 55；另加“领奖事实已记（`Claimed[201]`）”；未击杀时领奖被拒是 task 的 `task_incomplete` |
+| `TestMMORPGRealPersistenceAcrossProcesses`、`TestMMORPGRealCrashRecovery` | 种子直接写 `Gold` / `Items`；视图读 DAO 字段 | 种子经 `Wallet().Add` / `Bag().Add`；视图读模块状态；DAO 持久字节里含 wallet / bag / task 状态，崩溃屏障与三进程逐字节比对不变；未投影 WAL 仍 16 条；写入子进程另断言领奖事实已记 |
+
+变异证明（把模块调用去掉或改错，对应场景变红，恢复后变绿）记在 [R9 批 2B 证据](../maintenance/evidence/r9-2b-20261117/README.md)。
 
 ### 5. 地图切换与断线重连怎样接
 
@@ -211,7 +239,7 @@ SLG 手册的[通用接入原则](SLG-INTEGRATION.md#9-通用接入原则)（定
 bash scripts/test-mmorpg-generated.sh
 ```
 
-按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 14 条顶层 race 场景（§4.4，含 1 条业务 Robot）且无 skip，随后执行 `roost id check` 与 `roost generate --check`。成功删除临时工程；失败或 `ROOST_MMORPG_KEEP=1` 时保留。
+按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 14 条顶层 race 场景（§4.4，含 1 条业务 Robot）且无 skip，随后执行 build / vet、`roost id check` 与 `roost generate --check`，再跑已装模块自带的场景（`modules.sh verify`：wallet 17、bag 20、task 29、task+bag 3、task+wallet 6，每项通过数等于检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip，结果 `module-verify.json`）。成功删除临时工程；失败或 `ROOST_MMORPG_KEEP=1` 时保留。
 
 业务 Robot 用例 `TestMMORPGRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（4.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 

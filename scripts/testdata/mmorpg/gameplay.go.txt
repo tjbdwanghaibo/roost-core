@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"errors"
 	db "example.com/mmorpg-practice/db"
 	player "example.com/mmorpg-practice/game/entities/player"
+	apperrors "example.com/mmorpg-practice/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"math"
 	"time"
@@ -21,8 +23,15 @@ type IMMOCombatEntity interface {
 	TimerComp() *player.TimerComponent
 }
 
+// 金币在 wallet（PlayerDao.Wallet），交易与掉落的材料是 bag 道具 mmoItem（生成脚本追加到 configs/table/item.csv，
+// 单种上限 1000 = mmoItemLimit），击杀任务是 task 的永久任务 mmoKillTask（configs/table/task.csv，事件 mmoKillEvent，
+// 奖 5 金币，经 wallet 发）。mmoGoldLimit 是玩法自己的持有上限（wallet 只防 int64 溢出）；mmoItemLimit 用于托管时
+// 预留买家的容量，与表里的 max_stack 必须一致。
 const mmoGoldLimit int64 = 1000000
 const mmoItemLimit int64 = 1000
+const mmoItem int64 = 3001
+const mmoKillTask int64 = 201
+const mmoKillEvent = "mmo.kill"
 
 // 两人队伍退出 / 解散；携带预期队伍 ID，旧队伍的延迟请求不能清掉新队伍。
 //
@@ -43,11 +52,13 @@ func handlerMMORPGDisband(target IMMOEntity, peer IMMOEntity, expected int64) er
 }
 
 // 交易记录是独立实体，完整 ID 是幂等身份；只为本示例预留双方资产，不调用远端服务。
+// 托管借鉴 friends（没有交易模块）：Trade 与两个 Player 同一笔 Nest 事务，先检查双方余额 / 容量，再经各自的
+// Bag() / Wallet() 扣出；托管的资产只记在 Trade 上，不在任何一方的模块状态里。
 // 截止从本条消息冻结的业务时间算（nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间，调用方不传），不从客户端接受；正式游戏需配置有效期与库存容量。
 //
 //roost:nest rollback=undo durability=strict
 func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, price int64, count int64, nowUnixMilli int64) error {
-	d, s, b := trade.Dao(), seller.Dao(), buyer.Dao()
+	d := trade.Dao()
 	if seller.ID() == buyer.ID() || price <= 0 || price > mmoGoldLimit || count <= 0 || count > mmoItemLimit || nowUnixMilli <= 0 || nowUnixMilli > math.MaxInt64-5000 {
 		return errMMORule
 	}
@@ -57,11 +68,15 @@ func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEnti
 		}
 		return errMMORule
 	}
-	if s.GetItems() < count || b.GetGold() < price || s.GetGold() > mmoGoldLimit-price || b.GetItems() > mmoItemLimit-count {
+	if !seller.Bag().Has(mmoItem, count) || buyer.Wallet().Balance() < price || seller.Wallet().Balance() > mmoGoldLimit-price || buyer.Bag().Count(mmoItem) > mmoItemLimit-count {
 		return errMMORule
 	}
-	s.SetItems(s.GetItems() - count)
-	b.SetGold(b.GetGold() - price)
+	if _, err := seller.Bag().Remove(mmoItem, count); err != nil {
+		return err
+	}
+	if _, err := buyer.Wallet().Add(-price); err != nil {
+		return err
+	}
 	d.SetSellerID(seller.ID())
 	d.SetBuyerID(buyer.ID())
 	d.SetPrice(price)
@@ -76,7 +91,7 @@ func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEnti
 //
 //roost:nest rollback=undo durability=strict
 func handlerMMORPGResolveTrade(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, actorID int64, action int64, nowUnixMilli int64) error {
-	d, s, b := trade.Dao(), seller.Dao(), buyer.Dao()
+	d := trade.Dao()
 	if d.GetStatus() == 0 || d.GetSellerID() != seller.ID() || d.GetBuyerID() != buyer.ID() {
 		return errMMORule
 	}
@@ -108,19 +123,27 @@ func handlerMMORPGResolveTrade(trade IMMOTradeEntity, seller IMMOEntity, buyer I
 		if d.GetSellerConfirmed() == 0 || d.GetBuyerConfirmed() == 0 {
 			return nil
 		}
-		if s.GetGold() > mmoGoldLimit-d.GetPrice() || b.GetItems() > mmoItemLimit-d.GetCount() {
+		if seller.Wallet().Balance() > mmoGoldLimit-d.GetPrice() || buyer.Bag().Count(mmoItem) > mmoItemLimit-d.GetCount() {
 			return errMMORule
 		}
-		s.SetGold(s.GetGold() + d.GetPrice())
-		b.SetItems(b.GetItems() + d.GetCount())
+		if _, err := seller.Wallet().Add(d.GetPrice()); err != nil {
+			return err
+		}
+		if _, err := buyer.Bag().Add(mmoItem, d.GetCount()); err != nil {
+			return err
+		}
 		d.SetStatus(2)
 		return nil
 	}
-	if s.GetItems() > mmoItemLimit-d.GetCount() || b.GetGold() > mmoGoldLimit-d.GetPrice() {
+	if seller.Bag().Count(mmoItem) > mmoItemLimit-d.GetCount() || buyer.Wallet().Balance() > mmoGoldLimit-d.GetPrice() {
 		return errMMORule
 	}
-	s.SetItems(s.GetItems() + d.GetCount())
-	b.SetGold(b.GetGold() + d.GetPrice())
+	if _, err := seller.Bag().Add(mmoItem, d.GetCount()); err != nil {
+		return err
+	}
+	if _, err := buyer.Wallet().Add(d.GetPrice()); err != nil {
+		return err
+	}
 	d.SetStatus(3)
 	return nil
 }
@@ -146,6 +169,7 @@ func handlerMMORPGBuff(target IMMOCombatEntity, value int64) error {
 }
 
 // 最小权威战斗：同地图、存活、单调输入序号和服务器冷却；命中 / 掉落归属 / 击杀任务一起提交。
+// 击杀在事实第一次生效时（怪物血量归零的这一笔）向 task 上报 mmoKillEvent；重放命中输入序号早退，不会再报。
 // 本例未模拟空间距离或客户端预测；正式游戏必须再按权威位置验证射程和技能配置。
 //
 //roost:nest rollback=undo durability=strict
@@ -160,7 +184,7 @@ func handlerMMORPGStrike(target IMMOEntity, mob IMMONpcEntity, seq int64, nowUni
 		}
 		return errMMORule
 	}
-	if seq-1 != d.GetAttackSeq() || d.GetHP() <= 0 || d.GetSceneID() != m.GetSceneID() || m.GetHP() <= 0 || nowUnixMilli < d.GetCooldownUntil() || d.GetQuestKills() >= 1000000 {
+	if seq-1 != d.GetAttackSeq() || d.GetHP() <= 0 || d.GetSceneID() != m.GetSceneID() || m.GetHP() <= 0 || nowUnixMilli < d.GetCooldownUntil() {
 		return errMMORule
 	}
 	damage := int64(10) + d.GetBuffValue()
@@ -174,12 +198,15 @@ func handlerMMORPGStrike(target IMMOEntity, mob IMMONpcEntity, seq int64, nowUni
 	d.SetCooldownUntil(nowUnixMilli + 1000)
 	if hp == 0 {
 		m.SetLootOwner(target.ID())
-		d.SetQuestKills(d.GetQuestKills() + 1)
+		if err := target.Task().Report(mmoKillEvent, 1, nowUnixMilli); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// 掉落领奖与领取事实同事务；其他人不能拾取，本例没有队伍分配规则。
+// 掉落领奖与领取事实同事务；其他人不能拾取，本例没有队伍分配规则。“拾取过没有”记在怪物的 LootTaken 上，
+// 材料经 bag 放入（背包满答 bag_stack_full，整笔回滚、可重试）。
 //
 //roost:nest rollback=undo durability=strict
 func handlerMMORPGLoot(target IMMOEntity, mob IMMONpcEntity) error {
@@ -190,25 +217,21 @@ func handlerMMORPGLoot(target IMMOEntity, mob IMMONpcEntity) error {
 	if m.GetLootTaken() != 0 {
 		return nil
 	}
-	if d.GetItems() >= mmoItemLimit {
-		return errMMORule
+	if _, err := target.Bag().Add(mmoItem, 1); err != nil {
+		return err
 	}
-	d.SetItems(d.GetItems() + 1)
 	m.SetLootTaken(1)
 	return nil
 }
 
+// 击杀任务领奖：task 的永久任务 mmoKillTask，奖励（5 金币）经 wallet 与领奖事实同一笔事务。没杀够答 task_incomplete；
+// 已领过时 task 答 task_claimed，这里当作重放成功（客户端重试拿到同样的结果），不再发奖。
+//
 //roost:nest rollback=undo durability=strict
-func handlerMMORPGQuest(target IMMOEntity) error {
-	d := target.Dao()
-	if d.GetQuestClaimed() != 0 {
-		return nil
+func handlerMMORPGQuest(target IMMOEntity, nowUnixMilli int64) error {
+	if _, err := target.Task().Claim(mmoKillTask, nowUnixMilli); err != nil && !errors.Is(err, apperrors.ErrTaskClaimed) {
+		return err
 	}
-	if d.GetQuestKills() < 1 || d.GetGold() > mmoGoldLimit-5 {
-		return errMMORule
-	}
-	d.SetGold(d.GetGold() + 5)
-	d.SetQuestClaimed(1)
 	return nil
 }
 

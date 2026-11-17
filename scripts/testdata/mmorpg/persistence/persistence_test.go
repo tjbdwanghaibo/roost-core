@@ -45,8 +45,9 @@ var (
 	mmoRealOnce sync.Once
 )
 
-// mmoRealState 是经 Nest 读出的一个实体：Raw 是 DAO 的完整持久字节（与写入 Mongo 的文档同一份编码），
-// 其余字段只为断言好读。投递循环运行后，读状态必须走 Nest（实体锁内），不能与循环投递的 Tick 并发读 DAO。
+// mmoRealState 是经 Nest 读出的一个实体：Raw 是 DAO 的完整持久字节（与写入 Mongo 的文档同一份编码，
+// 含 wallet / bag / task 的模块状态），其余字段只为断言好读：Gold 读 wallet、Items 读 bag 的材料、
+// QuestKills / QuestClaimed 读 task 永久任务 mmoKillTask 的进度与领奖事实（领过为 1）。投递循环运行后，读状态必须走 Nest（实体锁内），不能与循环投递的 Tick 并发读 DAO。
 type mmoRealState struct {
 	Raw                                          []byte
 	Gold, Items, HP, QuestKills, QuestClaimed    int64
@@ -66,12 +67,21 @@ func registerMMORealHandlers() {
 		RegisterMmoGameplayNestHandlers()
 		RegisterTickPlayerTimerGenNestHandlers()
 		// 种子：参数为 gold / items / hp / sceneID，怪物只用 hp / sceneID。只在第一次写入时使用。
+		// 玩家的金币经 wallet、材料经 bag 放入（为 0 时不调：模块拒绝数量 0）。
 		nest.MustRegisterHandlerWithMeta(mmoRealSeed, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
 			gold, items, hp, area := args[0].(int64), args[1].(int64), args[2].(int64), args[3].(int64)
 			switch e := es[0].(type) {
 			case *player.Player:
-				e.Dao().SetGold(gold)
-				e.Dao().SetItems(items)
+				if gold > 0 {
+					if _, err := e.Wallet().Add(gold); err != nil {
+						return nil, err
+					}
+				}
+				if items > 0 {
+					if _, err := e.Bag().Add(mmoItem, items); err != nil {
+						return nil, err
+					}
+				}
 				e.Dao().SetHP(hp)
 				e.Dao().SetSceneID(area)
 			case *monster.Monster:
@@ -86,7 +96,11 @@ func registerMMORealHandlers() {
 			switch e := es[0].(type) {
 			case *player.Player:
 				d := e.Dao()
-				return mmoRealState{Raw: d.Marshal(), Gold: d.GetGold(), Items: d.GetItems(), HP: d.GetHP(), QuestKills: d.GetQuestKills(), QuestClaimed: d.GetQuestClaimed(), BuffValue: d.GetBuffValue(), BuffTimer: d.GetBuffTimer(), ReviveTimer: d.GetReviveTimer(), Timers: d.TimersLen()}, nil
+				var claimed int64
+				if mmoQuestClaimed(d) {
+					claimed = 1
+				}
+				return mmoRealState{Raw: d.Marshal(), Gold: mmoGold(d), Items: mmoItems(d), HP: d.GetHP(), QuestKills: mmoQuestKills(d), QuestClaimed: claimed, BuffValue: d.GetBuffValue(), BuffTimer: d.GetBuffTimer(), ReviveTimer: d.GetReviveTimer(), Timers: d.TimersLen()}, nil
 			case *trade.Trade:
 				d := e.Dao()
 				return mmoRealState{Raw: d.Marshal(), TradeStatus: d.GetStatus(), SellerConfirmed: d.GetSellerConfirmed(), BuyerConfirmed: d.GetBuyerConfirmed()}, nil
@@ -133,6 +147,8 @@ func openMMORealRuntime(t *testing.T, walRoot string, manual bool, now int64) *m
 	if database != os.Getenv("ROOST_MMORPG_DB") || !strings.HasPrefix(database, "roost_mmo_it_") {
 		t.Fatal("refusing a database outside this generated consumer")
 	}
+	// 每个进程（含 SIGKILL 的写入子进程与第三个核对进程）各装一次工程的配置表：bag 的材料道具与 task 的击杀任务。
+	loadMMOTables(t)
 	registerMMORealHandlers()
 	h := &mmoRealRuntime{database: database}
 	h.clock.Store(now)

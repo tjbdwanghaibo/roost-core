@@ -23,7 +23,8 @@ import (
 // 两次攻击、拾取、任务领奖、Buff 共 9 条业务命令。关掉后台投影后这些记录全部停在 WAL、一条也没有投影。
 const mmoCrashUnprojected = 16
 
-// mmoCrashFacts 是崩溃屏障 / 第三进程核对用的事实：四个实体的 DAO 完整持久字节与两个定时器节点 ID。
+// mmoCrashFacts 是崩溃屏障 / 第三进程核对用的事实：四个实体的 DAO 完整持久字节（Player 的含 wallet / bag / task
+// 模块状态）与两个定时器节点 ID。
 type mmoCrashFacts struct {
 	Seller, Buyer, Trade, Mob []byte
 	BuffTimer, ReviveTimer    int64
@@ -167,7 +168,7 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 		if stats.Projected != 0 || stats.WALUnacked != mmoCrashUnprojected {
 			t.Fatalf("missing strict crash boundary: projected=%d unacked=%d want 0 / %d", stats.Projected, stats.WALUnacked, mmoCrashUnprojected)
 		}
-		if sd.GetBuffValue() != 7 || facts.BuffTimer == 0 || sd.GetItems() != 3 || sd.GetGold() != 55 || bd.GetHP() != 0 || facts.ReviveTimer == 0 || bd.GetGold() != 40 || sd.TimersLen() != 1 || bd.TimersLen() != 1 {
+		if sd.GetBuffValue() != 7 || facts.BuffTimer == 0 || mmoItems(sd) != 3 || mmoGold(sd) != 55 || !mmoQuestClaimed(sd) || bd.GetHP() != 0 || facts.ReviveTimer == 0 || mmoGold(bd) != 40 || sd.TimersLen() != 1 || bd.TimersLen() != 1 {
 			t.Fatal("crash point is not the intended in-flight state")
 		}
 		facts.Unprojected = stats.WALUnacked

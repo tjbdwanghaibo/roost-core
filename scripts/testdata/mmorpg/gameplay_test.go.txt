@@ -56,7 +56,7 @@ func TestMMORPGTradeBothConfirmAndReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.players[0].Dao().GetItems() != 2 || f.players[1].Dao().GetGold() != 40 {
+	if mmoItems(f.players[0].Dao()) != 2 || mmoGold(f.players[1].Dao()) != 40 {
 		t.Fatal("escrow not reserved once")
 	}
 	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, 999, 1); err == nil {
@@ -65,7 +65,7 @@ func TestMMORPGTradeBothConfirmAndReplay(t *testing.T) {
 	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1); err != nil {
 		t.Fatal(err)
 	}
-	if f.trade.Dao().GetStatus() != 1 || f.players[0].Dao().GetGold() != 50 {
+	if f.trade.Dao().GetStatus() != 1 || mmoGold(f.players[0].Dao()) != 50 {
 		t.Fatal("one confirmation settled trade")
 	}
 	for range 2 {
@@ -73,7 +73,7 @@ func TestMMORPGTradeBothConfirmAndReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.trade.Dao().GetStatus() != 2 || f.players[0].Dao().GetGold() != 60 || f.players[1].Dao().GetItems() != 4 {
+	if f.trade.Dao().GetStatus() != 2 || mmoGold(f.players[0].Dao()) != 60 || mmoItems(f.players[1].Dao()) != 4 {
 		t.Fatal("trade settlement duplicated or missing")
 	}
 	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 2); err == nil {
@@ -107,7 +107,7 @@ func TestMMORPGTradeCancelAndExpiryRefundEscrow(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if f.trade.Dao().GetStatus() != 3 || f.players[0].Dao().GetItems() != 3 || f.players[1].Dao().GetGold() != 50 {
+			if f.trade.Dao().GetStatus() != 3 || mmoItems(f.players[0].Dao()) != 3 || mmoGold(f.players[1].Dao()) != 50 {
 				t.Fatal("escrow refund duplicated or lost")
 			}
 			if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1); err == nil {
@@ -136,13 +136,13 @@ func TestMMORPGTradeConfirmRacesWithCancel(t *testing.T) {
 	if status := f.trade.Dao().GetStatus(); status != 2 && status != 3 {
 		t.Fatalf("nonterminal trade %d", status)
 	}
-	if f.players[0].Dao().GetGold()+f.players[1].Dao().GetGold() != 100 || f.players[0].Dao().GetItems()+f.players[1].Dao().GetItems() != 6 {
+	if mmoGold(f.players[0].Dao())+mmoGold(f.players[1].Dao()) != 100 || mmoItems(f.players[0].Dao())+mmoItems(f.players[1].Dao()) != 6 {
 		t.Fatal("race lost assets")
 	}
-	if f.trade.Dao().GetStatus() == 2 && (f.players[0].Dao().GetGold() != 60 || f.players[1].Dao().GetItems() != 4) {
+	if f.trade.Dao().GetStatus() == 2 && (mmoGold(f.players[0].Dao()) != 60 || mmoItems(f.players[1].Dao()) != 4) {
 		t.Fatal("settled assets disagree")
 	}
-	if f.trade.Dao().GetStatus() == 3 && (f.players[0].Dao().GetGold() != 50 || f.players[0].Dao().GetItems() != 3) {
+	if f.trade.Dao().GetStatus() == 3 && (mmoGold(f.players[0].Dao()) != 50 || mmoItems(f.players[0].Dao()) != 3) {
 		t.Fatal("cancelled assets disagree")
 	}
 }
@@ -171,7 +171,7 @@ func TestMMORPGCombatCooldownReplayLootAndQuest(t *testing.T) {
 	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 2); err != nil {
 		t.Fatal(err)
 	}
-	if f.monster.Dao().GetHP() != 0 || f.players[0].Dao().GetQuestKills() != 1 {
+	if f.monster.Dao().GetHP() != 0 || mmoQuestKills(f.players[0].Dao()) != 1 {
 		t.Fatal("kill not attributed exactly once")
 	}
 	if err := s.MultiSync_MMORPGLoot(ctx, b, id); err == nil {
@@ -185,7 +185,7 @@ func TestMMORPGCombatCooldownReplayLootAndQuest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.players[0].Dao().GetItems() != 4 || f.players[0].Dao().GetGold() != 55 {
+	if mmoItems(f.players[0].Dao()) != 4 || mmoGold(f.players[0].Dao()) != 55 || !mmoQuestClaimed(f.players[0].Dao()) {
 		t.Fatal("loot or quest reward replay duplicated")
 	}
 	if err := s.MultiSync_MMORPGCompleteInstance(ctx, f.scenes[0].ID(), id); err != nil {

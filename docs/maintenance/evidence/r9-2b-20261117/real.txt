@@ -1,0 +1,16 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_MMORPG_REAL=1 ROOST_GENRE_OUTPUT=<scratchpad>/b1117-r9-2b/real1 bash scripts/test-mmorpg-generated.sh（2026-11-17）
+# exit 0；缺省 14 条 + module verify 五项之后，REAL 三段（write / recover / SIGKILL）
+ok  	example.com/mmorpg-practice/game/handler	1.765s
+module verify: bag 20/20 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0
+--- PASS: TestMMORPGRealPersistenceAcrossProcesses (0.66s)
+ok  	example.com/mmorpg-practice/game/handler	2.275s
+--- PASS: TestMMORPGRealPersistenceAcrossProcesses (0.23s)
+ok  	example.com/mmorpg-practice/game/handler	1.811s
+    mmo_recovery_test.go:394: SIGKILL: 16 unprojected strict records; escrow, combat rewards, Buff and revive timers restored byte for byte; driver loop delivered one catch-up per overdue player after cold load and the next Buff expiry at its deadline; expired trade refunded once; third process replayed without duplicating rewards or refunds
+--- PASS: TestMMORPGRealCrashRecovery (2.99s)
+ok  	example.com/mmorpg-practice/game/handler	4.337s
+# SKIP 行：0；成功后本次唯一库已删（listDatabases 无 roost_mmo_it_* 残留）

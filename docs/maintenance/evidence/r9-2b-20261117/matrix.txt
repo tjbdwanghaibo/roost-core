@@ -1,0 +1,9 @@
+# python3 scripts/test-genres-generated.py --out <scratchpad>/b1117-r9-2b/matrix1 --genres mmorpg（2026-11-17）
+mmorpg: passed
+genre: mmorpg
+status: passed
+module: example.com/acceptance/mmorpg
+passed_tests: 14
+custom_module_passed_tests: 14
+skipped_tests: 0
+custom_module_verify: {'bag': 20, 'task': 29, 'task+bag': 3, 'task+wallet': 6, 'wallet': 17}

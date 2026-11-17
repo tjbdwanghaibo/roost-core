@@ -1,0 +1,41 @@
+# 变异：保留的生成工程（run1/project）里逐个改 handler，跑对应场景看红，恢复看绿（驱动 mutate.py.txt：python3 mutate.py <工程根>）
+M1 单笔转账不给对方加金币（删 peer.Wallet().Add）
+  TestMMORPGTradeConcurrentReplay: mutated -> FAIL (red) ['mmo_tasks_test.go:228: replay duplicated transfer']
+  restored -> PASS (green)
+M3 挂单不从卖家背包扣出材料（删 seller.Bag().Remove）
+  TestMMORPGTradeBothConfirmAndReplay: mutated -> FAIL (red) ['mmo_gameplay_test.go:60: escrow not reserved once']
+  restored -> PASS (green)
+M4 成交不把材料放进买家背包（删 buyer.Bag().Add）
+  TestMMORPGTradeBothConfirmAndReplay: mutated -> FAIL (red) ['mmo_gameplay_test.go:77: trade settlement duplicated or missing']
+  restored -> PASS (green)
+M5 取消 / 到期不退买家金币（删退款的 buyer.Wallet().Add）
+  TestMMORPGTradeCancelAndExpiryRefundEscrow: mutated -> FAIL (red) ['mmo_gameplay_test.go:111: escrow refund duplicated or lost']
+  restored -> PASS (green)
+M6 击杀不上报任务（删 Task().Report）
+  TestMMORPGCombatCooldownReplayLootAndQuest: mutated -> FAIL (red) ['mmo_gameplay_test.go:175: kill not attributed exactly once']
+  restored -> PASS (green)
+M7 领奖重放不再当成功（task_claimed 容忍换成只容忍 task_unknown）
+  TestMMORPGCombatCooldownReplayLootAndQuest: mutated -> FAIL (red) ['mmo_gameplay_test.go:185: task_claimed: task reward already claimed in this period']
+  restored -> PASS (green)
+M8 未完成也算领过（吞掉 Claim 的所有错误）
+  TestMMORPGCombatCooldownReplayLootAndQuest: mutated -> FAIL (red) ['mmo_gameplay_test.go:155: unearned quest reward']
+  restored -> PASS (green)
+M9 拾取不放进背包（删 Bag().Add）
+  TestMMORPGCombatCooldownReplayLootAndQuest: mutated -> FAIL (red) ['mmo_gameplay_test.go:189: loot or quest reward replay duplicated']
+  restored -> PASS (green)
+M10 挂单不扣买家金币（删 buyer.Wallet().Add(-price)）
+  TestMMORPGTradeConfirmRacesWithCancel: mutated -> FAIL (red) ['mmo_gameplay_test.go:140: race lost assets']
+  restored -> PASS (green)
+M2 转账扣款改走 Apply 固定键（不同序号的转账被当成重放）
+  TestMMORPGRobotBusiness: mutated -> FAIL (red) ['robot_network_test.go:68: robot: {Scheduled:1 DroppedCapacity:0 DroppedSchedule:0 LaunchFailed:0 PeakOnline:1 Started:1 Online:0 Success:0 Failure:1 Canceled:0}']
+  restored -> PASS (green)
+M11 转账拒绝路径吞掉错误（钱包已改的那一笔不再回滚）
+  TestMMORPGTradeRollback: mutated -> FAIL (red) ['mmo_tasks_test.go:239: rejection lost']
+  restored -> PASS (green)
+# REAL 变异（real1/project，source ~/.roost-it/roost-dataengine-it/env.sh，每次用独立的 roost_mmo_it_* 库与 WAL 根，跑完删库）
+R1 真实依赖进程不装配置表（删 openMMORealRuntime 里的 loadMMOTables）
+  TestMMORPGRealCrashRecovery: mutated -> FAIL (red) ['mmo_recovery_test.go:263: child failed before barrier ... mmo_recovery_test.go:133: bag_item_invalid: unknown item [item_id=3001]']
+  restored -> PASS (green)（新库 SIGKILL 全流程 ok）
+R2 领奖重放不再当成功（同 M7，task_claimed 容忍换成只容忍 task_unknown）
+  TestMMORPGRealPersistenceAcrossProcesses write: PASS；recover: mutated -> FAIL (red) ['mmo_persistence_test.go:373: task_claimed: task reward already claimed in this period']
+  restored -> write PASS、recover PASS (green)

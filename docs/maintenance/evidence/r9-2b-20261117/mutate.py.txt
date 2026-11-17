@@ -1,0 +1,62 @@
+import subprocess, sys, os
+from pathlib import Path
+root = Path(sys.argv[1])
+T = 'game/handler/mmo_tasks.go'
+G = 'game/handler/mmo_gameplay.go'
+muts = [
+ ('M1 单笔转账不给对方加金币（删 peer.Wallet().Add）', T, '''	if _, err := peer.Wallet().Add(amount); err != nil {
+		return err
+	}
+''', '', 'TestMMORPGTradeConcurrentReplay'),
+ ('M2 转账扣款改走 Apply 固定键（不同序号的转账被当成重放）', T, 'target.Wallet().Add(-amount)', 'target.Wallet().Apply("mmo-trade", -amount)', 'TestMMORPGRobotBusiness'),
+ ('M3 挂单不从卖家背包扣出材料（删 seller.Bag().Remove）', G, '''	if _, err := seller.Bag().Remove(mmoItem, count); err != nil {
+		return err
+	}
+''', '', 'TestMMORPGTradeBothConfirmAndReplay'),
+ ('M4 成交不把材料放进买家背包（删 buyer.Bag().Add）', G, '''		if _, err := buyer.Bag().Add(mmoItem, d.GetCount()); err != nil {
+			return err
+		}
+''', '', 'TestMMORPGTradeBothConfirmAndReplay'),
+ ('M5 取消 / 到期不退买家金币（删退款的 buyer.Wallet().Add）', G, '''	if _, err := buyer.Wallet().Add(d.GetPrice()); err != nil {
+		return err
+	}
+	d.SetStatus(3)''', '	d.SetStatus(3)', 'TestMMORPGTradeCancelAndExpiryRefundEscrow'),
+ ('M6 击杀不上报任务（删 Task().Report）', G, '''		if err := target.Task().Report(mmoKillEvent, 1, nowUnixMilli); err != nil {
+			return err
+		}
+''', '', 'TestMMORPGCombatCooldownReplayLootAndQuest'),
+ ('M7 领奖重放不再当成功（task_claimed 容忍换成只容忍 task_unknown）', G, '!errors.Is(err, apperrors.ErrTaskClaimed)', '!errors.Is(err, apperrors.ErrTaskUnknown)', 'TestMMORPGCombatCooldownReplayLootAndQuest'),
+ ('M8 未完成也算领过（吞掉 Claim 的所有错误）', G, ' && !errors.Is(err, apperrors.ErrTaskClaimed)', ' && !errors.Is(err, apperrors.ErrTaskClaimed) && false', 'TestMMORPGCombatCooldownReplayLootAndQuest'),
+ ('M9 拾取不放进背包（删 Bag().Add）', G, '''	if _, err := target.Bag().Add(mmoItem, 1); err != nil {
+		return err
+	}
+	m.SetLootTaken(1)''', '	m.SetLootTaken(1)', 'TestMMORPGCombatCooldownReplayLootAndQuest'),
+ ('M10 挂单不扣买家金币（删 buyer.Wallet().Add(-price)）', G, '''	if _, err := buyer.Wallet().Add(-price); err != nil {
+		return err
+	}
+''', '', 'TestMMORPGTradeConfirmRacesWithCancel'),
+ ('M11 转账拒绝路径吞掉错误（钱包已改的那一笔不再回滚）', T, '''	d.SetTradeAmount(amount)
+	if reject {
+		return errMMORule
+	}''', '''	d.SetTradeAmount(amount)
+	if reject {
+		return nil
+	}''', 'TestMMORPGTradeRollback'),
+]
+env = {**os.environ, 'GOWORK': 'off'}
+def run(test):
+    return subprocess.run(['go', 'test', '-mod=mod', '-count=1', '-run', '^' + test + '$', './game/handler'], cwd=root, capture_output=True, text=True, env=env)
+for name, path, old, new, test in muts:
+    f = root / path
+    text = f.read_text()
+    assert text.count(old) == 1, name
+    f.write_text(text.replace(old, new))
+    try:
+        r = run(test)
+        out = r.stdout + r.stderr
+        reason = [l.strip() for l in out.splitlines() if ('mmo_' in l or 'robot_' in l) and '.go:' in l][:1]
+        print(f'{name}\n  {test}: mutated -> {"FAIL (red)" if r.returncode else "PASS (NOT RED!)"} {reason}', flush=True)
+    finally:
+        f.write_text(text)
+    r = run(test)
+    print(f'  restored -> {"PASS (green)" if r.returncode == 0 else "FAIL"}', flush=True)

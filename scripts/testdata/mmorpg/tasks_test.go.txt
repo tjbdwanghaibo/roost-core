@@ -2,16 +2,20 @@ package handler
 
 import (
 	"context"
+	db "example.com/mmorpg-practice/db"
+	generated "example.com/mmorpg-practice/configs/generated"
 	monster "example.com/mmorpg-practice/game/entities/monster"
 	player "example.com/mmorpg-practice/game/entities/player"
 	scene "example.com/mmorpg-practice/game/entities/scene"
 	trade "example.com/mmorpg-practice/game/entities/trade"
 	sender "example.com/mmorpg-practice/game/handler/syncsender"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"sync"
 	"testing"
 	"time"
@@ -42,6 +46,38 @@ type mmoCommitter struct{}
 
 func (mmoCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
+// mmoTablesDir 是工程的配置数据（configs/table 经 roost generate 转成的 JSON）：bag 的道具表里有材料 3001，
+// task 的任务表里有击杀任务 201。测试包的工作目录是 game/handler。
+const mmoTablesDir = "../../configs/data"
+
+// loadMMOTables 装载工程的配置表（装载即发布成进程的缺省配置）：bag 按道具表放行材料，task 按任务表推进与发奖，
+// 没装表时两者都拒绝。真实依赖用例的每个进程（含子进程）也各装一次。
+func loadMMOTables(t testing.TB) {
+	t.Helper()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configdata.NewStore(registry, mmoTablesDir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 模块状态的读法（断言用）：金币在 wallet，材料在 bag，击杀任务的进度与领奖事实在 task 的永久记录里。
+func mmoGold(d *db.PlayerDao) int64 { return d.GetWallet().GetCoins() }
+func mmoItems(d *db.PlayerDao) int64 {
+	n, _ := d.GetBag().GetItems(mmoItem)
+	return n
+}
+func mmoQuestKills(d *db.PlayerDao) int64 {
+	n, _ := d.GetTask().GetPermanent().GetProgress(mmoKillTask)
+	return n
+}
+func mmoQuestClaimed(d *db.PlayerDao) bool {
+	claimed, _ := d.GetTask().GetPermanent().GetClaimed(mmoKillTask)
+	return claimed
+}
+
 type mmoFixture struct {
 	engine  *nest.NestMgr
 	players [2]*player.Player
@@ -53,6 +89,9 @@ type mmoFixture struct {
 
 func newMMOFixture(t *testing.T) *mmoFixture {
 	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	loadMMOTables(t)
 	player.RegisterEntity()
 	scene.RegisterEntity()
 	RegisterMmoTasksNestHandlers()
@@ -111,10 +150,15 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 	})
 	init := nest.NewHandlerName("mmo_init_" + t.Name())
 	nest.MustRegisterHandlerWithMeta(init, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		// 每名玩家 50 金币（wallet）、3 个材料（bag），满血站在第一张图。
 		p := es[0].(*player.Player)
-		p.Dao().SetGold(50)
+		if _, err := p.Wallet().Add(50); err != nil {
+			return nil, err
+		}
+		if _, err := p.Bag().Add(mmoItem, 3); err != nil {
+			return nil, err
+		}
 		p.Dao().SetHP(100)
-		p.Dao().SetItems(3)
 		p.Dao().SetSceneID(f.scenes[0].ID())
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
@@ -180,7 +224,7 @@ func TestMMORPGTradeConcurrentReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.players[0].Dao().GetGold() != 40 || f.players[1].Dao().GetGold() != 60 {
+	if mmoGold(f.players[0].Dao()) != 40 || mmoGold(f.players[1].Dao()) != 60 {
 		t.Fatal("replay duplicated transfer")
 	}
 	if err := s.MultiSync_MMORPGTrade(ctx, f.players[0].ID(), f.players[1].ID(), 1, 11, false); err == nil {
@@ -194,7 +238,7 @@ func TestMMORPGTradeRollback(t *testing.T) {
 	if err := s.MultiSync_MMORPGTrade(ctx, f.players[0].ID(), f.players[1].ID(), 1, 10, true); err == nil {
 		t.Fatal("rejection lost")
 	}
-	if f.players[0].Dao().GetGold() != 50 || f.players[1].Dao().GetGold() != 50 || f.players[0].Dao().GetTradeSeq() != 0 {
+	if mmoGold(f.players[0].Dao()) != 50 || mmoGold(f.players[1].Dao()) != 50 || f.players[0].Dao().GetTradeSeq() != 0 {
 		t.Fatal("partial trade survived rollback")
 	}
 	if err := s.MultiSync_MMORPGTrade(ctx, f.players[0].ID(), f.players[1].ID(), 1, 10, false); err != nil {
