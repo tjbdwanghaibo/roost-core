@@ -406,6 +406,9 @@ func (m Manifest) Validate() error {
 	if err := m.ClientExport.validate(); err != nil {
 		joined = errors.Join(joined, err)
 	}
+	if m.ClientExport != nil && m.ClientExport.Config != nil && !hasFeature(m, "config") {
+		joined = errors.Join(joined, errors.New("client_export.config exports configs/schema and configs/table, which need the config feature; add config to features"))
+	}
 	for name, access := range m.Access {
 		if name != "player" {
 			joined = errors.Join(joined, fmt.Errorf("unsupported access layer %q; supported: player", name))

@@ -1,0 +1,346 @@
+{
+  "kind": "roost-config-export",
+  "schema": 1,
+  "core": "v1.53.0",
+  "generator": "v1.53.1-0.20261117090013-dd78962fbf93+dirty",
+  "data_version": "41f9ec5c098a465bde1f90c05236ad13dfa0ec47cc894f9f43e8d9af1646bf5d",
+  "data_version_short": "41f9ec5c098a",
+  "csharp_namespace": "Demo.Config",
+  "omitted": {
+    "tables": 0,
+    "fields": 2
+  },
+  "tables": [
+    {
+      "name": "balance",
+      "type": "Balance",
+      "kind": "kv",
+      "file": "data/balance.json",
+      "rows": 1,
+      "schema_hash": "7784ee0446a3bb29b2f462de2a4ed15bb0b7dc256346397159b568d0c26de2fd",
+      "data_hash": "9319e305135e07e097ff973e42798b3352f9ff55c41a6c3f72b5a359dcf5f6e4",
+      "fields": [
+        {
+          "name": "max_level",
+          "type": "int32"
+        },
+        {
+          "name": "start_gold",
+          "type": "int64"
+        },
+        {
+          "name": "shop_banner",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "building",
+      "type": "Building",
+      "kind": "table",
+      "key": "id",
+      "file": "data/building.json",
+      "rows": 4,
+      "schema_hash": "8ba4a6c5c4e085e07fdda94580932a7783610dfc18bb6ddd61ff1195c4913872",
+      "data_hash": "c6c9dfa17baf705160410d230fcfccf25630dcef8a164ac78a237ba81955f871",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int32"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "model",
+          "type": "string"
+        },
+        {
+          "name": "w",
+          "type": "int32"
+        },
+        {
+          "name": "h",
+          "type": "int32"
+        },
+        {
+          "name": "max_rise",
+          "type": "int32"
+        },
+        {
+          "name": "max_cut",
+          "type": "int32"
+        },
+        {
+          "name": "must_level",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "building_param",
+      "type": "BuildingParam",
+      "kind": "table",
+      "key": "id",
+      "file": "data/building_param.json",
+      "rows": 6,
+      "schema_hash": "227a2ff8f3fe29f8a9fc5576b14ea52db6985a8e53643608ce82e68f4f70a206",
+      "data_hash": "e9c8394ac1ba4b790f10851f418ab574b56a1de8a3af5828b97a9b92af8bee25",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int32"
+        },
+        {
+          "name": "building",
+          "type": "int32"
+        },
+        {
+          "name": "slot",
+          "type": "int32"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "min",
+          "type": "int32"
+        },
+        {
+          "name": "max",
+          "type": "int32"
+        },
+        {
+          "name": "default",
+          "type": "int32"
+        }
+      ]
+    },
+    {
+      "name": "equipment_item",
+      "type": "EquipmentItem",
+      "kind": "table",
+      "key": "item_id",
+      "file": "data/equipment_item.json",
+      "rows": 2,
+      "schema_hash": "6ffc93e80c19e0fc54ad2ee105b6582f3e31dcc008a9738fbb12f0e0bc57c5a5",
+      "data_hash": "da3670e4b6b0fa54755a4d844d08a9491808016338aab72c31b5ba8908d5ca4b",
+      "fields": [
+        {
+          "name": "item_id",
+          "type": "int64"
+        },
+        {
+          "name": "slot",
+          "type": "int32"
+        },
+        {
+          "name": "attack",
+          "type": "int64"
+        },
+        {
+          "name": "hp",
+          "type": "int64"
+        }
+      ]
+    },
+    {
+      "name": "featureflag",
+      "type": "FeatureFlag",
+      "kind": "table",
+      "key": "name",
+      "file": "data/featureflag.json",
+      "rows": 3,
+      "schema_hash": "54ae5b25d3a8e7db28be61fcac09b9d55689db25c8f26ef87f3ce19645ae2ead",
+      "data_hash": "a9aba2b5c1c8d175cc0c6e62fca3e16da0b1b66009591cfc8c9ff988266171e8",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        },
+        {
+          "name": "note",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "item",
+      "type": "Item",
+      "kind": "table",
+      "key": "id",
+      "file": "data/item.json",
+      "rows": 5,
+      "schema_hash": "8401bba5c9c4d20cb1cfc5fd4dcfc9d03879a1f6cf4a7940fedd37c73e85a701",
+      "data_hash": "4239c57979932f6a84ebca912ee2d7f042dfc4b494057087660106550cee77e9",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int64"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "max_stack",
+          "type": "int64"
+        },
+        {
+          "name": "attack",
+          "type": "int64"
+        },
+        {
+          "name": "hp",
+          "type": "int64"
+        }
+      ]
+    },
+    {
+      "name": "monster",
+      "type": "Monster",
+      "kind": "table",
+      "key": "id",
+      "file": "data/monster.json",
+      "rows": 3,
+      "schema_hash": "f1e167085815982e486044c60379e223fa28a18d149c1c4a8bed139ad424f457",
+      "data_hash": "b4f80d1f29a73df2408e71eeb5086e53dc4dfa95d13337a606f6fca3fd0f3f17",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int32"
+        },
+        {
+          "name": "scene_id",
+          "type": "int32"
+        },
+        {
+          "name": "level",
+          "type": "int32"
+        },
+        {
+          "name": "model",
+          "type": "string"
+        },
+        {
+          "name": "rewards",
+          "type": "[]int64"
+        }
+      ]
+    },
+    {
+      "name": "scene",
+      "type": "Scene",
+      "kind": "table",
+      "key": "id",
+      "file": "data/scene.json",
+      "rows": 2,
+      "schema_hash": "f33a6952e047d9dba39c7ec9c3e760129125c93200907ec8f204c29776594642",
+      "data_hash": "6c6c9b540f6e440a5b2d9ab80fec8676f88b8d2847d2a4d85215725f19bbcbab",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int32"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "spawn",
+      "type": "Spawn",
+      "kind": "table",
+      "key": "id",
+      "file": "data/spawn.json",
+      "rows": 1,
+      "schema_hash": "4e58dc1576ac4df8e7d71d2ae105f5e64742593c41ee8ab58bb0252cbdebf40a",
+      "data_hash": "ff44e964814c3acb2084df50401f9ab1fd05b46eceb3cd707ad7012e28214e9a",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int32"
+        },
+        {
+          "name": "template",
+          "type": "int32"
+        },
+        {
+          "name": "count",
+          "type": "int32"
+        },
+        {
+          "name": "hp",
+          "type": "int64"
+        },
+        {
+          "name": "center_x",
+          "type": "int64"
+        },
+        {
+          "name": "center_y",
+          "type": "int64"
+        },
+        {
+          "name": "radius",
+          "type": "int64"
+        },
+        {
+          "name": "respawn_seconds",
+          "type": "int64"
+        }
+      ]
+    },
+    {
+      "name": "tip",
+      "type": "Tip",
+      "kind": "table",
+      "key": "id",
+      "file": "data/tip.json",
+      "rows": 2,
+      "schema_hash": "4024278b3a832c138342df4f07e74631efe7513f2844592fe1ea52defaddffd0",
+      "data_hash": "ecaf3c0d3f08e74ab8e166dbf62d3f5709dd020eae6765adb25ae68f0ca69c57",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int32"
+        },
+        {
+          "name": "text",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "files": {
+    "csharp/ConfigJson.cs": "sha256:7701a353b54f7c0ed12de89d2e3b596dfcc3881828da3779d7675a7aa79a87b5",
+    "csharp/ConfigTables.Balance.cs": "sha256:575ff32075e8f2be3c2ce6d7ddd74295a1a9c24caf566e59047a0b5fe3ab2152",
+    "csharp/ConfigTables.Building.cs": "sha256:7f19bf401b82f8c0981414be6ea88a1f8990bf92c1ed7c93650c8e28305bb02a",
+    "csharp/ConfigTables.BuildingParam.cs": "sha256:ff5be3102b7097f5851310a9ead349f65d7ac854300be64e55d5acfdb4f15750",
+    "csharp/ConfigTables.EquipmentItem.cs": "sha256:b6e4950dd24d727ac812a8ee15c070ed8ad291b6d201e004b827be44b3e69e97",
+    "csharp/ConfigTables.FeatureFlag.cs": "sha256:a6e8d59babcaa1486a2f995670a0a8251b95622b73197ebb96e7922947b63b74",
+    "csharp/ConfigTables.Item.cs": "sha256:73b9e7cc66b17790643c67d3c60e0092a8d5afb99bdc3d5e9911b1ee0a08e33e",
+    "csharp/ConfigTables.Monster.cs": "sha256:a839e503fceab6340eb0be3ce7cc613a84321eed61a52de7f69ec4cfb36b4a9c",
+    "csharp/ConfigTables.Scene.cs": "sha256:8284ccf53372eb65722140b66d53fc3a8810f21ef414dc973261a8a91b89962f",
+    "csharp/ConfigTables.Spawn.cs": "sha256:d977cd1e86f54f27f06e5feae28fff6bd3347fac1e3c9c47f2abf4af71fe74dd",
+    "csharp/ConfigTables.Tip.cs": "sha256:bf53e9dec3bca4343623c50c1452cc23eef8fca695a1d9dc02e572ad95d1483c",
+    "csharp/ConfigTables.cs": "sha256:937c2fc1de2514cff727e5898ec930498bee5dd3b930ff6167a2523ee1b47273",
+    "data/balance.json": "sha256:9319e305135e07e097ff973e42798b3352f9ff55c41a6c3f72b5a359dcf5f6e4",
+    "data/building.json": "sha256:c6c9dfa17baf705160410d230fcfccf25630dcef8a164ac78a237ba81955f871",
+    "data/building_param.json": "sha256:e9c8394ac1ba4b790f10851f418ab574b56a1de8a3af5828b97a9b92af8bee25",
+    "data/equipment_item.json": "sha256:da3670e4b6b0fa54755a4d844d08a9491808016338aab72c31b5ba8908d5ca4b",
+    "data/featureflag.json": "sha256:a9aba2b5c1c8d175cc0c6e62fca3e16da0b1b66009591cfc8c9ff988266171e8",
+    "data/item.json": "sha256:4239c57979932f6a84ebca912ee2d7f042dfc4b494057087660106550cee77e9",
+    "data/monster.json": "sha256:b4f80d1f29a73df2408e71eeb5086e53dc4dfa95d13337a606f6fca3fd0f3f17",
+    "data/scene.json": "sha256:6c6c9b540f6e440a5b2d9ab80fec8676f88b8d2847d2a4d85215725f19bbcbab",
+    "data/spawn.json": "sha256:ff44e964814c3acb2084df50401f9ab1fd05b46eceb3cd707ad7012e28214e9a",
+    "data/tip.json": "sha256:ecaf3c0d3f08e74ab8e166dbf62d3f5709dd020eae6765adb25ae68f0ca69c57"
+  }
+}

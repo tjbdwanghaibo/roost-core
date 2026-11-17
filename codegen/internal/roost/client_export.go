@@ -74,6 +74,8 @@ type ClientExportSpec struct {
 	// Languages 目前只支持 csharp；为空时只导出 proto 副本与 manifest.json。
 	Languages []string            `yaml:"languages,omitempty"`
 	CSharp    *ClientExportCSharp `yaml:"csharp,omitempty"`
+	// Config 是配置表导出（client_export.config，见 client_config_export.go）；不写就不导出配置。
+	Config *ClientConfigExportSpec `yaml:"config,omitempty"`
 
 	// projectRoot 是读 roost.yaml 时的工程根（绝对路径），用来解析相对的 csharp.protoc：生成在暂存树里跑，
 	// 暂存树不保留可执行位。Not part of roost.yaml.
@@ -102,6 +104,15 @@ func (spec *ClientExportSpec) csharp() bool {
 	return spec != nil && contains(spec.Languages, "csharp")
 }
 
+// protocol 判断是否导出协议。client_export 下只写了 config（dir、languages、csharp 都没写）的工程只导出配置，
+// 不导出协议，也不需要 protoc；写了其中任何一项、或者整个 client_export 只有空声明时照旧导出协议。
+func (spec *ClientExportSpec) protocol() bool {
+	if spec == nil {
+		return false
+	}
+	return spec.Config == nil || strings.TrimSpace(spec.Dir) != "" || len(spec.Languages) > 0 || spec.CSharp != nil
+}
+
 func (spec *ClientExportSpec) namespaces() clientExportNamespaces {
 	if spec.CSharp != nil && spec.CSharp.Namespace != "" {
 		ns := spec.CSharp.Namespace
@@ -114,27 +125,7 @@ func (spec *ClientExportSpec) validate() error {
 	if spec == nil {
 		return nil
 	}
-	var joined error
-	raw := filepath.ToSlash(strings.TrimSpace(spec.Dir))
-	dir := spec.dir()
-	switch {
-	case raw != "" && (path.IsAbs(raw) || filepath.IsAbs(spec.Dir) || filepath.VolumeName(spec.Dir) != ""):
-		joined = errors.Join(joined, fmt.Errorf("client_export.dir %q must be relative to the project root", spec.Dir))
-	case dir == "." || dir == ".." || strings.HasPrefix(dir, "../"):
-		joined = errors.Join(joined, fmt.Errorf("client_export.dir %q must be a directory inside the project", spec.Dir))
-	default:
-		for _, segment := range strings.Split(dir, "/") {
-			if skippedProjectDirectory(segment) {
-				// copyProject / 提交计划都跳过这些名字，生成的文件进不了工程。
-				joined = errors.Join(joined, fmt.Errorf("client_export.dir %q uses directory name %q, which generation skips", spec.Dir, segment))
-			}
-		}
-		top, _, _ := strings.Cut(dir, "/")
-		switch top {
-		case "protocol", "db", "game", "internal", "service", "configs", "cmd", "deploy":
-			joined = errors.Join(joined, fmt.Errorf("client_export.dir %q is inside %s/, which holds server sources and generator output; use a directory of its own such as %s", spec.Dir, top, DefaultClientExportDir))
-		}
-	}
+	joined := validateExportDir("client_export.dir", spec.Dir, DefaultClientExportDir)
 	seen := map[string]bool{}
 	for _, language := range spec.Languages {
 		if language != "csharp" {
@@ -153,15 +144,60 @@ func (spec *ClientExportSpec) validate() error {
 			joined = errors.Join(joined, fmt.Errorf("client_export.csharp.namespace %q is not a C# namespace (dot-separated identifiers)", ns))
 		}
 	}
+	if spec.Config != nil {
+		joined = errors.Join(joined, spec.Config.validate())
+		if spec.protocol() {
+			protocolDir, configDir := spec.dir(), spec.Config.dir()
+			if protocolDir == configDir || strings.HasPrefix(configDir, protocolDir+"/") || strings.HasPrefix(protocolDir, configDir+"/") {
+				joined = errors.Join(joined, fmt.Errorf("client_export.config.dir %q overlaps client_export.dir %q; the protocol and config exports each own their directory (both write manifest.json)", configDir, protocolDir))
+			}
+		}
+	}
 	return joined
 }
 
-// owns 判断工程相对路径 rel（斜杠分隔）是不是导出目录里归生成器所有的文件。没声明 client_export 时为 false。
+// validateExportDir 核对一个导出目录（client_export.dir、client_export.config.dir）：相对工程根、在工程内、
+// 不用生成时跳过的目录名、不在服务端源码与生成物的目录下。raw 为空表示用缺省值，缺省值本身合法。
+func validateExportDir(key, raw, fallback string) error {
+	var joined error
+	slashed := filepath.ToSlash(strings.TrimSpace(raw))
+	dir := fallback
+	if slashed != "" {
+		dir = path.Clean(slashed)
+	}
+	switch {
+	case slashed != "" && (path.IsAbs(slashed) || filepath.IsAbs(raw) || filepath.VolumeName(raw) != ""):
+		joined = errors.Join(joined, fmt.Errorf("%s %q must be relative to the project root", key, raw))
+	case dir == "." || dir == ".." || strings.HasPrefix(dir, "../"):
+		joined = errors.Join(joined, fmt.Errorf("%s %q must be a directory inside the project", key, raw))
+	default:
+		for _, segment := range strings.Split(dir, "/") {
+			if skippedProjectDirectory(segment) {
+				// copyProject / 提交计划都跳过这些名字，生成的文件进不了工程。
+				joined = errors.Join(joined, fmt.Errorf("%s %q uses directory name %q, which generation skips", key, raw, segment))
+			}
+		}
+		top, _, _ := strings.Cut(dir, "/")
+		switch top {
+		case "protocol", "db", "game", "internal", "service", "configs", "cmd", "deploy":
+			joined = errors.Join(joined, fmt.Errorf("%s %q is inside %s/, which holds server sources and generator output; use a directory of its own such as %s", key, raw, top, fallback))
+		}
+	}
+	return joined
+}
+
+// owns 判断工程相对路径 rel（斜杠分隔）是不是导出目录（协议与配置）里归生成器所有的文件。没声明 client_export 时为 false。
 func (spec *ClientExportSpec) owns(rel string) bool {
 	if spec == nil {
 		return false
 	}
 	rel = filepath.ToSlash(rel)
+	if spec.Config.owns(rel) {
+		return true
+	}
+	if !spec.protocol() {
+		return false
+	}
 	inner, ok := strings.CutPrefix(rel, spec.dir()+"/")
 	if !ok {
 		return false

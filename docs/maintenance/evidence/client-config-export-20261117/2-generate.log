@@ -1,0 +1,175 @@
+==> module-service
+==> dao
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_databases.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_alliance_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_alliance_member_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_building_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_monster_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_player_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_room_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_scene_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_scene_actor_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_team_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_terrain_cell_editor_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_terrain_chunk_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_terrain_editor_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_world_dao.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_alliance_seat_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_alliance_application_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_alliance_receipt_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_alliance_member_receipt_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_cell_death_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_cell_recovery_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_cell_ownership_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_cell_hit_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_cell_handoff_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_cell_effect_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_cell_cooldown_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_team_seat_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_alliance_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_profile_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_profile_private_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_purchase_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_rehome_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_room_seat_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_room_timer_node_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_team_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_team_invite_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_turn_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_turn_player_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_wallet_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_wallet_ledger_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_wallet_receipt_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_timer_node_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_enter_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_bag_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_mailbox_ledger_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_attribute_values_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_equipment_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_matchmaking_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_matchroom_state_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_gear_piece_nested.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/protocol/proto/protocol.proto
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/protocol/pb/protocol.pb.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/protocol/msgid/msgid_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/protocol/protocol_manifest.json
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/protocol/player_bind/bind_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/loadtest/protocol/registry_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/controllers/controller.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/alliance/alliance_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/alliance/alliance_mirror_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/alliance/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/alliance_member/alliance_member_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/alliance_member/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/building/building_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/building/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/monster/monster_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/monster/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/player/player_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/player/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/room/room_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/room/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/scene/scene_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/scene/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/scene_actor/scene_actor_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/scene_actor/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/team/team_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/team/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/terrain_cell_editor/terrain_cell_editor_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/terrain_cell_editor/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/terrain_chunk/terrain_chunk_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/terrain_chunk/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/terrain_editor/terrain_editor_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/terrain_editor/lifecycle_gen.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/world/world_gen_wire.go
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> attribute
+unchanged: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/game/modules/gameplay/attribute/gen_combat_attribute.go
+==> config-template
+tablegen: server side omitted 1 tables / 2 fields (client only)
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/balance.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/building.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/building_param.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/equipment_item.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/feature_flag.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/item.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/monster.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/scene.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/spawn.csv
+table template: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/table_template/tip.csv
+==> config-data
+tablegen: server side omitted 1 tables / 2 fields (client only)
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/balance.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/building.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/building_param.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/equipment_item.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/feature_flag.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/item.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/monster.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/scene.json
+table json: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/data/spawn.json
+==> config-go
+tablegen: server side omitted 1 tables / 2 fields (client only)
+table go: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/configs/generated/gen_table_config.go
+==> servicerpc
+alliance.Alliance: service_type=alliance capability=rpc.alliance methods=23
+  Found          params=5 results=1
+  Apply          params=4 results=1 route=target
+  Approve        params=5 results=1 route=target
+  Reject         params=5 results=1 route=target
+  Join           params=4 results=1 route=target
+  Leave          params=4 results=1 route=target
+  Kick           params=5 results=1 route=target
+  Transfer       params=5 results=1 route=target
+  Donate         params=5 results=1 route=target
+  DeclareWar     params=5 results=1 route=target
+  Info           params=1 results=1 route=target
+  RefreshHome    params=5 results=1 route=target
+  Guard          params=1 results=1 route=target
+  Membership     params=1 results=1 route=target
+  Result         params=2 results=1 route=target
+  ClaimReward    params=4 results=1 route=target
+  ReleaseReward  params=2 results=1 route=target
+  Establish      params=6 results=1 route=target
+  ReserveGuard   params=4 results=1 route=target
+  ResolveGuard   params=4 results=1 route=target
+  ClearGuard     params=3 results=1 route=target
+  AcknowledgeWar params=3 results=1 route=target
+  Settle         params=4 results=1 route=target
+up to date: alliance_rpc_gen.go
+up to date: alliance_rpc_assembly_gen.go
+==> endpoint
+==> registry
+==> client-config-export
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigJson.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.Balance.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.Building.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.BuildingParam.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.EquipmentItem.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.FeatureFlag.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.Item.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.Monster.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.Scene.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.Spawn.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.Tip.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/csharp/ConfigTables.cs
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/balance.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/building.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/building_param.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/equipment_item.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/featureflag.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/item.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/monster.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/scene.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/spawn.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/data/tip.json
+generated: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config/manifest.json
+client config export: 10 tables, omitted 0 tables / 2 fields (server only or not listed in client_export.config.tables)
+client config data version: 41f9ec5c098a (41f9ec5c098a465bde1f90c05236ad13dfa0ec47cc894f9f43e8d9af1646bf5d)

@@ -1,0 +1,78 @@
+M1-服务端字段被导出: RED -run 'TestGenerateClientConfigExport'
+    --- FAIL: TestGenerateClientConfigExport (1.04s)
+    client_config_export_test.go:268: export csharp/ConfigTables.Monster.cs carries server-only "drop_seed"
+    client_config_export_test.go:268: export csharp/ConfigTables.Monster.cs carries server-only "掉落种子"
+    client_config_export_test.go:268: export data/monster.json carries server-only "drop_seed"
+    client_config_export_test.go:268: export data/monster.json carries server-only "777"
+    client_config_export_test.go:268: export data/monster.json carries server-only "888"
+M2-Load不核对哈希: RED -run 'TestClientConfigCSharpRuntime'
+    --- FAIL: TestClientConfigCSharpRuntime (4.45s)
+    client_config_export_test.go:814: harness output:
+    client_config_export_test.go:849: harness output lacks "TAMPER balance.json -> table=balance rule=hash"
+    client_config_export_test.go:849: harness output lacks "TAMPER monster.json -> table=monster rule=hash"
+    client_config_export_test.go:849: harness output lacks "TAMPER scene.json -> table=scene rule=hash"
+    client_config_export_test.go:849: harness output lacks "TAMPER tip.json -> table=tip rule=hash"
+M3a-Load不查required/unique/min/enum: RED -run 'TestClientConfigCSharpRuntime'
+    --- FAIL: TestClientConfigCSharpRuntime (3.01s)
+    client_config_export_test.go:814: harness output:
+    client_config_export_test.go:849: harness output lacks "BAD required: table monster row 2 (key 11) field model: required: missing or null"
+    client_config_export_test.go:849: harness output lacks "BAD unique: table scene row 2 (key 2) field name: unique: value forest repeats row 1"
+    client_config_export_test.go:849: harness output lacks "BAD min: table monster row 2 (key 11) field level: min: value 0 is below min=1"
+    client_config_export_test.go:849: harness output lacks "BAD enum: table scene row 2 (key 2) field kind: enum: value sky is not one of [field dungeon]"
+M3b-Load不查ref: RED -run 'TestClientConfigCSharpRuntime'
+    --- FAIL: TestClientConfigCSharpRuntime (3.15s)
+    client_config_export_test.go:849: harness output lacks "BAD ref: table monster row 2 (key 11) field scene_id: ref: references missing scene key 9"
+    client_config_export_test.go:853: harness reported an unexpected result
+M4-sync覆盖不是上次写的文件: RED -run 'TestClientConfigSync|TestClientSync'
+    --- FAIL: TestClientSync (5.69s)
+    client_export_test.go:485: overwrote a client-owned file: <nil>
+    --- FAIL: TestClientConfigSync (5.76s)
+    client_config_export_test.go:587: overwrote a hand-written client file: <nil>
+M5a-check不认领配置导出目录: RED -run 'TestGenerateClientConfigExport'
+    --- FAIL: TestGenerateClientConfigExport (1.21s)
+    client_config_export_test.go:376: generate --check after a CSV edit = generated files are stale: shared/config/csharp/ConfigTables.cs
+M5b-doctor不比数据哈希: RED -run 'TestGenerateClientConfigExport'
+    --- FAIL: TestGenerateClientConfigExport (1.36s)
+    client_config_export_test.go:380: config-export:fresh after a CSV edit = {Name:config-export:fresh Status:fail Detail:shared/config is stale: data version e412512a6d02 in manifest.json, 03a8ccda7d55 from configs/table; run roost generate and commit shared/config}
+M5c-doctor不比schema哈希: RED -run 'TestGenerateClientConfigExport'
+    --- FAIL: TestGenerateClientConfigExport (1.29s)
+M6-DataVersion不含表名: RED -run 'TestClientExportDataVersion'
+    --- FAIL: TestClientExportDataVersionCoversTableNames (0.03s)
+    export_test.go:319: renaming tip to tips left the data version at a3c5bb8986235840f237e340e7cba65dc2515165b86603c5dc79ee697bb11caa
+M7-横排Convert不跳过注释: RED -run 'TestClientExportFixtureEndToEnd'
+    --- FAIL: TestClientExportFixtureEndToEnd (0.81s)
+    export_test.go:169: generated server binding: exit status 1
+M8a-没声明config也跑配置导出: RED -run 'TestUndeclaredClientConfigExportChangesNothing'
+    --- FAIL: TestUndeclaredClientConfigExportChangesNothing (0.00s)
+    client_config_export_test.go:227: protocol-only export runs "client-export,client-config-export"
+M8b-只写config也导出协议: RED -run 'TestUndeclaredClientConfigExportChangesNothing|TestClientConfigExportSpecValidation'
+    --- FAIL: TestClientConfigExportSpecValidation (0.00s)
+    client_config_export_test.go:157: validate({Dir: Languages:[] CSharp:<nil> Config:0x75563caf9e0 projectRoot:}) = client_export.config.dir "shared/protocol" overlaps client_export.dir "shared/protocol"; the protocol and config exports each own their directory (both write manifest.json)
+    client_config_export_test.go:173: protocol(&{Dir: Languages:[] CSharp:<nil> Config:0x75563cafa70 projectRoot:}) = true, want false
+    client_config_export_test.go:192: owns(shared/protocol/manifest.json) = true, want false
+    client_config_export_test.go:192: owns(shared/protocol/csharp/MessageIds.cs) = true, want false
+    --- FAIL: TestUndeclaredClientConfigExportChangesNothing (0.00s)
+M9-sync不删上次写过这次没有的文件: RED -run 'TestClientConfigSync'
+    --- FAIL: TestClientConfigSync (0.98s)
+    client_config_export_test.go:562: incremental sync report lacks "removed data/tip.json":
+    client_config_export_test.go:562: incremental sync report lacks "removed csharp/ConfigTables.Tip.cs":
+    client_config_export_test.go:570: /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestClientConfigSync1134829773/002/Assets/StreamingAssets/Config/tip.json still in the client after the server dropped it: <nil>
+    client_config_export_test.go:570: /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestClientConfigSync1134829773/002/Assets/Scripts/Config/ConfigTables.Tip.cs still in the client after the server dropped it: <nil>
+M10-sync报告不比字段类型: RED -run 'TestClientConfigSync'
+    --- FAIL: TestClientConfigSync (0.51s)
+    client_config_export_test.go:562: incremental sync report lacks "config fields changed type (1):\n  monster.level: int32 -> int64":
+M11-生成不删退役文件: RED -run 'TestClientConfigExportTransactionalRetirement'
+    --- FAIL: TestClientConfigExportTransactionalRetirement (4.10s)
+    client_config_export_test.go:469: client/config/data/tip.json survived dropping the table: <nil>
+    client_config_export_test.go:469: client/config/csharp/ConfigTables.Tip.cs survived dropping the table: <nil>
+M12-tables不过滤: RED -run 'TestClientConfigExportTables'
+    --- FAIL: TestClientConfigExportTables (1.47s)
+    client_config_export_test.go:428: client_export:
+    client_config_export_test.go:431: omitted tables not printed:
+    client_config_export_test.go:434: unlisted table exported: <nil>
+    client_config_export_test.go:415: client_export:
+    client_config_export_test.go:415: client_export:
+M13-config目录可放在configs下: RED -run 'TestClientConfigExportSpecValidation'
+    --- FAIL: TestClientConfigExportSpecValidation (0.00s)
+    client_config_export_test.go:147: validate({Dir: Languages:[] CSharp:<nil> Config:0x2a6e5c583c80 projectRoot:}) = <nil>, want "inside configs/"
+    client_config_export_test.go:147: validate({Dir: Languages:[] CSharp:<nil> Config:0x2a6e5c583cb0 projectRoot:}) = <nil>, want "inside game/"

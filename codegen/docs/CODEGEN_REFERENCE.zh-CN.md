@@ -114,7 +114,7 @@ roost project upgrade -core vX.Y.Z                      # 提高 Core 下限（�
 
 ## 2. 统一生成流水线：roost generate
 
-默认顺序为 DAO → Errcode → Protocol → Entity → Nest → Attribute → Config（template → data → go）→ WebRoute → ServiceRPC，避免后一个生成器读取旧产物；每一步只在 `roost.yaml` 启用了对应 feature 时运行。声明了 `client_export` 的工程最后再写前后端公共协议目录（[§2.1](#21-前后端公共协议目录client_export)）。
+默认顺序为 DAO → Errcode → Protocol → Entity → Nest → Attribute → Config（template → data → go）→ WebRoute → ServiceRPC，避免后一个生成器读取旧产物；每一步只在 `roost.yaml` 启用了对应 feature 时运行。声明了 `client_export` 的工程最后再写前后端公共协议目录（[§2.1](#21-前后端公共协议目录client_export)）与配置表导出目录（[§2.2](#22-配置表导出给客户端client_exportconfig)）。
 普通生成在同级临时项目内完成全部生成器与 `GOWORK=off go mod tidy`，补齐新生成 import 的依赖与
 checksum；只有全部成功才以可回滚批次提交生成物和 `go.mod/go.sum`。后置生成器、tidy 或提交失败
 不会留下半生成工程；它不执行 `go get -u`，不会借机升级框架。
@@ -161,6 +161,48 @@ client_export:
 - **检查**：`roost generate --check` 覆盖导出目录（要 protoc）。`roost project doctor` 的 `client-export:fresh`（声明了 `client_export` 才有）不跑 protoc：核对每个导出文件的哈希与 `manifest.json` 一致、`protocol/def` 与同步字段的哈希一致（工程开了 dao 时把 `db/def` 生成到临时目录取同步 schema，不读可能过期的 `db/dao_sync.proto`）、重新扫出的错误码一致，`languages` 与 `roost.yaml` 一致；任何一项不符为 FAIL，提示重新生成并提交。
 - **同步到客户端**：`roost client sync --from <服务端工程> --to <客户端目录> [--dry-run]`。先核对服务端导出目录的哈希（手改或拷了一半拒绝），把 `csharp/` 下的文件平铺拷进客户端目录，另存服务端的 `manifest.json`；对比上次同步留下的 `manifest.json`，打印版本变化与新增、变化、删除的消息号（按方向 + 名字对比）和错误码（按名字对比）。上次同步写过、这次没有的文件删掉；目录里同名但不是上次同步写的文件拒绝覆盖；上次同步写过、之后被手改的文件照样覆盖并提示。不生成 Unity 的 `.meta`。
 - **接入**：Unity 缺省走托管路线（`GameClient` + `RoostClientDriver`），直接编译导出的 `csharp/`，见 [Unity 手册](../../client/unity/README.md)。
+
+### 2.2 配置表导出给客户端（client_export.config）
+
+服务端工程是配置的唯一源头：同一份 `configs/schema` + `configs/table`，`roost generate` 既产出服务端的 JSON 与 Go 绑定，也产出客户端的 JSON 与 C# 读取代码（维护者 2026-11-17，方案 `docs/maintenance/FEATURE-2026-11-17-client-config-export.md`）。不写 `config` 就不导出配置；没声明的工程生成结果不变。要 `config` feature，不要 protoc。
+
+```yaml
+client_export:
+  config:
+    dir: shared/config          # 可选，缺省 shared/config；相对工程根，产物提交进仓库
+    tables: [item, monster]     # 可选；空表示全部带客户端字段的表
+    csharp:
+      namespace: Game.Config    # 可选，缺省 Roost.Config
+```
+
+- **只要配置、不要协议**：`client_export` 下只写 `config`（不写 `dir`、`languages`、`csharp`）就只导出配置，不导出协议、不找 protoc。写了这三项之一（或者 `client_export` 里没有 `config`）时照旧导出协议；两者都要时把协议的 `dir` 或 `languages` 写出来。
+- **校验**（读 `roost.yaml` 时）：`config.dir` 相对工程根、在工程内，不在 `configs/`、`game/`、`protocol/`、`db/`、`internal/`、`service/`、`cmd/`、`deploy/` 下，不用生成时跳过的目录名，也不能与协议导出目录相同或互相包含（两边都写 `manifest.json`）；`tables` 不能有空名与重复；`namespace` 是点分 C# 标识符。生成与 doctor 时再核对 `tables` 里的表存在且带客户端字段（`side=s`、或字段全是 `side:"s"` 的表不行），以及被导出表 `ref` 到的表也在导出里。
+- **选表**：导出的是 tablegen 的客户端投影（§9.2：`side=s` 的表、`side:"s"` 的字段都不在），再按 `tables` 过滤。只给服务端的字段与表绝不出现在导出目录里。
+
+导出目录（同样的输入，逐字节相同）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `data/<表>.json` | 导出模型里的数据，只含客户端字段：普通表 `{"rows":[...]}`，object / kv 单个对象；键是 schema 里的 JSON 名 |
+| `csharp/ConfigTables.cs` | 读取入口 `ConfigTables.Load(Func<string,string> readText)`、常量 `DataVersion` / `ShortDataVersion`、`DataFiles()`、`ConfigLoadException` |
+| `csharp/ConfigJson.cs` | 运行部分：最小 JSON 解析器、按字段强类型读取、规则检查、数据哈希核对（全部 `internal`） |
+| `csharp/ConfigTables.<类型>.cs` | 每张表一个文件。普通表：`[Serializable]` 行类型 `<类型>`（public 字段，名字与 JSON 键一致，C# 关键字写成 `@名字`）与表类型 `<类型>Table`（`Get(key)`、`TryGet`、`All`、`Count`，每个 index 一个 `By<index>(value)`，返回列表）；object / kv：单例类型 `<类型>`，kv 的 note 写成 XML 文档注释（别的表用 title） |
+| `manifest.json` | `kind: roost-config-export`、`schema: 1`、`core`、`generator`、`data_version`（完整值）与 `data_version_short`（12 位）、`csharp_namespace`、`omitted`（排除的表数 / 字段数）、`tables`（名字、类型、种类、主键、文件、行数、`schema_hash`、`data_hash`、字段名与类型）、`files`（每个导出文件按 LF 的 sha256） |
+
+`data/` 下的 `.json`、`csharp/` 下的 `.cs` 与 `manifest.json` 归生成器所有：本轮不产出的删掉（例如去掉一张表），目录里别的文件不动。`roost generate` 打印 `client config export: N tables, omitted N tables / M fields` 与 `client config data version: <12 位> (<完整值>)`。按表拆文件，单个文件不随表数变大。
+
+C#（netstandard2.1 纯 C#，Unity IL2CPP 裁剪安全，不需要 `link.xml`）：
+
+- **类型对应**：`string`、`bool`、`int8/16/32/64`、`int`（`long`）、`uint8/16/32/64`、`uint`（`ulong`）、`float32/64`；指向这些标量的指针是可空类型（`*string` 为可为 null 的 `string`）；切片是数组（`[]byte` 除外：encoding/json 把它写成 base64），`map[string]T` 是 `Dictionary<string, T>`，可以嵌套。带 `parser` 的字段一律是 `string`：**客户端拿到的是 CSV 原文字符串，由游戏自己解析**。别的类型（具名类型、结构体、`time.Duration`）生成时报错，写明表与字段，提示改成 parser 或 `side:"s"`。缺省或 null 读成零值（字符串为 `""`、数组与字典为空，可空类型为 null）。
+- **读取**：`var tables = ConfigTables.Load(name => ...)`，`readText` 收到数据文件名（如 `"monster.json"`，`DataFiles()` 列出全部），读文件的方式（Resources、Addressables、StreamingAssets）由调用方决定。返回一个实例，由调用方持有；生成代码没有静态的可变状态，两次 `Load` 得到两个互不相干的实例。
+- **加载时核对**：先核对每个数据文件的哈希与生成时内置的清单一致（CRLF 统一成 LF 再算 sha256），不一致抛出 `ConfigLoadException`，消息以 `table <表名>: hash:` 开头；再按服务端声明的规则检查 `required`、`unique`、`min`、`enum`（与 `framework/configdata/rules` 同一套语义）和 `ref`（全部表读完后查；零值表示没有引用，`required` 时零值也要查），违反时写明表、行、主键和字段，例如 `table monster row 2 (key 11) field scene_id: ref: references missing scene key 9`。类型不对、整数越界同样报出位置。
+- **只给客户端的数据，没有运行时版本核对**：`ConfigTables.DataVersion` 与 `manifest.json` 的 `data_version` 相同，客户端可以显示或上报；登录时不核对，SDK 不比较，热更也不提示过期（决定 4）。
+
+检查与同步：
+
+- `roost generate --check` 覆盖导出目录（不要 protoc）。
+- `roost project doctor` 的 `config-export:fresh`（声明了 `config` 才有）不重新生成：核对每个导出文件的哈希与 `manifest.json` 一致，按 `configs/schema` 与 `configs/table` 现在的内容算出客户端投影，核对表的集合、每张表的 schema 哈希与数据哈希、数据版本、C# 命名空间都与清单一致，并打印数据版本。只改只给服务端的列不算过期。C# 模板与生成器版本是否最新由 `--check` 负责。
+- `roost client sync --from <服务端工程> --config-code-to <代码目录> --config-data-to <数据目录> [--dry-run]`（两个目录一起给，可以与 `--to` 一起用）：先核对服务端导出目录的哈希，`csharp/` 平铺拷进代码目录、`data/` 平铺拷进数据目录，服务端清单另存为代码目录里的 `config-manifest.json`（同步记录，含数据版本）。规则与协议同步相同：上次同步写过、这次没有的文件删掉；不是上次同步写的同名文件拒绝覆盖（全部检查通过才写）；上次写过之后被手改的照样覆盖并提示；不生成 `.meta`。对比上次的记录，打印 `config data version: <旧> -> <新>`、表的增删、字段的增删与改类型、行数变化。
 
 CI 推荐：
 
@@ -999,9 +1041,9 @@ type Balance struct {
 
 **index**：`//roost:table` 的字段 tag `index:"true"`（索引名取 Go 字段名）或 `index:"<名字>"`，`index:"false"` 等于不写；语义与 cfggen 的 index 相同，**不唯一**。服务端生成 `<Type>By<Index>(v)`（`index:"true"` 时是 `<Type>By<字段名>`，如 `MonsterBySceneID(v int32) []MonsterCfg`），与 `<Type>By<Key>` 一样读当前请求钉住的快照，返回全部匹配行（文件顺序），没有时为空；索引登记在 `TableDef.Indexes`，键是值的字符串（整数十进制、bool 为 true / false）。只能建在 string、整数、bool 字段上；浮点、指针、具名类型、带 `parser` 的字段、主键（已有 `By<Key>`）、object 上都拒绝；同表索引名不能重复，访问器不能与主键访问器同名。只给客户端的字段上的 index 只进导出模型。
 
-**注释行**：CSV 里以 `#` 开头的行是注释，生成步骤（横排、竖排）读取时忽略；`#` 必须是行首第一个字符，值本身要以 `#` 开头时写成带引号的单元格（`"#red"`）。表头格式不变：列名一行必须有，标题、类型、规则三行可选。转换报错的 `row=` 是文件里的行号（注释行也计数）。layout=kv 表生成的 `Convert<Type>CSV` 同样忽略 `#` 行；**横排表生成的 `Convert<Type>CSV` 不识别注释**——给它的 CSV 不要带 `#` 行（改它会让每个已有工程的 `gen_table_config.go` 每张表多一行，暂未改，待维护者定）。
+**注释行**：CSV 里以 `#` 开头的行是注释，生成步骤（横排、竖排）读取时忽略；`#` 必须是行首第一个字符，值本身要以 `#` 开头时写成带引号的单元格（`"#red"`）。表头格式不变：列名一行必须有，标题、类型、规则三行可选。转换报错的 `row=` 是文件里的行号（注释行也计数）。生成的 `Convert<Type>CSV`（横排与 layout=kv）同样忽略 `#` 行（2026-11-17 协调者定：横排表的转换多了一行 `reader.Comment = '#'`，已有工程重新生成后 `gen_table_config.go` 每张表多这一行）；横排转换报错的 `row=` 是去掉注释行后的记录序号（含表头，1 起），不是文件行号。
 
-**导出模型**：`tablegen.ClientExport(metaDir, csvDir)` 返回客户端投影（`side=s` 的表与 `side:"s"` 的字段都不在）：每张表的名字、种类（table / object / kv）、字段（Go 名、JSON 名、csv 名、类型、主键、title、kv 的 note、index、parser——带 parser 的字段在 JSON 里是 CSV 原文字符串）、索引、规则（与服务端 loader 同一份翻译）、只含客户端字段的 JSON（普通表 `{"rows":[...]}`，object / kv 单个对象）、数据哈希（CRLF 统一成 LF 后的 sha256）、schema 哈希、行数，以及 `DataVersion`（各表数据哈希按表名排序拼接后再取 sha256；`ShortDataVersion()` 取前 12 位）。只改只给服务端的字段，导出与数据版本都不变；同样的输入，模型逐字节相同。导出目录、manifest、C# 与同步由 `client_export.config` 负责（另见该方案第 4 节）。
+**导出模型**：`tablegen.ClientExport(metaDir, csvDir)` 返回客户端投影（`side=s` 的表与 `side:"s"` 的字段都不在）：每张表的名字、种类（table / object / kv）、字段（Go 名、JSON 名、csv 名、类型、主键、title、kv 的 note、index、parser——带 parser 的字段在 JSON 里是 CSV 原文字符串）、索引、规则（与服务端 loader 同一份翻译）、只含客户端字段的 JSON（普通表 `{"rows":[...]}`，object / kv 单个对象）、数据哈希（CRLF 统一成 LF 后的 sha256）、schema 哈希、行数，以及 `DataVersion`（表按表名排序，每张表写成 `表名 + "\x00" + 数据哈希 + "\n"` 拼接后再取 sha256，表改名版本号也变；`ShortDataVersion()` 取前 12 位；`tablegen.DataVersion(tables)` 是同一个算法）。只改只给服务端的字段，导出与数据版本都不变；同样的输入，模型逐字节相同。导出目录、manifest、C# 与同步由 `client_export.config` 负责，见 [§2.2](#22-配置表导出给客户端client_exportconfig)。
 
 ## 10. attribute
 

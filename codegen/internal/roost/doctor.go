@@ -126,8 +126,11 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	report.Items = append(report.Items, checkWebRouteServing(root, m)...)
 	report.Items = append(report.Items, checkPlayerGate(root, m)...)
 	report.Items = append(report.Items, checkLobbyRelay(root, m)...)
-	if m.ClientExport != nil {
+	if m.ClientExport.protocol() {
 		report.Items = append(report.Items, checkClientExport(root, m))
+	}
+	if m.ClientExport != nil && m.ClientExport.Config != nil {
+		report.Items = append(report.Items, checkClientConfigExport(root, m))
 	}
 	if selfSyncEnabled(m) {
 		if status, err := checkSelfSync(root, m); err != nil {

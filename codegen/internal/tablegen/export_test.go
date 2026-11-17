@@ -153,6 +153,11 @@ func main() {
 	// 运行时的横排转换容忍只给客户端的列。
 	rows, err := generated.ConvertMonsterCSV(strings.NewReader("id,scene_id,level,drop_seed,model,tags\n10,1,3,777,slime.prefab,\n"))
 	check(err == nil && len(rows) == 1 && rows[0].Model == "" && rows[0].DropSeed == 777, "ConvertMonsterCSV = %+v, %v", rows, err)
+	// 横排表的运行时转换同样忽略 # 注释行（标题行前后、数据行之间都有）。
+	rows, err = generated.ConvertMonsterCSV(strings.NewReader("# 怪物\nid,scene_id,level,drop_seed,model\n编号,场景,等级,掉落种子,模型\n# 场景 1\n10,1,3,777,slime.prefab\n# 场景 2\n11,2,5,888,bat.prefab\n"))
+	check(err == nil && len(rows) == 2 && rows[0].ID == 10 && rows[1].ID == 11 && rows[1].DropSeed == 888, "ConvertMonsterCSV(# comments) = %+v, %v", rows, err)
+	scenes, err := generated.ConvertSceneCSV(strings.NewReader("id,name\n# 注释\n1,forest\n"))
+	check(err == nil && len(scenes) == 1 && scenes[0].Name == "forest", "ConvertSceneCSV(# comment) = %+v, %v", scenes, err)
 }
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -279,6 +284,39 @@ func TestClientExportDataVersionFollowsClientDataOnly(t *testing.T) {
 		if after := clientExport(t, root).DataVersion; after == before {
 			t.Fatalf("editing %s (%s -> %s) left the data version at %s", change.file, change.old, change.replacement, before)
 		}
+	}
+}
+
+// DataVersion 把表名算进去：数据一字不改、只改表名（标记 name=），版本号也要变。新名字 tips 与 tip
+// 排序位置相同（仍在最后），所以变化只能来自表名本身，不是来自拼接顺序。
+func TestClientExportDataVersionCoversTableNames(t *testing.T) {
+	root := stageClientExportFixture(t)
+	base := clientExport(t, root)
+	path := filepath.Join(root, "schema", "schema.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := strings.Replace(string(raw), "//roost:table name=tip side=c key=ID", "//roost:table name=tips side=c key=ID", 1)
+	if renamed == string(raw) {
+		t.Fatal("fixture has no tip marker")
+	}
+	writeTablegenTestFile(t, path, renamed)
+	got := clientExport(t, root)
+	if len(got.Tables) != len(base.Tables) {
+		t.Fatalf("renaming changed the table count: %d -> %d", len(base.Tables), len(got.Tables))
+	}
+	for i := range got.Tables {
+		want := base.Tables[i].Name
+		if want == "tip" {
+			want = "tips"
+		}
+		if got.Tables[i].Name != want || got.Tables[i].DataHash != base.Tables[i].DataHash {
+			t.Fatalf("table %d = %s %s, want %s %s (same data, same order)", i, got.Tables[i].Name, got.Tables[i].DataHash, want, base.Tables[i].DataHash)
+		}
+	}
+	if got.DataVersion == base.DataVersion {
+		t.Fatalf("renaming tip to tips left the data version at %s", base.DataVersion)
 	}
 }
 

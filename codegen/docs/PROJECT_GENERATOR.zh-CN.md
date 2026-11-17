@@ -241,6 +241,7 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 | `ids.<kind>.min/max` | 视类型 | 普通编号空间的闭区间，必须 `min > 0` 且 `max >= min` |
 | `ids.protocol.groups.<name>.min/max` | 否 | Protocol 按业务组划分的独立闭区间 |
 | `client_export` | 否 | 前后端公共协议目录：`dir`（缺省 `shared/protocol`）、`languages`（目前只有 `csharp`）、`csharp.namespace` / `csharp.protoc`（可选）。声明后 `roost generate` 整份写出客户端要的 proto、C# 与 `manifest.json`，C# 要求 protoc 与 SDK 锁定的 Google.Protobuf 同版本（31.1）；不声明时生成结果不变。见[参考 §2.1](CODEGEN_REFERENCE.zh-CN.md#21-前后端公共协议目录client_export) |
+| `client_export.config` | 否 | 配置表导出给客户端：`dir`（缺省 `shared/config`）、`tables`（可选，缺省全部带客户端字段的表）、`csharp.namespace`（缺省 `Roost.Config`）。要 `config` feature，不要 protoc；`client_export` 下只写 `config` 时只导出配置。声明后 `roost generate` 写出 `data/<表>.json`（只含客户端字段）、C# 读取代码与 `manifest.json`（含数据版本）；不声明时生成结果不变。见[参考 §2.2](CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig) |
 
 底层编码上限会 fail-fast：EntityKind 为 1..255，ComponentType 最大 65535，Protocol 消息 ID
 最大 4294967295。不要沿用旧脚手架曾给出的 Entity 1000..1999 区间；它无法转换为 core 的 uint8 EntityKind。
@@ -673,7 +674,8 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - `config-reads`：扫工程源码，直接调 viper 读方法 / `app.Config*` 单键读取、或声明了却没有任何代码读的字段为 FAIL（与 app / wiring 的守卫同一份实现 `internal/configschema/guard.go`）。
 - `time:logic_offset`：dev / prod example / k8s secret example 三套配置里各服务的业务时钟偏移是否一致。game-demo 的业务时间读 `app.BusinessClock(registry)`（带 `time.logic_offset`），租约、saga 截止、支付时间仍是系统时钟并标 `//glsvet:system-clock`；`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。
 - `shutdown:<service>`：见 [§17](#17-生产部署生成物)。
-- `client-export:fresh`（2026-11-17）：声明了 `client_export` 时出现，不跑 protoc：导出目录的每个文件与 `manifest.json` 里的哈希一致，`protocol/def`、DAO 同步字段与错误码都没有在上次生成之后变过。不符为 FAIL，提示重新生成并提交导出目录。见[参考 §2.1](CODEGEN_REFERENCE.zh-CN.md#21-前后端公共协议目录client_export)。
+- `client-export:fresh`（2026-11-17）：声明了 `client_export` 且导出协议时出现，不跑 protoc：导出目录的每个文件与 `manifest.json` 里的哈希一致，`protocol/def`、DAO 同步字段与错误码都没有在上次生成之后变过。不符为 FAIL，提示重新生成并提交导出目录。见[参考 §2.1](CODEGEN_REFERENCE.zh-CN.md#21-前后端公共协议目录client_export)。
+- `config-export:fresh`（2026-11-17）：声明了 `client_export.config` 时出现，不重新生成：导出目录的每个文件与 `manifest.json` 里的哈希一致，按 `configs/schema` 与 `configs/table` 算出的每张表 schema 哈希、数据哈希与数据版本都与清单一致，并打印数据版本。不符为 FAIL，提示重新生成并提交导出目录。见[参考 §2.2](CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)。
 
 进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明、跨键与跨 Mod 规则），不报没有声明的键；`roost config check` 先按声明查键，通过后交给编译出的进程跑同一个 `--check-config`（跨键 / 跨 Mod 规则），与 doctor 的 `config-check:<service>` 结论相同；工程编译不过时明确提示跨 Mod 规则没查。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
 

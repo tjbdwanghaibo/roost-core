@@ -1,0 +1,150 @@
+
+### 环境
+roost: roost-codegen v1.53.1-0.20261117090013-dd78962fbf93+dirty  go: go1.27.3  dotnet: 10.0.302
+
+### 1. game-demo 工程 + 夹具表 + client_export.config
+project new rc=0
+roost.yaml 末尾：
+client_export:
+  config:
+    csharp:
+      namespace: Demo.Config
+
+### 2. roost generate（不要 protoc：PATH 上没有也能跑）
+generate rc=0
+tablegen: server side omitted 1 tables / 2 fields (client only)
+tablegen: server side omitted 1 tables / 2 fields (client only)
+tablegen: server side omitted 1 tables / 2 fields (client only)
+client config export: 10 tables, omitted 0 tables / 2 fields (server only or not listed in client_export.config.tables)
+client config data version: 41f9ec5c098a (41f9ec5c098a465bde1f90c05236ad13dfa0ec47cc894f9f43e8d9af1646bf5d)
+./csharp/ConfigJson.cs
+./csharp/ConfigTables.Balance.cs
+./csharp/ConfigTables.Building.cs
+./csharp/ConfigTables.BuildingParam.cs
+./csharp/ConfigTables.EquipmentItem.cs
+./csharp/ConfigTables.FeatureFlag.cs
+./csharp/ConfigTables.Item.cs
+./csharp/ConfigTables.Monster.cs
+./csharp/ConfigTables.Scene.cs
+./csharp/ConfigTables.Spawn.cs
+./csharp/ConfigTables.Tip.cs
+./csharp/ConfigTables.cs
+./data/balance.json
+./data/building.json
+./data/building_param.json
+./data/equipment_item.json
+./data/featureflag.json
+./data/item.json
+./data/monster.json
+./data/scene.json
+./data/spawn.json
+./data/tip.json
+./manifest.json
+go build ./... && go vet ./configs/...:
+rc=0
+generate --check rc=0 generated files are up to date
+doctor: OK    config-export:fresh  shared/config matches configs/schema and configs/table: 10 table(s), data version 41f9ec5c098a
+
+### 3. 只给服务端的字段不出现在导出目录里
+  drop_seed: 0 个文件
+  server_tick: 0 个文件
+  掉落种子: 0 个文件
+  服务端心跳: 0 个文件
+  只给服务端: 0 个文件
+  777001（数据）: 0 个文件
+  888002（数据）: 0 个文件
+  999003（数据）: 0 个文件
+  服务端 configs/data 里只给客户端的值 slime.prefab: 0 个文件；tip.json 存在: no
+  导出的 data/balance.json：
+{
+  "max_level": 60,
+  "shop_banner": "summer_sale",
+  "start_gold": 100
+}
+
+### 4. 两次生成逐字节相同
+generate --force rc=0
+diff -r: 无差异
+
+### 5. 改 CSV 不重新生成：--check 与 doctor 都报过期
+generate --check rc=1
+2026/11/17 17:17:29 generated files are stale: shared/config/csharp/ConfigTables.cs, shared/config/data/monster.json, shared/config/manifest.json
+FAIL  config-export:fresh  shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
+2026/11/17 17:17:50 config-export:fresh: shared/config is stale: table monster: data (configs/table/monster.csv) changed since the export was generated; data version 41f9ec5c098a in manifest.json, ed94374cead5 from configs/table; run roost generate and commit shared/config
+只改只给服务端的列：OK    config-export:fresh  shared/config matches configs/schema and configs/table: 10 table(s), data version 41f9ec5c098a
+
+### 6. C#：netstandard2.1 编译（LangVersion 8、Nullable、警告即错误、XML 文档），net 控制台 Load
+dotnet build rc=0
+    0 个警告
+    0 个错误
+DataVersion 41f9ec5c098a465bde1f90c05236ad13dfa0ec47cc894f9f43e8d9af1646bf5d short 41f9ec5c098a
+files balance.json,building.json,building_param.json,equipment_item.json,featureflag.json,item.json,monster.json,scene.json,spawn.json,tip.json
+monster 3 rows; BySceneID(1) = 10:slime.prefab,12:orc.prefab; Get(11).rewards = []
+scene 1:forest,2:cave
+tip 1:hello,2:world
+balance max_level=60 start_gold=100 shop_banner=summer_sale
+item 5 rows; building 4 rows
+independent True
+tampered: table monster: hash: monster.json does not match the exported manifest (sha256 8e2d83371d2adafbadd52be28fed22048a9116d6b962a118c3f12178270b0743, want b4f80d1f29a73df2408e71eeb5086e53dc4dfa95d13337a606f6fca3fd0f3f17); sync the config export again instead of editing the data
+manifest data_version:   "data_version": "41f9ec5c098a465bde1f90c05236ad13dfa0ec47cc894f9f43e8d9af1646bf5d",
+
+### 7. roost client sync：首次
+synced /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config -> code /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Assets/Scripts/Config, data /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Assets/StreamingAssets/Config
+files: 22 added, 0 updated, 0 removed, 0 unchanged
+  added csharp/ConfigJson.cs
+  added csharp/ConfigTables.Balance.cs
+  added csharp/ConfigTables.Building.cs
+  added csharp/ConfigTables.BuildingParam.cs
+  added csharp/ConfigTables.EquipmentItem.cs
+  added csharp/ConfigTables.FeatureFlag.cs
+  added csharp/ConfigTables.Item.cs
+  added csharp/ConfigTables.Monster.cs
+  added csharp/ConfigTables.Scene.cs
+  added csharp/ConfigTables.Spawn.cs
+  added csharp/ConfigTables.Tip.cs
+  added csharp/ConfigTables.cs
+  added data/balance.json
+  added data/building.json
+  added data/building_param.json
+  added data/equipment_item.json
+  added data/featureflag.json
+  added data/item.json
+  added data/monster.json
+  added data/scene.json
+  added data/spawn.json
+  added data/tip.json
+first config sync: core v1.53.0, generator v1.53.1-0.20261117090013-dd78962fbf93+dirty; 10 table(s)
+config data version: none -> 41f9ec5c098a
+代码目录：ConfigJson.cs ConfigTables.Balance.cs ConfigTables.Building.cs ConfigTables.BuildingParam.cs ConfigTables.EquipmentItem.cs ConfigTables.FeatureFlag.cs ConfigTables.Item.cs ConfigTables.Monster.cs ConfigTables.Scene.cs ConfigTables.Spawn.cs ConfigTables.Tip.cs ConfigTables.cs config-manifest.json 
+数据目录：balance.json building.json building_param.json equipment_item.json featureflag.json item.json monster.json scene.json spawn.json tip.json 
+.meta 文件：0
+
+### 8. roost client sync：增量（monster 加一行、去掉 rewards、level 改 int64、加 icon；去掉 tip）
+generate rc=0
+client config export: 9 tables, omitted 0 tables / 2 fields (server only or not listed in client_export.config.tables)
+client config data version: cef6554809bb (cef6554809bb9b24a33835d91fadadfb15a521f44d01a781193841d5884d0ad3)
+synced /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/demo/shared/config -> code /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Assets/Scripts/Config, data /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Assets/StreamingAssets/Config
+files: 0 added, 3 updated, 2 removed, 17 unchanged
+  updated csharp/ConfigTables.Monster.cs
+  updated csharp/ConfigTables.cs
+  updated data/monster.json
+  removed csharp/ConfigTables.Tip.cs
+  removed data/tip.json
+config data version: 41f9ec5c098a -> cef6554809bb
+config tables removed (1):
+  tip (table, 2 row(s))
+config fields added (1):
+  monster.icon string
+config fields removed (1):
+  monster.rewards []int64
+config fields changed type (1):
+  monster.level: int32 -> int64
+config rows changed (1):
+  monster: 3 -> 4
+同步记录 config-manifest.json 的 data_version：  "data_version": "cef6554809bb9b24a33835d91fadadfb15a521f44d01a781193841d5884d0ad3",
+
+### 9. roost client sync：目录里手写的同名文件拒绝覆盖
+2026/11/17 17:18:26 refuse to overwrite /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Other/data/monster.json: it was not written by a previous roost client sync (no entry in /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-ce-export/client/Other/code/config-manifest.json); move it away or pick another directory
+rc=1
+手写文件：{"mine":true}；代码目录被创建：no
+done

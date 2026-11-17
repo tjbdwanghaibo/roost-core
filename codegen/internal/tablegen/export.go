@@ -21,9 +21,9 @@ type ExportModel struct {
 	// 供导出步骤打印 "omitted N tables / M fields"。
 	OmittedTables int
 	OmittedFields int
-	// DataVersion 是客户端数据版本（决定 4：记录、可查看，登录时不核对）：每张导出表的
-	// DataHash 按表名排序后首尾相接（十六进制串直接拼接，不加分隔），再取 sha256 的十六进制。
-	// 只改只给服务端的字段不会改变它。
+	// DataVersion 是客户端数据版本（决定 4：记录、可查看，登录时不核对）：表按表名排序，每张表写成
+	// name + "\x00" + DataHash + "\n" 依次拼接，再取 sha256 的十六进制。表名算在里面，所以只改表名
+	// 版本号也变；只改只给服务端的字段不会改变它。
 	DataVersion string
 }
 
@@ -106,7 +106,6 @@ func ClientExport(metaDir, csvDir string) (*ExportModel, error) {
 	sort.SliceStable(client, func(i, j int) bool { return client[i].Name < client[j].Name })
 	model := &ExportModel{OmittedTables: omitted.tables, OmittedFields: omitted.fields}
 	names := make(map[string]bool, len(client))
-	versionInput := make([]byte, 0, len(client)*64)
 	for _, meta := range client {
 		if names[meta.Name] {
 			return nil, fmt.Errorf("duplicate table name %q", meta.Name)
@@ -117,10 +116,22 @@ func ClientExport(metaDir, csvDir string) (*ExportModel, error) {
 			return nil, err
 		}
 		model.Tables = append(model.Tables, table)
-		versionInput = append(versionInput, table.DataHash...)
 	}
-	model.DataVersion = sha256Hex(versionInput)
+	model.DataVersion = DataVersion(model.Tables)
 	return model, nil
+}
+
+// DataVersion 是一组导出表的数据版本：表按表名排序，每张表写成 name + "\x00" + DataHash + "\n" 依次
+// 拼接，再取 sha256 的十六进制。ClientExport 与只导出部分表（client_export.config.tables）的导出步骤
+// 共用这一个算法。
+func DataVersion(tables []ExportTable) string {
+	sorted := append([]ExportTable(nil), tables...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	input := make([]byte, 0, len(sorted)*96)
+	for _, table := range sorted {
+		input = fmt.Appendf(input, "%s\x00%s\n", table.Name, table.DataHash)
+	}
+	return sha256Hex(input)
 }
 
 func exportTable(csvDir string, meta Meta) (ExportTable, error) {

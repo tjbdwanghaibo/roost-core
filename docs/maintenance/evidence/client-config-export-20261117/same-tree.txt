@@ -1,0 +1,10 @@
+old plain rc=0
+old game rc=0
+old game-demo rc=0
+new plain rc=0
+new game rc=0
+new game-demo rc=0
+plain: files=75 changed-files=0 added-comment-lines=0 other-diff-lines=0
+game: files=87 changed-files=0 added-comment-lines=0 other-diff-lines=0
+demo: files=1402 changed-files=1 added-comment-lines=6 other-diff-lines=0
+diff -r -x .git -x *.log old/demo/configs/generated/gen_table_config.go new/demo/configs/generated/gen_table_config.go

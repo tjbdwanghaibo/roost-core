@@ -1010,6 +1010,7 @@ func {{.TypeName}}ConfigFrom(snap *configdata.Snapshot) ({{.Alias}}.{{.TypeName}
 {{if eq .Layout "kv"}}{{template "kvConverter" .}}{{else}}func Convert{{.TypeName}}CSV(r io.Reader) ({{if eq .Kind "table"}}[]{{.Alias}}.{{.TypeName}}{{else}}{{.Alias}}.{{.TypeName}}{{end}}, error) {
 	reader := csv.NewReader(r)
 	reader.TrimLeadingSpace = true
+	reader.Comment = '#'
 	records, err := reader.ReadAll()
 	if err != nil {
 		var zero {{if eq .Kind "table"}}[]{{.Alias}}.{{.TypeName}}{{else}}{{.Alias}}.{{.TypeName}}{{end}}

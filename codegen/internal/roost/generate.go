@@ -193,9 +193,15 @@ func generatorsFor(m Manifest, force bool) []generator {
 	}
 	// 前后端公共协议目录：只有声明了 client_export 的工程才有这一步（没声明的生成结果逐字节不变）。放在最后，
 	// 读本轮刚生成的 protocol.proto、dao_sync.proto 与 dao_sync_apply.cs。
-	if m.ClientExport != nil {
+	if m.ClientExport.protocol() {
 		generators = append(generators, generator{Name: "client-export", Always: true, Run: func(root string, w io.Writer) error {
 			return generateClientExport(root, m, w)
+		}})
+	}
+	// 配置表导出给客户端（client_export.config）：只读 configs/schema 与 configs/table，不要 protoc；没声明的工程没有这一步。
+	if m.ClientExport != nil && m.ClientExport.Config != nil {
+		generators = append(generators, generator{Name: "client-config-export", Always: true, Run: func(root string, w io.Writer) error {
+			return generateClientConfigExport(root, m, w)
 		}})
 	}
 	return generators
