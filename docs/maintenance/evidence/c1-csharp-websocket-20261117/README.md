@@ -113,7 +113,7 @@ ROOST_RELAYPEER_BIN=/tmp/relaypeer node client/dotnet/unity-webgl-smoke/serve.mj
 
 可选方向：
 
-- **A1（推荐）单线程模式，选项打开**：`RelayClientOptions` 加一个“由 Pump 驱动”的开关（WebGL 必开，其他平台保持现状）。打开时：读循环直接在调用线程起（不用 `Task.Run`），所有 `await` 回到调用者的上下文（`ConfigureAwait(!singleThread)`，机械替换）；心跳、读超时、连接超时、重连退避改由 `Pump` 按时钟检查（把 `HeartbeatAsync` 的一轮判断抽成 `Tick(now)`）；`LobbyClient` 的 HTTP 抽成一个小接口（缺省 HttpClient，WebGL 由游戏用 UnityWebRequest 实现，参考写法已在冒烟工程里）。估计 SDK 改动 200～350 行，加一组“单线程上下文 + 禁用线程池”的 .NET 用例跑现有对端用例的子集（约 150 行），再用本冒烟工程在 WebGL 里验收；约 1～2 天。代价：两条调度路径都要测；单线程模式下游戏不 `Pump`（加载场景、切后台时 Unity 停了循环）就不发心跳，超过 relay 的 `idle_timeout`（30s）会断开、靠重连回来。
+- **A1（推荐；维护者 2026-11-18 选定，待实施）单线程模式，选项打开**：`RelayClientOptions` 加一个“由 Pump 驱动”的开关（WebGL 必开，其他平台保持现状）。打开时：读循环直接在调用线程起（不用 `Task.Run`），所有 `await` 回到调用者的上下文（`ConfigureAwait(!singleThread)`，机械替换）；心跳、读超时、连接超时、重连退避改由 `Pump` 按时钟检查（把 `HeartbeatAsync` 的一轮判断抽成 `Tick(now)`）；`LobbyClient` 的 HTTP 抽成一个小接口（缺省 HttpClient，WebGL 由游戏用 UnityWebRequest 实现，参考写法已在冒烟工程里）。估计 SDK 改动 200～350 行，加一组“单线程上下文 + 禁用线程池”的 .NET 用例跑现有对端用例的子集（约 150 行），再用本冒烟工程在 WebGL 里验收；约 1～2 天。代价：两条调度路径都要测；单线程模式下游戏不 `Pump`（加载场景、切后台时 Unity 停了循环）就不发心跳，超过 relay 的 `idle_timeout`（30s）会断开、靠重连回来。
 - **A2 全部改成 Pump 驱动**：只有一条路径，测试面不翻倍；代价是桌面 / 移动端行为也变（不 `Pump` 就没有心跳），与 `Roost.Client` 的 GameClient 现有做法不一致，改动面比 A1 大。
 - **B 不支持 C# SDK 上 WebGL**：文档写明 Unity WebGL 不能用 `Roost.Client.Relay`；WebGL 游戏要么不做开房间，要么自己在 jslib 里调用 TS SDK 再桥接事件（工作量在游戏侧，大）。
 - 无论哪种，切后台：WebGL 页面在后台时 Unity 的循环会停或被限流，C# 里的心跳都会停，长时间后台必断线（TS SDK 用 Worker 计时器只是缓解）。要不要把心跳挪进 jslib 是 A1/A2 之后的问题，尚未确认。

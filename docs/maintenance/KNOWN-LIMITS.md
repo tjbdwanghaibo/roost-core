@@ -740,7 +740,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（未发版），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
 
 - **Go 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**：C# 的 `Roost.Client`（连 Gate）没有 WebSocket。
-- **Unity WebGL 上 C# 开房间 SDK 跑不起来（SDK 调度怎么改待维护者定）**：2026-11-17 在 Unity 6000.7.0b7 WebGL 构建里实测，WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行都不运行，SDK 的读循环、心跳、连接超时、重连与 `LobbyClient` 依赖它们。浏览器 WebSocket 桥接（`client/dotnet/unity-webgl-smoke` 的 jslib + `BrowserRelayTransport`）实测可用。候选：由 `Pump` 驱动调度（推荐）等，见[证据](evidence/c1-csharp-websocket-20261117/README.md)。
+- **Unity WebGL 上 C# 开房间 SDK 跑不起来（维护者 2026-11-18 定 A1：单线程开关，待实施）**：2026-11-17 在 Unity 6000.7.0b7 WebGL 构建里实测，WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行都不运行，SDK 的读循环、心跳、连接超时、重连与 `LobbyClient` 依赖它们。浏览器 WebSocket 桥接（`client/dotnet/unity-webgl-smoke` 的 jslib + `BrowserRelayTransport`）实测可用。维护者 2026-11-18 选 A1：`RelayClientOptions` 加“由 Pump 驱动”的开关（WebGL 必开，其他平台不变），读循环在调用线程、心跳 / 超时 / 重连退避由 `Pump` 按时钟检查，`LobbyClient` 的 HTTP 抽成接口（WebGL 用 UnityWebRequest）；不 `Pump` 时 30s 后被断开、靠重连回来。三种做法见[证据](evidence/c1-csharp-websocket-20261117/README.md)。
 - **高层离开分不出“房间早就不在”与“正常离开”**：Go `Leave` / C# `LeaveAsync` / TS `leave()` 把 lobby 的 `room_not_found` 当成离开成功（2026-11-17），要区分就直接调 lobby 客户端的 leave；是否另给返回标志尚未确认。
 - **Web 房主在后台标签页靠 Worker 撑住只是缓解**：浏览器不保证 Worker 计时器不被限流，手机后台页随时被冻结，冻结后走 relay 的断线换 host。
 - **内置浏览器面板测不了真实后台**：Claude 桌面应用内置浏览器面板里，后台标签页的 `document.visibilityState` 始终是 `visible`，所以在那里“切到后台”只能用演示页的“模拟隐藏”按钮触发；后台限流对 Worker 计时器的影响没有实测。
