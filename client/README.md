@@ -348,12 +348,12 @@ dirtyMeshes.Clear();
 | SDK | 位置 | 接入 relay | 通知线程 |
 |---|---|---|---|
 | Go | [client/relay](relay/README.md) | TCP | 连接的读 goroutine 上依次调用 |
-| C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP 或 WebSocket（`RelayClientOptions.Transport`；传输是公开接口 `IRelayTransport`，自带 TCP 与 `ClientWebSocket` 两种）。**Unity WebGL 上跑不起来**：SDK 的调度依赖线程池，见下 | `Pump` 的调用线程（Unity 主线程） |
+| C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP 或 WebSocket（`RelayClientOptions.Transport`；传输是公开接口 `IRelayTransport`，自带 TCP 与 `ClientWebSocket` 两种）。Unity WebGL 上用单线程调度 `PumpDriven`，见下 | `Pump` 的调用线程（Unity 主线程）；`PumpDriven` 时心跳、超时、重连退避也在 `Pump` 里 |
 | TS | [ts](ts/README.md)（浏览器；node 测试用 `ws` 包） | WebSocket，每条二进制消息一帧，收的时候按字节流解 | 事件循环 |
 
 三份共同的做法：
 
-- **lobby**：建房、列房、加入、离开、改状态，请求带 `Authorization: Bearer gt2…`，可选 `transport`（tcp / ws）；lobby 的错误名映射成各语言自己的错误类型（Go `*LobbyError` + `errors.Is(err, relay.ErrRoomFull)`，C# `LobbyException.Code`，TS `LobbyError.code`）。高层离开（Go `Client.Leave`、C# `LeaveAsync`、TS `leave()`）遇到 `room_not_found` 算离开成功：房间已关或过了寿命，最常见的是自己是最后一个人、relay 收到 `Leave` 帧随即关了房（[LOBBY §2.1](../docs/framework/LOBBY.md)）；直接调 lobby 客户端的 leave 仍拿到这个错误。
+- **lobby**：建房、列房、加入、离开、改状态，请求带 `Authorization: Bearer gt2…`，可选 `transport`（tcp / ws）；lobby 的错误名映射成各语言自己的错误类型（Go `*LobbyError` + `errors.Is(err, relay.ErrRoomFull)`，C# `LobbyException.Code`，TS `LobbyError.code`）。高层离开（Go `Client.Leave`、C# `LeaveAsync`、TS `leave()`）遇到 `room_not_found` 算离开成功：房间已关或过了寿命，最常见的是自己是最后一个人、relay 收到 `Leave` 帧随即关了房（[LOBBY §2.1](../docs/framework/LOBBY.md)）；结果里多一个“房间已不在”的标志（Go `LeaveResult.RoomGone`、C# `RelayLeaveResult.RoomGone`、TS `{ roomGone }`），正常让出席位时为 false（维护者 2026-11-18）；直接调 lobby 客户端的 leave 仍拿到这个错误。
 - **relay 帧**：直接是 RS v2 帧，通道在 flags bits3..4、seq 是槽位（上行目标，0 = 全体；下行发送者），编码与 [relay-packets.json](spec/relay-packets.json) 逐字节相同（Go 用 `client/wire`，C# / TS 各自实现并用这份金样核对）。连接后首帧发令牌，等 Welcome（13 字节：角色、房主槽位、房间此刻的 epoch；旧的 5 字节 Welcome 不再接受）；收发游戏通道与房间通道；房主收成员上下线，房主可以踢人、禁言。
 - **心跳与断线**：成员缺省每 10s 一个 Ping（relay 的 `idle_timeout` 缺省 30s），房主与候选缺省每 600ms 一个（relay 的 `host_idle_timeout` 缺省 2s），Pong 测 RTT；30s 一帧都没收到就当断线。断线后重连先调 lobby 的 join（对已在房间里的人幂等，开局后掉线也能回原座）拿新令牌，再连 relay；自动重连缺省关闭，打开后只在连接自己断掉或 relay 判 `idle_timeout` 时重连，被踢、房间关闭、被顶号、经 lobby 离开、relay 停机都不重连；尝试中 relay 答 `lobby_rejected` 就停，答 `lobby_unavailable` 按退避再试。
 - **被踢**：记在 lobby，被踢的账号再 join 答 403 `kicked`；拿没过期的旧令牌直连 relay 收到 `Closed{kicked}`。房主能踢已离线的座位（收到这个槽位的第二条 `MemberLeft{kicked}`）。
@@ -361,7 +361,7 @@ dirtyMeshes.Clear();
 - **前台上报**：成员 `SetForeground(bool)` 发 `Presence`，relay 只转给当前房主（`OnMemberPresence`）；SDK 收到 `HostChanged`、每次连上后自动重发。TS 的 `WebHost` 按页面可见性自动上报，房主在游戏没显式声明候选顺序时自动把前台成员排在前面；Go / C# 不自动排，由游戏决定。
 - **扩展点**：不认识的控制帧操作码丢弃，不断开；`OnControl(op, …)` 给任意操作码注册回调；发控制帧用 `SendControl`。
 - **WebSocket**（TS 只用它，C# 可选，Go 不支持）：发送一帧一条二进制消息；接收按字节流拼帧，不假设一条消息一帧。向 lobby 要哪种传输由选项决定，重连沿用同一种。
-- **C# 与 Unity WebGL**（交接 C1，2026-11-17 实测）：WebGL 上没有套接字，要用浏览器 WebSocket 实现 `IRelayTransport`（参考写法 [unity-webgl-smoke](dotnet/unity-webgl-smoke/README.md)，SDK 不带）。这一层在浏览器里实测可用，但 SDK 本身跑不起来：WebGL 上 `Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行与线程池都不运行，而 SDK 的读循环、心跳、连接超时、重连退避与 `LobbyClient` 都靠它们。要支持 WebGL 得改 SDK 的调度（由 `Pump` 驱动），是否做待维护者定，见 [证据](../docs/maintenance/evidence/c1-csharp-websocket-20261117/README.md)。Unity 编辑器（Mono）上 TCP 与 WebSocket 都实测可用（WebSocket 偶发在心跳整 10 秒点断开，原因在 relay 的 WebSocket 写期限，见证据）；桌面播放器没有跑。
+- **C# 与 Unity WebGL**（交接 C1 实测；维护者 2026-11-18 定 A1）：WebGL 上没有套接字、线程池与计时器也不运行（2026-11-17 实测 `Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行都不跑）。C# SDK 的做法：`RelayClientOptions.PumpDriven = true`（WebGL 必开，缺省关、其他平台不变）——读循环在主线程上起、所有等待回到调用者的上下文，心跳、读超时、连接超时、重连退避都由 `Pump` 按时钟检查；`LobbyClient` 的 HTTP 抽成 `ILobbyHttp`（缺省 `HttpClient`，WebGL 用 `UnityWebRequest` 实现）并以 `pumpDriven: true` 构造；传输用浏览器 WebSocket 实现 `IRelayTransport`（参考写法 [unity-webgl-smoke](dotnet/unity-webgl-smoke/README.md)，SDK 不带）。代价：游戏不 `Pump`（加载场景、切后台）就不发心跳，成员超过 relay 的 `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）被断开，恢复 `Pump` 后靠重连回来。见 [C# README](dotnet/Roost.Client.Relay/README.md) 与 [证据](../docs/maintenance/evidence/sdk-webgl-a1-20261118/README.md)。
 
 验证（Redis 用 `~/.roost-it`：先 `source ~/.roost-it/roost-dataengine-it/env.sh`，没有时对端用内存房间目录）：
 

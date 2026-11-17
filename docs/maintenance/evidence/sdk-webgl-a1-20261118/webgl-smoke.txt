@@ -1,0 +1,47 @@
+Unity 6000.7.0b7 (74fb57f88838) WebGL 开发版构建（RelaySmokeEditor.BuildWebGL，不压缩），2026-11-18，macOS arm64。
+页面：serve.mjs <Build/WebGL> 18791（测试对端 relay + lobby，房间目录 ~/.roost-it 的 Redis），Claude 桌面应用内置浏览器面板（Chromium；
+面板处于隐藏状态，页面按后台页运行，document.visibilityState 仍是 visible）。日志是浏览器控制台里的 SMOKE 行（去掉 Unity 的调用栈）。
+
+== 第 1 次：http://127.0.0.1:18791/?hold=45（PumpDriven 开）
+SMOKE start: lobby http://127.0.0.1:18791/lobby, transport Ws, browser websocket True, pump driven True, main thread 1
+SMOKE probe Task.Run: DID NOT COMPLETE within 3s
+SMOKE probe Task.Delay(100ms): DID NOT COMPLETE within 3s
+SMOKE probe SemaphoreSlim.WaitAsync(100ms): DID NOT COMPLETE within 3s
+SMOKE probe CancelAfter(100ms): DID NOT COMPLETE within 3s
+SMOKE probe ConfigureAwait(false) after a main-thread completion: DID NOT COMPLETE within 3s
+SMOKE probe await (Unity context) after a main-thread completion: continued on thread 1 (main)
+SMOKE probe ThreadPool.QueueUserWorkItem: DID NOT COMPLETE within 3s
+SMOKE probes: 6 did not complete (the threaded scheduling depends on them; PumpDriven does not)
+SMOKE bridge: ok (UnityWebRequest lobby → jslib WebSocket → welcome + pong, awaits on the Unity context)
+SMOKE lobby created room 8fd15f1259a53413, relay ws://127.0.0.1:50510/relay
+SMOKE host connected: slot 1, host True, host slot 1, epoch 0
+SMOKE member connected: slot 2, host False, host slot 1, epoch 0
+SMOKE frames: ok (member → host 5, host → member 1, room 1)
+SMOKE holding 45s to see heartbeats (from 3.2s) ...
+SMOKE held 45s: still connected, rtt host 8.5ms member 8.7ms
+SMOKE unity-smoke-host saw slot 2 (unity-smoke-m2) leave at 48.2s: Left
+SMOKE left: ok (member room gone False, last one room gone True)
+SMOKE PASS
+（没有任何 “disconnected at” 行）
+
+== 第 2 次：?hold=45&pump=0（PumpDriven 关，即修前的调度；同一个构建）
+SMOKE start: ..., pump driven False, main thread 1
+SMOKE probes: 6 did not complete ...
+SMOKE bridge: ok (...)
+SMOKE FAIL stuck at step 'end to end: lobby (LobbyClient + UnityWebRequestLobbyHttp)' for 65s (at 68.1s)
+（第一个 lobby 请求的续行 ConfigureAwait(false) 排进不运行的线程池，与 2026-11-17 C1 的结果相同）
+
+== 第 3 次：?hold=60（PumpDriven 开）
+SMOKE start: ..., pump driven True, main thread 1
+SMOKE probes: 6 did not complete ...
+SMOKE bridge: ok (...)
+SMOKE lobby created room ..., SMOKE host connected: slot 1 ..., SMOKE member connected: slot 2 ...
+SMOKE frames: ok (member → host 5, host → member 1, room 1)
+SMOKE holding 60s to see heartbeats (from 3.2s) ...
+SMOKE held 60s: still connected, rtt host 1000.1ms member 1008.3ms
+SMOKE unity-smoke-host saw slot 2 (unity-smoke-m2) leave at 64.6s: Left
+SMOKE left: ok (member room gone False, last one room gone True)
+SMOKE PASS
+说明：这一次 rtt 约 1s，是隐藏面板里的后台页把帧率限到约 1 帧/秒（Pong 要等下一帧的 PollAll 才被读到；墙钟上这一轮也明显比
+页面里的计时慢）。即使约 1 帧/秒，房主的心跳（HostPingInterval 600ms，实际每帧至多一个）仍在 host_idle_timeout 2s 之内，
+没有断线。帧率被限的原因是推断（面板隐藏），没有单独核对，尚未确认。

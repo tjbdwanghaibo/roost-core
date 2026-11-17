@@ -23,6 +23,7 @@ namespace Roost.RelaySmoke
 #if UNITY_WEBGL && !UNITY_EDITOR
             config.BrowserWebSocket = true;
             var page = new Uri(Application.absoluteURL);
+            config.PumpDriven = Query(page.Query, "pump") != "0"; // WebGL 上必开；pump=0 只为看清修前卡在哪
             config.LobbyUrl = new Uri(page, Query(page.Query, "lobby") ?? "/lobby").ToString().TrimEnd('/');
             if (Query(page.Query, "transport") == "tcp") config.Transport = RelayTransport.Tcp; // WebGL 上连不了 TCP：只为看清错误
             if (float.TryParse(Query(page.Query, "hold"), out float hold)) config.HoldSeconds = hold;
@@ -33,6 +34,7 @@ namespace Roost.RelaySmoke
                 if (args[i] == "-roostLobby") config.LobbyUrl = args[i + 1];
                 if (args[i] == "-roostTransport") config.Transport = args[i + 1] == "tcp" ? RelayTransport.Tcp : RelayTransport.Ws;
                 if (args[i] == "-roostHold" && float.TryParse(args[i + 1], out float hold)) config.HoldSeconds = hold;
+                if (args[i] == "-roostPumpDriven") config.PumpDriven = args[i + 1] == "1";
             }
 #endif
             smoke = new RelaySmoke(config, Write, () => Time.realtimeSinceStartupAsDouble);

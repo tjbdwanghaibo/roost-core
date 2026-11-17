@@ -9,6 +9,7 @@ export type {
   HostChange,
   HostRole,
   HostTakeover,
+  LeaveResult,
   ReconnectPolicy,
   RelayClientOptions,
   SentSnapshot,

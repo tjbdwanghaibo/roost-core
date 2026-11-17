@@ -133,6 +133,15 @@ export interface SentSnapshot {
  * 一条连接结束的通知。reconnecting 为 true 表示正在重连，之后会有 onReconnected，或者一条 reconnecting 为 false 的通知；
  * reconnecting 为 false 的是最后一条。reason 是 relay 的 Closed 原因（没收到 Closed 时是 Disconnected）；本地 close 时是 None。
  */
+/**
+ * leave() 的结果（三份 SDK 一致：Go LeaveResult.RoomGone、C# RelayLeaveResult.RoomGone）。
+ * roomGone 为 true：lobby 答 room_not_found——房间早就关了或过了寿命，人已经不在里面，leave 照样算成功（例如先用 sendLeave
+ * 在 relay 上离开、自己又是最后一个人，relay 随即关房）。为 false：lobby 正常让出了席位，或者没有 lobby / 房间号。
+ */
+export interface LeaveResult {
+  roomGone: boolean;
+}
+
 export interface Disconnect {
   reason: RelayReason;
   error?: Error;
@@ -716,14 +725,17 @@ export class RelayClient {
 
   /**
    * 经 lobby 离开房间（让出席位；房主离开由 relay 走换 host），然后 close。
-   * lobby 答 room_not_found 算离开成功：房间已关或过了寿命（例如先用 sendLeave 在 relay 上离开、自己又是最后一个人，relay
-   * 随即关房），人已经不在里面。其余 lobby 错误照常抛出。
+   * lobby 答 room_not_found 算离开成功，结果的 roomGone 为 true：房间已关或过了寿命（例如先用 sendLeave 在 relay 上离开、
+   * 自己又是最后一个人，relay 随即关房），人已经不在里面（维护者 2026-11-18 定：让调用方分得出“房间早就不在”与“正常离开”）。
+   * 其余 lobby 错误照常抛出。
    */
-  async leave(): Promise<void> {
+  async leave(): Promise<LeaveResult> {
     try {
       if (this.lobby && this.roomId) await this.lobby.leaveRoom(this.roomId, this.opts.game);
+      return { roomGone: false };
     } catch (error) {
       if (!(error instanceof LobbyError && error.code === "room_not_found")) throw error;
+      return { roomGone: true };
     } finally {
       this.close();
     }

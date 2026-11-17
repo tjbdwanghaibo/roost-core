@@ -1,16 +1,16 @@
 # unity-webgl-smoke：Roost.Client.Relay 在 Unity（含 WebGL）上的最小冒烟
 
-交接 C1（维护者 2026-11-17“做一个最小的测试”）：看 `Roost.Client.Relay` 在 Unity 的调度下能不能跑，重点是 **WebGL 单线程**。同时是 WebGL 桥接的参考写法（SDK 不带桥接代码，维护者定）。
+交接 C1（维护者 2026-11-17“做一个最小的测试”）：看 `Roost.Client.Relay` 在 Unity 的调度下能不能跑，重点是 **WebGL 单线程**。同时是 WebGL 接入的参考写法（SDK 不带桥接代码，维护者定）。2026-11-18 起 WebGL 上以 `RelayClientOptions.PumpDriven` 跑（维护者定 A1）。
 
 ## 内容
 
 | 文件 | 作用 |
 |---|---|
-| `Assets/RelaySmoke/RelaySmoke.cs` | 冒烟本体：①调度原语探针（`Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 续行、线程池；对照组是回到 Unity 上下文的 `await`）；②只走桥接（WebGL 下）：`UnityWebRequest` 向 lobby 要票据 → `BrowserRelayTransport` 连 relay → 令牌、Ping → 收 Welcome、Pong，不经 SDK 的调度；③端到端经 SDK：房主建房、成员加入、成员 → 房主 5 帧、房主广播、房间通道、停 `hold` 秒（大于 relay 空闲超时 30s，看心跳）、离开。日志行以 `SMOKE` 开头，最后一行 `SMOKE PASS` / `SMOKE FAIL …`；某一步 `hold + 20` 秒没往下走时报 `SMOKE FAIL stuck at step '…'`。冒烟自己的等待按帧计时，不借助被测的原语。 |
+| `Assets/RelaySmoke/RelaySmoke.cs` | 冒烟本体：①调度原语探针（`Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 续行、线程池；对照组是回到 Unity 上下文的 `await`）；②只走桥接（WebGL 下）：`UnityWebRequest` 向 lobby 要票据 → `BrowserRelayTransport` 连 relay → 令牌、Ping → 收 Welcome、Pong，不经 SDK 的调度；③端到端经 SDK（WebGL 上 `PumpDriven`）：房主建房、成员加入、成员 → 房主 5 帧、房主广播、房间通道、停 `hold` 秒（大于 relay 空闲超时 30s，看心跳）、离开（成员正常离开 `RoomGone` 为 false）。日志行以 `SMOKE` 开头，最后一行 `SMOKE PASS` / `SMOKE FAIL …`；某一步 `hold + 20` 秒没往下走时报 `SMOKE FAIL stuck at step '…'`。冒烟自己的等待按帧计时，不借助被测的原语。 |
 | `Assets/RelaySmoke/BrowserRelayTransport.cs` + `Assets/Plugins/WebGL/RoostRelayWebSocket.jslib` | WebGL 上的 `IRelayTransport` 参考实现：浏览器 WebSocket，JS 把二进制消息排成字节队列，C# 每帧 `BrowserRelayTransport.PollAll()` 轮询（不从 JS 回调 C#，续行在主线程同步执行）。 |
-| `Assets/RelaySmoke/UnityWebRequestHandler.cs` | 让 `LobbyClient` 的 `HttpClient` 经 `UnityWebRequest` 发请求（投到主线程）。 |
-| `Assets/RelaySmoke/RelaySmokeBehaviour.cs` | 播放器入口：Update 每帧驱动、OnGUI 显示日志、记录切前后台。WebGL 读页面查询参数 `lobby`（缺省同源 `/lobby`）、`hold`；桌面播放器读 `-roostLobby`、`-roostTransport ws|tcp`、`-roostHold`。 |
-| `Assets/Editor/RelaySmokeEditor.cs` | 批处理入口：`RunInEditor`（编辑器里直接跑，环境变量 `ROOST_SMOKE_LOBBY`、`ROOST_SMOKE_TRANSPORT`、`ROOST_SMOKE_HOLD`；不要加 `-quit`）、`BuildWebGL`（不压缩、开发版，输出 `Build/WebGL`）、`BuildMac`。 |
+| `Assets/RelaySmoke/UnityWebRequestLobbyHttp.cs` | `LobbyClient` 的 `ILobbyHttp` 经 `UnityWebRequest` 实现（主线程上直接发，别的线程上调时投到主线程；任务在主线程上完成）。用法 `new LobbyClient(url, gt2, new UnityWebRequestLobbyHttp(), pumpDriven: true)`。 |
+| `Assets/RelaySmoke/RelaySmokeBehaviour.cs` | 播放器入口：Update 每帧驱动、OnGUI 显示日志、记录切前后台。WebGL 读页面查询参数 `lobby`（缺省同源 `/lobby`）、`hold`、`pump`（缺省开 `PumpDriven`，`pump=0` 关掉，只为看修前卡在哪）；桌面播放器读 `-roostLobby`、`-roostTransport ws|tcp`、`-roostHold`、`-roostPumpDriven 1`。 |
+| `Assets/Editor/RelaySmokeEditor.cs` | 批处理入口：`RunInEditor`（编辑器里直接跑，环境变量 `ROOST_SMOKE_LOBBY`、`ROOST_SMOKE_TRANSPORT`、`ROOST_SMOKE_HOLD`、`ROOST_SMOKE_PUMP_DRIVEN=1`；不要加 `-quit`）、`BuildWebGL`（不压缩、开发版，输出 `Build/WebGL`）、`BuildMac`。 |
 | `prepare.sh` | 把工程拷到仓库外的新目录并放进刚编好的 `Roost.Client.Relay.dll`（Unity 会生成 `Library/` 与 `.meta`，不在仓库里打开）。 |
 | `serve.mjs` | 起测试对端（真实 relay + lobby，带 WebSocket 监听），发静态目录，`/lobby/*` 同源代理到 lobby。 |
 | `check-jslib.mjs` | 不经 Unity、不经浏览器，在 node 里用 Emscripten 替身加载 jslib，连真实对端核对它的 JS 逻辑。 |
@@ -44,7 +44,12 @@ ROOST_RELAYPEER_BIN=/tmp/relaypeer node client/dotnet/unity-webgl-smoke/serve.mj
 
 ## 实测结果
 
-2026-11-17，详见 [证据](../../../docs/maintenance/evidence/c1-csharp-websocket-20261117/README.md)：
+2026-11-18（WebGL A1 之后），详见 [证据](../../../docs/maintenance/evidence/sdk-webgl-a1-20261118/README.md)：
+
+- **WebGL（6000.7.0b7，浏览器，`PumpDriven` 开）**：两次 `SMOKE PASS`（停 45s、60s 都没有断线，Rtt 非 0；成员离开 `RoomGone` 为 false，最后一人离开 `RoomGone` 为 true）。探针照旧 6 个不完成——平台限制没变，`PumpDriven` 不依赖它们。同一个构建以 `pump=0` 打开，照旧卡在第一个 lobby 请求（修前的调度）。
+- 编辑器与桌面播放器这一轮没有重跑。
+
+2026-11-17（修前），详见 [C1 证据](../../../docs/maintenance/evidence/c1-csharp-websocket-20261117/README.md)：
 
 - **编辑器（6000.3.12f1，Mono，macOS）**：探针全部完成（在线程池线程上）；tcp `SMOKE PASS`；ws 13 次里 8 次 `SMOKE PASS`，5 次成员在心跳整 10 秒点被 relay 关掉连接——原因在 relay 的 WebSocket 写期限（证据里有分析，尚未确定性复现），不是 SDK 或 Unity 的问题。
 - **WebGL（6000.7.0b7，浏览器）**：探针里 `Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行、`ThreadPool.QueueUserWorkItem` **全部没有完成**，只有回到 Unity 上下文的 `await` 完成；`bridge: ok`（jslib + `BrowserRelayTransport` 在浏览器里能连 relay、收发）；端到端卡在第一步（`HttpClient` 的请求已经答 200，但续行没有回来）。结论：**SDK 现有的调度（后台读循环、心跳、`ConfigureAwait(false)`）在 WebGL 上跑不起来**，换传输解决不了，要改调度，见证据里的工作量估计。

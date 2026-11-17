@@ -1,0 +1,159 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/client/relay
+cpu: Apple M5
+BenchmarkSnapshotCompression/json/1KiB/compress-10         	   19232	     64394 ns/op	  15.90 MB/s	         0.2803 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/compress-10         	   17580	     67096 ns/op	  15.26 MB/s	         0.2803 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/decompress-10       	  180517	      6938 ns/op	 147.59 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/decompress-10       	  159230	      7557 ns/op	 135.51 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/compress-10        	    7837	    140628 ns/op	 116.51 MB/s	         0.2044 ratio	 1083827 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/compress-10        	    9624	    136721 ns/op	 119.84 MB/s	         0.2044 ratio	 1083828 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/decompress-10      	   32266	     39117 ns/op	 418.84 MB/s	   78712 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/decompress-10      	   28132	     38595 ns/op	 424.52 MB/s	   78712 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/compress-10        	    4554	    297819 ns/op	 220.05 MB/s	         0.1989 ratio	 1108403 B/op	      21 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/compress-10        	    4395	    288402 ns/op	 227.24 MB/s	         0.1989 ratio	 1108402 B/op	      21 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/decompress-10      	    8731	    152250 ns/op	 430.45 MB/s	  179016 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/decompress-10      	    7387	    148762 ns/op	 440.54 MB/s	  179016 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/compress-10       	    1000	   1201938 ns/op	 218.10 MB/s	         0.1998 ratio	 1206705 B/op	      23 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/compress-10       	     920	   1266906 ns/op	 206.92 MB/s	         0.1998 ratio	 1206707 B/op	      23 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/decompress-10     	    1772	    636992 ns/op	 411.53 MB/s	  670745 B/op	      41 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/decompress-10     	    1839	    619034 ns/op	 423.47 MB/s	  670746 B/op	      41 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/compress-10       	   14078	     85648 ns/op	  11.96 MB/s	         0.4170 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/compress-10       	   14437	     82062 ns/op	  12.48 MB/s	         0.4170 ratio	 1076656 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/decompress-10     	  124436	      9549 ns/op	 107.24 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/decompress-10     	  129535	      9081 ns/op	 112.76 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/compress-10      	    6085	    168675 ns/op	  97.13 MB/s	         0.3495 ratio	 1092017 B/op	      20 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/compress-10      	    7152	    190704 ns/op	  85.91 MB/s	         0.3495 ratio	 1092018 B/op	      20 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/decompress-10    	   17670	     67074 ns/op	 244.27 MB/s	   81888 B/op	      84 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/decompress-10    	   16264	     73551 ns/op	 222.76 MB/s	   81888 B/op	      84 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/compress-10      	    1894	    610694 ns/op	 107.31 MB/s	         0.3370 ratio	 1141170 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/compress-10      	    2389	    558926 ns/op	 117.25 MB/s	         0.3370 ratio	 1141170 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/decompress-10    	    4093	    287759 ns/op	 227.75 MB/s	  191520 B/op	     109 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/decompress-10    	    4154	    264713 ns/op	 247.57 MB/s	  191520 B/op	     109 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/compress-10     	     514	   2196601 ns/op	 119.34 MB/s	         0.3338 ratio	 1337776 B/op	      24 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/compress-10     	     519	   2623506 ns/op	  99.92 MB/s	         0.3338 ratio	 1337790 B/op	      24 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/decompress-10   	     812	   1351044 ns/op	 194.03 MB/s	  707148 B/op	     342 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/decompress-10   	    1219	    991197 ns/op	 264.47 MB/s	  707145 B/op	     342 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/compress-10       	   20245	     59378 ns/op	  17.25 MB/s	         1.007 ratio	 1077104 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/compress-10       	   17346	     65313 ns/op	  15.68 MB/s	         1.007 ratio	 1077104 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/decompress-10     	  365053	      3645 ns/op	 280.94 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/decompress-10     	  299697	      3705 ns/op	 276.38 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/compress-10      	   16323	     71809 ns/op	 228.16 MB/s	         1.000 ratio	 1094387 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/compress-10      	   18454	     64213 ns/op	 255.15 MB/s	         1.000 ratio	 1094387 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/decompress-10    	  179667	      7701 ns/op	2127.48 MB/s	   78312 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/decompress-10    	  147034	      7588 ns/op	2159.33 MB/s	   78312 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/compress-10      	   20536	     63579 ns/op	1030.78 MB/s	         1.000 ratio	 1149682 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/compress-10      	   17592	     65261 ns/op	1004.21 MB/s	         1.000 ratio	 1149682 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/decompress-10    	   70476	     17500 ns/op	3744.82 MB/s	  178664 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/decompress-10    	   67983	     17836 ns/op	3674.34 MB/s	  178665 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/compress-10     	   10000	    120684 ns/op	2172.16 MB/s	         1.000 ratio	 1592052 B/op	      18 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/compress-10     	   10000	    134905 ns/op	1943.18 MB/s	         1.000 ratio	 1592053 B/op	      18 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/decompress-10   	   19453	     61373 ns/op	4271.30 MB/s	  670186 B/op	      26 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/decompress-10   	   20017	     58577 ns/op	4475.18 MB/s	  670187 B/op	      26 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/client/relay
+cpu: Apple M5
+BenchmarkSnapshotCompression/json/1KiB/compress-10         	   17313	     65098 ns/op	  15.73 MB/s	         0.2803 ratio	 1076658 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/compress-10         	   20176	     68885 ns/op	  14.87 MB/s	         0.2803 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/decompress-10       	  194008	      6126 ns/op	 167.15 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/decompress-10       	  167299	      6507 ns/op	 157.37 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/compress-10        	   10000	    107507 ns/op	 152.40 MB/s	         0.2044 ratio	 1083828 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/compress-10        	   10000	    105364 ns/op	 155.50 MB/s	         0.2044 ratio	 1083827 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/decompress-10      	   33631	     34506 ns/op	 474.82 MB/s	   78712 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/decompress-10      	   33607	     34396 ns/op	 476.34 MB/s	   78712 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/compress-10        	    5235	    218840 ns/op	 299.47 MB/s	         0.1989 ratio	 1108401 B/op	      21 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/compress-10        	    5226	    221601 ns/op	 295.74 MB/s	         0.1989 ratio	 1108401 B/op	      21 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/decompress-10      	    9652	    131597 ns/op	 498.00 MB/s	  179016 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/decompress-10      	   10000	    119536 ns/op	 548.25 MB/s	  179016 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/compress-10       	    1171	   1030667 ns/op	 254.34 MB/s	         0.1998 ratio	 1206706 B/op	      23 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/compress-10       	    1244	    965765 ns/op	 271.44 MB/s	         0.1998 ratio	 1206706 B/op	      23 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/decompress-10     	    2193	    572902 ns/op	 457.57 MB/s	  670745 B/op	      41 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/decompress-10     	    2037	    615116 ns/op	 426.17 MB/s	  670746 B/op	      41 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/compress-10       	   10000	    105167 ns/op	   9.74 MB/s	         0.4170 ratio	 1076659 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/compress-10       	   12595	     99184 ns/op	  10.32 MB/s	         0.4170 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/decompress-10     	  141312	      8210 ns/op	 124.72 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/decompress-10     	  156847	      8261 ns/op	 123.95 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/compress-10      	    8001	    135512 ns/op	 120.90 MB/s	         0.3495 ratio	 1092017 B/op	      20 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/compress-10      	    9249	    133787 ns/op	 122.46 MB/s	         0.3495 ratio	 1092017 B/op	      20 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/decompress-10    	   20062	     60809 ns/op	 269.44 MB/s	   81888 B/op	      84 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/decompress-10    	   20073	     58373 ns/op	 280.68 MB/s	   81888 B/op	      84 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/compress-10      	    3525	    351079 ns/op	 186.67 MB/s	         0.3370 ratio	 1141169 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/compress-10      	    3579	    353840 ns/op	 185.21 MB/s	         0.3370 ratio	 1141169 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/decompress-10    	    5344	    219448 ns/op	 298.64 MB/s	  191520 B/op	     109 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/decompress-10    	    6220	    203722 ns/op	 321.69 MB/s	  191520 B/op	     109 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/compress-10     	     691	   1634005 ns/op	 160.43 MB/s	         0.3338 ratio	 1337784 B/op	      24 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/compress-10     	     810	   1570294 ns/op	 166.94 MB/s	         0.3338 ratio	 1337776 B/op	      24 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/decompress-10   	    1494	    831252 ns/op	 315.36 MB/s	  707144 B/op	     342 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/decompress-10   	    1443	    830541 ns/op	 315.63 MB/s	  707144 B/op	     342 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/compress-10       	   22779	     54033 ns/op	  18.95 MB/s	         1.007 ratio	 1077104 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/compress-10       	   21622	     59304 ns/op	  17.27 MB/s	         1.007 ratio	 1077105 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/decompress-10     	  305880	      3872 ns/op	 264.47 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/decompress-10     	  384450	      4072 ns/op	 251.49 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/compress-10      	   17720	     68078 ns/op	 240.67 MB/s	         1.000 ratio	 1094386 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/compress-10      	   17263	     65373 ns/op	 250.62 MB/s	         1.000 ratio	 1094386 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/decompress-10    	  130381	      9771 ns/op	1676.84 MB/s	   78312 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/decompress-10    	  125904	      7989 ns/op	2050.73 MB/s	   78312 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/compress-10      	   21298	     57417 ns/op	1141.41 MB/s	         1.000 ratio	 1149682 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/compress-10      	   23678	     51910 ns/op	1262.49 MB/s	         1.000 ratio	 1149681 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/decompress-10    	   64482	     18404 ns/op	3560.97 MB/s	  178665 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/decompress-10    	   63530	     18844 ns/op	3477.77 MB/s	  178665 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/compress-10     	   10000	    105705 ns/op	2479.95 MB/s	         1.000 ratio	 1592050 B/op	      18 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/compress-10     	   10000	    120385 ns/op	2177.54 MB/s	         1.000 ratio	 1592051 B/op	      18 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/decompress-10   	   20718	     64347 ns/op	4073.90 MB/s	  670186 B/op	      26 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/decompress-10   	   22269	     53400 ns/op	4909.03 MB/s	  670185 B/op	      26 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/client/relay
+cpu: Apple M5
+BenchmarkSnapshotCompression/json/1KiB/compress-10         	   17017	     71504 ns/op	  14.32 MB/s	         0.2803 ratio	 1076658 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/compress-10         	   15181	     79198 ns/op	  12.93 MB/s	         0.2803 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/decompress-10       	  145384	      7701 ns/op	 132.97 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/json/1KiB/decompress-10       	  143098	      7742 ns/op	 132.26 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/compress-10        	    6940	    164632 ns/op	  99.52 MB/s	         0.2044 ratio	 1083827 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/compress-10        	    8347	    142629 ns/op	 114.87 MB/s	         0.2044 ratio	 1083827 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/decompress-10      	   29526	     39555 ns/op	 414.21 MB/s	   78712 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/16KiB/decompress-10      	   31220	     37010 ns/op	 442.69 MB/s	   78712 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/compress-10        	    4695	    291278 ns/op	 224.99 MB/s	         0.1989 ratio	 1108403 B/op	      21 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/compress-10        	    3670	    301628 ns/op	 217.27 MB/s	         0.1989 ratio	 1108403 B/op	      21 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/decompress-10      	    8906	    140098 ns/op	 467.79 MB/s	  179016 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/64KiB/decompress-10      	    9891	    131368 ns/op	 498.87 MB/s	  179016 B/op	      29 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/compress-10       	     978	   1070948 ns/op	 244.78 MB/s	         0.1998 ratio	 1206705 B/op	      23 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/compress-10       	    1018	   1235532 ns/op	 212.17 MB/s	         0.1998 ratio	 1206708 B/op	      23 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/decompress-10     	    1983	    665639 ns/op	 393.82 MB/s	  670747 B/op	      41 allocs/op
+BenchmarkSnapshotCompression/json/256KiB/decompress-10     	    1725	    753472 ns/op	 347.91 MB/s	  670747 B/op	      41 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/compress-10       	   13483	     89799 ns/op	  11.40 MB/s	         0.4170 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/compress-10       	   10000	    108969 ns/op	   9.40 MB/s	         0.4170 ratio	 1076657 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/decompress-10     	  103060	     10771 ns/op	  95.07 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/packed/1KiB/decompress-10     	  160706	      8559 ns/op	 119.64 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/compress-10      	    7818	    196852 ns/op	  83.23 MB/s	         0.3495 ratio	 1092019 B/op	      20 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/compress-10      	    9772	    185489 ns/op	  88.33 MB/s	         0.3495 ratio	 1092018 B/op	      20 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/decompress-10    	   15768	     68940 ns/op	 237.65 MB/s	   81888 B/op	      84 allocs/op
+BenchmarkSnapshotCompression/packed/16KiB/decompress-10    	   19851	     60302 ns/op	 271.70 MB/s	   81888 B/op	      84 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/compress-10      	    3356	    320666 ns/op	 204.37 MB/s	         0.3370 ratio	 1141168 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/compress-10      	    3787	    332770 ns/op	 196.94 MB/s	         0.3370 ratio	 1141169 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/decompress-10    	    6108	    220253 ns/op	 297.55 MB/s	  191520 B/op	     109 allocs/op
+BenchmarkSnapshotCompression/packed/64KiB/decompress-10    	    5844	    224936 ns/op	 291.35 MB/s	  191520 B/op	     109 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/compress-10     	     750	   1854952 ns/op	 141.32 MB/s	         0.3338 ratio	 1337778 B/op	      24 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/compress-10     	     780	   2368129 ns/op	 110.70 MB/s	         0.3338 ratio	 1337782 B/op	      24 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/decompress-10   	    1029	   1082194 ns/op	 242.23 MB/s	  707144 B/op	     342 allocs/op
+BenchmarkSnapshotCompression/packed/256KiB/decompress-10   	    1293	   1130909 ns/op	 231.80 MB/s	  707146 B/op	     342 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/compress-10       	   14971	     75267 ns/op	  13.60 MB/s	         1.007 ratio	 1077104 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/compress-10       	   19162	     62069 ns/op	  16.50 MB/s	         1.007 ratio	 1077105 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/decompress-10     	  335958	      3500 ns/op	 292.57 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/random/1KiB/decompress-10     	  423986	      3012 ns/op	 339.96 MB/s	   42728 B/op	      10 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/compress-10      	   15669	     77572 ns/op	 211.21 MB/s	         1.000 ratio	 1094389 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/compress-10      	   17830	     70918 ns/op	 231.03 MB/s	         1.000 ratio	 1094389 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/decompress-10    	  177548	      7423 ns/op	2207.25 MB/s	   78312 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/random/16KiB/decompress-10    	  158730	      7506 ns/op	2182.88 MB/s	   78312 B/op	      19 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/compress-10      	   19099	     68763 ns/op	 953.08 MB/s	         1.000 ratio	 1149682 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/compress-10      	   20229	     63116 ns/op	1038.34 MB/s	         1.000 ratio	 1149682 B/op	      16 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/decompress-10    	   68676	     17836 ns/op	3674.42 MB/s	  178664 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/random/64KiB/decompress-10    	   68536	     18187 ns/op	3603.50 MB/s	  178664 B/op	      22 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/compress-10     	   10000	    117878 ns/op	2223.86 MB/s	         1.000 ratio	 1592052 B/op	      18 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/compress-10     	    9475	    116897 ns/op	2242.53 MB/s	         1.000 ratio	 1592052 B/op	      18 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/decompress-10   	   20938	     58154 ns/op	4507.74 MB/s	  670186 B/op	      26 allocs/op
+BenchmarkSnapshotCompression/random/256KiB/decompress-10   	   21606	     56812 ns/op	4614.20 MB/s	  670186 B/op	      26 allocs/op
+PASS

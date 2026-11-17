@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
@@ -144,25 +145,67 @@ type deflateCompressor struct{}
 
 func (deflateCompressor) ID() byte { return compressionDeflate }
 
+// deflate 的压缩器与解压器在多次调用之间复用（2026-11-18 测量：每次新建 flate.Writer 固定约 1 MB 分配，1KiB 的小快照也一样）。
+// Reset 之后的 Writer 与新建的输出逐字节相同（compress/flate 的 Reset 契约），线上字节不变，见 TestDeflateReuse。
+// 放回池子之前把它们对调用方缓冲区的引用断开（deflateSink.out、bytes.Reader），池子里不留住快照字节。
+var (
+	deflateWriters = sync.Pool{New: func() any {
+		d := &pooledDeflater{}
+		d.w, _ = flate.NewWriter(&d.sink, flate.DefaultCompression) // DefaultCompression 是合法级别，不会出错
+		return d
+	}}
+	deflateReaders = sync.Pool{New: func() any {
+		i := &pooledInflater{src: bytes.NewReader(nil)}
+		i.r = flate.NewReader(i.src)
+		return i
+	}}
+)
+
+// pooledDeflater 是池子里的一个压缩器：w 总是写进 sink，sink 再转到这一次调用的输出缓冲区。
+type pooledDeflater struct {
+	w    *flate.Writer
+	sink deflateSink
+}
+
+// deflateSink 把压缩器的输出转进当前调用的缓冲区；两次调用之间 out 为 nil。
+type deflateSink struct{ out *bytes.Buffer }
+
+func (s *deflateSink) Write(p []byte) (int, error) { return s.out.Write(p) }
+
+// pooledInflater 是池子里的一个解压器：r 总是读 src，src 每次换成这一次的输入。
+type pooledInflater struct {
+	src *bytes.Reader // 实现 io.ByteReader：flate 直接读它，不再包一层 bufio
+	r   io.ReadCloser
+}
+
 func (deflateCompressor) Compress(data []byte) ([]byte, error) {
 	var out bytes.Buffer
-	w, err := flate.NewWriter(&out, flate.DefaultCompression)
+	d := deflateWriters.Get().(*pooledDeflater)
+	d.sink.out = &out
+	d.w.Reset(&d.sink)
+	_, err := d.w.Write(data)
+	if err == nil {
+		err = d.w.Close()
+	}
+	d.sink.out = nil
+	deflateWriters.Put(d)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := w.Write(data); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
 }
 
 func (deflateCompressor) Decompress(data []byte, limit int) ([]byte, error) {
-	r := flate.NewReader(bytes.NewReader(data))
-	defer r.Close()
-	out, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
+	i := deflateReaders.Get().(*pooledInflater)
+	i.src.Reset(data)
+	if err := i.r.(flate.Resetter).Reset(i.src, nil); err != nil {
+		i.src.Reset(nil)
+		deflateReaders.Put(i)
+		return nil, fmt.Errorf("relay: inflate state: %w", err)
+	}
+	out, err := io.ReadAll(io.LimitReader(i.r, int64(limit)+1))
+	i.src.Reset(nil)
+	deflateReaders.Put(i)
 	if err != nil {
 		return nil, fmt.Errorf("relay: inflate state: %w", err)
 	}

@@ -345,31 +345,33 @@ namespace Roost.Client.Relay
 
         /// <summary>从流里读一帧；流在帧中间结束时抛 EndOfStreamException。</summary>
         public static Task<RelayFrame> ReadAsync(Stream stream, int maxPayload, CancellationToken cancellation = default) =>
-            ReadAsync(stream.ReadAsync, maxPayload, cancellation);
+            ReadAsync(stream.ReadAsync, maxPayload, false, cancellation);
 
         /// <summary>
         /// 从连接上读一帧：按包头拼帧，不看字节是怎么到的（WebSocket 上一条消息里有几帧、一帧拆成几条消息都行）。
         /// 连接在帧中间结束时抛 EndOfStreamException。
+        /// continueOnCapturedContext 为 true 时每次等待之后回到调用者的上下文（RelayClientOptions.PumpDriven 用：Unity WebGL 上
+        /// ConfigureAwait(false) 之后的续行排进不运行的线程池）；缺省 false。
         /// </summary>
-        public static Task<RelayFrame> ReadAsync(IRelayTransport transport, int maxPayload, CancellationToken cancellation = default) =>
-            ReadAsync(transport.ReceiveAsync, maxPayload, cancellation);
+        public static Task<RelayFrame> ReadAsync(IRelayTransport transport, int maxPayload, CancellationToken cancellation = default, bool continueOnCapturedContext = false) =>
+            ReadAsync(transport.ReceiveAsync, maxPayload, continueOnCapturedContext, cancellation);
 
-        private static async Task<RelayFrame> ReadAsync(Func<byte[], int, int, CancellationToken, Task<int>> read, int maxPayload, CancellationToken cancellation)
+        private static async Task<RelayFrame> ReadAsync(Func<byte[], int, int, CancellationToken, Task<int>> read, int maxPayload, bool context, CancellationToken cancellation)
         {
             var header = new byte[HeaderSize];
-            await ReadExactlyAsync(read, header, cancellation).ConfigureAwait(false);
+            await ReadExactlyAsync(read, header, context, cancellation).ConfigureAwait(context);
             int size = ParseHeader(header, maxPayload);
             var payload = new byte[size];
-            await ReadExactlyAsync(read, payload, cancellation).ConfigureAwait(false);
+            await ReadExactlyAsync(read, payload, context, cancellation).ConfigureAwait(context);
             return FromHeader(header, payload);
         }
 
-        private static async Task ReadExactlyAsync(Func<byte[], int, int, CancellationToken, Task<int>> read, byte[] buffer, CancellationToken cancellation)
+        private static async Task ReadExactlyAsync(Func<byte[], int, int, CancellationToken, Task<int>> read, byte[] buffer, bool context, CancellationToken cancellation)
         {
             int offset = 0;
             while (offset < buffer.Length)
             {
-                int got = await read(buffer, offset, buffer.Length - offset, cancellation).ConfigureAwait(false);
+                int got = await read(buffer, offset, buffer.Length - offset, cancellation).ConfigureAwait(context);
                 if (got == 0) throw new EndOfStreamException();
                 offset += got;
             }

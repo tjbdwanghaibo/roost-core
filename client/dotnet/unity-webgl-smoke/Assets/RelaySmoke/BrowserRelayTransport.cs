@@ -13,7 +13,7 @@ namespace Roost.RelaySmoke
     /// Unity WebGL 上的 relay 连接：用浏览器的 WebSocket（Assets/Plugins/WebGL/RoostRelayWebSocket.jslib）实现
     /// Roost.Client.Relay 的 IRelayTransport。SDK 不带它（维护者 2026-11-17 定：桥接代码不进 SDK），这是给游戏照抄的参考写法。
     ///
-    /// 用法：RelayClientOptions { Transport = RelayTransport.Ws, TransportFactory = () => new BrowserRelayTransport() }，
+    /// 用法：RelayClientOptions { Transport = RelayTransport.Ws, PumpDriven = true, TransportFactory = () => new BrowserRelayTransport() }，
     /// 游戏每帧在主线程先调 BrowserRelayTransport.PollAll()、再调 RelayClient.Pump()。
     ///
     /// 做法是轮询，不从 JS 回调 C#：JS 一侧把收到的二进制消息排成字节队列，PollAll 每帧把字节交给等着的 ReceiveAsync、

@@ -305,8 +305,8 @@ func TestRoomLifecycleAgainstRealRelayAndLobby(t *testing.T) {
 	}
 
 	// 离开：先在 relay 上发 Leave（Closed{left}），再经 lobby 让出席位；房主收到 MemberLeft{left}。
-	if err := m1.client.Leave(context.Background()); err != nil {
-		t.Fatal(err)
+	if left, err := m1.client.Leave(context.Background()); err != nil || left.RoomGone {
+		t.Fatalf("member leave: %+v %v", left, err)
 	}
 	if m := recv(t, host.left, "member left"); m.Slot != 2 || m.Reason != wire.RelayReasonLeft {
 		t.Fatalf("left %+v", m)
@@ -329,8 +329,10 @@ func TestRoomLifecycleAgainstRealRelayAndLobby(t *testing.T) {
 }
 
 // 房间里最后一个人 Leave：relay 收到 Leave 帧随即关房并报 room.closed，lobby 的 leave 可能答 room_not_found。
-// 房间已经不在，“我要离开”的目的已达到，Leave 不报错。第二个房间把这个先后定下来：最后一人先只在 relay 上发
-// Leave 帧，等 lobby 确认房间已关，再调 Leave。
+// 房间已经不在，“我要离开”的目的已达到，Leave 不报错，结果的 RoomGone 告诉调用方“房间早就不在”（维护者 2026-11-18）；
+// 房间还在时的正常离开 RoomGone 为 false。第二个房间把这个先后定下来：最后一人先只在 relay 上发 Leave 帧，等 lobby
+// 确认房间已关，再调 Leave，RoomGone 必须为 true。自然先后下两种答复都可能（看 relay 的报告与 lobby 的 leave 谁先到），
+// 只要求不报错。
 func TestLeaveByTheLastMemberSucceedsAfterTheRoomCloses(t *testing.T) {
 	peer := startPeer(t, relaysvc.Config{})
 	openRoom := func(suffix string) (*player, *player, string) {
@@ -343,8 +345,8 @@ func TestLeaveByTheLastMemberSucceedsAfterTheRoomCloses(t *testing.T) {
 		member := newPlayer(t, peer, "member-"+suffix, relay.Options{})
 		member.join(ticket.Room.ID, "")
 		recv(t, host.joined, suffix+" member joined")
-		if err := member.client.Leave(context.Background()); err != nil {
-			t.Fatalf("%s: first leave: %v", suffix, err)
+		if left, err := member.client.Leave(context.Background()); err != nil || left.RoomGone {
+			t.Fatalf("%s: first leave (the room is still open): %+v %v", suffix, left, err)
 		}
 		if m := recv(t, host.left, suffix+" member left"); m.Reason != wire.RelayReasonLeft {
 			t.Fatalf("%s: left %+v", suffix, m)
@@ -358,7 +360,7 @@ func TestLeaveByTheLastMemberSucceedsAfterTheRoomCloses(t *testing.T) {
 
 	// 自然先后：最后一人直接 Leave。
 	host, _, roomID := openRoom("a")
-	if err := host.client.Leave(context.Background()); err != nil {
+	if _, err := host.client.Leave(context.Background()); err != nil {
 		t.Fatalf("last member leave: %v", err)
 	}
 	waitFor(t, "room a closed in the lobby", func() bool { return roomGone(host, roomID) })
@@ -372,8 +374,8 @@ func TestLeaveByTheLastMemberSucceedsAfterTheRoomCloses(t *testing.T) {
 		t.Fatalf("host disconnect %+v", d)
 	}
 	waitFor(t, "room b closed in the lobby", func() bool { return roomGone(host, roomID) })
-	if err := host.client.Leave(context.Background()); err != nil {
-		t.Fatalf("leave a room that already closed: %v", err)
+	if left, err := host.client.Leave(context.Background()); err != nil || !left.RoomGone {
+		t.Fatalf("leave a room that already closed: %+v %v (want RoomGone)", left, err)
 	}
 	// 只放过房间不在这一种：别的 lobby 错误照常返回（这里拿一个从没有过的房间号经 lobby 直接离开）。
 	if _, err := host.lobby.LeaveRoom(context.Background(), "0000000000000000", game); !errors.Is(err, relay.ErrRoomNotFound) {

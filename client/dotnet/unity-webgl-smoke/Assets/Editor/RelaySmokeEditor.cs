@@ -10,7 +10,8 @@ using UnityEngine;
 /// <summary>
 /// 冒烟工程的批处理入口（见 README）：
 /// - RunInEditor：在编辑器里直接跑一遍（SDK 自带的 ClientWebSocket / TCP，lobby 走 UnityWebRequest），由 EditorApplication.update 驱动，
-///   结束时以 0 / 1 退出。设置取环境变量 ROOST_SMOKE_LOBBY、ROOST_SMOKE_TRANSPORT（ws / tcp）、ROOST_SMOKE_HOLD（秒）。
+///   结束时以 0 / 1 退出。设置取环境变量 ROOST_SMOKE_LOBBY、ROOST_SMOKE_TRANSPORT（ws / tcp）、ROOST_SMOKE_HOLD（秒）、
+///   ROOST_SMOKE_PUMP_DRIVEN（1 打开 RelayClientOptions.PumpDriven）。
 ///   不要加 -quit（要等 update 循环跑完）。
 /// - BuildWebGL：生成场景并构建 WebGL 开发版到 Build/WebGL（要装 WebGL 模块；不压缩，便于本地静态服务）。
 /// - BuildMac：同一场景构建 macOS 播放器（Mono）到 Build/RelaySmoke.app，用来在真正的播放器循环里跑（命令行参数见 RelaySmokeBehaviour）。
@@ -27,6 +28,7 @@ public static class RelaySmokeEditor
         config.LobbyUrl = Environment.GetEnvironmentVariable("ROOST_SMOKE_LOBBY") ?? config.LobbyUrl;
         config.Transport = Environment.GetEnvironmentVariable("ROOST_SMOKE_TRANSPORT") == "tcp" ? RelayTransport.Tcp : RelayTransport.Ws;
         if (float.TryParse(Environment.GetEnvironmentVariable("ROOST_SMOKE_HOLD"), out float hold)) config.HoldSeconds = hold;
+        config.PumpDriven = Environment.GetEnvironmentVariable("ROOST_SMOKE_PUMP_DRIVEN") == "1";
         smoke = new RelaySmoke(config, line => Debug.Log(line), () => EditorApplication.timeSinceStartup);
         deadline = EditorApplication.timeSinceStartup + config.HoldSeconds + 120;
         EditorApplication.update += Tick;

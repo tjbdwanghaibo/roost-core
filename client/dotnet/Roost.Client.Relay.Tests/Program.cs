@@ -19,9 +19,11 @@ using Roost.Client.Relay;
 //      跑建房、加入、游戏通道往返、房间通道直达、禁言、踢人（记在 lobby）、离开、断线重连、lobby 错误映射，以及换 host：
 //      主动转交、房主断线后候选拿快照接手、宽限期内房主回来、候选顺序、快照节奏与 Rejected、定时快照、房主心跳、
 //      重连遇到 lobby_unavailable 退避重试 / lobby_rejected 停止。全部真实对端用例对 TCP 与 WebSocket 各跑一遍（交接 C1），
-//      WebSocket 一轮另加“向 lobby 要 ws 再连上”与“令牌与 Ping 拼在一条消息里 relay 照样读”。
+//      WebSocket 一轮另加“向 lobby 要 ws 再连上”与“令牌与 Ping 拼在一条消息里 relay 照样读”；
+//   3. 单线程调度（WebGL A1，SingleThread.cs）：另起一个 relay idle_timeout 改成 2s 的对端，在像 WebGL 主线程的单线程环境里
+//      跑 RelayClientOptions.PumpDriven 的关键子集，凡是用到线程池或计时器都记违规。
 // 用法：dotnet run --project client/dotnet/Roost.Client.Relay.Tests [-- <仓库根目录>]
-internal static class Program
+internal static partial class Program
 {
     private const string Game = "party";
     private static int checks;
@@ -56,14 +58,28 @@ internal static class Program
 
     private static async Task<int> AgainstPeers(string root, string binary)
     {
+        // 真实对端用例，对 TCP 与 WebSocket 各跑一遍；每一轮起一个新的对端（Redis 键前缀不同），账号与房间互不影响。
+        // 环境变量 ROOST_RELAY_TESTS_ONLY=<名字片段> 时只跑名字含它的那些，名字形如“[ws] room lifecycle”（变异时用来把红落到指定用例上）。
+        var only = Environment.GetEnvironmentVariable("ROOST_RELAY_TESTS_ONLY");
         await using (var tcpOnly = await Peer.StartAsync(root, binary, webSocket: false))
         {
             await NoWebSocketRelay(tcpOnly);
             Console.WriteLine("lobby without a ws relay: ok");
         }
-        // 真实对端用例，对 TCP 与 WebSocket 各跑一遍；每一轮起一个新的对端（Redis 键前缀不同），账号与房间互不影响。
-        // 环境变量 ROOST_RELAY_TESTS_ONLY=<名字片段> 时只跑名字含它的那些，名字形如“[ws] room lifecycle”（变异时用来把红落到指定用例上）。
-        var only = Environment.GetEnvironmentVariable("ROOST_RELAY_TESTS_ONLY");
+        // 单线程调度（WebGL A1）：对端的 relay idle_timeout 改成 2s，几秒内就能核对心跳保活与“不 Pump 就被断开”。
+        await using (var shortIdle = await Peer.StartAsync(root, binary, webSocket: false, idleMs: SingleThreadIdleMs))
+        {
+            foreach (var (name, run) in new (string, Func<Peer, Task>)[]
+            {
+                ("[single-thread] the detector catches the threaded scheduling", SingleThreadDetector),
+                ("[single-thread] pump-driven: create, join, frames, heartbeat, reconnect, no Pump, host transfer, connect timeout, leave", SingleThreadPumpDriven),
+            })
+            {
+                if (!string.IsNullOrEmpty(only) && !name.Contains(only, StringComparison.Ordinal)) continue;
+                await run(shortIdle);
+                Console.WriteLine(name + ": ok");
+            }
+        }
         var cases = new (string name, Func<Peer, Task> run)[]
         {
             ("lobby errors", LobbyErrors),
@@ -689,7 +705,7 @@ internal static class Program
             Check((await Throws<RelayClosedException>(() => stale.ConnectAsync(m2.Ticket!))).Reason == RelayReason.Kicked, "kicked account's old token → Closed{kicked}");
 
         // 离开：先在 relay 上发 Leave，再经 lobby 让出席位；房主收到 MemberLeft{left}。
-        await m1.Client.LeaveAsync();
+        Check(!(await m1.Client.LeaveAsync()).RoomGone, "a normal leave reports RoomGone false");
         var leftViaLobby = await host.Next(host.Left, "member left");
         Check(leftViaLobby.Slot == 2 && leftViaLobby.Reason == RelayReason.Left, "member left (left)");
         // 席位让出后拿还没过期的旧令牌连 relay：令牌验签通过，lobby 验权不让进，Closed{lobby_rejected}。
@@ -886,14 +902,15 @@ internal static class Program
     }
 
     // 房间里最后一个人 LeaveAsync：relay 收到 Leave 帧随即关房并报 room.closed，lobby 的 leave 可能答 room_not_found。房间已经不在，
-    // “我要离开”的目的已达到，LeaveAsync 不抛。第二个房间把先后定下来：最后一人先只在 relay 上发 Leave 帧，等 lobby 确认房间已关，
+    // “我要离开”的目的已达到，LeaveAsync 不抛，结果的 RoomGone 为 true（维护者 2026-11-18）；房间还在时正常离开 RoomGone 为 false。
+    // 自然先后（房间 a）下两种答复都可能，只要求不抛。第二个房间把先后定下来：最后一人先只在 relay 上发 Leave 帧，等 lobby 确认房间已关，
     // 再 LeaveAsync。别的 lobby 错误照常抛（这里拿一个从没有过的房间号经 lobby 直接离开）。
     private static async Task LastMemberLeave(Peer peer)
     {
         async Task<(Player host, Player member, string room)> TwoAndOneLeft(string prefix)
         {
             var (host, members, room) = await OpenRoom(peer, prefix, Opts(), Opts());
-            await members[0].Client.LeaveAsync();
+            Check(!(await members[0].Client.LeaveAsync()).RoomGone, prefix + " member left a room that is still open (RoomGone false)");
             Check((await host.Next(host.Left, prefix + " member left")).Reason == RelayReason.Left, prefix + " member left with reason left");
             return (host, members[0], room);
         }
@@ -911,7 +928,7 @@ internal static class Program
         Check(hostB.Client.SendControl(RelayOps.Leave, 0, ReadOnlyMemory<byte>.Empty), "leave frame sent on the relay");
         Check(!(await hostB.Next(hostB.Disconnected, "host left on the relay")).Reconnecting, "no reconnect after leaving on the relay");
         await Until("room b closed in the lobby", () => Gone(hostB, roomB));
-        await hostB.Client.LeaveAsync();
+        Check((await hostB.Client.LeaveAsync()).RoomGone, "leaving a room that already closed reports RoomGone");
         Check((await Throws<LobbyException>(() => hostB.Lobby.LeaveRoomAsync("0000000000000000", Game))).Code == LobbyErrorCode.RoomNotFound, "raw lobby leave of an unknown room still throws");
         foreach (var p in new[] { hostA, memberA, hostB, memberB }) p.Dispose();
     }
@@ -1282,7 +1299,8 @@ internal static class Program
             return binary;
         }
 
-        public static async Task<Peer> StartAsync(string root, string binary, bool webSocket)
+        /// <param name="idleMs">大于 0 时把对端 relay 的 idle_timeout 改成这么多毫秒（ROOST_RELAYPEER_IDLE_MS）。</param>
+        public static async Task<Peer> StartAsync(string root, string binary, bool webSocket, int idleMs = 0)
         {
             var start = new ProcessStartInfo(binary)
             {
@@ -1290,6 +1308,7 @@ internal static class Program
             };
             start.Environment["ROOST_RELAYPEER_SERVE"] = "1";
             start.Environment["ROOST_RELAYPEER_WS"] = webSocket ? "1" : "0";
+            if (idleMs > 0) start.Environment["ROOST_RELAYPEER_IDLE_MS"] = idleMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var process = Process.Start(start)!;
             var line = await process.StandardOutput.ReadLineAsync() ?? throw new Exception("relaypeer exited before printing its addresses");
             return new Peer(process, JsonDocument.Parse(line).RootElement);

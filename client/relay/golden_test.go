@@ -2,14 +2,18 @@ package relay
 
 import (
 	"bytes"
+	"compress/flate"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,7 +180,7 @@ func TestSDKHostFramesMatchRelayGolden(t *testing.T) {
 	expect("relay_snapshot", func() error { return c.Snapshot([]byte{0xAB, 0xCD}) })
 	expect("relay_host_ready", func() error { return c.HostReady(2) })
 	expect("relay_presence", func() error { return c.SetForeground(true) })
-	expect("relay_leave", func() error { return c.Leave(context.Background()) })
+	expect("relay_leave", func() error { _, err := c.Leave(context.Background()); return err })
 
 	// relay → 客户端。
 	d := NewClient(nil, Options{Compressor: NoCompression})
@@ -366,5 +370,101 @@ func TestCompressors(t *testing.T) {
 	}
 	if packed, _ := Deflate.Compress(state); len(packed) >= len(state) {
 		t.Fatalf("deflate did not shrink a repetitive state (%d → %d)", len(state), len(packed))
+	}
+}
+
+// Deflate 复用压缩器与解压器（2026-11-18）：
+//   - 线上字节不变：一串大小、内容各不相同的状态，复用的压缩器压出的字节与每次新建的 flate.Writer 逐字节相同（前一次的
+//     状态不漏到下一次）；
+//   - 解压器在解坏数据、超过上限之后照常解下一份；
+//   - 并发压缩 / 解压得回原样（-race 下跑）；
+//   - 每次压缩的平均分配远小于新建一个 flate.Writer（约 1 MB）：1KiB 状态压 200 次，平均不到 512 KiB（-race 下 sync.Pool
+//     随机丢掉四分之一的 Put，平均仍在这条线以下）。
+func TestDeflateReuse(t *testing.T) {
+	fresh := func(data []byte) []byte {
+		var out bytes.Buffer
+		w, err := flate.NewWriter(&out, flate.DefaultCompression)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write(data)
+		_ = w.Close()
+		return out.Bytes()
+	}
+	var states [][]byte
+	for i, size := range []int{1, 300, 70 << 10, 0, 5 << 10, 256 << 10, 2 << 10} {
+		state := make([]byte, size)
+		for j := range state {
+			state[j] = byte((j*7 + i*13) % 61) // 有重复、可压
+		}
+		if i%2 == 1 {
+			copy(state, bytes.Repeat([]byte{byte(i)}, size/2))
+		}
+		states = append(states, state)
+	}
+	for round := 0; round < 3; round++ {
+		for i, state := range states {
+			packed, err := Deflate.Compress(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := fresh(state); !bytes.Equal(packed, want) {
+				t.Fatalf("round %d state %d (%d bytes): reused compressor wrote %d bytes, a fresh flate.Writer %d", round, i, len(state), len(packed), len(want))
+			}
+			if _, err := Deflate.Decompress(packed[:len(packed)/2], MaxStateBytes); err == nil && len(state) > 300 {
+				t.Fatalf("state %d: a truncated stream decompressed", i)
+			}
+			if len(state) > 1 {
+				if _, err := Deflate.Decompress(packed, len(state)-1); err == nil {
+					t.Fatalf("state %d: decompressed past the limit", i)
+				}
+			}
+			if out, err := Deflate.Decompress(packed, MaxStateBytes); err != nil || !bytes.Equal(out, state) {
+				t.Fatalf("round %d state %d: round trip after failures: %d bytes, %v", round, i, len(out), err)
+			}
+		}
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				state := states[(g+i)%len(states)]
+				packed, err := Deflate.Compress(state)
+				if err == nil {
+					var out []byte
+					if out, err = Deflate.Decompress(packed, MaxStateBytes); err == nil && !bytes.Equal(out, state) {
+						err = fmt.Errorf("goroutine %d: round trip changed %d bytes", g, len(state))
+					}
+				}
+				if err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	small := states[6]
+	const runs = 200
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for i := 0; i < runs; i++ {
+		if _, err := Deflate.Compress(small); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	if perCall := (after.TotalAlloc - before.TotalAlloc) / runs; perCall > 512<<10 {
+		t.Fatalf("compressing %d bytes allocates %d bytes per call on average; the compressor is not reused", len(small), perCall)
 	}
 }

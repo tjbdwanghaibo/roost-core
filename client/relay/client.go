@@ -406,24 +406,33 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// LeaveResult 是 Client.Leave 的结果（三份 SDK 一致：C# RelayLeaveResult.RoomGone、TS LeaveResult.roomGone）。
+type LeaveResult struct {
+	// RoomGone 为 true：lobby 答 room_not_found——房间早就关了或过了寿命，人已经不在里面，Leave 照样算成功（error 为 nil）。
+	// 最常见的是房间里最后一个人离开：relay 收到 Leave 帧随即关房并报给 lobby，lobby 的 leave 晚到一步。为 false：lobby
+	// 正常让出了席位，或者没有 lobby / 房间号、只在 relay 上离开了。
+	RoomGone bool
+}
+
 // Leave 离开房间，然后 Close：先在 relay 连接上发 RelayOpLeave（房主离开时 relay 不等宽限期，立即用存着的快照换 host；
 // 不经 lobby 也能离开），再经 lobby 离开（让出席位）。返回 lobby 的错误；没有连接时只经 lobby 离开。
 //
-// lobby 答 room_not_found 算离开成功：房间已关或过了寿命，人已经不在里面。最常见的是房间里最后一个人离开——relay
-// 收到 Leave 帧随即关房并报给 lobby，lobby 的 leave 晚到一步就答 room_not_found。
-func (c *Client) Leave(ctx context.Context) error {
+// lobby 答 room_not_found 算离开成功，结果里 RoomGone 为 true（维护者 2026-11-18 定：让调用方分得出“房间早就不在”与
+// “正常离开”）。其余 lobby 错误照常返回。
+func (c *Client) Leave(ctx context.Context) (LeaveResult, error) {
 	c.mu.Lock()
 	room := c.roomID
 	c.mu.Unlock()
 	_ = c.SendControl(wire.RelayOpLeave, 0, nil) // relay 回 Closed{left} 后断开
+	var result LeaveResult
 	var err error
 	if c.lobby != nil && room != "" {
 		if _, err = c.lobby.LeaveRoom(ctx, room, c.opts.Game); errors.Is(err, ErrRoomNotFound) {
-			err = nil
+			result.RoomGone, err = true, nil
 		}
 	}
 	_ = c.Close()
-	return err
+	return result, err
 }
 
 // SendGame 发游戏通道的帧。房主：target 是成员槽位或 All（全体成员）；成员：只到房主，target 不看（写 All 即可）。

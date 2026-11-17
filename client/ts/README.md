@@ -24,7 +24,7 @@ client.setForeground(false);         // 成员：告诉房主自己切到后台�
 client.onMemberPresence((p) => {});  // 房主：p.slot、p.foreground
 await client.transfer(3, handoff);   // 房主：主动转交，交接数据压缩后随帧带走
 await client.pushSnapshot();         // 房主：手动推一份快照（关键时刻）
-await client.leave();                // 经 lobby 离开、close；房间已关（lobby 答 room_not_found）也算离开成功
+const { roomGone } = await client.leave(); // 经 lobby 离开、close；房间已关（lobby 答 room_not_found）也算离开成功，roomGone 为 true
 ```
 
 ## 帧、心跳与重连

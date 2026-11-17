@@ -8,7 +8,8 @@ package relay_test
 //
 //     {"lobby_url":"http://127.0.0.1:...","relay_tcp":"127.0.0.1:...","relay_ws":"ws://127.0.0.1:.../relay","backend":"redis","game":"party"}
 //
-//     ROOST_RELAYPEER_WS=0 时不开 WebSocket 监听（C# 测试用它核对 lobby 对 ws 答 no_relay）。测试拿 POST <lobby_url>/harness/game-token {"account":"a"}
+//     ROOST_RELAYPEER_WS=0 时不开 WebSocket 监听（C# 测试用它核对 lobby 对 ws 答 no_relay）。ROOST_RELAYPEER_IDLE_MS=<毫秒>
+//     把 relay 的 idle_timeout 改短（C# 的单线程用例用它在几秒内核对心跳保活与“不 Pump 就被断开、靠重连回来”）。测试拿 POST <lobby_url>/harness/game-token {"account":"a"}
 //     换一张测试 gt2，再按 lobby 的正式接口建房、加入。POST <lobby_url>/harness/admission {"mode":"ok|reject|down"}
 //     切换 relay 向 lobby 验权的结果（缺省 ok：照 lobby 的真实答复；reject：一律拒绝，relay 发 Closed{lobby_rejected}；
 //     down：一律不可用，relay 发 Closed{lobby_unavailable}），用来测自动重连遇到这两种拒绝时停还是退避重试。
@@ -39,6 +40,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"testing"
@@ -61,7 +63,16 @@ func TestMain(m *testing.M) {
 }
 
 func servePeer() int {
-	peer, err := startTestPeer(peerConfig{RedisAddr: redisAddrFromEnv(), WebSocket: os.Getenv("ROOST_RELAYPEER_WS") != "0"})
+	cfg := peerConfig{RedisAddr: redisAddrFromEnv(), WebSocket: os.Getenv("ROOST_RELAYPEER_WS") != "0"}
+	if ms := os.Getenv("ROOST_RELAYPEER_IDLE_MS"); ms != "" {
+		n, err := strconv.Atoi(ms)
+		if err != nil || n <= 0 {
+			fmt.Fprintln(os.Stderr, "relaypeer: ROOST_RELAYPEER_IDLE_MS must be a positive number of milliseconds:", ms)
+			return 1
+		}
+		cfg.Relay.IdleTimeout = time.Duration(n) * time.Millisecond
+	}
+	peer, err := startTestPeer(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "relaypeer:", err)
 		return 1

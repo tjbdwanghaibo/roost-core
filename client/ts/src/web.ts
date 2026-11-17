@@ -11,7 +11,7 @@
 //
 // 浏览器 API（document、sessionStorage、Worker、计时器、时钟）都可以注入，node 下测试用假的。
 
-import { RelayClient, internalHooks, internalSuccessors, type RelayClientOptions } from "./client.js";
+import { RelayClient, internalHooks, internalSuccessors, type LeaveResult, type RelayClientOptions } from "./client.js";
 import { ALL, RelayChannel, RelayReason, type RelayFrame, type Welcome } from "./codec.js";
 import { MAX_STATE_BYTES, defaultCompressor, unpackState, type Compressor } from "./compress.js";
 import type { CreateRoomRequest, LobbyClient } from "./lobby.js";
@@ -549,11 +549,11 @@ export class WebHost {
     return (await this.client.transfer(target, handoff)) ? target : undefined;
   }
 
-  /** 经 lobby 离开、停规则、删存档。 */
-  async leave(): Promise<void> {
+  /** 经 lobby 离开、停规则、删存档。结果同 RelayClient.leave（roomGone：房间早就不在）。 */
+  async leave(): Promise<LeaveResult> {
     this.runner.stop();
     this.store?.clear();
-    await this.client.leave();
+    return this.client.leave();
   }
 
   /** 断开、停规则、不再监听页面事件（存档留着：刷新时也会走到这里之前的状态）。 */

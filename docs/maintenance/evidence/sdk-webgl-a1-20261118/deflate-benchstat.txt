@@ -1,0 +1,132 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/client/relay
+cpu: Apple M5
+                                                │  before.txt   │              after.txt              │
+                                                │    sec/op     │    sec/op     vs base               │
+SnapshotCompression/json/1KiB/compress-10         67.991µ ± 16%   5.918µ ±  9%  -91.30% (p=0.002 n=6)
+SnapshotCompression/json/1KiB/decompress-10        7.248µ ± 15%   3.689µ ±  4%  -49.10% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/compress-10        138.67µ ± 24%   41.53µ ±  7%  -70.05% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/decompress-10       37.80µ ±  9%   30.57µ ± 15%  -19.13% (p=0.009 n=6)
+SnapshotCompression/json/64KiB/compress-10         289.8µ ± 24%   160.8µ ±  5%  -44.53% (p=0.002 n=6)
+SnapshotCompression/json/64KiB/decompress-10       135.8µ ± 12%   112.0µ ±  3%  -17.59% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/compress-10       1136.4µ ± 15%   799.8µ ± 12%  -29.62% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/decompress-10      628.0µ ± 20%   566.6µ ± 31%        ~ (p=0.310 n=6)
+SnapshotCompression/packed/1KiB/compress-10        94.49µ ± 15%   11.90µ ± 26%  -87.40% (p=0.002 n=6)
+SnapshotCompression/packed/1KiB/decompress-10      8.820µ ± 22%   5.248µ ± 18%  -40.50% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/compress-10      177.08µ ± 24%   78.08µ ±  5%  -55.91% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/decompress-10     63.94µ ± 15%   56.98µ ±  6%  -10.89% (p=0.009 n=6)
+SnapshotCompression/packed/64KiB/compress-10       352.5µ ± 73%   338.0µ ± 22%        ~ (p=0.394 n=6)
+SnapshotCompression/packed/64KiB/decompress-10     222.6µ ± 29%   206.1µ ±  5%   -7.43% (p=0.026 n=6)
+SnapshotCompression/packed/256KiB/compress-10      2.026m ± 30%   1.544m ± 47%  -23.79% (p=0.041 n=6)
+SnapshotCompression/packed/256KiB/decompress-10   1036.7µ ± 30%   851.5µ ± 44%        ~ (p=0.310 n=6)
+SnapshotCompression/random/1KiB/compress-10       60.724µ ± 24%   1.061µ ± 22%  -98.25% (p=0.002 n=6)
+SnapshotCompression/random/1KiB/decompress-10     3675.0n ± 18%   436.0n ±  6%  -88.13% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/compress-10      69.498µ ± 12%   3.669µ ± 37%  -94.72% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/decompress-10     7.645µ ± 28%   4.109µ ±  8%  -46.25% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/compress-10       63.35µ ± 18%   11.04µ ± 13%  -82.58% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/decompress-10     18.01µ ±  5%   13.52µ ± 42%        ~ (p=0.058 n=6)
+SnapshotCompression/random/256KiB/compress-10     119.13µ ± 13%   51.23µ ± 24%  -57.00% (p=0.002 n=6)
+SnapshotCompression/random/256KiB/decompress-10    58.37µ ± 10%   60.09µ ± 16%        ~ (p=0.818 n=6)
+geomean                                            91.08µ         35.70µ        -60.80%
+
+                                                │  before.txt   │                after.txt                │
+                                                │      B/s      │      B/s        vs base                 │
+SnapshotCompression/json/1KiB/compress-10         14.37Mi ± 14%   165.02Mi ±  8%  +1048.59% (p=0.002 n=6)
+SnapshotCompression/json/1KiB/decompress-10       135.0Mi ± 18%    264.7Mi ±  4%    +96.11% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/compress-10        112.7Mi ± 32%    376.3Mi ±  6%   +233.89% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/decompress-10      413.5Mi ± 10%    511.1Mi ± 13%    +23.60% (p=0.009 n=6)
+SnapshotCompression/json/64KiB/compress-10        215.6Mi ± 32%    388.7Mi ±  5%    +80.27% (p=0.002 n=6)
+SnapshotCompression/json/64KiB/decompress-10      460.5Mi ± 14%    558.3Mi ±  4%    +21.22% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/compress-10       220.7Mi ± 17%    312.6Mi ± 10%    +41.64% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/decompress-10     398.2Mi ± 17%    442.8Mi ± 24%          ~ (p=0.310 n=6)
+SnapshotCompression/packed/1KiB/compress-10       10.36Mi ± 15%    82.57Mi ± 21%   +697.28% (p=0.002 n=6)
+SnapshotCompression/packed/1KiB/decompress-10     110.8Mi ± 18%    186.1Mi ± 16%    +67.94% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/compress-10      88.43Mi ± 32%   200.11Mi ±  6%   +126.29% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/decompress-10    245.0Mi ± 13%    274.4Mi ±  6%    +12.02% (p=0.009 n=6)
+SnapshotCompression/packed/64KiB/compress-10      177.3Mi ± 42%    185.2Mi ± 18%          ~ (p=0.394 n=6)
+SnapshotCompression/packed/64KiB/decompress-10    280.8Mi ± 23%    303.3Mi ±  4%     +8.03% (p=0.026 n=6)
+SnapshotCompression/packed/256KiB/compress-10     124.3Mi ± 28%    161.9Mi ± 32%    +30.29% (p=0.041 n=6)
+SnapshotCompression/packed/256KiB/decompress-10   241.6Mi ± 25%    293.7Mi ± 30%          ~ (p=0.310 n=6)
+SnapshotCompression/random/1KiB/compress-10       16.09Mi ± 19%   920.17Mi ± 18%  +5617.72% (p=0.002 n=6)
+SnapshotCompression/random/1KiB/decompress-10     265.8Mi ± 22%   2240.4Mi ±  6%   +743.03% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/compress-10      224.9Mi ± 10%   4258.8Mi ± 27%  +1793.45% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/decompress-10    1.996Gi ± 22%    3.718Gi ±  8%    +86.27% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/compress-10      986.6Mi ± 22%   5662.4Mi ± 13%   +473.91% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/decompress-10    3.389Gi ±  4%    4.516Gi ± 30%          ~ (p=0.065 n=6)
+SnapshotCompression/random/256KiB/compress-10     2.050Gi ± 13%    4.767Gi ± 19%   +132.58% (p=0.002 n=6)
+SnapshotCompression/random/256KiB/decompress-10   4.183Gi ±  9%    4.063Gi ± 19%          ~ (p=0.818 n=6)
+geomean                                           242.9Mi          619.3Mi         +154.97%
+
+                                              │ before.txt  │              after.txt              │
+                                              │    ratio    │    ratio     vs base                │
+SnapshotCompression/json/1KiB/compress-10       280.3m ± 0%   280.3m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/json/16KiB/compress-10      204.4m ± 0%   204.4m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/json/64KiB/compress-10      198.9m ± 0%   198.9m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/json/256KiB/compress-10     199.8m ± 0%   199.8m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/packed/1KiB/compress-10     417.0m ± 0%   417.0m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/packed/16KiB/compress-10    349.5m ± 0%   349.5m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/packed/64KiB/compress-10    337.0m ± 0%   337.0m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/packed/256KiB/compress-10   333.8m ± 0%   333.8m ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/random/1KiB/compress-10      1.007 ± 0%    1.007 ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/random/16KiB/compress-10     1.000 ± 0%    1.000 ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/random/64KiB/compress-10     1.000 ± 0%    1.000 ± 0%       ~ (p=1.000 n=6) ¹
+SnapshotCompression/random/256KiB/compress-10    1.000 ± 0%    1.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                         427.8m        427.8m       +0.00%
+¹ all samples are equal
+
+                                                │   before.txt    │              after.txt              │
+                                                │      B/op       │     B/op      vs base               │
+SnapshotCompression/json/1KiB/compress-10          1076657.0 ± 0%     836.0 ± 3%  -99.92% (p=0.002 n=6)
+SnapshotCompression/json/1KiB/decompress-10         41.727Ki ± 0%   2.149Ki ± 0%  -94.85% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/compress-10        1058.425Ki ± 0%   7.948Ki ± 2%  -99.25% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/decompress-10         76.87Ki ± 0%   37.31Ki ± 0%  -51.47% (p=0.002 n=6)
+SnapshotCompression/json/64KiB/compress-10         1082.42Ki ± 0%   32.47Ki ± 1%  -97.00% (p=0.002 n=6)
+SnapshotCompression/json/64KiB/decompress-10         174.8Ki ± 0%   135.3Ki ± 0%  -22.60% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/compress-10         1178.4Ki ± 0%   128.9Ki ± 0%  -89.06% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/decompress-10        655.0Ki ± 0%   615.8Ki ± 0%   -5.99% (p=0.002 n=6)
+SnapshotCompression/packed/1KiB/compress-10        1076657.0 ± 0%     831.0 ± 2%  -99.92% (p=0.002 n=6)
+SnapshotCompression/packed/1KiB/decompress-10       41.727Ki ± 0%   2.149Ki ± 0%  -94.85% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/compress-10       1066.42Ki ± 0%   16.07Ki ± 1%  -98.49% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/decompress-10       79.97Ki ± 0%   40.41Ki ± 0%  -49.47% (p=0.002 n=6)
+SnapshotCompression/packed/64KiB/compress-10       1114.42Ki ± 0%   64.75Ki ± 1%  -94.19% (p=0.002 n=6)
+SnapshotCompression/packed/64KiB/decompress-10       187.0Ki ± 0%   147.5Ki ± 0%  -21.12% (p=0.002 n=6)
+SnapshotCompression/packed/256KiB/compress-10       1306.4Ki ± 0%   257.2Ki ± 0%  -80.31% (p=0.002 n=6)
+SnapshotCompression/packed/256KiB/decompress-10      690.6Ki ± 0%   651.4Ki ± 0%   -5.68% (p=0.002 n=6)
+SnapshotCompression/random/1KiB/compress-10       1051.859Ki ± 0%   1.299Ki ± 1%  -99.88% (p=0.002 n=6)
+SnapshotCompression/random/1KiB/decompress-10       41.727Ki ± 0%   2.149Ki ± 0%  -94.85% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/compress-10       1068.74Ki ± 0%   18.51Ki ± 0%  -98.27% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/decompress-10       76.48Ki ± 0%   36.92Ki ± 0%  -51.72% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/compress-10       1122.74Ki ± 0%   73.10Ki ± 0%  -93.49% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/decompress-10       174.5Ki ± 0%   135.0Ki ± 0%  -22.64% (p=0.002 n=6)
+SnapshotCompression/random/256KiB/compress-10       1554.7Ki ± 0%   511.1Ki ± 1%  -67.13% (p=0.002 n=6)
+SnapshotCompression/random/256KiB/decompress-10      654.5Ki ± 0%   615.2Ki ± 0%   -6.00% (p=0.002 n=6)
+geomean                                              398.8Ki        32.51Ki       -91.85%
+
+                                                │ before.txt  │             after.txt             │
+                                                │  allocs/op  │ allocs/op   vs base               │
+SnapshotCompression/json/1KiB/compress-10         16.000 ± 0%   3.000 ± 0%  -81.25% (p=0.002 n=6)
+SnapshotCompression/json/1KiB/decompress-10       10.000 ± 0%   5.000 ± 0%  -50.00% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/compress-10        19.000 ± 0%   6.000 ± 0%  -68.42% (p=0.002 n=6)
+SnapshotCompression/json/16KiB/decompress-10       29.00 ± 0%   24.00 ± 0%  -17.24% (p=0.002 n=6)
+SnapshotCompression/json/64KiB/compress-10        21.000 ± 0%   8.000 ± 0%  -61.90% (p=0.002 n=6)
+SnapshotCompression/json/64KiB/decompress-10       29.00 ± 0%   24.00 ± 0%  -17.24% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/compress-10        23.00 ± 0%   10.00 ± 0%  -56.52% (p=0.002 n=6)
+SnapshotCompression/json/256KiB/decompress-10      41.00 ± 0%   36.00 ± 0%  -12.20% (p=0.002 n=6)
+SnapshotCompression/packed/1KiB/compress-10       16.000 ± 0%   3.000 ± 0%  -81.25% (p=0.002 n=6)
+SnapshotCompression/packed/1KiB/decompress-10     10.000 ± 0%   5.000 ± 0%  -50.00% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/compress-10      20.000 ± 0%   7.000 ± 0%  -65.00% (p=0.002 n=6)
+SnapshotCompression/packed/16KiB/decompress-10     84.00 ± 0%   79.00 ± 0%   -5.95% (p=0.002 n=6)
+SnapshotCompression/packed/64KiB/compress-10      22.000 ± 0%   9.000 ± 0%  -59.09% (p=0.002 n=6)
+SnapshotCompression/packed/64KiB/decompress-10     109.0 ± 0%   104.0 ± 0%   -4.59% (p=0.002 n=6)
+SnapshotCompression/packed/256KiB/compress-10      24.00 ± 0%   11.00 ± 0%  -54.17% (p=0.002 n=6)
+SnapshotCompression/packed/256KiB/decompress-10    342.0 ± 0%   337.0 ± 0%   -1.46% (p=0.002 n=6)
+SnapshotCompression/random/1KiB/compress-10       16.000 ± 0%   3.000 ± 0%  -81.25% (p=0.002 n=6)
+SnapshotCompression/random/1KiB/decompress-10     10.000 ± 0%   5.000 ± 0%  -50.00% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/compress-10      16.000 ± 0%   3.000 ± 0%  -81.25% (p=0.002 n=6)
+SnapshotCompression/random/16KiB/decompress-10     19.00 ± 0%   14.00 ± 0%  -26.32% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/compress-10      16.000 ± 0%   3.000 ± 0%  -81.25% (p=0.002 n=6)
+SnapshotCompression/random/64KiB/decompress-10     22.00 ± 0%   17.00 ± 0%  -22.73% (p=0.002 n=6)
+SnapshotCompression/random/256KiB/compress-10     18.000 ± 0%   5.000 ± 0%  -72.22% (p=0.002 n=6)
+SnapshotCompression/random/256KiB/decompress-10    26.00 ± 0%   21.00 ± 0%  -19.23% (p=0.002 n=6)
+geomean                                            24.48        11.18       -54.34%

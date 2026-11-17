@@ -170,7 +170,7 @@ func TestHostLeaveUsesTheSuccessorOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitPong(t, host)
-	if err := host.client.Leave(context.Background()); err != nil {
+	if _, err := host.client.Leave(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	offer := recv(t, members[2].youAreHost, "you are host at slot 4")
@@ -265,7 +265,7 @@ func TestAutoSnapshotIsPushedWhileHost(t *testing.T) {
 		SnapshotMinInterval: 50 * time.Millisecond}, []relay.Options{{SnapshotState: candidateState, SnapshotInterval: 100 * time.Millisecond}})
 	waitFor(t, "a few automatic snapshots", func() bool { return pushed.Load() >= 3 })
 	waitPong(t, host)
-	if err := host.client.Leave(context.Background()); err != nil {
+	if _, err := host.client.Leave(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	n := pushed.Load()

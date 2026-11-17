@@ -1,7 +1,6 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,8 +18,13 @@ namespace Roost.RelaySmoke
         public bool BrowserWebSocket;
         /// <summary>连上之后在房间里停的秒数：要大于 relay 的 idle_timeout（缺省 30s），才能看出心跳任务在不在跑。</summary>
         public float HoldSeconds = 40;
-        /// <summary>账号名前缀（测试对端的 /harness/game-token 按它签 gt1）。</summary>
+        /// <summary>账号名前缀（测试对端的 /harness/game-token 按它签 gt2）。</summary>
         public string Account = "unity-smoke";
+        /// <summary>
+        /// RelayClientOptions.PumpDriven 与 LobbyClient 的 pumpDriven（WebGL A1，维护者 2026-11-18）：WebGL 上必开（缺省开，页面参数
+        /// pump=0 关掉看修前的卡住）；编辑器 / 桌面播放器缺省关（现在的线程池调度），ROOST_SMOKE_PUMP_DRIVEN=1 / -roostPumpDriven 打开。
+        /// </summary>
+        public bool PumpDriven;
     }
 
     /// <summary>
@@ -31,7 +35,8 @@ namespace Roost.RelaySmoke
     /// 两段：
     /// 1. 探针：单独起上面每一种调度原语，看它们在规定时间内有没有完成（等待按帧计时，不借助被测的原语）；
     /// 2. 端到端：同一进程里一个房主一个成员，经 lobby 建房 / 加入 → 连 relay → 成员发、房主收，房主广播、成员收，房间通道 →
-    ///    停 HoldSeconds 秒（超过 relay 的空闲超时）后两边仍在线且 Rtt 非 0（心跳在跑）→ 离开。
+    ///    停 HoldSeconds 秒（超过 relay 的空闲超时）后两边仍在线且 Rtt 非 0（心跳在跑）→ 离开（成员正常离开 RoomGone 为 false）。
+    ///    WebGL 上 SDK 以 PumpDriven 跑（WebGL A1）：心跳、超时都在 Pump 里，所有续行回主线程；lobby 的 HTTP 经 UnityWebRequestLobbyHttp。
     ///
     /// 由宿主每帧调 Tick（播放器里是 RelaySmokeBehaviour.Update，编辑器批处理里是 EditorApplication.update）；结果写成
     /// “SMOKE ...”开头的日志行，最后一行是 “SMOKE PASS” 或 “SMOKE FAIL ...”。本类自己的等待都按帧检查，不用 Task.Delay。
@@ -65,7 +70,7 @@ namespace Roost.RelaySmoke
             try
             {
                 started = now();
-                Log($"start: lobby {config.LobbyUrl}, transport {config.Transport}, browser websocket {config.BrowserWebSocket}, main thread {mainThread}");
+                Log($"start: lobby {config.LobbyUrl}, transport {config.Transport}, browser websocket {config.BrowserWebSocket}, pump driven {config.PumpDriven}, main thread {mainThread}");
                 await ProbesAsync();
                 if (config.BrowserWebSocket) await BridgeAsync();
                 await EndToEndAsync();
@@ -163,7 +168,7 @@ namespace Roost.RelaySmoke
                 if (detail == null) missing++;
                 Log($"probe {name}: {(detail ?? "DID NOT COMPLETE within 3s")}");
             }
-            Log(missing == 0 ? "probes: all completed" : $"probes: {missing} did not complete (the SDK depends on them; see README)");
+            Log(missing == 0 ? "probes: all completed" : $"probes: {missing} did not complete (the threaded scheduling depends on them; PumpDriven does not)");
         }
 
         private async Task Probe(Func<Task> body)
@@ -175,7 +180,7 @@ namespace Roost.RelaySmoke
         // ---------- 2. 只走桥接：不经 SDK 的调度 ----------
 
         /// <summary>
-        /// 只在浏览器 WebSocket 下跑：不经 RelayClient、LobbyClient 与 HttpClient，用 UnityWebRequest 直接向 lobby 要 gt1 与 ws 票据，
+        /// 只在浏览器 WebSocket 下跑：不经 RelayClient、LobbyClient 与 HttpClient，用 UnityWebRequest 直接向 lobby 要 gt2 与 ws 票据，
         /// 用 BrowserRelayTransport 连 relay、发令牌与 Ping、收 Welcome 与 Pong。等待都不加 ConfigureAwait(false)（续行回主线程），
         /// 读字节也不经 RelayCodec.ReadAsync（它内部用 ConfigureAwait(false)）。用来把“桥接（jslib + DllImport）能不能用”与
         /// “SDK 的调度在单线程下能不能跑”分开。
@@ -255,10 +260,9 @@ namespace Roost.RelaySmoke
 
         private async Task EndToEndAsync()
         {
-            Step("end to end: lobby (HttpClient + UnityWebRequestHandler)");
-            var http = new HttpClient(new UnityWebRequestHandler()) { Timeout = Timeout.InfiniteTimeSpan }; // 不让 HttpClient 起超时计时器
-            var host = await PlayerAsync(http, config.Account + "-host");
-            var member = await PlayerAsync(http, config.Account + "-m2");
+            Step("end to end: lobby (LobbyClient + UnityWebRequestLobbyHttp)");
+            var host = await PlayerAsync(config.Account + "-host");
+            var member = await PlayerAsync(config.Account + "-m2");
 
             var ticket = await host.lobby.CreateRoomAsync(new CreateRoomRequest { Game = "party", Mode = "smoke", Transport = config.Transport });
             Log($"lobby created room {ticket.Room.Id}, relay {ticket.RelayAddr}");
@@ -285,7 +289,7 @@ namespace Roost.RelaySmoke
             await WaitAsync(() => host.room.Count == 1, 5, "host receives the room frame");
             Log("frames: ok (member → host 5, host → member 1, room 1)");
 
-            // 停一段比 relay 空闲超时（30s）更久：心跳任务（Task.Run + SemaphoreSlim.WaitAsync 超时）不跑的话这里会被断开。
+            // 停一段比 relay 空闲超时（30s）更久：心跳（PumpDriven 时在 Pump 里，否则是后台任务）不跑的话这里会被断开。
             double until = now() + config.HoldSeconds;
             Step("end to end: hold");
             Log($"holding {config.HoldSeconds}s to see heartbeats (from {now() - started:F1}s) ...");
@@ -296,13 +300,13 @@ namespace Roost.RelaySmoke
             Log($"held {config.HoldSeconds}s: still connected, rtt host {host.client.Rtt.TotalMilliseconds:F1}ms member {member.client.Rtt.TotalMilliseconds:F1}ms");
 
             Step("end to end: leave");
-            await member.client.LeaveAsync();
+            var memberLeft = await member.client.LeaveAsync();
+            Require(!memberLeft.RoomGone, "the member left a room that is still open (RoomGone false)");
             await WaitAsync(() => host.left.Count == 1, 5, "host sees the member leave");
-            // 房间里最后一个人离开：LeaveAsync 先在 relay 上发 Leave，relay 随即关房，之后经 lobby 离开可能答 room_not_found
-            // （Go / C# SDK 都是这个顺序，2026-11-17 编辑器冒烟里看到；不在 C1 范围，记为观察）。这里只记下，不算失败。
-            try { await host.client.LeaveAsync(); }
-            catch (LobbyException error) when (error.Code == LobbyErrorCode.RoomNotFound) { Log("last leave: lobby answered room_not_found (relay closed the room first)"); }
-            Log("left: ok");
+            // 房间里最后一个人离开：LeaveAsync 先在 relay 上发 Leave，relay 随即关房，之后经 lobby 离开可能答 room_not_found，
+            // SDK 算离开成功并把 RoomGone 置 true（2026-11-18）；两种都可能，记下来。
+            var hostLeft = await host.client.LeaveAsync();
+            Log($"left: ok (member room gone {memberLeft.RoomGone}, last one room gone {hostLeft.RoomGone})");
         }
 
         private sealed class SmokePlayer
@@ -314,16 +318,13 @@ namespace Roost.RelaySmoke
             public readonly List<RelayDisconnect> disconnects = new List<RelayDisconnect>();
         }
 
-        private async Task<SmokePlayer> PlayerAsync(HttpClient http, string account)
+        private async Task<SmokePlayer> PlayerAsync(string account)
         {
-            // 测试对端签 gt1（client/relay/peer_test.go 的 /harness/game-token）；正式游戏从账号服务拿。
-            var reply = await http.PostAsync(config.LobbyUrl + "/harness/game-token", new StringContent("{\"account\":\"" + account + "\"}", Encoding.UTF8, "application/json"));
-            var text = await reply.Content.ReadAsStringAsync();
-            if (!reply.IsSuccessStatusCode) throw new Exception($"harness game token: HTTP {(int)reply.StatusCode} {text}");
-            string token = Field(text, "token");
+            // 测试对端签 gt2（client/relay/peer_test.go 的 /harness/game-token）；正式游戏从账号服务拿。
+            string token = Field(await RawPostAsync(config.LobbyUrl + "/harness/game-token", "{\"account\":\"" + account + "\"}", null), "token");
 
-            var player = new SmokePlayer { lobby = new LobbyClient(config.LobbyUrl, token, http) };
-            var options = new RelayClientOptions { Game = "party", Transport = config.Transport };
+            var player = new SmokePlayer { lobby = new LobbyClient(config.LobbyUrl, token, new UnityWebRequestLobbyHttp(), config.PumpDriven) };
+            var options = new RelayClientOptions { Game = "party", Transport = config.Transport, PumpDriven = config.PumpDriven };
             if (config.BrowserWebSocket) options.TransportFactory = () => new BrowserRelayTransport();
             player.client = new RelayClient(player.lobby, options);
             player.client.GameFrame += player.game.Add;   // 回调都在 Pump 里、主线程上

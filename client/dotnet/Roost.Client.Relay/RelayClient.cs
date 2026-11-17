@@ -33,6 +33,19 @@ namespace Roost.Client.Relay
         /// <summary>等 Pump 派发的通知上限；业务长期不 Pump、积压超过它时断开连接，不无界占内存。</summary>
         public int MaxPendingEvents { get; set; } = 65536;
 
+        // ---------- 调度（WebGL A1，维护者 2026-11-18） ----------
+
+        /// <summary>
+        /// 由 Pump 驱动（Unity WebGL 必开；缺省 false，其他平台行为不变）。打开时 SDK 不用线程池与计时器：读循环在调用
+        /// ConnectAsync / RejoinAsync 的线程上起，所有等待回到调用者的上下文（Unity 主线程）；心跳、读超时、连接超时、
+        /// 重连退避都由 Pump 按时钟检查。代价：游戏不调 Pump（加载场景、切后台时 Unity 停了循环）就不发心跳、不判超时、
+        /// 不重连——超过 relay 的 idle_timeout（缺省 30s）会被 relay 断开，恢复 Pump 后按 ReconnectAttempts 重连回来。
+        /// 要求：只在一个线程（有 SynchronizationContext 的主线程）上调用本类的方法；传入的 LobbyClient 也要以 pumpDriven 构造；
+        /// 传输的 ConnectAsync / ReceiveAsync 在同一线程上完成（例如 unity-webgl-smoke 的 BrowserRelayTransport：每帧先
+        /// PollAll 再 Pump）。
+        /// </summary>
+        public bool PumpDriven { get; set; }
+
         // ---------- 传输（交接 C1） ----------
 
         /// <summary>
@@ -124,6 +137,19 @@ namespace Roost.Client.Relay
         NotConnected,
     }
 
+    /// <summary>LeaveAsync 的结果（三份 SDK 一致：Go LeaveResult.RoomGone、TS LeaveResult.roomGone）。</summary>
+    public sealed class RelayLeaveResult
+    {
+        /// <summary>
+        /// true：lobby 答 room_not_found——房间早就关了或过了寿命，人已经不在里面，LeaveAsync 照样算成功（不抛）。最常见的是
+        /// 房间里最后一个人离开：relay 收到 Leave 帧随即关房并报给 lobby，lobby 的 leave 晚到一步。false：lobby 正常让出了席位，
+        /// 或者没有 lobby / 房间号、只在 relay 上离开了。
+        /// </summary>
+        public bool RoomGone { get; }
+        public RelayLeaveResult(bool roomGone) { RoomGone = roomGone; }
+        public override string ToString() => $"room gone {RoomGone}";
+    }
+
     /// <summary>relay 发来 Closed 之后断开：令牌被拒、房间不存在、满员、被踢、房间关闭等。</summary>
     public sealed class RelayClosedException : IOException
     {
@@ -141,10 +167,12 @@ namespace Roost.Client.Relay
         public readonly SemaphoreSlim Wake = new SemaphoreSlim(0);
         private readonly object writeLock = new object();
         private long lastReceive;
+        /// <summary>最近一次发 Ping 的时刻（Clock.Elapsed.Ticks）；只由心跳（后台任务，或 PumpDriven 下 Pump 里的 Tick）读写。</summary>
+        public long LastPing;
 
-        public RelaySession(IRelayTransport transport, RelayWelcome welcome, long now)
+        public RelaySession(IRelayTransport transport, RelayWelcome welcome, long now, long pingClock)
         {
-            Transport = transport; Welcome = welcome; lastReceive = now;
+            Transport = transport; Welcome = welcome; lastReceive = now; LastPing = pingClock;
         }
 
         public void Touch(long now) => Interlocked.Exchange(ref lastReceive, now);
@@ -173,6 +201,7 @@ namespace Roost.Client.Relay
     ///
     /// 线程：网络在后台线程收发；业务通知（帧、成员上下线、禁言、断线、重连）只由 <see cref="Pump"/> 在调用它的线程派发
     /// （Unity 每帧在主线程调用一次），与 Roost.Client 的 GameClient 相同。Send 一类方法可以从任意线程调用。
+    /// RelayClientOptions.PumpDriven 打开时（Unity WebGL）不用后台线程：读循环的续行回到主线程，心跳、超时与重连退避在 Pump 里检查。
     ///
     /// 心跳：每 PingInterval 发一个 Ping，relay 原样回 Pong（测 RTT）；ReadTimeout 内一帧都没收到就当断线。当房主（含候选）时
     /// 按 HostPingInterval（缺省 600ms）发：relay 的 host_idle_timeout 缺省 2s。
@@ -354,6 +383,10 @@ namespace Roost.Client.Relay
         private long autoAt = -1;      // 最近一次定时推送的尝试（State 返回 null 也算）
         private bool autoQueued;       // 定时推送已放进 Pump 队列、还没执行
         private Task completion = Task.CompletedTask;
+        /// <summary>PumpDriven：所有等待回到调用者的上下文（ConfigureAwait(pumpDriven)），心跳与计时由 Pump 做。</summary>
+        private readonly bool pumpDriven;
+        /// <summary>PumpDriven 下由 Pump 按时钟触发的计时（连接超时、重连退避）；由 gate 保护。</summary>
+        private readonly List<PumpTimer> timers = new List<PumpTimer>();
 
         /// <summary>游戏通道：房主收到成员的帧（Slot 是成员槽位），成员收到房主的帧（Slot 是房主槽位）。</summary>
         public event Action<RelayFrame>? GameFrame;
@@ -377,6 +410,10 @@ namespace Roost.Client.Relay
             this.lobby = lobby;
             this.options = (options ?? throw new ArgumentNullException(nameof(options))).Snapshot();
             frameLimit = Math.Max(this.options.MaxPayloadBytes, this.options.SnapshotMaxBytes + 8 + YouAreHostOverhead);
+            pumpDriven = this.options.PumpDriven;
+            // LobbyClient 的等待若不回到调用者的上下文，WebGL 上 lobby 请求（含重连时的 join）的续行排进不运行的线程池。
+            if (pumpDriven && lobby != null && !lobby.PumpDriven)
+                throw new ArgumentException("RelayClientOptions.PumpDriven needs a LobbyClient created with pumpDriven: true.", nameof(lobby));
         }
 
         /// <summary>YouAreHost 除状态字节以外的余量（固定头 + 成员名单），与 service/relay 相同。</summary>
@@ -445,7 +482,7 @@ namespace Roost.Client.Relay
             if (ticket == null) throw new ArgumentNullException(nameof(ticket));
             Reserve();
             RelaySession session;
-            try { session = await DialAsync(ticket.RelayAddr, ticket.Token, cancellation).ConfigureAwait(false); }
+            try { session = await DialAsync(ticket.RelayAddr, ticket.Token, cancellation).ConfigureAwait(pumpDriven); }
             catch { Release(); throw; }
             Start(ticket.Room.Id, session);
             return session.Welcome;
@@ -456,13 +493,16 @@ namespace Roost.Client.Relay
         {
             Reserve();
             RelaySession session;
-            try { session = await RejoinOnceAsync(cancellation).ConfigureAwait(false); }
+            try { session = await RejoinOnceAsync(cancellation).ConfigureAwait(pumpDriven); }
             catch { Release(); throw; }
             Start(RoomId!, session);
             return session.Welcome;
         }
 
-        /// <summary>派发积压的通知，返回派发了几个。在创建线程（Unity 主线程）上每帧调用；回调里不要再调 Pump。</summary>
+        /// <summary>
+        /// 派发积压的通知，返回派发了几个。在创建线程（Unity 主线程）上每帧调用；回调里不要再调 Pump。
+        /// PumpDriven 时先按时钟做一轮心跳与计时（发 Ping、判读超时、定时快照、连接超时、重连退避），不计入 budget。
+        /// </summary>
         public int Pump(int budget = int.MaxValue)
         {
             lock (gate)
@@ -473,6 +513,7 @@ namespace Roost.Client.Relay
             int count = 0;
             try
             {
+                if (pumpDriven) TickOnPump();
                 while (count < budget && events.TryDequeue(out var action))
                 {
                     Interlocked.Decrement(ref pendingEvents);
@@ -583,18 +624,20 @@ namespace Roost.Client.Relay
         /// <summary>
         /// 离开房间，然后 Dispose：先在 relay 连接上发 Leave（房主离开时 relay 不等宽限期，立即用存着的快照换 host；不经 lobby 也能离开），
         /// 再经 lobby 离开（让出席位）。没有连接时只经 lobby 离开。
-        /// lobby 答 room_not_found 算离开成功：房间已关或过了寿命，人已经不在里面。最常见的是房间里最后一个人离开——relay 收到 Leave
-        /// 随即关房并报给 lobby，lobby 的 leave 晚到一步就答 room_not_found。其余 lobby 错误照常抛出。
+        /// lobby 答 room_not_found 算离开成功，结果的 RoomGone 为 true：房间已关或过了寿命，人已经不在里面（维护者 2026-11-18 定：
+        /// 让调用方分得出“房间早就不在”与“正常离开”）。最常见的是房间里最后一个人离开——relay 收到 Leave 随即关房并报给 lobby，
+        /// lobby 的 leave 晚到一步就答 room_not_found。其余 lobby 错误照常抛出。
         /// </summary>
-        public async Task LeaveAsync(CancellationToken cancellation = default)
+        public async Task<RelayLeaveResult> LeaveAsync(CancellationToken cancellation = default)
         {
             string? room = RoomId;
             SendControl(RelayOps.Leave, 0, ReadOnlyMemory<byte>.Empty); // relay 回 Closed{left} 后断开
             try
             {
-                if (lobby != null && room != null) await lobby.LeaveRoomAsync(room, options.Game, cancellation).ConfigureAwait(false);
+                if (lobby != null && room != null) await lobby.LeaveRoomAsync(room, options.Game, cancellation).ConfigureAwait(pumpDriven);
+                return new RelayLeaveResult(false);
             }
-            catch (LobbyException error) when (error.Code == LobbyErrorCode.RoomNotFound) { }
+            catch (LobbyException error) when (error.Code == LobbyErrorCode.RoomNotFound) { return new RelayLeaveResult(true); }
             finally { Dispose(); }
         }
 
@@ -608,9 +651,10 @@ namespace Roost.Client.Relay
                 disposed = true;
                 session = current;
             }
-            lifetime.Cancel();
+            lifetime.Cancel(); // PumpDriven 下等着的重连退避、连接超时随之结束（取消回调同步执行）
             session?.Abort();
             while (events.TryDequeue(out _)) { }
+            lock (gate) timers.Clear();
         }
 
         /// <summary>测试用：像断网一样关掉 socket，不发任何帧。</summary>
@@ -669,7 +713,13 @@ namespace Roost.Client.Relay
                     throw new ObjectDisposedException(nameof(RelayClient));
                 }
                 roomId = room; current = session; SetWelcomeLocked(session.Welcome);
-                completion = Task.Run(() => RunAsync(session));
+                if (!pumpDriven) completion = Task.Run(() => RunAsync(session));
+            }
+            // PumpDriven：读循环在调用线程上起（锁外：第一段可能同步跑到收帧、分发），之后的续行回到调用者的上下文。
+            if (pumpDriven)
+            {
+                var run = RunAsync(session);
+                lock (gate) completion = run;
             }
             ResendPresence(); // 连上之前（或上一轮连接里）设过的前台状态告诉房主
         }
@@ -695,7 +745,7 @@ namespace Roost.Client.Relay
             {
                 while (true)
                 {
-                    var (reason, error) = await ServeAsync(session).ConfigureAwait(false);
+                    var (reason, error) = await ServeAsync(session).ConfigureAwait(pumpDriven);
                     bool closed;
                     lock (gate) { closed = disposed; current = null; }
                     if (closed) return;
@@ -703,7 +753,7 @@ namespace Roost.Client.Relay
                     PostDisconnect(new RelayDisconnect(reason, error, retry));
                     if (!retry) return;
                     RelaySession next;
-                    try { next = await ReconnectAsync().ConfigureAwait(false); }
+                    try { next = await ReconnectAsync().ConfigureAwait(pumpDriven); }
                     catch (Exception failure)
                     {
                         if (!lifetime.IsCancellationRequested)
@@ -727,12 +777,13 @@ namespace Roost.Client.Relay
         /// <summary>收帧、分发直到连接结束，返回结束原因：relay 的 Closed 原因，或 Disconnected / Protocol。</summary>
         private async Task<(RelayReason, Exception?)> ServeAsync(RelaySession session)
         {
-            var heartbeat = Task.Run(() => HeartbeatAsync(session));
+            // PumpDriven 时不起心跳任务：Pump 每次调用对当前连接做一轮 Tick。
+            var heartbeat = pumpDriven ? Task.CompletedTask : Task.Run(() => HeartbeatAsync(session));
             try
             {
                 while (true)
                 {
-                    var frame = await RelayCodec.ReadAsync(session.Transport, frameLimit, session.Stop.Token).ConfigureAwait(false);
+                    var frame = await RelayCodec.ReadAsync(session.Transport, frameLimit, session.Stop.Token, pumpDriven).ConfigureAwait(pumpDriven);
                     session.Touch(Clock.ElapsedTicks);
                     var reason = Dispatch(frame);
                     if (reason != RelayReason.None) return (reason, new RelayClosedException(reason));
@@ -743,7 +794,7 @@ namespace Roost.Client.Relay
             finally
             {
                 session.Abort();
-                try { await heartbeat.ConfigureAwait(false); } catch (Exception) { }
+                try { await heartbeat.ConfigureAwait(pumpDriven); } catch (Exception) { }
             }
         }
 
@@ -769,47 +820,118 @@ namespace Roost.Client.Relay
         }
 
         /// <summary>
-        /// 按当前角色的间隔发 Ping（成员 PingInterval，房主与候选 HostPingInterval；载荷是发出时刻的单调时钟 tick，8 字节大端，
-        /// Pong 原样带回）；ReadTimeout 内没收到帧就断开；当房主且设了 SnapshotState 时把定时快照放进 Pump 队列。
-        /// 角色变了（RoleChanged）立即按新角色重算，不等旧的间隔走完。
+        /// 后台心跳任务（PumpDriven 为 false 时）：反复做一轮 <see cref="Tick"/>，两轮之间睡到下一件事该做的时刻；
+        /// 角色变了（RoleChanged）立即醒来按新角色重算，不等旧的间隔走完。
         /// </summary>
         private async Task HeartbeatAsync(RelaySession session)
         {
-            long lastPing = Clock.Elapsed.Ticks;
-            long readCheck = Math.Max(1, options.ReadTimeout.Ticks / 4);
             while (!session.Stop.IsCancellationRequested)
             {
-                long now = Clock.Elapsed.Ticks;
-                if (TimeSpan.FromSeconds((double)(Clock.ElapsedTicks - session.LastReceive) / Stopwatch.Frequency) > options.ReadTimeout)
-                {
-                    session.Abort();
-                    return;
-                }
-                long interval;
-                long snapshotDue = long.MaxValue;
-                lock (gate)
-                {
-                    interval = role.IsHost || candidate ? options.HostPingInterval.Ticks : options.PingInterval.Ticks;
-                    if (role.IsHost && options.SnapshotState != null && !autoQueued)
-                        snapshotDue = Math.Max(snapshotAt, autoAt) < 0 ? now : Math.Max(snapshotAt, autoAt) + options.SnapshotInterval.Ticks;
-                    if (snapshotDue <= now)
-                    {
-                        autoQueued = true;
-                        autoAt = now;
-                    }
-                }
-                if (snapshotDue <= now) { Post(AutoSnapshot); snapshotDue = long.MaxValue; }
-                if (now - lastPing >= interval)
-                {
-                    lastPing = now;
-                    var payload = new byte[8];
-                    BinaryPrimitives.WriteInt64BigEndian(payload, now);
-                    if (!session.Write(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Ping, payload), frameLimit))) return;
-                }
-                long wait = Math.Min(Math.Min(lastPing + interval, snapshotDue) - now, readCheck);
+                long wait = Tick(session, Clock.Elapsed.Ticks);
+                if (wait < 0) return;
                 try { await session.Wake.WaitAsync(TimeSpan.FromTicks(Math.Max(1, wait)), session.Stop.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
             }
+        }
+
+        /// <summary>
+        /// 一轮心跳判断（后台心跳任务与 PumpDriven 下的 Pump 共用）：ReadTimeout 内没收到帧就断开；按当前角色的间隔发 Ping
+        /// （成员 PingInterval，房主与候选 HostPingInterval；载荷是发出时刻的单调时钟 tick，8 字节大端，Pong 原样带回）；
+        /// 当房主且设了 SnapshotState 时把定时快照放进 Pump 队列。返回离下一件事该做还有多久（Clock tick），连接该结束时返回 -1。
+        /// </summary>
+        private long Tick(RelaySession session, long now)
+        {
+            if (TimeSpan.FromSeconds((double)(Clock.ElapsedTicks - session.LastReceive) / Stopwatch.Frequency) > options.ReadTimeout)
+            {
+                session.Abort();
+                return -1;
+            }
+            long readCheck = Math.Max(1, options.ReadTimeout.Ticks / 4);
+            long interval;
+            long snapshotDue = long.MaxValue;
+            lock (gate)
+            {
+                interval = role.IsHost || candidate ? options.HostPingInterval.Ticks : options.PingInterval.Ticks;
+                if (role.IsHost && options.SnapshotState != null && !autoQueued)
+                    snapshotDue = Math.Max(snapshotAt, autoAt) < 0 ? now : Math.Max(snapshotAt, autoAt) + options.SnapshotInterval.Ticks;
+                if (snapshotDue <= now)
+                {
+                    autoQueued = true;
+                    autoAt = now;
+                }
+            }
+            if (snapshotDue <= now) { Post(AutoSnapshot); snapshotDue = long.MaxValue; }
+            if (now - session.LastPing >= interval)
+            {
+                session.LastPing = now;
+                var payload = new byte[8];
+                BinaryPrimitives.WriteInt64BigEndian(payload, now);
+                if (!session.Write(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Ping, payload), frameLimit))) return -1;
+            }
+            return Math.Min(Math.Min(session.LastPing + interval, snapshotDue) - now, readCheck);
+        }
+
+        /// <summary>PumpDriven：Pump 开头调用。先触发到期的计时（连接超时、重连退避），再对当前连接做一轮心跳。</summary>
+        private void TickOnPump()
+        {
+            long now = Clock.Elapsed.Ticks;
+            List<PumpTimer>? due = null;
+            lock (gate)
+            {
+                for (int i = timers.Count - 1; i >= 0; i--)
+                {
+                    if (timers[i].Due > now) continue;
+                    (due ??= new List<PumpTimer>()).Add(timers[i]);
+                    timers.RemoveAt(i);
+                }
+            }
+            // 到期的计时投到调用者的上下文、在 Pump 之外触发：触发的续行（重连退避之后的 rejoin、连接超时之后游戏自己 await
+            // ConnectAsync 的那段代码）会同步跑下去，不能跑在 Pump 里面（Pump 不可重入）。没有上下文时就地触发（锁外）。
+            if (due != null)
+            {
+                var context = SynchronizationContext.Current;
+                foreach (var timer in due)
+                {
+                    if (context != null) context.Post(_ => timer.Fire(), null);
+                    else timer.Fire();
+                }
+            }
+            RelaySession? session;
+            lock (gate) session = current;
+            if (session != null && !session.Stop.IsCancellationRequested) Tick(session, now);
+        }
+
+        /// <summary>PumpDriven 下由 Pump 触发的一个计时。</summary>
+        private sealed class PumpTimer
+        {
+            public readonly long Due;
+            public readonly Action Fire;
+            public PumpTimer(long due, Action fire) { Due = due; Fire = fire; }
+        }
+
+        /// <summary>登记一个由 Pump 在 delay 之后触发的计时（只在 PumpDriven 下用）。</summary>
+        private PumpTimer After(TimeSpan delay, Action fire)
+        {
+            var timer = new PumpTimer(Clock.Elapsed.Ticks + delay.Ticks, fire);
+            lock (gate) timers.Add(timer);
+            return timer;
+        }
+
+        private void CancelTimer(PumpTimer timer) { lock (gate) timers.Remove(timer); }
+
+        /// <summary>
+        /// 等 delay：PumpDriven 时由 Pump 按时钟完成（不用计时器与线程池；不 Pump 就一直等），否则 Task.Delay。
+        /// cancellation 取消时抛 OperationCanceledException（PumpDriven 下取消回调在调 Cancel 的线程上同步执行）。
+        /// </summary>
+        private Task DelayAsync(TimeSpan delay, CancellationToken cancellation)
+        {
+            if (!pumpDriven) return Task.Delay(delay, cancellation);
+            var done = new TaskCompletionSource<bool>();
+            if (cancellation.IsCancellationRequested) { done.TrySetCanceled(); return done.Task; }
+            CancellationTokenRegistration registration = default;
+            var timer = After(delay, () => { registration.Dispose(); done.TrySetResult(true); });
+            registration = cancellation.Register(() => { CancelTimer(timer); done.TrySetCanceled(); });
+            return done.Task;
         }
 
         /// <summary>定时快照（在 Pump 里执行）：向游戏要状态，返回 null 时这一轮不推；太密或不再是房主时跳过。</summary>
@@ -831,8 +953,8 @@ namespace Roost.Client.Relay
             Exception? last = null;
             for (int attempt = 0; attempt < options.ReconnectAttempts; attempt++)
             {
-                await Task.Delay(backoff, lifetime.Token).ConfigureAwait(false);
-                try { return await RejoinOnceAsync(lifetime.Token).ConfigureAwait(false); }
+                await DelayAsync(backoff, lifetime.Token).ConfigureAwait(pumpDriven);
+                try { return await RejoinOnceAsync(lifetime.Token).ConfigureAwait(pumpDriven); }
                 catch (Exception error) when (!lifetime.IsCancellationRequested)
                 {
                     last = error;
@@ -852,8 +974,8 @@ namespace Roost.Client.Relay
         {
             string? room = RoomId;
             if (lobby == null || room == null) throw new InvalidOperationException("Rejoin needs a lobby and a room from an earlier ConnectAsync.");
-            var ticket = await lobby.JoinRoomAsync(room, new JoinRoomRequest { Game = options.Game, Password = options.Password, Transport = options.Transport }, cancellation).ConfigureAwait(false);
-            return await DialAsync(ticket.RelayAddr, ticket.Token, cancellation).ConfigureAwait(false);
+            var ticket = await lobby.JoinRoomAsync(room, new JoinRoomRequest { Game = options.Game, Password = options.Password, Transport = options.Transport }, cancellation).ConfigureAwait(pumpDriven);
+            return await DialAsync(ticket.RelayAddr, ticket.Token, cancellation).ConfigureAwait(pumpDriven);
         }
 
         /// <summary>拨号、发令牌首帧、等第一帧：Welcome 就进房成功，Closed 就是 relay 拒绝。relay 总是先发 Welcome。</summary>
@@ -861,21 +983,24 @@ namespace Roost.Client.Relay
         {
             var transport = NewTransport();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation, lifetime.Token);
-            timeout.CancelAfter(options.ConnectTimeout);
+            // 连接超时：PumpDriven 时由 Pump 按时钟取消（WebGL 上 CancelAfter 的计时器不跑；不 Pump 就不超时），否则 CancelAfter。
+            PumpTimer? deadline = null;
+            if (pumpDriven) deadline = After(options.ConnectTimeout, () => { try { timeout.Cancel(); } catch (ObjectDisposedException) { } });
+            else timeout.CancelAfter(options.ConnectTimeout);
             try
             {
                 // 超时或取消时关掉连接：不依赖各实现对 CancellationToken 的处理（Mono 的 TcpClient.ConnectAsync 不收 token）。
                 using (timeout.Token.Register(transport.Dispose))
                 {
-                    await transport.ConnectAsync(address, timeout.Token).ConfigureAwait(false);
+                    await transport.ConnectAsync(address, timeout.Token).ConfigureAwait(pumpDriven);
                     transport.Send(RelayCodec.EncodeToken(token));
-                    var first = await RelayCodec.ReadAsync(transport, frameLimit, timeout.Token).ConfigureAwait(false);
+                    var first = await RelayCodec.ReadAsync(transport, frameLimit, timeout.Token, pumpDriven).ConfigureAwait(pumpDriven);
                     if (first.Channel == RelayChannel.Control && first.MessageId == RelayOps.Closed && first.Payload.Length == 1)
                         throw new RelayClosedException((RelayReason)first.Payload.Span[0]);
                     if (first.Channel != RelayChannel.Control || first.MessageId != RelayOps.Welcome)
                         throw new InvalidDataException("First relay frame is not a welcome.");
                     var welcome = RelayCodec.DecodeWelcome(first.Slot, first.Payload.Span);
-                    return new RelaySession(transport, welcome, Clock.ElapsedTicks);
+                    return new RelaySession(transport, welcome, Clock.ElapsedTicks, Clock.Elapsed.Ticks);
                 }
             }
             catch (Exception error) when (!(error is RelayClosedException) && timeout.IsCancellationRequested)
@@ -889,6 +1014,10 @@ namespace Roost.Client.Relay
             {
                 transport.Dispose();
                 throw;
+            }
+            finally
+            {
+                if (deadline != null) CancelTimer(deadline);
             }
         }
 

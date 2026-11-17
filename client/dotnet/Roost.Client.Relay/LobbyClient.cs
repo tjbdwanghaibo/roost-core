@@ -133,28 +133,83 @@ namespace Roost.Client.Relay
         }
     }
 
+    /// <summary>lobby 的一个 HTTP 答复：状态码与 UTF-8 正文（非 200 时正文是 lobby 的错误 JSON，或前置代理的错误页）。</summary>
+    public sealed class LobbyHttpResponse
+    {
+        public int Status { get; }
+        public string Body { get; }
+        public LobbyHttpResponse(int status, string body) { Status = status; Body = body ?? ""; }
+    }
+
+    /// <summary>
+    /// LobbyClient 发 HTTP 请求的方式（WebGL A1，维护者 2026-11-18）。缺省 <see cref="HttpClientLobbyHttp"/>（HttpClient）；
+    /// Unity WebGL 上 HttpClient 自带的网络用不了，游戏用 UnityWebRequest 实现它（参考写法见 client/dotnet/unity-webgl-smoke 的
+    /// UnityWebRequestLobbyHttp），并让返回的任务在主线程上完成。
+    ///
+    /// 约定：method 是 GET / POST；bearer 是游戏账号 token（Authorization: Bearer）；jsonBody 不为 null 时以 application/json
+    /// 发出。4xx / 5xx 照常返回答复（LobbyClient 要读 lobby 的错误 JSON），只有连不上等网络错误抛异常。
+    /// </summary>
+    public interface ILobbyHttp
+    {
+        Task<LobbyHttpResponse> SendAsync(string method, string url, string bearer, string? jsonBody, CancellationToken cancellation);
+    }
+
+    /// <summary>用 HttpClient 发（缺省；编辑器、桌面、移动端）。</summary>
+    public sealed class HttpClientLobbyHttp : ILobbyHttp
+    {
+        private readonly HttpClient http;
+
+        /// <param name="http">null 时新建一个 HttpClient。</param>
+        public HttpClientLobbyHttp(HttpClient? http = null) { this.http = http ?? new HttpClient(); }
+
+        public async Task<LobbyHttpResponse> SendAsync(string method, string url, string bearer, string? jsonBody, CancellationToken cancellation)
+        {
+            using var request = new HttpRequestMessage(new HttpMethod(method), url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            if (jsonBody != null) request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            using var response = await http.SendAsync(request, cancellation).ConfigureAwait(false);
+            return new LobbyHttpResponse((int)response.StatusCode, await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+        }
+    }
+
     /// <summary>
     /// lobby 的 HTTP 客户端（docs/framework/LOBBY.md §2）。每个请求带 Authorization: Bearer gt2...（游戏账号 token）；
     /// 请求的 game 必须等于 token 里的游戏。线程安全。
+    ///
+    /// pumpDriven（与 RelayClientOptions.PumpDriven 一起打开，Unity WebGL 必开）：每次等待之后回到调用者的上下文
+    /// （ConfigureAwait(true)），不把续行排进线程池；缺省 false，等待之后在线程池上继续（与以前相同）。
     /// </summary>
     public sealed class LobbyClient
     {
         private readonly string baseUrl;
         private readonly Func<CancellationToken, Task<string>> gameToken;
-        private readonly HttpClient http;
+        private readonly ILobbyHttp http;
+        private readonly bool pumpDriven;
 
         /// <param name="baseUrl">lobby 的根地址，例如 https://lobby.example.com。</param>
         /// <param name="gameToken">每个请求取一次 gt2；gt2 有寿命，长时间运行的客户端在这里换新的。</param>
         /// <param name="http">null 时新建一个 HttpClient。</param>
         public LobbyClient(string baseUrl, Func<CancellationToken, Task<string>> gameToken, HttpClient? http = null)
-        {
-            this.baseUrl = (baseUrl ?? throw new ArgumentNullException(nameof(baseUrl))).TrimEnd('/');
-            this.gameToken = gameToken ?? throw new ArgumentNullException(nameof(gameToken));
-            this.http = http ?? new HttpClient();
-        }
+            : this(baseUrl, gameToken, new HttpClientLobbyHttp(http)) { }
 
         public LobbyClient(string baseUrl, string gameToken, HttpClient? http = null)
             : this(baseUrl, _ => Task.FromResult(gameToken), http) { }
+
+        /// <param name="http">发请求的方式；Unity WebGL 上用 UnityWebRequest 实现。</param>
+        /// <param name="pumpDriven">见类说明；RelayClientOptions.PumpDriven 为 true 时这里也要为 true（RelayClient 构造时检查）。</param>
+        public LobbyClient(string baseUrl, Func<CancellationToken, Task<string>> gameToken, ILobbyHttp http, bool pumpDriven = false)
+        {
+            this.baseUrl = (baseUrl ?? throw new ArgumentNullException(nameof(baseUrl))).TrimEnd('/');
+            this.gameToken = gameToken ?? throw new ArgumentNullException(nameof(gameToken));
+            this.http = http ?? throw new ArgumentNullException(nameof(http));
+            this.pumpDriven = pumpDriven;
+        }
+
+        public LobbyClient(string baseUrl, string gameToken, ILobbyHttp http, bool pumpDriven = false)
+            : this(baseUrl, _ => Task.FromResult(gameToken), http, pumpDriven) { }
+
+        /// <summary>构造时的 pumpDriven。</summary>
+        public bool PumpDriven => pumpDriven;
 
         /// <summary>建房，调用者是房主。拿到的 RoomTicket 交给 RelayClient.ConnectAsync。</summary>
         public async Task<RoomTicket> CreateRoomAsync(CreateRoomRequest request, CancellationToken cancellation = default)
@@ -165,14 +220,14 @@ namespace Roost.Client.Relay
                 ["name"] = request.Name, ["password"] = request.Password,
                 ["attrs"] = request.AttrsJson == null ? null : new RawJson(request.AttrsJson), ["transport"] = TransportName(request.Transport),
             });
-            return Ticket(await CallAsync(HttpMethod.Post, "/rooms", body, cancellation).ConfigureAwait(false));
+            return Ticket(await CallAsync("POST", "/rooms", body, cancellation).ConfigureAwait(pumpDriven));
         }
 
         /// <summary>列出 game / mode 下可加入的房间（未满、未开始、未过期、房主已连上 relay），新建的在前。limit 为 0 取 lobby 的缺省。</summary>
         public async Task<IReadOnlyList<RoomInfo>> ListRoomsAsync(string game, string mode, int limit = 0, CancellationToken cancellation = default)
         {
             var path = "/rooms?game=" + Uri.EscapeDataString(game) + "&mode=" + Uri.EscapeDataString(mode) + (limit > 0 ? "&limit=" + limit : "");
-            var reply = await CallAsync(HttpMethod.Get, path, null, cancellation).ConfigureAwait(false);
+            var reply = await CallAsync("GET", path, null, cancellation).ConfigureAwait(pumpDriven);
             var rooms = new List<RoomInfo>();
             foreach (var item in reply.Array("rooms") ?? new List<object?>()) rooms.Add(RoomInfo.From(item as JsonObject));
             return rooms;
@@ -185,14 +240,14 @@ namespace Roost.Client.Relay
             {
                 ["game"] = request.Game, ["password"] = request.Password, ["transport"] = TransportName(request.Transport),
             });
-            return Ticket(await CallAsync(HttpMethod.Post, RoomPath(roomId, "join"), body, cancellation).ConfigureAwait(false));
+            return Ticket(await CallAsync("POST", RoomPath(roomId, "join"), body, cancellation).ConfigureAwait(pumpDriven));
         }
 
         /// <summary>离开房间：让出席位，lobby 再让 relay 断开这个账号（Closed{left}）。房主离开由 relay 走换 host。</summary>
         public async Task<RoomInfo> LeaveRoomAsync(string roomId, string game, CancellationToken cancellation = default)
         {
             var body = MiniJson.WriteObject(new Dictionary<string, object?> { ["game"] = game });
-            return RoomInfo.From((await CallAsync(HttpMethod.Post, RoomPath(roomId, "leave"), body, cancellation).ConfigureAwait(false)).Object("room"));
+            return RoomInfo.From((await CallAsync("POST", RoomPath(roomId, "leave"), body, cancellation).ConfigureAwait(pumpDriven)).Object("room"));
         }
 
         /// <summary>改房间状态或自定义属性，只有当前房主能调（否则 LobbyErrorCode.NotHost）。</summary>
@@ -203,7 +258,7 @@ namespace Roost.Client.Relay
                 ["game"] = request.Game, ["state"] = request.State == null ? null : (request.State == RoomState.Started ? "started" : "open"),
                 ["attrs"] = request.AttrsJson == null ? null : new RawJson(request.AttrsJson),
             });
-            return RoomInfo.From((await CallAsync(HttpMethod.Post, RoomPath(roomId, "state"), body, cancellation).ConfigureAwait(false)).Object("room"));
+            return RoomInfo.From((await CallAsync("POST", RoomPath(roomId, "state"), body, cancellation).ConfigureAwait(pumpDriven)).Object("room"));
         }
 
         private static string RoomPath(string roomId, string action) => "/rooms/" + Uri.EscapeDataString(roomId) + "/" + action;
@@ -214,15 +269,13 @@ namespace Roost.Client.Relay
             new RoomTicket(RoomInfo.From(reply.Object("room")), reply.String("relay_addr") ?? "", reply.String("token") ?? "", reply.Long("expires_at"));
 
         /// <summary>发一个请求：带上 gt2；200 解成 JSON 对象，其余答复换成 LobbyException。</summary>
-        private async Task<JsonObject> CallAsync(HttpMethod method, string path, string? body, CancellationToken cancellation)
+        private async Task<JsonObject> CallAsync(string method, string path, string? body, CancellationToken cancellation)
         {
-            var token = await gameToken(cancellation).ConfigureAwait(false);
-            using var request = new HttpRequestMessage(method, baseUrl + path);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            if (body != null) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-            using var response = await http.SendAsync(request, cancellation).ConfigureAwait(false);
-            var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            int status = (int)response.StatusCode;
+            var token = await gameToken(cancellation).ConfigureAwait(pumpDriven);
+            var response = await http.SendAsync(method, baseUrl + path, token, body, cancellation).ConfigureAwait(pumpDriven)
+                ?? throw new InvalidOperationException("ILobbyHttp.SendAsync returned null.");
+            var text = response.Body;
+            int status = response.Status;
             if (status != 200)
             {
                 JsonObject? error = null;
