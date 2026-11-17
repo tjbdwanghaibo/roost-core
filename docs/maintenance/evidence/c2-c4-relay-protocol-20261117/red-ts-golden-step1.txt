@@ -1,0 +1,24 @@
+✖ TS encodes every relay golden frame byte for byte like Go (0.837333ms)
+✖ TS decodes the relay golden frames (0.56175ms)
+✖ TS decodes the host-change golden frames into the expected fields (0.117792ms)
+✔ members see HostChanging, HostResumed and HostChanged; Rejected reaches onRejected; Leave is the golden frame (2.016916ms)
+test at dist-test/test/golden.test.js:69:1
+✖ TS encodes every relay golden frame byte for byte like Go (0.837333ms)
+  AssertionError [ERR_ASSERTION]: relay_welcome
+  + actual - expected
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/golden.test.js:73:16)
+    actual: '525302180000000100000003000000050200000001',
+    expected: '5253021800000001000000030000000d02000000010000000000000005',
+test at dist-test/test/golden.test.js:77:1
+✖ TS decodes the relay golden frames (0.56175ms)
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/golden.test.js:90:22)
+test at dist-test/test/golden.test.js:94:1
+✖ TS decodes the host-change golden frames into the expected fields (0.117792ms)
+  AssertionError [ERR_ASSERTION]: 14 base frames + 13 host-change frames
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/golden.test.js:96:12)
+    actual: 31,
+    expected: 27,
+  AssertionError [ERR_ASSERTION]: Transfer to slot 3 carries the handoff bytes
+  + actual - expected
+    actual: '5253021800000050000000030000000768616e646f6666',
+    expected: '525302180000005000000003000000080068616e646f6666',

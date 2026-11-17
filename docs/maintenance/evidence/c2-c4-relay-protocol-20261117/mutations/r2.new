@@ -1,0 +1,3 @@
+	for _, m := range r.members {
+		m.enqueueControl(wire.RelayOpMemberPresence, from.slot, payload)
+	}

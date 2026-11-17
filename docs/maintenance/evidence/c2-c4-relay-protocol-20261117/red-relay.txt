@@ -1,0 +1,7 @@
+--- FAIL: TestWelcomeCarriesTheRoomEpoch (0.00s)
+    host_test.go:448: welcome after two host changes {Host:false HostSlot:2 Epoch:0} slot 5, want host slot 2 epoch 2
+--- FAIL: TestPresenceReachesOnlyTheHost (2.00s)
+    host_test.go:468: slot 1 got channel 3 msg 4 seq 0 payload "\b"; want channel 3 msg 70 seq 2 payload "\x00"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay	3.319s
+FAIL

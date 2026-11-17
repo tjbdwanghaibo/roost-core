@@ -1,0 +1,332 @@
+✔ unknown control ops are dropped (or handed to onControl) and frames after the welcome are not lost (8.454625ms)
+✔ compression round trips: CompressionStream, zlib, default and no compression (24.427ms)
+✔ decompression stops at the limit (inflate bomb) (420.341917ms)
+✔ browser CompressionStream bytes and node zlib bytes are interchangeable (5.139625ms)
+✔ TS and Go (compress/flate, the Go SDK's default Deflate) inflate each other's bytes (1753.299375ms)
+✔ without CompressionStream the default falls back to node:zlib (1.505625ms)
+✖ a game-supplied compressor (stand-in for LZ4 / zstd) is what the SDK puts on the wire (6.835ms)
+✔ TS encodes every relay golden frame byte for byte like Go (0.603541ms)
+✔ TS decodes the relay golden frames (0.675417ms)
+✔ TS decodes the host-change golden frames into the expected fields (0.273292ms)
+✔ presence frames and the compression marker in the golden (10.851291ms)
+✔ the stream reader does not depend on message boundaries (0.531833ms)
+✔ TS refuses the same headers as Go's ValidateRelay (0.157958ms)
+✖ YouAreHost → candidate, HostReady after the callback, HostChanged{self} → host; seq continues from YouAreHost (54.150292ms)
+✔ a YouAreHost seq above epoch<<32 wins: the next snapshot continues from it (2.407ms)
+✔ without autoHostReady the game answers hostReady() itself; only a candidate may (84.631792ms)
+✔ a candidate whose callback throws does not send HostReady (33.0215ms)
+✖ the host transfers with handoff data, declares successors, and becomes a member on YouAreMember (2.103625ms)
+✔ members see HostChanging, HostResumed and HostChanged; Rejected reaches onRejected; Leave is the golden frame (1.884792ms)
+✖ a YouAreHost larger than maxPayloadBytes is still read (read limit covers snapshotMaxBytes) (53.305916ms)
+✔ the host sends a Ping whenever it has been quiet for hostPingIntervalMs; members keep the slow ping (704.013125ms)
+✖ the SDK pushes snapshots on the interval while host, with consecutive seqs, and stops as a member (156.941459ms)
+✔ snapshots closer than snapshotMinIntervalMs are not sent and do not use up a seq; becoming host resets the clock (223.48475ms)
+✔ kicking an offline seat: the host's second MemberLeft{kicked} reaches the callback and the seat is gone (1.061792ms)
+✔ snapshots over snapshotMaxBytes are refused locally (1.677792ms)
+✔ kick semantics: reconnect retries lobby_unavailable with backoff and stops at lobby_rejected (52.818459ms)
+✔ kick semantics: lobby_unavailable then success reconnects (21.70575ms)
+✔ kick semantics: an old token refused with Closed{kicked} (same relay) stops reconnecting (9.156875ms)
+✔ kick semantics: the lobby's 403 kicked on join stops reconnecting (9.704375ms)
+✔ decoding a malformed host-change frame is a protocol error (1.325416ms)
+✖ the Welcome's epoch is the room's: client.epoch follows it on connect and on every reconnect (1.652625ms)
+✖ setForeground sends Presence (the golden frame), re-sent after HostChanged and after a reconnect; MemberPresence reaches the host (5.180125ms)
+✖ the compression marker: an unknown method is UnknownCompressionError, a corrupt body a decompression error, built-ins always decode (54.439792ms)
+peer: lobby http://127.0.0.1:55881, relay ws ws://127.0.0.1:55880/relay, room directory redis
+✔ lobby errors map to LobbyError codes (886.917917ms)
+✔ room lifecycle over WebSocket against the real relay and lobby (21.356167ms)
+✔ reconnect asks the lobby for a fresh token and resumes (5398.872542ms)
+✔ heartbeat pongs reach onControl (66.11275ms)
+✔ transfer: handoff data reaches the chosen member, everyone sees HostChanged, the lobby follows (8.321709ms)
+✖ the Welcome carries the room's epoch: a member who joins after a transfer, and one who rejoins, see it (5.496542ms)
+✖ presence: members' foreground state reaches only the host, and is re-sent to a new host after HostChanged and after a reconnect (5005.875584ms)
+✔ host disconnect: HostChanging while waiting, the snapshot goes to the successor after host_grace, seq continues (6413.545875ms)
+✔ host heartbeat: an idle host is not replaced within 5s (5505.194791ms)
+✔ refresh within host_grace: the same account is still host, members get HostResumed, state comes back from sessionStorage (53.889709ms)
+✔ kick: the lobby answers 403 kicked and an unused old token is refused; a left member's old token is lobby_rejected (12.343333ms)
+✔ after the start: a dropped member auto-reconnects to its seat; the host kicks an offline seat and the lobby bars it (113.769416ms)
+✔ reconnect against lobby admission: down is retried with backoff until it recovers, reject stops (369.986833ms)
+✔ transfer between WebHost pages that also register client callbacks: the new host's rules keep stepping, snapshots go out, a refresh within host_grace resumes (1861.362709ms)
+✔ catch-up: steps follow elapsed time and stop at the catch-up cap (1.023792ms)
+✔ LocalRunner restores, steps on its timer by elapsed time, and hands outputs to onStep (0.320375ms)
+✔ WorkerRunner drives rules served in a worker over a real MessageChannel (structured clone) (64.283125ms)
+✔ HostSessionStore keeps identity, seq and snapshot; only the same account resumes; storage failures are ignored (0.38925ms)
+✖ visibilitychange: a hidden host hands off to the first online successor with handoff data after hiddenHandoffMs (5.730541ms)
+✔ visibilitychange: back in time cancels the handoff; no online successor keeps the host; mobile hands off at once (29.610209ms)
+✔ the host's own rules output reaches the page; members' frames go to the rules; outputs go out over relay (1.799875ms)
+✔ refresh: sessionStorage keeps the snapshot; reconnecting within the grace as host restores it and continues the seq (5.534959ms)
+✖ a new host started by YouAreHost gets the decompressed snapshot and the SDK answers HostReady (2.991417ms)
+✖ the app's own client callbacks do not displace WebHost (YouAreHost starts the rules, snapshots are still stored) (2.576958ms)
+✖ foreground first: a hidden host hands off to the member in the foreground; WebHost declares that order unless the game declared its own (1.582125ms)
+✖ a member page reports visibilitychange as Presence (and its state when it connects) (3003.230291ms)
+ℹ tests 59
+ℹ suites 0
+ℹ pass 44
+ℹ fail 15
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 464067.31475
+
+✖ failing tests:
+
+test at dist-test/test/compress.test.js:104:1
+✖ a game-supplied compressor (stand-in for LZ4 / zstd) is what the SDK puts on the wire (6.835ms)
+  AssertionError [ERR_ASSERTION]: marker 7, then the game's bytes
+  + actual - expected
+  
+    [
+  -   7,
+      238,
+      1,
+      2
+    ]
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/compress.test.js:115:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 238, 1, 2 ],
+    expected: [ 7, 238, 1, 2 ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/host.test.js:36:1
+✖ YouAreHost → candidate, HostReady after the callback, HostChanged{self} → host; seq continues from YouAreHost (54.150292ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '\x00state-7'
+  - 'state-7'
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/host.test.js:51:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '\x00state-7',
+    expected: 'state-7',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/host.test.js:105:1
+✖ the host transfers with handoff data, declares successors, and becomes a member on YouAreMember (2.103625ms)
+  AssertionError [ERR_ASSERTION]: Transfer to slot 3 carries the handoff bytes
+  + actual - expected
+  
+  + '5253021800000050000000030000000768616e646f6666'
+  - '525302180000005000000003000000080068616e646f6666'
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/host.test.js:116:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '5253021800000050000000030000000768616e646f6666',
+    expected: '525302180000005000000003000000080068616e646f6666',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/host.test.js:150:1
+✖ a YouAreHost larger than maxPayloadBytes is still read (read limit covers snapshotMaxBytes) (53.305916ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  32769 !== 32768
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/host.test.js:156:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 32769,
+    expected: 32768,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/host.test.js:176:1
+✖ the SDK pushes snapshots on the interval while host, with consecutive seqs, and stops as a member (156.941459ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + Uint8Array(2) [
+  - Uint8Array(3) [
+  -   0,
+      115,
+      49
+    ]
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/host.test.js:190:12)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at listOnTimeout (node:internal/timers:644:9)
+      at process.processTimers (node:internal/timers:618:7)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Uint8Array(2) [ 115, 49 ],
+    expected: Uint8Array(3) [ 0, 115, 49 ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/host.test.js:304:1
+✖ the Welcome's epoch is the room's: client.epoch follows it on connect and on every reconnect (1.652625ms)
+  AssertionError [ERR_ASSERTION]: a member who joins after host changes knows the room's epoch
+  
+  0n !== 3n
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/host.test.js:319:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0n,
+    expected: 3n,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/host.test.js:328:1
+✖ setForeground sends Presence (the golden frame), re-sent after HostChanged and after a reconnect; MemberPresence reaches the host (5.180125ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(client.setForeground(true))
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/host.test.js:345:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at dist-test/test/host.test.js:364:1
+✖ the compression marker: an unknown method is UnknownCompressionError, a corrupt body a decompression error, built-ins always decode (54.439792ms)
+  AssertionError [ERR_ASSERTION]: TypeError
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/host.test.js:383:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at dist-test/test/relay.test.js:305:1
+✖ the Welcome carries the room's epoch: a member who joins after a transfer, and one who rejoins, see it (5.496542ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0n !== 1n
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/relay.test.js:317:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0n,
+    expected: 1n,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/relay.test.js:323:1
+✖ presence: members' foreground state reaches only the host, and is re-sent to a new host after HostChanged and after a reconnect (5005.875584ms)
+  Error: timed out waiting for presence 1
+      at Timeout._onTimeout (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/relay.test.js:38:51)
+      at listOnTimeout (node:internal/timers:685:17)
+      at process.processTimers (node:internal/timers:618:7)
+
+test at dist-test/test/web.test.js:222:1
+✖ visibilitychange: a hidden host hands off to the first online successor with handoff data after hiddenHandoffMs (5.730541ms)
+  Error [UnknownCompressionError]: relay: state uses an unknown compression method 75 (this client compresses with 1)
+      at unpackState (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/src/compress.js:147:15)
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/web.test.js:239:28)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    method: 75
+  }
+
+test at dist-test/test/web.test.js:331:1
+✖ a new host started by YouAreHost gets the decompressed snapshot and the SDK answers HostReady (2.991417ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   null
+  -   'seed=42'
+    ]
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/web.test.js:339:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ null ],
+    expected: [ 'seed=42' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/web.test.js:344:1
+✖ the app's own client callbacks do not displace WebHost (YouAreHost starts the rules, snapshots are still stored) (2.576958ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   null
+  -   'handed'
+    ]
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/web.test.js:365:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ null ],
+    expected: [ 'handed' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/web.test.js:372:1
+✖ foreground first: a hidden host hands off to the member in the foreground; WebHost declares that order unless the game declared its own (1.582125ms)
+  AssertionError [ERR_ASSERTION]: foreground members first (by slot), then the rest
+  + actual - expected
+  
+  + undefined
+  - [
+  -   3,
+  -   2
+  - ]
+  
+      at TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/web.test.js:381:12)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: [ 3, 2 ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at dist-test/test/web.test.js:406:1
+✖ a member page reports visibilitychange as Presence (and its state when it connects) (3003.230291ms)
+  Error: timed out waiting for presence on connect
+      at FakeRelay.waitFor (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/fake.js:68:23)
+      at async TestContext.<anonymous> (file:///Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/ts/dist-test/test/web.test.js:410:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7)

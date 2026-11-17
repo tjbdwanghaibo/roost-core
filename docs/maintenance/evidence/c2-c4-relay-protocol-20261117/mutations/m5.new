@@ -1,0 +1,2 @@
+		c.mu.Lock()
+		fn := c.h.reconnected

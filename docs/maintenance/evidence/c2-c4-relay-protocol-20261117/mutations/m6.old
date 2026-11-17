@@ -1,0 +1,2 @@
+	default:
+		return nil, fmt.Errorf("%w: marker %d (this client compresses with %d)", ErrUnknownCompression, id, c.opts.Compressor.ID())

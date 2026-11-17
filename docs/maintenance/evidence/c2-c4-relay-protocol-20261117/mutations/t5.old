@@ -1,0 +1,1 @@
+  else throw new UnknownCompressionError(id, compressor.id);

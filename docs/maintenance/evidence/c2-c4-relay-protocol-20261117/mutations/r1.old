@@ -1,0 +1,1 @@
+	c.enqueueControl(wire.RelayOpWelcome, c.slot, wire.EncodeRelayWelcome(wire.RelayWelcome{Host: c == r.host, HostSlot: hostSlot, Epoch: r.epoch}))

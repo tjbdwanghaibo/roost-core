@@ -42,7 +42,7 @@
 
 | 操作码 | 方向 | seq | 载荷 |
 |---|---|---|---|
-| 1 `Welcome` | relay → 刚进房的连接 | 自己的槽位 | `[角色 1B：1 房主 / 2 成员][房主槽位 4B 大端]` |
+| 1 `Welcome` | relay → 刚进房的连接 | 自己的槽位 | `[角色 1B：1 房主 / 2 成员][房主槽位 4B 大端][epoch 8B 大端]`，固定 13 字节 |
 | 2 `MemberJoined` | relay → 房主 | 成员槽位 | `[原因 1B][账号]`；原因 0 = 新加入，3 = 同一账号重连顶掉旧连接（槽位不变） |
 | 3 `MemberLeft` | relay → 房主 | 成员槽位 | `[原因 1B][账号]` |
 | 4 `Closed` | relay → 某条连接，随后断开 | 0 | `[原因 1B]`；发送队列满被断开的连接收不到 |
@@ -52,13 +52,13 @@
 | 32 `Ping` | 客户端 → relay | 0 | 不透明，至多 16 字节；重置空闲计时 |
 | 33 `Pong` | relay → 客户端 | 0 | 原样带回 Ping 的载荷 |
 
-- 成员发 `Kick` / `Mute` 不生效；不认识的操作码丢弃（留给协议扩展），64～127 是换 host（§2.3）。
-- `Welcome` 里的房主槽位是当前房主的槽位（换 host 之后不一定是 1）；正在选新房主时为 0。
+- 成员发 `Kick` / `Mute` 不生效；不认识的操作码丢弃（留给协议扩展），64～127 是换 host 与前台上报（§2.3）。
+- `Welcome` 里的房主槽位是当前房主的槽位（换 host 之后不一定是 1）；正在选新房主时为 0。epoch 是 relay 此刻的 host_epoch：选人阶段进房的连接拿到的是已经加过 1 的新一轮（与 `HostChanging` 的约定相同），所以换过 host 之后才进房、或重连回来的客户端不用等下一次换 host 就知道房间的 epoch，三份 SDK 收到 Welcome 时都按它更新 `Role` 的 epoch（2026-11-17 起；之前 Welcome 是 5 字节、不带 epoch，旧客户端连新 relay 会因长度不对按协议错误断开，不兼容）。
 - 原因码：1 disconnected、2 kicked、3 replaced、4 room_closed（房主走了且选不出新房主）、5 frame_too_big、6 rate_limited、7 slow_consumer、8 idle_timeout、9 protocol、10 token_rejected、11 room_not_found、12 room_full、13 shutdown、14 left（经 lobby 的 leave 或 `Leave` 控制帧离开）、15 lobby_rejected（lobby 验权不让进）、16 lobby_unavailable（向 lobby 验权失败或超时）。
 
 ### 2.3 换 host 的控制帧
 
-整数都是大端；`epoch` 是 8 字节的 host_epoch（建房时 0，每次换 host 加 1）。64～79 由 relay 发出，80～95 由客户端发出。金样在 `client/spec/relay-packets.json`（`relay_you_are_member` 起的条目）。
+整数都是大端；`epoch` 是 8 字节的 host_epoch（建房时 0，每次换 host 加 1）。64～79 由 relay 发出，80～95 由客户端发出。金样在 `client/spec/relay-packets.json`（`relay_you_are_member` 起的条目；前台上报是 `relay_presence`、`relay_member_presence`）。
 
 | 操作码 | 方向 | seq | 载荷 |
 |---|---|---|---|
@@ -68,11 +68,13 @@
 | 67 `HostChanged` | relay → 房间里在线的每个人（含新房主） | 新房主槽位 | `[epoch 8B][新房主账号 UTF-8]` |
 | 68 `HostResumed` | relay → 成员：房主在宽限期内回来了 | 房主槽位 | `[epoch 8B]` |
 | 69 `Rejected` | relay → 发快照 / 转交的连接，连接保留 | 0 | `[被拒的操作码 1B][原因 1B][seq 8B]`；原因 1 too_big、2 too_soon、3 stale_seq、4 bad_target、5 not_host；seq 是被拒快照的 seq，转交为 0 |
+| 70 `MemberPresence` | relay → 当前房主 | 上报的成员的槽位 | `[1 前台 / 0 后台]`，即成员 `Presence` 的载荷 |
 | 80 `Transfer` | 房主 → relay | 目标槽位 | 交接数据（不透明，不超过 `snapshot_max_bytes`） |
 | 81 `Leave` | 任何人 → relay | 0 | 无；relay 回 `Closed{left}` 后断开 |
 | 82 `Successors` | 房主 → relay | 0 | 槽位列表，每个 4B，至多 256 个 |
 | 83 `Snapshot` | 房主 → relay | 0 | `[seq 8B][快照字节]`；快照字节不超过 `snapshot_max_bytes` |
 | 84 `HostReady` | 新房主候选 → relay | 0 | `[epoch 8B]`，等于 `YouAreHost` 里的 epoch |
+| 85 `Presence` | 任何成员 → relay | 0 | `[1 前台 / 0 后台]`；别的长度或取值按协议错误断开（与 `Mute` 一致） |
 
 `YouAreHost` 的载荷：
 
@@ -85,6 +87,10 @@
 - 成员名单是房间里有座位的账号（含离线的、含旧房主、不含被踢的），按槽位排列。
 - 快照 seq 不管来源，都是 relay 存着的最新一份快照的 seq（还没有快照时为 0，见 §4A“快照”）。快照年龄（relay 收到它到发出这一帧的毫秒数，与时钟无关）只在来源为快照时给，新房主据此知道快照落后了多少；其余来源为 0。
 - 这一帧可以大于 `max_payload_bytes`（最大约 `snapshot_max_bytes` + 成员名单）。客户端读 relay 帧的上限要按它放大。
+
+**状态字节的压缩方式标识**（三份 SDK 之间的约定，relay 不解析；2026-11-17 起）：`Snapshot` 的快照字节、`Transfer` 的交接数据（也就是 `YouAreHost` 的状态字节），非空时是 `[压缩方式 1B][压缩后的字节]`，空的就是空（不带标识，收到时当空状态）。0 不压缩、1 RFC 1951 原始 deflate（三份 SDK 的缺省），2～255 归游戏自带的压缩方式（SDK README 的示例里 zstd 用 2、LZ4 用 3）。收到时按标识选解压方式：自己配的压缩方式，或内置的 0 / 1；标识不认识时新房主拿到明确的“不认识的压缩方式”错误（Go `ErrUnknownCompression`、C# `RelayUnknownCompressionException`、TS `UnknownCompressionError`），标识认识、内容坏时是解压错误；两种情况都当没有状态交给游戏。`snapshot_max_bytes` 按带标识的字节算。
+
+**前台上报**（方案 §4.7.3；2026-11-17 起）：成员发 `Presence` 告诉房主自己在前台还是后台，relay 只检查格式，改写成 `MemberPresence{成员槽位}` 转给当前已就绪的房主；宽限期与选人阶段没有房主、或发送者就是房主时丢弃，relay 不记状态。这一帧计入每连接帧率限额（`frames_per_second`），不另设限流。SDK 把自己的状态记下，收到 `HostChanged`、以及每次连上（含自动重连）后自动重发，新房主不用问；从没设过时不发。房主一侧：TS 的 `WebHost` 在游戏没有显式 `setSuccessors` 时，自动把前台成员按槽位升序排在前面再声明 `Successors`（游戏声明过的以游戏为准），页面隐藏让出房主时也按这个顺序；Go / C# 只给 `SetForeground` 与 `OnMemberPresence`，不自动排。成员可以谎报，后果只是影响候选顺序。
 
 ## 3. 连接与房间
 
@@ -236,6 +242,7 @@ relay **没有按 IP 的连接限额**，也不读 `X-Forwarded-For`：WebSocket
 
 - 语音走 TCP / WebSocket，丢一个包会卡住后面的包；需要时以后加 UDP 通道。
 - 换 host 不保证玩法状态连续（方案 §4.6.6）：主动转交最完整；断线时丢最后一份快照之后的变化；不做投票、延迟测量选人、多人同时当 host。
+- relay 选人时不看前台状态（交接 C2 的选项 3，维护者 2026-11-17 定这一轮不做）：房主来不及声明候选顺序就掉线时，兜底仍是槽位最小的在线成员；前台优先只经房主声明的 `Successors` 生效。
 - lobby 不可用时新连接与重连都进不来（失败即关闭，方案 §4.3）；已连上的不受影响。
 - 座位（账号 → 槽位）在房间存续期间只增不减（被踢的除外）：一个房间里进出过的不同账号越多，表越大；人数由 lobby 的席位与令牌限住，实际很小。
 - relay 进程重启即丢房（维护者 2026-11-17）：旧进程上的房间不在新进程上重建。房主拿着还没过期的 host 令牌（或经 lobby 重新 join 拿的新令牌）连新进程请求建房，lobby 验权见房间已被 relay 报告过，答 `room_not_found`，连接收到 `Closed{lobby_rejected}`；成员的旧令牌对应的房间不存在，收到 `Closed{room_not_found}`；SDK 都不再重连。lobby 的目录在最后一条报告之后 `room_ttl` 内消失。只有房主、还没被 relay 报告过的房间（房主刚建、还没连上）不受影响。2026-11-17 多进程演练里，此前的“重建”会让比房主早到的成员被关在外面、报告序号从 1 重数（[证据](../maintenance/evidence/lobby-relay-multiprocess-20261117/README.md)）。

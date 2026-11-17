@@ -1,0 +1,7 @@
+golden: ok
+unknown control op: ok
+compressors: ok
+FAILED: System.Exception: Check failed: presence sent
+   at Program.Check(Boolean condition, String what) in /Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 81
+   at Program.HostFramesAgainstFakeRelay(String path) in /Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 318
+   at Program.Main(String[] args) in /Users/whb/roost/roost-core/.claude/worktrees/agent-af45c8f4e77a2e105/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 38

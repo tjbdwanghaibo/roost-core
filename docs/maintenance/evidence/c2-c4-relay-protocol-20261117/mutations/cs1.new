@@ -1,0 +1,1 @@
+            role = new RelayWelcome(welcome.Slot, welcome.IsHost, welcome.HostSlot, role.Epoch);

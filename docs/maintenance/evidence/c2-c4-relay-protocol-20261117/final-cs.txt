@@ -1,0 +1,21 @@
+golden: ok
+unknown control op: ok
+compressors: ok
+host frames against a fake relay: ok
+peer: lobby http://127.0.0.1:59718, relay 127.0.0.1:59717, room directory redis
+2026/11/17 22:58:05 WARN lobby: request failed method=POST path=/rooms err="lobby: no relay instance is available for transport ws"
+lobby errors: ok
+room lifecycle: ok
+reconnect: ok
+host transfer: ok
+host loss → snapshot to the declared successor: ok
+host resumed within the grace period: ok
+host leave uses the successor order: ok
+snapshot pacing and rejections: ok
+automatic snapshots: ok
+host heartbeat under host_idle_timeout: ok
+reconnect vs lobby_unavailable / lobby_rejected: ok
+started room: reconnect, rejoin, kick an offline seat: ok
+welcome epoch for a late joiner and a rejoin: ok
+presence re-sent after host changed and reconnect: ok
+all 409 checks passed

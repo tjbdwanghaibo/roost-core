@@ -1,0 +1,2 @@
+	wasHost := c.role.Host
+	c.role = w

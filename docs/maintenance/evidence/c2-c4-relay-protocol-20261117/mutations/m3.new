@@ -1,0 +1,3 @@
+	wasHost := c.role.Host
+	w.Epoch = c.role.Epoch
+	c.role = w

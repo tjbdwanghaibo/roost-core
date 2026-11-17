@@ -1,0 +1,2 @@
+    this.role = welcome;
+    this.epochValue = welcome.epoch;

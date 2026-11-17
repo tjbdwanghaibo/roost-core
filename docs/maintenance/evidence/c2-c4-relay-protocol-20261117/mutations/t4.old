@@ -1,0 +1,1 @@
+    return [...slots.filter((slot) => this.presence.get(slot) === true), ...slots.filter((slot) => this.presence.get(slot) !== true)];

@@ -1,0 +1,15 @@
+--- FAIL: TestSDKFramesMatchRelayGolden (0.00s)
+    golden_test.go:65: welcome {Slot:3 Host:false HostSlot:1 Epoch:0}
+--- FAIL: TestSDKHostFramesMatchRelayGolden (5.00s)
+    golden_test.go:174: relay_transfer: read read pipe: i/o timeout
+--- FAIL: TestStateCarriesTheCompressionMarker (0.00s)
+    golden_test.go:308: markers: deflate 2a, none 6162
+--- FAIL: TestLateJoinerAndRejoinSeeTheRoomEpoch (0.01s)
+    host_test.go:356: peer: lobby http://127.0.0.1:63547, relay 127.0.0.1:63546, room directory memory
+    host_test.go:374: late welcome {Slot:4 Host:false HostSlot:3 Epoch:0}
+--- FAIL: TestPresenceIsResentAfterHostChangedAndReconnect (5.00s)
+    host_test.go:389: peer: lobby http://127.0.0.1:63554, relay 127.0.0.1:63553, room directory memory
+    host_test.go:403: timed out waiting for member presence at the host
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	10.327s
+FAIL

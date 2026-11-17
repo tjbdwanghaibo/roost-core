@@ -27,12 +27,44 @@ client.OnYouAreMember(epoch => { });             // 被换下的旧房主、超�
 client.OnRejected(r => { });                     // 快照 / 转交被拒
 client.Transfer(3, handoff); client.SetSuccessors(new uint[] { 3, 2 }); client.Snapshot(state); // 只有房主
 var role = client.Role;                          // Slot、IsHost、IsCandidate、HostSlot、Epoch
+client.SetForeground(false);                     // 成员：切到后台（Unity 在 OnApplicationPause 里调）；换 host、重连后 SDK 自动重发
+client.OnMemberPresence(p => { });               // 房主：成员的前台状态；要不要据此 SetSuccessors 由游戏决定
 ```
 
 - **线程**：网络在后台收发；全部通知只由 `Pump` 在调用它的线程派发（与 `GameClient` 相同），回调抛错交给 `Error`。`Send*` 可以从任意线程调用，没有连接或写失败返回 false。积压超过 `MaxPendingEvents` 时断开连接。`Dispose` 之后不再通知。
 - **lobby 错误**：`LobbyException`（`Status`、`ErrorName`、`Code`、`IsTemporary`）；被踢的账号再 join 是 403、`Code == LobbyErrorCode.Kicked`。
 - **心跳、重连、扩展点**：与 Go 版相同（成员 10s Ping、房主与候选 `HostPingInterval` 600ms、30s 读超时；`RejoinAsync` / `ReconnectAttempts` 先调 lobby 的 join 拿新令牌，开局后掉线也能回原座；遇到 `LobbyRejected` 停、`LobbyUnavailable` 按退避再试；`OnControl`、`SendControl`）。读超时由心跳任务检查，不依赖 `ReadAsync` 的取消（Unity Mono 上不一定生效）。
-- **换 host**：角色规则、快照 seq 接续（不低于 `epoch << 32`）、压缩（`RelayCompressors.Deflate` 缺省，与 Go 的 `relay.Deflate` 互通；实现 `IRelayCompressor` 可换 LZ4 / zstd）、收帧上限、被踢（房主可踢离线座位，收到第二条 `MemberLeft{Kicked}`）都与 [Go 版](../../relay/README.md) 相同。差别：定时快照在 `Pump` 里向游戏要状态（`SnapshotState`），`AutoHostReady` 在 `OnYouAreHost` 回调（Pump 里）返回后回；`Snapshot` 返回 `Sent` / `TooSoon` / `NotConnected`，不是房主或压缩后太大抛异常。
+- **换 host**：角色规则（Welcome 带房间此刻的 epoch，`Role.Epoch` 进房就对）、快照 seq 接续（不低于 `epoch << 32`）、压缩（`RelayCompressors.Deflate` 缺省，与 Go 的 `relay.Deflate` 互通；实现 `IRelayCompressor` 可换 LZ4 / zstd，见下）、压缩方式标识（`[Id 1B][压缩后的字节]`，内置的 None / Deflate 谁都解得开，不认识的标识 `StateError` 是 `RelayUnknownCompressionException`，标识对、内容坏是 `InvalidDataException`）、前台上报（`SetForeground` / `OnMemberPresence`，收到 HostChanged 与每次连上后自动重发，C# SDK 不自动排候选顺序）、收帧上限、被踢（房主可踢离线座位，收到第二条 `MemberLeft{Kicked}`）都与 [Go 版](../../relay/README.md) 相同。差别：定时快照在 `Pump` 里向游戏要状态（`SnapshotState`），`AutoHostReady` 在 `OnYouAreHost` 回调（Pump 里）返回后回；`Snapshot` 返回 `Sent` / `TooSoon` / `NotConnected`，不是房主或压缩后太大抛异常；`SetForeground` 没有连接时返回 false（状态仍记下）。
+- **接入自己的 zstd / LZ4**：SDK 不带第三方依赖（维护者 2026-11-17 定）。游戏自带库（Unity 下能不能用由游戏自己在 Unity 里验），实现 `IRelayCompressor`、`Id` 取 2～255，房间里每个客户端都配上同一个。下面的代码原样在 `Roost.Client.Relay.Tests` 里编译并走一遍（`IZstdCodec` 是代表库的接口桩）：
+
+  ```csharp
+  /// <summary>代表游戏自带的 zstd 库（例如 ZstdSharp 的 Compressor / Decompressor）；SDK 不带它。</summary>
+  public interface IZstdCodec
+  {
+      byte[] Wrap(ReadOnlySpan<byte> data);
+      /// <summary>解压，至多解出 maxOutput 字节（库自己能限就在库里限）。</summary>
+      byte[] Unwrap(ReadOnlySpan<byte> data, int maxOutput);
+  }
+
+  /// <summary>把它接成 IRelayCompressor。Id 取 2：0、1 归内置的 None 与 Deflate，LZ4 照样接、取 3。</summary>
+  public sealed class ZstdRelayCompressor : IRelayCompressor
+  {
+      private readonly IZstdCodec codec;
+      public ZstdRelayCompressor(IZstdCodec codec) { this.codec = codec; }
+      public byte Id => 2;
+      public byte[] Compress(ReadOnlySpan<byte> data) => codec.Wrap(data);
+      public byte[] Decompress(ReadOnlySpan<byte> data, int limit)
+      {
+          var output = codec.Unwrap(data, limit + 1);
+          if (output.Length > limit) throw new InvalidDataException($"Inflated relay state exceeds {limit} bytes.");
+          return output;
+      }
+  }
+
+  var client = new RelayClient(lobby, new RelayClientOptions { Game = "party", Compressor = new ZstdRelayCompressor(codec) });
+  ```
+
+  要不要换：deflate 与 zstd 在真实状态上的耗时与大小差距没有测过，先量自己的状态再决定。
 - **只连 TCP**：ticket 的地址是 `ws://` 时 `ConnectAsync` 抛 `ArgumentException`。
 
 ## 测试

@@ -1,0 +1,5 @@
+--- FAIL: TestSDKHostFramesMatchRelayGolden (5.00s)
+    golden_test.go:168: relay_transfer: read read pipe: i/o timeout
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	5.544s
+FAIL

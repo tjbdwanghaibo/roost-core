@@ -42,6 +42,8 @@ client.Transfer(3, handoff)                                // 房主：主动转
 client.SetSuccessors([]uint32{3, 2})                       // 房主：候选顺序
 client.Snapshot(state)                                     // 房主：随时手动推一份
 role := client.Role()                                      // Slot、Host、Candidate、HostSlot、Epoch
+client.SetForeground(false)                                // 成员：告诉房主自己切到后台（换 host、重连后 SDK 自动重发）
+client.OnMemberPresence(func(m relay.MemberPresence) {})   // 房主：成员的前台状态；要不要据此 SetSuccessors 由游戏决定
 ```
 
 - **lobby 错误**：非 200 返回 `*LobbyError{Status, Code, Message}`，`errors.Is(err, relay.ErrRoomFull)` 按错误名判断；`Temporary()` 是 5xx。
@@ -49,8 +51,44 @@ role := client.Role()                                      // Slot、Host、Cand
 - **心跳**：成员按 `PingInterval`（缺省 10s），房主与候选按 `HostPingInterval`（缺省 600ms，短于 relay `host_idle_timeout` 缺省 2s 的三分之一）；角色一变立即按新间隔。Ping 载荷是 8 字节单调时钟纳秒，Pong 原样带回算 `RTT()`；`ReadTimeout`（缺省 30s）内一帧都没收到就当断线。
 - **重连**：`Rejoin(ctx)` 或自动重连都先调 lobby 的 join（幂等）拿新令牌再连 relay；开局后掉线的成员席位还在，join 照样放行、回到原槽位。只在 `Disconnected`（读写出错、超时，没收到 Closed）或 `idle_timeout` 时自动重连；每次尝试遇到 lobby 4xx（含被踢 `ErrKicked`）或 relay 的终止性 Closed（含 `lobby_rejected`）就停，`token_rejected` 换新令牌再试，`lobby_unavailable`（relay 向 lobby 验权失败）按退避再试。
 - **被踢**：记在 lobby。被踢的账号再 join 答 403 `kicked`（`errors.Is(err, relay.ErrKicked)`）；拿还没过期的旧令牌直连 relay 收到 `Closed{kicked}`（relay 本地记着）。房主也能踢有座位但已离线的槽位，房主会收到这个槽位的第二条 `MemberLeft`（原因 kicked）；SDK 不维护离线座位表，游戏自己维护的话收到 kicked 就删座位。
-- **角色**（`Role()`）：只按 relay 的控制帧更新——Welcome；`YouAreHost` → 候选；`HostChanged` 槽位是自己 → 房主，否则成员；`YouAreMember` → 成员（房主槽位 0，还在选人）；`HostResumed` → 房主槽位。`HostChanging` 不改角色。Welcome 不带 epoch，连上后还没见过换 host 时 `Epoch` 是 0。`IsHost()`、踢人、禁言、`Transfer`、`SetSuccessors`、`Snapshot` 都以已就绪的房主为准（候选回 HostReady、收到 HostChanged 之后）。
-- **快照**：`Snapshot(state)` 经 `Compressor`（缺省 `relay.Deflate`，RFC 1951 原始 deflate，与 C# `DeflateStream` 互通；可换成 LZ4 / zstd 的实现，`NoCompression` 不压）压缩，seq 由 SDK 递增；离上一份不到 `SnapshotMinInterval`（缺省 1s）不发（`ErrSnapshotTooSoon`），压缩后超过 `SnapshotMaxBytes`（缺省 256 KiB，要与 relay 一致）不发（`ErrStateTooBig`）。设了 `SnapshotState` 时当房主每 `SnapshotInterval`（缺省 3s）推一次，在心跳 goroutine 上调用、与其他回调并发。新房主的 seq 从 `YouAreHost` 里的 seq 往上接，并且不低于 `epoch<<32`（主动转交的 `YouAreHost` 不带 seq，relay 可能还存着旧房主更大的 seq）。交接数据（`Transfer`）同样压缩；`YouAreHost.State` 是解压后的，解压失败时 `StateErr` 非空。房间里每个客户端要用同一种 `Compressor`。
+- **角色**（`Role()`）：只按 relay 的控制帧更新——Welcome（角色、房主槽位与 epoch）；`YouAreHost` → 候选；`HostChanged` 槽位是自己 → 房主，否则成员；`YouAreMember` → 成员（房主槽位 0，还在选人）；`HostResumed` → 房主槽位。`HostChanging` 不改角色。Welcome 带着房间此刻的 epoch（选人阶段进房的是新的一轮），所以换过 host 之后才进房、或重连回来的客户端 `Epoch` 也是房间的真实值；`Welcome()` 返回的值同样随换 host 更新。`IsHost()`、踢人、禁言、`Transfer`、`SetSuccessors`、`Snapshot` 都以已就绪的房主为准（候选回 HostReady、收到 HostChanged 之后）。
+- **快照**：`Snapshot(state)` 经 `Compressor`（缺省 `relay.Deflate`，RFC 1951 原始 deflate，与 C# `DeflateStream` 互通；可换成 LZ4 / zstd 的实现，见下；`NoCompression` 不压）压缩，seq 由 SDK 递增；离上一份不到 `SnapshotMinInterval`（缺省 1s）不发（`ErrSnapshotTooSoon`），压缩后超过 `SnapshotMaxBytes`（缺省 256 KiB，要与 relay 一致）不发（`ErrStateTooBig`）。设了 `SnapshotState` 时当房主每 `SnapshotInterval`（缺省 3s）推一次，在心跳 goroutine 上调用、与其他回调并发。新房主的 seq 从 `YouAreHost` 里的 seq 往上接，并且不低于 `epoch<<32`（主动转交的 `YouAreHost` 不带 seq，relay 可能还存着旧房主更大的 seq）。交接数据（`Transfer`）同样压缩；`YouAreHost.State` 是解压后的，解压失败时 `StateErr` 非空。
+- **压缩方式标识**：非空的快照与交接数据在线上是 `[Compressor.ID() 1B][压缩后的字节]`（[RELAY §2.3](../../docs/framework/RELAY.md)，relay 不解析）。收到时按标识选解压方式：自己的 `Compressor`，或内置的 `NoCompression`（0）、`Deflate`（1）——内置的两种谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上，否则新房主的 `StateErr` 是 `relay.ErrUnknownCompression`（`errors.Is`）；标识对、内容坏是解压错误。`SnapshotMaxBytes` 算上标识这 1 个字节。
+- **前台上报**：`SetForeground(bool)` 发 `Presence`，relay 只转给当前房主（`OnMemberPresence`，`MemberPresence{Slot, Foreground}`）；SDK 记下状态，收到 `HostChanged`、每次连上（含自动重连、`Rejoin`）都自动重发，从没调过不发；没有连接时返回 `ErrNotConnected`，状态仍记下。Go SDK 不自动排候选顺序：房主收到上报后要不要 `SetSuccessors`（例如前台的排前面）由游戏决定。
+- **接入自己的 zstd / LZ4**：SDK 不带第三方依赖（维护者 2026-11-17 定）。游戏自带库，实现 `Compressor` 的三个方法、`ID` 取 2～255，房间里每个客户端都配上。下面的代码原样在 `host_test.go` 里编译（`zstdCodec` 是代表库的接口桩）：
+
+  ```go
+  // zstdCodec 代表游戏自带的 zstd 库（例如 klauspost/compress/zstd 的 Encoder 与 Decoder）；SDK 不带它。
+  type zstdCodec interface {
+  	EncodeAll(src, dst []byte) []byte
+  	DecodeAll(src, dst []byte) ([]byte, error)
+  }
+
+  // zstdCompressor 把它接成 relay.Compressor。ID 取 2：0、1 归内置的 NoCompression 与 Deflate，LZ4 照样接、取 3。
+  type zstdCompressor struct{ codec zstdCodec }
+
+  func (zstdCompressor) ID() byte { return 2 }
+
+  func (z zstdCompressor) Compress(data []byte) ([]byte, error) {
+  	return z.codec.EncodeAll(data, nil), nil
+  }
+
+  // Decompress 要守住解压上限（防解压炸弹）：库自己能限就在库里限（klauspost 的 zstd.WithDecoderMaxMemory），这里再核一次。
+  func (z zstdCompressor) Decompress(data []byte, limit int) ([]byte, error) {
+  	out, err := z.codec.DecodeAll(data, nil)
+  	if err != nil {
+  		return nil, err
+  	}
+  	if len(out) > limit {
+  		return nil, fmt.Errorf("zstd: state exceeds %d bytes", limit)
+  	}
+  	return out, nil
+  }
+
+  client := relay.NewClient(lobby, relay.Options{Game: "party", Compressor: zstdCompressor{codec}})
+  ```
+
+  要不要换：快照每秒至多一份、通常几十到几百 KB，deflate 与 zstd 在真实状态上的耗时与大小差距**没有测过**；先量自己的状态再决定。
 - **收帧上限**：取 `MaxPayloadBytes` 与 `SnapshotMaxBytes + 16 KiB` 的大值，装得下带满快照的 `YouAreHost`。
 - **离开**：`Leave(ctx)` 先在 relay 上发 `Leave`（房主离开不等宽限期，立即换 host），再经 lobby 让出席位，最后 `Close`。
 - **只连 TCP**：ticket 的 `RelayAddr` 是 `ws://` 时 Connect 直接报错；向 lobby 要 `transport: tcp`（缺省）。
