@@ -1,0 +1,11 @@
+package handler
+
+import "{{MODULE}}/game/view"
+
+// handlerFacebookInvites 只读收件箱里此刻还没过期的邀请；Remote 准备在 I/O 池（共享模式取锁后读到最新权威），
+// 读在 Nest 锁内。
+//
+//roost:nest durability=memory
+func handlerFacebookInvites(target view.IFacebookEntity, nowUnixMilli int64) []view.FacebookInvite {
+	return target.Facebook().Invites(nowUnixMilli)
+}

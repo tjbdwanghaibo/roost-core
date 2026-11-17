@@ -1,0 +1,343 @@
+package facebook
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
+	facebookentity "{{MODULE}}/game/entities/facebook"
+	"{{MODULE}}/game/view"
+)
+
+// 这里的替身只验证编排：确保的步骤、投递与告知的顺序和失败答法。收件箱的事务语义由 game/handler 的场景走正式 Nest 验；
+// 真实的 Remote 认领 / 共享、Mongo 与跨进程广播由 scripts/test-alliance-e2e.sh 的 TestAllianceE2ESocialTeamInvite 验。
+
+// facebookTestNotices 收 facebookTestKind 来源的告知（测试在 init 里登记；OnInvite 只许 init 登记）。
+var facebookTestNotices struct {
+	sync.Mutex
+	got []Invite
+}
+
+// facebookTestKind 借 Facebook 自己的 kind 当“发出邀请的实体”的种类：正式代码里没有功能登记它。
+var facebookTestKind = facebookentity.EntityKindFacebook
+
+func init() {
+	OnInvite(facebookTestKind, func(_ context.Context, _ *app.Registry, invite Invite) {
+		facebookTestNotices.Lock()
+		facebookTestNotices.got = append(facebookTestNotices.got, invite)
+		facebookTestNotices.Unlock()
+	})
+}
+
+func takeFacebookTestNotices() []Invite {
+	facebookTestNotices.Lock()
+	defer facebookTestNotices.Unlock()
+	out := facebookTestNotices.got
+	facebookTestNotices.got = nil
+	return out
+}
+
+func facebookTestSetup(t *testing.T) int64 {
+	t.Helper()
+	facebookentity.RegisterEntity()
+	takeFacebookTestNotices()
+	now := time.UnixMilli(1000000)
+	clock.SetSource(func() time.Time { return now })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	return now.UnixMilli()
+}
+
+func facebookTestSource(t *testing.T, unique int64) int64 {
+	t.Helper()
+	id, err := entity.BuildEntityID(unique, facebookTestKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// facebookOwners 是所有权的替身：record 是权威里的记录（nil 表示没有），claimErr / shareErr 让对应一步失败。
+type facebookOwners struct {
+	entity.RemoteOwnershipManager
+	record   *entity.RemoteEntityMarkerLease
+	claimErr error
+	shareErr error
+	calls    []string
+}
+
+func (o *facebookOwners) GetRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, bool, error) {
+	o.calls = append(o.calls, "get")
+	if o.record == nil {
+		return entity.RemoteEntityMarkerLease{}, false, nil
+	}
+	return *o.record, true, nil
+}
+func (o *facebookOwners) ClaimRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, error) {
+	o.calls = append(o.calls, "claim")
+	if o.claimErr != nil {
+		return entity.RemoteEntityMarkerLease{}, o.claimErr
+	}
+	o.record = &entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1}
+	return *o.record, nil
+}
+func (o *facebookOwners) EnterRemoteSharedMode(context.Context, int64) (entity.RemoteEntityMarkerLease, error) {
+	o.calls = append(o.calls, "share")
+	if o.shareErr != nil {
+		return entity.RemoteEntityMarkerLease{}, o.shareErr
+	}
+	o.record.Shared = true
+	return *o.record, nil
+}
+
+func (o *facebookOwners) ensure(t *testing.T, player int64) (int64, error) {
+	t.Helper()
+	return ensure(context.Background(), o, func(_ context.Context, unique int64) error {
+		if unique != player {
+			t.Fatalf("loaded %d for player %d", unique, player)
+		}
+		o.calls = append(o.calls, "load")
+		return nil
+	}, player)
+}
+
+func requireFacebookCalls(t *testing.T, o *facebookOwners, want ...string) {
+	t.Helper()
+	if len(o.calls) != len(want) {
+		t.Fatalf("calls=%v want %v", o.calls, want)
+	}
+	for i := range want {
+		if o.calls[i] != want[i] {
+			t.Fatalf("calls=%v want %v", o.calls, want)
+		}
+	}
+}
+
+// 确保：没有记录的 Facebook 先装进内存、再认领、再切共享；已经共享的只装进内存；本进程认领了还没切共享的补切一次。
+func TestFacebookEnsureOpensSharedOnce(t *testing.T) {
+	facebookTestSetup(t)
+	want, _ := EntityID(102)
+	missing := &facebookOwners{}
+	if id, err := missing.ensure(t, 102); err != nil || id != want || !missing.record.Shared {
+		t.Fatalf("missing facebook: id=%d err=%v record=%+v", id, err, missing.record)
+	}
+	requireFacebookCalls(t, missing, "get", "load", "claim", "share")
+	shared := &facebookOwners{record: &entity.RemoteEntityMarkerLease{OwnerSid: 1001, MarkerEpoch: 1, RouteEpoch: 1, Shared: true}}
+	if id, err := shared.ensure(t, 102); err != nil || id != want {
+		t.Fatalf("shared facebook: id=%d err=%v", id, err)
+	}
+	requireFacebookCalls(t, shared, "get", "load")
+	halfOpen := &facebookOwners{record: &entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1}}
+	if id, err := halfOpen.ensure(t, 102); err != nil || id != want || !halfOpen.record.Shared {
+		t.Fatalf("half-opened facebook: id=%d err=%v", id, err)
+	}
+	requireFacebookCalls(t, halfOpen, "get", "load", "share")
+}
+
+// 别的进程抢先认领、或别的进程独占着还没切共享：可重试的 ErrOpening，不当成没有这个人。
+func TestFacebookEnsureReportsAnotherProcessOpening(t *testing.T) {
+	facebookTestSetup(t)
+	lost := &facebookOwners{claimErr: entity.ErrRemoteFenced}
+	if _, err := lost.ensure(t, 102); !errors.Is(err, ErrOpening) || !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatalf("lost claim: %v", err)
+	}
+	requireFacebookCalls(t, lost, "get", "load", "claim")
+	foreign := &facebookOwners{record: &entity.RemoteEntityMarkerLease{OwnerSid: 1001, MarkerEpoch: 1, RouteEpoch: 1}, shareErr: entity.ErrRemoteFenced}
+	if _, err := foreign.ensure(t, 102); !errors.Is(err, ErrOpening) {
+		t.Fatalf("held by another process: %v", err)
+	}
+	requireFacebookCalls(t, foreign, "get", "load", "share")
+}
+
+// facebookNest 替代 Nest：记下请求，按 answer 作答。
+type facebookNest struct {
+	nest.Client
+	answer func(name string, id int64, args nest.Params) (any, error)
+	calls  []string
+}
+
+func (c *facebookNest) Request(_ context.Context, name nest.HandlerName, id int64, args nest.Params, _ ...nest.SendOpt) (any, error) {
+	c.calls = append(c.calls, name.String())
+	return c.answer(name.String(), id, args)
+}
+
+// facebookBus 是同步总线的替身：记下发布，保留订阅以便测试投递。
+type facebookBus struct {
+	mu        sync.Mutex
+	published []*fsyncbus.SyncMsg
+	sub       *fsyncbus.Subscription
+	fail      error
+}
+
+func (b *facebookBus) Publish(msg *fsyncbus.SyncMsg) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.fail != nil {
+		return b.fail
+	}
+	b.published = append(b.published, msg)
+	return nil
+}
+func (b *facebookBus) Subscribe(topic string, handler fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	b.sub = fsyncbus.NewSubscription(topic, handler, nil)
+	return b.sub, nil
+}
+
+func facebookTestRegistry(t *testing.T, bus *facebookBus) *app.Registry {
+	t.Helper()
+	registry := app.NewRegistry(viper.New())
+	if bus != nil {
+		if err := registry.Register(mods.ModSyncBus, fsyncbus.ISyncBus(bus)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return registry
+}
+
+// 投递：记进收件人的 Facebook（一次 Nest 写，参数原样），本进程直接告知一次、广播一次；广播的内容是同一份邀请。
+// 记不上（收件箱满）或确保失败时照样告知（推送带着来源号，收件人能接受），错误交给调用方记日志；广播失败不影响告知。
+func TestFacebookDeliverRecordsThenTellsEveryGame(t *testing.T) {
+	now := facebookTestSetup(t)
+	bus := &facebookBus{}
+	registry := facebookTestRegistry(t, bus)
+	inbox, _ := EntityID(102)
+	invite := Invite{To: 102, Source: facebookTestSource(t, 90001), From: 101, ExpireAt: now + 60000}
+	noted := true
+	client := &facebookNest{answer: func(name string, id int64, args nest.Params) (any, error) {
+		if name != "handlerFacebookNote" || id != inbox || len(args) != 3 || args[0] != invite.Source || args[1] != invite.From || args[2] != invite.ExpireAt {
+			t.Fatalf("note request %s/%d %v", name, id, args)
+		}
+		return noted, nil
+	}}
+	ensured := func(context.Context) (int64, error) { return inbox, nil }
+	if err := deliver(context.Background(), registry, client, invite, ensured); err != nil {
+		t.Fatal(err)
+	}
+	if got := takeFacebookTestNotices(); len(got) != 1 || got[0] != invite || len(client.calls) != 1 {
+		t.Fatalf("local notices=%+v nest calls=%v", got, client.calls)
+	}
+	if len(bus.published) != 1 || bus.published[0].Topic != Topic || bus.published[0].Key != 102 {
+		t.Fatalf("broadcast=%+v", bus.published)
+	}
+	var sent Invite
+	if err := json.Unmarshal(bus.published[0].Data, &sent); err != nil || sent != invite {
+		t.Fatalf("broadcast payload %+v err=%v", sent, err)
+	}
+
+	noted = false
+	if err := deliver(context.Background(), registry, client, invite, ensured); !errors.Is(err, ErrNotRecorded) {
+		t.Fatalf("full inbox: %v", err)
+	}
+	if got := takeFacebookTestNotices(); len(got) != 1 {
+		t.Fatalf("full inbox suppressed the notice: %+v", got)
+	}
+	opening := func(context.Context) (int64, error) { return 0, ErrOpening }
+	calls := len(client.calls)
+	bus.fail = errors.New("bus down")
+	if err := deliver(context.Background(), registry, client, invite, opening); !errors.Is(err, ErrOpening) || len(client.calls) != calls {
+		t.Fatalf("ensure failure: err=%v nest calls=%v", err, client.calls)
+	}
+	if got := takeFacebookTestNotices(); len(got) != 1 {
+		t.Fatalf("ensure / broadcast failure suppressed the local notice: %+v", got)
+	}
+	if err := deliver(context.Background(), registry, client, Invite{To: 102, Source: 0, From: 101, ExpireAt: now + 1}, ensured); !errors.Is(err, ErrNotRecorded) || len(takeFacebookTestNotices()) != 0 {
+		t.Fatalf("invalid invite delivered: %v", err)
+	}
+}
+
+// 别的 game 广播来的告知：交给来源种类登记的处理；过期的、坏的、键不符的不交；停机第一步退订之后不再处理。
+func TestFacebookNoticeFromAnotherGameReachesTheFeature(t *testing.T) {
+	now := facebookTestSetup(t)
+	bus := &facebookBus{}
+	registry := facebookTestRegistry(t, bus)
+	stop, err := Start(registry)
+	if err != nil || stop == nil || bus.sub == nil || bus.sub.Topic() != Topic {
+		t.Fatalf("start: stop=%v sub=%v err=%v", stop != nil, bus.sub, err)
+	}
+	invite := Invite{To: 102, Source: facebookTestSource(t, 90001), From: 101, ExpireAt: now + 60000}
+	notice := func(invite Invite, key int64) *fsyncbus.SyncMsg {
+		data, _ := json.Marshal(invite)
+		return &fsyncbus.SyncMsg{Topic: Topic, Key: key, Data: data, FromSid: 1001}
+	}
+	if err := bus.sub.Deliver(context.Background(), notice(invite, 102)); err != nil {
+		t.Fatal(err)
+	}
+	if got := takeFacebookTestNotices(); len(got) != 1 || got[0] != invite {
+		t.Fatalf("notice from another game: %+v", got)
+	}
+	expired := invite
+	expired.ExpireAt = now
+	if err := bus.sub.Deliver(context.Background(), notice(expired, 102)); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.sub.Deliver(context.Background(), notice(invite, 103)); err == nil {
+		t.Fatal("notice whose key is not its recipient accepted")
+	}
+	if err := bus.sub.Deliver(context.Background(), &fsyncbus.SyncMsg{Topic: Topic, Key: 102, Data: []byte("{")}); err == nil {
+		t.Fatal("undecodable notice accepted")
+	}
+	if got := takeFacebookTestNotices(); len(got) != 0 {
+		t.Fatalf("expired or malformed notices handed on: %+v", got)
+	}
+	if err := app.CloseRegisteredIngress(context.Background(), registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.sub.Deliver(context.Background(), notice(invite, 102)); !errors.Is(err, fsyncbus.ErrUnsubscribed) {
+		t.Fatalf("notice handled after the App closed its inputs: %v", err)
+	}
+	if err := stop(context.Background()); err != nil {
+		t.Fatalf("second stop: %v", err)
+	}
+	if _, err := Start(facebookTestRegistry(t, nil)); err == nil {
+		t.Fatal("started without a sync bus")
+	}
+}
+
+// 查收件箱：Facebook 还没打开（没有所有权记录、或别的进程确保到一半还没切共享）时直接答空、不经 Nest 读——经 Nest 读
+// 会让写准入把它认领成本进程独占，之后别的 game 再也投递不进来；打开了才读，打开了还没有提交（冷加载不存在）也是空；
+// 别的失败照实返回。
+func TestFacebookInvitesNeverClaimsAnUnopenedFacebook(t *testing.T) {
+	facebookTestSetup(t)
+	inbox, _ := EntityID(102)
+	want := []view.FacebookInvite{{Source: facebookTestSource(t, 90001), From: 101, ExpireAt: 2000000}}
+	var answer error
+	client := &facebookNest{answer: func(name string, id int64, _ nest.Params) (any, error) {
+		if name != "handlerFacebookInvites" || id != inbox {
+			t.Fatalf("invites request %s/%d", name, id)
+		}
+		if answer != nil {
+			return nil, answer
+		}
+		return want, nil
+	}}
+	for _, owners := range []*facebookOwners{{}, {record: &entity.RemoteEntityMarkerLease{OwnerSid: 1001, MarkerEpoch: 1, RouteEpoch: 1}}} {
+		if got, err := invites(context.Background(), owners, client, 102); err != nil || got != nil || len(client.calls) != 0 {
+			t.Fatalf("unopened facebook %+v: listed=%+v err=%v nest calls=%v", owners.record, got, err, client.calls)
+		}
+	}
+	shared := &facebookOwners{record: &entity.RemoteEntityMarkerLease{OwnerSid: 1001, MarkerEpoch: 1, RouteEpoch: 1, Shared: true}}
+	if got, err := invites(context.Background(), shared, client, 102); err != nil || len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("listed=%+v err=%v", got, err)
+	}
+	answer = nest.EntityNotFoundError()
+	if got, err := invites(context.Background(), shared, client, 102); err != nil || got != nil {
+		t.Fatalf("opened facebook without a commit: %+v %v", got, err)
+	}
+	answer = errors.New("remote unavailable")
+	if _, err := invites(context.Background(), shared, client, 102); err == nil {
+		t.Fatal("a failed read reported as an empty inbox")
+	}
+	if _, err := Invites(context.Background(), facebookTestRegistry(t, nil), client, 102); err == nil {
+		t.Fatal("read without a Remote runtime")
+	}
+}

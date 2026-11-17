@@ -33,18 +33,21 @@ func TestModuleTeamGenerated(t *testing.T) {
 	if !bytes.Contains(restored, []byte("- remote_entity")) {
 		t.Fatal("team did not install its remote runtime")
 	}
+	if !bytes.Contains(restored, []byte("facebook:")) {
+		t.Fatal("team did not bring the facebook module it requires")
+	}
 
 	report, err := VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
 		t.Fatalf("team: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"team": 35})
+	checkTaskModuleRows(t, report, map[string]int{"facebook": 9, "team": 31})
 	roost("module", "add", "rehome")
 	report, err = VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
 		t.Fatalf("team/rehome: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"team": 35, "rehome": 62, "team+rehome": 2})
+	checkTaskModuleRows(t, report, map[string]int{"facebook": 9, "team": 31, "rehome": 62, "team+rehome": 2})
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "rehome", "team")
 	if moduleProjectDigest(t, root) != before {
@@ -58,7 +61,12 @@ func TestModuleTeamGenerated(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/components/team/team.go", "current != 0 && current != id", "false && current != 0 && current != id", "./game/handler", "TestTeamMemberCannotJoinASecondTeam", "joined second team:")
 	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", "c.TeamID() != 0", "false && c.TeamID() != 0", "./game/handler", "TestWithTeamRehomeRejectsAPlayerInTeam", "team allowed rehome:")
 	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", `c.owner.Dao().GetRehome().GetPendingID() != ""`, `false && c.owner.Dao().GetRehome().GetPendingID() != ""`, "./game/handler", "TestWithTeamRehomeRejectsJoiningDuringMove", "moving player joined:")
-	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome", "./game/handler", "./game/controllers")
+	// 邀请的跨 game 投递（facebook）：没打开的收件箱不经 Nest 读（否则写准入把它认领成本进程独占）、收件箱有界、
+	// 邀请提交后经 facebook 投递。真实依赖的跨进程用例是 scripts/test-alliance-e2e.sh 的 TestAllianceE2ESocialTeamInvite。
+	recipeMutationMustFail(t, root, "game/modules/facebook/facebook.go", "if !found || !lease.Shared {", "if false && (!found || !lease.Shared) {", "./game/modules/facebook", "TestFacebookInvitesNeverClaimsAnUnopenedFacebook", "unopened facebook")
+	recipeMutationMustFail(t, root, "game/components/facebook/facebook.go", "!renewing && dao.InvitesLen() >= MaxInvites", "!renewing && dao.InvitesLen() > MaxInvites", "./game/handler", "TestFacebookInvitesAreBoundedAndPruned", "invite beyond the bound accepted")
+	recipeMutationMustFail(t, root, "game/controllers/team.go", "if invitation.ExpireAt == 0 {", "if invitation.ExpireAt != 0 {", "./game/controllers", "TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority", "online invitee not told")
+	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome|^TestFacebook", "./game/handler", "./game/controllers", "./game/modules/facebook")
 
 }
 

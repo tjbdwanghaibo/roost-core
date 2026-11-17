@@ -1,0 +1,305 @@
+// Package facebook 是每名玩家一个的伴生社交实体（Facebook，共享 Remote）在实体之外的入口：算号、确保它存在且在
+// 共享模式、把邀请投进收件箱并告知、查收件箱，以及通知的登记点与运行时订阅。
+//
+// 跨 game 投递的路径（邀请已经在来源实体上成交之后，不在任何实体锁里）：
+//
+//  1. Ensure：收件人的 Facebook 没有所有权记录就在本进程新建、认领并切到共享模式；已共享就只装进本进程内存。
+//  2. Nest 事务 [Facebook] strict：收件箱记一条（handlerFacebookNote）。
+//  3. 告知：本进程直接交给登记的处理（OnInvite），同时在服务间同步总线的 Topic 主题上广播；别的 game 进程的运行时
+//     （Start 订阅的）收到后交给同一个处理。处理自己判断收件人是否连在本进程，在就推送。
+//
+// 收件箱是记录，告知是捷径：普通 NATS 的同步总线至多一次，丢了由收件人查收件箱（Invites）补上；投递任何一步失败都
+// 不撤销来源实体上已经成交的邀请。
+package facebook
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
+	facebookentity "{{MODULE}}/game/entities/facebook"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/view"
+)
+
+// Topic 是服务间同步总线上告知的主题（实际主题是 syncbus.prefix 加上它）。
+const Topic = "facebook"
+
+var (
+	// ErrOpening：收件人的 Facebook 被别的 game 进程认领了、还没切到共享模式（它正确保到一半，或确保到一半停了）。
+	// 可重试；那个进程下次确保同一个 Facebook 时会把它切过去。
+	ErrOpening = errors.New("facebook: another game process is still opening this facebook; retry")
+	// ErrNotRecorded：收件箱没有记下这份邀请（已经过期、来源或邀请人不合法，或者收件箱已满）。
+	ErrNotRecorded = errors.New("facebook: the invite was not recorded")
+)
+
+// Invite 是投给一名玩家的一份邀请。To、From 是玩家号；Source 是发出邀请的实体完整号（如队伍号），它的实体种类决定
+// 告知交给哪个功能（OnInvite）；ExpireAt 是过期时刻（业务时间，Unix 毫秒）。
+type Invite struct {
+	To       int64 `json:"to"`
+	Source   int64 `json:"source"`
+	From     int64 `json:"from"`
+	ExpireAt int64 `json:"expire_at"`
+}
+
+func (invite Invite) valid() bool {
+	return invite.To > 0 && invite.From > 0 && invite.ExpireAt > 0 && entity.ResolveEntityID(invite.Source).FullID != 0
+}
+
+// EntityID 是玩家的 Facebook 的完整实体号：与 Player 同一个唯一号、kind 是 Facebook。
+func EntityID(player int64) (int64, error) {
+	return entity.BuildEntityID(player, facebookentity.EntityKindFacebook)
+}
+
+// Notify 是一个功能对“有一份邀请投给了某名玩家”的处理（例如 team 推 TeamInvited）。每个收到告知的 game 进程都调用它，
+// 收件人连没连在本进程由它自己判断；它在投递或总线回调的 goroutine 里执行，不在任何实体锁里，不能阻塞太久。
+type Notify func(ctx context.Context, registry *app.Registry, invite Invite)
+
+// notifiers 只在 init 里写（OnInvite），之后只读。
+var notifiers = map[entity.EntityKind]Notify{}
+
+// OnInvite 登记来源实体种类为 kind 的邀请的告知处理。只在 init 里调用；同一个 kind 登记两次、nil 都 panic。
+func OnInvite(kind entity.EntityKind, notify Notify) {
+	if kind == entity.EntityKindNone || notify == nil {
+		panic("facebook: OnInvite needs an entity kind and a handler")
+	}
+	if _, exists := notifiers[kind]; exists {
+		panic(fmt.Sprintf("facebook: invites from entity kind %d already have a handler", kind))
+	}
+	notifiers[kind] = notify
+}
+
+// Ensure 确保玩家 player 的 Facebook 存在、在共享模式、并装进了本进程内存，返回它的实体号。要 I/O：只能在 Nest
+// handler 之外（端点、后台）调用。顺序与建队相同：先确保实体，再进事务。
+func Ensure(ctx context.Context, registry *app.Registry, player int64) (int64, error) {
+	if registry == nil {
+		return 0, errors.New("facebook: registry required")
+	}
+	lifecycle, err := facebookentity.LifecycleFromRegistry(registry)
+	if err != nil {
+		return 0, fmt.Errorf("facebook: lifecycle: %w", err)
+	}
+	remote, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
+	if !ok || remote == nil {
+		return 0, errors.New("facebook: remote runtime unavailable")
+	}
+	return ensure(ctx, remote, func(ctx context.Context, unique int64) error {
+		_, _, err := lifecycle.GetOrCreate(ctx, unique)
+		return err
+	}, player)
+}
+
+// ensure 是 Ensure 的步骤（owners 与 load 由调用方给，测试换成替身）：
+//   - 先装进本进程内存（GetOrCreate：权威里有就读出来，没有就新建一个空的；号由玩家号推出，不能用 Create）；
+//   - 已经是共享模式：完成；
+//   - 没有所有权记录：认领（别的进程抢先认领了就是 ErrOpening），再切共享；
+//   - 有记录但不是共享：切共享。只有 owner 能切，所以 owner 是别的进程时同样是 ErrOpening。
+//
+// 认领了却没切成共享（切的那一步失败、进程停在中间）时，这个 Facebook 留在本进程独占，别的进程一直得到 ErrOpening，
+// 直到本进程再确保它一次。
+func ensure(ctx context.Context, owners entity.RemoteOwnershipManager, load func(context.Context, int64) error, player int64) (int64, error) {
+	id, err := EntityID(player)
+	if err != nil {
+		return 0, err
+	}
+	lease, found, err := owners.GetRemoteOwnership(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("facebook %d: ownership: %w", player, err)
+	}
+	if err := load(ctx, entity.GetUniqueIDFromEntityID(id)); err != nil {
+		return 0, fmt.Errorf("facebook %d: load: %w", player, err)
+	}
+	if found && lease.Shared {
+		return id, nil
+	}
+	if !found {
+		if lease, err = owners.ClaimRemoteOwnership(ctx, id); err != nil {
+			return 0, fmt.Errorf("%w (player %d): claim: %w", ErrOpening, player, err)
+		}
+		if lease.Shared {
+			return id, nil
+		}
+	}
+	if _, err := owners.EnterRemoteSharedMode(ctx, id); err != nil {
+		return 0, fmt.Errorf("%w (player %d): enter shared mode: %w", ErrOpening, player, err)
+	}
+	return id, nil
+}
+
+// Deliver 把一份已经在来源实体上成交的邀请投给 invite.To：确保他的 Facebook、记进收件箱，再告知（本进程与广播）。
+// 告知不看记录成没成：推送带着来源号，收件人照样能接受；记录失败只让他查收件箱时看不到这一份。返回记录这一步的错误
+// （没记下是 ErrNotRecorded），调用方只记日志：来源实体上的邀请已经成交，不因投递失败撤销。
+func Deliver(ctx context.Context, registry *app.Registry, client nest.Client, invite Invite) error {
+	return deliver(ctx, registry, client, invite, func(ctx context.Context) (int64, error) {
+		return Ensure(ctx, registry, invite.To)
+	})
+}
+
+func deliver(ctx context.Context, registry *app.Registry, client nest.Client, invite Invite, ensure func(context.Context) (int64, error)) error {
+	if !invite.valid() {
+		return fmt.Errorf("%w: invalid invite %+v", ErrNotRecorded, invite)
+	}
+	err := record(ctx, client, invite, ensure)
+	announce(ctx, registry, invite)
+	return err
+}
+
+func record(ctx context.Context, client nest.Client, invite Invite, ensure func(context.Context) (int64, error)) error {
+	if client == nil {
+		return errors.New("facebook: nest client required")
+	}
+	id, err := ensure(ctx)
+	if err != nil {
+		return err
+	}
+	noted, err := sender.NewFacebookNoteSender(client).Sync_FacebookNote(ctx, id, invite.Source, invite.From, invite.ExpireAt)
+	if err != nil {
+		return fmt.Errorf("facebook %d: note: %w", invite.To, err)
+	}
+	if !noted {
+		return fmt.Errorf("%w: player %d, source %d", ErrNotRecorded, invite.To, invite.Source)
+	}
+	return nil
+}
+
+// announce 告知：本进程直接交给登记的处理（同步总线不把自己发的消息回送给自己），再广播给别的进程。广播失败只记日志。
+func announce(ctx context.Context, registry *app.Registry, invite Invite) {
+	dispatch(ctx, registry, invite)
+	if err := publish(ctx, registry, invite); err != nil {
+		slog.DebugContext(ctx, "facebook: invite notice not broadcast; the inbox still has it", "player_id", invite.To, "source", invite.Source, "err", err)
+	}
+}
+
+func publish(ctx context.Context, registry *app.Registry, invite Invite) error {
+	if registry == nil {
+		return errors.New("facebook: registry required")
+	}
+	bus, ok := app.Lookup[fsyncbus.ISyncBus](registry, mods.ModSyncBus)
+	if !ok || bus == nil {
+		return fmt.Errorf("facebook: capability %q not found", mods.ModSyncBus)
+	}
+	data, err := json.Marshal(invite)
+	if err != nil {
+		return err
+	}
+	msg := &fsyncbus.SyncMsg{
+		MessageID: fmt.Sprintf("facebook:%d:%d:%d", invite.To, invite.Source, invite.ExpireAt),
+		Topic:     Topic, Key: invite.To, Version: invite.ExpireAt, Data: data,
+	}
+	if publisher, ok := bus.(fsyncbus.IContextPublisher); ok {
+		return publisher.PublishContext(ctx, msg)
+	}
+	return bus.Publish(msg)
+}
+
+// dispatch 把一份告知交给来源实体种类登记的处理；没有登记的种类、已经过期的告知丢弃。
+func dispatch(ctx context.Context, registry *app.Registry, invite Invite) {
+	if fctx.NowMilli() >= invite.ExpireAt {
+		return
+	}
+	notify := notifiers[entity.ResolveEntityID(invite.Source).Kind]
+	if notify == nil {
+		slog.DebugContext(ctx, "facebook: no handler for invites from this entity kind", "player_id", invite.To, "source", invite.Source)
+		return
+	}
+	notify(ctx, registry, invite)
+}
+
+// Invites 读玩家 player 收件箱里还没过期的邀请，从没成功投递过（Facebook 还没打开）时返回空。只是发现入口：每一份
+// 仍要到来源实体上核对。要 I/O：只在 Nest handler 之外调用。
+func Invites(ctx context.Context, registry *app.Registry, client nest.Client, player int64) ([]view.FacebookInvite, error) {
+	if registry == nil {
+		return nil, errors.New("facebook: registry required")
+	}
+	remote, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
+	if !ok || remote == nil {
+		return nil, errors.New("facebook: remote runtime unavailable")
+	}
+	return invites(ctx, remote, client, player)
+}
+
+// invites 只在 Facebook 已经是共享模式时经 Nest 读它（共享模式取锁后读到的是最新权威）。没有所有权记录、或还没切到
+// 共享（别的进程确保到一半）时直接答空，不能经 Nest 读：Remote 的写准入会把没有记录的实体认领成本进程独占（读也走写
+// 准入），之后别的 game 再也确保不了它，投递全部失败。投递只在共享之后写它，所以不是共享模式时收件箱必定是空的。
+// 共享了还没有任何提交（确保了、记录还没成）时冷加载答“不存在”，同样是空。
+func invites(ctx context.Context, owners entity.RemoteOwnershipManager, client nest.Client, player int64) ([]view.FacebookInvite, error) {
+	if client == nil {
+		return nil, errors.New("facebook: nest client required")
+	}
+	id, err := EntityID(player)
+	if err != nil {
+		return nil, err
+	}
+	lease, found, err := owners.GetRemoteOwnership(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("facebook %d: ownership: %w", player, err)
+	}
+	if !found || !lease.Shared {
+		return nil, nil
+	}
+	out, err := sender.NewFacebookInvitesSender(client).Sync_FacebookInvites(ctx, id)
+	if err != nil {
+		if code, _ := errcode.ClientError(err); code == errcode.CodeEntityNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// Start 是模块运行时（清单 runtime.start）：订阅同步总线上的告知，交给登记的处理。订阅登记为 App 的外部输入，停机
+// 第一步退订并排空在途回调；返回的停止函数同样退订，重复调用无害。传输支持可确认订阅（JetStream）时用它
+// （DeliverNew，不回放订阅之前的旧告知）；普通 NATS 至多一次。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	if registry == nil {
+		return nil, errors.New("facebook: registry is required")
+	}
+	bus, ok := app.Lookup[fsyncbus.ISyncBus](registry, mods.ModSyncBus)
+	if !ok || bus == nil {
+		return nil, fmt.Errorf("facebook: capability %q not found; the remote_entity Mod brings it", mods.ModSyncBus)
+	}
+	handler := func(ctx context.Context, msg *fsyncbus.SyncMsg) error {
+		return receive(ctx, registry, msg)
+	}
+	var sub *fsyncbus.Subscription
+	var err error
+	if live, ok := bus.(fsyncbus.ILiveSubscriber); ok {
+		sub, err = live.SubscribeLive(Topic, handler)
+	} else {
+		sub, err = bus.Subscribe(Topic, handler)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("facebook: subscribe %q: %w", Topic, err)
+	}
+	if err := app.AddIngress(registry, "facebook invite notices", app.IngressFunc(sub.Unsubscribe)); err != nil {
+		_ = sub.Unsubscribe(context.Background())
+		return nil, err
+	}
+	return sub.Unsubscribe, nil
+}
+
+// receive 解码别的进程广播的告知并交给登记的处理。坏消息返回错误（总线只记警告，不重投）。
+func receive(ctx context.Context, registry *app.Registry, msg *fsyncbus.SyncMsg) error {
+	if msg == nil {
+		return errors.New("facebook: nil notice")
+	}
+	var invite Invite
+	if err := json.Unmarshal(msg.Data, &invite); err != nil {
+		return fmt.Errorf("facebook: decode notice: %w", err)
+	}
+	if !invite.valid() || invite.To != msg.Key {
+		return fmt.Errorf("facebook: malformed notice %+v (key %d)", invite, msg.Key)
+	}
+	dispatch(ctx, registry, invite)
+	return nil
+}

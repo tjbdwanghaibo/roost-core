@@ -362,7 +362,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 | 公告、跑马灯 | `notice` | chat | 可信服务端入口与 GM 命令 |
 | 好友 | `friends` | — | 申请、同意、删除、黑名单（同服）；申请、同意、删除、拉黑要求双方都在本进程在线 |
 | 排行榜 | `leaderboard` | — | 前 N 名与自己的名次、提交入口；分数只升不降，会下降的分数（余额、天梯分）不能用 |
-| 队伍 | `team` | — | 建队、邀请、入队、离队、队长交接 |
+| 队伍 | `team` | facebook | 建队、邀请、入队、离队、队长交接；邀请经 facebook 投给任何 game 上的被邀请人 |
 | 匹配 | `matchmaking` | team、matchroom | 本服单人或整队匹配，成局移交房间 |
 | 匹配房间 | `matchroom` | room | MatchID 到房间的幂等移交、固定名单 |
 | 房间 | `room` | — | 有限座位、进出、房主交接、重连 |
@@ -593,7 +593,7 @@ game/entities/<实体>      → 组件包、game/view、game/event、game/module
 game/handler、controllers → game/view、组件包（要实体的具体类型或运行期对象时才 import 实体包）
 ```
 
-组件包、`game/modules/login` 与联动永远不 import 实体包；组件包可以 import 别的组件包（同一实体上依赖另一个组件的规则：`turn`、`matchroom` 用 `room` 的席位检查与容量，`team` 用 `teamroster` 的上限）。要实体类型号这类常量时在组件包里按同一个号再声明一次（`{{ID:entity:Team}}`），不为它 import 实体包。
+组件包、`game/modules/login` 与联动永远不 import 实体包；组件包可以 import 别的组件包（同一实体上依赖另一个组件的规则：`turn`、`matchroom` 用 `room` 的席位检查与容量）。要实体类型号这类常量时在组件包里按同一个号再声明一次（`{{ID:entity:<实体>}}`），不为它 import 实体包。
 
 1. **组件包** `game/components/<功能>/<功能>.go`：`//roost:component type=<号>` 与 `const CompType<功能> entity.ComponentType = <号>`（模块里写 `{{ID:component:<功能>}}`，同一个组件挂在几种实体上只用这一个号）、`init()` 里的 `entity.RegisterComponentFactory(CompType<功能>, NewComponent)`、`Component` 类型、宿主接口 `Owner`、工厂 `NewComponent(value any, *entity.EntityCreateParam)`（把 `value` 断言成 `Owner`，断言失败返回错误）。实体结构体直接挂 `bag *bag.Component \`comp:"bag.CompTypeBag"\``，模块清单写 `component_package: game/components/<功能>`，安装器替你挂；不要在实体包里再声明 `type BagComponent = bag.Component` 别名（组件带 `//roost:listen` 时这种旧写法生成失败）。`Owner` 只列组件用得到的东西：
 

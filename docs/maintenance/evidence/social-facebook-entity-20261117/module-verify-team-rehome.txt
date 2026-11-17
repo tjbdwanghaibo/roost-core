@@ -1,0 +1,8 @@
+ok   module facebook: 9 passed (want 9), 0 skipped
+ok   module rehome: 50 passed (want 50), 0 skipped
+ok   module team: 31 passed (want 31), 0 skipped
+ok   module team+rehome: 2 passed (want 2), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check

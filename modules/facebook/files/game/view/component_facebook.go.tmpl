@@ -1,0 +1,18 @@
+package view
+
+// Facebook 是 Facebook 上 Facebook 组件对 game/ 下其它包公开的方法（实现在 game/components/facebook，语义见那里）；只在宿主被 Nest 锁住期间调用。
+type Facebook interface {
+	Note(source, from, expireAt, now int64) bool
+	Invites(now int64) []FacebookInvite
+}
+
+// FacebookHolder 是“带有 Facebook 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
+type FacebookHolder interface{ Facebook() Facebook }
+
+// FacebookInvite 是收件箱里的一份邀请：来源（发出邀请的实体完整号，如队伍号；接受时要的就是它）、邀请人玩家号、
+// 过期时刻（业务时间，Unix 毫秒）。
+type FacebookInvite struct {
+	Source   int64
+	From     int64
+	ExpireAt int64
+}

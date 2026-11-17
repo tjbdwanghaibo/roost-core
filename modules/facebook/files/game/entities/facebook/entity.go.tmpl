@@ -1,0 +1,23 @@
+package facebook
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	db "{{MODULE}}/db"
+)
+
+const EntityKindFacebook entity.EntityKind = {{ID:entity:Facebook}}
+
+// Facebook 是每名玩家一个的伴生社交实体：号由玩家号直接推出（entity.BuildEntityID(玩家号, EntityKindFacebook)），
+// 不要发号器，所以只用 GetOrCreate，不用 Create。
+//
+// 它是跨进程共享的 Remote 权威（与 Team 相同，归 game 服务、共享模式）：Player 只归它的承载 game 写，别的 game
+// 写不了；facebook 任何 game 都能在 Nest 事务里写，邀请因此能投给连在别的 game 上或离线的玩家。号与承载 sid
+// 无关，换服时不用搬。第一次写它之前由 game/modules/facebook 的 Ensure 认领并切到共享模式；不挂心跳。
+//
+//roost:entity id={{ID:entity:Facebook}} entityKind=EntityKindFacebook category=entity.EntityCategoryRemote remote=managed service={{GAME_SERVICE}}
+type Facebook struct {
+	*entity.RemoteEntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao *db.FacebookDao `dao:"facebook"`
+}

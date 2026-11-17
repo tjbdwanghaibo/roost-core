@@ -1,0 +1,18 @@
+name: facebook
+summary: 每名玩家一个伴生的 facebook（共享 Remote 实体，号由玩家号推出）：任何 game 都能投递的邀请收件箱，投递后告知玩家连着的那个 game 进程；换服不用搬
+requires: []
+conflicts: []
+needs:
+  mods: [nest, remote_entity]
+  features: [entity, dao]
+entities: [Facebook]
+entity: Facebook
+component: Facebook
+component_package: game/components/facebook
+runtime:
+  package: game/modules/facebook
+  start: Start
+verify:
+  packages: [./game/handler, ./game/modules/facebook]
+  run: ^TestFacebook
+  pass: 9

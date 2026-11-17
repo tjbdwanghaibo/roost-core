@@ -1,0 +1,7 @@
+--- PASS: TestAllianceE2ESocialTeam (6.94s)
+--- PASS: TestAllianceE2ESocialTeamInvite (4.43s)
+--- PASS: TestAllianceE2ESocialMatchmaking (19.58s)
+--- PASS: TestAllianceE2ESocialRehome (37.00s)
+ok  	example.com/planet/e2e	68.726s
+alliance actual cases: passed=4, skipped=0
+exit=0

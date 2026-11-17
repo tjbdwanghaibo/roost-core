@@ -1,0 +1,8 @@
+=== RUN   TestAllianceE2ESocialTeamInvite
+    social_test.go:202: SOCIAL_INVITE team 4611686018427388953 on game 1000: B (game 1001) pushed &{TeamID:4611686018427388953 Inviter:100001 ExpireAtUnixMilli:1794928745657} and listed it, accepted revision 2; C invited offline, listed after relogin on game 1001, joined revision 3
+    harness_test.go:522: all processes stopped; 0 ERROR log lines in total
+--- PASS: TestAllianceE2ESocialTeamInvite (6.33s)
+PASS
+ok  	example.com/planet/e2e	6.982s
+alliance actual cases: passed=1, skipped=0
+exit=0

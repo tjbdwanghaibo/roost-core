@@ -1,0 +1,7 @@
+=== RUN   TestAllianceE2ESocialTeamInvite
+    harness_test.go:139: prefix a5c8n70ei8, logs /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/fb/tmp/TestAllianceE2ESocialTeamInvite2216141098/001/logs
+    social_test.go:180: TEAM_INVITE_DELIVERY: player 100002 on sid 1001 got no TeamInvited for team 4611686018427388949 within 15s
+--- FAIL: TestAllianceE2ESocialTeamInvite (20.35s)
+FAIL
+FAIL	example.com/planet/e2e	21.065s
+FAIL

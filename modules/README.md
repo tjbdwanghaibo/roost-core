@@ -31,7 +31,8 @@
 | [activity_world](activity_world/README.md) | 全服/服务器组权威 Entity，独立服务、ownership 恢复扫描 | activity | ActivityWorldDao.ActivityWorld（只落库） | 6 |
 | [activity_alliance](activity_alliance/README.md) | 既有联盟 Entity 的活动适配，扩展 alliance 配置/RPC | activity、alliance | AllianceDao.ActivityAlliance（只落库） | 7 |
 | [alliance](alliance/README.md) | 独立联盟服务单写者、路由 RPC / 三个跨域 Saga、Mirror 展示与换服惰性校正 | bag；代办 saga / Mirror 与 alliance 服务 | AllianceDao、AllianceMemberDao、PlayerDao.Alliance / SagaReceipts | 55 |
-| [team](team/README.md) | Remote 共享权威队伍，七个 PB 请求和邀请推送；成员与 Player 引用同事务，邀请有界 | remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 35 |
+| [facebook](facebook/README.md) | 每名玩家一个伴生的共享 Remote 实体（号由玩家号推出）：任何 game 都能投递的邀请收件箱，投递后广播告知玩家连着的 game 进程；换服不用搬 | remote_entity Mod（安装时代办） | FacebookDao（只落库） | 9 |
+| [team](team/README.md) | Remote 共享权威队伍，七个 PB 请求和邀请推送；成员与 Player 引用同事务，邀请有界，经 facebook 投给任何 game 上的被邀请人 | facebook；remote_entity Mod（安装时代办） | TeamDao、PlayerDao.Team（只落库） | 31 |
 | [matchmaking](matchmaking/README.md) | 单人/整队按服分池；持久意图、取消竞态、结果补查、组队冻结 | team、matchroom；托管 match | PlayerDao.Matchmaking | 17 |
 | [matchroom](matchroom/README.md) | MatchID 幂等移交到 Room，固定准入名单、掉线保座 | room、Mongo | RoomDao.Matchroom、持久房号映射 | 12 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接；断线订阅（连接关了房间自己把席位标成断线，manager `NewRoomPresence`）；在线状态不落库，重启后全部断线、成员重连恢复；玩法命令的身份围栏 `Room().Authorize`（代际 + 连接 + 在线） | 无（安装时代办玩家 TCP 接入与 manager Mod；鉴权与启用配置仍归工程） | `RoomDao`（只落库；在线标记 `Online` 不落库；成员读 PB 快照） | 34 |

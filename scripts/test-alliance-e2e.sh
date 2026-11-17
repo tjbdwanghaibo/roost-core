@@ -14,6 +14,7 @@
 #   - TestAllianceE2ERobotCrossGameJoin        生成工程的机器人跑 alliance_cross_join：两个 game 进程上的玩家互相入会（-identities 把
 #                                              两个身份放到 game 1001），各在自己的 game 上读回；ALLIANCE_E2E_ROBOT_LOGIN=portal 走登录入口；
 #   - TestAllianceE2ESocialTeam               两 game 共享队伍，toxiproxy 丢接受回包 / 80±20ms 下行延迟、重试不重复入队；
+#   - TestAllianceE2ESocialTeamInvite         邀请的跨 game 投递（facebook）：game 1000 的 A 邀请 game 1001 的 B，B 收到推送、查得到并接受；离线的 C 登录后查到；
 #   - TestAllianceE2ESocialMatchmaking        单排意图经 game SIGKILL 恢复，同一 RoomID；队伍 / 换服屏障；
 #   - TestAllianceE2ESocialRehome             联盟成员跨 sid 换服 handed-off / committed 两点 SIGKILL，目标服成员展示与捐献；Q4 保留。
 #   - TestAllianceE2EShortPerf                 只在 ALLIANCE_E2E_PERF=1 时跑：续期量、预加载 1k / 10k、路由 RPC 延迟；
@@ -73,7 +74,7 @@ etcd --name alliance-e2e --data-dir "$work_dir/etcd" \
 etcd_pid=$!
 
 default_run='^TestAllianceE2E(PreloadOrder|CrashTakeoverAndScaleIn|OneAllianceUnderRace|RedisOutage|GamePlayers|RejectedFoundingAfterRestart|RobotOfflineJoin|RobotCrossGameJoin)$'
-default_run="${default_run%')$'}|SocialTeam|SocialMatchmaking|SocialRehome)$"
+default_run="${default_run%')$'}|SocialTeam|SocialTeamInvite|SocialMatchmaking|SocialRehome)$"
 export GOWORK=off
 cd "$repo_dir"
 go run ./codegen/cmd/roost project new planet -module example.com/planet -out "$work_dir/planet" -template game-demo --skip-deps
@@ -115,7 +116,7 @@ import os, pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text()
 passed = len(re.findall(r'^--- PASS: TestAllianceE2E', text, re.M))
 skipped = len(re.findall(r'^\s*--- SKIP:', text, re.M))
-expected = int(sys.argv[2]) if sys.argv[2] else (11 if not os.environ.get('ALLIANCE_E2E_RUN') else None)
+expected = int(sys.argv[2]) if sys.argv[2] else (12 if not os.environ.get('ALLIANCE_E2E_RUN') else None)
 if not passed or skipped or (expected is not None and passed != expected):
     raise SystemExit(f'alliance actual cases: passed={passed}, skipped={skipped}, expected={expected}')
 print(f'alliance actual cases: passed={passed}, skipped={skipped}')

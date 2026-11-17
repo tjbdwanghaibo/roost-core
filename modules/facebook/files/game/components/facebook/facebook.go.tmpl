@@ -1,0 +1,88 @@
+package facebook
+
+import (
+	"cmp"
+	"fmt"
+	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/view"
+)
+
+// MaxInvites 是一名玩家收件箱里同时记着的邀请上限（各来源合计），归工程所有。
+const MaxInvites = 64
+
+//roost:component type={{ID:component:Facebook}}
+const CompTypeFacebook entity.ComponentType = {{ID:component:Facebook}}
+
+// init 登记组件工厂：Facebook 结构体里 comp:"facebook.CompTypeFacebook" 的字段经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeFacebook, NewComponent)
+}
+
+// Owner 是 Facebook 组件的宿主：view 的 FacebookEntity（组件读写 FacebookDao）。只在实体被 Nest 锁住期间使用。
+type Owner = view.FacebookEntity
+
+// Component 是收件箱的规则。它不存状态，全部事实在 FacebookDao 里，提交失败随 DAO 一起回滚。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
+}
+
+// NewComponent 是组件工厂（上面的 init 登记）。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("facebook component: owner %T does not implement facebook.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "facebook" }
+
+// Note 把一份已经在来源实体上成交的邀请记进收件箱，返回记下没有。它只是提示：邀请成立与否看来源实体上的权威，
+// 所以这里不查来源。先清掉已过期的记录；同一来源的新邀请只延长、不缩短（迟到的旧告知不覆盖续期）；记满
+// （MaxInvites 条）时不记。已经过期的邀请、不是实体号的来源、没有邀请人都不记，也不写。
+func (c *Component) Note(source, from, expireAt, now int64) bool {
+	if entity.ResolveEntityID(source).FullID == 0 || from <= 0 || now >= expireAt {
+		return false
+	}
+	dao := c.owner.Dao()
+	var expired []int64
+	dao.RangeInvites(func(id int64, invite *db.FacebookInvite) bool {
+		if invite == nil || now >= invite.GetExpireAt() {
+			expired = append(expired, id)
+		}
+		return true
+	})
+	for _, id := range expired {
+		dao.DelInvites(id)
+	}
+	previous, renewing := dao.GetInvites(source)
+	if renewing && previous != nil && previous.GetExpireAt() >= expireAt {
+		return true
+	}
+	if !renewing && dao.InvitesLen() >= MaxInvites {
+		return false
+	}
+	invite := &db.FacebookInvite{}
+	invite.SetFrom(from)
+	invite.SetExpireAt(expireAt)
+	dao.SetInvites(source, invite)
+	return true
+}
+
+// Invites 列出此刻还没过期的邀请，按来源号升序；恰好到期那一刻就算过期。只读。
+func (c *Component) Invites(now int64) []view.FacebookInvite {
+	var out []view.FacebookInvite
+	c.owner.Dao().RangeInvites(func(id int64, invite *db.FacebookInvite) bool {
+		if invite != nil && now < invite.GetExpireAt() {
+			out = append(out, view.FacebookInvite{Source: id, From: invite.GetFrom(), ExpireAt: invite.GetExpireAt()})
+		}
+		return true
+	})
+	slices.SortFunc(out, func(a, b view.FacebookInvite) int { return cmp.Compare(a.Source, b.Source) })
+	return out
+}

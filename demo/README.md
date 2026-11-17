@@ -228,7 +228,7 @@ scene:
 答复都是成员表（`TeamResponse`）。成员表在 Remote 托管的 `Team` 实体上（`service=game`、共享模式：成员在不同的 game 进程上；game 因此装着
 `remote_entity`，联盟实体对它是别的服务的、写不了），每个端点是一笔 [Team, Player] 事务；普通场景答 `scene_not_partitioned`，普通场景的组队仍是匹配（不动）。队友的位置与 HP 从**队伍面板**来：每名队员的 Base
 每 `snapshot_every` 把他的 SceneActor 状态发给其他队员的 Base，客户端在同一条同步流里收到队友的 SceneActor（`player`
-命名空间，位置与 `cell_hp`），不论距离；在视野里的队友就是同一个对象，不重复推。被邀请的人从别处得知队伍 ID（此接口不推送邀请）。
+命名空间，位置与 `cell_hp`），不论距离；在视野里的队友就是同一个对象，不重复推。邀请经 team 依赖的 facebook 模块投递：被邀请人连在哪个 game 上都收到 `TeamInvited`，离线的登录后用 `TeamInvites` 查到。
 养成变化后 Player 监听实体事件 `event.AttributeChanged`（`game/entities/player/cell_base.go` 的 `OnAttributeChanged`），在同一笔 Player 事务内更新 Cell 面板，HP 上限增大不自动回血。NPC 致死结算与一次性 1 金币奖励共用 strict 回执，确认后按出生槽重生。Player 入场计数与 Recovery 持久保存；所有 Cell 需要 App singleton 和持久 Redis 权威。
 
 多进程端到端（两个 Cell、独立 Base、kill -9 后重建、跨 Base 队伍、普通场景）：`scripts/test-seamless-demo.sh`。Robot 使用 `-scenario cellworld`；`ROOST_SEAMLESS_CAPACITY=1 ROOST_SEAMLESS_ROBOT_ONLY=1 ROOST_SEAMLESS_ROBOTS=1000` 启用 9000 NPC / 1000 玩家容量配置，详细口径和依赖见 [验收说明](../docs/performance/CELLWORLD.md)。

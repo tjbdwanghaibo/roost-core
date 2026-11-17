@@ -1,0 +1,12 @@
+package handler
+
+import "{{MODULE}}/game/view"
+
+// handlerFacebookNote 只锁收件人的 Facebook（共享 Remote，写许可在 I/O 池的准备阶段取得）：把一份已经在来源实体上
+// 成交的邀请记进他的收件箱。由 game/modules/facebook 的 Deliver 在邀请提交之后调用，没有客户端协议。
+// strict：回复时这条记录已经持久，任何 game 随后读这个收件箱都看得到它。返回这份邀请有没有记下。
+//
+//roost:nest rollback=undo durability=strict
+func handlerFacebookNote(target view.IFacebookEntity, source int64, from int64, expireAt int64, nowUnixMilli int64) (bool, error) {
+	return target.Facebook().Note(source, from, expireAt, nowUnixMilli), nil
+}

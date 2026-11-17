@@ -1,0 +1,10 @@
+RED  M1 收件箱未打开时不经 Nest 读 [game/modules/facebook/facebook.go] TestFacebookInvitesNeverClaimsAnUnopenedFacebook: facebook_test.go:325: unopened facebook <nil>: listed=[{Source:4611686018519548941 From:101 ExpireAt:2000000}] err=<nil> nest calls=[handlerFacebookInvites]
+RED  M2 已共享时只装进内存 [game/modules/facebook/facebook.go] TestFacebookEnsureOpensSharedOnce: facebook_test.go:139: calls=[get load share] want [get load]
+RED  M3 投递后本进程直接告知 [game/modules/facebook/facebook.go] TestFacebookDeliverRecordsThenTellsEveryGame: facebook_test.go:227: local notices=[] nest calls=[handlerFacebookNote]
+RED  M4 广播告知 [game/modules/facebook/facebook.go] TestFacebookDeliverRecordsThenTellsEveryGame: facebook_test.go:230: broadcast=[]
+RED  M5 告知的键必须是收件人 [game/modules/facebook/facebook.go] TestFacebookNoticeFromAnotherGameReachesTheFeature: facebook_test.go:284: notice whose key is not its recipient accepted
+RED  M6 恰好到期即不列出 [game/components/facebook/facebook.go] TestFacebookInviteIsListedUntilItExpires: facebook_test.go:168: invite listed at its deadline: [{Source:4611686018519548941 From:101 ExpireAt:1060000}]
+RED  M7 收件箱有界 [game/components/facebook/facebook.go] TestFacebookInvitesAreBoundedAndPruned: facebook_test.go:183: invite beyond the bound accepted
+RED  M8 team 邀请提交后经 facebook 投递 [game/controllers/team.go] TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority: team_test.go:205: online invitee not told: &{calls:0 fail:true online:true push:<nil>}
+RED  M9 TeamInvites 只认队伍来源 [game/controllers/team.go] TestTeamEndpointInvitationQueryChecksAuthority: team_test.go:165: looked up a non-team source 93187077
+RED  M10 告知只推给本进程在线的被邀请人 [game/controllers/team.go] TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority: team_test.go:211: offline player was pushed

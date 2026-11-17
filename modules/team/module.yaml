@@ -1,5 +1,6 @@
 name: team
-summary: 共享权威队伍：建队、邀请、入队、离队与队长交接；队伍和玩家引用同事务
+summary: 共享权威队伍：建队、邀请、入队、离队与队长交接；队伍和玩家引用同事务；邀请经 facebook 投给任何 game 上的玩家
+requires: [facebook]
 needs:
   mods: [nest, remote_entity]
   features: [protocol, entity, dao, errcode]
@@ -21,7 +22,7 @@ errcodes: [team_invalid, team_missing, team_exists, team_not_leader, team_not_in
 verify:
   packages: [./game/handler, ./game/controllers]
   run: ^TestTeam
-  pass: 35
+  pass: 31
 with:
   rehome:
     summary: 在队伍中不能换服，换服意图未清除前不能建队或入队

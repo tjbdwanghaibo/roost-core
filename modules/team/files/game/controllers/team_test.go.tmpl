@@ -9,11 +9,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	facebookentity "{{MODULE}}/game/entities/facebook"
 	player "{{MODULE}}/game/entities/player"
 	teamentity "{{MODULE}}/game/entities/team"
+	"{{MODULE}}/game/modules/facebook"
 	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/msgid"
@@ -136,22 +139,31 @@ func (p *teamPushRecorder) PushPlayer(_ context.Context, id int64, message uint3
 func TestTeamEndpointInvitationQueryChecksAuthority(t *testing.T) {
 	player.RegisterEntity()
 	teamentity.RegisterEntity()
+	facebookentity.RegisterEntity()
 	first, _ := entity.BuildEntityID(91001, teamentity.EntityKindTeam)
 	second, _ := entity.BuildEntityID(91002, teamentity.EntityKindTeam)
-	self, _ := entity.BuildEntityID(102, player.EntityKindPlayer)
+	foreign, _ := entity.BuildEntityID(91003, player.EntityKindPlayer) // 别的功能投进收件箱的邀请，不归队伍查
+	inbox, _ := entity.BuildEntityID(102, facebookentity.EntityKindFacebook)
 	checked := 0
-	c := &Controller{nestClient: teamEndpointClient{request: func(name nest.HandlerName, id int64, _ nest.Params) (any, error) {
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(mods.ModRemoteEntity, entity.IRemoteEntityManager(teamOpenedInboxes{})); err != nil {
+		t.Fatal(err)
+	}
+	c := &Controller{registry: registry, nestClient: teamEndpointClient{request: func(name nest.HandlerName, id int64, _ nest.Params) (any, error) {
 		switch name.String() {
-		case "handlerTeamInvites":
-			if id != self {
-				t.Fatalf("wrong observer: %d", id)
+		case "handlerFacebookInvites":
+			if id != inbox {
+				t.Fatalf("wrong inbox: %d", id)
 			}
-			return []view.TeamInvite{{TeamID: first, Inviter: 101, ExpireAt: 60000}, {TeamID: second, Inviter: 103, ExpireAt: 60000}}, nil
+			return []view.FacebookInvite{{Source: first, From: 101, ExpireAt: 60000}, {Source: second, From: 103, ExpireAt: 60000}, {Source: foreign, From: 105, ExpireAt: 60000}}, nil
 		case "handlerTeamInvitation":
 			checked++
 			if id == first {
 				return view.TeamInvitation{}, nil
 			} // 队伍已解散，收件记录仍在。
+			if id != second {
+				t.Fatalf("looked up a non-team source %d", id)
+			}
 			return view.TeamInvitation{TeamSnapshot: view.TeamSnapshot{TeamID: second, Leader: 104}, Invitee: 102, ExpireAt: 70000}, nil
 		default:
 			t.Fatalf("unexpected request %s", name.String())
@@ -159,36 +171,48 @@ func TestTeamEndpointInvitationQueryChecksAuthority(t *testing.T) {
 		}
 	}}}
 	out, err := c.HandleTeamInvites(&playeraccess.Context{PlayerID: 102}, &pb.TeamInvitesRequest{})
-	if err != nil || out.Code != 0 || checked != 2 || len(out.Invites) != 1 || out.Invites[0].TeamID != second || out.Invites[0].ExpireAtUnixMilli != 70000 {
+	if err != nil || out.Code != 0 || checked != 2 || len(out.Invites) != 1 || out.Invites[0].TeamID != second || out.Invites[0].Inviter != 103 || out.Invites[0].ExpireAtUnixMilli != 70000 {
 		t.Fatalf("stale inbox exposed: response=%+v checked=%d err=%v", out, checked, err)
 	}
 }
 
+// teamOpenedInboxes 替代 Remote 运行时，只答“收件人的 Facebook 已经打开（共享模式）”，让查询经 Nest 读它。
+type teamOpenedInboxes struct{ entity.IRemoteEntityManager }
+
+func (teamOpenedInboxes) GetRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, bool, error) {
+	return entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1, Shared: true}, true, nil
+}
+
+// 投递只是告知，不是邀请的一部分：收件箱记不上（这里没有 Remote 运行时，确保 Facebook 就失败）时，连在本进程的被邀请人
+// 照样收到 TeamInvited；推送失败不影响什么；不在本进程的不推、也不冷加载。别的 game 广播来的告知走同一个处理。
 func TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority(t *testing.T) {
 	player.RegisterEntity()
 	teamentity.RegisterEntity()
+	facebookentity.RegisterEntity()
 	id, _ := entity.BuildEntityID(91001, teamentity.EntityKindTeam)
-	self, _ := entity.BuildEntityID(102, player.EntityKindPlayer)
-	noted := 0
 	c := &Controller{registry: app.NewRegistry(nil), nestClient: teamEndpointClient{request: func(name nest.HandlerName, target int64, _ nest.Params) (any, error) {
-		if name.String() != "handlerTeamInviteNote" || target != self {
-			t.Fatalf("unexpected request %s/%d", name.String(), target)
-		}
-		noted++
-		return true, nil
+		t.Fatalf("unexpected request %s/%d: the facebook could not be ensured", name.String(), target)
+		return nil, nil
 	}}}
 	push := &teamPushRecorder{online: true, fail: true}
 	if err := c.registry.Register(PlayerTCPCapability, push); err != nil {
 		t.Fatal(err)
 	}
-	invitation := view.TeamInvitation{TeamSnapshot: view.TeamSnapshot{TeamID: id, Leader: 101}, Invitee: 102, ExpireAt: 60000}
+	expireAt := clock.UnixMilli() + 60000
+	invitation := view.TeamInvitation{TeamSnapshot: view.TeamSnapshot{TeamID: id, Leader: 101}, Invitee: 102, ExpireAt: expireAt}
 	c.teamAnnounceInvite(context.Background(), invitation)
-	if noted != 1 || push.calls != 1 || push.push.TeamID != id || push.push.ExpireAtUnixMilli != 60000 {
-		t.Fatalf("note=%d push=%+v", noted, push)
+	if push.calls != 1 || push.push.TeamID != id || push.push.Inviter != 101 || push.push.ExpireAtUnixMilli != expireAt {
+		t.Fatalf("online invitee not told: %+v", push)
 	}
 	push.online = false
 	c.teamAnnounceInvite(context.Background(), invitation)
-	if noted != 1 || push.calls != 1 {
-		t.Fatal("offline player was cold loaded or pushed")
+	teamNotifyInvite(context.Background(), c.registry, facebook.Invite{To: 102, Source: id, From: 101, ExpireAt: expireAt})
+	if push.calls != 1 {
+		t.Fatal("offline player was pushed")
+	}
+	push.online = true
+	teamNotifyInvite(context.Background(), c.registry, facebook.Invite{To: 102, Source: id, From: 101, ExpireAt: expireAt})
+	if push.calls != 2 {
+		t.Fatalf("a notice broadcast from another game did not reach the online invitee: %+v", push)
 	}
 }

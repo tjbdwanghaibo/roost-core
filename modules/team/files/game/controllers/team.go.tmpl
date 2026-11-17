@@ -17,6 +17,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	teamentity "{{MODULE}}/game/entities/team"
 	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/facebook"
 	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/msgid"
@@ -42,6 +43,8 @@ func init() {
 		_, err := teamDepsFromRegistry(controller.Registry())
 		return err
 	})
+	// 投进收件人 Facebook 的队伍邀请，在收件人连着的那个 game 进程上推 TeamInvited（本进程直接交来，别的进程经广播）。
+	facebook.OnInvite(teamentity.EntityKindTeam, teamNotifyInvite)
 }
 
 func teamDepsFromRegistry(registry *app.Registry) (*teamDeps, error) {
@@ -256,46 +259,45 @@ type teamInviteTransport interface {
 	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
 }
 
-// teamAnnounceInvite 在邀请提交之后把它告知被邀请人：他此刻在本进程在线时，先在他的档里记一条收件记录（之后能用
-// TeamInvites 查到），再推一条 TeamInvited。只对在线的人做，因为本进程的会话是“他的档归本进程写”的证明——
-// 不在线、或连在别的 game 进程上的被邀请人收不到告知，邀请本身照常有效。
+// teamAnnounceInvite 在邀请提交之后把它投给被邀请人：记进他的 Facebook 收件箱（共享 Remote，任何 game 都能写，所以他
+// 连在别的 game 上或离线也收得到），再告知他连着的那个 game 进程推 TeamInvited（teamNotifyInvite）。
 //
-// 这一步只是告知，不是邀请的一部分：传输没装配、记录没记上（记满、玩家还没建档）、推送失败都只记日志，
-// 邀请（Team 上的权威记录）不受影响，调用方的应答也不变。
+// 这一步只是投递，不是邀请的一部分：确保收件箱、记录、广播任何一步失败都只记日志，邀请（Team 上的权威记录）不受影响，
+// 调用方的应答也不变；重发邀请会再投一次，客户端按 TeamID 合并重复的推送。
 func (c *Controller) teamAnnounceInvite(ctx context.Context, invitation view.TeamInvitation) {
-	if invitation.ExpireAt == 0 || c.registry == nil {
+	if invitation.ExpireAt == 0 {
 		return
 	}
-	transport, err := LookupPlayerTransport[teamInviteTransport](c.registry)
-	if err != nil || transport == nil || transport.ActiveSessions(invitation.Invitee) == 0 {
-		return
-	}
-	invitee, err := entity.BuildEntityID(invitation.Invitee, player.EntityKindPlayer)
-	if err != nil {
-		return
-	}
-	noted, err := sender.NewTeamInviteNoteSender(c.nestClient).Sync_TeamInviteNote(ctx, invitee, invitation.TeamID, invitation.Leader, invitation.ExpireAt)
-	if err != nil || !noted {
-		slog.DebugContext(ctx, "team: invitation not recorded for the invitee; it stays valid on the team", "player_id", invitation.Invitee, "team_id", invitation.TeamID, "err", err)
-	}
-	push := &pb.TeamInvitedPush{TeamID: invitation.TeamID, Inviter: invitation.Leader, ExpireAtUnixMilli: invitation.ExpireAt}
-	if err := transport.PushPlayer(ctx, invitation.Invitee, msgid.MsgTeamInvited, push); err != nil {
-		slog.DebugContext(ctx, "team: invitation push not delivered", "player_id", invitation.Invitee, "team_id", invitation.TeamID, "err", err)
+	invite := facebook.Invite{To: invitation.Invitee, Source: invitation.TeamID, From: invitation.Leader, ExpireAt: invitation.ExpireAt}
+	if err := facebook.Deliver(ctx, c.registry, c.nestClient, invite); err != nil {
+		slog.DebugContext(ctx, "team: invitation not recorded in the invitee's facebook; it stays valid on the team", "player_id", invitation.Invitee, "team_id", invitation.TeamID, "err", err)
 	}
 }
 
-// HandleTeamInvites 先读本人的有界收件记录，再逐个核对 Team 权威；不持 Player 锁等待 Remote。
+// teamNotifyInvite 是 facebook 的告知处理：被邀请人连在本进程时推一条 TeamInvited。不在本进程就什么都不做——
+// 每个 game 进程都会收到这份告知，他连着的那个负责推。推送失败只记日志，他仍能用 TeamInvites 查到。
+func teamNotifyInvite(ctx context.Context, registry *app.Registry, invite facebook.Invite) {
+	transport, err := LookupPlayerTransport[teamInviteTransport](registry)
+	if err != nil || transport == nil || transport.ActiveSessions(invite.To) == 0 {
+		return
+	}
+	push := &pb.TeamInvitedPush{TeamID: invite.Source, Inviter: invite.From, ExpireAtUnixMilli: invite.ExpireAt}
+	if err := transport.PushPlayer(ctx, invite.To, msgid.MsgTeamInvited, push); err != nil {
+		slog.DebugContext(ctx, "team: invitation push not delivered", "player_id", invite.To, "team_id", invite.Source, "err", err)
+	}
+}
+
+// HandleTeamInvites 先读本人 Facebook 上的有界收件箱（别的 game 投来的也在），再逐个核对 Team 权威；
 // 任一权威读取失败就返回错误码，不把部分结果伪装成完整列表。接受时仍须再次检查。
 func (c *Controller) HandleTeamInvites(ctx *playeraccess.Context, req *pb.TeamInvitesRequest) (*pb.TeamInvitesResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("team: request required")
 	}
-	self, err := teamPlayerID(ctx)
-	if err != nil {
+	if _, err := teamPlayerID(ctx); err != nil {
 		return nil, err
 	}
 	response := &pb.TeamInvitesResponse{}
-	invites, err := sender.NewTeamInvitesSender(c.nestClient).Sync_TeamInvites(ctx.Context(), self)
+	invites, err := facebook.Invites(ctx.Context(), c.registry, c.nestClient, ctx.PlayerID)
 	if err != nil {
 		response.Code, response.Reason = errcode.ClientError(err)
 		if response.Code == errcode.CodeInternal {
@@ -305,19 +307,22 @@ func (c *Controller) HandleTeamInvites(ctx *playeraccess.Context, req *pb.TeamIn
 	}
 	lookup := sender.NewTeamInvitationSender(c.nestClient)
 	for _, note := range invites {
-		invitation, err := lookup.Sync_TeamInvitation(ctx.Context(), note.TeamID, ctx.PlayerID)
+		if !entity.MatchEntityID(note.Source, teamentity.EntityKindTeam) {
+			continue // 收件箱里别的功能投来的邀请
+		}
+		invitation, err := lookup.Sync_TeamInvitation(ctx.Context(), note.Source, ctx.PlayerID)
 		if err != nil {
 			code, reason := errcode.ClientError(err)
 			if code == errcode.CodeEntityNotFound {
 				continue
 			}
 			if code == errcode.CodeInternal {
-				slog.ErrorContext(ctx.Context(), "team invitation lookup failed", "player_id", ctx.PlayerID, "team_id", note.TeamID, "err", err)
+				slog.ErrorContext(ctx.Context(), "team invitation lookup failed", "player_id", ctx.PlayerID, "team_id", note.Source, "err", err)
 			}
 			return &pb.TeamInvitesResponse{Code: code, Reason: reason}, nil
 		}
 		if invitation.ExpireAt != 0 {
-			response.Invites = append(response.Invites, pb.TeamInvitedPush{TeamID: invitation.TeamID, Inviter: note.Inviter, ExpireAtUnixMilli: invitation.ExpireAt})
+			response.Invites = append(response.Invites, pb.TeamInvitedPush{TeamID: invitation.TeamID, Inviter: note.From, ExpireAtUnixMilli: invitation.ExpireAt})
 		}
 	}
 	return response, nil

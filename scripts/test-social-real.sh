@@ -4,6 +4,6 @@
 # SOCIAL_REAL_MUTATION=drop-team-reference 只变异临时生成工程；SOCIAL_REAL_MODULE_MATRIX=1 另跑模块矩阵。
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -z "${ALLIANCE_E2E_RUN:-}" ]]; then export ALLIANCE_E2E_EXPECT=3; fi
-export ALLIANCE_E2E_RUN="${ALLIANCE_E2E_RUN:-^TestAllianceE2ESocial(Team|Matchmaking|Rehome)$}"
+if [[ -z "${ALLIANCE_E2E_RUN:-}" ]]; then export ALLIANCE_E2E_EXPECT=4; fi
+export ALLIANCE_E2E_RUN="${ALLIANCE_E2E_RUN:-^TestAllianceE2ESocial(Team|TeamInvite|Matchmaking|Rehome)$}"
 bash "$repo_dir/scripts/test-alliance-e2e.sh"

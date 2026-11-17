@@ -1,0 +1,6 @@
+=== RUN   TestAllianceE2ESocialTeamInvite
+    social_test.go:188: TEAM_INVITE_INBOX: player 100002 on sid 1001 listed &{Code:0 Reason: Invites:[]}; want exactly team 4611686018427388953 from 100001
+--- FAIL: TestAllianceE2ESocialTeamInvite (6.39s)
+FAIL
+FAIL	example.com/planet/e2e	7.036s
+FAIL

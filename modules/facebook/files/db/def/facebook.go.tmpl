@@ -1,0 +1,18 @@
+package dbdef
+
+// FacebookDao 是一名玩家的伴生社交记录（Facebook 实体，号由玩家号推出），共享 Remote 权威：任何 game 进程都能在
+// Nest 事务里写它，所以连在别的 game 上、或此刻离线的玩家也能收到邀请。
+//
+// Invites 是收到的邀请收件箱：发出邀请的实体完整号（如队伍号）→ 邀请。它只是提示，邀请成立与否以发出邀请的
+// 实体上的权威为准，接受时照旧核对。条数有界（facebook.MaxInvites），过期的在下一次记录时清掉。
+//
+//roost:dao coll=facebook db=main
+type FacebookDao struct {
+	Invites map[int64]*FacebookInvite `dao:"nosync,map=fast" store:"1"`
+}
+
+// FacebookInvite 是一条收件记录：谁邀请的（玩家号）、什么时候过期（业务时间，Unix 毫秒；恰好到这一刻就算过期）。
+type FacebookInvite struct {
+	From     int64 `store:"1"`
+	ExpireAt int64 `store:"2"`
+}
