@@ -3,8 +3,11 @@ package portal
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
+	"unicode"
 )
 
 // config 是入口在托管 account 服务的进程配置（configs/service/config.<account 服务>.yaml）里读的键，可以不写：
@@ -13,6 +16,8 @@ import (
 //	  servers:                   # 静态的区服目录：服号 -> 客户端连得到的地址（host:port，通常是 Gate）
 //	    "1000": 203.0.113.7:7000
 //	    "1001": 203.0.113.8:7000
+//	  services:                  # 服务的地址：服务名（account.services 里的）-> 客户端连得到的地址
+//	    lobby: https://lobby.example.com
 //
 // 入口没有自己的密钥，也没有票据的有效期：票据由 account 签发与校验（account.session_secret、
 // account.ticket_ttl、account.session_ttl）。
@@ -22,6 +27,8 @@ import (
 type config struct {
 	Portal struct {
 		Servers map[string]string `config:"servers" help:"静态的区服目录：服号 -> 客户端连得到的地址（host:port，通常是 Gate）。有哪些服由 account 说了算，这里只给地址；没写地址的服照常列出、没有地址"`
+		// Services 给 account.services 里的服务配客户端连得到的地址（大厅的 HTTP 地址……），清单的 services 里原样带上。
+		Services map[string]string `config:"services" help:"服务的地址：服务名（account.services 里的）-> 客户端连得到的地址（例如大厅的 https://host:port）。有哪些服务由 account 说了算，这里只给地址"`
 	} `config:"portal"`
 }
 
@@ -35,8 +42,42 @@ func (c *config) ValidateConfig(bool) error {
 	if _, err := parseServers(c.Portal.Servers); err != nil {
 		problems = append(problems, err)
 	}
+	if _, err := parseServices(c.Portal.Services); err != nil {
+		problems = append(problems, err)
+	}
 	return errors.Join(problems...)
 }
+
+// parseServices 检查 portal.services：键是服务名的写法（与 account.services 相同：小写字母开头，小写字母、数字、
+// 下划线、连字符，至多 32 字节），值是非空、至多 MaxAddrBytes 字节、不含空白的地址。地址的形式（host:port 还是 URL）
+// 由客户端与那个服务约定，入口不解释。名字是否真在 account.services 里不在这里查：没有的服务不会出现在清单里。
+func parseServices(raw map[string]string) (map[string]string, error) {
+	if len(raw) > MaxServices {
+		return nil, fmt.Errorf("config: portal.services lists %d services; at most %d", len(raw), MaxServices)
+	}
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	services := make(map[string]string, len(raw))
+	for _, key := range keys {
+		if !serviceNamePattern.MatchString(key) {
+			return nil, fmt.Errorf("config: portal.services key %q is not a service name (lowercase letters, digits, '_' or '-', starting with a letter, at most 32 bytes)", key)
+		}
+		addr := raw[key]
+		if addr == "" || len(addr) > MaxAddrBytes || strings.ContainsFunc(addr, unicode.IsSpace) {
+			return nil, fmt.Errorf("config: portal.services.%s: the address must be non-empty, at most %d bytes and without spaces", key, MaxAddrBytes)
+		}
+		services[key] = addr
+	}
+	return services, nil
+}
+
+// MaxServices 是 portal.services 的条数上限。
+const MaxServices = 64
+
+var serviceNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // parseServers 把 portal.servers 变成 服号 -> 地址。键必须是正的服号的规范十进制写法（"+7"、"007" 不算），
 // 值必须是带主机的 host:port——只写端口（":7000"）的地址客户端连不了。

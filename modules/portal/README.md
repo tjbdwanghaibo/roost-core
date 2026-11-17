@@ -1,16 +1,17 @@
-# portal：客户端登录入口（三个 HTTP 端点，挂在托管 account 的进程上）
+# portal：客户端登录入口（四个 HTTP 端点，挂在托管 account 的进程上）
 
-`portal` 给工程一个**客户端够得着的登录入口**：三个 HTTP 端点，代客户端去问只在内部总线上的 account 服务（游戏的账号服）。它就是常说的 manifest（清单）那一层：登录拿账号票据 → 凭票拿区服清单与推荐 → 选定一个服换进服票据与该连的地址。入口缺省挂在**托管 account 服务的进程**上，不挂在某个 game 服上；业务服务（game）不因此多出任何 HTTP 监听。
+`portal` 给工程一个**客户端够得着的登录入口**：四个 HTTP 端点，代客户端去问只在内部总线上的 account 服务（游戏的账号服）。它就是常说的 manifest（清单）那一层：登录拿账号票据 → 凭票拿服务与区服清单与推荐 → 选定一个服换进服票据与该连的地址；开房间类游戏（大厅 + relay，没有区服）另凭票换一张**游戏账号 token**，大厅凭它认人。入口缺省挂在**托管 account 服务的进程**上，不挂在某个 game 服上；业务服务（game）不因此多出任何 HTTP 监听。
 
 ## 能力
 
-**客户端协议**：没有 Nest / PB 协议，只有三个 HTTP 端点（`services/account/portal/portal.go`；都是 `POST`、JSON；字段与响应的细节见后面的“端点”一节）。
+**客户端协议**：没有 Nest / PB 协议，只有四个 HTTP 端点（`services/account/portal/portal.go`；都是 `POST`、JSON；字段与响应的细节见后面的“端点”一节）。
 
 | 端点 | 请求 | 响应 | 做什么 |
 | --- | --- | --- | --- |
-| `POST /portal/login` | `{channel, open_id, credential}` | `{ok, account_ticket, account_ticket_expires_at}` | 让 account 向渠道确认身份（`Login`），再向它要一张账号票据（`IssueAccountTicket`） |
-| `POST /portal/servers` | `{account_ticket}` | `{ok, recommended_server_id, servers[]}` | 区服清单：每个服的名字、状态、是否并入别的服、地址、负载、标签、本账号在那里有没有角色；外加推荐的服 |
+| `POST /portal/login` | `{channel, open_id, credential, game?}` | `{ok, account_ticket, account_ticket_expires_at, game_token?, game_token_expires_at?}` | 让 account 向渠道确认身份（`Login`），再向它要一张账号票据（`IssueAccountTicket`）；带了 `game` 时再凭票要一张那个游戏的游戏账号 token（`IssueGameToken`） |
+| `POST /portal/servers` | `{account_ticket, service?}` | `{ok, recommended_server_id, services[]?, servers[]}` | 区服清单：每个服的名字、所属服务、状态、是否并入别的服、地址、负载、标签、本账号在那里有没有角色；外加推荐的服。配置了 `account.services` 时另有服务清单（`ListServices`），`service` 只列那个 game 服务的服 |
 | `POST /portal/enter` | `{account_ticket, server_id}` | `{ok, ticket, server_id, serving_server_id, expires_at, addr, addr_source}` | 向 account 要一张进服票据（`IssueEnterTicket`），连同承载服的地址交给客户端；`ticket` 是握手时原样出示的 `enter:<进服票据>` |
+| `POST /portal/game-token` | `{account_ticket, game}` | `{ok, game, game_token, expires_at}` | 凭账号票据向 account 换一张游戏账号 token（`IssueGameToken`，`gt1.…`）；开房间类游戏的大厅（lobby）请求里带它，大厅经 account 的 `ValidateGameToken` 认人 |
 
 **服务端入口**（`services/account/portal`）
 
@@ -29,11 +30,13 @@
 **配置**（写在**托管 account 的服务**的配置里，`configs/service/config.account.yaml`；细节见“配置”一节）
 
 - `portal.servers`：静态的区服目录，服号 → 客户端连得到的 `host:port`。可以不写。
+- `portal.services`：服务的地址，服务名（`account.services` 里的）→ 客户端连得到的地址（例如大厅的 HTTP 地址），清单的 `services` 里原样带上。可以不写。
+- 游戏账号 token 服务哪些游戏、各自的寿命，服务清单有哪些服务，是 account 的键（`account.games`、`account.services`，见 [服务篇“account 的游戏账号 token 与多个服务”](../../docs/framework/guide/09-services.md#4-关键业务边界)）。
 - 动态地址不在这里配：写在 **game 服务**的配置里（`login.presence.addr`，login 模块的 manager 读），game 定期报给 account。
 - `web.*`：入口的监听地址、超时、请求体上限（web Mod 的键）。
 - 票据的有效期与签名密钥是 account 的键（`account.ticket_ttl`、`account.session_ttl`、`account.session_secret`）。
 
-**错误码**（`internal/errors/portal.go`）：入口自己的只有 `portal_request_invalid`——必填字段没填、字段超过长度上限、服号不是正数；这样的请求没有去问 account。其余的拒绝是 account 的码原样带回：`560111` 票据无效、`560102` 渠道拒绝凭据或账号被封、`560103` 账号不存在、`560104` 服没登记。
+**错误码**（`internal/errors/portal.go`）：入口自己的只有 `portal_request_invalid`——必填字段没填、字段超过长度上限、服号不是正数、`service` 不是 `account.services` 里的 game 服务；除最后一种外这样的请求没有去问 account。其余的拒绝是 account 的码原样带回：`560111` 票据无效、`560102` 渠道拒绝凭据或账号被封、`560103` 账号不存在、`560104` 服没登记、`560120` 游戏不在 `account.games` 里。
 
 **日志**：登录与签发进服票据确认，记录账号、区服；渠道拒绝记 Info。角色尚未分配，因此此处使用 account_id，不造 player_id；内部失败只记录错误码，防止渠道错误携带凭据。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `services/account/portal/portal.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
 
@@ -42,16 +45,17 @@
 - **入口只守一件事**：账号只取自 account 校验过的账号票据，绝不取自请求。它不认证任何人（身份由 account 向渠道确认）、不签也不验任何票据、**不建角不选角**、不知道玩家号、不知道角色名（名字是游戏服的数据）。
 - **没有限流，也没有防撞库**。三个端点谁都能调；`/portal/login` 每次都会去问渠道。对外暴露时放在有限流的反向代理后面。
 - **明文**。凭据与票据都在请求体里；web Mod 不终止 TLS。生产环境 web Mod 缺省只绑回环地址，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr: true`。生成的生产示例配置里 `web.addr` 是占位值，上线前要改。
-- **上限**：请求体 16 KiB（`MaxRequestBytes`）；`channel` 32 字节、`open_id` 128 字节、`credential` 8 KiB、账号票据 1024 字节；区服至多 256 个（`MaxEntries`，与 account 的区服上限一致）；目录条目的地址至多 255 字节、标签至多 8 个、每个至多 32 字节；account 登记表一次登记的期限至多 600 秒（`svcaccount.MaxPresenceTTLSeconds`），至多 256 个没过期的服。
+- **上限**：请求体 16 KiB（`MaxRequestBytes`）；`channel` 32 字节、`open_id` 128 字节、`credential` 8 KiB、账号票据 1024 字节、`game` 与 `service` 32 字节（`MaxNameBytes`）；区服至多 1024 个（`MaxEntries`，与 account 的区服上限 `svcaccount.MaxServers` 一致，2026-11-17 由 256 放宽）；目录条目的地址至多 255 字节、标签至多 8 个、每个至多 32 字节；`portal.services` 至多 64 条；account 登记表一次登记的期限至多 600 秒（`svcaccount.MaxPresenceTTLSeconds`），至多 1024 个没过期的服。
 - **清单的开销随区服数增长**：每次 `/portal/servers` 是 1 次清单（account 读 1 + N 条记录）、1 次登记表（account 读一个 Redis 哈希）加每个服 1 次角色查询，顺序执行，没有缓存；`/portal/enter` 也多 1 次登记表。区服很多、请求很密的部署该把 manifest 拆出去并自己加缓存，或者换成分页的清单。
 - **清单要么完整要么失败**：account、目录（含 account 的登记表）、任何一个服的角色记录问不到（不是“没有角色”，而是出错），整个请求失败，不给一份缺了角色或缺了地址的清单——登记表问不到时也不回落到静态配置冒充全部。某个服上本账号的 slot 与角色对不上（`560113`）或合服别名两跳时也是整个请求失败。
-- **票据不能单张吊销**：账号票据与进服票据都是无状态的签名，有效期内可以重复使用；封号对已经发出去的票据立即生效（account 每次校验都再读账号）。同一张账号票据对同一个服反复 `enter` 不会多出玩家——映射的唯一性在 account。
+- **票据不能单张吊销**：账号票据、进服票据与游戏账号 token 都是无状态的签名，有效期内可以重复使用；封号对已经发出去的票据立即生效（account 每次校验都再读账号）。
+- **游戏账号 token 只回答“哪个账号、哪个游戏”**：不带区服、不带角色。登录带了 `game` 而游戏不在 `account.games` 里时整个登录失败（不交出账号票据），客户端去掉 `game` 重试或改用 `/portal/game-token`。入口不核对 token 用在哪个大厅：大厅拿 `ValidateGameToken` 返回的游戏与自己服务的游戏比较（`GameAccount.RequireGame`）。同一张账号票据对同一个服反复 `enter` 不会多出玩家——映射的唯一性在 account。
 - **区服状态在 `/portal/enter` 不拦**：维护中的服老号照常能进；新号被送去非 `open` 的服时拿得到进服票据，握手才被拒，而握手失败客户端拿不到原因。客户端要按清单里的 `status` 与 `role` 自己判断。
 - **账号 ↔ 玩家号的映射在握手时才建**：拿了进服票据而没有去握手的新号，在 account 里没有角色，清单里仍是 `role: null`。反过来，握手过而没有在游戏服新建的账号，清单里已经有 `role`（“老号”），推荐规则把那个服当作他玩过的服；游戏服那边仍告知要新建。清单里的 `role` 说的是 account 的映射，不是游戏服的玩家数据。
 - **地址可以是空的**：零配置时清单与进服结果里 `addr` 为空、`addr_source` 是 `none`，票据照发。
 - **动态地址的新鲜度**：game 每 `login.presence.interval`（缺省 10 秒）报一次，期限是三倍（30 秒）。进程死了、断网了，它的地址最多还会被发出去一个期限；正常停机时立刻撤销。上报者自报服号，account 不核对（总线只在内网，调用方可信）。没写 `login.presence.addr` 的 game 不上报，那个服只有静态地址。
 - **`portal.servers` 不在 App 的配置声明里**：`--print-config` 不打印、`--check-config` 与 `roost config check` 不检查，写错了要等进程启动到入口这一步才报错退出。
-- **前提**：依赖 `login`（握手时把票据交给 account 的认证器；`/portal/enter` 的握手票据由 `game/modules/login` 的 `EnterTicket` 拼）；托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`ListServerPresence`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
+- **前提**：依赖 `login`（握手时把票据交给 account 的认证器；`/portal/enter` 的握手票据由 `game/modules/login` 的 `EnterTicket` 拼）；托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`ListServices`、`ListServerPresence`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`IssueGameToken`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
 - **已知限制**：[KNOWN-LIMITS“portal 的边界”](../../docs/maintenance/KNOWN-LIMITS.md)，以及同一处的“login 的边界”“game-demo 接入登录链路的边界”（demo 渠道经入口对外、生成依赖没发布的 `wiring/modulehost`）。
 
 ## 复用方式
@@ -80,7 +84,7 @@ roost module verify
 
 **把 manifest 拆成独立服务**
 
-入口用到的只有 account 在总线上的接口（`Login`、`IssueAccountTicket`、`ValidateAccountTicket`、`ListServers`、`ListServerPresence`、`RoleOnServer`、`IssueEnterTicket`），不依赖“与 account 同进程”：
+入口用到的只有 account 在总线上的接口（`Login`、`IssueAccountTicket`、`ValidateAccountTicket`、`ListServers`、`ListServices`、`ListServerPresence`、`RoleOnServer`、`IssueEnterTicket`、`IssueGameToken`），不依赖“与 account 同进程”：
 
 - 新建一个业务服务，`uses: [account]`，加 web Mod；在它的 `Init` 里调 `portal.Start(registry)`（它按能力名取 account——同进程时是本地服务，拆出去之后是总线客户端，代码不用改）。原来装在 account 进程上的那一行接线从 `roost.yaml` 的模块记录里拿掉（`modules.portal.runtime.framework`），再 `roost project sync`。
 - 两个进程之间**不需要共享任何密钥**：票据是 account 的，manifest 每次都把票据交回 account 校验。manifest 的副本数与 account 的副本数互不相干。
@@ -103,9 +107,9 @@ roost module verify
 
 ## 验证范围
 
-- `roost module verify portal`：12 条场景（`services/account/portal`）；与 `enter` 的联动 2 条。
+- `roost module verify portal`：15 条场景（`services/account/portal`）；与 `enter` 的联动 2 条。
 - 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）与 login 模块的认证器；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
-- 覆盖：从渠道身份走到一条认证过的握手、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
+- 覆盖：从渠道身份走到一条认证过的握手、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt1 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；game-demo 的这一段有可重复的脚本（仓库的 `scripts/test-demo-login.sh`：`make dev-run`、curl 三步、机器人 `-login portal` 新号与老号，最后经独立 Gate 再跑一遍）。已并入别的服的老角色也有脚本（`scripts/test-demo-merge.sh`：合服后原服 1001 的角色走三步，清单标出 `merged_into`、地址给承载服，1001 的进服票据在承载服 1000 上嵌入 TCP 与经独立 Gate 各握手一次，进到原角色、背包延续）。
 - `scripts/test-demo-login.sh` 的 casual + naming 阶段增加两个 account 进程：A 签发账号票据，B 校验并选服、签发进服票据；停掉 A 后 B 独立完成同一角色的重连。两个 game sid 共用正式 Redis Directory，验证建角、重名拒绝与换名；嵌入 TCP 和双 Gate 都走真实入口。
 - 没有验证：动态地址经真实进程（game 上报 → NATS → account → Redis → 入口）、换服中的角色、生产配置、跨机。可重复步骤见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
@@ -116,6 +120,7 @@ roost module verify
 POST /portal/login    {channel, open_id, credential}   -> 账号票据
 POST /portal/servers  {account_ticket}                  -> 区服清单（地址、负载、本账号有没有角色）+ 推荐的服
 POST /portal/enter    {account_ticket, server_id}       -> 握手票据 enter:<进服票据> + 该连的地址
+（开房间类游戏没有区服：POST /portal/game-token {account_ticket, game} -> 游戏账号 token，拿去大厅）
 连那个地址（Gate，或直连的 game），握手帧出示握手票据    -> 认证器问 account：这个账号在这个服上是哪一名玩家，没有就新建映射
 （game 推送 EnterStatus）                                -> 本服能不能进、要不要先新建（只是告知）
 要新建：发 EnterCreate{name}                             -> game 建成这名玩家：建档、起名、初始发放
@@ -170,7 +175,7 @@ go run ./cmd/playerprobe -addr 127.0.0.1:7000      # 只验证握手；之后的
 | 请求体过大 | 413 | `{"ok":false,"error":"request body too large"}` |
 | account 或区服目录给不出结论（不可达、超时、存储出错），或 account 的回答对不上问题 | 500 | `{"ok":false,"code":1,"reason":"server error"}`；原因只进服务端日志 |
 
-account 的码（`service/account` 的常量）：`560111` 票据无效（过期、被改过、不是 account 签的、拿别的票据冒充——一律这一个码，重新登录）、`560102` 渠道拒绝了凭据（含开发登录没开、渠道没接）或账号被封、`560103` 账号不存在、`560104` 服没登记。票据为空或超过 1024 字节时入口不去问 account，直接按 `560111` 回答。
+account 的码（`service/account` 的常量）：`560111` 票据无效（过期、被改过、不是 account 签的、拿别的票据冒充——一律这一个码，重新登录）、`560102` 渠道拒绝了凭据（含开发登录没开、渠道没接）或账号被封、`560103` 账号不存在、`560104` 服没登记、`560120` 游戏不在 `account.games` 里。票据为空或超过 1024 字节时入口不去问 account，直接按 `560111` 回答。
 
 ### POST /portal/login
 
@@ -179,26 +184,34 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 | `channel` | 32 字节 | 渠道。开发登录是 `dev`；其余是工程在 `services/account/login_channels.go` 接的 |
 | `open_id` | 128 字节 | 渠道里的用户标识。只是提示：账号以渠道确认的身份为准——拿自己的凭据配上别人的 `open_id`，得到的仍是自己的账号 |
 | `credential` | 8 KiB | 交给渠道校验的凭据（开发登录是 `login.dev_token` 的值）。不记日志、不回显 |
+| `game` | 32 字节，可选 | 开房间类游戏的游戏名（`account.games` 里的）。写了就在答复里一并给一张游戏账号 token |
 
-响应只有账号票据：`{"ok": true, "account_ticket": "at1.…", "account_ticket_expires_at": 1800000600}`。票据有效期 `account.ticket_ttl`（缺省 10 分钟），期内可以重复使用；过期了重新登录。
+响应：`{"ok": true, "account_ticket": "at1.…", "account_ticket_expires_at": 1800000600}`；带了 `game` 时另有 `"game_token": "gt1.…", "game_token_expires_at": 1800007200`。票据有效期 `account.ticket_ttl`（缺省 10 分钟），期内可以重复使用；过期了重新登录。游戏账号 token 的寿命是 `account.games.<游戏>.token_ttl`。`game` 不在 `account.games` 里时整个登录答 `560120`，不给账号票据。
 
 ### POST /portal/servers
 
-请求 `{"account_ticket": "…"}`。响应：
+请求 `{"account_ticket": "…"}`，可选 `"service": "slg"`（只列这个 game 服务的服）。响应：
 
 ```json
 {
   "ok": true,
   "recommended_server_id": 1000,
+  "services": [
+    {"name": "lobby", "kind": "lobby", "addr": "https://lobby.example.com"},
+    {"name": "relay", "kind": "relay", "addr": ""},
+    {"name": "slg", "kind": "game", "addr": ""}
+  ],
   "servers": [
-    {"server_id": 1000, "name": "game-1000", "status": "open", "addr": "203.0.113.7:7000", "addr_source": "directory", "load": 40, "tags": ["new"],
+    {"server_id": 1000, "name": "game-1000", "service": "slg", "status": "open", "addr": "203.0.113.7:7000", "addr_source": "directory", "load": 40, "tags": ["new"],
      "role": {"player_id": 100001, "serving_server_id": 1000, "created_at": 1800000000, "last_login_at": 1800000000}},
-    {"server_id": 1001, "name": "game-1001", "status": "closed", "merged_into": 1000, "addr": "203.0.113.7:7000", "addr_source": "directory", "load": 40, "role": null}
+    {"server_id": 1001, "name": "game-1001", "service": "slg", "status": "closed", "merged_into": 1000, "addr": "203.0.113.7:7000", "addr_source": "directory", "load": 40, "role": null}
   ]
 }
 ```
 
-- `servers` 是 account 登记过的全部区服（`ListServers`），按服号升序，至多 256 个。目录里有、account 没登记的服不列出。
+- `services` 只在配置了 `account.services` 时有：account 的 `ListServices`（按名字升序），`kind` 是 `game` / `lobby` / `relay`，`addr` 来自配置 `portal.services`（没配是空串；game 服务的地址在各个区服上）。没有配置 `account.services` 的工程没有这一项、服上也没有 `service`，与以前完全相同。
+- `servers` 是 account 登记过的全部区服（`ListServers`），按服号升序，至多 1024 个；写了 `service` 时只有那个 game 服务的，推荐也只在其中挑。`service` 不是 `account.services` 里的 game 服务（lobby、relay、不认识的名字，或者工程没有配置 `account.services`）答 `portal_request_invalid`。目录里有、account 没登记的服不列出。
+- `service` 是这个服归属的 game 服务（account 的 `GameServer.Service`；记录没写时归到唯一的 game 服务）。所有 game 服务的区服共用一个全局号段。
 - `status` 是 account 里的状态（`open` / `maintenance` / `full` / `closed`）。新号只进得了 `open` 的服；已有角色的在任何状态下都能进。
 - `merged_into` 非 0：这个服已并入那个服。这里的老角色照常进，由那个服承载。
 - `addr` 是进这个服该连的地址——它的**承载服**在目录里的地址；`addr_source` 是 `directory`，目录里没有时 `addr` 为空、`addr_source` 是 `none`。`load`、`tags` 是目录给的，入口不解释。
@@ -217,6 +230,15 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 | `addr`、`addr_source` | 承载服的地址；目录里没有时为空、`none`——票据照发，只是入口不知道该连哪里 |
 
 进服票据只绑定账号与服。这个账号在那个服上是哪一名玩家、要不要新建映射，是握手时认证器问 account 的事（`EnterServer`）。服号必须是 account 登记过的服，否则带着 `560104` 拒绝；被封的账号拿不到票据。
+
+### POST /portal/game-token
+
+请求 `{"account_ticket": "…", "game": "party"}`（`game` 必填，至多 32 字节）。响应 `{"ok": true, "game": "party", "game_token": "gt1.<过期秒>.party.<账号>.<签名>", "expires_at": 1800007200}`。
+
+- 账号只取自账号票据（account 在 `IssueGameToken` 里校验它）；被封的账号拿不到（`560102`）；`game` 不在 `account.games` 里答 `560120`。
+- 寿命是 `account.games.<游戏>.token_ttl`（至多 24h），期内可以重复使用；过期了凭新的账号票据再换一张。
+- 大厅请求里带它（方案约定 `Authorization: Bearer gt1.…`）；大厅不持有密钥，经 account 的 `ValidateGameToken` 校验，拿返回的游戏与自己服务的游戏比较。A 游戏的 token 进不了 B 游戏的大厅。
+- 游戏账号 token 不能当账号票据用（拿清单、进服票据、再换 token 都答 `560111`），反过来也一样。
 
 ## 区服目录
 
@@ -237,10 +259,10 @@ type Directory interface {
 
 - 入口每个要地址的请求都问一次目录，所以实现要快：读内存，或者自己带缓存；要并发安全。
 - 返回错误 = “现在问不到”，入口答 500。
-- 不成样子的条目与重复的服号（留第一个）由入口丢掉并记一条 Warn，那个服在清单里就是没有地址；坏数据不会让请求失败，也不会被带给客户端。至多认 256 个条目。
+- 不成样子的条目与重复的服号（留第一个）由入口丢掉并记一条 Warn，那个服在清单里就是没有地址；坏数据不会让请求失败，也不会被带给客户端。至多认 1024 个条目。
 - 用哪个目录在 `services/account/portal/portal_rules.go` 的 `newDirectory` 里选，**那个文件归工程所有**。
 
-静态目录：配置 `portal.servers`（`NewStaticDirectory`）。静态数据写错（地址不成样子、服号不是正数、超过 256 条）在启动时就报错。
+静态目录：配置 `portal.servers`（`NewStaticDirectory`）。静态数据写错（地址不成样子、服号不是正数、超过 1024 条）在启动时就报错。
 
 ### 动态目录
 
@@ -260,7 +282,7 @@ account：登记表（Redis 哈希 <prefix>:presence，到期的不给出）
 - 到期那一刻起条目不再给出：进程死了、断网了，它的地址最多还会被发出去一个期限（缺省 30 秒），之后那个服回到静态配置的地址（没有就没有地址）。
 - 登记表在共享存储里：入口多副本、manifest 拆成独立服务，读到的都是同一张，不用把上报送到每个副本。
 - game 一侧只要配 `login.presence.addr`（客户端连得到的 `host:port`，通常是 Gate；监听地址 `0.0.0.0` 与独立 Gate 部署时进程猜不出来，所以必须写）；不写就不报。负载是那个 game 进程的在线连接数（独立 Gate 部署时是经 Gate 进来的会话数）。细节见 [login 的“区服入口上报”](../login/README.md)。
-- 至多 256 个没过期的服（满了之后新的服号被拒、已登记的照常续期）；期限至多 600 秒；条目的地址、负载、标签与目录条目同样的上限，account 在上报时就拒绝不成样子的。
+- 至多 1024 个没过期的服（满了之后新的服号被拒、已登记的照常续期）；期限至多 600 秒；条目的地址、负载、标签与目录条目同样的上限，account 在上报时就拒绝不成样子的。
 - 别的来源：读服务发现时自己实现 `Directory`（`Entries` 里读发现结果并带上缓存——入口每个请求都会问一次；托管 account 的进程缺省没有 etcd Mod，要自己加；发现里登记的要是客户端连得到的地址），在 `newDirectory` 里换掉或叠上去。运维手工登记直接调 account 的 `ReportServerPresence`（期限至多 600 秒，要持续有效就写 `portal.servers`）。
 
 ## 推荐规则
@@ -280,8 +302,9 @@ account：登记表（Redis 哈希 <prefix>:presence，到期的不给出）
 | --- | --- | --- | --- |
 | 账号票据 `at1.…` | account 的 `IssueAccountTicket`（入口在 `Login` 之后调） | account 的 `ValidateAccountTicket`（入口每个带票据的请求都调） | `account.ticket_ttl`，缺省 10 分钟 |
 | 进服票据 `et1.…`（握手时写作 `enter:et1.…`） | account 的 `IssueEnterTicket`（入口的 `/portal/enter` 调） | account 的 `EnterServer`（握手的认证器调） | `account.session_ttl`，缺省 30 分钟 |
+| 游戏账号 token `gt1.…` | account 的 `IssueGameToken`（入口的 `/portal/game-token` 与带 `game` 的登录调） | account 的 `ValidateGameToken`（大厅调） | `account.games.<游戏>.token_ttl`，至多 24h |
 
-两种票据与角色会话令牌用的是同一把 `account.session_secret`，各有各的域，互相冒充不了；换 `account.session_secret` 同时作废全部在外的票据。
+三种票据与角色会话令牌用的是同一把 `account.session_secret`，各有各的域，互相冒充不了；换 `account.session_secret` 同时作废全部在外的票据。
 
 ## 配置
 
@@ -289,14 +312,18 @@ account：登记表（Redis 哈希 <prefix>:presence，到期的不给出）
 
 ```yaml
 portal:
-  servers:                   # 静态的区服目录：服号 -> 客户端连得到的地址；至多 256 个
+  servers:                   # 静态的区服目录：服号 -> 客户端连得到的地址；至多 1024 个
     "1000": 203.0.113.7:7000
     "1001": 203.0.113.8:7000
+  services:                  # 服务的地址：服务名（account.services 里的）-> 客户端连得到的地址；至多 64 个
+    lobby: https://lobby.example.com
 ```
 
 | 键 | 缺省 | 说明 |
 | --- | --- | --- |
 | `portal.servers` | 空 | 服号 → 带主机的 `host:port`（通常是 Gate）。键必须是正的服号的规范十进制写法（`"+7"`、`"007"` 不算），只写端口的地址（`":7000"`）不行。有哪些服由 account 说了算，这里只给地址；写了一个 account 没登记的服不会让它出现在清单里 |
+| `portal.services` | 空 | 服务名 → 地址（非空、至多 255 字节、不含空白；形式由客户端与那个服务约定，入口不解释）。名字的写法同 `account.services`；写了一个 account 没列出的服务不会让它出现在清单里。与 `portal.servers` 一样不在 App 的配置声明里，写错了启动到入口这一步才报错 |
+| `account.games` / `account.services` | 空 | account Mod 的键：游戏账号 token 服务的游戏（`games.<游戏>.token_ttl`）与接受本账号体系的服务（`services.<服务>.kind`）。都不写时与只有 game 区服的工程相同 |
 | `web.*` | 见 web Mod | 入口的监听地址、超时、请求体上限。开发配置的端口是 8080 + 这个服务的端口块号；生产环境 `web.addr` 不是回环地址时必须同时写 `web.allow_public_addr: true` |
 | `account.ticket_ttl` | `10m` | 账号票据的有效期（account Mod 的键，不写进生成的配置） |
 | `account.session_ttl` / `account.session_secret` | 见 account | 进服票据的有效期与全部票据的签名密钥 |
@@ -305,9 +332,9 @@ portal:
 
 | 文件 | 内容 |
 | --- | --- |
-| `services/account/portal/portal.go` | 启动入口 `Start`（清单的 `runtime`，在托管 account 的进程里启动）、三个端点、请求与响应的形状 |
+| `services/account/portal/portal.go` | 启动入口 `Start`（清单的 `runtime`，在托管 account 的进程里启动）、四个端点、请求与响应的形状 |
 | `services/account/portal/portal_rules.go` | **归工程所有**：用哪个区服目录（`newDirectory`）、推荐规则（`recommend`） |
 | `services/account/portal/portal_directory.go` | 区服目录的接口、静态目录、account 登记表的目录（`NewPresenceDirectory`）、`Overlay` |
-| `services/account/portal/portal_config.go` | `portal.servers` 的声明与启动时的检查 |
+| `services/account/portal/portal_config.go` | `portal.servers`、`portal.services` 的声明与启动时的检查 |
 | `internal/errors/portal.go` | 入口自己的业务码 |
 | `services/account/portal/portal_enter_test.go` | 只在装了 enter 时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |

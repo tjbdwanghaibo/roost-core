@@ -91,6 +91,7 @@ type portalRecordingAccounts struct {
 	listServers  func() ([]svcaccount.GameServer, error)
 	roleOnServer func(accountID string, serverID int32) (svcaccount.Role, error)
 	issueEnter   func(accountID string, serverID int32) (svcaccount.EnterTicket, error)
+	issueGame    func(game string) (svcaccount.GameToken, error)
 }
 
 var errPortalBusDown = errors.New("bus: no responders for account (redis 10.9.8.7:6379 unreachable)")
@@ -206,6 +207,23 @@ func (accounts *portalRecordingAccounts) IssueEnterTicket(ctx context.Context, a
 	return accounts.Accounts.IssueEnterTicket(ctx, accountID, serverID)
 }
 
+func (accounts *portalRecordingAccounts) IssueGameToken(ctx context.Context, accountTicket string, game string) (svcaccount.GameToken, error) {
+	if err := accounts.enter("IssueGameToken", ""); err != nil {
+		return svcaccount.GameToken{}, err
+	}
+	if accounts.issueGame != nil {
+		return accounts.issueGame(game)
+	}
+	return accounts.Accounts.IssueGameToken(ctx, accountTicket, game)
+}
+
+func (accounts *portalRecordingAccounts) ListServices(ctx context.Context) ([]svcaccount.ServiceSpec, error) {
+	if err := accounts.enter("ListServices", ""); err != nil {
+		return nil, err
+	}
+	return accounts.Accounts.ListServices(ctx)
+}
+
 func (accounts *portalRecordingAccounts) CreateRole(ctx context.Context, accountID string, serverID int32, name string) (svcaccount.Role, error) {
 	_ = accounts.enter("CreateRole", "")
 	return accounts.Accounts.CreateRole(ctx, accountID, serverID, name)
@@ -251,6 +269,13 @@ func portalVerifier(t *testing.T) svcaccount.IdentityVerifier {
 // newPortalWorld 建一套 account（1000、1001 两个开放的服）与一个入口。mutate 改入口的参数：区服目录、推荐规则。
 func newPortalWorld(t *testing.T, mutate ...func(*Options)) *portalWorld {
 	t.Helper()
+	return newPortalWorldWith(t, nil, mutate...)
+}
+
+// newPortalWorldWith 同 newPortalWorld，另由 account 改 account 的配置（account.games、account.services）。
+// 配置了 account.services 时，1000、1001 归第一个 game 服务。
+func newPortalWorldWith(t *testing.T, account func(*svcaccount.Config), mutate ...func(*Options)) *portalWorld {
+	t.Helper()
 	w := &portalWorld{t: t, stores: portalStores{
 		accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
 		roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
@@ -263,7 +288,7 @@ func newPortalWorld(t *testing.T, mutate ...func(*Options)) *portalWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.service, err = svcaccount.New(svcaccount.Config{
+	accountConfig := svcaccount.Config{
 		Accounts:      w.stores.accounts,
 		Roles:         w.stores.roles,
 		Servers:       versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
@@ -276,12 +301,22 @@ func newPortalWorld(t *testing.T, mutate ...func(*Options)) *portalWorld {
 		SessionTTL:    30 * time.Minute,
 		Now:           w.clock,
 		SystemNow:     w.clock,
-	})
+	}
+	if account != nil {
+		account(&accountConfig)
+	}
+	w.service, err = svcaccount.New(accountConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstGame := ""
+	for _, service := range accountConfig.Services {
+		if service.Kind == svcaccount.ServiceKindGame && firstGame == "" {
+			firstGame = service.Name
+		}
+	}
 	for _, sid := range []int32{1000, 1001} {
-		w.upsert(sid, svcaccount.ServerOpen)
+		w.upsertIn(sid, svcaccount.ServerOpen, firstGame)
 	}
 	w.accounts = &portalRecordingAccounts{Accounts: w.service, calls: map[string]int{}}
 	options := Options{Accounts: w.accounts}
@@ -297,7 +332,13 @@ func newPortalWorld(t *testing.T, mutate ...func(*Options)) *portalWorld {
 
 func (w *portalWorld) upsert(sid int32, status svcaccount.ServerStatus) {
 	w.t.Helper()
-	if _, err := w.service.UpsertServer(context.Background(), svcaccount.GameServer{ID: sid, Name: fmt.Sprintf("s%d", sid), Status: status}); err != nil {
+	w.upsertIn(sid, status, "")
+}
+
+// upsertIn 登记一个服，归 service 这个 game 服务（空串：不写服务名）。
+func (w *portalWorld) upsertIn(sid int32, status svcaccount.ServerStatus, service string) {
+	w.t.Helper()
+	if _, err := w.service.UpsertServer(context.Background(), svcaccount.GameServer{ID: sid, Name: fmt.Sprintf("s%d", sid), Status: status, Service: service}); err != nil {
 		w.t.Fatal(err)
 	}
 }
@@ -1274,13 +1315,13 @@ func TestPortalDropsBadDirectoryEntries(t *testing.T) {
 	if entered := w.enter(ticket, 1001); entered.text("addr") != "" || entered.text("addr_source") != "none" {
 		t.Fatalf("enter a server whose entry is malformed: %s", entered.raw)
 	}
-	// 条目太多：只认前 256 个成样子的。
-	many := make([]Entry, 0, 300)
-	for sid := int32(1); sid <= 300; sid++ {
+	// 条目太多：只认前 1024 个成样子的（与 account 的区服上限一致，2026-11-17 由 256 放宽）。
+	many := make([]Entry, 0, 1100)
+	for sid := int32(1); sid <= 1100; sid++ {
 		many = append(many, Entry{ServerID: sid, Addr: "203.0.113.7:7000"})
 	}
-	if usable, dropped := usableEntries(many); len(usable) != 256 || dropped != 44 || usable[256].Addr == "" || usable[257].Addr != "" {
-		t.Fatalf("300 entries: %d kept, %d dropped", len(usable), dropped)
+	if usable, dropped := usableEntries(many); len(usable) != 1024 || dropped != 76 || usable[1024].Addr == "" || usable[1025].Addr != "" {
+		t.Fatalf("1100 entries: %d kept, %d dropped", len(usable), dropped)
 	}
 
 	// 静态目录：写错了在构造时报，不等到请求。
@@ -1294,11 +1335,11 @@ func TestPortalDropsBadDirectoryEntries(t *testing.T) {
 		}
 	}
 	tooMany := map[int32]string{}
-	for sid := int32(1); sid <= 257; sid++ {
+	for sid := int32(1); sid <= 1025; sid++ {
 		tooMany[sid] = "203.0.113.7:7000"
 	}
 	if _, err := NewStaticDirectory(tooMany); err == nil {
-		t.Fatal("NewStaticDirectory accepted 257 servers")
+		t.Fatal("NewStaticDirectory accepted 1025 servers")
 	}
 	// Overlay：后面的盖住前面的，nil 的层跳过，任何一层出错整体出错。
 	base := portalAddrs(t, map[int32]string{1: "base-1:7000", 2: "base-2:7000"})
@@ -1422,7 +1463,7 @@ portal:
 		t.Fatal("Start without a registry succeeded")
 	}
 	tooMany := map[string]any{}
-	for sid := 1; sid <= 257; sid++ {
+	for sid := 1; sid <= 1025; sid++ {
 		tooMany[strconv.Itoa(sid)] = "203.0.113.7:7000"
 	}
 	for label, test := range map[string]struct {
@@ -1435,7 +1476,7 @@ portal:
 		"an address without a host":  {map[string]any{"1000": ":7000"}, "portal.servers.1000"},
 		"an address without a port":  {map[string]any{"1000": "203.0.113.7"}, "portal.servers.1000"},
 		"port zero":                  {map[string]any{"1000": "203.0.113.7:0"}, "portal.servers.1000"},
-		"257 servers":                {tooMany, "portal.servers lists 257 servers; at most 256"},
+		"1025 servers":               {tooMany, "portal.servers lists 1025 servers; at most 1024"},
 	} {
 		refused, err := portalProcess(t, w.accounts, map[string]any{"portal.servers": test.servers})
 		if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -1469,5 +1510,258 @@ func TestPortalNewRefusesIncompleteOptions(t *testing.T) {
 	}
 	if err := w.portal.RegisterRoutes(nil); err == nil {
 		t.Fatal("RegisterRoutes accepted a nil registerer")
+	}
+}
+
+// ---- 游戏账号 token 与多个服务（方案 2026-11-16 §4.1）----
+
+// portalGames 是场景里的 account.games：party 两小时、brawl 九十分钟。
+func portalGames(c *svcaccount.Config) {
+	c.Games = []svcaccount.GameSpec{{Name: "party", TokenTTL: 2 * time.Hour}, {Name: "brawl", TokenTTL: 90 * time.Minute}}
+}
+
+// 游戏账号 token 的两条拿法：已登录的客户端凭账号票据调 /portal/game-token；登录时带上 game，登录的答复里多一张。
+// 两张都是 account 签的、account 认的，绑定的是票据（登录时是渠道确认）的账号，不是请求里写的；不带 game 的登录
+// 与以前一样没有 token。时钟在 Unix 1800000000。
+func TestPortalHandsOutGameTokensByEndpointAndAtLogin(t *testing.T) {
+	w := newPortalWorldWith(t, portalGames)
+	ctx := context.Background()
+
+	plain := w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken})
+	if _, present := plain.body["game_token"]; plain.status != http.StatusOK || present {
+		t.Fatalf("a login without game: %d %s; want no game token", plain.status, plain.raw)
+	}
+	ticket := plain.text("account_ticket")
+	// 第一条路：凭账号票据换。请求里夹带的账号不起作用。
+	reply := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party", "account_id": "dev:bob"})
+	if reply.status != http.StatusOK || reply.body["ok"] != true || reply.text("game") != "party" || reply.number("expires_at") != 1_800_007_200 ||
+		!strings.HasPrefix(reply.text("game_token"), "gt1.1800007200.party.") {
+		t.Fatalf("/portal/game-token: %d %s", reply.status, reply.raw)
+	}
+	got, err := w.service.ValidateGameToken(ctx, reply.text("game_token"))
+	if err != nil || got != (svcaccount.GameAccount{AccountID: "dev:alice", Game: "party", ExpiresAtUnix: 1_800_007_200}) {
+		t.Fatalf("account on the token from /portal/game-token: %+v, %v", got, err)
+	}
+	brawl := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "brawl"})
+	if brawl.status != http.StatusOK || brawl.number("expires_at") != 1_800_005_400 {
+		t.Fatalf("the brawl token (90 minutes): %d %s", brawl.status, brawl.raw)
+	}
+
+	// 第二条路：登录时带 game。账号以渠道确认的为准：store 渠道的凭据是 bob 的，请求里写的 open_id 是 alice。
+	login := w.post("/portal/login", map[string]any{"channel": "store", "open_id": "alice", "credential": "receipt-of-bob", "game": "brawl"})
+	if login.status != http.StatusOK || login.text("account_ticket") == "" || login.number("game_token_expires_at") != 1_800_005_400 {
+		t.Fatalf("a login with game: %d %s", login.status, login.raw)
+	}
+	got, err = w.service.ValidateGameToken(ctx, login.text("game_token"))
+	if err != nil || got.AccountID != "store:bob" || got.Game != "brawl" {
+		t.Fatalf("account on the token from the login: %+v, %v; want store:bob in brawl", got, err)
+	}
+	if err := got.RequireGame("party"); err == nil {
+		t.Fatal("the brawl token passed as a party token")
+	}
+	if account, err := w.service.ValidateAccountTicket(ctx, login.text("account_ticket")); err != nil || account.ID != "store:bob" {
+		t.Fatalf("the account ticket from the same login: %+v, %v", account, err)
+	}
+	if got := w.accounts.count("IssueGameToken"); got != 3 {
+		t.Fatalf("IssueGameToken was asked %d times, want 3", got)
+	}
+	if got := w.accounts.roleWrites(); got != 0 {
+		t.Fatalf("the portal reached CreateRole / SelectRole / EnterServer %d times", got)
+	}
+}
+
+// 拿不到游戏账号 token 的各种情形：游戏不在 account.games（两条路都带着 account 的 560120，登录整个失败、
+// 不交出账号票据）、票据无效或是别的凭证（560111）、账号被封（560102）、请求不成样子（不去问 account）、
+// account 问不到（500）、account 答了别的游戏的 token（500，不往下传）。
+func TestPortalRefusesGameTokensItCannotStandBehind(t *testing.T) {
+	w := newPortalWorldWith(t, portalGames)
+	ticket := w.login("alice")
+	refused := func(label string, reply portalReply, status, code int) {
+		t.Helper()
+		if reply.status != status || reply.code() != code || reply.body["ok"] != false {
+			t.Fatalf("%s: %d %s; want %d with code %d", label, reply.status, reply.raw, status, code)
+		}
+		for _, leak := range []string{"gt1.", "at1.", "10.9.8."} {
+			if strings.Contains(reply.raw, leak) {
+				t.Fatalf("%s: the refusal carries %q: %s", label, leak, reply.raw)
+			}
+		}
+	}
+	refused("a game account does not serve", w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "chess"}), http.StatusBadRequest, 560120)
+	refused("a login asking for a game account does not serve", w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": "chess"}), http.StatusBadRequest, 560120)
+	gameToken := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party"}).text("game_token")
+	for label, other := range map[string]string{
+		"a game token in place of the account ticket": gameToken,
+		"an enter ticket":         w.enter(ticket, 1000).text("ticket")[len("enter:"):],
+		"a forged ticket":         "at1.9999999999.ZGV2OmFsaWNl.AAAA",
+		"an empty ticket":         "",
+		"a ticket over the limit": "at1." + strings.Repeat("x", 1024),
+	} {
+		refused(label, w.post("/portal/game-token", map[string]any{"account_ticket": other, "game": "party"}), http.StatusBadRequest, 560111)
+	}
+	// 游戏账号 token 也不能当账号票据去拿清单。
+	refused("a game token for the server list", w.post("/portal/servers", map[string]any{"account_ticket": gameToken}), http.StatusBadRequest, 560111)
+	carol := w.login("carol")
+	w.ban("dev:carol")
+	refused("a banned account", w.post("/portal/game-token", map[string]any{"account_ticket": carol, "game": "party"}), http.StatusBadRequest, 560102)
+
+	// 不成样子的请求不去问 account。
+	before := w.accounts.count("IssueGameToken") + w.accounts.count("Login")
+	for label, payload := range map[string]map[string]any{
+		"no game":                     {"account_ticket": ticket},
+		"a 33-byte game":              {"account_ticket": ticket, "game": strings.Repeat("p", 33)},
+		"a login with a 33-byte game": {"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": strings.Repeat("p", 33)},
+	} {
+		path := "/portal/game-token"
+		if _, isLogin := payload["channel"]; isLogin {
+			path = "/portal/login"
+		}
+		refused(label, w.post(path, payload), http.StatusBadRequest, portalCodeRequestInvalid)
+	}
+	if got := w.accounts.count("IssueGameToken") + w.accounts.count("Login"); got != before {
+		t.Fatalf("malformed game token requests reached account %d times", got-before)
+	}
+	if reply := portalSend(t, w.engine, http.MethodGet, "/portal/game-token", nil); reply.status != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /portal/game-token: %d; want 405", reply.status)
+	}
+
+	// 问不到：500，不是 4xx。
+	w.accounts.fail("IssueGameToken")
+	refused("IssueGameToken is down", w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party"}), http.StatusInternalServerError, 1)
+	refused("IssueGameToken is down at login", w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": "party"}), http.StatusInternalServerError, 1)
+	w.accounts.fail()
+	// account 答非所问：成功却是别的游戏的 token、或者没有 token。
+	real, err := w.service.IssueGameToken(context.Background(), ticket, "brawl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, answer := range map[string]svcaccount.GameToken{
+		"a token for another game": real,
+		"no token":                 {Game: "party", ExpiresAtUnix: 1},
+	} {
+		w.accounts.issueGame = func(string) (svcaccount.GameToken, error) { return answer, nil }
+		refused(label, w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party"}), http.StatusInternalServerError, 1)
+		refused(label+" at login", w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": "party"}), http.StatusInternalServerError, 1)
+	}
+	w.accounts.issueGame = nil
+	if reply := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party"}); reply.status != http.StatusOK {
+		t.Fatalf("after the outage: %d %s", reply.status, reply.raw)
+	}
+}
+
+// 多个服务：account.services 列出 lobby、relay 与两个 game 服务（slg、mmo，区服号一个号段）。清单带着服务列表
+// （按名字升序，地址来自 portal.services），每个服标出所属的 game 服务；写了 service 只列那个服务的服，推荐也只在
+// 其中挑。不是 game 服务的名字不能当筛选。没有配置 account.services 的工程：清单没有 services、服上没有 service，
+// 写了 service 就是不成样子的请求。
+func TestPortalListsServersByService(t *testing.T) {
+	w := newPortalWorldWith(t, func(c *svcaccount.Config) {
+		c.Services = []svcaccount.ServiceSpec{
+			{Name: "slg", Kind: svcaccount.ServiceKindGame}, {Name: "mmo", Kind: svcaccount.ServiceKindGame},
+			{Name: "lobby", Kind: svcaccount.ServiceKindLobby}, {Name: "relay", Kind: svcaccount.ServiceKindRelay},
+		}
+	}, func(options *Options) {
+		options.ServiceAddrs = map[string]string{"lobby": "https://lobby.example.test:8443", "relay": "relay.example.test:9000"}
+	})
+	w.upsertIn(2000, svcaccount.ServerOpen, "mmo")
+	w.upsertIn(2001, svcaccount.ServerMaintenance, "mmo")
+	ticket := w.login("alice")
+
+	all := w.post("/portal/servers", map[string]any{"account_ticket": ticket})
+	if all.status != http.StatusOK {
+		t.Fatalf("the full list: %d %s", all.status, all.raw)
+	}
+	services, _ := all.body["services"].([]any)
+	wantServices := []map[string]any{
+		{"name": "lobby", "kind": "lobby", "addr": "https://lobby.example.test:8443"},
+		{"name": "mmo", "kind": "game", "addr": ""},
+		{"name": "relay", "kind": "relay", "addr": "relay.example.test:9000"},
+		{"name": "slg", "kind": "game", "addr": ""},
+	}
+	if len(services) != len(wantServices) {
+		t.Fatalf("services = %v", all.body["services"])
+	}
+	for i, want := range wantServices {
+		got, _ := services[i].(map[string]any)
+		for key, value := range want {
+			if got[key] != value {
+				t.Fatalf("service %d: %s = %v, want %v (%v)", i, key, got[key], value, got)
+			}
+		}
+	}
+	servers, recommended := w.servers(ticket)
+	for sid, service := range map[int]string{1000: "slg", 1001: "slg", 2000: "mmo", 2001: "mmo"} {
+		if servers[sid]["service"] != service {
+			t.Fatalf("server %d belongs to %v, want %s", sid, servers[sid]["service"], service)
+		}
+	}
+	if len(servers) != 4 || recommended != 2000 {
+		t.Fatalf("the full list has %v and recommends %d; want four servers and 2000 (the newest open)", portalKeys(servers), recommended)
+	}
+
+	for service, want := range map[string]struct {
+		servers     []int
+		recommended int64
+	}{
+		"slg": {[]int{1000, 1001}, 1001},
+		"mmo": {[]int{2000, 2001}, 2000},
+	} {
+		reply := w.post("/portal/servers", map[string]any{"account_ticket": ticket, "service": service})
+		list, _ := reply.body["servers"].([]any)
+		got := []int{}
+		for _, item := range list {
+			entry, _ := item.(map[string]any)
+			sid, _ := entry["server_id"].(float64)
+			got = append(got, int(sid))
+			if entry["service"] != service {
+				t.Fatalf("service %s lists a server of %v: %v", service, entry["service"], entry)
+			}
+		}
+		if reply.status != http.StatusOK || fmt.Sprint(got) != fmt.Sprint(want.servers) || reply.number("recommended_server_id") != want.recommended {
+			t.Fatalf("service %s: %d %s; want servers %v, recommended %d", service, reply.status, reply.raw, want.servers, want.recommended)
+		}
+		if services, _ := reply.body["services"].([]any); len(services) != 4 {
+			t.Fatalf("service %s: the filtered answer dropped the service list: %s", service, reply.raw)
+		}
+	}
+	for _, service := range []string{"lobby", "relay", "chess", strings.Repeat("s", 33)} {
+		if reply := w.post("/portal/servers", map[string]any{"account_ticket": ticket, "service": service}); reply.status != http.StatusBadRequest || reply.code() != portalCodeRequestInvalid {
+			t.Fatalf("service %q: %d %s; want 400 portal_request_invalid", service, reply.status, reply.raw)
+		}
+	}
+	// ListServices 问不到：整个清单 500。
+	w.accounts.fail("ListServices")
+	if reply := w.post("/portal/servers", map[string]any{"account_ticket": ticket}); reply.status != http.StatusInternalServerError || reply.code() != 1 {
+		t.Fatalf("ListServices down: %d %s; want 500", reply.status, reply.raw)
+	}
+	w.accounts.fail()
+
+	// 没有配置 account.services 的工程：与以前一样。
+	single := newPortalWorld(t)
+	singleTicket := single.login("alice")
+	reply := single.post("/portal/servers", map[string]any{"account_ticket": singleTicket})
+	if _, present := reply.body["services"]; reply.status != http.StatusOK || present || strings.Contains(reply.raw, `"service"`) {
+		t.Fatalf("a project without account.services: %d %s; want no services and no service on the servers", reply.status, reply.raw)
+	}
+	if reply := single.post("/portal/servers", map[string]any{"account_ticket": singleTicket, "service": "game"}); reply.status != http.StatusBadRequest || reply.code() != portalCodeRequestInvalid {
+		t.Fatalf("a service filter without account.services: %d %s", reply.status, reply.raw)
+	}
+
+	// portal.services 从配置来；写错的名字与地址启动不了。
+	engine, err := portalProcess(t, w.accounts, map[string]any{"portal.services": map[string]any{"lobby": "https://lobby.example.test:8443"}})
+	if err != nil {
+		t.Fatalf("Start with portal.services: %v", err)
+	}
+	configured := portalPost(t, engine, "/portal/servers", map[string]any{"account_ticket": ticket})
+	if !strings.Contains(configured.raw, `{"name":"lobby","kind":"lobby","addr":"https://lobby.example.test:8443"}`) {
+		t.Fatalf("the configured lobby address is not in the list: %s", configured.raw)
+	}
+	for label, services := range map[string]map[string]any{
+		"a name starting with a digit": {"9lobby": "https://lobby.example.test"},
+		"an address with a space":      {"lobby": "https://lobby example.test"},
+		"an empty address":             {"lobby": ""},
+	} {
+		if _, err := portalProcess(t, w.accounts, map[string]any{"portal.services": services}); err == nil || !strings.Contains(err.Error(), "portal.services") {
+			t.Fatalf("%s: Start = %v, want a refusal naming portal.services", label, err)
+		}
 	}
 }

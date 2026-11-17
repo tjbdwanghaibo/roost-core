@@ -1,9 +1,10 @@
-// Package portal 是客户端够得着的登录入口：三个 HTTP 端点，代客户端去问只在内部总线上的 account 服务。
+// Package portal 是客户端够得着的登录入口：四个 HTTP 端点，代客户端去问只在内部总线上的 account 服务。
 // 它就是常说的 manifest（清单）那一层，缺省与 account 跑在同一个进程里。
 //
-//	POST /portal/login    渠道身份 -> 账号票据
-//	POST /portal/servers  账号票据 -> 区服清单（每个服的地址、负载、本账号有没有角色）与推荐的服
-//	POST /portal/enter    账号票据 + 服号 -> 进服票据 + 该连的地址
+//	POST /portal/login       渠道身份（可选游戏名）-> 账号票据（带了游戏名时另加一张游戏账号 token）
+//	POST /portal/servers     账号票据（可选服务名）-> 服务清单、区服清单（每个服的地址、负载、本账号有没有角色）与推荐的服
+//	POST /portal/enter       账号票据 + 服号 -> 进服票据 + 该连的地址
+//	POST /portal/game-token  账号票据 + 游戏名 -> 游戏账号 token（开房间类游戏的大厅凭它认人）
 //
 // 客户端走完这三步，拿进服票据去连那个地址（Gate，或直连的 game），握手时出示它；握手的认证器再去问
 // account 这个账号在这个服上是哪一名玩家（登录模块 login）。入口不建角、不选角，也不知道玩家号。
@@ -22,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	gamelogin "{{MODULE}}/game/modules/login"
@@ -34,11 +36,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// 三个端点的路径。
+// 四个端点的路径。
 const (
-	PathLogin   = "/portal/login"
-	PathServers = "/portal/servers"
-	PathEnter   = "/portal/enter"
+	PathLogin     = "/portal/login"
+	PathServers   = "/portal/servers"
+	PathEnter     = "/portal/enter"
+	PathGameToken = "/portal/game-token"
 )
 
 // 请求的上限。请求体整段读进内存再解码，所以先按 MaxRequestBytes 截断，再逐个字段检查；
@@ -53,6 +56,8 @@ const (
 	MaxCredentialBytes = 8 << 10
 	// MaxTicketBytes 是请求里账号票据的上限，与 account 的票据上限一致；更长的不去问 account。
 	MaxTicketBytes = 1024
+	// MaxNameBytes 是请求里游戏名、服务名的上限，与 account 的上限一致（svcaccount.MaxGameNameBytes）。
+	MaxNameBytes = 32
 )
 
 // 清单与进服结果里 addr_source 的取值：地址是怎么来的。
@@ -63,11 +68,12 @@ const (
 	AddrNone = "none"
 )
 
-// Portal 是三个端点的处理器。用 New 构造；构造之后只读，请求可以并发。
+// Portal 是四个端点的处理器。用 New 构造；构造之后只读，请求可以并发。
 type Portal struct {
 	accounts  svcaccount.Accounts
 	directory Directory
 	recommend func([]ServerChoice) int32
+	services  map[string]string
 }
 
 // Options 是 New 的参数。Start 按进程配置填它；测试直接填。
@@ -78,6 +84,9 @@ type Options struct {
 	Directory Directory
 	// Recommend 是推荐规则；nil 取 portal_rules.go 的 recommend。只有测试需要换它。
 	Recommend func([]ServerChoice) int32
+	// ServiceAddrs 是服务名 -> 客户端连得到的地址（配置 portal.services，例如大厅的 HTTP 地址）；清单的 services
+	// 里按名字带上。nil 表示一个都没有。
+	ServiceAddrs map[string]string
 }
 
 // New 检查参数并返回处理器。
@@ -93,11 +102,15 @@ func New(options Options) (*Portal, error) {
 	if rule == nil {
 		rule = recommend
 	}
-	return &Portal{accounts: options.Accounts, directory: directory, recommend: rule}, nil
+	services := make(map[string]string, len(options.ServiceAddrs))
+	for name, addr := range options.ServiceAddrs {
+		services[name] = addr
+	}
+	return &Portal{accounts: options.Accounts, directory: directory, recommend: rule, services: services}, nil
 }
 
 // Start 是模块的服务级启动入口（清单的 runtime）：在托管 account 服务的进程里，全部 Mod 启动之后、
-// 路由表冻结之前执行一次，把三个端点登记到本进程的 web Mod。它读配置、取本进程的 account 服务、
+// 路由表冻结之前执行一次，把四个端点登记到本进程的 web Mod。它读配置、取本进程的 account 服务、
 // 让 portal_rules.go 选区服目录，任何一样不对都返回错误、进程不启动。返回的停止函数是 newDirectory 给的
 // （没有要停的东西时是 nil）。
 func Start(registry *app.Registry) (func(context.Context) error, error) {
@@ -116,6 +129,10 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if err != nil {
 		return nil, err
 	}
+	serviceAddrs, err := parseServices(settings.Portal.Services)
+	if err != nil {
+		return nil, fmt.Errorf("portal: %w", err)
+	}
 	accounts, ok := app.Lookup[svcaccount.Accounts](registry, svcaccount.CapabilityName)
 	if !ok || accounts == nil {
 		return nil, fmt.Errorf("portal: capability %q not found; the login entry runs in the process that hosts the account service (or, split out, in a service that lists account under uses)", svcaccount.CapabilityName)
@@ -131,18 +148,18 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if directory == nil {
 		return stop, errors.New("portal: newDirectory returned no directory")
 	}
-	portal, err := New(Options{Accounts: accounts, Directory: directory})
+	portal, err := New(Options{Accounts: accounts, Directory: directory, ServiceAddrs: serviceAddrs})
 	if err != nil {
 		return stop, err
 	}
 	if err := portal.RegisterRoutes(routes); err != nil {
 		return stop, fmt.Errorf("portal: %w", err)
 	}
-	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "servers", PathServers, "enter", PathEnter, "configured_addresses", len(addrs))
+	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "servers", PathServers, "enter", PathEnter, "game_token", PathGameToken, "configured_addresses", len(addrs), "service_addresses", len(serviceAddrs))
 	return stop, nil
 }
 
-// RegisterRoutes 把三个端点登记到 reg（web Mod，或测试里的替身）。实现 webroute.Module。
+// RegisterRoutes 把四个端点登记到 reg（web Mod，或测试里的替身）。实现 webroute.Module。
 // 路由只能在服务启动之前登记；同一条路由登记两次（工程自己也占了 /portal/...）会在这里报错。
 func (portal *Portal) RegisterRoutes(reg webroute.Registerer) error {
 	if reg == nil {
@@ -155,6 +172,7 @@ func (portal *Portal) RegisterRoutes(reg webroute.Registerer) error {
 		{PathLogin, portal.handleLogin},
 		{PathServers, portal.handleServers},
 		{PathEnter, portal.handleEnter},
+		{PathGameToken, portal.handleGameToken},
 	} {
 		if err := reg.Register(http.MethodPost, route.path, route.handler); err != nil {
 			return err
@@ -175,9 +193,12 @@ type loginRequest struct {
 	OpenID string `json:"open_id"`
 	// Credential 是交给渠道校验的凭据（开发登录是 login.dev_token 的值）。入口不解释它、不记日志、不回显。
 	Credential string `json:"credential"`
+	// Game 可选：开房间类游戏的客户端写自己的游戏名（account.games 里的），登录成功时一并拿到一张游戏账号 token，
+	// 省掉一次 /portal/game-token。游戏不在 account.games 里时整个登录失败（account 的码 560120）。
+	Game string `json:"game,omitempty"`
 }
 
-// loginResponse 是登录成功的响应：只有账号票据。区服清单是下一步（/portal/servers）。
+// loginResponse 是登录成功的响应：账号票据；请求带了游戏名时另有一张游戏账号 token。区服清单是下一步（/portal/servers）。
 type loginResponse struct {
 	OK bool `json:"ok"`
 	// AccountTicket 是 account 签发的账号票据：拿清单、要进服票据时原样带上。不要长期保存——
@@ -185,6 +206,9 @@ type loginResponse struct {
 	AccountTicket string `json:"account_ticket"`
 	// AccountTicketExpiresAt 是票据的过期时刻（Unix 秒，服务器的系统时间）。
 	AccountTicketExpiresAt int64 `json:"account_ticket_expires_at"`
+	// GameToken 与 GameTokenExpiresAt 只在请求带了 game 时出现：与 /portal/game-token 给的是同一种 token。
+	GameToken          string `json:"game_token,omitempty"`
+	GameTokenExpiresAt int64  `json:"game_token_expires_at,omitempty"`
 }
 
 func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -204,9 +228,13 @@ func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
 //
 // 票据绑定的是 account 返回的账号（渠道确认过的身份），不是请求里的 open_id：拿自己的凭据配上别人的
 // open_id，得到的仍是自己的账号。account 拒绝登录（凭据不对、账号被封、渠道没接）时原样带着它的码答回去。
+//
+// 带了 game 时，账号票据签好之后再凭它向 account 要一张这个游戏的游戏账号 token；要不到（游戏不在 account.games 里）
+// 整个登录失败，不交出一个缺了 token 的“成功”。
 func (portal *Portal) login(ctx context.Context, request loginRequest) (loginResponse, error) {
 	channel, openID := strings.TrimSpace(request.Channel), strings.TrimSpace(request.OpenID)
-	if channel == "" || len(channel) > MaxChannelBytes || openID == "" || len(openID) > MaxOpenIDBytes || len(request.Credential) > MaxCredentialBytes {
+	if channel == "" || len(channel) > MaxChannelBytes || openID == "" || len(openID) > MaxOpenIDBytes || len(request.Credential) > MaxCredentialBytes ||
+		len(request.Game) > MaxNameBytes {
 		return loginResponse{}, invalidRequest()
 	}
 	account, err := portal.accounts.Login(ctx, svcaccount.Identity{Channel: svcaccount.Channel(channel), OpenID: openID, Credential: request.Credential})
@@ -226,8 +254,16 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 	if ticket.Ticket == "" {
 		return loginResponse{}, errors.New("portal: account answered without an account ticket")
 	}
-	slog.InfoContext(ctx, "portal: login completed", "account_id", account.ID, "channel", channel)
-	return loginResponse{OK: true, AccountTicket: ticket.Ticket, AccountTicketExpiresAt: ticket.ExpiresAtUnix}, nil
+	response := loginResponse{OK: true, AccountTicket: ticket.Ticket, AccountTicketExpiresAt: ticket.ExpiresAtUnix}
+	if request.Game != "" {
+		token, err := portal.gameToken(ctx, ticket.Ticket, request.Game)
+		if err != nil {
+			return loginResponse{}, err
+		}
+		response.GameToken, response.GameTokenExpiresAt = token.Token, token.ExpiresAtUnix
+	}
+	slog.InfoContext(ctx, "portal: login completed", "account_id", account.ID, "channel", channel, "game", request.Game)
+	return response, nil
 }
 
 // ---- 清单与推荐 ----
@@ -235,21 +271,38 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 // serversRequest 是 POST /portal/servers 的请求体。
 type serversRequest struct {
 	AccountTicket string `json:"account_ticket"`
+	// Service 可选：只列这个 game 服务的区服（account.services 里 kind=game 的服务名）。不写列全部。
+	// 不是 account.services 里的 game 服务（含没有配置 account.services 的工程写了它）时答 portal_request_invalid。
+	Service string `json:"service,omitempty"`
 }
 
 // serversResponse 是清单。
 type serversResponse struct {
 	OK bool `json:"ok"`
-	// RecommendedServerID 是推荐规则（portal_rules.go 的 recommend）挑的服；0 表示没有推荐。
+	// RecommendedServerID 是推荐规则（portal_rules.go 的 recommend）挑的服；0 表示没有推荐。推荐只在列出的服里挑。
 	RecommendedServerID int32 `json:"recommended_server_id"`
-	// Servers 是 account 登记过的全部区服，按服号升序。
+	// Services 是 account.services 里的服务（按名字升序），带着配置 portal.services 给的地址；没有配置 account.services
+	// 的工程没有这一项。
+	Services []serviceView `json:"services,omitempty"`
+	// Servers 是 account 登记过的区服（写了 service 时只有那个服务的），按服号升序。
 	Servers []serverView `json:"servers"`
+}
+
+// serviceView 是清单里的一个服务。
+type serviceView struct {
+	Name string `json:"name"`
+	// Kind 是 game、lobby 或 relay。
+	Kind string `json:"kind"`
+	// Addr 是配置 portal.services 给这个服务的地址（例如大厅的 HTTP 地址）；没配是空串。game 服务的地址在各个区服上。
+	Addr string `json:"addr"`
 }
 
 // serverView 是清单里的一个服。
 type serverView struct {
 	ServerID int32  `json:"server_id"`
 	Name     string `json:"name"`
+	// Service 是这个服归属的 game 服务；没有配置 account.services 的工程没有这一项。
+	Service string `json:"service,omitempty"`
 	// Status 是 account 里这个服的状态：open、maintenance、full、closed。新号只能进 open 的服；
 	// 已经有角色的在任何状态下都能拿到进服票据。
 	Status string `json:"status"`
@@ -299,10 +352,25 @@ func (portal *Portal) handleServers(w http.ResponseWriter, r *http.Request) {
 // 任何一样问不到（account 出错、目录出错、角色记录对不上）整个请求失败：宁可让客户端重试，
 // 也不给一份缺了角色或缺了地址的清单，让玩家以为号没了、或者被推荐去一个其实有号的服的隔壁。
 // 开销是 1 次清单 + 每个服 1 次角色查询，顺序执行；区服很多、请求很密的部署见 README 的“边界”。
+//
+// 服务清单来自 account 的 ListServices（account.services），地址来自配置 portal.services。写了 service 时只列
+// 那个 game 服务的区服，推荐也只在其中挑。
 func (portal *Portal) servers(ctx context.Context, request serversRequest) (serversResponse, error) {
+	if len(request.Service) > MaxNameBytes {
+		return serversResponse{}, invalidRequest()
+	}
 	account, err := portal.account(ctx, request.AccountTicket)
 	if err != nil {
 		return serversResponse{}, err
+	}
+	services, err := portal.accounts.ListServices(ctx)
+	if err != nil {
+		return serversResponse{}, err
+	}
+	if request.Service != "" && !slices.ContainsFunc(services, func(service svcaccount.ServiceSpec) bool {
+		return service.Name == request.Service && service.Kind == svcaccount.ServiceKindGame
+	}) {
+		return serversResponse{}, invalidRequest()
 	}
 	listed, err := portal.accounts.ListServers(ctx)
 	if err != nil {
@@ -318,7 +386,10 @@ func (portal *Portal) servers(ctx context.Context, request serversRequest) (serv
 		if server.ID <= 0 {
 			return serversResponse{}, errors.New("portal: account listed a server without an id")
 		}
-		view := serverView{ServerID: server.ID, Name: server.Name, Status: string(server.Status), MergedInto: server.MergedInto}
+		if request.Service != "" && server.Service != request.Service {
+			continue
+		}
+		view := serverView{ServerID: server.ID, Name: server.Name, Service: server.Service, Status: string(server.Status), MergedInto: server.MergedInto}
 		serving := server.ID
 		if server.MergedInto > 0 {
 			serving = server.MergedInto
@@ -349,6 +420,9 @@ func (portal *Portal) servers(ctx context.Context, request serversRequest) (serv
 		choices = append(choices, choice)
 	}
 	response := serversResponse{OK: true, Servers: views}
+	for _, service := range services {
+		response.Services = append(response.Services, serviceView{Name: service.Name, Kind: string(service.Kind), Addr: portal.services[service.Name]})
+	}
 	// 推荐规则是工程的代码：它返回一个不在清单里的服号时按没有推荐处理，不把一个客户端进不了的服推出去。
 	if recommended := portal.recommend(choices); recommended > 0 {
 		for _, view := range views {
@@ -429,6 +503,67 @@ func (portal *Portal) enter(ctx context.Context, request enterRequest) (enterRes
 	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID)
 	slog.InfoContext(ctx, "portal: enter ticket issued", "account_id", account.ID, "server_id", ticket.ServerID, "serving_server_id", ticket.ServingServerID)
 	return response, nil
+}
+
+// ---- 游戏账号 token ----
+
+// gameTokenRequest 是 POST /portal/game-token 的请求体。
+type gameTokenRequest struct {
+	AccountTicket string `json:"account_ticket"`
+	// Game 是游戏名（account.games 里的），必填。
+	Game string `json:"game"`
+}
+
+// gameTokenResponse 是游戏账号 token。
+type gameTokenResponse struct {
+	OK bool `json:"ok"`
+	// Game 是 token 绑定的游戏，GameToken 是 token 本身（gt1.…），大厅请求里原样带上（Authorization: Bearer <token>）。
+	Game      string `json:"game"`
+	GameToken string `json:"game_token"`
+	// ExpiresAt 是 token 的过期时刻（Unix 秒，服务器的系统时间）：寿命按游戏配置（account.games.<游戏>.token_ttl）。
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+func (portal *Portal) handleGameToken(w http.ResponseWriter, r *http.Request) {
+	var request gameTokenRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	response, err := portal.issueGameToken(r.Context(), request)
+	if code, _ := errcode.ClientError(err); err != nil && code == errcode.CodeInternal {
+		slog.ErrorContext(r.Context(), "portal: game token failed", "game", request.Game, "code", code)
+	}
+	webroute.WriteResult(w, http.StatusOK, response, err)
+}
+
+// issueGameToken 把账号票据与游戏名交给 account 换一张游戏账号 token。账号只取自票据（account 自己校验它），
+// 游戏不在 account.games 里时带着 account 的码（560120）拒绝。
+func (portal *Portal) issueGameToken(ctx context.Context, request gameTokenRequest) (gameTokenResponse, error) {
+	if request.Game == "" || len(request.Game) > MaxNameBytes {
+		return gameTokenResponse{}, invalidRequest()
+	}
+	if request.AccountTicket == "" || len(request.AccountTicket) > MaxTicketBytes {
+		return gameTokenResponse{}, fmt.Errorf("%w: the ticket is not valid", svcaccount.ErrSessionInvalid)
+	}
+	token, err := portal.gameToken(ctx, request.AccountTicket, request.Game)
+	if err != nil {
+		return gameTokenResponse{}, err
+	}
+	slog.InfoContext(ctx, "portal: game token issued", "game", token.Game)
+	return gameTokenResponse{OK: true, Game: token.Game, GameToken: token.Token, ExpiresAt: token.ExpiresAtUnix}, nil
+}
+
+// gameToken 向 account 要一张 game 的游戏账号 token，并核对回答就是问的那个游戏的。
+func (portal *Portal) gameToken(ctx context.Context, accountTicket, game string) (svcaccount.GameToken, error) {
+	token, err := portal.accounts.IssueGameToken(ctx, accountTicket, game)
+	if err != nil {
+		return svcaccount.GameToken{}, err
+	}
+	if token.Token == "" || token.Game != game {
+		// account 答了“成功”，但 token 不是问的那个游戏的：不把一张进不了大厅的 token 交出去。
+		return svcaccount.GameToken{}, fmt.Errorf("portal: account answered a game token for %q with one that does not match", game)
+	}
+	return token, nil
 }
 
 // ---- 公共 ----

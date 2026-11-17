@@ -27,8 +27,8 @@ import (
 //
 // 用哪一个在 portal_rules.go 的 newDirectory 里选，那个文件归工程所有。
 
-// MaxEntries 是入口从目录里接受的条目数上限，与 account 的区服上限（256）一致。
-const MaxEntries = 256
+// MaxEntries 是入口从目录里接受的条目数上限，与 account 的区服上限（svcaccount.MaxServers，1024）一致。
+const MaxEntries = svcaccount.MaxServers
 
 // 目录条目里各字段的上限。
 const (

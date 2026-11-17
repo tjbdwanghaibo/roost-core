@@ -1,0 +1,8 @@
+ok   module portal: 15 passed (want 15), 0 skipped
+ok   module portal+enter: 2 passed (want 2), 0 skipped
+ok   module login: 37 passed (want 37), 0 skipped
+ok   module login+enter: 6 passed (want 6), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check

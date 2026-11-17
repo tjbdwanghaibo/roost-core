@@ -1,0 +1,21 @@
+KILLED  A1 校验不再读账号（封号不生效）  [TestABanRefusesGameTokensAtOnce]  game_token_test.go:253: local: a banned account's game token: {AccountID:store:alice Game:party ExpiresAtUnix:1700007200}, <nil>
+KILLED  A2 签发不查 account.games  [TestOnlyTheConfiguredGamesGetTokens]  game_token_test.go:179: game "chess": {Token:gt1.1700003600.chess.c3RvcmU6YWxpY2U.cR9TUlUs0Ix3zp8xW4xfgZllVe2HuAml1sRi8rZme_o Game:chess ExpiresAtUnix:1700003600}, <nil>; want ErrGameInvalid
+KILLED  A3 校验不查 account.games（去掉的游戏仍认）  [TestOnlyTheConfiguredGamesGetTokens]  game_token_test.go:190: a token for a game no longer configured: {AccountID:store:alice Game:party ExpiresAtUnix:1700007200}, <nil>
+KILLED  A4 RequireGame 不比较游戏  [TestAGameTokenOnlyOpensItsOwnGame]  game_token_test.go:234: the party token for the "brawl" lobby: <nil>; want ErrSessionInvalid
+KILLED  A5 签名不覆盖游戏段（签名内容去掉游戏）  [TestATamperedGameTokenIsRefused]  game_token_test.go:121: another game: {AccountID:store:alice Game:brawl ExpiresAtUnix:1700007200}, <nil>; want ErrSessionInvalid
+KILLED  A6 game token 与 at1 同一个版本前缀  [TestGameTokensAreIssuedPerGameAndValidatedByAccount]  game_token_test.go:45: local: party token = {Token:at1.1700007200.party.c3RvcmU6YWxpY2U.S5eft19kO8Isw0_yN69Xds1k3xTyk5GFrfl5Z7Di_c0 Game:party ExpiresAtUnix:1700007200}, want gt1.1700007200.party.<account>.<signature>
+KILLED  S1 没写服务名的区服不归唯一的 game 服务  [TestServersBelongToTheOnlyGameService]  services_test.go:76: local: server 1 belongs to "", want slg
+KILLED  S2 允许跨服务合服  [TestTwoGameServicesShareOneServerNumbering]  services_test.go:136: merging mmo's server into slg's: <nil>; want ErrServerInvalid
+KILLED  S3 服务名不对时先写了索引  [TestTwoGameServicesShareOneServerNumbering]  services_test.go:113: the refused server was put into the index
+KILLED  S4 lobby 也能当区服的服务  [TestServersBelongToTheOnlyGameService]  services_test.go:91: a server of service "lobby": {ID:9 Name:nine Status:open Region: UpdatedAtUnix:1700000000 Service:lobby MergedInto:0 MergedFrom:[] MergedAtUnix:0 MergeNote: Listed:[]}, <nil>
+KILLED  S5 没配置 services 时也接受服务名  [TestWithoutServicesTheServerListIsUnchanged]  services_test.go:26: a service name without account.services: {ID:8 Name:eight Status:open Region: UpdatedAtUnix:1700000000 Service: MergedInto:0 MergedFrom:[] MergedAtUnix:0 MergeNote: Listed:[]}, <nil>
+KILLED  W1 Init 不检查 games / services 的写法  [TestModReadsGamesAndServices]  account_mod_test.go:233: Init = <nil>, want a refusal naming "9lobby"
+KILLED  P1 登录忽略 game  [TestPortalHandsOutGameTokensByEndpointAndAtLogin]  portal_test.go:1553: a login with game: 200 {"ok":true,"account_ticket":"at1.1800000600.c3RvcmU6Ym9i.rIIHEpVzzL956X1Qz8P_RVR9curv0hdyu1fxkqlp_Pg","account_ticket_expires_at":1800000600}
+KILLED  P2 入口不核对 account 给的 token 是不是问的游戏  [TestPortalRefusesGameTokensItCannotStandBehind]  portal_test.go:1643: a token for another game: 200 {"ok":true,"game":"brawl","game_token":"gt1.1800005400.brawl.ZGV2OmFsaWNl.Ar9tUoRdzpgpIg8vuNk2eKF0czIMXdhiZUpAHoq60IU","expires_at":1800005400}
+KILLED  P3 game 超长也去问 account  [TestPortalRefusesGameTokensItCannotStandBehind]  portal_test.go:1619: a 33-byte game: 400 {"code":560120,"ok":false,"reason":"account: game is not served by this account service"}
+KILLED  P4 servers 不按 service 筛选  [TestPortalListsServersByService]  portal_test.go:1716: service slg lists a server of mmo: map[addr: addr_source:none load:0 name:s2000 role:<nil> server_id:2000 service:mmo status:open]
+KILLED  P5 非 game 服务也能当筛选  [TestPortalListsServersByService]  portal_test.go:1728: service "lobby": 200 {"ok":true,"recommended_server_id":0,"services":[{"name":"lobby","kind":"lobby","addr":"https://lobby.example.test:8443"},{"name":"mmo","kind":"game","addr":""},{"name":"relay","
+KILLED  P6 清单不带服务列表  [TestPortalListsServersByService]  portal_test.go:1681: services = <nil>
+KILLED  P7 portal.services 不检查名字的写法  [TestPortalListsServersByService]  portal_test.go:1764: a name starting with a digit: Start = <nil>, want a refusal naming portal.services
+KILLED  P8 portal.services 不检查地址  [TestPortalListsServersByService]  portal_test.go:1764: an address with a space: Start = <nil>, want a refusal naming portal.services
+ALL KILLED

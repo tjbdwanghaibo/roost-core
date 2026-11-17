@@ -1,0 +1,15 @@
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.00s)
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+--- PASS: TestOnlyTheConfiguredGamesGetTokens (0.00s)
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+--- PASS: TestABanRefusesGameTokensAtOnce (0.00s)
+--- PASS: TestTheServerIndexRefusesNewServersWhenFull (0.00s)
+--- PASS: TestWithoutServicesTheServerListIsUnchanged (0.00s)
+--- PASS: TestServersBelongToTheOnlyGameService (0.00s)
+--- PASS: TestTwoGameServicesShareOneServerNumbering (0.00s)
+--- PASS: TestBadServicesAreRefusedAtStart (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.388s
+--- PASS: TestModReadsGamesAndServices (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/account	1.334s

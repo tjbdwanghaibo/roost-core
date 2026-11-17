@@ -14,6 +14,12 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "account.session_ttl", Kind: "duration", Default: "30m", Min: "1ns", Starter: true, Example: "30m"},
 		{Name: "account.ticket_ttl", Kind: "duration", Default: "10m", Min: "10s", Max: "24h", Help: "账号票据的有效期（登录之后多久之内可以拿区服清单、要进服票据）；进服票据与角色会话令牌用 session_ttl"},
 		{Name: "account.claim_ttl", Kind: "duration", Default: "30s", Min: "1ns", Starter: true, Example: "5m"},
+		{Name: "account.games", Kind: "map", Help: "游戏账号 token 服务的游戏：games.<游戏名>.token_ttl（必填，至多 24h）。不在这里的游戏不签发 token"},
+		{Name: "account.games.*", Kind: "section", Closed: true},
+		{Name: "account.games.*.token_ttl", Kind: "duration", Min: "1s", Max: "24h", Help: "这个游戏的游戏账号 token 寿命（例如 2h，至多 24h）", Required: true},
+		{Name: "account.services", Kind: "map", Help: "接受本账号体系的服务：services.<服务名>.kind（game | lobby | relay）。不写时按单一 game 服务处理"},
+		{Name: "account.services.*", Kind: "section", Closed: true},
+		{Name: "account.services.*.kind", Kind: "string", Help: "服务类型：game（传统区服）、lobby（大厅）、relay（转发）", Enum: []string{"game", "lobby", "relay"}, Required: true},
 	}},
 	"account.client": {Keys: []configschema.Key{
 		{Name: "account.service_type", Kind: "string", Default: "account", Help: "bus service type the calls are addressed to"},
