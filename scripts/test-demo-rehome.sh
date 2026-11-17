@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # B-1：account + 两个 game 的真实 TCP / Redis / Mongo / NATS / 文件 WAL 换服演练。
 # 六个精确文件栅栏：accepted、quiesced、leaving、handed-off、committed、dropped；脚本收到栅栏事实后
-# SIGKILL 源服，保留原 WAL 重启，前四点经登录续做。每点一个新角色，核对 account 唯一绑定、旧服拒绝、背包与钱包去重。
-# committed→删除源库的崩溃窗口仍按 Q4 保留：必须报告旧副本，不能把它当成“自动清理已完成”。
+# SIGKILL 源服，保留原 WAL 重启，之后不登录任何一方：前四点（account 上换服在途）由重启后的恢复循环按 account 的
+# 在途索引接着做完（D8 A）；committed 点（已提交、源库未删）由起服核对认出旧档并删掉（D7 A）。两者都以 account
+# 绑定与 Mongo 为准等到结果，然后才登录核对。每点一个新角色，核对 account 唯一绑定、旧服拒绝、背包与钱包去重、源库无档。
 # 第七场景压住真实投影之后的 WAL Ack，验证 HandOffEntity 等 checkpoint；DEMO_REHOME_MUTATION=skip-checkpoint
 # 只在临时 go overlay 中删除等待，脚本必须非零退出（CHECKPOINT_BYPASS）。不修改生产源文件。
 #
@@ -142,32 +143,28 @@ for case_name in ${DEMO_REHOME_STAGES:-accepted quiesced leaving handed-off comm
 	source_kill
 	wait "$apply_pid" || drill_fail "accepted connection did not disconnect"
 	source_start
-	# 登录原服触发 Resume；预期第一次得到 rehome_moving，直到 account 的持久绑定指向目标服。
-	for i in $(seq 1 40); do
-		drill binding >"$out/$case_name/recover-binding.json"
-		if jq -e '.serving_server_id == 1001 and .transfer == null' "$out/$case_name/recover-binding.json" >/dev/null; then break; fi
-		drill resume >>"$out/$case_name/resume.log" 2>&1 || true
+	# 不登录：只读 account 绑定与两个库。在途的由恢复循环接着做完（D8），已提交的旧档由起服核对删掉（D7）。
+	for i in $(seq 1 240); do
+		snapshot no-login
+		if jq -e '.serving_server_id == 1001 and .transfer == null' "$out/$case_name/no-login-binding.json" >/dev/null &&
+			jq -e '.source == null and .target != null' "$out/$case_name/no-login-documents.json" >/dev/null; then break; fi
 		sleep 0.25
 	done
-	jq -e '.serving_server_id == 1001 and .transfer == null' "$out/$case_name/recover-binding.json" >/dev/null || drill_fail "transfer not recovered"
+	jq -e '.serving_server_id == 1001 and .transfer == null' "$out/$case_name/no-login-binding.json" >/dev/null || drill_fail "transfer not recovered without a login"
+	jq -e '.source == null and .target != null' "$out/$case_name/no-login-documents.json" >/dev/null || drill_fail "source documents not dropped without a login"
+	cp "$out/$case_name/no-login-binding.json" "$out/$case_name/recover-binding.json"
 	drill verify >"$out/$case_name/verify.txt"
 	drill source-refused -gate "127.0.0.1:$(drill_port 7000)" >"$out/$case_name/source-refused.txt"
 	# 等已受理的投影，最终数据与源库状态以 Mongo 为准。
 	for i in $(seq 1 30); do
 		snapshot after
 		if jq -e '.target.wallet["1"] == 93 and .target.bag["1"]["1001"] == 11 and .target.rehome["7"] == 1 and .target.rehome["1"] == ""' "$out/$case_name/after-documents.json" >/dev/null; then
-			if [[ "$case_name" == committed ]]; then break; fi
 			jq -e '.source == null' "$out/$case_name/after-documents.json" >/dev/null && break
 		fi
 		sleep 0.1
 	done
 	jq -e '.target.wallet["1"] == 93 and .target.bag["1"]["1001"] == 11 and .target.rehome["7"] == 1 and .target.rehome["1"] == ""' "$out/$case_name/after-documents.json" >/dev/null || drill_fail "persisted assets or arrival marker differ"
-	if [[ "$case_name" == committed ]]; then
-		jq -e '.source != null and .target != null' "$out/$case_name/after-documents.json" >/dev/null || drill_fail "Q4 retained-copy premise missing"
-		drill_log 'KNOWN_LIMIT Q4: committed before source deletion; source copy retained, owner is target only' | tee "$out/$case_name/known-limit.txt"
-	else
-		jq -e '.source == null and .target != null' "$out/$case_name/after-documents.json" >/dev/null || drill_fail "source documents not dropped"
-	fi
+	jq -e '.source == null and .target != null' "$out/$case_name/after-documents.json" >/dev/null || drill_fail "source documents not dropped"
 	cp .dev/rehome-source.log "$out/$case_name/source-recovered.log"
 	drill_log "PASS $case_name: target binding, bag=11, wallet=93, source refused"
 done
@@ -175,4 +172,4 @@ drill_stop rehome-source
 drill_stop rehome-target
 bin/sidmove wal-drained -dir data/wal/game/1000 >"$out/source-wal-drained.json"
 bin/sidmove wal-drained -dir data/wal/game/1001 >"$out/target-wal-drained.json"
-drill_log "PASS demo rehome drill; Q4 committed-window copy remains explicitly documented"
+drill_log "PASS demo rehome drill; every point recovered without a login (D7 / D8)"

@@ -56,6 +56,12 @@ func (d *gmMoveDirectory) Abort(context.Context, int64, string, string) (svcacco
 	d.binding.Transfer = nil
 	return d.binding, nil
 }
+func (d *gmMoveDirectory) Transfers(context.Context, int32) ([]svcaccount.RoleBinding, error) {
+	return nil, nil
+}
+func (d *gmMoveDirectory) BindingsAway(context.Context, int32, []int64) ([]svcaccount.RoleBinding, error) {
+	return nil, nil
+}
 
 type gmMoveResidency struct{ done chan rehome.Outcome }
 

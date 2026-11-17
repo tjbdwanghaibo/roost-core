@@ -1,0 +1,266 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 这个文件是源服重启之后的两件恢复（维护者 2026-11-14 的 D7 A、D8 A）。原来两件都只靠玩家来登录源服时顺带做：
+// 他不再来，换服就一直停在在途；提交之后、删源库之前崩溃留下的旧档一直留在源库，起服预加载还会把它载进内存，
+// 它的定时逻辑接着写这份过期的档。
+//
+//   - 起服核对本服库里的玩家（D7）：account 把他绑在别的服、本服库里却还有他的档，那份档就是上面说的旧档。
+//     Player 起服预加载时，预加载的准入检查（AdmitPreload，登记为 DataEngine 的 PreloadAdmitter）在加载之前问 account，
+//     这样的不加载；Player 不预加载时，Background 起来后把本服库里的玩家列一遍（不加载），同样问 account。认出来的
+//     都按“已迁走”落定（settleGone）：立交出屏障（本进程从此不写他），把本服的档补搬到他现在的服——那里已有同一版本
+//     （正常的提交之后都是这样）就只是确认——再按版本条件删掉本服的。那边已有**别的**版本（目标服在源服重启之前已经
+//     写过他，或者运维在模块之外提交、目标服新建了他）时不覆盖、不删，记 Error 留给运维：哪一份才是他的数据，只看
+//     版本号判断不了。
+//   - 接着做在途的换服（D8）：account 有了在途换服的索引（ListRoleTransfers）。Background 起来时与之后每
+//     recoverEvery，把从本服发起、此刻在途、迁出表里没有的换服交给 Resume——与玩家登录时 Admit 做的相同，只是
+//     不再等他登录。期限（account 记的 DeadlineUnix）之内做完的照常提交；过了期限的提交被 account 拒绝并记为中止，
+//     驱动器按“没换成”收尾；源服一直没起来的，account 的清扫到期中止它。
+//
+// 两件都在 Background 里跑（RunRecovery，由 rehome manager 交给 Background），进程停机时随 Background 一起停；
+// 停在半路的与崩溃相同，下次起服再做。
+
+// DriverCapability 是本进程唯一的 Driver 在 Registry 里的能力名（game/controllers 建驱动器时发布）。恢复循环与
+// 预加载的准入检查经它找到驱动器。
+const DriverCapability app.ModName = "game.rehome.driver"
+
+const (
+	// recoverEvery 是接着做在途换服的间隔。account 的期限缺省 10 分钟，这个间隔让重启之后的源服在期限之内接上。
+	recoverEvery = 30 * time.Second
+	// recoverRetry 是驱动器、DataEngine 还没发布或 account 问不到时，起服核对的重试间隔。
+	recoverRetry = time.Second
+	// residentPage 是起服核对时一次列、一次问 account 的玩家数（account 一次至多 svcaccount.MaxBindingBatch 个）。
+	residentPage = svcaccount.MaxBindingBatch
+)
+
+// departedQueue 是起服核对认出来、还没落定的旧档（Move 按“已迁走”填好）。预加载的准入检查往里放，恢复循环取走。
+type departedQueue struct {
+	mu    sync.Mutex
+	moves []Move
+}
+
+func (q *departedQueue) push(moves ...Move) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.moves = append(q.moves, moves...)
+}
+
+func (q *departedQueue) take() []Move {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	moves := q.moves
+	q.moves = nil
+	return moves
+}
+
+// AdmitPreload 是 Player 起服预加载的准入检查（wiring/dataengine 的 PreloadAdmitter，game/controllers 建驱动器时以
+// wiringde.PreloadAdmitCapability(Player 的 kind) 发布）：ids 是本服库里的一页 Player，返回其中可以加载的。
+// account 把他绑在别的服的（旧档）不加载，交给恢复循环落定；account 问不到时返回错误，预加载失败、起服失败——判断
+// 不了就不加载，不能把旧档载进内存。
+func (d *Driver) AdmitPreload(ctx context.Context, kind entity.EntityKind, ids []int64) ([]int64, error) {
+	if d.playerKind != 0 && kind != d.playerKind {
+		return ids, nil
+	}
+	away, err := d.checkResidents(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	admitted := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if !away[id] {
+			admitted = append(admitted, id)
+		}
+	}
+	return admitted, nil
+}
+
+// checkResidents 问 account：本服库里的这些 Player（完整 Entity ID）里，哪些此刻不由本服承载。返回它们（不该加载），
+// 并把其中要落定的放进 departed。正在换到本服的（在途的目标是本服）也不加载，但不落定：那次换服会用新的档覆盖本服库里的这份。
+func (d *Driver) checkResidents(ctx context.Context, entityIDs []int64) (map[int64]bool, error) {
+	away := map[int64]bool{}
+	for start := 0; start < len(entityIDs); start += residentPage {
+		page := entityIDs[start:min(start+residentPage, len(entityIDs))]
+		byPlayer := make(map[int64]int64, len(page))
+		players := make([]int64, 0, len(page))
+		for _, entityID := range page {
+			playerID := d.playerID(entityID)
+			if playerID <= 0 {
+				continue
+			}
+			byPlayer[playerID] = entityID
+			players = append(players, playerID)
+		}
+		bindings, err := d.directory.BindingsAway(ctx, d.self, players)
+		if err != nil {
+			return nil, fmt.Errorf("rehome: which players stored on server %d are bound elsewhere: %w", d.self, err)
+		}
+		for _, binding := range bindings {
+			entityID, ok := byPlayer[binding.PlayerID]
+			if !ok || binding.ServingServerID == d.self || binding.ServingServerID <= 0 {
+				continue
+			}
+			away[entityID] = true
+			if transfer := binding.Transfer; transfer != nil && transfer.To == d.self {
+				slog.Info("rehome: a player stored here is moving back to this server; his old copy is not loaded and will be overwritten",
+					"player_id", binding.PlayerID, "transfer_id", transfer.ID, "bound_to", binding.ServingServerID)
+				continue
+			}
+			d.departed.push(departedMove(d.self, entityID, binding))
+			slog.Warn("rehome: a player stored on this server is bound to another server; his copy here is not loaded and is dropped once confirmed",
+				"player_id", binding.PlayerID, "bound_to", binding.ServingServerID, "bind_epoch", binding.BindEpoch)
+		}
+	}
+	return away, nil
+}
+
+// departedMove 把“他在本服库里有档、account 把他绑在别的服”填成一次按已迁走落定的 Move。ID 用最近一次从本服提交的
+// 换服（迁出表按 ID 认记录），不是从本服换走的（换走之后又换了几次）用一个固定的名字。Epoch 取当前代数减一：他之后
+// 再换回本服时代数至少加一，迁出表按“代数至少比发起时大 2”认出他回来了（readmit）。
+func departedMove(self int32, entityID int64, binding svcaccount.RoleBinding) Move {
+	id := "startup-check"
+	if last := binding.LastTransfer; last != nil && last.Committed && last.From == self {
+		id = last.ID
+	}
+	epoch := binding.BindEpoch
+	if epoch > 0 {
+		epoch--
+	}
+	return Move{PlayerID: binding.PlayerID, EntityID: entityID, ID: id, From: self, To: binding.ServingServerID, Epoch: epoch}
+}
+
+// entityLister 是起服核对需要的 DataEngine 能力（wiring/dataengine 的 Mod.ListLocalEntityIDs）。
+type entityLister interface {
+	ListLocalEntityIDs(ctx context.Context, kind entity.EntityKind, after int64, limit int) ([]int64, int64, error)
+}
+
+// checkStoredPlayers 是 Player 不预加载时的起服核对：把本服库里的 Player 列一遍（只读 _id，不加载），交给 checkResidents。
+// Player 起服预加载时什么都不做——预加载的准入检查已经核对过每一个（AdmitPreload）。
+func (d *Driver) checkStoredPlayers(ctx context.Context) error {
+	if d.playerKind == 0 {
+		return errors.New("rehome: the player kind is not configured; stored players cannot be checked")
+	}
+	if preload, ok := app.Lookup[*wiringde.LocalPreloadMod](d.registry, mods.ModDataEnginePreload); ok && preload != nil && slices.Contains(preload.Kinds(), d.playerKind) {
+		return nil
+	}
+	lister := d.lister
+	if lister == nil {
+		mod, ok := app.Lookup[entityLister](d.registry, mods.ModDataEngine)
+		if !ok || mod == nil {
+			return fmt.Errorf("rehome: capability %q not found; stored players cannot be checked", mods.ModDataEngine)
+		}
+		lister = mod
+	}
+	checked, departed := 0, 0
+	for after := int64(0); ; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ids, next, err := lister.ListLocalEntityIDs(ctx, d.playerKind, after, residentPage)
+		if err != nil {
+			return fmt.Errorf("rehome: list the players stored on server %d: %w", d.self, err)
+		}
+		away, err := d.checkResidents(ctx, ids)
+		if err != nil {
+			return err
+		}
+		checked += len(ids)
+		departed += len(away)
+		if next == 0 {
+			break
+		}
+		after = next
+	}
+	slog.Info("rehome: checked the players stored on this server against the account service", "checked", checked, "bound_elsewhere", departed)
+	return nil
+}
+
+// settleDeparted 落定起服核对认出来的旧档：迁出表里已经有他的（有人在处理）跳过，其余按“已迁走”落定（settleGone：
+// 立屏障、确认他现在的服已有同一版本、按版本删本服的）。只在恢复循环里调用，一个一个做。
+func (d *Driver) settleDeparted(ctx context.Context) {
+	for _, move := range d.departed.take() {
+		if ctx.Err() != nil {
+			d.departed.push(move)
+			continue
+		}
+		if _, tracked := d.residency.Where(move.PlayerID); tracked {
+			continue
+		}
+		d.settleGone(ctx, move, nil)
+	}
+}
+
+// resumeInFlight 把从本服发起、此刻在途、本进程没在做的换服交给 Resume（D8）。先看迁出表、再问 account：
+// 申请的顺序是先打标记再向 account 发起，所以“表里没有、account 说在途”只能是本进程之前受理过（重启之前）或者
+// 运维在别处发起的；正在本进程里了结的那一次，表里的记录要等 account 有了结论才撤，不会被当成没人做。
+func (d *Driver) resumeInFlight(ctx context.Context) error {
+	bindings, err := d.directory.Transfers(ctx, d.self)
+	if err != nil {
+		return fmt.Errorf("rehome: list the transfers in flight from server %d: %w", d.self, err)
+	}
+	for _, binding := range bindings {
+		transfer := binding.Transfer
+		if transfer == nil || transfer.From != d.self || binding.ServingServerID != d.self {
+			continue
+		}
+		if _, tracked := d.residency.Where(binding.PlayerID); tracked {
+			continue
+		}
+		move := Move{PlayerID: binding.PlayerID, ID: transfer.ID, From: d.self, To: transfer.To, Epoch: transfer.Epoch}
+		if err := d.Resume(move); err != nil {
+			slog.Warn("rehome: a transfer in flight from this server was not resumed; retrying later", "player_id", binding.PlayerID, "transfer_id", transfer.ID, "err", err)
+		}
+	}
+	return nil
+}
+
+// RunRecovery 是 rehome manager 交给 Background 的恢复循环（见本文件开头），ctx 在 Background 停下时取消。驱动器用到时
+// 从 Registry 取（DriverCapability）：它在接入层装配协议时才建。起服核对做成一次就不再做；之后每 recoverEvery 落定
+// 预加载新认出来的旧档、接着做在途的换服。
+func RunRecovery(ctx context.Context, registry *app.Registry) {
+	checked := false
+	for {
+		wait := recoverEvery
+		if driver, ok := app.Lookup[*Driver](registry, DriverCapability); ok && driver != nil {
+			if !checked {
+				switch err := driver.checkStoredPlayers(ctx); {
+				case err == nil:
+					checked = true
+				case ctx.Err() != nil:
+					return
+				case errors.Is(err, wiringde.ErrLocalEntityKind):
+					// Player 不在本服自己的库里（主 DAO 不是 dbscope=sid）：没有本服的旧档可核对，重试也不会变。
+					slog.Error("rehome: the players stored on this server cannot be listed; old copies left by a crash are not checked", "err", err)
+					checked = true
+				default:
+					slog.Warn("rehome: checking the stored players against the account service failed; retrying", "err", err)
+					wait = recoverRetry
+				}
+			}
+			driver.settleDeparted(ctx)
+			if err := driver.resumeInFlight(ctx); err != nil && ctx.Err() == nil {
+				slog.Warn("rehome: resuming the transfers in flight failed; retrying later", "err", err)
+			}
+		} else {
+			wait = recoverRetry
+		}
+		pause(ctx, wait)
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}

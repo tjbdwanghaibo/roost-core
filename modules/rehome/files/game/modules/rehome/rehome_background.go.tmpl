@@ -15,7 +15,7 @@ import (
 // 以 BackgroundCapability 发布，Stop 时 Close——不再接新的步骤、取消在途步骤的 ctx、在停机期限内等它们返回。
 //
 // 停机时被取消的换服与进程在那一刻崩溃是同一回事：迁出表随进程没了，account 上换服仍在途（或已经有了结论）；
-// 重启之后这名玩家再来进入时 Admit 接着做完（Resume），见 Driver 的注释。所以后台步骤被取消时**不按失败处理**
+// 重启之后由恢复循环（rehome_recover.go）或这名玩家的下一次进入接着做完（Resume），见 Driver 的注释。所以后台步骤被取消时**不按失败处理**
 // （不去中止、不撤屏障），只是停下。
 
 // BackgroundCapability 是 Background 在 Registry 里的能力名（game/managers 的 rehome manager 发布）。

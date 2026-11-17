@@ -513,6 +513,10 @@ const EntityCopyUnknown = engine.EntityCopyUnknown
 // ErrEntityCopyConflict：目标服的库里已有这个实体的另一个版本，不覆盖时拒绝（engine.ErrEntityCopyConflict）。
 var ErrEntityCopyConflict = engine.ErrEntityCopyConflict
 
+// ErrLocalEntityKind：kind 不是本服库里的本地持久实体（没有登记 builder、不落库、主 DAO 不是 dbscope=sid），
+// 不能按本服列出或预加载（engine.ErrLocalPreloadKind）。这是配置问题，重试不会变。
+var ErrLocalEntityKind = engine.ErrLocalPreloadKind
+
 // CopyHandedOffEntity 把本进程已交出（HandOffEntity 成立、未 Release）的实体的 dbscope=sid 文档复制到 sid=to 的库
 // （engine.Runtime.CopyHandedOffEntity，换服的搬档）。overwrite 只在“account 仍绑在本服、换服在途”时用。
 // 出错（冲突除外）时返回的结果列出可能已经写进目标库的文档（EntityCopyUnknown），不能把出错当成目标库里什么都没有。
@@ -537,7 +541,8 @@ func (mod *Mod) DropEntityCopy(ctx context.Context, copied EntityCopy, sid int32
 
 // ListLocalEntityIDs 按 _id 升序列出本服库里 kind 的未删除实体（主 DAO，dbscope=sid），不加载它们
 // （engine.Runtime.ListLocalEntityIDs）：起服时要核对本服库里的实体、又不预加载那个 kind 的部件用（rehome 模块，D7）。
-// 会等待，只能在 io 池或独立 goroutine 调用。
+// 会等待，只能在 io 池或独立 goroutine 调用。kind 的主 DAO 不是 dbscope=sid（本服没有自己的库可列）时返回
+// ErrLocalEntityKind。
 func (mod *Mod) ListLocalEntityIDs(ctx context.Context, kind entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
 	runtime := mod.Runtime()
 	if runtime == nil {

@@ -13,6 +13,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
@@ -44,6 +45,11 @@ type DriverConfig struct {
 	EntityID func(playerID int64) (int64, error)
 	// Documents 搬他的文档（本服库 → 目标服库）；nil 时经 Registry 里的 DataEngine Mod（RegistryDocuments）。
 	Documents Documents
+	// PlayerKind 是 Player 的实体 kind：起服核对本服库里的玩家（rehome_recover.go）按它列、按它认预加载。
+	// 0 时不做起服核对（恢复循环记 Warn）。
+	PlayerKind entity.EntityKind
+	// PlayerID 把 Player 的完整 Entity ID 换回玩家号（EntityID 的反函数）；nil 时取 Entity ID 里的唯一号。
+	PlayerID func(entityID int64) int64
 }
 
 // 一步的时间预算。受理之后的步骤在后台执行，用的是自己的预算，不是申请那条请求的。
@@ -96,8 +102,12 @@ const (
 //   - Commit 或 Abort 结果未知（超时、account 不可用）：标记与屏障都保持，原样重发，直到 account 给出结论；
 //     以它的回答为准——Abort 得到“已经提交”就按已提交落定。期间这名玩家在哪个服都进不去，
 //     因为没有人知道他归谁。
-//   - 进程在受理之后崩溃：迁出表没了，account 上换服仍在途。重启后这名玩家再来进入本服时，
-//     Admit 发现“在途、源服是本服、表里没有”，从离开钩子起把后台部分重做一遍（Resume）。
+//   - 进程在受理之后崩溃：迁出表没了，account 上换服仍在途。重启之后不等这名玩家来登录：恢复循环
+//     （rehome_recover.go）起来时与之后定期向 account 列出从本服发起的在途换服，迁出表里没有的从头把后台部分
+//     重做一遍（Resume）；他先来登录的，Admit 发现“在途、源服是本服、表里没有”同样 Resume。过了 account 的期限
+//     还没提交的，提交被拒绝、按中止收尾。
+//   - 进程在提交之后、删掉本服的档之前崩溃：重启之后起服核对认出这份旧档（account 已把他绑到别的服），
+//     不加载它，按“已迁走”落定并按版本删掉（rehome_recover.go）。
 //   - 进程停机：后台部分在 Background 里执行（game/managers 的 rehome manager 启停，D22）。停机时它取消在途步骤的 ctx：
 //     每一步、每一次重发之间的等待都看这个 ctx，被取消的步骤**不按失败处理**（不中止、不撤屏障），只是停下——
 //     与在那一刻崩溃相同，重启之后按上一条接着做。停机期间新的申请答可重试（Background 不在时不受理）。
@@ -115,6 +125,13 @@ type Driver struct {
 
 	// background 执行受理之后的后台部分（Background，由 game/managers 的 rehome manager 启停）。
 	background backgroundRunner
+
+	// 起服核对（rehome_recover.go）：Player 的 kind、Entity ID → 玩家号、认出来还没落定的旧档、列本服库的
+	// DataEngine 能力（nil 时从 Registry 取，测试替换）。
+	playerKind entity.EntityKind
+	playerID   func(entityID int64) int64
+	departed   *departedQueue
+	lister     entityLister
 
 	// 下面几项给测试替换：换服 ID 的来源、结果未知时两次重发之间怎么等（ctx 结束时提前返回）、应答的宽限。
 	newID func() string
@@ -134,10 +151,15 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	if documents == nil {
 		documents = RegistryDocuments(config.Registry)
 	}
+	playerID := config.PlayerID
+	if playerID == nil {
+		playerID = entity.GetUniqueIDFromEntityID
+	}
 	driver := &Driver{
 		registry: config.Registry, self: config.Self, directory: config.Directory,
 		residency: config.Residency, profile: config.Profile, documents: documents, entityID: config.EntityID,
 		background: registryBackground{registry: config.Registry},
+		playerKind: config.PlayerKind, playerID: playerID, departed: &departedQueue{},
 		wait: func(ctx context.Context, attempt int) {
 			pause(ctx, min(time.Second<<min(attempt, 5), retryCeiling))
 		},
@@ -165,10 +187,10 @@ func pause(ctx context.Context, wait time.Duration) {
 }
 
 // spawn 把一个后台步骤交给 Background。交不出去（进程在停机、manager 没有登记）时不执行，记一条日志：
-// 与进程在这一刻崩溃相同，迁出表随进程没了，重启之后这名玩家再来进入时由 Admit 接着做（Resume）。
+// 与进程在这一刻崩溃相同，迁出表随进程没了，重启之后由恢复循环（rehome_recover.go）或这名玩家的下一次进入接着做（Resume）。
 func (d *Driver) spawn(move Move, step string, run func(ctx context.Context)) {
 	if err := d.background.Go(run); err != nil {
-		slog.Warn("rehome: a background step was not started; the transfer is picked up again when the player enters after a restart",
+		slog.Warn("rehome: a background step was not started; the transfer is picked up again after a restart (recovery, or the player's next enter)",
 			"player_id", move.PlayerID, "transfer_id", move.ID, "step", step, "err", err)
 	}
 }
@@ -178,7 +200,7 @@ func stopped(ctx context.Context, move Move, step string) bool {
 	if ctx.Err() == nil {
 		return false
 	}
-	slog.Info("rehome: stopping with the process; the transfer is picked up again when the player enters after a restart",
+	slog.Info("rehome: stopping with the process; the transfer is picked up again after a restart (recovery, or the player's next enter)",
 		"player_id", move.PlayerID, "transfer_id", move.ID, "step", step)
 	return true
 }

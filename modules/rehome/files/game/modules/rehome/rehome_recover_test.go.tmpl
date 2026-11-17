@@ -1,0 +1,242 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+)
+
+// 源服重启之后的两件恢复（rehome_recover.go，D7 A / D8 A）：都不等玩家登录。
+
+// departedBinding 是“提交之后、删源库之前源服崩溃”留下的局面：account 已把他改绑到 1001（代数 4），
+// 最近一次了结的是从本服提交的 t-7；本服库里还有他的档。
+func departedBinding() svcaccount.RoleBinding {
+	return svcaccount.RoleBinding{
+		PlayerID: rehomePlayer, ServerID: rehomeTarget, ServingServerID: rehomeTarget, BindEpoch: 4, TransferSeq: 6,
+		LastTransfer: &svcaccount.RoleTransferRecord{ID: "t-7", From: rehomeSelf, To: rehomeTarget, Committed: true, Epoch: 4},
+	}
+}
+
+// D7：起服预加载问 account，绑在别的服的不加载；恢复循环把这份旧档按“已迁走”落定——立屏障、确认目标服已有
+// （不覆盖）、按版本删本服的。之后迁出表答“已迁走，去了 1001”，再落定一次什么都不做。
+func TestRehomeStartupCheckDropsTheCopyLeftByACrashAfterTheCommit(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.directory.binding = departedBinding()
+	f.directory.away = []svcaccount.RoleBinding{f.directory.binding}
+	stays := rehomeEntity + 1 // 玩家 94302：account 仍绑在本服
+	admitted, err := f.driver.AdmitPreload(context.Background(), rehomePlayerKind, []int64{rehomeEntity, stays})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{stays}; !reflect.DeepEqual(admitted, want) {
+		t.Fatalf("admitted %v, want %v: a player bound elsewhere must not be loaded", admitted, want)
+	}
+	f.expectEvents(t, "bindings away from 1000: [94301 94302]")
+	f.driver.settleDeparted(context.Background())
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301",
+		"copy 7094301 to 1001 overwrite=false", "drop 7094301 copied to 1001 at 1000")
+	where, tracked := f.residency.Where(rehomePlayer)
+	want := Move{PlayerID: rehomePlayer, EntityID: rehomeEntity, ID: "t-7", From: rehomeSelf, To: rehomeTarget, Epoch: 3}
+	if !tracked || where.Moving || where.Move != want {
+		t.Fatalf("after the startup check the table says %+v (%v), want departed with %+v", where, tracked, want)
+	}
+	f.driver.settleDeparted(context.Background())
+	f.expectEvents(t)
+}
+
+// D7：目标服的库里已有他的另一个版本（目标服在源服重启之前已经写过他）：不覆盖、不删本服的，屏障照样立着
+// （本进程不加载、不写他），留给运维。
+func TestRehomeStartupCheckKeepsTheCopyWhenTheNewServerHoldsAnotherVersion(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.directory.binding = departedBinding()
+	f.directory.away = []svcaccount.RoleBinding{f.directory.binding}
+	f.documents.copyErrs = []error{fmt.Errorf("%w: version 12", ErrCopyConflict)}
+	if admitted, err := f.driver.AdmitPreload(context.Background(), rehomePlayerKind, []int64{rehomeEntity}); err != nil || len(admitted) != 0 {
+		t.Fatalf("admitted %v (%v), want none", admitted, err)
+	}
+	f.driver.settleDeparted(context.Background())
+	f.expectEvents(t, "bindings away from 1000: [94301]", "close 94301: rehome: the player is changing servers", "handoff 7094301",
+		"copy 7094301 to 1001 overwrite=false")
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != rehomeTarget {
+		t.Fatalf("the table says %+v (%v), want departed to 1001 with the barrier held", where, tracked)
+	}
+}
+
+// D7：正在换回本服的（在途的目标是本服）也不加载，但不落定——那次换服会用新的档覆盖本服的这一份；
+// 不是本模块的 kind 原样放行，不问 account。
+func TestRehomeStartupCheckLeavesAPlayerMovingBackHereToThatTransfer(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	binding := departedBinding()
+	binding.Transfer = &svcaccount.RoleTransfer{ID: "t-8", From: rehomeTarget, To: rehomeSelf, Epoch: 4}
+	f.directory.away = []svcaccount.RoleBinding{binding}
+	if admitted, err := f.driver.AdmitPreload(context.Background(), rehomePlayerKind, []int64{rehomeEntity}); err != nil || len(admitted) != 0 {
+		t.Fatalf("admitted %v (%v), want none", admitted, err)
+	}
+	f.driver.settleDeparted(context.Background())
+	f.expectEvents(t, "bindings away from 1000: [94301]")
+	f.expectFree(t)
+	const other entity.EntityKind = rehomePlayerKind + 1
+	if admitted, err := f.driver.AdmitPreload(context.Background(), other, []int64{rehomeEntity}); err != nil || !reflect.DeepEqual(admitted, []int64{rehomeEntity}) {
+		t.Fatalf("another kind: admitted %v (%v), want it unchanged", admitted, err)
+	}
+	f.expectEvents(t)
+}
+
+// D7：account 问不到时预加载失败（起服失败），判断不了就不加载、不落定。
+func TestRehomeStartupCheckFailsThePreloadWhenTheAccountCannotAnswer(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.directory.awayErr = errRehomeLost
+	admitted, err := f.driver.AdmitPreload(context.Background(), rehomePlayerKind, []int64{rehomeEntity})
+	if !errors.Is(err, errRehomeLost) || admitted != nil {
+		t.Fatalf("admitted %v (%v), want the account error and nothing admitted", admitted, err)
+	}
+	f.driver.settleDeparted(context.Background())
+	f.expectEvents(t, "bindings away from 1000: [94301]")
+	f.expectFree(t)
+}
+
+// rehomeLister 是 DataEngine 列本服库里 Player 的替身：按 after 翻页。
+type rehomeLister struct {
+	ids   []int64
+	limit int
+	calls []string
+}
+
+func (l *rehomeLister) ListLocalEntityIDs(_ context.Context, kind entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
+	l.calls = append(l.calls, fmt.Sprintf("list kind %d after %d", kind, after))
+	if l.limit > 0 {
+		limit = l.limit
+	}
+	var page []int64
+	for _, id := range l.ids {
+		if id > after && len(page) < limit {
+			page = append(page, id)
+		}
+	}
+	next := int64(0)
+	if len(page) == limit && page[len(page)-1] != l.ids[len(l.ids)-1] {
+		next = page[len(page)-1]
+	}
+	return page, next, nil
+}
+
+// D7：Player 不预加载时，恢复循环把本服库里的 Player 一页一页列出来（不加载）问 account，认出来的同样落定。
+func TestRehomeStartupCheckListsTheStoredPlayersWhenPlayerIsNotPreloaded(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.directory.binding = departedBinding()
+	f.directory.away = []svcaccount.RoleBinding{f.directory.binding}
+	lister := &rehomeLister{ids: []int64{rehomeEntity - 1, rehomeEntity, rehomeEntity + 1}, limit: 2}
+	f.driver.lister = lister
+	if err := f.driver.checkStoredPlayers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"list kind 1 after 0", fmt.Sprintf("list kind 1 after %d", rehomeEntity)}; !reflect.DeepEqual(lister.calls, want) {
+		t.Fatalf("listed %v, want %v", lister.calls, want)
+	}
+	f.expectEvents(t, "bindings away from 1000: [94300 94301]", "bindings away from 1000: [94302]")
+	f.driver.settleDeparted(context.Background())
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301",
+		"copy 7094301 to 1001 overwrite=false", "drop 7094301 copied to 1001 at 1000")
+}
+
+// D8：account 上从本服发起、仍在途、本进程没在做的换服，不等他登录就接着做完；正在做的不再交一次。
+func TestRehomeRecoveryResumesATransferInFlightWithoutALogin(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-7", From: rehomeSelf, To: rehomeTarget, Epoch: 3}
+	for range 2 {
+		if err := f.driver.resumeInFlight(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.background) != 1 {
+		t.Fatalf("%d background parts were started, want 1", len(f.background))
+	}
+	f.expectEvents(t, "transfers from 1000", "transfers from 1000")
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-7", "close 94301: rehome: the player is changing servers",
+		"handoff 7094301", "copy 7094301 to 1001 overwrite=true", "commit 94301 t-7", "drop 7094301 copied to 1001 at 1000")
+	want := Move{PlayerID: rehomePlayer, EntityID: rehomeEntity, ID: "t-7", From: rehomeSelf, To: rehomeTarget, Epoch: 3}
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move != want {
+		t.Fatalf("the table says %+v (%v), want departed with %+v", where, tracked, want)
+	}
+}
+
+// D8：接着做的时候已过期限，account 拒绝迟到的提交并记为中止：驱动器按“没换成”收尾——删掉目标库的副本、撤屏障，
+// 他留在本服。从别的服发起的、已经不绑在本服的在途换服不归本服做。
+func TestRehomeRecoveryEndsATransferWhoseLateCommitIsRefused(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-7", From: rehomeSelf, To: rehomeTarget, Epoch: 3}
+	f.directory.commits = []error{svcaccount.ErrTransferStale}
+	if err := f.driver.resumeInFlight(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.runBackground()
+	f.expectEvents(t, "transfers from 1000", "close 94301: rehome: the player is changing servers", "recheck t-7",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "copy 7094301 to 1001 overwrite=true",
+		"commit 94301 t-7", "drop 7094301 copied to 1001 at 1001", "release 7094301",
+		"close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-7")
+	f.expectFree(t)
+	// 别的服发起的、或者绑定已经不在本服的，都不接。
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-9", From: 1002, To: rehomeTarget, Epoch: 3}
+	if err := f.driver.resumeInFlight(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-9", From: rehomeSelf, To: rehomeTarget, Epoch: 3}
+	f.directory.binding.ServingServerID = 1002
+	if err := f.driver.resumeInFlight(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.background) != 0 {
+		t.Fatalf("%d background parts were started for transfers this server does not own", len(f.background))
+	}
+	f.expectEvents(t, "transfers from 1000", "transfers from 1000")
+}
+
+// 恢复循环按 DriverCapability 找驱动器：起服核对一次（列本服库、问 account、落定旧档），之后接着做在途的换服；
+// 停机（ctx 取消）时返回。驱动器发布之前它等着，不出错。
+func TestRehomeRecoveryLoopChecksOnceThenFollowsTheTransfersInFlight(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.documentEvents = true
+	f.directory.binding = departedBinding()
+	f.directory.away = []svcaccount.RoleBinding{f.directory.binding}
+	f.driver.lister = &rehomeLister{ids: []int64{rehomeEntity}}
+	registry := app.NewRegistry(viper.New())
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		RunRecovery(ctx, registry)
+	}()
+	if err := registry.Register(DriverCapability, f.driver); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bindings away from 1000: [94301]", "close 94301: rehome: the player is changing servers", "handoff 7094301",
+		"copy 7094301 to 1001 overwrite=false", "drop 7094301 copied to 1001 at 1000", "transfers from 1000"}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(f.events.peek()) < len(want) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	wg.Wait()
+	f.expectEvents(t, want...)
+}
+
+// 预加载的准入检查与 DataEngine 的约定：驱动器就是 wiringde.PreloadAdmitter。
+var _ wiringde.PreloadAdmitter = (*Driver)(nil)

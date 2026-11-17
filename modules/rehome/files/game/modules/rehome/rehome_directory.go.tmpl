@@ -30,11 +30,20 @@ import (
 // 时都带回当前绑定；没带回的（别的实现、别的拒绝）调用方再读一次 Binding。
 //
 // 不带业务码的错误（超时、总线错误）一律是“结果未知”：请求可能已经生效。
+//
+// 另有两个只读的批量问法，给起服与之后的恢复用（rehome_recover.go）：
+//
+//   - Transfers：从 from 服发起、此刻在途的换服（account 的在途索引，D8）。源服据此把自己受理过、重启之后没人来
+//     登录的换服接着做完，不再只靠玩家登录触发。
+//   - BindingsAway：playerIDs 里此刻不由 self 承载的角色的绑定（D7）。源服起服时据此认出库里的旧档——换服提交之后、
+//     删掉源库那份之前崩溃留下的——不加载它们，并带版本条件删掉。
 type Directory interface {
 	Binding(ctx context.Context, playerID int64) (svcaccount.RoleBinding, error)
 	Begin(ctx context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error)
 	Commit(ctx context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error)
 	Abort(ctx context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error)
+	Transfers(ctx context.Context, from int32) ([]svcaccount.RoleBinding, error)
+	BindingsAway(ctx context.Context, self int32, playerIDs []int64) ([]svcaccount.RoleBinding, error)
 }
 
 // DirectoryCapability 是工程发布自己的 Directory 用的能力名。没有发布时用 account 服务的客户端。
@@ -93,6 +102,22 @@ func (d registryDirectory) Abort(ctx context.Context, playerID int64, transferID
 	return directory.Abort(ctx, playerID, transferID, reason)
 }
 
+func (d registryDirectory) Transfers(ctx context.Context, from int32) ([]svcaccount.RoleBinding, error) {
+	directory, err := DirectoryOf(d.registry)
+	if err != nil {
+		return nil, err
+	}
+	return directory.Transfers(ctx, from)
+}
+
+func (d registryDirectory) BindingsAway(ctx context.Context, self int32, playerIDs []int64) ([]svcaccount.RoleBinding, error) {
+	directory, err := DirectoryOf(d.registry)
+	if err != nil {
+		return nil, err
+	}
+	return directory.BindingsAway(ctx, self, playerIDs)
+}
+
 // accountDirectory 把 Directory 接到 account 服务的客户端上。
 type accountDirectory struct{ accounts svcaccount.Accounts }
 
@@ -110,6 +135,14 @@ func (d accountDirectory) Commit(ctx context.Context, playerID int64, transferID
 
 func (d accountDirectory) Abort(ctx context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error) {
 	return d.accounts.AbortRoleTransfer(ctx, playerID, transferID, reason)
+}
+
+func (d accountDirectory) Transfers(ctx context.Context, from int32) ([]svcaccount.RoleBinding, error) {
+	return d.accounts.ListRoleTransfers(ctx, from)
+}
+
+func (d accountDirectory) BindingsAway(ctx context.Context, self int32, playerIDs []int64) ([]svcaccount.RoleBinding, error) {
+	return d.accounts.RoleBindingsAway(ctx, self, playerIDs)
 }
 
 // standing 是一次换服对源服（本进程）意味着什么，由 judge 按当前绑定判定。

@@ -23,6 +23,7 @@ import (
 	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/managers"
 	gamerehome "{{MODULE}}/game/modules/rehome"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
@@ -96,23 +97,57 @@ func (t rehomeTransport) CloseSessions(playerID int64, reason error) int {
 }
 
 // rehomeEngine 站在 DataEngine Mod 的位置上：LocalResidency 用它的 HandOffEntity，驱动器用它的搬档
-// （CopyHandedOffEntity / DropEntityCopy）。返回的句柄没有接到任何 Runtime 上，Release 什么都不做——真实的屏障与
-// 真实的库不在这一档里（搬档本身由 framework/dataengine/engine 的用例覆盖）。
-type rehomeEngine struct{ events *rehomeServerEvents }
+// （CopyHandedOffEntity / DropEntityCopy），起服核对用它的 ListLocalEntityIDs。返回的句柄没有接到任何 Runtime 上，
+// Release 什么都不做——真实的屏障与真实的库不在这一档里（搬档本身由 framework/dataengine/engine 的用例覆盖）。
+type rehomeEngine struct {
+	events *rehomeServerEvents
+	// crashAt 非空时，那一步（"copy" 或 "drop"）关闭 reached 之后停住，直到 Background 停下（ctx 取消）：
+	// 用例在这一刻停掉 Background，与进程在这一步崩溃相同。
+	crashAt string
+	reached chan struct{}
+	// stored 是本服库里的 Player（ListLocalEntityIDs 的回答）。
+	stored []int64
+}
 
-func (e rehomeEngine) HandOffEntity(_ context.Context, entityID int64) (*wiringde.EntityHandOff, error) {
+func (e *rehomeEngine) crash(ctx context.Context, step string) error {
+	if e.crashAt != step {
+		return nil
+	}
+	e.crashAt = ""
+	close(e.reached)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (e *rehomeEngine) HandOffEntity(_ context.Context, entityID int64) (*wiringde.EntityHandOff, error) {
 	e.events.add(fmt.Sprintf("handoff %d", entityID))
 	return &wiringde.EntityHandOff{EntityID: entityID}, nil
 }
 
-func (e rehomeEngine) CopyHandedOffEntity(_ context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error) {
+func (e *rehomeEngine) CopyHandedOffEntity(ctx context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error) {
 	e.events.add(fmt.Sprintf("copy %d to %d overwrite=%v", entityID, to, overwrite))
+	if err := e.crash(ctx, "copy"); err != nil {
+		return wiringde.EntityCopy{}, err
+	}
 	return wiringde.EntityCopy{EntityID: entityID, To: to, Documents: []wiringde.EntityCopyDocument{{Database: "main", Collection: "player", Version: 1}}}, nil
 }
 
-func (e rehomeEngine) DropEntityCopy(_ context.Context, copied wiringde.EntityCopy, sid int32) (int, error) {
+func (e *rehomeEngine) DropEntityCopy(ctx context.Context, copied wiringde.EntityCopy, sid int32) (int, error) {
 	e.events.add(fmt.Sprintf("drop %d at %d", copied.EntityID, sid))
+	if err := e.crash(ctx, "drop"); err != nil {
+		return 0, err
+	}
 	return len(copied.Documents), nil
+}
+
+func (e *rehomeEngine) ListLocalEntityIDs(_ context.Context, _ entity.EntityKind, after int64, _ int) ([]int64, int64, error) {
+	var ids []int64
+	for _, id := range e.stored {
+		if id > after {
+			ids = append(ids, id)
+		}
+	}
+	return ids, 0, nil
 }
 
 // rehomeServer 是一个服的进程：它的 Registry、协议的 Controller、这个进程的换服驱动器、记下的外部动作。
@@ -122,6 +157,8 @@ type rehomeServer struct {
 	controller *Controller
 	driver     *gamerehome.Driver
 	events     *rehomeServerEvents
+	engine     *rehomeEngine
+	background *gamerehome.Background
 }
 
 type rehomeWorld struct {
@@ -159,7 +196,7 @@ func newRehomeWorld(t *testing.T, servers ...int32) *rehomeWorld {
 	}
 	w.accounts, err = svcaccount.New(svcaccount.Config{
 		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
-		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Roles:    svcaccount.NewMemoryRoles(),
 		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		Names:    names,
 		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
@@ -218,23 +255,57 @@ func newRehomeWorld(t *testing.T, servers ...int32) *rehomeWorld {
 // 同一个 sid 再起一次就是“这个服的进程重启了”。
 func (w *rehomeWorld) server(sid int32) *rehomeServer {
 	w.t.Helper()
-	config := viper.New()
-	config.Set("sid", sid)
-	server := &rehomeServer{sid: sid, registry: app.NewRegistry(config), events: &rehomeServerEvents{}}
-	background := gamerehome.NewBackground()
+	server := w.process(sid, &rehomeEngine{})
+	server.background = gamerehome.NewBackground()
 	w.t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := background.Close(ctx); err != nil {
+		if err := server.background.Close(ctx); err != nil {
 			w.t.Error(err)
 		}
 	})
+	if err := server.registry.Register(gamerehome.BackgroundCapability, server.background); err != nil {
+		w.t.Fatal(err)
+	}
+	return server
+}
+
+// restart 像生成的工程那样起这个服的进程：rehome manager（managers.NewRehomeBackground）发布 Background 并在里面
+// 跑恢复循环（D7 / D8）。engine 是这个进程的 DataEngine 替身（本服库里存着哪些 Player）。
+func (w *rehomeWorld) restart(sid int32, engine *rehomeEngine) *rehomeServer {
+	w.t.Helper()
+	server := w.process(sid, engine)
+	manager := managers.NewRehomeBackground()
+	if err := manager.Start(server.registry); err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(manager.Stop)
+	return server
+}
+
+// crash 停掉这个进程的 Background：在途的后台步骤被取消、什么都不落定，与进程在那一刻崩溃相同。
+func (s *rehomeServer) crash(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.background.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// process 建一个服的 Registry：发布 Nest、account 的客户端、玩家传输与 DataEngine 的替身，照生成的协议绑定那样用
+// FromRegistry 建 Controller，并取这个进程的驱动器。Background 由调用方发布。
+func (w *rehomeWorld) process(sid int32, engine *rehomeEngine) *rehomeServer {
+	w.t.Helper()
+	config := viper.New()
+	config.Set("sid", sid)
+	server := &rehomeServer{sid: sid, registry: app.NewRegistry(config), events: &rehomeServerEvents{}, engine: engine}
+	engine.events = server.events
 	for name, value := range map[app.ModName]any{
 		app.ModName("nest"):              nest.Client(w.engine),
 		svcaccount.CapabilityName:        svcaccount.Accounts(w.accounts),
 		app.ModName("access.player.tcp"): rehomeTransport{events: server.events},
-		app.ModName("dataengine"):        rehomeEngine{events: server.events},
-		gamerehome.BackgroundCapability:  background,
+		app.ModName("dataengine"):        engine,
 	} {
 		if err := server.registry.Register(name, value); err != nil {
 			w.t.Fatal(err)
@@ -430,5 +501,119 @@ func TestRehomeMoveIsTheServerSideEntryAndBringsThePlayerBack(t *testing.T) {
 	}
 	if pendingID, _, _, count := w.intent(); pendingID != "" || count != 2 {
 		t.Fatalf("after arriving back: intent %q, count %d; want none and 2", pendingID, count)
+	}
+}
+
+// waitEvents 等这个进程记下 want 件外部动作，返回到那时为止记下的。
+func (s *rehomeServer) waitEvents(t *testing.T, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := s.events.snapshot()
+		if len(got) >= want || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// crashedWhile 在源服上申请换到 1001，在 step（"copy" 或 "drop"）那一刻让源服进程崩溃，返回玩家的 Entity ID。
+func (w *rehomeWorld) crashedWhile(step string) int64 {
+	w.t.Helper()
+	engine := &rehomeEngine{crashAt: step, reached: make(chan struct{})}
+	source := w.process(rehomeSourceSID, engine)
+	source.background = gamerehome.NewBackground()
+	if err := source.registry.Register(gamerehome.BackgroundCapability, source.background); err != nil {
+		w.t.Fatal(err)
+	}
+	if response := w.apply(source, rehomeTargetSID); response.Code != 0 {
+		w.t.Fatalf("response = %+v", response)
+	}
+	select {
+	case <-engine.reached:
+	case <-time.After(10 * time.Second):
+		w.t.Fatalf("the transfer never reached %s", step)
+	}
+	source.crash(w.t)
+	entityID, err := entity.BuildEntityID(w.playerID, playerentity.EntityKindPlayer)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return entityID
+}
+
+// D7：提交之后、删源库之前源服崩溃（account 已改绑到 1001，源库里还有他的档）。源服重启，没有人登录：恢复循环
+// 起服核对本服库里的玩家，认出他绑在别的服，立屏障、确认 1001 已有（不覆盖）、删掉本服的那份；迁出表答已迁走。
+func TestRehomeSourceRestartDropsTheCopyLeftByACrashAfterTheCommit(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	entityID := w.crashedWhile("drop")
+	if binding := w.binding(); binding.ServingServerID != rehomeTargetSID || binding.Transfer != nil {
+		t.Fatalf("after the crash the account binding = %+v, want committed to 1001", binding)
+	}
+	restarted := w.restart(rehomeSourceSID, &rehomeEngine{stored: []int64{entityID}})
+	// Player 起服预加载的工程走预加载的准入检查：驱动器以 PreloadAdmitCapability 发布（这里的 Player 不预加载，
+	// 恢复循环自己列本服库）。
+	if admitter, ok := app.Lookup[wiringde.PreloadAdmitter](restarted.registry, wiringde.PreloadAdmitCapability(playerentity.EntityKindPlayer)); !ok || admitter != wiringde.PreloadAdmitter(restarted.driver) {
+		t.Fatalf("the preload admitter for Player = %v (%v), want this process's driver", admitter, ok)
+	}
+	closed := fmt.Sprintf("close %d: rehome: the player is changing servers", w.playerID)
+	want := []string{closed, fmt.Sprintf("handoff %d", entityID), fmt.Sprintf("copy %d to 1001 overwrite=false", entityID),
+		fmt.Sprintf("drop %d at 1000", entityID)}
+	if got := restarted.waitEvents(t, len(want)); !slices.Equal(got, want) {
+		t.Fatalf("on the restarted source: %v, want %v", got, want)
+	}
+	if where, tracked := w.settled(restarted); !tracked || where.Move.To != rehomeTargetSID {
+		t.Fatalf("the restarted source's table says %+v (%v), want departed to 1001", where, tracked)
+	}
+}
+
+// D8：搬档时源服崩溃（account 上换服仍在途）。源服重启，没有人登录：恢复循环按 account 的在途索引把它接着做完，
+// 在期限之内提交；源库里那份随后删掉。
+func TestRehomeSourceRestartFinishesATransferInFlightWithoutALogin(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	entityID := w.crashedWhile("copy")
+	if binding := w.binding(); binding.Transfer == nil || binding.ServingServerID != rehomeSourceSID {
+		t.Fatalf("after the crash the account binding = %+v, want the transfer still in flight", binding)
+	}
+	restarted := w.restart(rehomeSourceSID, &rehomeEngine{})
+	closed := fmt.Sprintf("close %d: rehome: the player is changing servers", w.playerID)
+	want := []string{closed, closed, fmt.Sprintf("handoff %d", entityID), fmt.Sprintf("copy %d to 1001 overwrite=true", entityID),
+		fmt.Sprintf("drop %d at 1000", entityID)}
+	if got := restarted.waitEvents(t, len(want)); !slices.Equal(got, want) {
+		t.Fatalf("on the restarted source: %v, want %v", got, want)
+	}
+	if binding := w.binding(); binding.ServingServerID != rehomeTargetSID || binding.Transfer != nil || binding.LastTransfer == nil || !binding.LastTransfer.Committed {
+		t.Fatalf("account binding = %+v (last %+v), want committed to 1001", binding, binding.LastTransfer)
+	}
+}
+
+// D8：源服重启时已经过了期限：接着做到提交时 account 拒绝迟到的提交并记为中止，源服按“没换成”收尾——删掉 1001 库里
+// 刚复制的那份、撤屏障、清意图，他留在 1000。
+func TestRehomeSourceRestartAfterTheDeadlineEndsTheTransferWithoutALogin(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	entityID := w.crashedWhile("copy")
+	w.now.Add(int64((svcaccount.DefaultTransferTTL + time.Minute) / time.Millisecond))
+	restarted := w.restart(rehomeSourceSID, &rehomeEngine{})
+	closed := fmt.Sprintf("close %d: rehome: the player is changing servers", w.playerID)
+	want := []string{closed, closed, fmt.Sprintf("handoff %d", entityID), fmt.Sprintf("copy %d to 1001 overwrite=true", entityID),
+		fmt.Sprintf("drop %d at 1001", entityID), fmt.Sprintf("close %d: rehome: the server change was aborted; select the role again", w.playerID)}
+	if got := restarted.waitEvents(t, len(want)); !slices.Equal(got, want) {
+		t.Fatalf("on the restarted source: %v, want %v", got, want)
+	}
+	binding := w.binding()
+	if binding.ServingServerID != rehomeSourceSID || binding.Transfer != nil || binding.LastTransfer == nil || binding.LastTransfer.Committed {
+		t.Fatalf("account binding = %+v (last %+v), want the transfer aborted and the player on 1000", binding, binding.LastTransfer)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		pendingID, _, _, _ := w.intent()
+		_, tracked := gamerehome.ResidencyOf(restarted.registry).Where(w.playerID)
+		if pendingID == "" && !tracked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the refused commit: intent %q, tracked %v; want both cleared", pendingID, tracked)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

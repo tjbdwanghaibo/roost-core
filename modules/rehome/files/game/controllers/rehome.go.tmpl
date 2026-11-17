@@ -11,6 +11,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	gamerehome "{{MODULE}}/game/modules/rehome"
@@ -57,9 +58,18 @@ func RehomeDriverFromRegistry(registry *app.Registry) (*gamerehome.Driver, error
 	driver, err := gamerehome.NewDriver(gamerehome.DriverConfig{
 		Registry: registry, Self: self, Directory: gamerehome.RegistryDirectory(registry),
 		Residency: gamerehome.RegistryResidency(registry), Profile: newRehomeProfile(client), EntityID: rehomePlayerEntityID,
+		PlayerKind: player.EntityKindPlayer,
 	})
 	if err != nil {
 		return nil, err
+	}
+	// 发布给两个用到时才找它的地方（D7 / D8）：rehome manager 的恢复循环（DriverCapability），以及 Player 起服预加载
+	// 的准入检查（wiringde.PreloadAdmitCapability）。驱动器在接入层装配协议时（Provide 阶段）建，早于预加载的 Start。
+	if err := registry.RegisterBatch(
+		app.Capability{Name: gamerehome.DriverCapability, Value: driver},
+		app.Capability{Name: wiringde.PreloadAdmitCapability(player.EntityKindPlayer), Value: wiringde.PreloadAdmitter(driver)},
+	); err != nil {
+		return nil, fmt.Errorf("rehome controller: %w", err)
 	}
 	rehomeDrivers[registry] = driver
 	return driver, nil

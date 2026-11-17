@@ -17,9 +17,10 @@ import (
 // 复核、离开钩子、交出、搬档、提交、落定，以及结果未知时重发到 account 给出结论为止的循环）：
 //
 //   - Start：建一个 gamerehome.Background，以 gamerehome.BackgroundCapability 发布。Driver 交出步骤时按能力名取它；
-//     取不到（这一行被删了、manager 已经停了）时不受理新的换服（答可重试）。
+//     取不到（这一行被删了、manager 已经停了）时不受理新的换服（答可重试）。并在 Background 里起恢复循环
+//     （gamerehome.RunRecovery，D7 / D8）：起服核对本服库里的旧档，之后定期接着做本服受理过、还在途的换服。
 //   - Stop：不再接新的步骤，取消在途步骤的 ctx，在停机期限之内等它们返回（ManagerMod 带着期限调 StopWithContext）。
-//     被取消的步骤不按失败处理、不去中止：与进程在那一刻崩溃相同，重启之后玩家再来进入时接着做（见 Driver 的注释）。
+//     被取消的步骤不按失败处理、不去中止：与进程在那一刻崩溃相同，重启之后由恢复循环或玩家的下一次进入接着做（见 Driver 的注释）。
 
 // rehomeBackgroundStopBudget 是没有带期限的 Stop()（不经 ManagerMod 的调用方）等在途步骤返回的上限。
 const rehomeBackgroundStopBudget = gamerehome.StopBudget
@@ -39,6 +40,9 @@ func (m *rehomeBackground) Start(registry *app.Registry) error {
 		return fmt.Errorf("rehome background: %w", err)
 	}
 	m.background = background
+	if err := background.Go(func(ctx context.Context) { gamerehome.RunRecovery(ctx, registry) }); err != nil {
+		return fmt.Errorf("rehome background: start recovery: %w", err)
+	}
 	return nil
 }
 
