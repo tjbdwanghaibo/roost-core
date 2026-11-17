@@ -245,11 +245,8 @@ func TestAllianceE2ESocialRehome(t *testing.T) {
 		_ = os.Remove(filepath.Join(dir, "reached.json"))
 		s.launch(games[1])
 		s.waitReady(games[1], 2*time.Minute)
-		if stage == "handed-off" {
-			// account 尚未改绑；一次源登录是明确的恢复触发，不能宣称无人介入自动恢复。
-			movingCode, _ := errcode.ClientError(apperrors.ErrRehomeMoving)
-			member = s.login(games[1], open, movingCode)
-		}
+		// handed-off：account 尚未改绑，不登录——源服重启后的恢复循环按 account 的在途索引接着做完（D8 A）。
+		// 在这里登录会与恢复循环赛跑（答 rehome_moving 还是 player_elsewhere 取决于谁先到），所以不登录。
 		s.eventually("account committed to target", time.Minute, func() (bool, string) {
 			b, err := accounts.RoleBinding(s.ctx, member.id)
 			return err == nil && b.ServerID == 1000 && b.ServingServerID == 1000, fmt.Sprintf("%+v %v", b, err)

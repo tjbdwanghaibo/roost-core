@@ -1,0 +1,516 @@
+{
+  "platform": "Darwin arm64",
+  "go": "go1.27.3",
+  "scope": "same-host private mirror-local dependencies; no login after each SIGKILL restart",
+  "runs": [
+    {
+      "run": "run1-before-fix",
+      "baseline": "cb059f9ab225af0a852647d3dd38f089a804c456",
+      "exit": "drill exit=1",
+      "verdict": [
+        "[drill 22:23:06] FAIL: rehome-source exited before it was ready"
+      ],
+      "cases": [
+        {
+          "case": "accepted",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          }
+        }
+      ]
+    },
+    {
+      "run": "run2",
+      "baseline": "18c45c765f615a76f05ff00302e34385a87e6207",
+      "exit": "drill exit=0",
+      "verdict": [
+        "[drill 22:31:14] PASS accepted: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:31:34] PASS quiesced: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:31:53] PASS leaving: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:32:11] PASS handed-off: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:32:29] PASS committed: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:32:48] PASS dropped: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:33:08] PASS checkpoint: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:33:11] PASS demo rehome drill; every point recovered without a login (D7 / D8)"
+      ],
+      "cases": [
+        {
+          "case": "accepted",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "quiesced",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "leaving",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "handed-off",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "committed",
+          "at_kill": {
+            "serving_sid": 1001,
+            "in_flight": false
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": true
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": false,
+            "startup_check_bound_elsewhere": 1
+          }
+        },
+        {
+          "case": "dropped",
+          "at_kill": {
+            "serving_sid": 1001,
+            "in_flight": false
+          },
+          "at_kill_documents": {
+            "source": false,
+            "target": true
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": false,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "checkpoint",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        }
+      ],
+      "source_wal_drained": true,
+      "target_wal_drained": true
+    },
+    {
+      "run": "run3",
+      "baseline": "18c45c765f615a76f05ff00302e34385a87e6207",
+      "exit": "drill exit=0",
+      "verdict": [
+        "[drill 22:43:29] PASS accepted: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:43:47] PASS quiesced: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:44:06] PASS leaving: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:44:25] PASS handed-off: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:44:44] PASS committed: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:45:02] PASS dropped: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:45:21] PASS checkpoint: target binding, bag=11, wallet=93, source refused",
+        "[drill 22:45:23] PASS demo rehome drill; every point recovered without a login (D7 / D8)"
+      ],
+      "cases": [
+        {
+          "case": "accepted",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "quiesced",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "leaving",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "handed-off",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "committed",
+          "at_kill": {
+            "serving_sid": 1001,
+            "in_flight": false
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": true
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": false,
+            "startup_check_bound_elsewhere": 1
+          }
+        },
+        {
+          "case": "dropped",
+          "at_kill": {
+            "serving_sid": 1001,
+            "in_flight": false
+          },
+          "at_kill_documents": {
+            "source": false,
+            "target": true
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": false,
+            "startup_check_bound_elsewhere": 0
+          }
+        },
+        {
+          "case": "checkpoint",
+          "at_kill": {
+            "serving_sid": 1000,
+            "in_flight": true
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": false
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": false,
+            "target": true
+          },
+          "final": {
+            "source": false,
+            "bag": 11,
+            "wallet": 93,
+            "arrival_count": 1
+          },
+          "source_log": {
+            "resumed_without_login": true,
+            "startup_check_bound_elsewhere": 0
+          }
+        }
+      ],
+      "source_wal_drained": true,
+      "target_wal_drained": true
+    },
+    {
+      "run": "mutant-d7-committed",
+      "baseline": "18c45c765f615a76f05ff00302e34385a87e6207",
+      "exit": "drill exit=1",
+      "verdict": [
+        "[drill 22:39:21] FAIL: source documents not dropped without a login"
+      ],
+      "cases": [
+        {
+          "case": "committed",
+          "at_kill": {
+            "serving_sid": 1001,
+            "in_flight": false
+          },
+          "at_kill_documents": {
+            "source": true,
+            "target": true
+          },
+          "after_restart_without_login": {
+            "serving_sid": 1001,
+            "in_flight": false,
+            "last_transfer_committed": true
+          },
+          "after_restart_without_login_documents": {
+            "source": true,
+            "target": true
+          }
+        }
+      ]
+    }
+  ]
+}
