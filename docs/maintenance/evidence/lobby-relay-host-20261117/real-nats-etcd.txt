@@ -1,0 +1,8 @@
+$ source ~/.roost-it/roost-dataengine-it/env.sh && GOWORK=off go test -tags integration -race -count=1 -run TestRealRelay -v ./wiring/relay/
+（共享隔离环境的 NATS 集群与 Redis，用例自己起单节点 etcd；主题、键前缀、Redis 前缀都带 pid+纳秒后缀，用后清理）
+=== RUN   TestRealRelayReportsCommandsAndAdvertisement
+--- PASS: TestRealRelayReportsCommandsAndAdvertisement (1.92s)
+=== RUN   TestRealRelayHostChangeKickAndVerification
+--- PASS: TestRealRelayHostChangeKickAndVerification (0.42s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.996s

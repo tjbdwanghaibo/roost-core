@@ -1,0 +1,4 @@
+$ GOWORK=off go vet ./client/wire ./service/relay/... ./service/lobby/... ./wiring/relay ./wiring/lobby
+vet ok
+$ GOWORK=off go vet -tags integration ./wiring/relay
+vet ok

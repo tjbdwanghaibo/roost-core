@@ -1,0 +1,91 @@
+# 换 host 与验权的变异：每条撤 / 改一行关键代码，目标用例要变红（编译失败不算），恢复后要变绿。
+# 用法：cd roost-core && python3 docs/maintenance/evidence/lobby-relay-host-20261117/mutate.py.txt [H1 H2 ...]
+import subprocess, sys, os
+repo = '/Users/whb/roost/roost-core'
+os.chdir(repo)
+R, L, W, WL = "./service/relay", "./service/lobby", "./wiring/relay", "./wiring/lobby"
+M = [
+ ("H1 换 host 时 epoch 加 1", "service/relay/room.go",
+  "\tr.epoch++\n\tr.changeGen++\n", "\tr.changeGen++\n", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H2 断线等宽限期（离开才不等）", "service/relay/room.go",
+  "\tif reason == wire.RelayReasonLeft {\n\t\tr.startMigrationLocked", "\tif true {\n\t\tr.startMigrationLocked", R, "TestHostReturnsWithinGrace"),
+ ("H3 宽限期内同账号回来仍是房主", "service/relay/room.go",
+  "\tif seated && r.phase == phaseGrace && account == r.hostAccount {", "\tif false {", R, "TestHostReturnsWithinGrace"),
+ ("H4 按候选顺序选人", "service/relay/room.go",
+  "\tfor _, slot := range r.successors {", "\tfor _, slot := range r.successors[:0] {", R, "TestGraceExpiresAndSuccessorsAreHonoured"),
+ ("H5 兜底取最小槽位", "service/relay/room.go",
+  "(best == nil || slot < best.slot)", "(best == nil || slot > best.slot)", R, "TestCandidateFallsBackToTheSmallestOnlineSlot"),
+ ("H6 host_ready 超时换下一个", "service/relay/room.go",
+  "\t\t\tc.enqueueControl(wire.RelayOpYouAreMember, c.slot, wire.EncodeRelayEpoch(r.epoch))\n\t\t\tr.offerNextLocked(eff)\n",
+  "\t\t\tc.enqueueControl(wire.RelayOpYouAreMember, c.slot, wire.EncodeRelayEpoch(r.epoch))\n", R, "TestHostReadyTimeoutMovesOnAndAllFailingCloses"),
+ ("H7 候选都失败就关房", "service/relay/room.go",
+  "\t\treturn\n\t}\n\tr.closeLocked(wire.RelayReasonRoomClosed, eff)\n}", "\t\treturn\n\t}\n}", R, "TestHostReadyTimeoutMovesOnAndAllFailingCloses"),
+ ("H8 迁移期间成员帧丢弃（不转给候选）", "service/relay/room.go",
+  "\tif from != r.candidate && from.changingSeen != r.changeGen {",
+  "\tif r.candidate != nil {\n\t\tr.candidate.enqueue(data)\n\t}\n\tif from != r.candidate && from.changingSeen != r.changeGen {", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H9 丢帧时通知 host_changing", "service/relay/room.go",
+  "\t\tfrom.enqueueControl(wire.RelayOpHostChanging, 0, wire.EncodeRelayEpoch(r.epoch))\n", "", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H10 host_changing 每次换 host 只发一次", "service/relay/room.go",
+  "\t\tfrom.changingSeen = r.changeGen\n", "", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H11 旧房主降级：只有 host 指向的连接发房主帧（不按建房槽位认房主）", "service/relay/room.go",
+  "\t\tif from == r.host {\n\t\t\tr.sendLocked(from, p.Seq, data)", "\t\tif from == r.host || from.slot == firstSlot {\n\t\t\tr.sendLocked(from, p.Seq, data)", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H11b 旧房主拿 host 令牌重连只是成员（角色看 room.host）", "service/relay/room.go",
+  "wire.EncodeRelayWelcome(wire.RelayWelcome{Host: c == r.host, HostSlot: hostSlot})", "wire.EncodeRelayWelcome(wire.RelayWelcome{Host: c == r.host || c.slot == firstSlot, HostSlot: hostSlot})", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H12 旧房主收到 you_are_member", "service/relay/room.go",
+  "\t\told.enqueueControl(wire.RelayOpYouAreMember, old.slot, wire.EncodeRelayEpoch(r.epoch))\n", "", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H13 快照超限拒收、连接保留", "service/relay/conn.go",
+  "if size := int(h.PayloadSize); size > limit && size <= hard {", "if size := int(h.PayloadSize); false && size > limit && size <= hard {", R, "TestSnapshotLimits"),
+ ("H14 快照最小间隔", "service/relay/room.go",
+  "\tcase r.snapshot.held && r.snapshot.epoch == r.epoch && now.Sub(r.snapshot.at) < r.server.config.SnapshotMinInterval:", "\tcase false:", R, "TestSnapshotLimits"),
+ ("H15 快照 seq 递增", "service/relay/room.go",
+  "\tcase s.Seq <= r.snapshot.seq:", "\tcase false:", R, "TestSnapshotLimits"),
+ ("H16 快照存下、换 host 时交出", "service/relay/room.go",
+  "\tr.snapshot = snapshot{held: true, seq: s.Seq, data: s.Data, at: now, epoch: r.epoch}\n", "", R, "TestGraceExpiresAndSuccessorsAreHonoured"),
+ ("H17 报告的 epoch 是已就绪房主的", "service/relay/room.go",
+  "Host: r.hostAccount, Epoch: r.hostEpoch}", "Host: r.hostAccount, Epoch: r.epoch}", R, "TestHostReadyTimeoutMovesOnAndAllFailingCloses"),
+ ("H18 host_ready 后报告 host_changed", "service/relay/room.go",
+  "\t\treport := r.reportLocked(EventHostChanged)\n\t\treport.Slot, report.Account = c.slot, c.account\n\t\teff.report(report)\n", "", R, "TestTransferHandsTheRoomToTheTarget"),
+ ("H19 房主单独的心跳超时", "service/relay/room.go",
+  "\thost.setIdleLimit(s.config.HostIdleTimeout)\n", "", R, "TestHostHeartbeatTimeoutStartsTheGrace"),
+ ("H20 lobby 只接受更大的 epoch（CAS）", "service/lobby/events.go",
+  "if event.Epoch > room.HostEpoch && event.Host != \"\" {", "if event.Host != \"\" {", L, "TestHostChangedAcceptsOnlyLargerEpochs"),
+ ("H21 lobby 的 join 查被踢名单", "service/lobby/rooms.go",
+  "\t\tif room.kicked(account) {\n\t\t\treturn false, ErrKicked\n\t\t}\n", "", L, "TestKickedAccountsAreRecordedAndRefused"),
+ ("H22 lobby 的验权查被踢名单", "service/lobby/events.go",
+  "\tcase room.kicked(req.Account):\n\t\treturn RelayVerifyReply{Reason: VerifyKicked}\n", "", L, "TestRelayVerification"),
+ ("H23 lobby 记下被踢的账号", "service/lobby/events.go",
+  "\t\t\t\troom.Kicked = append(room.Kicked, event.Account)\n", "", W, "TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection"),
+ ("H24 relay 每条连接都向 lobby 验权", "service/relay/relay.go",
+  "\terr := s.admission.Admit(ctx, AdmitRequest{Room: claims.Room, Account: claims.Account, Relay: s.config.Instance, Create: create})\n",
+  "\terr := error(nil)\n\t_ = ctx\n", W, "TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection"),
+ ("H25 验权超时失败即关闭", "service/relay/relay.go",
+  "\t}\n\treturn wire.RelayReasonLobbyUnavailable\n}", "\t}\n\treturn wire.RelayReasonNone\n}", R, "TestEveryConnectionIsCheckedWithTheLobby"),
+ ("H26 lobby 不可用的答复按不可用处理", "wiring/relay/server.go",
+  "\tcase reply.Reason == verifyUnavailable || reply.Reason == \"\":\n\t\treturn fmt.Errorf(\"relay: the lobby could not verify the connection (%q)\", reply.Reason)\n", "", W, "TestServerReportsAdvertisesAndTakesLobbyCommands"),
+ ("H27 宽限期内经 lobby 离开立即换 host", "service/relay/room.go",
+  "\t\tcase r.phase == phaseGrace && account == r.hostAccount:\n\t\t\tr.startMigrationLocked(nil, 0, nil, false, r.server.now(), eff)\n", "", R, "TestHostReturnsWithinGrace"),
+ ("H28 WebSocket 单条消息上限放得下快照", "wiring/relay/relay_mod.go",
+  "MaxMessageBytes: int64(server.Config().MaxFrameBytes())", "MaxMessageBytes: int64(server.Config().MaxPayloadBytes + 16)", W, "TestWebSocketHostChange"),
+ ("H29 lobby 答复验权请求", "wiring/lobby/server.go",
+  "\t\tif err := s.nats.Publish(msg.Reply, service.HandleRelayVerifyData(verifyCtx, msg.Data)); err != nil {",
+  "\t\t_ = verifyCtx\n\t\tif err := s.nats.Publish(msg.Reply, []byte(`{\"ok\":true}`)); err != nil {", WL, "TestModAndServerOnRealRedis"),
+]
+only = sys.argv[1:]
+for name, path, old, new, pkg, test in M:
+    if only and name.split()[0] not in only: continue
+    src = open(path).read()
+    assert src.count(old) == 1, (name, src.count(old))
+    open(path, 'w').write(src.replace(old, new))
+    try:
+        r = subprocess.run(['go', 'test', '-count=1', pkg, '-run', '^' + test + '$'], capture_output=True, text=True, timeout=300)
+        out = (r.stdout + r.stderr).strip().splitlines()
+        if r.returncode != 0 and any('[build failed]' in l or l.startswith('# ') for l in out):
+            status = 'BUILD-FAILED(!)'
+        else:
+            status = 'RED' if r.returncode != 0 else 'GREEN(!)'
+        fail = [l for l in out if '_test.go:' in l][:1]
+        print(f"{name}\t{path}\t{test}\t{status}\t{fail[0].strip() if fail else out[-1] if out else ''}", flush=True)
+    finally:
+        open(path, 'w').write(src)
+    r = subprocess.run(['go', 'test', '-count=1', pkg, '-run', '^' + test + '$'], capture_output=True, text=True, timeout=300)
+    print(f"  restored -> {'GREEN' if r.returncode == 0 else 'RED(!)'}", flush=True)

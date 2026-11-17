@@ -1,0 +1,62 @@
+$ python3 docs/maintenance/evidence/lobby-relay-host-20261117/mutate.py.txt
+（名字 / 文件 / 目标用例 / 结果 / 第一条失败行；每条之后恢复并重跑同一用例）
+H1 换 host 时 epoch 加 1	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:95: slot 1 op 64 epoch 0 (<nil>), want 1
+  restored -> GREEN
+H2 断线等宽限期（离开才不等）	service/relay/room.go	TestHostReturnsWithinGrace	RED	host_test.go:177: slot 2 got channel 3 op 65 seq 2 payload "\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x04host\x00\x00\x00\x02\x01\x00\x05acc-a\x00\x00\x00\x03\x01\x00\x05acc-b"; want control op 66 seq 0
+  restored -> GREEN
+H3 宽限期内同账号回来仍是房主	service/relay/room.go	TestHostReturnsWithinGrace	RED	host_test.go:182: returning host welcome {Host:false HostSlot:1} slot 1
+  restored -> GREEN
+H4 按候选顺序选人	service/relay/room.go	TestGraceExpiresAndSuccessorsAreHonoured	RED	host_test.go:221: slot 3 read: read tcp 127.0.0.1:59170->127.0.0.1:59167: i/o timeout
+  restored -> GREEN
+H5 兜底取最小槽位	service/relay/room.go	TestCandidateFallsBackToTheSmallestOnlineSlot	RED	host_test.go:255: slot 3 read: read tcp 127.0.0.1:59190->127.0.0.1:59187: i/o timeout
+  restored -> GREEN
+H6 host_ready 超时换下一个	service/relay/room.go	TestHostReadyTimeoutMovesOnAndAllFailingCloses	RED	host_test.go:275: slot 3 read: read tcp 127.0.0.1:59201->127.0.0.1:59198: i/o timeout
+  restored -> GREEN
+H7 候选都失败就关房	service/relay/room.go	TestHostReadyTimeoutMovesOnAndAllFailingCloses	RED	host_test.go:290: slot 2 read: read tcp 127.0.0.1:59211->127.0.0.1:59209: i/o timeout
+  restored -> GREEN
+H8 迁移期间成员帧丢弃（不转给候选）	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:113: slot 3 got channel 1 msg 1 seq 2 payload "lost-1"; want channel 2 msg 3 seq 2 payload "chat"
+  restored -> GREEN
+H9 丢帧时通知 host_changing	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:105: slot 2 read: read tcp 127.0.0.1:59234->127.0.0.1:59232: i/o timeout
+  restored -> GREEN
+H10 host_changing 每次换 host 只发一次	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:114: slot 2 expected silence, got channel 3 msg 66 seq 0 payload "\x00\x00\x00\x00\x00\x00\x00\x01"
+  restored -> GREEN
+H11 旧房主降级：只有 host 指向的连接发房主帧（不按建房槽位认房主）	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:132: slot 3 got channel 3 msg 4 seq 0 payload "\b"; want channel 1 msg 5 seq 1 payload "old host up"
+  restored -> GREEN
+H11b 旧房主拿 host 令牌重连只是成员（角色看 room.host）	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:141: old host with its host token: welcome {Host:true HostSlot:3} slot 1
+  restored -> GREEN
+H12 旧房主收到 you_are_member	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:95: slot 1 read: read tcp 127.0.0.1:59277->127.0.0.1:59276: i/o timeout
+  restored -> GREEN
+H13 快照超限拒收、连接保留	service/relay/conn.go	TestSnapshotLimits	RED	host_test.go:332: slot 1 got channel 3 op 4 seq 0 payload "\x05"; want control op 69 seq 0
+  restored -> GREEN
+H14 快照最小间隔	service/relay/room.go	TestSnapshotLimits	RED	host_test.go:327: slot 1 got channel 3 op 4 seq 0 payload "\b"; want control op 69 seq 0
+  restored -> GREEN
+H15 快照 seq 递增	service/relay/room.go	TestSnapshotLimits	RED	host_test.go:330: slot 1 got channel 3 op 4 seq 0 payload "\b"; want control op 69 seq 0
+  restored -> GREEN
+H16 快照存下、换 host 时交出	service/relay/room.go	TestGraceExpiresAndSuccessorsAreHonoured	RED	host_test.go:227: offer {Epoch:1 Source:0 SnapshotSeq:0 SnapshotAgeMillis:0 Members:[{Slot:1 Account:host Online:false} {Slot:2 Account:acc-a Online:true} {Slot:3 Account:acc-b Online:true}] State:[]} seats host@1:off acc-a@2:on acc-b@3:on
+  restored -> GREEN
+H17 报告的 epoch 是已就绪房主的	service/relay/room.go	TestHostReadyTimeoutMovesOnAndAllFailingCloses	RED	host_test.go:284: report during the migration names host "host" epoch 1
+  restored -> GREEN
+H18 host_ready 后报告 host_changed	service/relay/room.go	TestTransferHandsTheRoomToTheTarget	RED	host_test.go:123: no matching report among [{Type:room.heartbeat Room:room-transfer Relay:relay-1 Seq:1 Online:[host] Host:host Epoch:0 Account: Slot:0 Reason:} {Type:room.member_joined Room:room-transfer Relay:relay-1 Seq:2 Online:[host acc-a] Host:host Epoch:0 Account:acc-a Slot:2 Reason:} {Type:room.member_joined Room:room-transfer Relay:relay-1 Seq:3 Online:[host acc-a acc-b] Host:host Epoch:0 Account:acc-b Slot:3 Reason:} {Type:room.member_left Room:room-transfer Relay:relay-1 Seq:4 Online:[host acc-a] Host:acc-b Epoch:1 Account:acc-b Slot:3 Reason:idle_timeout}]
+  restored -> GREEN
+H19 房主单独的心跳超时	service/relay/room.go	TestHostHeartbeatTimeoutStartsTheGrace	RED	host_test.go:304: slot 1 read: read tcp 127.0.0.1:59352->127.0.0.1:59351: i/o timeout
+  restored -> GREEN
+H20 lobby 只接受更大的 epoch（CAS）	service/lobby/events.go	TestHostChangedAcceptsOnlyLargerEpochs	RED	lobby_test.go:438: after epochs 2 then 1 then 2 again: host acc-alice epoch 2, want acc-bob at 2
+  restored -> GREEN
+H21 lobby 的 join 查被踢名单	service/lobby/rooms.go	TestKickedAccountsAreRecordedAndRefused	RED	lobby_test.go:547: kicked account joining: err = <nil>, want ErrKicked
+  restored -> GREEN
+H22 lobby 的验权查被踢名单	service/lobby/events.go	TestRelayVerification	RED	lobby_test.go:598: kicked member: {OK:false Reason:not_member}
+  restored -> GREEN
+H23 lobby 记下被踢的账号	service/lobby/events.go	TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection	RED	lobby_contract_test.go:222: lobby never recorded the kick: {ID:d3a0b86b6fbfe58c Game:party Mode:duel Name: MaxMembers:4 State:open Closed:true PasswordHash: Attrs:null Host:host HostEpoch:0 Relay:{Instance:relay-3 TCPAddr:127.0.0.1:59408 WSAddr: Rooms:0} Members:[{Account:host Online:true ReservedUntilUnix:0}] Kicked:[] RelaySeq:3 CreatedAtUnix:1794903775} <nil>
+  restored -> GREEN
+H24 relay 每条连接都向 lobby 验权	service/relay/relay.go	TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection	RED	lobby_contract_test.go:250: waiting for op 4: read tcp 127.0.0.1:59422->127.0.0.1:59418: i/o timeout
+  restored -> GREEN
+H25 验权超时失败即关闭	service/relay/relay.go	TestEveryConnectionIsCheckedWithTheLobby	RED	relay_test.go:745: slot 0 got channel 3 msg 1 seq 3 payload "\x02\x00\x00\x00\x01"; want channel 3 msg 4 seq 0 payload "\x10"
+  restored -> GREEN
+H26 lobby 不可用的答复按不可用处理	wiring/relay/server.go	TestServerReportsAdvertisesAndTakesLobbyCommands	RED	relay_mod_test.go:158: op 4 payload [15], want [16]
+  restored -> GREEN
+H27 宽限期内经 lobby 离开立即换 host	service/relay/room.go	TestHostReturnsWithinGrace	RED	host_test.go:206: slot 2 read: read tcp 127.0.0.1:59460->127.0.0.1:59458: i/o timeout
+  restored -> GREEN
+H28 WebSocket 单条消息上限放得下快照	wiring/relay/relay_mod.go	TestWebSocketHostChange	RED	ws_test.go:289: websocket waiting for op 33: failed to get reader: received close frame: status = StatusMessageTooBig and reason = "read limited at 65553 bytes"
+  restored -> GREEN
+H29 lobby 答复验权请求	wiring/lobby/server.go	TestModAndServerOnRealRedis	RED	lobby_mod_test.go:326: verification replies = [inbox.1 {"ok":true} inbox.2 {"ok":true}]
+  restored -> GREEN
