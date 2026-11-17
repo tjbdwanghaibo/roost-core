@@ -1,0 +1,9 @@
+=== RUN   TestRequestOnAnEntityThatDoesNotExistClaimsNothing
+    write_admission_test.go:1494: A's read-only request on an entity that does not exist claimed it: ownership record {ID:4611686018429775349 Version:0 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:}
+    write_admission_test.go:1494: A's write request on an entity that does not exist claimed it: ownership record {ID:4611686018429775349 Version:0 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:}
+    write_admission_test.go:1498: empty_claim_total{left} = 1; want 0 (nothing was claimed)
+    write_admission_test.go:1509: B claim after A's requests: remote entity: writer fenced: entity=4611686018429775349 owner=1000 marker=1 route=1 shared=false
+--- FAIL: TestRequestOnAnEntityThatDoesNotExistClaimsNothing (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.618s
+FAIL

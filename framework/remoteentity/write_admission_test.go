@@ -16,6 +16,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
@@ -1458,4 +1459,134 @@ func TestExclusiveClaimOfAnExistingNewerRecordReloadsBeforeWriting(t *testing.T)
 	if doc := b.loaderDocument(t, id); doc != "a=A2;b=B1" {
 		t.Fatalf("Mongo document=%q, want B's write on top of A's %q", doc, "a=A2;b=B1")
 	}
+}
+
+// ---- 请求一个还没建的实体不认领它；共享实体先读后写；独占实体别的进程读（2026-11-18） ----
+
+// 没有所有权记录、本进程内存里也没有实例的实体在权威里不存在（Remote 提交在同一个 Mongo 事务里校验所有权记录），
+// 声明它的请求只能答 entity_not_found。这时写准入不认领：权威里不留下本进程的所有权记录（不留空认领），别的进程之后
+// 照常建它——按共享伴生实体的做法本进程新建、认领、切共享——建好之后两个进程都能读写，读到对方的修改。
+// 修前写准入先认领、再冷加载：A 的一次只读请求就把它认领成 A 独占（空认领），B 的认领被 fence 拒绝，且没有时限，
+// 直到 A 删空认领、进共享或转走它（facebook 模块实施时在真实依赖下发现：读一次空收件箱，别的 game 再也投递不进来）。
+func TestRequestOnAnEntityThatDoesNotExistClaimsNothing(t *testing.T) {
+	useFreshMetrics(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodes := newSharedWriterNodes(t, 2331, nil, 1000, 1001)
+	a, b := startExclusiveNest(t, nodes[0]), startExclusiveNest(t, nodes[1])
+	// A 的 loader 像 DataEngine 聚合仓库那样答“权威里没有”；B 的 loader 未命中就建空实例（相当于业务的 GetOrCreate）。
+	a.loader.absentIsNotFound = true
+	// A 信任所有权缓存一小时：答“不存在”之后必须丢掉缓存的“没有记录”，B 建好之后 A 的第一次请求才会重读权威、
+	// 按共享模式准入，而不是在旧缓存上冷加载到 B 的数据、再去认领一次被 fence 拒绝。
+	a.mgr.cfg.MarkerCacheTTL = time.Hour
+	id := testRemoteFullIDWithKind(2331, 1, 125)
+
+	for _, request := range []struct {
+		name    string
+		handler nest.HandlerName
+		params  []any
+	}{
+		{"read-only", exclusiveReadHandler, nil},
+		{"write", exclusiveWriteHandler, []any{[2]string{"A0", ""}}},
+	} {
+		_, err := a.engine.Request(ctx, request.handler, id, nest.NewParams(request.params...))
+		if code, _ := errcode.ClientError(err); code != errcode.CodeEntityNotFound {
+			t.Fatalf("A %s request on an entity that does not exist: code %d err=%v; want entity_not_found", request.name, code, err)
+		}
+		if doc, ok := readMeta(t, a.sharedWriterNode, id); ok {
+			t.Fatalf("A's %s request on an entity that does not exist claimed it: ownership record %+v", request.name, doc)
+		}
+	}
+	if left := emptyClaimCount("left"); left != 0 {
+		t.Fatalf("empty_claim_total{left} = %d; want 0 (nothing was claimed)", left)
+	}
+	if a.manager.Get(id) != nil {
+		t.Fatal("A keeps an instance of an entity that does not exist")
+	}
+
+	// B 建它：本进程新建空实例、认领、切共享，再写。
+	if _, err := b.loader.LoadEntity(ctx, id, 125); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.mgr.ClaimRemoteOwnership(ctx, id); err != nil {
+		t.Fatalf("B claim after A's requests: %v", err)
+	}
+	if lease, err := b.mgr.EnterRemoteSharedMode(ctx, id); err != nil || !lease.Shared {
+		t.Fatalf("B enter shared mode: lease=%+v err=%v", lease, err)
+	}
+	if err := b.writeNest(ctx, id, "", "B1"); err != nil {
+		t.Fatalf("B first write: %v", err)
+	}
+	if err := a.writeNest(ctx, id, "A1", ""); err != nil {
+		t.Fatalf("A write once B created it: %v", err)
+	}
+	for _, n := range []exclusiveNestNode{a, b} {
+		if got := n.read(t, ctx, id); got != "a=A1;b=B1@2" {
+			t.Fatalf("sid %d read=%q, want both writes %q", n.sid, got, "a=A1;b=B1@2")
+		}
+	}
+}
+
+// 共享实体上读不占写：A 先读（取分布式锁与写许可、读完即放），之后 A、B 都能写，每笔写在最新版本上，读到的是权威最新。
+// 独占实体：owner 之外的进程读同样被 fence 拒绝（答出 owner），不认领、不改所有权，owner 照常读写。
+func TestReadsBeforeWritesOnSharedAndExclusiveEntities(t *testing.T) {
+	t.Run("shared: read first, then both processes write", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		nodes := newSharedWriterNodes(t, 2332, nil, 1000, 1001)
+		a, b := startExclusiveNest(t, nodes[0]), startExclusiveNest(t, nodes[1])
+		id := testRemoteFullIDWithKind(2332, 1, 125)
+		if _, err := b.loader.LoadEntity(ctx, id, 125); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.mgr.ClaimRemoteOwnership(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.mgr.EnterRemoteSharedMode(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.writeNest(ctx, id, "", "B1"); err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			if got := a.read(t, ctx, id); got != "a=;b=B1@1" {
+				t.Fatalf("A read=%q", got)
+			}
+		}
+		if err := a.writeNest(ctx, id, "A1", ""); err != nil {
+			t.Fatalf("A write after its reads: %v", err)
+		}
+		if err := b.writeNest(ctx, id, "", "B2"); err != nil {
+			t.Fatalf("B write after A read and wrote: %v", err)
+		}
+		if got := a.read(t, ctx, id); got != "a=A1;b=B2@3" {
+			t.Fatalf("A read after B's write=%q, want %q", got, "a=A1;b=B2@3")
+		}
+		if lease, found, err := a.mgr.GetRemoteOwnership(ctx, id); err != nil || !found || !lease.Shared {
+			t.Fatalf("ownership after the reads: %+v found=%v err=%v; want still shared", lease, found, err)
+		}
+	})
+	t.Run("exclusive: another process's read is fenced", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		nodes := newSharedWriterNodes(t, 2333, nil, 1000, 1001)
+		a, b := startExclusiveNest(t, nodes[0]), startExclusiveNest(t, nodes[1])
+		id := testRemoteFullIDWithKind(2333, 1, 125)
+		if err := a.writeNest(ctx, id, "A1", ""); err != nil {
+			t.Fatal(err)
+		}
+		_, err := b.engine.Request(ctx, exclusiveReadHandler, id, nest.NewParams())
+		if !errors.Is(err, entity.ErrRemoteFenced) {
+			t.Fatalf("B read of A's exclusive entity: %v; want ErrRemoteFenced", err)
+		}
+		if doc, ok := readMeta(t, a.sharedWriterNode, id); !ok || doc.Owner != a.sid || doc.Shared {
+			t.Fatalf("ownership after B's read: %+v found=%v; want A exclusive", doc, ok)
+		}
+		if err := a.writeNest(ctx, id, "A2", ""); err != nil {
+			t.Fatalf("A write after B's read: %v", err)
+		}
+		if got := a.read(t, ctx, id); got != "a=A2;b=@2" {
+			t.Fatalf("A read=%q", got)
+		}
+	})
 }

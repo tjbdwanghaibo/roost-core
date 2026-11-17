@@ -228,8 +228,8 @@ type OwnedEntityLister interface {
 var _ OwnedEntityLister = (*MongoCommitter)(nil)
 
 // EmptyClaimStore 是“删空认领”（D17）的存储能力：按 owner 枚举空认领的候选、带所有权代际守护地删除一条空认领。
-// 空认领是“所有权记录在、这条记录下从没有提交落进权威”的实体（首写认领之后事务被拒绝回滚、读请求冷加载不到、或提交
-// 之前崩溃留下的），契约见 Manager.DeleteEmptyClaim。MongoCommitter 实现它。
+// 空认领是“所有权记录在、这条记录下从没有提交落进权威”的实体（首写认领之后事务被拒绝回滚、只读请求没有修改、或提交
+// 之前崩溃留下的；内存与权威里都不存在的实体，写准入不认领，见 confirmExistsBeforeClaim），契约见 Manager.DeleteEmptyClaim。MongoCommitter 实现它。
 type EmptyClaimStore interface {
 	// ListEmptyClaims 与 OwnedEntityLister 同样分页，只列权威记录看起来是空认领的（候选：没有提交落进权威）。
 	ListEmptyClaims(ctx context.Context, owner int32, kinds []entity.EntityKind, after int64, limit int) (ids []int64, next int64, err error)

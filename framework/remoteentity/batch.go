@@ -156,7 +156,8 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 		return nil, err
 	}
 	if !marked && durable {
-		// 认领发生在准入里、事务之前；这次准入失败（例如实体在权威里不存在、冷加载不到）时认领不撤销，留下空认领。
+		// 认领发生在准入里、事务之前；认领之后这次准入失败（例如对齐时版本冲突）时认领不撤销，留下空认领。实体在权威里
+		// 不存在、内存里也没有时不认领（confirmExistsBeforeClaim）。
 		claimed := state != nil && state.Claimed
 		lease, version, err := w.alignExclusive(ctx, authority, state)
 		if err != nil {
@@ -324,7 +325,8 @@ func (w *remoteEntityWrapper) abortBeginWrite(ctx context.Context, distLocked bo
 	w.releaseWriteGate()
 }
 
-// confirmWriteOwnership 刷新 marker（MarkerCacheTTL 内信任缓存），没有所有权记录时为本节点认领，返回实体是否处于
+// confirmWriteOwnership 刷新 marker（MarkerCacheTTL 内信任缓存），没有所有权记录时为本节点认领（持久权威下先确认实体
+// 存在，见 confirmExistsBeforeClaim），返回实体是否处于
 // 共享模式。独占模式下只有本节点是所有者才允许写。持久权威（authority 非 nil）下缓存过期时用 ReadAuthorityState
 // 刷新，同一次读取顺带给出权威版本（state），独占写的对齐不必再读一次；认领用 ClaimAuthorityState，认领带回的权威
 // 状态同样作为 state，取得归属之后的对齐也不再读。缓存未过期、没有认领时 state 为 nil，由对齐读一次。
@@ -342,6 +344,11 @@ func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context, authori
 		return false, nil, fmt.Errorf("remote_entity: refresh marker %d: %w", w.id, err)
 	}
 	if _, found := w.cachedOwnership(); !found {
+		if authority != nil {
+			if err := w.confirmExistsBeforeClaim(ctx); err != nil {
+				return false, nil, err
+			}
+		}
 		claimed, err := w.claimOwnership(ctx, authority)
 		if err != nil {
 			// CAS 失败后刷新，让错误报告真正赢得认领的所有者，而不是把“没有记录”当作本地拥有。
@@ -366,6 +373,27 @@ func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context, authori
 		return false, nil, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, w.id, w.leaseOwner())
 	}
 	return marked, state, nil
+}
+
+// confirmExistsBeforeClaim 在首写认领之前确认实体存在（只在持久权威下、所有权缓存是“没有记录”时调用）。
+//
+// 没有所有权记录的实体在权威里没有任何提交（Remote 提交与所有权记录在同一个 Mongo 事务里校验），本进程内存里也没有
+// 实例（业务在 Nest 之外 GetOrCreate 新建的那份）时，准入的冷加载必然答“不存在”。这时不认领、原样返回加载错误
+// （声明目标的 Nest 请求答 entity_not_found，与认领之后再冷加载失败时相同）：先认领的话准入照样失败，却留下本 sid
+// 独占的空认领，别的进程再也认领不了、切不了共享——只读请求同样走写准入，读一次还没建的共享实体就会把它锁给本进程。
+// 失败时所有权缓存置为未知，下一次准入重读权威，不在旧的“没有记录”上再冷加载一次（别的进程可能刚建了它）。
+//
+// 内存里已有实例时不加载、直接认领（正常的新建路径，没有多出的 I/O）；冷加载读得到实例（权威里有数据却没有记录，
+// 正常运行不出现）时照旧认领，加载的实例留给随后的对齐。
+func (w *remoteEntityWrapper) confirmExistsBeforeClaim(ctx context.Context) error {
+	if w.lookupLocalEntity() != nil {
+		return nil
+	}
+	if _, err := w.loadWriteTarget(ctx, false, 0); err != nil {
+		w.invalidateMarker()
+		return err
+	}
+	return nil
 }
 
 // claimOwnership 为本节点认领实体。持久权威下用 ClaimAuthorityState，带回认领之后的权威状态（版本与所有权）；

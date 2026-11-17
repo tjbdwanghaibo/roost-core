@@ -136,24 +136,22 @@ func TestDeleteEmptyClaimRemovesOnlyANeverCommittedClaim(t *testing.T) {
 	}
 }
 
-// 同 sid 重启后内存里没有实例：删空认领经 loader 冷加载确认“权威里没有聚合”再删。读请求在权威里不存在的实体上的
-// 首写认领（冷加载不到、准入失败）同样留下空认领，计 left。
+// 同 sid 重启后内存里没有实例：删空认领经 loader 冷加载确认“权威里没有聚合”再删。空认领来自重启前被业务拒绝的首写
+// （内存里新建的空实例被认领、事务没提交）。在权威里不存在、内存里也没有的实体上的请求不认领（2026-11-18，
+// TestRequestOnAnEntityThatDoesNotExistClaimsNothing），不再是空认领的来源。
 func TestDeleteEmptyClaimAfterRestartConfirmsTheAggregateIsAbsent(t *testing.T) {
 	useFreshMetrics(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	db := newRemoteMongoFake()
 	before := newWriterNodesOn(t, db, 2411, nil, 1000)[0]
-	before.loader.absentIsNotFound = true
 	id := testRemoteFullIDWithKind(2411, 1, emptyClaimKind)
-	if _, err := before.mgr.PrepareRemoteWriteBatch(ctx, []int64{id}); !errors.Is(err, entity.ErrAuthorityEntityNotFound) {
-		t.Fatalf("admission on an entity that does not exist: %v; want ErrAuthorityEntityNotFound", err)
-	}
+	rejectFirstWrite(t, ctx, before, id)
 	if doc, ok := readMeta(t, before, id); !ok || doc.Version != 0 {
-		t.Fatalf("the failed admission left %+v (found=%v); the case under test does not arise", doc, ok)
+		t.Fatalf("the rejected first write left %+v (found=%v); the case under test does not arise", doc, ok)
 	}
 	if got := emptyClaimCount("left"); got != 1 {
-		t.Fatalf("empty_claim_total{left} = %d after a claim whose admission failed; want 1", got)
+		t.Fatalf("empty_claim_total{left} = %d after a rejected first write; want 1", got)
 	}
 
 	restarted := newWriterNodesOn(t, db, 2411, nil, 1000)[0]

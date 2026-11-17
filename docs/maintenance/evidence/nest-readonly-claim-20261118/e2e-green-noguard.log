@@ -1,0 +1,5 @@
+511:=== RUN   TestAllianceE2ESocialTeamInvite
+532:    social_test.go:202: SOCIAL_INVITE team 4611686018427388957 on game 1000: B (game 1001) pushed &{TeamID:4611686018427388957 Inviter:100001 ExpireAtUnixMilli:1794945067040} and listed it, accepted revision 2; C invited offline, listed after relogin on game 1001, joined revision 3
+550:--- PASS: TestAllianceE2ESocialTeamInvite (5.98s)
+552:ok  	example.com/planet/e2e	6.685s
+553:alliance actual cases: passed=1, skipped=0

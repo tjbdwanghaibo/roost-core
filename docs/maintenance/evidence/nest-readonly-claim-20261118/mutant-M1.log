@@ -1,0 +1,5 @@
+--- FAIL: TestRequestOnAnEntityThatDoesNotExistClaimsNothing (0.00s)
+    write_admission_test.go:1494: A's read-only request on an entity that does not exist claimed it: ownership record {ID:4611686018429775349 Version:0 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.540s
+FAIL

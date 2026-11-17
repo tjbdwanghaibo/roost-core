@@ -1,0 +1,6 @@
+--- FAIL: TestRequestOnAnEntityThatDoesNotExistClaimsNothing (0.00s)
+    write_admission_test.go:1521: A write once B created it: remote entity: writer fenced: entity=4611686018429775349 owner=1001 marker=2 route=1 shared=true
+        remote entity: writer fenced
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.546s
+FAIL

@@ -144,7 +144,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `remote_entity.route_lookup_total{source}` | Counter | 路由查找的来源：redis / authority（Redis 没有登记或读不了，回退读所有权记录）/ not_found（实体不存在）/ error（所有权记录也读不了）。authority 占比高说明登记缺失（Redis 不可用、刚重启、续期失败），每次多一次 Mongo 点读 |
 | `remote_entity.route_lookup_fallback_total{reason}` | Counter | 查找回退到所有权记录的原因：redis_missing / redis_error |
 | `remote_entity.preload_total{result}` | Counter | 起服预加载每个实体的结果：ok / skipped（枚举之后所有权已变）/ empty（空认领：所有权是本 sid、权威里没有聚合）/ deleted（删过档）/ error（加载失败，留给按需冷加载；应为零） |
-| `remote_entity.empty_claim_total{event}` | Counter | 空认领的累积计数（D17，[REMOTE_ENTITY“删空认领”](REMOTE_ENTITY.md#路由登记)）：event=left 是本进程的写准入新插入了第一代所有权记录、而这个实体最终没有提交落进权威的次数（建盟被业务拒绝、读请求冷加载不到、只读请求首次碰到它）；event=deleted 是运维命令 `remote_entity.empty_claims delete=true` 删掉的条数。left 持续增长说明空认领在累积（每条占一条 `_remote_entity_meta`），按需运行删空认领。两者之差不是现存数：留下的空认领之后可能被同 ID 的首写填上，提交前崩溃留下的不计入 left；现存数用命令不带 delete 列出，重启时预加载 kind 的看 `preload_total{result="empty"}` |
+| `remote_entity.empty_claim_total{event}` | Counter | 空认领的累积计数（D17，[REMOTE_ENTITY“删空认领”](REMOTE_ENTITY.md#路由登记)）：event=left 是本进程的写准入新插入了第一代所有权记录、而这个实体最终没有提交落进权威的次数（建盟被业务拒绝、对内存里新建还没提交的实例只读；实体在内存与权威里都不存在时请求答 entity_not_found、不认领，2026-11-18 起不计）；event=deleted 是运维命令 `remote_entity.empty_claims delete=true` 删掉的条数。left 持续增长说明空认领在累积（每条占一条 `_remote_entity_meta`），按需运行删空认领。两者之差不是现存数：留下的空认领之后可能被同 ID 的首写填上，提交前崩溃留下的不计入 left；现存数用命令不带 delete 列出，重启时预加载 kind 的看 `preload_total{result="empty"}` |
 
 ### 帧同步（sync/lockstep）
 
