@@ -1,0 +1,10 @@
+临时探针（未提交的代码，跑完已恢复）：在 TestRealRelayStartedRoomKeepsADroppedMembersSeat 里 alice 掉线后，房主发 RelayOpKick 踢她的离线槽位 2，等 2s 看 lobby 的 Kicked。
+命令：source env.sh && GOWORK=off go test -tags integration -count=1 -run TestRealRelayStartedRoomKeepsADroppedMembersSeat -v ./wiring/relay/
+结论：relay 的 kick 只作用于在线连接（service/relay/room.go kick：target := r.members[slot]，members 只有在线连接），离线槽位踢不动、不报 member_left{kicked}。
+
+
+    real_integration_test.go:550: PROBE: host kicked offline slot 2, lobby after 2s: kicked=[] members=[{Account:host Online:true ReservedUntilUnix:0 Connected:true} {Account:acc-alice Online:false ReservedUntilUnix:0 Connected:true}]
+--- FAIL: TestRealRelayStartedRoomKeepsADroppedMembersSeat (3.23s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.883s
+FAIL

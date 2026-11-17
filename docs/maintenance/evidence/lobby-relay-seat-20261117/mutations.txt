@@ -1,0 +1,55 @@
+== M1 开局保留席位：holdsSeat 去掉 started && Connected  (service/lobby/lobby.go)
+--- FAIL: TestStartedRoomsKeepDroppedMembersSeats (0.00s)
+        lobby_test.go:716: seats after alice dropped in a started room = "acc-host:online", want her seat kept
+--- FAIL: TestOpenRoomsReleaseDroppedMembersSeats (0.00s)
+        lobby_test.go:779: seats in the started room = "acc-host:online"
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+        lobby_test.go:838: seats after everyone but the host dropped = "acc-host:online"
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.003s
+
+== M2 回座不受 started 限制：started 检查挪到成员分支之前  (service/lobby/rooms.go)
+--- FAIL: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers (0.00s)
+        lobby_test.go:371: member reconnecting to a started room: lobby: room has started
+--- FAIL: TestStartedRoomsKeepDroppedMembersSeats (0.00s)
+        lobby_test.go:729: dropped member returning to a started, full room: lobby: room has started
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+        lobby_test.go:863: lobby: room has started
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.021s
+
+== M3 回座不算新人：人数检查挪到成员分支之前  (service/lobby/rooms.go)
+--- FAIL: TestJoinRefusesWhenFullAndIsIdempotentForMembers (0.00s)
+        lobby_test.go:297: alice rejoining: lobby: room is full
+--- FAIL: TestStartedRoomsKeepDroppedMembersSeats (0.00s)
+        lobby_test.go:724: newcomer into a started room: err = lobby: room is full (room_full), want room_started
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.022s
+
+== M4 applyOnline 不记 Connected  (service/lobby/events.go)
+--- FAIL: TestStartedRoomsKeepDroppedMembersSeats (0.00s)
+        lobby_test.go:716: seats after alice dropped in a started room = "acc-host:online", want her seat kept
+--- FAIL: TestOpenRoomsReleaseDroppedMembersSeats (0.00s)
+        lobby_test.go:779: seats in the started room = "acc-host:online"
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+        lobby_test.go:838: seats after everyone but the host dropped = "acc-host:online"
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.987s
+
+== M5 member_left{left} 不清 Connected  (service/lobby/events.go)
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+        lobby_test.go:877: seats after carol left through the relay = "acc-host:online acc-carol:offline"
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.011s
+
+== M6 房主经 lobby leave 不清 Connected  (service/lobby/rooms.go)
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+        lobby_test.go:895: seats after the host left a started room = "acc-host:offline acc-alice:online", want the old host's released
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.012s
+
+== M7 left 不看序号（挪到序号判断之外）  (service/lobby/events.go)
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+        lobby_test.go:871: seats after a late left and a drop = "acc-host:online", want carol's kept
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.028s
+
+== M8 开局后不论是否连上过一律保留  (service/lobby/lobby.go)
+--- FAIL: TestStartingARoomDoesNotKeepSeatsNeverConnected (0.00s)
+        lobby_test.go:810: seats = "acc-host:online acc-alice:offline", want the never-connected reservation released
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+        lobby_test.go:877: seats after carol left through the relay = "acc-host:online acc-carol:offline"
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	1.018s

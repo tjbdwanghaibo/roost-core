@@ -157,8 +157,9 @@ func (s *Service) ListRooms(ctx context.Context, gameToken, game, mode string, l
 
 // JoinRoom 加入房间并签令牌。
 //
-// 已经在房间里的人（含房主）再调是幂等的：不查密码、不查人数与“已开始”，席位预留期重新算，重新签一张令牌——
-// 断线重连就走这条路（§4.3）。角色按 Redis 里的当前房主填（§4.6.5）。
+// 已经在房间里的人（含房主）再调是幂等的：不查密码、不查人数与“已开始”，不算新人（不再占一个席位），席位预留期
+// 重新算，重新签一张令牌——断线重连就走这条路（§4.3）。已开始的房间里掉线的人席位一直留着（Room.holdsSeat），
+// 所以他再 join 就是回到原座。角色按 Redis 里的当前房主填（§4.6.5）。
 func (s *Service) JoinRoom(ctx context.Context, gameToken, roomID string, req JoinRequest) (Ticket, error) {
 	account, _, err := s.authenticate(ctx, gameToken, req.Game)
 	if err != nil {
@@ -204,7 +205,8 @@ func (s *Service) JoinRoom(ctx context.Context, gameToken, roomID string, req Jo
 // LeaveRoom 离开房间。
 //
 // 成员：立即让出席位，并让 relay 断开他（RelayCommand leave）。房主：席位不动，让 relay 走换 host（§4.6.1“房主离开”），
-// 新房主由 relay 的 host_changed 报告回来；relay 还没报告过这个房间（房主从没连上）时没有可换的人，直接关房。
+// 新房主由 relay 的 host_changed 报告回来；同时清掉他的 Connected，换完 host 后他按没开局的规则让出席位（已开始的
+// 房间也不给主动离开的人留座）。relay 还没报告过这个房间（房主从没连上）时没有可换的人，直接关房。
 // 不在房间里的人调用是空操作。
 func (s *Service) LeaveRoom(ctx context.Context, gameToken, roomID string, req LeaveRequest) (Ticket, error) {
 	account, _, err := s.authenticate(ctx, gameToken, req.Game)
@@ -223,7 +225,12 @@ func (s *Service) LeaveRoom(ctx context.Context, gameToken, roomID string, req L
 				return true, nil
 			}
 			notifyRelay = true
-			return false, nil
+			i := room.memberIndex(account)
+			if i < 0 || !room.Members[i].Connected {
+				return false, nil
+			}
+			room.Members[i].Connected = false
+			return true, nil
 		}
 		i := room.memberIndex(account)
 		if i < 0 {

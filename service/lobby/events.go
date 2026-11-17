@@ -35,6 +35,9 @@ const (
 
 	// ReasonKicked 是 member_left 报告里“被房主踢出”的原因（relay 的 wire.RelayReasonKicked 的名字）。
 	ReasonKicked = "kicked"
+	// ReasonLeft 是 member_left 报告里“主动离开”的原因（wire.RelayReasonLeft：lobby 的 leave 或 RelayOpLeave）。
+	// 其余原因（disconnected、idle_timeout 等）都是掉线：已开始的房间里掉线的人席位留着。
+	ReasonLeft = "left"
 
 	// VerifyQueue 是验权请求的队列组：多个 lobby 实例只有一个答复。
 	VerifyQueue = "lobby"
@@ -57,7 +60,8 @@ type RoomEvent struct {
 	Host    string   `json:"host,omitempty"`
 	Epoch   uint64   `json:"epoch"`
 	Account string   `json:"account,omitempty"`
-	// Reason 只在 member_left / closed 上有；lobby 只认 member_left 的 ReasonKicked：把 Account 记进被踢名单。
+	// Reason 只在 member_left / closed 上有；lobby 只认 member_left 的两种：ReasonKicked 把 Account 记进被踢名单，
+	// ReasonLeft 清掉他的 Connected（主动离开，已开始的房间也不再给他留席位）。
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -116,9 +120,14 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 		if event.Epoch > room.HostEpoch && event.Host != "" {
 			room.Host, room.HostEpoch = event.Host, event.Epoch
 		}
-		// 在线名单：只认序号更大的报告。
+		// 在线名单：只认序号更大的报告。主动离开也只认序号更大的：迟到的旧 left 不能清掉回座后又连上的人。
 		if event.Seq > room.RelaySeq {
 			room.RelaySeq = event.Seq
+			if event.Type == EventMemberLeft && event.Reason == ReasonLeft {
+				if i := room.memberIndex(event.Account); i >= 0 {
+					room.Members[i].Connected = false
+				}
+			}
 			room.applyOnline(event.Online, now)
 		}
 		if room.memberIndex(room.Host) < 0 {
@@ -133,7 +142,7 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 	return err
 }
 
-// applyOnline 按 relay 的在线名单重算席位：在线的留下并清掉预留；不在线的，房主与预留期内的留下，其余让出。
+// applyOnline 按 relay 的在线名单重算席位：在线的记下 Connected、清掉预留；不在线的按 holdsSeat 决定留不留。
 // relay 报告在线、目录里却没有的人补上（relay 是“谁连着”的权威）。
 func (r *Room) applyOnline(online []string, now time.Time) {
 	connected := make(map[string]bool, len(online))
@@ -147,16 +156,17 @@ func (r *Room) applyOnline(online []string, now time.Time) {
 		member.Online = connected[member.Account]
 		if member.Online {
 			member.ReservedUntilUnix = 0
+			member.Connected = true
 			delete(connected, member.Account)
 		}
-		if member.Online || member.Account == r.Host || member.ReservedUntilUnix > now.Unix() {
+		if r.holdsSeat(member, now) {
 			kept = append(kept, member)
 		}
 	}
 	r.Members = kept
 	for _, account := range online {
 		if connected[account] && !r.kicked(account) {
-			r.Members = append(r.Members, Member{Account: account, Online: true})
+			r.Members = append(r.Members, Member{Account: account, Online: true, Connected: true})
 			delete(connected, account)
 		}
 	}

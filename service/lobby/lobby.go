@@ -36,6 +36,7 @@ const (
 	// StateOpen：可加入，出现在列表里（还要未满、relay 已报告房主连上）。
 	StateOpen RoomState = "open"
 	// StateStarted：已开始，不出现在列表里，新人不能加入；已在房间里的人照常可以重连（join 幂等）。
+	// 已开始的房间里，连上过 relay 的成员掉线后席位一直留着，直到离开、被踢或关房（Room.holdsSeat，方案 §6 第 12 条）。
 	StateStarted RoomState = "started"
 )
 
@@ -197,7 +198,7 @@ type Room struct {
 	HostEpoch uint64 `json:"host_epoch"`
 	// Relay 是建房时选中的 relay 实例与它的对外地址；房间固定在它上面。
 	Relay Relay `json:"relay"`
-	// Members 是占着席位的人（含房主）：relay 报告在线的、预留期内（拿了令牌还没连上）的，以及房主本人。
+	// Members 是占着席位的人（含房主），规则见 holdsSeat。
 	Members []Member `json:"members"`
 	// Kicked 是被房主踢出过的账号（relay 报告 member_left、原因 kicked 时记下）：之后 join 与 relay 的验权都拒绝它，
 	// 名单随房间记录一起过期（方案 §4.4）。
@@ -214,6 +215,9 @@ type Member struct {
 	Online bool `json:"online,omitempty"`
 	// ReservedUntilUnix：lobby 给这个人签了令牌，席位留到这一刻；连上后清零。
 	ReservedUntilUnix int64 `json:"reserved_until_unix,omitempty"`
+	// Connected：relay 报告过他连上（之后掉线也不清）。房间已开始时，靠它把掉线的人的席位一直留着；
+	// 主动离开（lobby 的 leave、relay 报告 member_left 原因 left）清掉它，席位按没开局的规则让出。
+	Connected bool `json:"connected,omitempty"`
 }
 
 // RoomView 是客户端看到的房间。
@@ -267,11 +271,22 @@ func (r Room) memberIndex(account string) int {
 	return -1
 }
 
-// pruneReservations 去掉预留过期、又不在线的席位；房主的席位一直留着（房主断线等 relay 换 host，§4.6.1）。
+// holdsSeat 是席位规则，加入、relay 报告、验权都按它算（被踢、离开、关房另有入口直接移除）：
+//   - 在线的、房主（房主断线等 relay 换 host，§4.6.1）、预留期内的（拿了令牌还没连上）占着席位；
+//   - 房间已开始时，relay 报告过连上的人（Connected）掉线后也一直占着，直到主动离开、被踢或关房；他再 join 就回到
+//     原座（方案 §6 第 12 条）。拿了令牌却从没连上的人不算：预留过期照样让出，因为 relay 上没有他的座位，房主也踢不到他。
+//
+// 没开局的房间（以及改回 open 的房间）：不在线、过了预留期就让出。
+func (r *Room) holdsSeat(member Member, now time.Time) bool {
+	return member.Online || member.Account == r.Host || member.ReservedUntilUnix > now.Unix() ||
+		(r.State == StateStarted && member.Connected)
+}
+
+// pruneReservations 按 holdsSeat 去掉不再占席位的人。
 func (r *Room) pruneReservations(now time.Time) {
 	kept := r.Members[:0]
 	for _, member := range r.Members {
-		if member.Online || member.Account == r.Host || member.ReservedUntilUnix > now.Unix() {
+		if r.holdsSeat(member, now) {
 			kept = append(kept, member)
 		}
 	}

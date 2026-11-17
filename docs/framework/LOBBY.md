@@ -47,13 +47,18 @@
 
 ### 2.1 加入、离开与房主
 
-- **join 对已在房间里的人是幂等的**，房主也一样：不再查密码、人数和“已开始”，重新签一张令牌。断线重连就走这条路。
-- **席位**：
+- **join 对已在房间里的人是幂等的**，房主也一样：不再查密码、人数和“已开始”，不算新人（满员也放行），席位预留期重新算，重新签一张令牌。断线重连就走这条路。
+- **席位**（一条规则 `Room.holdsSeat`，join、relay 报告、验权都按它算）：
   - 席位包括 relay 报告在线的人、房主本人，以及预留期内的人。
   - 预留期：签了令牌、还没连上 relay 的人，席位留 relay 令牌寿命再加 15s。过期又没连上，就让出席位。
+  - **没开局**（`open`，含从 `started` 改回 `open`）：不在线、又过了预留期，就让出席位。
+  - **已开始**（`started`）：relay 报告过连上的人（记录里的 `connected`）掉线后，席位一直留着，预留过期也不让出，直到他主动离开、被踢或房间关闭（方案 §6 第 12 条）。他再 join 就是回到原座：不受“已开始”限制、不算新人，签新令牌，relay 验权也通过。掉线不回来的人一直占着位子，要房主踢掉才空出来。
+  - 开局那一刻还在预留期、从没连上 relay 的人不算掉线成员：照没开局的规则，预留过期就让出；之后再 join 是新人，答 `room_started`。原因：relay 上没有他的座位，房主踢不到他，留着就永远空不出来。
+  - 已开始的房间里，新账号 join 照旧答 `room_started`。
 - **离开**：
   - 成员离开：立即让出席位，并经 NATS 让 relay 断开他（§5.2 的 `leave` 命令）。
-  - 房主离开：目录里的房主不变，由 relay 走换 host（方案 §4.6.1）；新房主经 `room.host_changed` 报告回来。
+  - 成员在 relay 上发 `leave` 控制帧离开：relay 报 `room.member_left`、原因 `left`，lobby 清掉他的 `connected`，席位按没开局的规则让出（已开始的房间也不留）。
+  - 房主离开：目录里的房主不变，由 relay 走换 host（方案 §4.6.1）；新房主经 `room.host_changed` 报告回来。lobby 同时清掉他的 `connected`，换完 host 后他不再是房主，席位按没开局的规则让出（已开始的房间也不给主动离开的人留座）。
   - 房间还没被 relay 报告过（房主从没连上）时，房主一离开就关房。
   - 不在房间里的人调 leave 是空操作。
 - **被踢**：房主在 relay 上踢人后，relay 报 `room.member_left`、原因 `kicked`；lobby 把账号记进房间记录的被踢名单 `kicked`、让出它的席位。名单随房间记录一起过期。之后这个账号 join 答 `kicked`，relay 的验权也拒绝它（§5.2），手里没过期的令牌也用不了。lobby 的名单是权威，relay 本地的记录只挡报告到达之前的那一小段时间（方案 §4.4、§6 第 11 条）。
@@ -126,7 +131,7 @@ lobby 不持有 account 的密钥，也不自己验签。
   - `room.closed`：房间关闭时发。
 - 除 `room.closed` 外，每一条都带全量快照：`online` 是此刻连着的账号（含房主），`host`、`epoch` 是 relay 的当前房主与 `host_epoch`。建房时的房主是 epoch 0，每换一次 host 加 1。
 - `seq`：同一房间内由 relay 严格递增，从 1 开始。
-- `reason`：`member_left` / `closed` 的原因名；lobby 只认 `member_left` 上的 `kicked`。
+- `reason`：`member_left` / `closed` 的原因名；lobby 只认 `member_left` 上的 `kicked`（被踢）与 `left`（主动离开），其余原因（`disconnected`、`idle_timeout` 等）都按掉线处理。
 - `host` / `epoch` 是 relay 上最近一个已就绪的房主：relay 选新房主的过程中仍报旧房主与旧 epoch，新房主回了 host_ready 才发 `room.host_changed`（新 epoch）。
 - `relay` 必须等于房间记录里的实例，不等就整条忽略。
 
@@ -134,10 +139,11 @@ lobby 的处理：
 - 房主按 epoch 做 CAS，只接受更大的 epoch，与消息类型无关：心跳也带着，丢了一条 `host_changed` 下一次心跳补上。之后 `/rooms/{id}/state` 只认新房主，令牌角色也跟着变。
 - 在线名单只认 `seq` 更大的报告；迟到的旧报告不改名单，只续 TTL。
 - `member_left` 带 `kicked`：账号记进被踢名单、让出席位，与 `seq` 无关（踢出是永久的事实，迟到也照记）；之后 relay 的在线名单里再出现它也不补回席位。
-- 按名单重算席位：在线的留下；不在线的，房主与预留期内的留下，其余让出；名单里有、目录里没有的人补上（relay 是“谁连着”的权威）。
+- `member_left` 带 `left`：清掉这个账号的 `connected`（主动离开）。只认 `seq` 更大的：迟到的旧 `left` 不能清掉回座后又连上的人。
+- 按名单重算席位：在线的记下 `connected`、清掉预留；不在线的按 §2.1 的席位规则决定留不留；名单里有、目录里没有的人补上（relay 是“谁连着”的权威）。
 - 每一条被接受的报告都写一次记录，也就续了一次 TTL。房间已经不在、已关闭、或不是这个 relay 的报告，静默忽略。
 
-`RelayCommand`：`{"type":"leave","room":"<id>","account":"<账号>"}`。relay 把这个账号移出房间，等同于他自己 leave；是房主时 relay 走换 host。命令是尽力而为，发不出去只记日志：席位已经在目录里让出，客户端自己断开 relay 连接也算离开。
+`RelayCommand`：`{"type":"leave","room":"<id>","account":"<账号>"}`。relay 把这个账号移出房间，等同于他自己 leave；是房主时 relay 走换 host。命令是尽力而为，发不出去只记日志：席位已经在目录里让出；客户端调完 leave 也应自己断开 relay 连接（单纯断开在已开始的房间里只算掉线，见 §2.1）。
 
 **验权**（方案 §4.3）：relay 每条连接（含重连、含建房的第一条）在本地验签之后都发一条 request 到 `<subject>.verify`：
 
@@ -153,7 +159,7 @@ lobby 读房间记录（只读，不写），按顺序核对，答复 `{"ok":tru
 | `wrong_relay` | 房间不分在发请求的 relay 实例上 |
 | `kicked` | 账号在被踢名单里 |
 | `not_host` | `create` 为 true（relay 上还没有这个房间），账号却不是记录里的房主 |
-| `not_member` | 账号不占席位：没 join，或已离开、预留过期又不在线 |
+| `not_member` | 账号不占席位：没 join，或已离开、席位已按 §2.1 让出 |
 | `unavailable` | lobby 读 Redis 出错；relay 按 lobby 不可用处理 |
 | `bad_request` | 请求解不开或缺字段 |
 

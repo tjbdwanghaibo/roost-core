@@ -1,0 +1,14 @@
+== IT-M1 开局保留席位撤掉（holdsSeat 去掉 started && Connected）
+--- FAIL: TestRealRelayStartedRoomKeepsADroppedMembersSeat (5.85s)
+    real_integration_test.go:535: lobby room {ID:792c5385fd2b4c80 Game:party Mode:duel Name: MaxMembers:2 State:started Closed:false PasswordHash: Attrs:null Host:host HostEpoch:0 Relay:{Instance:relay-9 TCPAddr:127.0.0.1:61402 WSAddr: Rooms:0} Members:[{Account:host Online:true ReservedUntilUnix:0 Connected:true}] Kicked:[] RelaySeq:4 CreatedAtUnix:1794904764} (<nil>)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/relay	6.449s
+FAIL
+== IT-M3 回座算成新人（人数检查挪到成员分支之前）
+--- FAIL: TestRealRelayStartedRoomKeepsADroppedMembersSeat (0.34s)
+    real_integration_test.go:540: newcomer into the started room: lobby: room is full, want ErrRoomStarted
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/relay	0.957s
+FAIL
+== 恢复后
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	1.317s

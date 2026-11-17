@@ -1,0 +1,12 @@
+--- FAIL: TestStartedRoomsKeepDroppedMembersSeats (0.00s)
+    --- FAIL: TestStartedRoomsKeepDroppedMembersSeats/memory (0.00s)
+        lobby_test.go:716: seats after alice dropped in a started room = "acc-host:online", want her seat kept
+--- FAIL: TestOpenRoomsReleaseDroppedMembersSeats (0.00s)
+    --- FAIL: TestOpenRoomsReleaseDroppedMembersSeats/memory (0.00s)
+        lobby_test.go:779: seats in the started room = "acc-host:online"
+--- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.00s)
+    --- FAIL: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose/memory (0.00s)
+        lobby_test.go:838: seats after everyone but the host dropped = "acc-host:online"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.518s
+FAIL

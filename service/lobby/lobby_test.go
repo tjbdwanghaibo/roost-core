@@ -690,6 +690,225 @@ func TestLeave(t *testing.T) {
 	})
 }
 
+// lapse 让所有预留过期：令牌寿命加余量再多一秒。
+func (h *harness) lapse() { h.clock.Advance(token.DefaultTTL + reservationSlack + time.Second) }
+
+// 开局后掉线的席位（方案 §6 第 12 条）：已开始的房间里，连上过 relay 的成员掉线后席位一直留着，预留过期也不让出；
+// 他再 join 回到原座——不受“已开始”限制、满员也不算新人——签新令牌，relay 验权能过。新人照旧 room_started。
+func TestStartedRoomsKeepDroppedMembersSeats(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		created := h.create(t, "gt-host", CreateRequest{MaxMembers: 2})
+		id := created.Room.ID
+		if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 1, Host: "acc-host", Online: []string{"acc-host", "acc-alice"}})
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+			t.Fatal(err)
+		}
+		// alice 掉线：relay 的在线名单里没有她，过了预留期，再来一条心跳。
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Account: "acc-alice", Reason: "disconnected",
+			Online: []string{"acc-host"}})
+		h.lapse()
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 3, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online acc-alice:offline" {
+			t.Fatalf("seats after alice dropped in a started room = %q, want her seat kept", got)
+		}
+		if got := h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id, Account: "acc-alice", Relay: "relay-b"}); !got.OK {
+			t.Fatalf("verifying the dropped member: %+v", got)
+		}
+		// 新人：房间已开始，拒绝（满员之前先答 room_started）。
+		_, err := h.join("gt-bob", id, JoinRequest{})
+		if _, name := errorStatus(err); !errors.Is(err, ErrRoomStarted) || name != "room_started" {
+			t.Fatalf("newcomer into a started room: err = %v (%s), want room_started", err, name)
+		}
+		// alice 回座：房间已开始且 2/2 满员，仍然放行，人数不变，签新令牌。
+		back, err := h.join("gt-alice", id, JoinRequest{})
+		if err != nil {
+			t.Fatalf("dropped member returning to a started, full room: %v", err)
+		}
+		if claims := verifyToken(t, back, "relay-b"); claims.Account != "acc-alice" || claims.Role != token.RoleMember || back.Room.Members != 2 {
+			t.Fatalf("return ticket: claims %+v, room %+v", claims, back.Room)
+		}
+		// 回座后令牌又过期、她仍没连上：席位照样留着，验权照样能过。
+		h.lapse()
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 4, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id, Account: "acc-alice", Relay: "relay-b"}); !got.OK {
+			t.Fatalf("verifying the returned member after her reservation lapsed: %+v", got)
+		}
+		h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: "relay-b", Seq: 5, Host: "acc-host", Account: "acc-alice",
+			Online: []string{"acc-host", "acc-alice"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online acc-alice:online" {
+			t.Fatalf("seats after alice reconnected = %q", got)
+		}
+	})
+}
+
+// 没开局的房间沿用原规则：掉线并且过了预留期，席位让出，别人能进。
+func TestOpenRoomsReleaseDroppedMembersSeats(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		created := h.create(t, "gt-host", CreateRequest{MaxMembers: 2})
+		id := created.Room.ID
+		if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 1, Host: "acc-host", Online: []string{"acc-host", "acc-alice"}})
+		h.lapse()
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Account: "acc-alice", Reason: "disconnected",
+			Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online" {
+			t.Fatalf("seats after alice dropped in an open room = %q, want hers released", got)
+		}
+		if got := h.svc.VerifyRelayConnection(context.Background(), RelayVerifyRequest{Room: id, Account: "acc-alice", Relay: "relay-b"}); got.Reason != VerifyNotMember {
+			t.Fatalf("verifying the dropped member of an open room: %+v, want not_member", got)
+		}
+		if _, err := h.join("gt-bob", id, JoinRequest{}); err != nil {
+			t.Fatalf("bob into the released seat: %v", err)
+		}
+
+		// 改回 open 的房间同样按原规则：开局时留着的掉线席位，改回后让出。
+		ctx := context.Background()
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: "relay-b", Seq: 3, Host: "acc-host", Account: "acc-bob", Online: []string{"acc-host", "acc-bob"}})
+		h.lapse()
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 4, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online acc-bob:offline" {
+			t.Fatalf("seats in the started room = %q", got)
+		}
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateOpen}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 5, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online" {
+			t.Fatalf("seats after reopening = %q, want the dropped seat released", got)
+		}
+	})
+}
+
+// 开局那一刻还在预留期、从没连上 relay 的人：不算掉线成员，预留过期就让出，之后再 join 是新人（room_started）。
+func TestStartingARoomDoesNotKeepSeatsNeverConnected(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		created := h.create(t, "gt-host", CreateRequest{})
+		id := created.Room.ID
+		if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 1, Host: "acc-host", Online: []string{"acc-host"}})
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id, Account: "acc-alice", Relay: "relay-b"}); !got.OK {
+			t.Fatalf("alice within her reservation: %+v", got)
+		}
+		h.lapse()
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online" {
+			t.Fatalf("seats = %q, want the never-connected reservation released", got)
+		}
+		if _, err := h.join("gt-alice", id, JoinRequest{}); !errors.Is(err, ErrRoomStarted) {
+			t.Fatalf("alice after her reservation lapsed: err = %v, want ErrRoomStarted", err)
+		}
+	})
+}
+
+// 开局后掉线的人，席位由三种事让出：被房主踢（记进被踢名单，join 答 kicked）、主动离开（lobby 的 leave，或 relay
+// 报告 member_left 原因 left）、关房。房主主动离开后换了 host，他也不再占座。
+func TestStartedRoomsReleaseSeatsOnKickLeaveAndClose(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		created := h.create(t, "gt-host", CreateRequest{})
+		id := created.Room.ID
+		for _, tok := range []string{"gt-alice", "gt-bob", "gt-carol"} {
+			if _, err := h.join(tok, id, JoinRequest{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 1, Host: "acc-host",
+			Online: []string{"acc-host", "acc-alice", "acc-bob", "acc-carol"}})
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+			t.Fatal(err)
+		}
+		h.lapse()
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online acc-alice:offline acc-bob:offline acc-carol:offline" {
+			t.Fatalf("seats after everyone but the host dropped = %q", got)
+		}
+
+		// 踢：relay 报告掉线的 alice 被踢（房主踢的是她的离线座位）。
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 3, Host: "acc-host", Account: "acc-alice", Reason: ReasonKicked,
+			Online: []string{"acc-host"}})
+		_, err := h.join("gt-alice", id, JoinRequest{})
+		if _, name := errorStatus(err); !errors.Is(err, ErrKicked) || name != "kicked" {
+			t.Fatalf("kicked member returning: err = %v (%s), want kicked", err, name)
+		}
+		if got := seats(h.room(t, id)); got != "acc-host:online acc-bob:offline acc-carol:offline" {
+			t.Fatalf("seats after the kick = %q, want alice's released", got)
+		}
+
+		// 主动离开（lobby）：bob 掉线后调 leave，席位让出，之后再 join 是新人。
+		if _, err := h.svc.LeaveRoom(ctx, "gt-bob", id, LeaveRequest{Game: "party"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.join("gt-bob", id, JoinRequest{}); !errors.Is(err, ErrRoomStarted) {
+			t.Fatalf("bob after leaving: err = %v, want ErrRoomStarted", err)
+		}
+
+		// 主动离开（relay）：carol 回座连上，又掉线，再回座连上后发 RelayOpLeave，relay 报告 member_left 原因 left。
+		// 先到一条迟到的 left（序号比已应用的小）：不能清掉回座后又连上的她，之后掉线席位照样留着。
+		if _, err := h.join("gt-carol", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: "relay-b", Seq: 5, Host: "acc-host", Account: "acc-carol", Online: []string{"acc-host", "acc-carol"}})
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 4, Host: "acc-host", Account: "acc-carol", Reason: ReasonLeft,
+			Online: []string{"acc-host"}})
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 6, Host: "acc-host", Account: "acc-carol", Reason: "idle_timeout",
+			Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online acc-carol:offline" {
+			t.Fatalf("seats after a late left and a drop = %q, want carol's kept", got)
+		}
+		h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: "relay-b", Seq: 7, Host: "acc-host", Account: "acc-carol", Online: []string{"acc-host", "acc-carol"}})
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 8, Host: "acc-host", Account: "acc-carol", Reason: ReasonLeft,
+			Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online" {
+			t.Fatalf("seats after carol left through the relay = %q", got)
+		}
+
+		// 房主主动离开：席位等 relay 换完 host 才让出（新房间演示）。
+		second := h.create(t, "gt-host", CreateRequest{})
+		sid := second.Room.ID
+		if _, err := h.join("gt-alice", sid, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: sid, Relay: "relay-b", Seq: 1, Host: "acc-host", Online: []string{"acc-host", "acc-alice"}})
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", sid, StateRequest{Game: "party", State: StateStarted}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.svc.LeaveRoom(ctx, "gt-host", sid, LeaveRequest{Game: "party"}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHostChanged, Room: sid, Relay: "relay-b", Seq: 2, Host: "acc-alice", Epoch: 1, Online: []string{"acc-alice"}})
+		if got := seats(h.room(t, sid)); got != "acc-alice:online" {
+			t.Fatalf("seats after the host left a started room = %q, want the old host's released", got)
+		}
+		if _, err := h.join("gt-host", sid, JoinRequest{}); !errors.Is(err, ErrRoomStarted) {
+			t.Fatalf("old host after leaving: err = %v, want ErrRoomStarted", err)
+		}
+
+		// 关房：房间不在了，掉线的人也回不去。
+		h.report(t, RoomEvent{Type: EventClosed, Room: sid, Relay: "relay-b", Seq: 3})
+		if _, err := h.join("gt-alice", sid, JoinRequest{}); !errors.Is(err, ErrRoomMissing) {
+			t.Fatalf("returning to a closed room: err = %v, want ErrRoomMissing", err)
+		}
+		if got := h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: sid, Account: "acc-alice", Relay: "relay-b"}); got.Reason != VerifyRoomNotFound {
+			t.Fatalf("verifying in a closed room: %+v", got)
+		}
+	})
+}
+
 // Redis 过期：记录的寿命是 room TTL，relay 的每条报告续一次；不再报告的房间到期消失，列表与加入都看不到，
 // 索引里残留的房间号在列表时清掉。
 func TestRoomsExpireWithoutRelayReports(t *testing.T) {

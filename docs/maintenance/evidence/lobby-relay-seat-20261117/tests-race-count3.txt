@@ -1,0 +1,30 @@
+$ ROOST_REDIS_TEST_ADDR=<共享隔离环境 Redis> GOWORK=off go test -race -count=3 ./service/lobby/ ./wiring/lobby/ ./wiring/relay/
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	15.706s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lobby	1.606s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	8.027s
+
+$ GOWORK=off go test -race -count=3 -v -run "Started|OpenRooms|Seats|Leave|Kicked|Verification|Idempotent|Password" ./service/lobby/ （只看 redis 子用例，按次数计）
+   3     --- PASS: TestJoinChecksThePassword/redis (0.00s)
+   3     --- PASS: TestJoinRefusesWhenFullAndIsIdempotentForMembers/redis (0.00s)
+   3     --- PASS: TestKickedAccountsAreRecordedAndRefused/redis (0.00s)
+   3     --- PASS: TestLeave/redis (0.00s)
+   3     --- PASS: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers/redis (0.00s)
+   3     --- PASS: TestOpenRoomsReleaseDroppedMembersSeats/redis (0.00s)
+   3     --- PASS: TestRelayReportsMaintainSeats/redis (0.00s)
+   3     --- PASS: TestRelayVerification/redis (0.00s)
+   3     --- PASS: TestStartedRoomsKeepDroppedMembersSeats/redis (0.00s)
+   3     --- PASS: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose/redis (0.01s)
+   3     --- PASS: TestStartingARoomDoesNotKeepSeatsNeverConnected/redis (0.00s)
+
+$ source env.sh && GOWORK=off go test -tags integration -race -count=3 -run TestRealRelay -v ./wiring/relay/
+--- PASS: TestRealRelayReportsCommandsAndAdvertisement (1.59s)
+--- PASS: TestRealRelayHostChangeKickAndVerification (0.63s)
+--- PASS: TestRealRelayStartedRoomKeepsADroppedMembersSeat (1.22s)
+--- PASS: TestRealRelayReportsCommandsAndAdvertisement (1.63s)
+--- PASS: TestRealRelayHostChangeKickAndVerification (0.93s)
+--- PASS: TestRealRelayStartedRoomKeepsADroppedMembersSeat (1.19s)
+--- PASS: TestRealRelayReportsCommandsAndAdvertisement (2.07s)
+--- PASS: TestRealRelayHostChangeKickAndVerification (1.22s)
+--- PASS: TestRealRelayStartedRoomKeepsADroppedMembersSeat (0.74s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	12.680s
