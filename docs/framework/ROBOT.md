@@ -92,9 +92,10 @@ MOBA 生成 `loadtest.NewBattleBot` / `BattleSink`，复用公共 `robot.Lockste
 生成的合作工程默认 `cmd/robot` 跑整局：
 
 ```sh
-# 两份票据来自业务登录，房间已由宿主分配，双方都在名单内。
+# 两份票据来自业务登录，房间已由宿主分配，双方都已 RoomJoin 入座；
+# -epoch / -peer-epoch 是两人 RoomJoin 拿到的当前席位代际（R9 起必填）。
 # 环境变量：ROOST_ROBOT_TICKET、ROOST_ROBOT_PEER_TICKET
-go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <新房间ID> -timeout 30s
+go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <新房间ID> -epoch <代际> -peer-epoch <对方代际> -timeout 30s
 ```
 
 宿主装配 `scenarionet.CoopDispatch`，仍需自己的账号/房间路由。每次使用新的房间和对应身份；不要复用已结算存档刷吞吐。`loadtest.Coop` 的一个场景对应两个客户端，不能把场景数称为客户端人数。两端关闭连接后退出，未增加销毁房间协议。
@@ -103,7 +104,7 @@ MOBA 的完整链由 `TestMOBAKCPRobotMatchSettlementAndClientResult` 验证；�
 
 这两个样板证明既有玩法规则的整局和客户端结果闭环，**不证明账号服务、动态匹配、完整业务重登、EntitySync 或真实 WAL/Mongo 已串成生产链**。合作使用 PB 查询视图，不冒充 EntitySync 推送验收；MOBA 不通过 session.Call 传帧，不能把 TCP 请求报告当作其 KCP 流量统计。
 
-game-demo 的 `turn` 场景使用正式 account 登录与 matchmaking/matchroom 开房，两个机器人各控制一个真实连接，完成四回合、每步同序号重试、断线重登与 Room Epoch 接管、终态回执重放。`make dev-smoke` 将它放在 demo 与 alliance_offline_join 之后，各跑 2 人；`scripts/test-demo-turn.sh` 实跑这一目标并追加独立 Gate 的 turn。正式配方的 SIGKILL 恢复与 GameRoom 纵切的持久 timer 恢复分别见 [回合 PvP 真实档](SESSION-GENRES.md#回合-pvp-真实档)，不从这份 Robot 记录推出跨机接管或容量结论。
+game-demo 的 `turn` 场景使用正式 account 登录与 matchmaking/matchroom 开房，两个机器人各控制一个真实连接，完成四回合、每步同序号重试、断线重登与 Room Epoch 接管、终态回执重放。`make dev-smoke` 将它放在 demo 与 alliance_offline_join 之后，各跑 2 人；`scripts/test-demo-turn.sh` 实跑这一目标并追加独立 Gate 的 turn。正式配方的 SIGKILL 恢复与纵切（Room 上 turn 的 `TurnDeadline`）的持久定时器恢复分别见 [回合 PvP 真实档](SESSION-GENRES.md#回合-pvp-真实档)，不从这份 Robot 记录推出跨机接管或容量结论。
 
 ## 上线补齐顺序
 
