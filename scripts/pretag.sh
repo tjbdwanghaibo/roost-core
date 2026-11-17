@@ -164,5 +164,7 @@ rm -rf "$genre_logs"
 
 echo "pretag: C# client SDK golden and self tests"
 ROOST_DOTNET_GOLDEN_ONLY=1 ./scripts/test-client-dotnet.sh >/dev/null || fail "C# client SDK tests failed (rerun ./scripts/test-client-dotnet.sh to see the output)"
+echo "pretag: TS client SDK tests"
+./scripts/test-client-ts.sh >/dev/null 2>&1 || fail "TS client SDK tests failed (rerun ./scripts/test-client-ts.sh to see the output)"
 
 echo "pretag: $module@$version is ready to tag"

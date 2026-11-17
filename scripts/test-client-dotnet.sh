@@ -38,6 +38,12 @@ echo "test-client-dotnet: cross-gate abandoned handshake with the C# client"
 ROOST_CLIENT_TEST_DLL="$repo_dir/client/dotnet/Roost.Client.Tests/bin/Debug/net10.0/Roost.Client.Tests.dll" \
   GOWORK=off go test -count=1 -run '^TestAcrossGatesTheCSharpClientThatAbandonsAHandshakeKeepsItsNewerConnection$' ./infra/network/gateway
 
+# 开房间 C# SDK（Roost.Client.Relay）：金样 relay-packets.json 逐字节一致，以及对真实 relay + lobby 的用例（对端是
+# go test -c ./client/relay 的测试二进制；没有 ROOST_REDIS_TEST_ADDR / ROOST_DATAENGINE_IT_REDIS_ADDR 时房间目录用内存）。
+# 2026-11-17 起 pretag 的 ROOST_DOTNET_GOLDEN_ONLY 也跑（之前它不在任何门里）。
+echo "test-client-dotnet: relay SDK golden + tests against the Go relay peer"
+dotnet run --project client/dotnet/Roost.Client.Relay.Tests -- "$repo_dir"
+
 if [[ "${ROOST_DOTNET_GOLDEN_ONLY:-}" == "1" ]]; then
   exit 0
 fi
