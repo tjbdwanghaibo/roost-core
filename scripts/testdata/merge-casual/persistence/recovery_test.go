@@ -64,6 +64,7 @@ func openMergeRuntime(t *testing.T, manual bool, now int64) *mergeRuntime {
 		t.Fatal("refusing a database outside this consumer")
 	}
 	playerentity.RegisterEntity()
+	RegisterEnterInitNestHandlers()
 	RegisterMergeCasualNestHandlers()
 	RegisterTickPlayerTimerGenNestHandlers()
 	h := &mergeRuntime{database: database}
@@ -158,9 +159,11 @@ func mergeTimerCounter(name string) int64 {
 	return total
 }
 
+// View 里的金币与体力是模块状态（wallet、stamina）；体力随业务时间恢复，所以记下视图取于哪一刻（At），比对时按同一刻重算。
 type mergeBarrier struct {
 	Digest      string
 	View        casual.View
+	At          int64
 	Timer       int64
 	Unprojected uint64
 }
@@ -175,7 +178,7 @@ func mergeRuntimeState(t *testing.T, h *mergeRuntime) (*playerentity.Player, cas
 		t.Fatal(err)
 	}
 	p := e.(*playerentity.Player)
-	s, err := casual.Decode(p.Dao().GetState())
+	s, err := casual.Decode(p.Dao().GetMergeState())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +224,9 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if _, err := sender.NewEnterInitSender(h.scheduler).Sync_EnterInit(ctx, h.playerID); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := s.Sync_MergeLogin(ctx, h.playerID, mergeKey, 1, rules); err != nil {
 			t.Fatal(err)
 		}
@@ -232,11 +238,12 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 		mergeRuntimeCommand(t, h, "start", 0, 0, 0)
 		p, state := mergeRuntimeState(t, h)
 		stats := h.projector.Stats()
-		// 新建 Player（Nest 之外 Create 的 strict 隔离事务）、首登、两次生产、广告到账、开挑战各一条 strict 记录；后台投影关闭，六条都未投影。
-		if stats.Projected != 0 || stats.WALUnacked != 6 || p.Dao().GetWakeTimer() == 0 {
+		// 新建 Player（Nest 之外 Create 的 strict 隔离事务）、enter 建档（初始金币）、首登、两次生产、广告到账、开挑战
+		// 各一条 strict 记录；后台投影关闭，七条都未投影。
+		if stats.Projected != 0 || stats.WALUnacked != 7 || p.Dao().GetMergeWakeTimer() == 0 {
 			t.Fatal("missing unprojected strict records / timer")
 		}
-		raw, _ := json.Marshal(mergeBarrier{state.Digest(), state.View(), p.Dao().GetWakeTimer(), stats.WALUnacked})
+		raw, _ := json.Marshal(mergeBarrier{state.Digest(), state.View(mergePurse(p, mergeNow)), mergeNow, p.Dao().GetMergeWakeTimer(), stats.WALUnacked})
 		if err := os.WriteFile(filepath.Join(root, "ready.json"), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +260,7 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 		if err := json.Unmarshal(raw, &expected); err != nil {
 			t.Fatal(err)
 		}
-		if state.Digest() != expected.Digest || state.View() != expected.View || !state.Challenge.Claimed || p.Dao().GetWakeTimer() != 0 {
+		if state.Digest() != expected.Digest || state.View(mergePurse(p, expected.At)) != expected.View || !state.Challenge.Claimed || p.Dao().GetMergeWakeTimer() != 0 {
 			t.Fatal("cold facts differ before retry")
 		}
 		sender := sender.NewMergeCasualSender(h.scheduler)
@@ -335,7 +342,7 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	}
 	h := openMergeRuntime(t, false, mergeNow+3600000)
 	p, state := mergeRuntimeState(t, h)
-	if state.Digest() != barrier.Digest || state.View() != barrier.View || p.Dao().GetWakeTimer() != barrier.Timer {
+	if state.Digest() != barrier.Digest || state.View(mergePurse(p, barrier.At)) != barrier.View || p.Dao().GetMergeWakeTimer() != barrier.Timer {
 		t.Fatal("WAL recovery lost board / asset / receipt / timer before mutations")
 	}
 	// 冷加载时 Host 把存量挑战期限报告给驱动索引。到这里投递循环还没启动，上面直接读 DAO 不会与 Tick 并发。
@@ -391,7 +398,8 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	// 加载后补触发：离线一小时只判负一次，按当前业务时间补体力 / 次数（封顶），挑战结束后不再挂期限。
 	awaitLoop("the overdue challenge expiry", func(v casual.View) bool { return v.Challenge.Status == "lost" }, 1, 0)
 	_, expired := mergeRuntimeState(t, h)
-	if expired.Challenge.ID != state.Challenge.ID || expired.Revision != state.Revision+1 || expired.LastAt != h.clock.Load() || expired.Energy != 10 || expired.Charges != 3 {
+	// 体力跟 stamina：离线一小时（每 5 分钟 1 点）早已回满，读出来是当前值，Tick 不写体力。
+	if expired.Challenge.ID != state.Challenge.ID || expired.Revision != state.Revision+1 || expired.LastAt != h.clock.Load() || p.Stamina().Current(h.clock.Load()) != 100 || expired.Charges != 3 {
 		t.Fatal("cold deadline / capped recovery incorrect")
 	}
 	mergeRuntimeCommand(t, h, "claim", 0, 0, int64(expired.Challenge.ID))
@@ -422,10 +430,10 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 		}
 	}
 	p, final := mergeRuntimeState(t, h)
-	if final.Gold != barrier.View.Gold+casual.DemoRules().ChallengeGold || len(final.Ads) != 1 || final.Board[10].Item != barrier.View.Board[10].Item || final.Board[11].Item != barrier.View.Board[11].Item || p.Dao().GetWakeTimer() != 0 {
+	if p.Dao().GetWallet().GetCoins() != barrier.View.Gold+casual.DemoRules().ChallengeGold || len(final.Ads) != 1 || final.Board[10].Item != barrier.View.Board[10].Item || final.Board[11].Item != barrier.View.Board[11].Item || p.Dao().GetMergeWakeTimer() != 0 {
 		t.Fatal("recovered claim duplicated or changed producer output")
 	}
-	expectedRaw, _ := json.Marshal(mergeBarrier{Digest: final.Digest(), View: final.View()})
+	expectedRaw, _ := json.Marshal(mergeBarrier{Digest: final.Digest(), View: final.View(mergePurse(p, h.clock.Load())), At: h.clock.Load()})
 	if err := os.WriteFile(filepath.Join(root, "claimed.json"), expectedRaw, 0600); err != nil {
 		t.Fatal(err)
 	}

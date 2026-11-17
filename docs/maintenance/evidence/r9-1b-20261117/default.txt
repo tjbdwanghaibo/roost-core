@@ -1,0 +1,53 @@
+# bash scripts/test-idle-sim-generated.sh（缺省档，2026-11-17，main 8200adf7 + 本批未提交改动）
+# exit 0
+# 场景计数：13 PASS，0 SKIP
+--- PASS: TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe (0.01s)
+--- PASS: TestIdleSimSegmentedTimeMatchesSingleIntegration (0.00s)
+--- PASS: TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed (0.00s)
+ok  	example.com/idle-sim-practice/game/modules/idlesim	1.501s
+--- PASS: TestIdleSimParallelQueuesReserveAndFinishIndependently (0.02s)
+--- PASS: TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce (0.01s)
+--- PASS: TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic (0.02s)
+--- PASS: TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem (0.01s)
+--- PASS: TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt (0.02s)
+--- PASS: TestIdleSimDriverCatchupCannotExtendOfflineHorizon (0.01s)
+--- PASS: TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards (0.01s)
+--- PASS: TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline (0.01s)
+--- PASS: TestIdleSimFullBufferPausesAndLedgerNeverEvicts (0.98s)
+--- PASS: TestIdleSimRobotBusiness (0.02s)
+ok  	example.com/idle-sim-practice/game/handler	3.749s
+IDs are valid
+generated files are up to date
+module verify: bag 20/20 skipped=0
+module verify: checkin 8/8 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0
+
+# bash scripts/test-merge-casual-generated.sh（缺省档，同上）
+# exit 0
+# 场景计数：16 PASS，0 SKIP
+--- PASS: TestMergeCasualCatalogReloadIsAtomicAndExistingBoardFrozen (0.02s)
+--- PASS: TestMergeCasualMalformedStateFailsClosedAndPublicViewExcludesSecrets (0.00s)
+--- PASS: TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow (0.01s)
+ok  	example.com/merge-casual-practice/game/modules/mergecasual	1.952s
+--- PASS: TestMergeCasualBoardAuthorityAndMergeRules (0.02s)
+--- PASS: TestMergeCasualWarehouseAndUnlockHaveAtomicCosts (0.01s)
+--- PASS: TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice (0.02s)
+--- PASS: TestMergeCasualSellUndoCannotDuplicateItemsOrGold (0.02s)
+--- PASS: TestMergeCasualOrdersConsumeRecipeAndRewardOnce (0.02s)
+--- PASS: TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts (0.01s)
+--- PASS: TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules (0.02s)
+--- PASS: TestMergeCasualChallengeServerWinAndConcurrentClaim (0.03s)
+--- PASS: TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge (0.02s)
+--- PASS: TestMergeCasualUndoRestoresStateRandomResultAndTimer (0.01s)
+--- PASS: TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock (0.01s)
+--- PASS: TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota (0.05s)
+--- PASS: TestMergeCasualRobotBusiness (0.01s)
+ok  	example.com/merge-casual-practice/game/handler	1.826s
+IDs are valid
+generated files are up to date
+module verify: enter 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: wallet 17/17 skipped=0

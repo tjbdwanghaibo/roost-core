@@ -81,6 +81,7 @@ func newMergeFixture(t *testing.T) *mergeFixture {
 	playerentity.RegisterEntity()
 	RegisterMergeCasualNestHandlers()
 	RegisterTickPlayerTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	f := &mergeFixture{rules: loadMergeRules(t, casual.DemoRules())}
 	f.clock.Store(mergeNow)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
@@ -109,16 +110,32 @@ func newMergeFixture(t *testing.T) *mergeFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.player.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
+	// 先经 enter 建档（初始金币在首次初始化事务里发），再用第一张登录票建棋盘。没建档的玩家建不了棋盘。
+	if _, err := sender.NewMergeCasualSender(f.engine).Sync_MergeLogin(context.Background(), id, mergeKey, 1, f.rules); err == nil || f.player.Dao().GetMergeState() != "" {
+		t.Fatal("board created before enter built the player", err)
+	}
+	if _, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := sender.NewMergeCasualSender(f.engine).Sync_MergeLogin(context.Background(), id, mergeKey, 1, f.rules); err != nil {
 		t.Fatal(err)
 	}
 	return f
 }
 
+// gold / energy 读模块状态：wallet 余额、stamina 按它自己的规则（game/components/stamina/rules.go，缺省上限 100、
+// 每 5 分钟 1 点）在当前业务时间的体力；modules 是两份模块状态的快照，拒绝零写入时比对它。同样只在 Sender 完成之后读。
+func (f *mergeFixture) gold() int64   { return f.player.Dao().GetWallet().GetCoins() }
+func (f *mergeFixture) energy() int64 { return f.player.Stamina().Current(f.clock.Load()) }
+func (f *mergeFixture) modules() [3]int64 {
+	stamina := f.player.Dao().GetStamina()
+	return [3]int64{f.gold(), stamina.GetValue(), stamina.GetSettledAt()}
+}
+
 // 测试只在 Sender 已完成、并发 goroutine 全部退出后查看实体快照。
 func (f *mergeFixture) state(t *testing.T) casual.State {
 	t.Helper()
-	s, err := casual.Decode(f.player.Dao().GetState())
+	s, err := casual.Decode(f.player.Dao().GetMergeState())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,13 +159,14 @@ func (f *mergeFixture) do(t *testing.T, kind string, a, b int, value int64) casu
 }
 func (f *mergeFixture) refuse(t *testing.T, c casual.Command) {
 	t.Helper()
-	before := f.player.Dao().GetState()
-	timer := f.player.Dao().GetWakeTimer()
+	before := f.player.Dao().GetMergeState()
+	timer := f.player.Dao().GetMergeWakeTimer()
+	modules := f.modules()
 	if _, err := f.batch([]casual.Command{c}); err == nil {
 		t.Fatal("invalid command accepted", c)
 	}
-	if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer {
-		t.Fatal("refused operation changed state or timer")
+	if f.player.Dao().GetMergeState() != before || f.player.Dao().GetMergeWakeTimer() != timer || f.modules() != modules {
+		t.Fatal("refused operation changed state, timer, gold or energy")
 	}
 }
 func mergeWin(t *testing.T, engine *nest.NestMgr, id int64) {
@@ -191,7 +209,7 @@ func TestMergeCasualWarehouseAndUnlockHaveAtomicCosts(t *testing.T) {
 	f.do(t, "restore", 0, 12, 0)
 	f.refuse(t, f.command(t, "unlock", 12, 0, 0))
 	s := f.state(t)
-	if s.Gold != 25 || s.Warehouse[0] != (casual.Item{}) || s.Board[12].Locked || s.Board[12].Item.Level != 1 {
+	if f.gold() != 25 || s.Warehouse[0] != (casual.Item{}) || s.Board[12].Locked || s.Board[12].Item.Level != 1 {
 		t.Fatal("warehouse / unlock duplicated cost or item")
 	}
 }
@@ -212,7 +230,7 @@ func TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice(t *testing.T) {
 		}
 	}
 	s := f.state(t)
-	if s.Energy != 9 || s.Charges != 2 || s.Board[10].Item != receipts[0][0].Drop || len(s.Receipts) != 1 {
+	if f.energy() != 99 || s.Charges != 2 || s.Board[10].Item != receipts[0][0].Drop || len(s.Receipts) != 1 {
 		t.Fatal("producer duplicated")
 	}
 	changed := c
@@ -224,7 +242,7 @@ func TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice(t *testing.T) {
 	f.do(t, "produce", 0, 0, 0)
 	f.do(t, "merge", 2, 3, 0)
 	f.refuse(t, f.command(t, "produce", 2, 0, 0))
-	if f.state(t).Energy != 7 {
+	if f.energy() != 97 {
 		t.Fatal("producer refusal spent energy")
 	}
 }
@@ -232,7 +250,7 @@ func TestMergeCasualSellUndoCannotDuplicateItemsOrGold(t *testing.T) {
 	f := newMergeFixture(t)
 	sale := f.do(t, "sell", 0, 0, 0)
 	undo := f.do(t, "undo", 0, 0, int64(sale.Command.Seq))
-	if s := f.state(t); s.Gold != 30 || s.Board[0].Item.Level != 1 {
+	if s := f.state(t); f.gold() != 30 || s.Board[0].Item.Level != 1 {
 		t.Fatal("undo changed economy")
 	}
 	if _, err := f.batch([]casual.Command{undo.Command}); err != nil {
@@ -244,7 +262,7 @@ func TestMergeCasualSellUndoCannotDuplicateItemsOrGold(t *testing.T) {
 	f.refuse(t, f.command(t, "undo", 0, 0, int64(sale.Command.Seq)))
 	f.do(t, "recover", 0, 0, 0)
 	f.refuse(t, f.command(t, "undo", 0, 0, int64(sale.Command.Seq)))
-	if f.state(t).Gold != 31 {
+	if f.gold() != 31 {
 		t.Fatal("late undo changed proceeds")
 	}
 }
@@ -262,7 +280,7 @@ func TestMergeCasualOrdersConsumeRecipeAndRewardOnce(t *testing.T) {
 	}
 	f.refuse(t, f.command(t, "order", 1, 5, 0))
 	s := f.state(t)
-	if s.Gold != 50 || s.Orders != 1 || s.Board[1].Item != (casual.Item{}) || s.Board[5].Item != (casual.Item{}) {
+	if f.gold() != 50 || s.Orders != 1 || s.Board[1].Item != (casual.Item{}) || s.Board[5].Item != (casual.Item{}) {
 		t.Fatal("order recipe or receipt incorrect")
 	}
 }
@@ -276,8 +294,8 @@ func TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts(t *testing.T) {
 	b.B = 3
 	bad := b
 	bad.B = 12
-	before := f.player.Dao().GetState()
-	if _, err := f.batch([]casual.Command{a, bad}); err == nil || f.player.Dao().GetState() != before {
+	before := f.player.Dao().GetMergeState()
+	if _, err := f.batch([]casual.Command{a, bad}); err == nil || f.player.Dao().GetMergeState() != before {
 		t.Fatal("invalid offline batch partially committed")
 	}
 	r, err := f.batch([]casual.Command{a, b})
@@ -322,7 +340,7 @@ func TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules(t *testing.T) {
 		t.Fatal("old login ticket accepted")
 	}
 	f.do(t, "unlock", 12, 0, 0)
-	if f.state(t).Gold != 25 {
+	if f.gold() != 25 {
 		t.Fatal("existing board silently repriced")
 	}
 }
@@ -331,7 +349,7 @@ func TestMergeCasualChallengeServerWinAndConcurrentClaim(t *testing.T) {
 	start := f.do(t, "start", 0, 0, 0)
 	f.refuse(t, f.command(t, "claim", 0, 0, int64(start.Command.Seq)))
 	mergeWin(t, f.engine, f.player.ID())
-	if f.state(t).Challenge.Status != "won" || f.player.Dao().GetWakeTimer() != 0 {
+	if f.state(t).Challenge.Status != "won" || f.player.Dao().GetMergeWakeTimer() != 0 {
 		t.Fatal("server goal / timer not settled")
 	}
 	f.refuse(t, f.command(t, "merge", 7, 7, 0))
@@ -349,7 +367,7 @@ func TestMergeCasualChallengeServerWinAndConcurrentClaim(t *testing.T) {
 		}
 	}
 	f.do(t, "claim", 0, 0, int64(start.Command.Seq))
-	if s := f.state(t); s.Gold != 60 || !s.Challenge.Claimed || s.Energy != 8 {
+	if s := f.state(t); f.gold() != 60 || !s.Challenge.Claimed || f.energy() != 98 {
 		t.Fatal("challenge paid twice")
 	}
 }
@@ -357,8 +375,8 @@ func TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge(t *testi
 	f := newMergeFixture(t)
 	first := f.do(t, "start", 0, 0, 0)
 	deadline := f.state(t).Challenge.Deadline
-	timer := f.player.Dao().GetWakeTimer()
-	if _, err := f.batch([]casual.Command{first.Command}); err != nil || f.player.Dao().GetWakeTimer() != timer {
+	timer := f.player.Dao().GetMergeWakeTimer()
+	if _, err := f.batch([]casual.Command{first.Command}); err != nil || f.player.Dao().GetMergeWakeTimer() != timer {
 		t.Fatal("retry rearmed timer")
 	}
 	f.clock.Store(deadline + 3600000)
@@ -367,7 +385,8 @@ func TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge(t *testi
 		t.Fatal(err)
 	}
 	s := f.state(t)
-	if s.Challenge.Status != "lost" || s.Energy != 10 || s.Charges != 3 || f.player.Dao().GetWakeTimer() != 0 {
+	// 体力由 stamina 惰性恢复：开局扣的 2 点在一小时后（每 5 分钟 1 点）早已回满。
+	if s.Challenge.Status != "lost" || f.energy() != 100 || s.Charges != 3 || f.player.Dao().GetMergeWakeTimer() != 0 {
 		t.Fatal("overdue challenge did not settle")
 	}
 	before := s.Digest()
@@ -379,14 +398,14 @@ func TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge(t *testi
 	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID()); err != nil {
 		t.Fatal(err)
 	}
-	if s := f.state(t); s.Challenge.Status != "active" || s.Gold != 30 {
+	if s := f.state(t); s.Challenge.Status != "active" || f.gold() != 30 {
 		t.Fatal("old timer or failed goal paid reward")
 	}
 	// 请求先于到期 tick 到达，也必须按服务器期限判负；不能靠延迟调度获得超时奖励。
 	f.clock.Store(f.state(t).Challenge.Deadline)
 	mergeWin(t, f.engine, f.player.ID())
 	f.do(t, "claim", 0, 0, int64(f.state(t).Challenge.ID))
-	if f.state(t).Challenge.Status != "lost" || f.state(t).Gold != 30 || f.player.Dao().GetWakeTimer() != 0 {
+	if f.state(t).Challenge.Status != "lost" || f.gold() != 30 || f.player.Dao().GetMergeWakeTimer() != 0 {
 		t.Fatal("late commands bypassed server deadline")
 	}
 }
@@ -397,8 +416,9 @@ func TestMergeCasualUndoRestoresStateRandomResultAndTimer(t *testing.T) {
 	ctx := context.Background()
 	for _, kind := range []string{"produce", "start"} {
 		c := f.command(t, kind, 10, 0, 0)
-		before := f.player.Dao().GetState()
-		timer := f.player.Dao().GetWakeTimer()
+		before := f.player.Dao().GetMergeState()
+		timer := f.player.Dao().GetMergeWakeTimer()
+		modules := f.modules()
 		name := nest.NewHandlerName("merge_undo_" + kind)
 		nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 			// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
@@ -410,14 +430,14 @@ func TestMergeCasualUndoRestoresStateRandomResultAndTimer(t *testing.T) {
 		if _, err := f.engine.Request(ctx, name, f.player.ID(), nil); !errors.Is(err, refused) {
 			t.Fatal(err)
 		}
-		if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer || len(f.player.TimerComp().Timers()) != 0 {
-			t.Fatal("undo left state or timer")
+		if f.player.Dao().GetMergeState() != before || f.player.Dao().GetMergeWakeTimer() != timer || len(f.player.TimerComp().Timers()) != 0 || f.modules() != modules {
+			t.Fatal("undo left state, timer or stamina spend")
 		}
 		expected, err := casual.Decode(before)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, err := expected.Apply(c, f.clock.Load())
+		want, _, err := expected.Apply(c, f.clock.Load(), mergePurse(f.player, f.clock.Load()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,16 +451,32 @@ func TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock(t *
 	f := newMergeFixture(t)
 	f.do(t, "produce", 10, 0, 0)
 	f.do(t, "produce", 11, 0, 0)
+	// 生产器充能（合成自己的规则，5 秒 1 次）：4.5 秒时还差半个周期，零头留在 ChargeAt 之后。
 	f.clock.Add(4500)
 	f.do(t, "recover", 0, 0, 0)
 	s := f.state(t)
-	if s.Energy != 9 || s.EnergyAt != mergeNow+3000 || s.Charges != 1 {
+	if s.Charges != 1 || s.ChargeAt != mergeNow || f.energy() != 98 {
+		t.Fatal("offline charge remainder lost")
+	}
+	// 体力跟 stamina（每 5 分钟 1 点）：recover 不写体力；1.5 个周期时恢复 1 点，剩下的半个周期不丢，
+	// 起点仍是第一次从满扣下来的那一刻，再过半个周期正好补满。
+	f.clock.Store(mergeNow + 450000)
+	f.do(t, "recover", 0, 0, 0)
+	if f.energy() != 99 || f.player.Dao().GetStamina().GetSettledAt() != mergeNow || f.player.Dao().GetStamina().GetValue() != 98 {
 		t.Fatal("offline energy remainder lost")
+	}
+	f.clock.Store(mergeNow + 599999)
+	if f.energy() != 99 {
+		t.Fatal("energy recovered before its period")
+	}
+	f.clock.Store(mergeNow + 600000)
+	if f.energy() != 100 {
+		t.Fatal("energy remainder dropped")
 	}
 	f.clock.Store(mergeNow + 1000000)
 	r := f.do(t, "recover", 0, 0, 0)
 	s = f.state(t)
-	if s.Energy != 10 || s.Charges != 3 || s.Board[10].Item != s.Receipts[0].Drop {
+	if f.energy() != 100 || s.Charges != 3 || s.Board[10].Item != s.Receipts[0].Drop {
 		t.Fatal("offline capacity overfilled or auto-produced")
 	}
 	before := s.Digest()
@@ -460,9 +496,9 @@ func TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota(t *testing.T) {
 	grant := func(p casual.SignedReward) (casual.View, error) {
 		return s.Sync_MergeAd(ctx, f.player.ID(), p, adKey, 1)
 	}
-	before := f.player.Dao().GetState()
+	before := f.player.Dao().GetMergeState()
 	for _, p := range []casual.SignedReward{{ID: "fake", PlayerID: f.player.ID(), ExpiresAt: mergeNow + 1000, Kind: "energy"}, casual.SignReward(casual.SignedReward{ID: "wrong-owner", PlayerID: f.player.ID() + 1, ExpiresAt: mergeNow + 1000, Kind: "energy"}, adKey), casual.SignReward(casual.SignedReward{ID: "expired", PlayerID: f.player.ID(), ExpiresAt: mergeNow, Kind: "energy"}, adKey)} {
-		if _, err := grant(p); err == nil || f.player.Dao().GetState() != before {
+		if _, err := grant(p); err == nil || f.player.Dao().GetMergeState() != before {
 			t.Fatal("invalid advertisement paid")
 		}
 	}
@@ -488,10 +524,11 @@ func TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota(t *testing.T) {
 	if _, err := grant(changed); err == nil {
 		t.Fatal("same provider ID changed identity")
 	}
-	if s := f.state(t); s.Energy != 10 || len(s.Ads) != 1 {
+	// 两次生产后 98，广告经 stamina 的 Grant 发 2 点回到 100；并发与过期后的重试都命中同一张到账回执。
+	if s := f.state(t); f.energy() != 100 || len(s.Ads) != 1 {
 		t.Fatal("advertisement duplicated energy")
 	}
-	// 持续消耗体力以触达同一 UTC 日的三次上限；不篡改实体资产。
+	// 逐轮开挑战、看广告，触达同一业务日（clock.BusinessDay，缺省 UTC 零点切日）的三次上限；不篡改实体资产。
 	for i := 2; i <= 4; i++ {
 		f.do(t, "start", 0, 0, 0)
 		f.clock.Add(f.rules.ChallengeMillis)
@@ -514,7 +551,7 @@ func TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota(t *testing.T) {
 	if len(f.state(t).Ads) != 3 {
 		t.Fatal("quota lost proof identities")
 	}
-	if strings.Contains(fmt.Sprintf("%+v", f.state(t).View()), adKey) {
+	if strings.Contains(fmt.Sprintf("%+v", f.state(t).View(mergePurse(f.player, f.clock.Load()))), adKey) {
 		t.Fatal("provider secret leaked")
 	}
 }

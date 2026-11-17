@@ -1,23 +1,26 @@
 package mergecasual
 
-// Apply 只修改从 DAO 解码的事务局部副本。调用者成功后 SetState；批次中任一步失败都不写回。
+// Apply 只修改从 DAO 解码的事务局部副本。调用者成功后 SetMergeState；批次中任一步失败都不写回。
 // 先核对旧回执，再检查新版本 / 时间：断线重试得到原结果，不能借热更、时钟或重试重掷产物。
-func (s *State) Apply(c Command, now int64) (Receipt, error) {
+// p 是同一把 Player 锁内读到的模块余额，只用来判断；金币与体力的变化作为 Effect 返回，由 handler 在同一笔事务里
+// 交给 wallet / stamina（模块拒绝时整笔回滚）。旧 Seq 重放返回原回执与零 Effect，不再动模块。
+func (s *State) Apply(c Command, now int64, p Purse) (Receipt, Effect, error) {
+	var e Effect
 	if c.Epoch != s.Epoch || c.Seq == 0 {
-		return Receipt{}, ErrRule
+		return Receipt{}, e, ErrRule
 	}
 	if c.Seq <= uint64(len(s.Receipts)) {
 		r := s.Receipts[c.Seq-1]
 		if r.Command != c {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
-		return r, nil
+		return r, e, nil
 	}
 	if c.Seq != uint64(len(s.Receipts))+1 || len(s.Receipts) >= LedgerLimit || c.Base != s.Revision || s.Revision >= uint64(ValueLimit) {
-		return Receipt{}, ErrRule
+		return Receipt{}, e, ErrRule
 	}
 	if err := s.Recover(now); err != nil {
-		return Receipt{}, err
+		return Receipt{}, e, err
 	}
 	oldSale := s.Sale
 	s.Sale = Sale{}
@@ -28,16 +31,16 @@ func (s *State) Apply(c Command, now int64) (Receipt, error) {
 	switch c.Kind {
 	case "move":
 		if !boardPair() || s.Board[c.A].Item == (Item{}) {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		s.Board[c.A].Item, s.Board[c.B].Item = s.Board[c.B].Item, s.Board[c.A].Item
 	case "merge":
 		if !boardPair() {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		item := s.Board[c.A].Item
 		if item == (Item{}) || item != s.Board[c.B].Item || item.Level >= 4 {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		item.Level++
 		s.Board[c.A].Item = Item{}
@@ -46,85 +49,85 @@ func (s *State) Apply(c Command, now int64) (Receipt, error) {
 			s.Challenge.Status = "won"
 		}
 	case "produce":
-		if c.A < 0 || c.A >= 16 || s.Board[c.A].Locked || s.Board[c.A].Item != (Item{}) || s.Charges == 0 || s.Energy == 0 {
-			return Receipt{}, ErrRule
+		if c.A < 0 || c.A >= 16 || s.Board[c.A].Locked || s.Board[c.A].Item != (Item{}) || s.Charges == 0 || p.Energy < 1 {
+			return Receipt{}, e, ErrRule
 		}
 		drop = s.drop(c.Seq)
 		s.Board[c.A].Item = drop
-		s.Energy--
+		e.Energy = -1
 		s.Charges--
 	case "store":
 		if c.A < 0 || c.A >= 16 || s.Board[c.A].Locked || s.Board[c.A].Item == (Item{}) || c.B < 0 || c.B >= 4 || s.Warehouse[c.B] != (Item{}) {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		s.Warehouse[c.B] = s.Board[c.A].Item
 		s.Board[c.A].Item = Item{}
 	case "restore":
 		if c.A < 0 || c.A >= 4 || s.Warehouse[c.A] == (Item{}) || c.B < 0 || c.B >= 16 || s.Board[c.B].Locked || s.Board[c.B].Item != (Item{}) {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		s.Board[c.B].Item = s.Warehouse[c.A]
 		s.Warehouse[c.A] = Item{}
 	case "unlock":
-		if c.A < 12 || c.A >= 16 || !s.Board[c.A].Locked || s.Gold < s.Rules.UnlockGold {
-			return Receipt{}, ErrRule
+		if c.A < 12 || c.A >= 16 || !s.Board[c.A].Locked || p.Gold < s.Rules.UnlockGold {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gold -= s.Rules.UnlockGold
+		e.Gold = -s.Rules.UnlockGold
 		s.Board[c.A].Locked = false
 	case "sell":
 		if c.A < 0 || c.A >= 16 || s.Board[c.A].Locked || s.Board[c.A].Item == (Item{}) {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		item := s.Board[c.A].Item
 		gold := int64(item.Level)
-		if s.Gold > ValueLimit-gold {
-			return Receipt{}, ErrRule
+		if p.Gold > ValueLimit-gold {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gold += gold
+		e.Gold = gold
 		s.Board[c.A].Item = Item{}
 		s.Sale = Sale{c.Seq, c.A, item, gold, now}
 	case "undo":
-		if oldSale.Seq == 0 || c.Value != int64(oldSale.Seq) || now-oldSale.At > 10000 || s.Board[oldSale.Cell].Item != (Item{}) || s.Gold < oldSale.Gold {
-			return Receipt{}, ErrRule
+		if oldSale.Seq == 0 || c.Value != int64(oldSale.Seq) || now-oldSale.At > 10000 || s.Board[oldSale.Cell].Item != (Item{}) || p.Gold < oldSale.Gold {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gold -= oldSale.Gold
+		e.Gold = -oldSale.Gold
 		s.Board[oldSale.Cell].Item = oldSale.Item
 	case "order":
 		// 演示订单只有一类配方；精确消耗两格，客户端不能上报完成度或奖励额度。
-		if !boardPair() || s.Board[c.A].Item != (Item{1, 2}) || s.Board[c.B].Item != (Item{1, 3}) || s.Gold > ValueLimit-s.Rules.OrderGold || s.Orders >= ValueLimit {
-			return Receipt{}, ErrRule
+		if !boardPair() || s.Board[c.A].Item != (Item{1, 2}) || s.Board[c.B].Item != (Item{1, 3}) || p.Gold > ValueLimit-s.Rules.OrderGold || s.Orders >= ValueLimit {
+			return Receipt{}, e, ErrRule
 		}
 		s.Board[c.A].Item = Item{}
 		s.Board[c.B].Item = Item{}
-		s.Gold += s.Rules.OrderGold
+		e.Gold = s.Rules.OrderGold
 		s.Orders++
 	case "start":
-		if s.Challenge.ID != 0 && !s.Challenge.Claimed || s.Energy < 2 || !validTime(now+s.Rules.ChallengeMillis) {
-			return Receipt{}, ErrRule
+		if s.Challenge.ID != 0 && !s.Challenge.Claimed || p.Energy < 2 || !validTime(now+s.Rules.ChallengeMillis) {
+			return Receipt{}, e, ErrRule
 		}
-		s.Energy -= 2
+		e.Energy = -2
 		s.Challenge = Challenge{ID: c.Seq, Deadline: now + s.Rules.ChallengeMillis, Status: "active"}
 	case "claim":
 		if s.Challenge.ID == 0 || c.Value != int64(s.Challenge.ID) || s.Challenge.Status == "active" {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		if !s.Challenge.Claimed {
 			if s.Challenge.Status == "won" {
-				if s.Gold > ValueLimit-s.Rules.ChallengeGold {
-					return Receipt{}, ErrRule
+				if p.Gold > ValueLimit-s.Rules.ChallengeGold {
+					return Receipt{}, e, ErrRule
 				}
-				s.Gold += s.Rules.ChallengeGold
+				e.Gold = s.Rules.ChallengeGold
 			}
 			s.Challenge.Claimed = true
 		}
 	case "recover": // 显式服务器时间恢复，不能携带客户端收益 / 余额快照。
 	default:
-		return Receipt{}, ErrRule
+		return Receipt{}, e, ErrRule
 	}
 	s.Revision++
-	r := Receipt{c, s.Revision, drop, s.Gold, s.Energy, s.ConfigHash}
+	r := Receipt{c, s.Revision, drop, s.ConfigHash}
 	s.Receipts = append(s.Receipts, r)
-	return r, nil
+	return r, e, nil
 }
 
 // Expire 是持久 timer 的业务处理；不轮询补发过期局数，也不循环产出物品。

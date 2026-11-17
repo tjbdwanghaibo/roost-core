@@ -1,0 +1,139 @@
+# 变异：保留的生成工程（缺省档）里改一处、跑对应场景看红，恢复后同一组场景再跑看绿。工具：scratchpad/b1117-r9-1b/tools/mutate.py（-run 前缀，-skip RealCrashRecovery）
+# 放置模拟（工程 example.com/idle-sim-practice）
+## I1: 去掉 wallet：新命令的金币 Effect 不交给 Wallet().Add
+  file: game/handler/idle_sim.go
+  mutated: rc=1 passed=7 failed=3 -> TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic
+    idle_sim_test.go:270: warehouse / order / sale duplicated or lost assets
+    idle_sim_test.go:284: new rate applied retroactively
+    idle_sim_test.go:337: duplicate offline / daily reward
+  restored: rc=0 passed=10 failed=0
+## I2: 去掉 bag：加速不从背包扣宝石
+  file: game/handler/idle_sim.go
+  mutated: rc=1 passed=9 failed=1 -> TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem
+    idle_sim_test.go:284: new rate applied retroactively
+  restored: rc=0 passed=10 failed=0
+## I3: 每日奖励改回夹具旧写法：不经 checkin，直接 Wallet().Add(5)
+  file: game/handler/idle_sim.go
+  mutated: rc=1 passed=8 failed=2 -> TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards
+    idle_sim_test.go:337: duplicate offline / daily reward
+    idle_sim_test.go:393: invalid command accepted {2 daily 0 0 0 0}
+  restored: rc=0 passed=10 failed=0
+## I4: 吞掉 checkin 的拒绝（同日再领 checkin_done 时照样提交命令）
+  file: game/handler/idle_sim.go
+  mutated: rc=1 passed=9 failed=1 -> TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards
+    idle_sim_test.go:393: invalid command accepted {2 daily 0 0 0 0}
+  restored: rc=0 passed=10 failed=0
+## I5: 去掉建档的初始金币（OnEnterFirst 不调 wallet）
+  file: game/entities/player/idle_sim.go
+  mutated: rc=1 passed=6 failed=4 -> TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic
+    idle_sim_test.go:270: warehouse / order / sale duplicated or lost assets
+    idle_sim_test.go:277: income_upgrade idle sim: invalid identity, time, operation, inventory or limit
+    idle_sim_test.go:337: duplicate offline / daily reward
+    idle_sim_test.go:405: missed days or old retry paid extra
+  restored: rc=0 passed=10 failed=0
+## I6: 去掉放置建档里的初始宝石（不调 Bag().Add）
+  file: game/handler/idle_sim.go
+  mutated: rc=1 passed=8 failed=2 -> TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem
+    idle_sim_test.go:278: boost idle sim: invalid identity, time, operation, inventory or limit
+    idle_sim_test.go:428: idle sim: invalid identity, time, operation, inventory or limit
+  restored: rc=0 passed=10 failed=0
+## I7: 放置建档不要求 enter 已建成（fixture 开头先在建档前调一次 IdleInit，必须被拒）
+  file: game/handler/idle_sim.go
+  mutated: rc=1 passed=0 failed=10 -> TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards TestIdleSimDriverCatchupCannotExtendOfflineHorizon TestIdleSimFullBufferPausesAndLedgerNeverEvicts TestIdleSimParallelQueuesReserveAndFinishIndependently TestIdleSimRobotBusiness TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic
+    idle_sim_test.go:203: idle save created before enter built the player <nil>
+    idle_sim_test.go:229: idle save created before enter built the player <nil>
+    idle_sim_test.go:250: idle save created before enter built the player <nil>
+    idle_sim_test.go:275: idle save created before enter built the player <nil>
+    idle_sim_test.go:305: idle save created before enter built the player <nil>
+    idle_sim_test.go:355: idle save created before enter built the player <nil>
+  restored: rc=0 passed=10 failed=0
+## I8: 测试本身的空转检查：撤销用例里的拒绝 handler 改为放行（提交），断言必须看到宝石 / 存档 / 定时器变化
+  file: game/handler/idle_sim_test.go
+  mutated: rc=1 passed=0 failed=1 -> TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline
+    idle_sim_test.go:428: <nil>
+  restored: rc=0 passed=1 failed=0
+## I9: 严格解码去掉 Raw 下界（替代原 Gold:-1 的坏存档）
+  file: game/modules/idlesim/state.go
+  mutated: rc=1 passed=2 failed=1 -> TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed
+    rules_test.go:105: invalid stored state accepted
+  restored: rc=0 passed=3 failed=0
+## I10: 领取去掉按 wallet 余额判断的业务上限
+  file: game/modules/idlesim/production.go
+  mutated: rc=1 passed=2 failed=1 -> TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed
+    rules_test.go:117: asset overflow accepted
+  restored: rc=0 passed=3 failed=0
+# 合成休闲（工程 example.com/merge-casual-practice）
+## M1: 去掉 wallet：新命令 / 领奖的金币 Effect 不交给 Wallet().Add
+  file: game/handler/merge_casual.go
+  mutated: rc=1 passed=7 failed=6 -> TestMergeCasualChallengeServerWinAndConcurrentClaim TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules TestMergeCasualOrdersConsumeRecipeAndRewardOnce TestMergeCasualRobotBusiness TestMergeCasualSellUndoCannotDuplicateItemsOrGold TestMergeCasualWarehouseAndUnlockHaveAtomicCosts
+    merge_casual_test.go:213: warehouse / unlock duplicated cost or item
+    merge_casual_test.go:266: late undo changed proceeds
+    merge_casual_test.go:284: order recipe or receipt incorrect
+    merge_casual_test.go:344: existing board silently repriced
+    merge_casual_test.go:371: challenge paid twice
+    robot_network_test.go:88: merge/sale cycle did not settle once
+  restored: rc=0 passed=13 failed=0
+## M2: 去掉 stamina 的扣体力（生产、开挑战不调 Spend）
+  file: game/handler/merge_casual.go
+  mutated: rc=1 passed=9 failed=4 -> TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota TestMergeCasualChallengeServerWinAndConcurrentClaim TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice
+    merge_casual_test.go:234: producer duplicated
+    merge_casual_test.go:371: challenge paid twice
+    merge_casual_test.go:459: offline charge remainder lost
+    merge_casual_test.go:529: advertisement duplicated energy
+  restored: rc=0 passed=13 failed=0
+## M3: 去掉 stamina 的发体力（广告到账不调 Grant）
+  file: game/handler/merge_casual.go
+  mutated: rc=1 passed=12 failed=1 -> TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota
+    merge_casual_test.go:529: advertisement duplicated energy
+  restored: rc=0 passed=13 failed=0
+## M4: 去掉建档的初始金币（OnEnterFirst 不调 wallet）
+  file: game/entities/player/merge_casual.go
+  mutated: rc=1 passed=7 failed=6 -> TestMergeCasualChallengeServerWinAndConcurrentClaim TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules TestMergeCasualOrdersConsumeRecipeAndRewardOnce TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge TestMergeCasualSellUndoCannotDuplicateItemsOrGold TestMergeCasualWarehouseAndUnlockHaveAtomicCosts
+    merge_casual_test.go:208: unlock merge casual: invalid identity, state, operation, revision or limit
+    merge_casual_test.go:254: undo changed economy
+    merge_casual_test.go:284: order recipe or receipt incorrect
+    merge_casual_test.go:342: unlock merge casual: invalid identity, state, operation, revision or limit
+    merge_casual_test.go:371: challenge paid twice
+    merge_casual_test.go:402: old timer or failed goal paid reward
+  restored: rc=0 passed=13 failed=0
+## M5: 棋盘建档不要求 enter 已建成（fixture 开头先在建档前登录一次，必须被拒）
+  file: game/handler/merge_casual.go
+  mutated: rc=1 passed=0 failed=13 -> TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota TestMergeCasualBoardAuthorityAndMergeRules TestMergeCasualChallengeServerWinAndConcurrentClaim TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock TestMergeCasualOrdersConsumeRecipeAndRewardOnce TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice TestMergeCasualRobotBusiness TestMergeCasualSellUndoCannotDuplicateItemsOrGold TestMergeCasualUndoRestoresStateRandomResultAndTimer TestMergeCasualWarehouseAndUnlockHaveAtomicCosts
+    merge_casual_test.go:187: board created before enter built the player <nil>
+    merge_casual_test.go:204: board created before enter built the player <nil>
+    merge_casual_test.go:217: board created before enter built the player <nil>
+    merge_casual_test.go:250: board created before enter built the player <nil>
+    merge_casual_test.go:270: board created before enter built the player <nil>
+    merge_casual_test.go:288: board created before enter built the player <nil>
+  restored: rc=0 passed=13 failed=0
+## M6: 测试本身的空转检查：撤销用例里的拒绝 handler 改为放行（提交），断言必须看到存档 / 定时器 / 体力变化
+  file: game/handler/merge_casual_test.go
+  mutated: rc=1 passed=0 failed=1 -> TestMergeCasualUndoRestoresStateRandomResultAndTimer
+    merge_casual_test.go:431: <nil>
+  restored: rc=0 passed=1 failed=0
+## M7: 广告每日次数去掉上限
+  file: game/modules/mergecasual/reward.go
+  mutated: rc=1 passed=0 failed=1 -> TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota
+    merge_casual_test.go:542: daily quota mismatch 4 <nil>
+  restored: rc=0 passed=1 failed=0
+## M8: 严格解码去掉 Charges 下界（替代原 Gold:-1 的坏存档）
+  file: game/modules/mergecasual/state.go
+  mutated: rc=1 passed=2 failed=1 -> TestMergeCasualMalformedStateFailsClosedAndPublicViewExcludesSecrets
+    rules_test.go:63: malformed state accepted
+  restored: rc=0 passed=3 failed=0
+## M9: 出售去掉按 wallet 余额判断的业务上限
+  file: game/modules/mergecasual/operations.go
+  mutated: rc=1 passed=2 failed=1 -> TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow
+    rules_test.go:108: gold overflow accepted
+  restored: rc=0 passed=3 failed=0
+# REAL 档变异（保留的 REAL 生成工程里直接跑 Test*RealCrashRecovery，隔离 Mongo、每次唯一库与 WAL，跑完删库）
+## I-REAL: 每日奖励改回旧写法 Wallet().Add(5)（不经 checkin）
+mutated: rc=1 --- FAIL: TestIdleSimRealCrashRecovery (1.85s)
+        idle_sim_recovery_test.go:429: recovery changed economy
+restored: rc=0 --- PASS: TestIdleSimRealCrashRecovery (1.78s)
+    idle_sim_recovery_test.go:459: SIGKILL: 7 unprojected strict records; two queues / boost / horizon / timer restored, driver loop delivered one catch-up after cold load and the next one-second refresh at its deadline, third process replayed every command without duplicating costs or rewards
+## M-REAL: 去掉 wallet（金币 Effect 不交给 Wallet().Add）
+mutated: rc=1 --- FAIL: TestMergeCasualRealCrashRecovery (1.71s)
+        merge_casual_recovery_test.go:434: recovered claim duplicated or changed producer output
+restored: rc=0 --- PASS: TestMergeCasualRealCrashRecovery (1.89s)
+    merge_casual_recovery_test.go:464: SIGKILL: 7 unprojected strict records; exact board / assets / timer restored, driver loop delivered one overdue expiry after cold load and the next challenge expiry at its deadline, server goal completed and rewards retried after third-process cold load

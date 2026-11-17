@@ -18,16 +18,22 @@ const LedgerLimit = 128
 const ValueLimit int64 = 1000000
 const MaxTime int64 = 4000000000000
 
+// StartGold 是新玩家的初始金币：在 enter 的首次初始化事务里（event.EnterFirst 的 Player 监听，
+// game/entities/player/merge_casual.go）经 wallet 发，“发过没有”由 enter 的建档标记保证。
+const StartGold int64 = 30
+
 // 配置全部为值类型。玩家棋盘创建时冻结规则，升级存档规则需独立迁移，登录不静默换表。
+// 体力不在这里：体力跟 stamina 模块（Q1 A），上限、恢复周期在 game/components/stamina/rules.go，每次读写取当前值、
+// 改了立刻对所有玩家生效，不随棋盘冻结。AdEnergy（一次广告发几点体力）是合成自己的规则，仍随棋盘冻结。
 type Rules struct {
-	Version                                                string
-	EnergyCap, EnergyMillis, ChargeMillis, ChallengeMillis int64
-	UnlockGold, OrderGold, ChallengeGold, AdEnergy         int64
+	Version                                        string
+	ChargeMillis, ChallengeMillis                  int64
+	UnlockGold, OrderGold, ChallengeGold, AdEnergy int64
 }
 
-func DemoRules() Rules { return Rules{"merge-v1", 10, 3000, 5000, 60000, 5, 20, 30, 2} }
+func DemoRules() Rules { return Rules{"merge-v1", 5000, 60000, 5, 20, 30, 2} }
 func (r Rules) Validate() error {
-	if r.Version == "" || len(r.Version) > 64 || r.EnergyCap < 3 || r.EnergyCap > 100 || r.EnergyMillis < 100 || r.EnergyMillis > 3600000 || r.ChargeMillis < 100 || r.ChargeMillis > 3600000 || r.ChallengeMillis < 1000 || r.ChallengeMillis > 3600000 || r.UnlockGold < 1 || r.UnlockGold > 100 || r.OrderGold < 1 || r.OrderGold > 100 || r.ChallengeGold < 1 || r.ChallengeGold > 100 || r.AdEnergy < 1 || r.AdEnergy > r.EnergyCap {
+	if r.Version == "" || len(r.Version) > 64 || r.ChargeMillis < 100 || r.ChargeMillis > 3600000 || r.ChallengeMillis < 1000 || r.ChallengeMillis > 3600000 || r.UnlockGold < 1 || r.UnlockGold > 100 || r.OrderGold < 1 || r.OrderGold > 100 || r.ChallengeGold < 1 || r.ChallengeGold > 100 || r.AdEnergy < 1 || r.AdEnergy > 100 {
 		return ErrRule
 	}
 	return nil

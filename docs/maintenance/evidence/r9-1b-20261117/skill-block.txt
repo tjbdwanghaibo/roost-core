@@ -1,0 +1,88 @@
+# skill reference idle-merge-casual.md §3.1 / §3.2 命令块（接 SKILL.md §3.2 前置与 §3.4 收尾，自定 module example.com/acme/myidle、example.com/acme/mymerge），2026-11-17
+## idle：exit 0
+--- PASS: TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe (0.02s)
+--- PASS: TestIdleSimSegmentedTimeMatchesSingleIntegration (0.00s)
+--- PASS: TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed (0.00s)
+ok  	example.com/acme/myidle/game/modules/idlesim	1.857s
+--- PASS: TestIdleSimParallelQueuesReserveAndFinishIndependently (0.03s)
+--- PASS: TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce (0.01s)
+--- PASS: TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic (0.02s)
+--- PASS: TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem (0.01s)
+--- PASS: TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt (0.02s)
+--- PASS: TestIdleSimDriverCatchupCannotExtendOfflineHorizon (0.01s)
+--- PASS: TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards (0.01s)
+--- PASS: TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline (0.01s)
+--- PASS: TestIdleSimFullBufferPausesAndLedgerNeverEvicts (0.84s)
+--- PASS: TestIdleSimRobotBusiness (0.02s)
+ok  	example.com/acme/myidle/game/handler	3.000s
+module verify: bag 20/20 skipped=0
+module verify: checkin 8/8 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0
+--- PASS: TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe (0.01s)
+--- PASS: TestIdleSimSegmentedTimeMatchesSingleIntegration (0.00s)
+--- PASS: TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed (0.00s)
+ok  	example.com/acme/myidle/game/modules/idlesim	1.235s
+--- PASS: TestIdleSimParallelQueuesReserveAndFinishIndependently (0.02s)
+--- PASS: TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce (0.01s)
+--- PASS: TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic (0.02s)
+--- PASS: TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem (0.01s)
+--- PASS: TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt (0.02s)
+--- PASS: TestIdleSimDriverCatchupCannotExtendOfflineHorizon (0.01s)
+--- PASS: TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards (0.01s)
+--- PASS: TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline (0.01s)
+--- PASS: TestIdleSimFullBufferPausesAndLedgerNeverEvicts (0.81s)
+--- PASS: TestIdleSimRobotBusiness (0.02s)
+ok  	example.com/acme/myidle/game/handler	2.269s
+13
+0
+IDs are valid
+generated files are up to date
+# project doctor：30 项 OK，0 项 FAIL
+## merge：exit 0
+--- PASS: TestMergeCasualCatalogReloadIsAtomicAndExistingBoardFrozen (0.00s)
+--- PASS: TestMergeCasualMalformedStateFailsClosedAndPublicViewExcludesSecrets (0.00s)
+--- PASS: TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow (0.01s)
+ok  	example.com/acme/mymerge/game/modules/mergecasual	1.477s
+--- PASS: TestMergeCasualBoardAuthorityAndMergeRules (0.02s)
+--- PASS: TestMergeCasualWarehouseAndUnlockHaveAtomicCosts (0.01s)
+--- PASS: TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice (0.02s)
+--- PASS: TestMergeCasualSellUndoCannotDuplicateItemsOrGold (0.01s)
+--- PASS: TestMergeCasualOrdersConsumeRecipeAndRewardOnce (0.01s)
+--- PASS: TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts (0.01s)
+--- PASS: TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules (0.01s)
+--- PASS: TestMergeCasualChallengeServerWinAndConcurrentClaim (0.03s)
+--- PASS: TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge (0.02s)
+--- PASS: TestMergeCasualUndoRestoresStateRandomResultAndTimer (0.01s)
+--- PASS: TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock (0.01s)
+--- PASS: TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota (0.05s)
+--- PASS: TestMergeCasualRobotBusiness (0.01s)
+ok  	example.com/acme/mymerge/game/handler	1.801s
+module verify: enter 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: wallet 17/17 skipped=0
+--- PASS: TestMergeCasualCatalogReloadIsAtomicAndExistingBoardFrozen (0.00s)
+--- PASS: TestMergeCasualMalformedStateFailsClosedAndPublicViewExcludesSecrets (0.00s)
+--- PASS: TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow (0.01s)
+ok  	example.com/acme/mymerge/game/modules/mergecasual	1.220s
+--- PASS: TestMergeCasualBoardAuthorityAndMergeRules (0.01s)
+--- PASS: TestMergeCasualWarehouseAndUnlockHaveAtomicCosts (0.01s)
+--- PASS: TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice (0.02s)
+--- PASS: TestMergeCasualSellUndoCannotDuplicateItemsOrGold (0.01s)
+--- PASS: TestMergeCasualOrdersConsumeRecipeAndRewardOnce (0.01s)
+--- PASS: TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts (0.01s)
+--- PASS: TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules (0.01s)
+--- PASS: TestMergeCasualChallengeServerWinAndConcurrentClaim (0.03s)
+--- PASS: TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge (0.02s)
+--- PASS: TestMergeCasualUndoRestoresStateRandomResultAndTimer (0.01s)
+--- PASS: TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock (0.01s)
+--- PASS: TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota (0.05s)
+--- PASS: TestMergeCasualRobotBusiness (0.01s)
+ok  	example.com/acme/mymerge/game/handler	1.536s
+16
+0
+IDs are valid
+generated files are up to date
+# project doctor：30 项 OK，0 项 FAIL

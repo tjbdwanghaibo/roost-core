@@ -11,18 +11,18 @@ const TimerChallenge int32 = 1
 func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
 	handlers.Register(TimerChallenge, func(f entitytimer.Fire) time.Duration {
 		d := component.owner.Dao()
-		if d.GetWakeTimer() != f.ID {
+		if d.GetMergeWakeTimer() != f.ID {
 			return 0
 		}
-		s, err := casual.Decode(d.GetState())
+		s, err := casual.Decode(d.GetMergeState())
 		if err != nil {
 			panic(err)
 		}
 		if err := s.Expire(uint64(f.Param1), f.Deadline.UnixMilli(), f.Now.UnixMilli()); err != nil {
 			panic(err)
 		}
-		d.SetState(s.Encode())
-		d.SetWakeTimer(0)
+		d.SetMergeState(s.Encode())
+		d.SetMergeWakeTimer(0)
 		return 0
 	})
 }

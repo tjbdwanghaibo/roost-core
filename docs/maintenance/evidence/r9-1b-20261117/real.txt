@@ -1,0 +1,57 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh（2026-11-17）
+# exit 0；SKIP 行数 0
+--- PASS: TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe (0.01s)
+--- PASS: TestIdleSimSegmentedTimeMatchesSingleIntegration (0.00s)
+--- PASS: TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed (0.00s)
+ok  	example.com/idle-sim-practice/game/modules/idlesim	1.817s
+--- PASS: TestIdleSimParallelQueuesReserveAndFinishIndependently (0.02s)
+--- PASS: TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce (0.01s)
+--- PASS: TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic (0.02s)
+--- PASS: TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem (0.01s)
+--- PASS: TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt (0.02s)
+--- PASS: TestIdleSimDriverCatchupCannotExtendOfflineHorizon (0.01s)
+--- PASS: TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards (0.01s)
+--- PASS: TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline (0.01s)
+--- PASS: TestIdleSimFullBufferPausesAndLedgerNeverEvicts (0.86s)
+--- PASS: TestIdleSimRobotBusiness (0.02s)
+ok  	example.com/idle-sim-practice/game/handler	2.557s
+IDs are valid
+generated files are up to date
+module verify: bag 20/20 skipped=0
+module verify: checkin 8/8 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0
+idle_sim_recovery_test.go:459: SIGKILL: 7 unprojected strict records; two queues / boost / horizon / timer restored, driver loop delivered one catch-up after cold load and the next one-second refresh at its deadline, third process replayed every command without duplicating costs or rewards
+--- PASS: TestIdleSimRealCrashRecovery (3.07s)
+ok  	example.com/idle-sim-practice/game/handler	4.740s
+
+# ROOST_MERGE_CASUAL_REAL=1 bash scripts/test-merge-casual-generated.sh（同一环境，串行）
+# exit 0；SKIP 行数 0
+--- PASS: TestMergeCasualCatalogReloadIsAtomicAndExistingBoardFrozen (0.00s)
+--- PASS: TestMergeCasualMalformedStateFailsClosedAndPublicViewExcludesSecrets (0.00s)
+--- PASS: TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow (0.01s)
+ok  	example.com/merge-casual-practice/game/modules/mergecasual	1.538s
+--- PASS: TestMergeCasualBoardAuthorityAndMergeRules (0.02s)
+--- PASS: TestMergeCasualWarehouseAndUnlockHaveAtomicCosts (0.01s)
+--- PASS: TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice (0.02s)
+--- PASS: TestMergeCasualSellUndoCannotDuplicateItemsOrGold (0.02s)
+--- PASS: TestMergeCasualOrdersConsumeRecipeAndRewardOnce (0.02s)
+--- PASS: TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts (0.02s)
+--- PASS: TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules (0.01s)
+--- PASS: TestMergeCasualChallengeServerWinAndConcurrentClaim (0.04s)
+--- PASS: TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge (0.03s)
+--- PASS: TestMergeCasualUndoRestoresStateRandomResultAndTimer (0.01s)
+--- PASS: TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock (0.02s)
+--- PASS: TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota (0.07s)
+--- PASS: TestMergeCasualRobotBusiness (0.02s)
+ok  	example.com/merge-casual-practice/game/handler	1.914s
+IDs are valid
+generated files are up to date
+module verify: enter 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: wallet 17/17 skipped=0
+merge_casual_recovery_test.go:464: SIGKILL: 7 unprojected strict records; exact board / assets / timer restored, driver loop delivered one overdue expiry after cold load and the next challenge expiry at its deadline, server goal completed and rewards retried after third-process cold load
+--- PASS: TestMergeCasualRealCrashRecovery (2.98s)
+ok  	example.com/merge-casual-practice/game/handler	4.623s

@@ -12,10 +12,24 @@ type Command struct {
 	JobID           uint64
 	Count           int64
 }
+// Receipt 是一条命令的原结果。金币与宝石在模块里（wallet 余额、bag 道具），回执不再记金币快照：
+// 重放只返回这份回执、不再动模块（R9：金币走 wallet、宝石走 bag，Q2 B）。
 type Receipt struct {
-	Command                Command
-	At, Gold, Raw, Pending int64
-	ConfigHash             string
+	Command          Command
+	At, Raw, Pending int64
+	ConfigHash       string
+}
+
+// Purse 是命令读到的玩家模块资产：Gold 是 wallet 的余额，Gems 是 bag 里宝石道具（GemItem）的数量。
+// Apply 只拿它做判断（够不够、会不会超过业务上限），不改它。
+type Purse struct{ Gold, Gems int64 }
+
+// Effect 是一条新命令交给模块执行的变化，由 handler 在同一笔事务里调模块：Gold 是 wallet 的增减（Add），
+// Gems 是要从 bag 扣掉的宝石数，Daily 表示经 checkin 签到领每日奖励（奖励数额与“今天领过没有”归 checkin）。
+// 重放旧命令时为零值：模块不再被调用。
+type Effect struct {
+	Gold, Gems int64
+	Daily      bool
 }
 
 // 任务创建时冻结工作量、投入和产出，队列等待中的任务也不随工坊升级重新定价。
@@ -31,24 +45,24 @@ type Station struct {
 
 // Horizon 由有效新玩家命令推进；后台 timer 和读视图均不延长离线收益窗口。
 // LastAt 始终推进到服务端本次 now，丢弃 Horizon 之后时间，不能靠重复 settle 补领被截掉的区间。
+// 金币（wallet）、宝石（bag 道具）与每日奖励的进度（checkin）在各自模块的 Player 状态里，不在这份存档。
 type State struct {
-	Schema                                                 int
-	Rules                                                  Rules
-	ConfigHash                                             string
-	LastAt, Horizon, BoostUntil                            int64
-	IncomeLevel, IncomeRemainder, Pending, Gold, Gems, Raw int64
-	Inventory                                              [3]int64
-	Stations                                               [3]Station
-	DailyDay                                               int64
-	Orders                                                 int64
-	Receipts                                               []Receipt
+	Schema                                      int
+	Rules                                       Rules
+	ConfigHash                                  string
+	LastAt, Horizon, BoostUntil                 int64
+	IncomeLevel, IncomeRemainder, Pending, Raw int64
+	Inventory                                   [3]int64
+	Stations                                    [3]Station
+	Orders                                      int64
+	Receipts                                    []Receipt
 }
 
 func NewState(now int64, r Rules) (State, error) {
 	if !validTime(now) || !validTime(now+r.OfflineCap) || r.Validate() != nil {
 		return State{}, ErrRule
 	}
-	s := State{Schema: 1, Rules: r, ConfigHash: r.Hash(), LastAt: now, Horizon: now + r.OfflineCap, IncomeLevel: 1, Gold: 100, Gems: 10, Raw: 50, DailyDay: -1}
+	s := State{Schema: 1, Rules: r, ConfigHash: r.Hash(), LastAt: now, Horizon: now + r.OfflineCap, IncomeLevel: 1, Raw: 50}
 	for i := range s.Stations {
 		s.Stations[i].Level = 1
 	}
@@ -64,7 +78,7 @@ func Decode(raw string) (State, error) {
 	if err := strictJSON(raw, &s); err != nil {
 		return s, err
 	}
-	if s.Schema != 1 || s.Rules.Validate() != nil || s.ConfigHash != s.Rules.Hash() || !validTime(s.LastAt) || !validTime(s.Horizon) || s.Horizon > s.LastAt+s.Rules.OfflineCap || s.BoostUntil < 0 || s.BoostUntil >= MaxTime || s.IncomeLevel < 1 || s.IncomeLevel > 5 || s.IncomeRemainder < 0 || s.IncomeRemainder >= s.Rules.IncomePeriod || s.Pending < 0 || s.Pending > s.Rules.PendingCap || s.Gold < 0 || s.Gold > ValueLimit || s.Gems < 0 || s.Gems > ValueLimit || s.Raw < 0 || s.Raw > s.Rules.RawCap || s.DailyDay < -1 || s.DailyDay > s.LastAt/DayMillis || s.Orders < 0 || s.Orders > ValueLimit || len(s.Receipts) > LedgerLimit {
+	if s.Schema != 1 || s.Rules.Validate() != nil || s.ConfigHash != s.Rules.Hash() || !validTime(s.LastAt) || !validTime(s.Horizon) || s.Horizon > s.LastAt+s.Rules.OfflineCap || s.BoostUntil < 0 || s.BoostUntil >= MaxTime || s.IncomeLevel < 1 || s.IncomeLevel > 5 || s.IncomeRemainder < 0 || s.IncomeRemainder >= s.Rules.IncomePeriod || s.Pending < 0 || s.Pending > s.Rules.PendingCap || s.Raw < 0 || s.Raw > s.Rules.RawCap || s.Orders < 0 || s.Orders > ValueLimit || len(s.Receipts) > LedgerLimit {
 		return s, ErrRule
 	}
 	total := int64(0)
@@ -95,7 +109,7 @@ func Decode(raw string) (State, error) {
 		}
 	}
 	for i, r := range s.Receipts {
-		if r.Command.Seq != uint64(i+1) || !validTime(r.At) || r.At > s.LastAt || i > 0 && r.At < s.Receipts[i-1].At || r.ConfigHash != s.ConfigHash || r.Gold < 0 || r.Gold > ValueLimit || r.Raw < 0 || r.Raw > s.Rules.RawCap || r.Pending < 0 || r.Pending > s.Rules.PendingCap {
+		if r.Command.Seq != uint64(i+1) || !validTime(r.At) || r.At > s.LastAt || i > 0 && r.At < s.Receipts[i-1].At || r.ConfigHash != s.ConfigHash || r.Raw < 0 || r.Raw > s.Rules.RawCap || r.Pending < 0 || r.Pending > s.Rules.PendingCap {
 			return s, ErrRule
 		}
 	}
@@ -103,21 +117,22 @@ func Decode(raw string) (State, error) {
 }
 
 // View 深拷贝生产队列，返回者不能通过切片别名修改实体状态；长期回执通过独立查询取得。
+// Gold / Gems 是同一把 Player 锁内读到的模块余额（wallet、bag），每日奖励的进度由 checkin 的同步状态下发。
 type View struct {
 	NextSeq                               uint64
 	LastAt, Horizon, BoostUntil           int64
 	Gold, Gems, Raw, Pending, IncomeLevel int64
 	Inventory                             [3]int64
 	Stations                              [3]Station
-	DailyDay, Orders                      int64
+	Orders                                int64
 	ConfigHash                            string
 }
 
-func (s State) View() View {
+func (s State) View(p Purse) View {
 	stations := s.Stations
 	for i := range stations {
 		stations[i].Queue = append([]Job(nil), stations[i].Queue...)
 		stations[i].Ready = append([]Job(nil), stations[i].Ready...)
 	}
-	return View{uint64(len(s.Receipts)) + 1, s.LastAt, s.Horizon, s.BoostUntil, s.Gold, s.Gems, s.Raw, s.Pending, s.IncomeLevel, s.Inventory, stations, s.DailyDay, s.Orders, s.ConfigHash}
+	return View{uint64(len(s.Receipts)) + 1, s.LastAt, s.Horizon, s.BoostUntil, p.Gold, p.Gems, s.Raw, s.Pending, s.IncomeLevel, s.Inventory, stations, s.Orders, s.ConfigHash}
 }

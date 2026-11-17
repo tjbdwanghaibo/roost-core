@@ -1,0 +1,16 @@
+package player
+
+import (
+	"example.com/merge-casual-practice/game/event"
+	casual "example.com/merge-casual-practice/game/modules/mergecasual"
+)
+
+// OnEnterFirst 是合成休闲的新玩家初始金币：在 enter 的首次初始化事务里（与建档标记同一笔、同一把 Player 锁）
+// 经 wallet 发。“只发一次”由 enter 的建档标记保证，所以用不留回执的 Add；返回错误时整笔建档回滚，下次进入再做。
+// 初始体力不用发：stamina 的零值状态按公式就是满体力。棋盘要服务端密钥与捕获的规则，由 handlerMergeLogin 在建档之后建。
+//
+//roost:listen
+func (e *Player) OnEnterFirst(ev event.EnterFirst) error {
+	_, err := e.Wallet().Add(casual.StartGold)
+	return err
+}

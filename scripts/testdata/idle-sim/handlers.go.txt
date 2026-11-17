@@ -1,69 +1,98 @@
 package handler
 
 import (
-	db "example.com/idle-sim-practice/db"
 	playerentity "example.com/idle-sim-practice/game/entities/player"
 	idle "example.com/idle-sim-practice/game/modules/idlesim"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"example.com/idle-sim-practice/game/view"
 	"time"
 )
 
+// IIdlePlayerEntity 是放置模拟的 handler 参数：view.PlayerEntity 带着同一个 Player 上装的模块组件——
+// Enter()（建档做过没有）、Wallet()（金币）、Bag()（宝石道具）、Checkin()（每日奖励）；Dao() 末尾的
+// IdleState / IdleWakeTimer 是放置自己的字段；TimerComp() 是 Player 上的实体定时器（生产与收益的唤醒）。
 type IIdlePlayerEntity interface {
-	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
+	view.PlayerEntity
 	TimerComp() *playerentity.TimerComponent
 }
 
-// Rules 来自服务端捕获的 configdata Snapshot；已有存档不因重试或新配置改变经济。
+// idlePurse 读这名玩家此刻的模块余额（调用方已持有 Player 锁）。
+func idlePurse(p IIdlePlayerEntity) idle.Purse {
+	return idle.Purse{Gold: p.Wallet().Balance(), Gems: p.Bag().Count(idle.GemItem)}
+}
+
+// 放置存档建在 enter 建档之后（初始金币已经在 enter 的首次初始化事务里发过，game/entities/player/idle_sim.go）。
+// 这里建放置自己的存档，并在同一笔事务里经 bag 发初始宝石：“发过没有”就是存档已经存在，同号重试只读不发。
+// Rules 来自服务端捕获的 configdata Snapshot，冻结进存档；已有存档不因重试或新配置改变经济。
 //
 //roost:nest rollback=undo durability=strict
 func handlerIdleInit(p IIdlePlayerEntity, nowUnixMilli int64, rules idle.Rules) (idle.View, error) {
-	if p.Dao().GetState() != "" {
-		s, err := idle.Decode(p.Dao().GetState())
-		return s.View(), err
+	if !p.Enter().Built() {
+		return idle.View{}, idle.ErrRule
+	}
+	if p.Dao().GetIdleState() != "" {
+		s, err := idle.Decode(p.Dao().GetIdleState())
+		return s.View(idlePurse(p)), err
 	}
 	s, err := idle.NewState(nowUnixMilli, rules)
 	if err != nil {
 		return idle.View{}, err
 	}
+	if _, err := p.Bag().Add(idle.GemItem, idle.StartGems); err != nil {
+		return idle.View{}, err
+	}
 	if err := saveIdle(p, s); err != nil {
 		return idle.View{}, err
 	}
-	return s.View(), nil
+	return s.View(idlePurse(p)), nil
 }
 
 // PlayerID 取鉴权会话，nowUnixMilli 是本条消息冻结的业务时间（生成的分发包装从 fctx 填，调用方不传）；命令不能上报工时、产出、余额或离线长度。
+// 新命令的金币 / 宝石 / 每日奖励经模块组件在同一笔事务里生效：wallet 的 Add（不留回执，“只做一次”由放置的
+// Seq 回执保证）、bag 的 Remove、checkin 的 Claim；任何一个拒绝，整笔回滚，放置存档也不写回。
 //
 //roost:nest rollback=undo durability=strict
 func handlerIdleCommand(p IIdlePlayerEntity, c idle.Command, nowUnixMilli int64) (idle.Receipt, error) {
-	s, err := idle.Decode(p.Dao().GetState())
+	s, err := idle.Decode(p.Dao().GetIdleState())
 	if err != nil {
 		return idle.Receipt{}, err
 	}
 	before := len(s.Receipts)
-	r, err := s.Apply(c, nowUnixMilli)
-	if err != nil {
+	r, effect, err := s.Apply(c, nowUnixMilli, idlePurse(p))
+	if err != nil || len(s.Receipts) == before {
 		return r, err
 	}
-	if len(s.Receipts) != before {
-		if err := saveIdle(p, s); err != nil {
+	if effect.Gold != 0 {
+		if _, err := p.Wallet().Add(effect.Gold); err != nil {
 			return idle.Receipt{}, err
 		}
+	}
+	if effect.Gems > 0 {
+		if _, err := p.Bag().Remove(idle.GemItem, effect.Gems); err != nil {
+			return idle.Receipt{}, err
+		}
+	}
+	if effect.Daily {
+		if _, err := p.Checkin().Claim(nowUnixMilli); err != nil {
+			return idle.Receipt{}, err
+		}
+	}
+	if err := saveIdle(p, s); err != nil {
+		return idle.Receipt{}, err
 	}
 	return r, nil
 }
 
 //roost:nest rollback=undo durability=strict
 func handlerIdleView(p IIdlePlayerEntity) (idle.View, error) {
-	s, err := idle.Decode(p.Dao().GetState())
-	return s.View(), err
+	s, err := idle.Decode(p.Dao().GetIdleState())
+	return s.View(idlePurse(p)), err
 }
 
 // 结果未知保持原 Seq 查询；不得为领取或取消生成新身份盲重试。
 //
 //roost:nest rollback=undo durability=strict
 func handlerIdleReceipt(p IIdlePlayerEntity, seq uint64) (idle.Receipt, error) {
-	s, err := idle.Decode(p.Dao().GetState())
+	s, err := idle.Decode(p.Dao().GetIdleState())
 	if err != nil {
 		return idle.Receipt{}, err
 	}
@@ -73,17 +102,17 @@ func handlerIdleReceipt(p IIdlePlayerEntity, seq uint64) (idle.Receipt, error) {
 	return s.Receipts[seq-1], nil
 }
 func saveIdle(p IIdlePlayerEntity, s idle.State) error {
-	if old := p.Dao().GetWakeTimer(); old != 0 {
+	if old := p.Dao().GetIdleWakeTimer(); old != 0 {
 		p.TimerComp().RemoveTimer(old)
-		p.Dao().SetWakeTimer(0)
+		p.Dao().SetIdleWakeTimer(0)
 	}
-	p.Dao().SetState(s.Encode())
+	p.Dao().SetIdleState(s.Encode())
 	if deadline := s.NextDeadline(); deadline != 0 {
 		id := p.TimerComp().NewTimerAt(time.UnixMilli(deadline), playerentity.TimerProduction, deadline, 0, nil)
 		if id == 0 {
 			return idle.ErrRule
 		}
-		p.Dao().SetWakeTimer(id)
+		p.Dao().SetIdleWakeTimer(id)
 	}
 	return nil
 }

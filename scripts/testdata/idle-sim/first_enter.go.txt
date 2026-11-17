@@ -1,0 +1,19 @@
+package player
+
+import (
+	"example.com/idle-sim-practice/game/event"
+	idle "example.com/idle-sim-practice/game/modules/idlesim"
+)
+
+// OnEnterFirst 是放置模拟的新玩家初始金币：在 enter 的首次初始化事务里（与建档标记同一笔、同一把 Player 锁）
+// 经 wallet 发。“只发一次”由 enter 的建档标记保证，所以用不留回执的 Add；返回错误时整笔建档回滚，下次进入再做。
+//
+// 初始宝石不在这里发：宝石是 bag 道具，放入要道具表；enter 模块自带的场景在没有道具表的进程里建档，
+// 在这里发道具会让它们答 bag_item_invalid（R9 记录的模块缺口）。宝石与放置存档（冻结的规则、原料、工坊）
+// 一起由 handlerIdleInit 在建档之后发，“发过没有”就是放置存档已经存在。
+//
+//roost:listen
+func (e *Player) OnEnterFirst(ev event.EnterFirst) error {
+	_, err := e.Wallet().Add(idle.StartGold)
+	return err
+}

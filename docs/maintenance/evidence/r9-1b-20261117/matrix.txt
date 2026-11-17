@@ -1,0 +1,6 @@
+# python3 scripts/test-genres-generated.py --out <scratchpad>/b1117-r9-1b/matrix --genres idle-sim merge-casual（2026-11-17）
+# exit 0；摘自 report.json（自定义 module example.com/acceptance/<genre>）
+idle-sim: status=passed passed_tests=13 custom_module_passed_tests=13 skipped_tests=0 custom_module_verify={"bag": 20, "checkin": 8, "enter": 29, "wallet": 17}
+merge-casual: status=passed passed_tests=16 custom_module_passed_tests=16 skipped_tests=0 custom_module_verify={"enter": 29, "rules": 10, "stamina": 26, "stamina+rules": 2, "wallet": 17}
+idle-sim: passed
+merge-casual: passed

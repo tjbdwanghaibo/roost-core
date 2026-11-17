@@ -11,10 +11,10 @@ const TimerProduction int32 = 1
 func (c *TimerComponent) registerTimerHandlers(h *entitytimer.Handlers) {
 	h.Register(TimerProduction, func(f entitytimer.Fire) time.Duration {
 		d := c.owner.Dao()
-		if d.GetWakeTimer() != f.ID {
+		if d.GetIdleWakeTimer() != f.ID {
 			return 0
 		}
-		s, err := idle.Decode(d.GetState())
+		s, err := idle.Decode(d.GetIdleState())
 		if err != nil {
 			panic(err)
 		}
@@ -24,15 +24,15 @@ func (c *TimerComponent) registerTimerHandlers(h *entitytimer.Handlers) {
 		if err := s.Advance(f.Now.UnixMilli()); err != nil {
 			panic(err)
 		}
-		d.SetState(s.Encode())
-		d.SetWakeTimer(0)
+		d.SetIdleState(s.Encode())
+		d.SetIdleWakeTimer(0)
 		// 单次有界补算后从 now 重排；不延长 Horizon，不补发逐秒 tick。
 		if deadline := s.NextDeadline(); deadline != 0 {
 			id := c.NewTimerAt(time.UnixMilli(deadline), TimerProduction, deadline, 0, nil)
 			if id == 0 {
 				panic(idle.ErrRule)
 			}
-			d.SetWakeTimer(id)
+			d.SetIdleWakeTimer(id)
 		}
 		return 0
 	})

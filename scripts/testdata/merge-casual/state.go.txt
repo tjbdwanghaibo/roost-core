@@ -24,13 +24,22 @@ type Command struct {
 	A, B             int
 	Value            int64
 }
+// Receipt 是一条命令的原结果。金币在 wallet、体力在 stamina，回执不再记它们的快照：重放只返回这份回执、
+// 不再动模块（R9：Gold 走 wallet，Energy 走 stamina）。
 type Receipt struct {
-	Command      Command
-	Revision     uint64
-	Drop         Item
-	Gold, Energy int64
-	ConfigHash   string
+	Command    Command
+	Revision   uint64
+	Drop       Item
+	ConfigHash string
 }
+
+// Purse 是命令读到的玩家模块资产：Gold 是 wallet 的余额，Energy 是 stamina 在本条消息业务时间的体力（Current）。
+// Apply 只拿它做判断（够不够、会不会超过业务上限），不改它。
+type Purse struct{ Gold, Energy int64 }
+
+// Effect 是一条新命令交给模块执行的变化，由 handler 在同一笔事务里调模块：Gold 是 wallet 的增减（Add），
+// Energy 为负是 stamina 的 Spend、为正是 Grant（广告）。重放旧命令时为零值：模块不再被调用。
+type Effect struct{ Gold, Energy int64 }
 type Sale struct {
 	Seq      uint64
 	Cell     int
@@ -49,16 +58,17 @@ type AdReceipt struct {
 }
 
 // 账本不淘汰。固定容量只用于教学，满后拒绝新写，旧命令仍可查询原回执。
-// Key 是服务端私有 HMAC 密钥，View 明确排除它及广告证明；DAO State 标 nosync（只落库，不下发）。
+// Key 是服务端私有 HMAC 密钥，View 明确排除它及广告证明；DAO MergeState 标 nosync（只落库，不下发）。
+// 金币（wallet）与体力（stamina）在各自模块的 Player 状态里，不在这份存档。
 type State struct {
-	Schema                                            int
-	Rules                                             Rules
-	ConfigHash, Key                                   string
-	Epoch, Revision                                   uint64
-	Board                                             [16]Cell
-	Warehouse                                         [4]Item
-	Gold, Energy, EnergyAt, Charges, ChargeAt, LastAt int64
-	Receipts                                          []Receipt
+	Schema                    int
+	Rules                     Rules
+	ConfigHash, Key           string
+	Epoch, Revision           uint64
+	Board                     [16]Cell
+	Warehouse                 [4]Item
+	Charges, ChargeAt, LastAt int64
+	Receipts                  []Receipt
 	Sale                                              Sale
 	Orders                                            int64
 	Challenge                                         Challenge
@@ -70,7 +80,7 @@ func NewState(key string, now int64, r Rules) (State, error) {
 	if err != nil || len(raw) != 32 || !validTime(now) || r.Validate() != nil {
 		return State{}, ErrRule
 	}
-	s := State{Schema: 1, Rules: r, ConfigHash: r.Hash(), Key: key, Epoch: 1, Revision: 1, Gold: 30, Energy: r.EnergyCap, EnergyAt: now, Charges: 3, ChargeAt: now, LastAt: now}
+	s := State{Schema: 1, Rules: r, ConfigHash: r.Hash(), Key: key, Epoch: 1, Revision: 1, Charges: 3, ChargeAt: now, LastAt: now}
 	for i := range 8 {
 		s.Board[i].Item = Item{1, 1}
 	}
@@ -87,7 +97,7 @@ func Decode(raw string) (State, error) {
 		return s, err
 	}
 	key, err := hex.DecodeString(s.Key)
-	if err != nil || len(key) != 32 || s.Schema != 1 || s.Rules.Validate() != nil || s.ConfigHash != s.Rules.Hash() || s.Epoch == 0 || s.Epoch > uint64(ValueLimit) || s.Revision == 0 || s.Revision > uint64(ValueLimit) || s.Gold < 0 || s.Gold > ValueLimit || s.Energy < 0 || s.Energy > s.Rules.EnergyCap || s.Charges < 0 || s.Charges > 3 || !validTime(s.LastAt) || s.EnergyAt <= 0 || s.EnergyAt > s.LastAt || s.ChargeAt <= 0 || s.ChargeAt > s.LastAt || len(s.Receipts) > LedgerLimit || len(s.Ads) > LedgerLimit || s.Orders < 0 || s.Orders > ValueLimit {
+	if err != nil || len(key) != 32 || s.Schema != 1 || s.Rules.Validate() != nil || s.ConfigHash != s.Rules.Hash() || s.Epoch == 0 || s.Epoch > uint64(ValueLimit) || s.Revision == 0 || s.Revision > uint64(ValueLimit) || s.Charges < 0 || s.Charges > 3 || !validTime(s.LastAt) || s.ChargeAt <= 0 || s.ChargeAt > s.LastAt || len(s.Receipts) > LedgerLimit || len(s.Ads) > LedgerLimit || s.Orders < 0 || s.Orders > ValueLimit {
 		return s, ErrRule
 	}
 	for i, c := range s.Board {
@@ -101,7 +111,7 @@ func Decode(raw string) (State, error) {
 		}
 	}
 	for i, r := range s.Receipts {
-		if r.Command.Seq != uint64(i+1) || r.Command.Epoch == 0 || r.Command.Epoch > s.Epoch || r.Command.Base >= r.Revision || r.Revision > s.Revision || i > 0 && r.Revision <= s.Receipts[i-1].Revision || r.ConfigHash != s.ConfigHash || !r.Drop.valid() || r.Gold < 0 || r.Gold > ValueLimit || r.Energy < 0 || r.Energy > s.Rules.EnergyCap {
+		if r.Command.Seq != uint64(i+1) || r.Command.Epoch == 0 || r.Command.Epoch > s.Epoch || r.Command.Base >= r.Revision || r.Revision > s.Revision || i > 0 && r.Revision <= s.Receipts[i-1].Revision || r.ConfigHash != s.ConfigHash || !r.Drop.valid() {
 			return s, ErrRule
 		}
 	}
@@ -133,8 +143,9 @@ func (s State) Digest() string {
 	sum := sha256.Sum256([]byte(s.Encode()))
 	return hex.EncodeToString(sum[:])
 }
-func (s State) View() View {
-	return View{s.Epoch, s.Revision, uint64(len(s.Receipts)) + 1, s.ConfigHash, s.Board, s.Warehouse, s.Gold, s.Energy, s.Charges, s.Orders, s.Challenge}
+// View 的 Gold / Energy 是同一把 Player 锁内读到的模块余额（wallet、stamina 在本条消息业务时间的体力）。
+func (s State) View(p Purse) View {
+	return View{s.Epoch, s.Revision, uint64(len(s.Receipts)) + 1, s.ConfigHash, s.Board, s.Warehouse, p.Gold, p.Energy, s.Charges, s.Orders, s.Challenge}
 }
 
 type View struct {
@@ -147,11 +158,11 @@ type View struct {
 }
 
 // 恢复使用服务端时间，按累计间隔计算一次，保留未满时的余数；满容量丢弃溢出时间，不补送道具或金币。
+// 只管生产器充能与挑战期限：体力由 stamina 在每次读写时惰性结算（同样保留零头、满了停表），这里不碰。
 func (s *State) Recover(now int64) error {
 	if !validTime(now) || now < s.LastAt {
 		return ErrRule
 	}
-	s.Energy, s.EnergyAt = recharge(s.Energy, s.Rules.EnergyCap, s.EnergyAt, now, s.Rules.EnergyMillis)
 	s.Charges, s.ChargeAt = recharge(s.Charges, 3, s.ChargeAt, now, s.Rules.ChargeMillis)
 	if s.Challenge.Status == "active" && now >= s.Challenge.Deadline {
 		s.Challenge.Status = "lost"

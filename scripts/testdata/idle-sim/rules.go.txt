@@ -20,6 +20,14 @@ const ValueLimit int64 = 1000000
 const DayMillis int64 = 86400000
 const MaxTime int64 = 4000000000000
 
+// GemItem 是宝石在 bag 道具表里的道具号（脚本往工程的 configs/table/item.csv 追加这一行；Q2 B：次要货币做 bag 道具）。
+const GemItem int64 = 1101
+
+// StartGold 是新玩家的初始金币：在 enter 的首次初始化事务里（event.EnterFirst 的 Player 监听，
+// game/entities/player/idle_sim.go）经 wallet 发，“发过没有”由 enter 的建档标记保证。
+// StartGems 是初始宝石：建放置存档的那一笔（handlerIdleInit）经 bag 发，“发过没有”是存档已经存在。
+const StartGold, StartGems int64 = 100, 10
+
 type Recipe struct{ Work, Raw, Output, Price int64 }
 type Rules struct {
 	Version                                                       string

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"example.com/idle-sim-practice/configs/schema"
 	playerentity "example.com/idle-sim-practice/game/entities/player"
 	sender "example.com/idle-sim-practice/game/handler/syncsender"
 	idle "example.com/idle-sim-practice/game/modules/idlesim"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -73,16 +75,49 @@ func loadIdleRules(t *testing.T, r idle.Rules) idle.Rules {
 	}
 	return r
 }
+
+// idleUseItems 把只有宝石一行的道具表装进 dir 并发布成进程当前配置：bag 的 ItemRule 经 generated.ItemByID 读
+// 钉在请求上的配置快照，没有道具表时宝石放不进背包。放置规则的目录也是 configdata.Store，装载同样会发布，
+// 所以先捕获放置规则、再装道具表。cleanup 不为 nil 时用例结束换回原来的配置（崩溃子进程不登记）。
+func idleUseItems(t *testing.T, dir string, cleanup bool) {
+	t.Helper()
+	raw, err := json.Marshal([]schema.Item{{ID: idle.GemItem, Name: "gem"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := configdata.NewRegistry()
+	if err := configdata.RegisterTable(registry, configdata.TableDef[int64, schema.Item]{
+		Name: configdata.Name("item"), File: "item.json",
+		Key: func(row schema.Item) int64 { return row.ID },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cleanup {
+		previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+		t.Cleanup(func() {
+			configdata.SetDefaultStore(previousStore)
+			fctx.SetRuntimeConfig(previousConfig)
+		})
+	}
+	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
 func newIdleFixture(t *testing.T, custom ...idle.Rules) *idleFixture {
 	t.Helper()
 	playerentity.RegisterEntity()
 	RegisterIdleSimNestHandlers()
 	RegisterTickPlayerTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	rules := idle.DemoRules()
 	if len(custom) > 0 {
 		rules = custom[0]
 	}
 	f := &idleFixture{rules: loadIdleRules(t, rules)}
+	idleUseItems(t, t.TempDir(), true)
 	f.clock.Store(idleNow)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
 	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
@@ -110,16 +145,27 @@ func newIdleFixture(t *testing.T, custom ...idle.Rules) *idleFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.player.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
+	// 先经 enter 建档（初始金币在首次初始化事务里发），再建放置存档（初始宝石与存档同一笔）。没建档的玩家建不了存档。
+	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), id, f.rules); err == nil || f.player.Dao().GetIdleState() != "" || f.gems() != 0 {
+		t.Fatal("idle save created before enter built the player", err)
+	}
+	if _, err := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), id, f.rules); err != nil {
 		t.Fatal(err)
 	}
 	return f
 }
 
+// gold / gems / checkin 读模块状态（wallet 余额、bag 里的宝石、checkin 进度）；同样只在 Sender 完成之后读。
+func (f *idleFixture) gold() int64 { return f.player.Dao().GetWallet().GetCoins() }
+func (f *idleFixture) gems() int64 { return f.player.Bag().Count(idle.GemItem) }
+
 // 测试只在 Sender 已完成、并发 goroutine 全部退出后查看实体快照。
 func (f *idleFixture) state(t *testing.T) idle.State {
 	t.Helper()
-	s, err := idle.Decode(f.player.Dao().GetState())
+	s, err := idle.Decode(f.player.Dao().GetIdleState())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,13 +189,14 @@ func (f *idleFixture) do(t *testing.T, kind string, station, recipe int, count i
 }
 func (f *idleFixture) refuse(t *testing.T, c idle.Command) {
 	t.Helper()
-	before := f.player.Dao().GetState()
-	timer := f.player.Dao().GetWakeTimer()
+	before := f.player.Dao().GetIdleState()
+	timer := f.player.Dao().GetIdleWakeTimer()
+	gold, gems, checkin := f.gold(), f.gems(), f.player.Dao().GetCheckin().GetTotal()
 	if _, err := f.send(c); err == nil {
 		t.Fatal("invalid command accepted", c)
 	}
-	if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer {
-		t.Fatal("refusal changed state or timer")
+	if f.player.Dao().GetIdleState() != before || f.player.Dao().GetIdleWakeTimer() != timer || f.gold() != gold || f.gems() != gems || f.player.Dao().GetCheckin().GetTotal() != checkin {
+		t.Fatal("refusal changed state, timer or module assets")
 	}
 }
 func TestIdleSimParallelQueuesReserveAndFinishIndependently(t *testing.T) {
@@ -219,7 +266,7 @@ func TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := f.state(t)
-	if s.Gold != 126 || s.Inventory != [3]int64{} || s.Orders != 1 {
+	if f.gold() != 126 || s.Inventory != [3]int64{} || s.Orders != 1 {
 		t.Fatal("warehouse / order / sale duplicated or lost assets")
 	}
 	f.refuse(t, f.command(t, "sell", 0, 0, 1, 0))
@@ -233,7 +280,7 @@ func TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem(t *testing.T) {
 	f.clock.Add(10000)
 	f.do(t, "settle", 0, 0, 0, 0)
 	s := f.state(t)
-	if s.Pending != 4 || s.IncomeRemainder != 5000 || s.Gold != 90 || s.Gems != 8 {
+	if s.Pending != 4 || s.IncomeRemainder != 5000 || f.gold() != 90 || f.gems() != 8 {
 		t.Fatal("new rate applied retroactively")
 	}
 	f.clock.Add(5000)
@@ -249,8 +296,8 @@ func TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem(t *testing.T) {
 	patched := f.rules
 	patched.Version = "idle-v2"
 	patched.Recipes[0].Raw = 9
-	before := f.player.Dao().GetState()
-	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), f.player.ID(), patched); err != nil || f.player.Dao().GetState() != before {
+	before, gold, gems := f.player.Dao().GetIdleState(), f.gold(), f.gems()
+	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), f.player.ID(), patched); err != nil || f.player.Dao().GetIdleState() != before || f.gold() != gold || f.gems() != gems {
 		t.Fatal("existing state changed on bootstrap retry")
 	}
 }
@@ -274,8 +321,8 @@ func TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt(t *testing.T) 
 		return results[0]
 	}
 	queue := parallel(f.command(t, "queue", 0, 0, 0, 0))
-	timer := f.player.Dao().GetWakeTimer()
-	if _, err := f.send(queue.Command); err != nil || f.player.Dao().GetWakeTimer() != timer {
+	timer := f.player.Dao().GetIdleWakeTimer()
+	if _, err := f.send(queue.Command); err != nil || f.player.Dao().GetIdleWakeTimer() != timer {
 		t.Fatal("retry rearmed timer")
 	}
 	if f.state(t).Raw != 48 || len(f.state(t).Stations[0].Queue) != 1 {
@@ -285,7 +332,8 @@ func TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt(t *testing.T) 
 	f.do(t, "settle", 0, 0, 0, 0)
 	parallel(f.command(t, "claim", 0, 0, 0, 0))
 	parallel(f.command(t, "daily", 0, 0, 0, 0))
-	if f.state(t).Gold != 106 || f.state(t).Pending != 0 {
+	// 收益 1 + checkin 第 1 天 10；并发的 8 条同 Seq 只有第一条调了 wallet 与 checkin。
+	if f.gold() != 111 || f.state(t).Pending != 0 || f.player.Dao().GetCheckin().GetTotal() != 1 {
 		t.Fatal("duplicate offline / daily reward")
 	}
 	r, err := sender.NewIdleSimSender(f.engine).Sync_IdleReceipt(context.Background(), f.player.ID(), queue.Command.Seq)
@@ -321,7 +369,7 @@ func TestIdleSimDriverCatchupCannotExtendOfflineHorizon(t *testing.T) {
 	})
 	waitIdle(t, func() bool { _, ok := playerentity.TimerDriver.DueOf(f.player); return !ok })
 	s := f.state(t)
-	if s.Pending != 3 || s.Horizon != horizon || s.Stations[0].Queue[0].Progress != 30000 || f.player.Dao().GetWakeTimer() != 0 {
+	if s.Pending != 3 || s.Horizon != horizon || s.Stations[0].Queue[0].Progress != 30000 || f.player.Dao().GetIdleWakeTimer() != 0 {
 		t.Fatal("offline horizon extended / time not capped")
 	}
 	if n := playerentity.TimerDriver.DeliverDue(context.Background()); n != 0 {
@@ -350,8 +398,10 @@ func TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards(t *testing.T) {
 	}
 	f.clock.Add(10 * idle.DayMillis)
 	f.do(t, "daily", 0, 0, 0, 0)
-	s := f.state(t)
-	if s.Gold != 115 || s.DailyDay != f.clock.Load()/idle.DayMillis {
+	// checkin 的规则：连续第 n 天 10×min(n,7)。10 + 20（连续第 2 天）+ 断签 10 天后从第 1 天重计 10；
+	// 漏掉的 10 天不补发、不倍增，旧 Seq 的重放不再调 checkin。
+	progress := f.player.Dao().GetCheckin()
+	if f.gold() != 140 || progress.GetLastDay() != int64(clock.BusinessDay(time.UnixMilli(f.clock.Load()))) || progress.GetStreak() != 1 || progress.GetTotal() != 3 {
 		t.Fatal("missed days or old retry paid extra")
 	}
 	f.clock.Add(-1)
@@ -362,8 +412,9 @@ func TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline(t *testing.T) {
 	refused := errors.New("refuse after idle mutation")
 	for _, kind := range []string{"queue", "boost"} {
 		c := f.command(t, kind, 0, 2, 0, 0)
-		before := f.player.Dao().GetState()
-		timer := f.player.Dao().GetWakeTimer()
+		before := f.player.Dao().GetIdleState()
+		timer := f.player.Dao().GetIdleWakeTimer()
+		gems := f.gems()
 		name := nest.NewHandlerName("idle_undo_" + kind)
 		nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 			// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
@@ -376,8 +427,8 @@ func TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline(t *testing.T) {
 		if _, err := f.engine.Request(context.Background(), name, f.player.ID(), nil); !errors.Is(err, refused) {
 			t.Fatal(err)
 		}
-		if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer || len(f.player.TimerComp().Timers()) != 1 {
-			t.Fatal("undo left resource or timer changes")
+		if f.player.Dao().GetIdleState() != before || f.player.Dao().GetIdleWakeTimer() != timer || len(f.player.TimerComp().Timers()) != 1 || f.gems() != gems {
+			t.Fatal("undo left resource, gem or timer changes")
 		}
 		if _, err := f.send(c); err != nil {
 			t.Fatal(err)
@@ -411,9 +462,9 @@ func TestIdleSimFullBufferPausesAndLedgerNeverEvicts(t *testing.T) {
 		f.do(t, "settle", 0, 0, 0, 0)
 	}
 	f.refuse(t, f.command(t, "queue", 1, 0, 0, 0))
-	before := f.player.Dao().GetState()
+	before := f.player.Dao().GetIdleState()
 	got, err := f.send(old.Command)
-	if err != nil || !reflect.DeepEqual(old, got) || f.player.Dao().GetState() != before {
+	if err != nil || !reflect.DeepEqual(old, got) || f.player.Dao().GetIdleState() != before {
 		t.Fatal("full ledger evicted original facts")
 	}
 }

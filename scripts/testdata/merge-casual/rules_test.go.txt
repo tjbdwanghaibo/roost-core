@@ -29,7 +29,7 @@ func TestMergeCasualCatalogReloadIsAtomicAndExistingBoardFrozen(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := old
-	bad.EnergyMillis = 0
+	bad.ChargeMillis = 0
 	write(bad)
 	if _, err := store.Reload(context.Background()); err == nil || store.Current() != snap {
 		t.Fatal("invalid config published")
@@ -58,18 +58,18 @@ func TestMergeCasualMalformedStateFailsClosedAndPublicViewExcludesSecrets(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range []string{s.Encode() + "{}", strings.Replace(s.Encode(), `"Schema":1`, `"Schema":0`, 1), strings.Replace(s.Encode(), `"Gold":30`, `"Gold":-1`, 1), strings.Replace(s.Encode(), `"Level":1`, `"Level":9`, 1), strings.Replace(s.Encode(), `"Energy":10`, `"UnknownEnergy":10`, 1), strings.Replace(s.Encode(), `"ConfigHash":"`, `"ConfigHash":"wrong`, 1)} {
+	for _, raw := range []string{s.Encode() + "{}", strings.Replace(s.Encode(), `"Schema":1`, `"Schema":0`, 1), strings.Replace(s.Encode(), `"Charges":3`, `"Charges":-1`, 1), strings.Replace(s.Encode(), `"Level":1`, `"Level":9`, 1), strings.Replace(s.Encode(), `"Orders":0`, `"UnknownOrders":0`, 1), strings.Replace(s.Encode(), `"ConfigHash":"`, `"ConfigHash":"wrong`, 1)} {
 		if _, err := Decode(raw); err == nil {
 			t.Fatal("malformed state accepted")
 		}
 	}
-	raw, _ := json.Marshal(s.View())
-	for _, private := range []string{s.Key, "Key", "Receipts", "Ads", "EnergyAt", "Rules"} {
+	raw, _ := json.Marshal(s.View(Purse{}))
+	for _, private := range []string{s.Key, "Key", "Receipts", "Ads", "ChargeAt", "Rules"} {
 		if strings.Contains(string(raw), private) {
 			t.Fatal("private field in view", private)
 		}
 	}
-	view := s.View()
+	view := s.View(Purse{})
 	view.Board[0].Item.Level = 4
 	if s.Board[0].Item.Level != 1 {
 		t.Fatal("view aliases private state")
@@ -82,7 +82,7 @@ func TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow(t *testing
 	}
 	var first Receipt
 	for i := 1; i <= LedgerLimit; i++ {
-		r, err := s.Apply(Command{Epoch: 1, Seq: uint64(i), Base: s.Revision, Kind: "recover"}, s.LastAt)
+		r, _, err := s.Apply(Command{Epoch: 1, Seq: uint64(i), Base: s.Revision, Kind: "recover"}, s.LastAt, Purse{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,20 +91,20 @@ func TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow(t *testing
 		}
 	}
 	before := s.Digest()
-	if _, err := s.Apply(Command{Epoch: 1, Seq: LedgerLimit + 1, Base: s.Revision, Kind: "produce", A: 10}, s.LastAt); err == nil || s.Digest() != before {
+	if _, _, err := s.Apply(Command{Epoch: 1, Seq: LedgerLimit + 1, Base: s.Revision, Kind: "produce", A: 10}, s.LastAt, Purse{Gold: StartGold, Energy: 100}); err == nil || s.Digest() != before {
 		t.Fatal("full ledger evicted evidence")
 	}
-	if got, err := s.Apply(first.Command, s.LastAt+3600000); err != nil || got != first || s.Digest() != before {
+	if got, effect, err := s.Apply(first.Command, s.LastAt+3600000, Purse{}); err != nil || got != first || effect != (Effect{}) || s.Digest() != before {
 		t.Fatal("full ledger lost old receipt")
 	}
 	if _, err := Decode(s.Encode()); err != nil {
 		t.Fatal(err)
 	}
-	s.Gold = ValueLimit
+	// 金币在 wallet：业务上限按调用方读到的余额判断，超过时拒绝、不交出 Effect。
 	local := s
 	local.Receipts = nil
 	local.Revision = 1
-	if _, err := local.Apply(Command{Epoch: 1, Seq: 1, Base: 1, Kind: "sell", A: 0}, s.LastAt); err == nil {
+	if _, effect, err := local.Apply(Command{Epoch: 1, Seq: 1, Base: 1, Kind: "sell", A: 0}, s.LastAt, Purse{Gold: ValueLimit}); err == nil || effect != (Effect{}) {
 		t.Fatal("gold overflow accepted")
 	}
 }

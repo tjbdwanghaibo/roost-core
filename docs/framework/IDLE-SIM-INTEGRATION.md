@@ -1,6 +1,6 @@
 # 放置模拟框架学习与验收
 
-本手册把“多工坊生产队列 + 离线收益箱 + 出售 / 订单 / 每日奖励”的放置经营业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明脚本证明什么、不证明什么。配方、产能、离线窗口和经济数值由游戏定义。下面的业务夹具（三个工坊、三种配方、每个工坊四个在途任务与四格待领产物、30 秒离线收益窗口、收益倍率卡、UTC 日每日奖励）只是学习和验收样例：框架与生成器不包含任何放置经营规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。其他游戏类型的手册见 [SLG](SLG-INTEGRATION.md)、[MMORPG](MMORPG-INTEGRATION.md)、[MOBA](MOBA-INTEGRATION.md)、[卡牌 RPG](CARD-RPG-INTEGRATION.md)、[合成休闲](MERGE-CASUAL-INTEGRATION.md)。
+本手册把“多工坊生产队列 + 离线收益箱 + 出售 / 订单 / 每日奖励”的放置经营业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明脚本证明什么、不证明什么。配方、产能、离线窗口和经济数值由游戏定义。工程按“装模块 + 只写模块没覆盖的部分”组织（R9，2026-11-17）：建档归 `enter`、金币归 `wallet`、宝石是 `bag` 的一种道具、每日奖励归 `checkin`；生产队列与收益积分没有模块，照 [idle 模块](../../modules/idle/README.md)的“游标只前移整周期 + 单调序号 + 回拨拒绝”手写。下面的业务夹具（三个工坊、三种配方、每个工坊四个在途任务与四格待领产物、30 秒离线收益窗口、收益倍率卡、经 checkin 领的每日奖励）只是学习和验收样例：框架与生成器不包含任何放置经营规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。其他游戏类型的手册见 [SLG](SLG-INTEGRATION.md)、[MMORPG](MMORPG-INTEGRATION.md)、[MOBA](MOBA-INTEGRATION.md)、[卡牌 RPG](CARD-RPG-INTEGRATION.md)、[合成休闲](MERGE-CASUAL-INTEGRATION.md)。
 
 ## 第一部分：学习
 
@@ -12,15 +12,19 @@
 
 ### 2. 模块分工：放置模拟里的状态归谁
 
-同一玩家的三个工坊、原料、仓库、金币、钻石、待领收益和操作回执都属于静态 sid 归属的 Player。“并行生产”指每个工坊各有自己的时间预算；修改这些状态仍由 Player 的 Nest 锁串行处理。本例不需要跨服实体或分布式交易。
+同一玩家的三个工坊、原料、仓库、金币、宝石、待领收益和操作回执都属于静态 sid 归属的 Player。“并行生产”指每个工坊各有自己的时间预算；修改这些状态仍由 Player 的 Nest 锁串行处理。本例不需要跨服实体或分布式交易。
 
 | 业务状态 | 拥有者 | 框架接法 | 业务边界 |
 | --- | --- | --- | --- |
-| 工坊等级、生产队列（工时 / 投入 / 产出在入队时冻结）、待领产物 | Player DAO 的 `State` | 生成的 Player DAO 字段，只在 Nest 事务里经 mutator 修改 | 每工坊四个在途、四格待领；整个 `State` 是一段业务 JSON |
-| 原料、仓库、金币、钻石、收益箱、收入等级、倍率期限 | Player DAO 的 `State` | 与队列同事务 | 收益箱 100 封顶、仓库 20 格、原料 100 上限 |
-| 操作回执（永久命令序号） | Player DAO 的 `State` | 与资产同事务提交 | 账本至多 128 条，满了拒绝新写 |
+| 建档做过没有、初始金币 | **enter 模块**（Player DAO 的 `Enter`） | `roost module add enter`；建档经 `EnterInit`，初始金币写在 `event.EnterFirst` 的 Player 监听（`game/entities/player/idle_sim.go`）里，与建档标记同一笔；放置建档要求 `Enter().Built()` | Q6：只装 enter，不装 login / portal，Robot 用夹具鉴权 |
+| 金币 | **wallet 模块**（Player DAO 的 `Wallet`） | 新命令的金币变化经 `Wallet().Add` 与放置存档同一笔提交 | “只做一次”由放置的 `Seq` 回执保证，不用 wallet 的去重窗口；放置自己的 100 万业务上限按读到的余额判断 |
+| 宝石 | **bag 模块**（Player DAO 的 `Bag`，道具号 `GemItem = 1101`） | 脚本往 `configs/table/item.csv` 追加一行；初始 10 颗随放置存档一笔经 `Bag().Add` 发，加速经 `Bag().Remove` 扣 | Q2 B：次要货币做道具；进程里要装着道具表（`ItemRule` 读配置快照） |
+| 每日奖励 | **checkin 模块**（Player DAO 的 `Checkin`） | `daily` 命令在同一笔事务里调 `Checkin().Claim(now)` | 业务日、连续天数加成（连续第 n 天 10×min(n,7)）与“今天领过没有”都归 checkin |
+| 工坊等级、生产队列（工时 / 投入 / 产出在入队时冻结）、待领产物 | Player DAO 末尾的 `IdleState`（手写） | 生成的 Player DAO 字段，只在 Nest 事务里经 mutator 修改 | 每工坊四个在途、四格待领；整个 `IdleState` 是一段业务 JSON |
+| 原料、仓库、收益箱、收入等级、倍率期限 | Player DAO 的 `IdleState` | 与队列同事务 | 收益箱 100 封顶、仓库 20 格、原料 100 上限；仓库里的产品是放置自己的事实（不进 bag），容量照旧手写校验 |
+| 操作回执（永久命令序号） | Player DAO 的 `IdleState` | 与资产同事务提交 | 账本至多 128 条，满了拒绝新写；回执不再记金币快照 |
 | 离线收益窗口（`Horizon`） | 业务时间计算 | 最后一条有效新命令之后 30 秒；读视图与定时器都不延长 | 窗口之外的时间直接丢弃 |
-| 在线时的生产唤醒 | Player 的实体定时器 + `WakeTimer` | `roost add timer --entity Player`；节点存 DAO，驱动到期投递 Tick | 窗口内每秒唤醒一次；加载后到期节点只触发一次，框架不追帧 |
+| 在线时的生产唤醒 | Player 的实体定时器 + `IdleWakeTimer` | `roost add timer --entity Player`；节点存 DAO，驱动到期投递 Tick | 窗口内每秒唤醒一次；加载后到期节点只触发一次，框架不追帧 |
 | 配置（配方、窗口、周期、上限） | configdata Store / Snapshot | 注册对象定义 → Load 时校验 → 首次初始化时捕获并整份写进存档 | 已有存档沿用初始化那一代 |
 | 客户端看到的存档 | 业务视图 `View` / `Receipt` | 锁内读取，队列深拷贝 | 回执账本另经查询取得 |
 | 登录与账号 | account / Player 静态 sid | 复用正式生命周期与登录鉴权 | 夹具直接用合成的已鉴权身份；账号链见 [玩家接入](PLAYER-ACCESS.md) 与 game-demo |
@@ -53,10 +57,10 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 脚本打印临时目录，生成工程在其中的 `project/`。它做的事就是一个新工程的接入步骤：
 
 1. `roost project new idle-sim-practice -module example.com/idle-sim-practice -template game`；
-2. `roost add dao Player --entity Player`、`roost add timer --entity Player`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；放入业务包 `game/modules/idlesim/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/idle_sim.go`；
+2. 装模块：`roost module add enter wallet bag checkin`（脚本经公用的 [`genre-common/modules.sh`](../../scripts/testdata/genre-common/modules.sh) `add`；Player 的主 DAO 与玩家 TCP 接入由安装计划代办，不再 `add dao Player`），再 `roost add timer --entity Player`；
+3. 业务只改这几处：在 `db/def/player.go` 的 `PlayerDao` 末尾（模块字段之后）加 ``IdleState string `store:"idle_state" dao:"nosync"` `` 与 ``IdleWakeTimer int64 `store:"idle_wake_timer" dao:"nosync"` ``；在 `configs/table/item.csv` 追加宝石一行 `1101,宝石,0`；放入业务包 `game/modules/idlesim/`、定时回调 `game/entities/player/timer_handlers.go`、建档监听 `game/entities/player/idle_sim.go` 与 handler `game/handler/idle_sim.go`；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> idle-sim`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
-5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
+5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "idle_state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Player 的定时器驱动（绑定 Nest、启动与停止投递循环；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` / `DeliverDue` / `Start` / `Stop` 是用例自己搭 Nest、控制投递时机的替身接线，不是生产装配要抄的步骤。
 
@@ -69,8 +73,10 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 | 1 | `game/modules/idlesim/rules.go`（[rules.go.txt](../../scripts/testdata/idle-sim/rules.go.txt)） | 配置怎样经校验发布？存档为什么在初始化时冻结一代？ |
 | 2 | `game/modules/idlesim/state.go`（[state.go.txt](../../scripts/testdata/idle-sim/state.go.txt)） | 存档里有什么？`LastAt` 与 `Horizon` 各表示什么？视图为什么要深拷贝队列？ |
 | 3 | `game/modules/idlesim/production.go`（[production.go.txt](../../scripts/testdata/idle-sim/production.go.txt)） | `Advance` 怎样把一段时间一次积分（倍率分段、余数、封顶、缓冲满暂停）？`Apply` 怎样先结算再改？ |
-| 4 | `game/handler/idle_sim.go`（[handlers.go.txt](../../scripts/testdata/idle-sim/handlers.go.txt)） | 命令、查回执分别在哪个锁与提交边界里生效？唤醒定时器在哪里替换？ |
+| 4 | `game/handler/idle_sim.go`（[handlers.go.txt](../../scripts/testdata/idle-sim/handlers.go.txt)） | 命令、查回执分别在哪个锁与提交边界里生效？`Apply` 交出的 `Effect` 怎样在同一笔里交给 wallet / bag / checkin？唤醒定时器在哪里替换？ |
+| 4A | `game/entities/player/idle_sim.go`（[first_enter.go.txt](../../scripts/testdata/idle-sim/first_enter.go.txt)） | 初始金币为什么写在 `event.EnterFirst` 监听里、初始宝石为什么不在这里发？ |
 | 5 | `game/entities/player/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/idle-sim/timer_handlers.go.txt)） | 唤醒回调怎样核对身份？离线很久为什么只积分一次？ |
+| 5A | enter / wallet / bag / checkin 模块的 README（[enter](../../modules/enter/README.md)、[wallet](../../modules/wallet/README.md)、[bag](../../modules/bag/README.md)、[checkin](../../modules/checkin/README.md)），借鉴的 [idle](../../modules/idle/README.md) | 模块管到哪、不管什么；`roost module verify` 跑的是哪些场景 |
 | 6 | `game/handler/syncsender/` | 生成的 Sender 怎样把 Player ID 与业务参数交给 Nest；业务调用它，不手改 |
 | 7 | [gameplay_test.go.txt](../../scripts/testdata/idle-sim/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/idle-sim/rules_test.go.txt) | 并发、拒绝、回滚、时间跳跃与上限怎样实际验证 |
 | 8 | [persistence/recovery_test.go](../../scripts/testdata/idle-sim/persistence/recovery_test.go) | 已确认但未投影的记录在 SIGKILL 后怎样恢复？离线一小时为什么只结算到原窗口？ |
@@ -79,7 +85,7 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/idleflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `idlesim.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；Player ID 是完整 EntityID：
+下面的文件放进保留的生成工程（例如 `internal/idleflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `idlesim.OpenCatalog` 打开的配置；玩家已经经 enter 建过档（生产里是 `EnterGame`，夹具里是 `Sync_EnterInit`），否则 `Sync_IdleInit` 被拒；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；Player ID 是完整 EntityID：
 
 ```go
 package idleflow
@@ -93,7 +99,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// initAndQueue 是已鉴权入口的调用顺序：首次初始化（已有存档时原样返回）、在 1 号工坊排一个 1 号配方。
+// initAndQueue 是已鉴权入口的调用顺序：建放置存档（同一笔发初始宝石；已有存档时原样返回）、在 1 号工坊排一个 1 号配方。
 // Rules 由服务器捕获，不来自请求；已有存档会忽略它，沿用初始化那一代。
 func initAndQueue(ctx context.Context, client nest.Client, catalog *configdata.Store,
 	playerEntityID int64) (idlesim.Receipt, error) {
@@ -144,7 +150,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 }
 ```
 
-`Station` / `Recipe` 从 0 开始。`Kind` 支持 `queue`、`cancel`（`JobID` 是原入队命令的 `Seq`）、`collect`、`sell`（`Recipe` / `Count`）、`buy`（`Count`）、`upgrade`、`income_upgrade`、`boost`、`claim`、`daily`、`order` 和 `settle`。取消只退尚未开工的任务；产物先进工坊的待领格，`collect` 才入仓；出售和订单消耗的是仓库里实际的物品。
+`Station` / `Recipe` 从 0 开始；视图里的 `Gold` / `Gems` 是同一把锁内读到的 wallet 余额与 bag 宝石数。`Kind` 支持 `queue`、`cancel`（`JobID` 是原入队命令的 `Seq`）、`collect`、`sell`（`Recipe` / `Count`）、`buy`（`Count`）、`upgrade`、`income_upgrade`、`boost`、`claim`、`daily`、`order` 和 `settle`。取消只退尚未开工的任务；产物先进工坊的待领格，`collect` 才入仓；出售和订单消耗的是仓库里实际的物品。
 
 `playerEntityID` 来自已鉴权会话，不来自请求体；公网入口只接收命令本身，Player ID、服务器时间、Rules 由服务器填，客户端不能指定工时、产出、余额或离线时长。每次调用的错误都要按业务逐次处理，示例只演示调用方式；接网络协议时把 `idlesim.ErrRule` 映射成业务错误码，存储 / 内部故障按[回复错误判别](guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试)处理。
 
@@ -154,19 +160,37 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 | --- | --- | --- |
 | `CatalogRejectsBadReloadAndKeepsFrozenRecipe` | 非法热更被拒，合法热更发布新一代 | configdata 校验失败不替换当前快照；已捕获的值不被新发布改写 |
 | `SegmentedTimeMatchesSingleIntegration` | 一次积分 25 秒与每秒积分一次 | 积分结果与唤醒频率无关（同一份摘要）；收益箱封顶时丢弃余数；视图不与存档共享队列 |
-| `InvalidSnapshotsIdentitiesAndOverflowFailClosed` | 存档被改、序号为 0 / 跳号、越界工坊 / 配方、未知命令、金币溢出 | 拒绝解码或拒绝命令，状态不变；窗口期限溢出被拒 |
+| `InvalidSnapshotsIdentitiesAndOverflowFailClosed` | 存档被改、序号为 0 / 跳号、越界工坊 / 配方、未知命令、领取会让金币超过业务上限 | 拒绝解码或拒绝命令，状态不变、不交出 `Effect`；窗口期限溢出被拒 |
 | `ParallelQueuesReserveAndFinishIndependently` | 三个工坊同时生产 | 入队即预扣原料；各工坊独立消耗时间预算；队列满（4 个）被拒、队列非空不能升级 |
 | `CancellationRefundsOnlyUnstartedJobsOnce` | 取消已开工 / 未开工任务、重放取消 | 只退未开工任务，重放三次只退一次；已开工、错工坊、不存在的任务被拒 |
 | `WarehouseCapacityOrdersAndSalesAreAtomic` | 仓库只有 3 格 | 仓库放不下时整次收取被拒、待领产物保留；订单与出售重放不重复结算 |
-| `UpgradeAndBoostSettleOldRatesBeforeChangingThem` | 升级收入等级、买倍率卡、升级工坊 | 先按旧倍率结算再改倍率，倍率到期后不再生效；工坊升级只影响以后入队的任务；初始化重试带新配置不改已有存档 |
-| `ConcurrentAdmissionAndClaimsRetainOriginalReceipt` | 同一入队 / 领取 / 每日奖励各八个并发 | 单实体 Nest 串行 + 业务序号：一次预扣、一份收益、一次每日奖励；重放不重排唤醒；按原序号查回执 |
+| `UpgradeAndBoostSettleOldRatesBeforeChangingThem` | 升级收入等级（wallet 扣金币）、买倍率卡（bag 扣宝石）、升级工坊 | 先按旧倍率结算再改倍率，倍率到期后不再生效；工坊升级只影响以后入队的任务；初始化重试带新配置不改已有存档、不再发宝石 |
+| `ConcurrentAdmissionAndClaimsRetainOriginalReceipt` | 同一入队 / 领取 / 每日奖励各八个并发 | 单实体 Nest 串行 + 业务序号：一次预扣、一份收益、一次 checkin 签到；重放不重排唤醒、不再调模块；按原序号查回执 |
 | `DriverCatchupCannotExtendOfflineHorizon` | 业务时间跳过一年 | 驱动只投递一次（用例调用驱动的 `DeliverDue`，不启动投递循环，实体一直在内存）；积分截到原窗口，窗口过后不再排唤醒，反复结算拿不回被丢弃的时间 |
-| `DailyBoundaryAndMissedDaysDoNotMultiplyRewards` | UTC 午夜前后、缺席十天 | 午夜前后是两天，缺席只领当天一份，原序号跨日重放仍是原回执；时钟回退被拒 |
-| `UndoRestoresQueueEconomyAndWakeDeadline` | 入队 / 买倍率后 handler 失败 | 原料、队列、钻石与唤醒定时器节点一起回滚，重试照常生效 |
+| `DailyBoundaryAndMissedDaysDoNotMultiplyRewards` | 业务日（缺省 UTC 零点）前后、缺席十天 | checkin 按业务日切分：日界前后是两天，同日再领 `checkin_done`；连续第 2 天 20、断签后从第 1 天重计 10，漏掉的天不补不倍增；原序号跨日重放仍是原回执；时钟回退被拒 |
+| `UndoRestoresQueueEconomyAndWakeDeadline` | 入队 / 买倍率后 handler 失败 | 原料、队列、bag 里的宝石与唤醒定时器节点一起回滚，重试照常生效 |
 | `FullBufferPausesAndLedgerNeverEvicts` | 待领格满、命令账本填满 128 条 | 待领格满时后续任务暂停、那段时间不补；收取后继续；账本满了拒绝新命令、旧回执可重放 |
 | `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
-上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 10 节。
+所有 Nest 场景的夹具都先在建档之前调一次 `Sync_IdleInit`（必须被拒、什么都不写），再经 enter 的 `Sync_EnterInit` 建档、`Sync_IdleInit` 建放置存档；被拒的命令除了存档与定时器，还要求 wallet 余额、bag 宝石与 checkin 次数都不变。上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 10 节。
+
+#### 3.5 模块化之后场景语义的变化（R9，2026-11-17）
+
+场景名与条数（13）不变；下面几条的断言改成读模块状态，旧断言 → 新断言：
+
+| 场景 | 旧断言 | 新断言 |
+| --- | --- | --- |
+| 全部 Nest 场景 | 夹具的 `Sync_IdleInit` 建档并发初始金币 100、钻石 10 | enter 的 `Sync_EnterInit` 建档（`EnterFirst` 监听经 wallet 发 100 金币），`Sync_IdleInit` 要求 `Enter().Built()`、建放置存档并经 bag 发 10 颗宝石；建档前的 `Sync_IdleInit` 被拒 |
+| `WarehouseCapacityOrdersAndSalesAreAtomic` | `State.Gold == 126` | wallet 的 `Wallet.Coins == 126` |
+| `UpgradeAndBoostSettleOldRatesBeforeChangingThem` | `State.Gold == 90`、`State.Gems == 8`；初始化重试存档不变 | `Wallet.Coins == 90`、`Bag().Count(1101) == 8`；初始化重试存档、金币与宝石都不变 |
+| `ConcurrentAdmissionAndClaimsRetainOriginalReceipt` | `State.Gold == 106`（收益 1 + 每日 5） | `Wallet.Coins == 111`（收益 1 + checkin 第 1 天 10），checkin `Total == 1` |
+| `DailyBoundaryAndMissedDaysDoNotMultiplyRewards` | `State.Gold == 115`（5 + 5 + 5），`DailyDay` 是今天 | `Wallet.Coins == 140`（10 + 连续第 2 天 20 + 断签后 10），checkin `LastDay` 是今天的业务日、`Streak == 1`、`Total == 3`；同日再领由 checkin 拒绝 |
+| `UndoRestoresQueueEconomyAndWakeDeadline` | 存档、定时器回滚 | 另加：bag 里的宝石回滚 |
+| `InvalidSnapshotsIdentitiesAndOverflowFailClosed` | 坏存档样本 `"Gold":-1`；`State.Gold = 100 万` 时领取被拒 | 金币不在存档里，坏存档样本换成 `"Raw":-1`；领取按调用方读到的余额（`Purse{Gold: 100 万}`）判断业务上限，被拒时收益箱不清空、`Effect` 为零 |
+| 被拒命令的公共检查（`refuse`） | 存档与定时器不变 | 另加：wallet 余额、bag 宝石、checkin 次数都不变 |
+| `TestIdleSimRealCrashRecovery` | WAL 6 条未投影；最终金币 129、`State.Gems == 8` | 7 条（多一次 enter 建档）；最终 `Wallet.Coins == 134`（checkin 第 1 天 10 代替 5）、`Bag().Count(1101) == 8`、checkin `Total == 1` |
+
+变异证明（把模块调用去掉或改错，对应场景变红，恢复后变绿）记在 [R9 批 1B 证据](../maintenance/evidence/r9-1b-20261117/README.md)。
 
 ### 4. 时间为什么这样结算
 
@@ -174,32 +198,32 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 
 令 `a = LastAt`、`b = min(now, Horizon)`。`b > a` 时，本段有效工作量是普通时长 `b - a` 加上倍率覆盖的那一段 `max(0, min(b, BoostUntil) - a)`。每个工坊独立使用这份预算，从队首起依次消耗，一次积分里最多处理四个在途任务，离线一年也不会执行一年的逐秒循环。
 
-收入按 `旧余数 + 工作量 × 收入等级` 除以 `IncomePeriod` 计算，商进收益箱、余数留给下一段；升级收入等级前先结算旧等级，所以不会把整段离线期都按新等级算。收益箱满时丢弃溢出和余数，领取后从下一段真实时间重新累计；金币会溢出时拒绝领取、保留收益箱。工坊升级让以后入队的任务工时缩短，已入队的任务保留自己的工时；倍率只改变时间预算，不改投入或产出。待领格满时后续任务暂停、那段时间不补，收取后也不会突然补出那段产品。
+收入按 `旧余数 + 工作量 × 收入等级` 除以 `IncomePeriod` 计算，商进收益箱、余数留给下一段；升级收入等级前先结算旧等级，所以不会把整段离线期都按新等级算。收益箱满时丢弃溢出和余数，领取后从下一段真实时间重新累计；领取会让 wallet 余额超过业务上限（100 万）时拒绝领取、保留收益箱。工坊升级让以后入队的任务工时缩短，已入队的任务保留自己的工时；倍率只改变时间预算，不改投入或产出。待领格满时后续任务暂停、那段时间不补，收取后也不会突然补出那段产品。
 
 ### 5. 唤醒定时器：准点走 Nest 消息，补算由业务做
 
-每次写存档时 handler 的 `saveIdle` 替换唤醒定时器（`RemoveTimer` 旧节点、`NewTimerAt` 新期限、ID 记进 `WakeTimer`）；期限是 `min(Horizon, LastAt + 1 秒)`，窗口结束后不再挂。回调核对节点 ID 与原期限后调用一次 `Advance(now)`，再挂下一个期限。
+每次写存档时 handler 的 `saveIdle` 替换唤醒定时器（`RemoveTimer` 旧节点、`NewTimerAt` 新期限、ID 记进 `IdleWakeTimer`）；期限是 `min(Horizon, LastAt + 1 秒)`，窗口结束后不再挂。回调核对节点 ID 与原期限后调用一次 `Advance(now)`，再挂下一个期限。
 
 **框架不追帧**：实体不在内存期间到期的节点，加载后只触发一次（[按实体的持久定时器](guide/10-time.md#4-按实体的持久定时器)）；离线多久都只投递这一次，补算多少由业务的 `Advance` 一次算完（本例截到窗口为止）。在线时“每秒看到收益涨”这种准点效果才需要走 Nest 消息；如果产品不需要，也可以完全不挂定时器，只在下一条命令到来时惰性积分：积分按区间计算，结果不依赖唤醒频率（`SegmentedTimeMatchesSingleIntegration` 用一组样例核对了“一次积分 25 秒”与“每秒积分一次”的摘要相同）。每秒一次唤醒意味着窗口内每个在线玩家每秒一次 strict 提交，这是教学选择，不代表产品应采用的周期；正式服按需要的刷新精度选周期，或改为只在最近一个任务完成的时刻唤醒。
 
 驱动的索引在提交之后（AfterCommit）才更新，测试读到新状态后仍有界等待索引变化，不能把二者当成同步返回的一件事。
 
-每日奖励用演示的 UTC 日界 `day = serverMillis / 86400000`：午夜前后是两天，长期缺席只领当天一份，原序号跨日重放仍返回原回执。正式业务的日界按 `time.business_timezone` / `time.business_day_start` 算（`app.BusinessCalendar(registry).BusinessDay(now)`，DAO 存上次领取的业务日；见 [guide/10-time §2A](guide/10-time.md#2a-业务时区与业务日)），活动重置规则由业务定义，不能使用客户端日期或机器本地时区。
+每日奖励交给 checkin 模块：`daily` 命令在同一笔事务里调 `Checkin().Claim(now)`，日界按部署配置的业务时区与重置时刻（`clock.BusinessDay`，缺省 UTC 零点；见 [guide/10-time §2A](guide/10-time.md#2a-业务时区与业务日)），“今天领过没有”记在 checkin 的 `LastDay`，同日再领答 `checkin_done`；奖励按 checkin 的连续天数加成（连续第 n 天 10×min(n,7)），长期缺席后从第 1 天重计、漏掉的天不补。放置的命令回执仍记着这条 `daily`，原序号跨日重放返回原回执、不再调 checkin。
 
 ### 6. 幂等身份与结果未知
 
-每个玩家有一个有序命令流：新 `Seq` 必须是上一个加 1；同 `Seq`、同完整命令重放返回原回执，同 `Seq` 换内容或跳号拒绝。回执里的余额是该操作当时的值，当前余额读 `View`。结果未知时用 `Sync_IdleReceipt(ctx, player, originalSeq)` 查询（见 3.3 的 `resolveUnknown`），不换序号再扣一次。
+每个玩家有一个有序命令流：新 `Seq` 必须是上一个加 1；同 `Seq`、同完整命令重放返回原回执、不再调模块，同 `Seq` 换内容或跳号拒绝。回执里的原料与收益箱是该操作当时的值，回执不记金币（金币在 wallet），当前余额读 `View`。结果未知时用 `Sync_IdleReceipt(ctx, player, originalSeq)` 查询（见 3.3 的 `resolveUnknown`），不换序号再扣一次。
 
-账本是 Player 上的持久业务事实，与资产同事务，所以长期有效；它不是服务的短期去重环。账本至多 128 条，满了拒绝新写而不淘汰旧回执（淘汰会让旧请求被当成新请求重复结算）；正式服需要归档 / 分片方案，不能靠删历史绕过。
+账本是 Player 上的持久业务事实，与资产同事务，所以长期有效；它不是服务的短期去重环。也因此金币走 wallet 的 `Add`（不留回执），不用 `Apply(业务键)`：wallet 的去重窗口只有 128 次，长期“只做一次”由这份账本保证（wallet README）。账本至多 128 条，满了拒绝新写而不淘汰旧回执（淘汰会让旧请求被当成新请求重复结算）；正式服需要归档 / 分片方案，不能靠删历史绕过。
 
 ### 7. 重连视图与存储格式
 
-重连时调用锁内的 `Sync_IdleView` 取当前视图；它深拷贝队列，返回者改不到存档。读视图不推进时间。不要给 `State` 加 Sync 标记或直接下发整个实体；需要推送时按 [self_sync](PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 写业务视图。夹具没有联调公网 TCP 协议或客户端。
+重连时调用锁内的 `Sync_IdleView` 取当前视图；它深拷贝队列，返回者改不到存档。读视图不推进时间。不要给 `IdleState` 加 Sync 标记或直接下发整个实体（wallet、bag、checkin 的状态各自标了 sync，经自身视图下发）；需要推送时按 [self_sync](PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 写业务视图。夹具没有联调公网 TCP 协议或客户端。
 
 存储格式要分两层看：
 
-- **DAO 持久键**：`State` / `WakeTimer` 的 `store` 键就是 Mongo 里的键（DESIGN-TODO D13），`roost add timer` 加的节点与种子字段同理。以后改 Go 字段名要保留原 `store` 键；改了 `store` 键或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
-- **业务 JSON**：`State` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、未知版本、越界数值、配置 hash 不符与身份错乱的任务。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
+- **DAO 持久键**：`IdleState` / `IdleWakeTimer` 的 `store` 键（`idle_state` / `idle_wake_timer`）就是 Mongo 里的键（DESIGN-TODO D13），`roost add timer` 加的节点与种子字段同理。以后改 Go 字段名要保留原 `store` 键；改了 `store` 键或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
+- **业务 JSON**：`IdleState` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、未知版本、越界数值、配置 hash 不符与身份错乱的任务。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
 
 ### 8. 接入时容易踩的问题
 
@@ -220,11 +244,11 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 bash scripts/test-idle-sim-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 13 条顶层 race 场景（3.4，含 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_IDLE_SIM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 13 条顶层 race 场景（3.4，含 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再跑已装模块自带的场景（`roost module verify`，经 `genre-common/modules.sh verify` 核对每个模块通过数等于本检出 `module.yaml` 的 `verify.pass`、0 skip；本类是 enter 29、wallet 17、bag 20、checkin 8，末尾打印 `module verify: <名> n/n skipped=0`）；成功删除临时工程，失败或 `ROOST_IDLE_SIM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
 
 业务 Robot 用例 `TestIdleSimRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
-- **证明**：公共 CLI 生成的 Player DAO、实体定时器、Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、业务幂等与时间积分；配置原子发布与存档冻结；视图深拷贝。
+- **证明**：公共 CLI 生成的 Player DAO、实体定时器、Sender 与 Nest，加上 enter / wallet / bag / checkin 四个模块，在 12 个业务组合下的事务（放置存档与模块状态同一笔提交或回滚）、undo 回滚、业务幂等与时间积分；配置原子发布与存档冻结；视图深拷贝。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例调用驱动的 `DeliverDue`，实体一直在内存，没有经过驱动投递循环与加载后补触发；单进程，无 Redis / NATS；鉴权是合成身份。代码里有上限但测试没有填满的：原料 100 上限、工坊与收入等级 5 级上限。夹具里的数值是样例。
 
 ### 11. 真实 WAL / Mongo 崩溃恢复
@@ -237,16 +261,16 @@ ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh
 
 它在第 10 节之后追加 `TestIdleSimRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交初始化、两个工坊各排一个任务、买倍率卡、5 秒后结算；后台投影关闭，断言 WAL 恰有 6 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 5 条业务命令；此时一个任务已完成待领、一个做了一半）后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程装好放置规则与宝石道具表，经 strict 文件 WAL 提交 enter 建档、放置初始化、两个工坊各排一个任务、买倍率卡、5 秒后结算；后台投影关闭，断言 WAL 恰有 7 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 enter 建档 1 条、5 条业务命令；此时一个任务已完成待领、一个做了一半）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、视图与定时器 ID，重放全部命令得到原回执；核对冷加载已把存量唤醒期限报告给驱动索引（`DueOf`）。
-3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次加载后的补触发，积分截到原窗口，窗口不延长、不再排唤醒；两个任务都完成，收益箱 4、余数 5000，原料与钻石不变；`entitytimer.delivered_total` 增量恰为 1。
+3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次加载后的补触发，积分截到原窗口，窗口不延长、不再排唤醒；两个任务都完成，收益箱 4、余数 5000，原料与 bag 里的宝石不变；`entitytimer.delivered_total` 增量恰为 1。
 4. 收取第一个工坊：玩家命令把窗口重新推到 now + 30 秒，下一秒的刷新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，恰好积分一秒（余数 5000 → 6000，收益箱仍是 4，窗口不变），再排下一秒，投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。
-5. 随后收取第二个工坊、领取收益、领每日奖励、交订单，领取与订单各重放三次不变；最终金币 129。其间循环不再投递（总计数 2、`redelivered_total` 增量 0）。先停循环再关 Nest（`close` 里与 `t.Cleanup` 还会再停一次）。
+5. 随后收取第二个工坊、领取收益、领每日奖励（checkin）、交订单，领取与订单各重放三次不变；最终 wallet 金币 134（100 + 收益 4 + checkin 第 1 天 10 + 订单 20）、宝石 8、checkin 一次。其间循环不再投递（总计数 2、`redelivered_total` 增量 0）。先停循环再关 Nest（`close` 里与 `t.Cleanup` 还会再停一次）。
 6. 正常关闭后再起第三个进程冷加载：核对存档摘要、视图与定时器，再重放全部命令，存档不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
 本例“在线每秒看到收益涨”的准点刷新（第 5 节）不是另一套唤醒：它就是这一个 Player 实体定时器节点，期限取 `min(Horizon, LastAt + TickMillis)`，到期由同一个驱动把生成的 Tick 作为 Nest 消息投递。所以每一次每秒刷新都计入同一个 `delivered_total`，计数里没有别的来源；冷加载后窗口已过、没有期限，直到玩家命令重开窗口才排下一秒，用例据此断言恰好的次数。去掉第 3 步的 `Start` 时，用例在补触发处等满 10 秒失败（`driver loop did not deliver the overdue production catch-up …`）。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（队列、投入、倍率、窗口、收益与唤醒定时器）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次、只积分到原窗口，并按时投递下一秒的刷新；跨进程重放不重复扣费或结算。
+- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（队列、投入、倍率、窗口、收益与唤醒定时器，以及同一 Player 上 wallet / bag / checkin 的模块状态）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次、只积分到原窗口，并按时投递下一秒的刷新；跨进程重放不重复扣费或结算。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例用冻结的业务时钟，循环按 `MaxWait` 重读）、准入失败重试与 Redeliver（见 entitytimer 包测试与 `TestEntityTimerGeneratedProjectEndToEnd`）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
 ### 12. 结论怎样给

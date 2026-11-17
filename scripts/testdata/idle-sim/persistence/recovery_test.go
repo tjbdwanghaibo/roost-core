@@ -66,6 +66,7 @@ func openIdleRuntime(t *testing.T, manual bool, now int64) *idleRuntime {
 	playerentity.RegisterEntity()
 	RegisterIdleSimNestHandlers()
 	RegisterTickPlayerTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	h := &idleRuntime{database: database}
 	h.clock.Store(now)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
@@ -172,7 +173,7 @@ func idleRuntimeState(t *testing.T, h *idleRuntime) (*playerentity.Player, idle.
 		t.Fatal(err)
 	}
 	p := e.(*playerentity.Player)
-	s, err := idle.Decode(p.Dao().GetState())
+	s, err := idle.Decode(p.Dao().GetIdleState())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +218,11 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// 道具表在放置规则之后装（装载会发布成进程当前配置）：放置建档事务里的初始宝石经 bag 放入要它。
+		idleUseItems(t, dir, false)
+		if _, err := sender.NewEnterInitSender(h.scheduler).Sync_EnterInit(ctx, h.playerID); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := s.Sync_IdleInit(ctx, h.playerID, rules); err != nil {
 			t.Fatal(err)
 		}
@@ -227,10 +233,11 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		idleRuntimeCommand(t, h, "settle", 0, 0)
 		p, state := idleRuntimeState(t, h)
 		stats := h.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 6 || p.Dao().GetWakeTimer() == 0 || len(state.Stations[0].Ready) != 1 || state.Stations[1].Queue[0].Progress != 10000 {
+		// 比装模块之前多一条 strict 记录（enter 建档，初始金币在里面）；全部未投影。
+		if stats.Projected != 0 || stats.WALUnacked != 7 || p.Dao().GetIdleWakeTimer() == 0 || len(state.Stations[0].Ready) != 1 || state.Stations[1].Queue[0].Progress != 10000 {
 			t.Fatal("missing strict crash boundary")
 		}
-		raw, _ = json.Marshal(idleBarrier{state.Digest(), state.View(), p.Dao().GetWakeTimer(), stats.WALUnacked})
+		raw, _ = json.Marshal(idleBarrier{state.Digest(), state.View(idlePurse(p)), p.Dao().GetIdleWakeTimer(), stats.WALUnacked})
 		if err := os.WriteFile(filepath.Join(root, "ready.json"), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -247,7 +254,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		if err := json.Unmarshal(raw, &expected); err != nil {
 			t.Fatal(err)
 		}
-		if state.Digest() != expected.Digest || !reflect.DeepEqual(state.View(), expected.View) || p.Dao().GetWakeTimer() != expected.Timer {
+		if state.Digest() != expected.Digest || !reflect.DeepEqual(state.View(idlePurse(p)), expected.View) || p.Dao().GetIdleWakeTimer() != expected.Timer {
 			t.Fatal("cold facts differ before replay")
 		}
 		s := sender.NewIdleSimSender(h.scheduler)
@@ -327,7 +334,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 	}
 	h := openIdleRuntime(t, false, idleNow+3600000)
 	p, state := idleRuntimeState(t, h)
-	if state.Digest() != barrier.Digest || !reflect.DeepEqual(state.View(), barrier.View) || p.Dao().GetWakeTimer() != barrier.Timer {
+	if state.Digest() != barrier.Digest || !reflect.DeepEqual(state.View(idlePurse(p)), barrier.View) || p.Dao().GetIdleWakeTimer() != barrier.Timer {
 		t.Fatal("WAL lost task / boost / asset / horizon / timer before mutation")
 	}
 	s := sender.NewIdleSimSender(h.scheduler)
@@ -385,7 +392,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 	// 加载后补触发：离线一小时只投递这一次，Advance 把积分截到原 Horizon；窗口已过，不再排唤醒。
 	awaitLoop("the overdue production catch-up", h.clock.Load(), 1, 0)
 	_, caught := idleRuntimeState(t, h)
-	if caught.Horizon != barrier.View.Horizon || caught.Pending != 4 || caught.IncomeRemainder != 5000 || caught.Raw != 45 || caught.Gems != 8 || len(caught.Stations[0].Ready) != 1 || len(caught.Stations[1].Ready) != 1 || p.Dao().GetWakeTimer() != 0 {
+	if caught.Horizon != barrier.View.Horizon || caught.Pending != 4 || caught.IncomeRemainder != 5000 || caught.Raw != 45 || p.Bag().Count(idle.GemItem) != 8 || len(caught.Stations[0].Ready) != 1 || len(caught.Stations[1].Ready) != 1 || p.Dao().GetIdleWakeTimer() != 0 {
 		t.Fatal("offline catch-up repriced jobs, extended horizon or repeated completed output")
 	}
 	// 下一个期限：玩家命令把窗口重新推到 now+OfflineCap，下一秒的刷新期限经提交进入索引；业务时间直接推进到
@@ -417,10 +424,11 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		}
 	}
 	p, final := idleRuntimeState(t, h)
-	if final.Gold != 129 || final.Pending != 0 || final.Inventory != [3]int64{} || final.Orders != 1 || final.Raw != 45 || final.Gems != 8 {
+	// 金币 100 + 收益 4 + checkin 第 1 天 10 + 订单 20；宝石 10 - 加速 2。回执重放不再调 wallet / checkin。
+	if p.Dao().GetWallet().GetCoins() != 134 || final.Pending != 0 || final.Inventory != [3]int64{} || final.Orders != 1 || final.Raw != 45 || p.Bag().Count(idle.GemItem) != 8 || p.Dao().GetCheckin().GetTotal() != 1 {
 		t.Fatal("recovery changed economy")
 	}
-	expectedRaw, _ := json.Marshal(idleBarrier{Digest: final.Digest(), View: final.View(), Timer: p.Dao().GetWakeTimer()})
+	expectedRaw, _ := json.Marshal(idleBarrier{Digest: final.Digest(), View: final.View(idlePurse(p)), Timer: p.Dao().GetIdleWakeTimer()})
 	if err := os.WriteFile(filepath.Join(root, "claimed.json"), expectedRaw, 0600); err != nil {
 		t.Fatal(err)
 	}

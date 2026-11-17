@@ -54,7 +54,8 @@ func TestIdleSimSegmentedTimeMatchesSingleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []Command{{Seq: 1, Kind: "queue", Station: 0, Recipe: 2}, {Seq: 2, Kind: "queue", Station: 1, Recipe: 1}, {Seq: 3, Kind: "boost"}} {
-		if _, err := s.Apply(c, now); err != nil {
+		// 宝石在 bag：boost 的判断读调用方给的余额（handler 里是同一把 Player 锁内读到的 bag 数量）。
+		if _, _, err := s.Apply(c, now, Purse{Gold: StartGold, Gems: StartGems}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -77,7 +78,7 @@ func TestIdleSimSegmentedTimeMatchesSingleIntegration(t *testing.T) {
 	if one.Digest() != many.Digest() || one.Pending != 3 || one.IncomeRemainder != 5000 || one.Stations[0].Queue[0].Progress != 35000 || len(one.Stations[1].Ready) != 1 {
 		t.Fatal("integration depends on timer frequency")
 	}
-	view := one.View()
+	view := one.View(Purse{})
 	view.Stations[0].Queue[0].Progress = 0
 	if reflect.DeepEqual(view.Stations, one.Stations) {
 		t.Fatal("view aliases mutable queue")
@@ -99,20 +100,20 @@ func TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range []string{s.Encode() + "{}", strings.Replace(s.Encode(), `"Gold":100`, `"Gold":-1`, 1), strings.Replace(s.Encode(), `"Schema":1`, `"Schema":9`, 1), strings.Replace(s.Encode(), `"IncomeLevel":1`, `"IncomeLevel":0`, 1)} {
+	for _, raw := range []string{s.Encode() + "{}", strings.Replace(s.Encode(), `"Raw":50`, `"Raw":-1`, 1), strings.Replace(s.Encode(), `"Schema":1`, `"Schema":9`, 1), strings.Replace(s.Encode(), `"IncomeLevel":1`, `"IncomeLevel":0`, 1)} {
 		if _, err := Decode(raw); err == nil {
 			t.Fatal("invalid stored state accepted")
 		}
 	}
 	for _, c := range []Command{{Seq: 0, Kind: "queue"}, {Seq: 2, Kind: "queue"}, {Seq: 1, Kind: "queue", Station: -1}, {Seq: 1, Kind: "queue", Recipe: 9}, {Seq: 1, Kind: "upload_balance", Count: 999999}} {
 		local, _ := Decode(s.Encode())
-		if _, err := local.Apply(c, now); err == nil {
+		if _, _, err := local.Apply(c, now, Purse{Gold: StartGold, Gems: StartGems}); err == nil {
 			t.Fatal("invalid command accepted")
 		}
 	}
-	s.Gold = ValueLimit
+	// 金币在 wallet：业务上限按调用方读到的余额判断，领取被拒时收益箱不清空、也不交出 Effect。
 	s.Pending = 1
-	if _, err := s.Apply(Command{Seq: 1, Kind: "claim"}, now); err == nil || s.Gold != ValueLimit || s.Pending != 1 {
+	if _, effect, err := s.Apply(Command{Seq: 1, Kind: "claim"}, now, Purse{Gold: ValueLimit}); err == nil || effect != (Effect{}) || s.Pending != 1 {
 		t.Fatal("asset overflow accepted")
 	}
 	if _, err := NewState(MaxTime-1, DemoRules()); err == nil {

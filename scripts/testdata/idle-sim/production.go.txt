@@ -44,39 +44,43 @@ func (s State) NextDeadline() int64 {
 	}
 	return min(s.Horizon, s.LastAt+s.Rules.TickMillis)
 }
-func (s *State) Apply(c Command, now int64) (Receipt, error) {
+// Apply 执行一条命令。p 是同一把 Player 锁内读到的模块余额，只用来判断；金币、宝石与每日奖励的变化作为 Effect
+// 返回，由 handler 在同一笔事务里交给 wallet / bag / checkin（模块拒绝时整笔回滚，这份局部副本也不写回）。
+// 旧 Seq 重放返回原回执与零 Effect，不再动模块。
+func (s *State) Apply(c Command, now int64, p Purse) (Receipt, Effect, error) {
+	var e Effect
 	if c.Seq == 0 {
-		return Receipt{}, ErrRule
+		return Receipt{}, e, ErrRule
 	}
 	if c.Seq <= uint64(len(s.Receipts)) {
 		r := s.Receipts[c.Seq-1]
 		if r.Command != c {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
-		return r, nil
+		return r, e, nil
 	}
 	if c.Seq != uint64(len(s.Receipts))+1 || len(s.Receipts) >= LedgerLimit || !validTime(now+s.Rules.OfflineCap) {
-		return Receipt{}, ErrRule
+		return Receipt{}, e, ErrRule
 	}
 	// 调用者只能使用 DAO 解码的局部副本，任何失败都丢弃本次 Advance 与操作，不写回。
 	if err := s.Advance(now); err != nil {
-		return Receipt{}, err
+		return Receipt{}, e, err
 	}
 	switch c.Kind {
 	case "queue":
 		if c.Station < 0 || c.Station >= 3 || c.Recipe < 0 || c.Recipe >= 3 {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		station := &s.Stations[c.Station]
 		recipe := s.Rules.Recipes[c.Recipe]
 		if len(station.Queue) >= QueueLimit || s.Raw < recipe.Raw {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		s.Raw -= recipe.Raw
 		station.Queue = append(station.Queue, Job{ID: c.Seq, Recipe: c.Recipe, Required: (recipe.Work + station.Level - 1) / station.Level, Raw: recipe.Raw, Output: recipe.Output})
 	case "cancel":
 		if c.Station < 0 || c.Station >= 3 {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		station := &s.Stations[c.Station]
 		found := -1
@@ -87,17 +91,17 @@ func (s *State) Apply(c Command, now int64) (Receipt, error) {
 			}
 		}
 		if found < 0 || station.Queue[found].Progress != 0 || s.Raw > s.Rules.RawCap-station.Queue[found].Raw {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		s.Raw += station.Queue[found].Raw
 		station.Queue = append(station.Queue[:found], station.Queue[found+1:]...)
 	case "collect":
 		if c.Station < 0 || c.Station >= 3 {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		station := &s.Stations[c.Station]
 		if len(station.Ready) == 0 {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		total := int64(0)
 		for _, v := range s.Inventory {
@@ -107,7 +111,7 @@ func (s *State) Apply(c Command, now int64) (Receipt, error) {
 			total += j.Output
 		}
 		if total > s.Rules.WarehouseCap {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		for _, j := range station.Ready {
 			s.Inventory[j.Recipe] += j.Output
@@ -115,69 +119,65 @@ func (s *State) Apply(c Command, now int64) (Receipt, error) {
 		station.Ready = nil
 	case "sell":
 		if c.Recipe < 0 || c.Recipe >= 3 || c.Count < 1 || c.Count > 100 || s.Inventory[c.Recipe] < c.Count {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		value := c.Count * s.Rules.Recipes[c.Recipe].Price
-		if s.Gold > ValueLimit-value {
-			return Receipt{}, ErrRule
+		if p.Gold > ValueLimit-value {
+			return Receipt{}, e, ErrRule
 		}
 		s.Inventory[c.Recipe] -= c.Count
-		s.Gold += value
+		e.Gold = value
 	case "buy":
-		if c.Count < 1 || c.Count > 20 || s.Gold < c.Count*2 || s.Raw > s.Rules.RawCap-c.Count {
-			return Receipt{}, ErrRule
+		if c.Count < 1 || c.Count > 20 || p.Gold < c.Count*2 || s.Raw > s.Rules.RawCap-c.Count {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gold -= c.Count * 2
+		e.Gold = -c.Count * 2
 		s.Raw += c.Count
 	case "upgrade":
 		if c.Station < 0 || c.Station >= 3 {
-			return Receipt{}, ErrRule
+			return Receipt{}, e, ErrRule
 		}
 		station := &s.Stations[c.Station]
-		if len(station.Queue) != 0 || station.Level >= 5 || s.Gold < 10*station.Level {
-			return Receipt{}, ErrRule
+		if len(station.Queue) != 0 || station.Level >= 5 || p.Gold < 10*station.Level {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gold -= 10 * station.Level
+		e.Gold = -10 * station.Level
 		station.Level++
 	case "income_upgrade":
-		if s.IncomeLevel >= 5 || s.Gold < 10*s.IncomeLevel {
-			return Receipt{}, ErrRule
+		if s.IncomeLevel >= 5 || p.Gold < 10*s.IncomeLevel {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gold -= 10 * s.IncomeLevel
+		e.Gold = -10 * s.IncomeLevel
 		s.IncomeLevel++
 	case "boost":
-		if s.BoostUntil > now || s.Gems < 2 || !validTime(now+s.Rules.BoostMillis) {
-			return Receipt{}, ErrRule
+		if s.BoostUntil > now || p.Gems < 2 || !validTime(now+s.Rules.BoostMillis) {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gems -= 2
+		e.Gems = 2
 		s.BoostUntil = now + s.Rules.BoostMillis
 	case "claim":
-		if s.Pending == 0 || s.Gold > ValueLimit-s.Pending {
-			return Receipt{}, ErrRule
+		if s.Pending == 0 || p.Gold > ValueLimit-s.Pending {
+			return Receipt{}, e, ErrRule
 		}
-		s.Gold += s.Pending
+		e.Gold = s.Pending
 		s.Pending = 0
 	case "daily":
-		day := now / DayMillis
-		if s.DailyDay >= day || s.Gold > ValueLimit-5 {
-			return Receipt{}, ErrRule
-		}
-		s.Gold += 5
-		s.DailyDay = day
+		// 每日奖励交给 checkin：业务日切分、“今天领过没有”与连续天数加成都在它的状态里（同日再领答 checkin_done）。
+		e.Daily = true
 	case "order":
-		if s.Inventory[0] < 2 || s.Inventory[1] < 1 || s.Gold > ValueLimit-20 || s.Orders >= ValueLimit {
-			return Receipt{}, ErrRule
+		if s.Inventory[0] < 2 || s.Inventory[1] < 1 || p.Gold > ValueLimit-20 || s.Orders >= ValueLimit {
+			return Receipt{}, e, ErrRule
 		}
 		s.Inventory[0] -= 2
 		s.Inventory[1]--
-		s.Gold += 20
+		e.Gold = 20
 		s.Orders++
 	case "settle":
 	default:
-		return Receipt{}, ErrRule
+		return Receipt{}, e, ErrRule
 	}
 	s.Horizon = now + s.Rules.OfflineCap
-	r := Receipt{c, now, s.Gold, s.Raw, s.Pending, s.ConfigHash}
+	r := Receipt{c, now, s.Raw, s.Pending, s.ConfigHash}
 	s.Receipts = append(s.Receipts, r)
-	return r, nil
+	return r, e, nil
 }

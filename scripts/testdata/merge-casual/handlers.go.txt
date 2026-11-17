@@ -1,28 +1,63 @@
 package handler
 
 import (
-	db "example.com/merge-casual-practice/db"
 	playerentity "example.com/merge-casual-practice/game/entities/player"
 	casual "example.com/merge-casual-practice/game/modules/mergecasual"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"example.com/merge-casual-practice/game/view"
 	"time"
 )
 
+// IMergePlayerEntity 是合成休闲的 handler 参数：view.PlayerEntity 带着同一个 Player 上装的模块组件——
+// Enter()（建档做过没有）、Wallet()（金币）、Stamina()（体力，Q1 A：跟 stamina 的规则）；Dao() 末尾的
+// MergeState / MergeWakeTimer 是合成自己的字段；TimerComp() 是 Player 上的实体定时器（挑战期限）。
 type IMergePlayerEntity interface {
-	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
+	view.PlayerEntity
 	TimerComp() *playerentity.TimerComponent
+}
+
+// mergePurse 读这名玩家在 nowUnixMilli 这一刻的模块余额（调用方已持有 Player 锁）：金币是 wallet 余额，
+// 体力是 stamina 按它自己的规则惰性结算出的当前值（只读，不写状态）。
+func mergePurse(player IMergePlayerEntity, nowUnixMilli int64) casual.Purse {
+	return casual.Purse{Gold: player.Wallet().Balance(), Energy: player.Stamina().Current(nowUnixMilli)}
+}
+
+// mergeSpend 把一条新命令的 Effect 交给模块，与合成存档同一笔事务：金币走 wallet 的 Add（不留回执，“只做一次”由
+// 合成的 Seq / 广告回执保证），体力为负走 stamina 的 Spend、为正走 Grant——Grant 到硬顶会静默截断，
+// 这里要求实际发足，否则整笔拒绝（广告不发半份）。任何一个拒绝原样返回，Nest 整笔回滚。
+func mergeSpend(player IMergePlayerEntity, e casual.Effect, nowUnixMilli int64) error {
+	if e.Gold != 0 {
+		if _, err := player.Wallet().Add(e.Gold); err != nil {
+			return err
+		}
+	}
+	if e.Energy < 0 {
+		if _, err := player.Stamina().Spend(-e.Energy, nowUnixMilli); err != nil {
+			return err
+		}
+	}
+	if e.Energy > 0 {
+		granted, err := player.Stamina().Grant(e.Energy, nowUnixMilli)
+		if err != nil {
+			return err
+		}
+		if granted.Granted != e.Energy {
+			return casual.ErrRule
+		}
+	}
+	return nil
 }
 
 // 登录票序号由已鉴权入口持久分配。密钥来自服务端 crypto/rand；Rules 捕获 configdata Snapshot。
 // 同票重试不提高 Epoch；更新票接管后旧设备不能再写，操作序号不重置。
+// 棋盘建在 enter 建档之后：初始金币已经在 enter 的首次初始化事务里发过（game/entities/player/merge_casual.go）；
+// 棋盘要服务端的密钥与捕获的规则，事件里没有，所以仍由这里在第一张票时建。
 //
 //roost:nest rollback=undo durability=strict
 func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, nowUnixMilli int64, rules casual.Rules) (casual.View, error) {
-	if ticket == 0 {
+	if ticket == 0 || !player.Enter().Built() {
 		return casual.View{}, casual.ErrRule
 	}
-	if player.Dao().GetState() == "" {
+	if player.Dao().GetMergeState() == "" {
 		if ticket != 1 {
 			return casual.View{}, casual.ErrRule
 		}
@@ -30,10 +65,10 @@ func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now
 		if err != nil {
 			return casual.View{}, err
 		}
-		player.Dao().SetState(s.Encode())
-		return s.View(), nil
+		player.Dao().SetMergeState(s.Encode())
+		return s.View(mergePurse(player, nowUnixMilli)), nil
 	}
-	s, err := casual.Decode(player.Dao().GetState())
+	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {
 		return casual.View{}, err
 	}
@@ -41,7 +76,7 @@ func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now
 		return casual.View{}, casual.ErrRule
 	}
 	if ticket == s.Epoch {
-		return s.View(), nil
+		return s.View(mergePurse(player, nowUnixMilli)), nil
 	}
 	if ticket > uint64(casual.ValueLimit) || s.Revision >= uint64(casual.ValueLimit) {
 		return casual.View{}, casual.ErrRule
@@ -55,25 +90,29 @@ func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now
 	if err := saveMerge(player, s); err != nil {
 		return casual.View{}, err
 	}
-	return s.View(), nil
+	return s.View(mergePurse(player, nowUnixMilli)), nil
 }
 
-// 一个离线批次最多 16 步，全部成功才 SetState。公网只接收 Command，不接收 State / Rules / 时间；nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间。
+// 一个离线批次最多 16 步，全部成功才 SetMergeState。公网只接收 Command，不接收 State / Rules / 时间；nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间。
 //
 //roost:nest rollback=undo durability=strict
 func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, nowUnixMilli int64) ([]casual.Receipt, error) {
 	if len(commands) == 0 || len(commands) > 16 {
 		return nil, casual.ErrRule
 	}
-	s, err := casual.Decode(player.Dao().GetState())
+	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {
 		return nil, err
 	}
 	before := s.Revision
 	receipts := make([]casual.Receipt, 0, len(commands))
 	for _, c := range commands {
-		r, err := s.Apply(c, nowUnixMilli)
+		// 每一步都按上一步交给模块之后的余额判断：批次里先卖后解锁、先恢复后生产都按顺序生效。
+		r, effect, err := s.Apply(c, nowUnixMilli, mergePurse(player, nowUnixMilli))
 		if err != nil {
+			return nil, err
+		}
+		if err := mergeSpend(player, effect, nowUnixMilli); err != nil {
 			return nil, err
 		}
 		receipts = append(receipts, r)
@@ -90,46 +129,51 @@ func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, now
 //
 //roost:nest rollback=undo durability=strict
 func handlerMergeAd(player IMergePlayerEntity, proof casual.SignedReward, verificationKey string, epoch uint64, nowUnixMilli int64) (casual.View, error) {
-	s, err := casual.Decode(player.Dao().GetState())
+	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {
 		return casual.View{}, err
 	}
 	before := s.Revision
-	if err := s.GrantAd(proof, verificationKey, player.ID(), epoch, nowUnixMilli); err != nil {
+	energy, err := s.GrantAd(proof, verificationKey, player.ID(), epoch, nowUnixMilli)
+	if err != nil {
 		return casual.View{}, err
 	}
 	if s.Revision != before {
+		if err := mergeSpend(player, casual.Effect{Energy: energy}, nowUnixMilli); err != nil {
+			return casual.View{}, err
+		}
 		if err := saveMerge(player, s); err != nil {
 			return casual.View{}, err
 		}
 	}
-	return s.View(), nil
+	return s.View(mergePurse(player, nowUnixMilli)), nil
 }
 
-// 读视图也在 Player 锁内取得；不顺便推进时间，因此客户端需显式 recover 后再以新版本发离线批次。
+// 读视图也在 Player 锁内取得；不顺便推进充能与挑战，因此客户端需显式 recover 后再以新版本发离线批次。
+// 体力是 stamina 在本条消息业务时间的当前值（只读结算，不写状态）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMergeView(player IMergePlayerEntity) (casual.View, error) {
-	s, err := casual.Decode(player.Dao().GetState())
+func handlerMergeView(player IMergePlayerEntity, nowUnixMilli int64) (casual.View, error) {
+	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {
 		return casual.View{}, err
 	}
-	return s.View(), nil
+	return s.View(mergePurse(player, nowUnixMilli)), nil
 }
 
 func saveMerge(player IMergePlayerEntity, s casual.State) error {
-	old := player.Dao().GetWakeTimer()
+	old := player.Dao().GetMergeWakeTimer()
 	if old != 0 {
 		player.TimerComp().RemoveTimer(old)
-		player.Dao().SetWakeTimer(0)
+		player.Dao().SetMergeWakeTimer(0)
 	}
-	player.Dao().SetState(s.Encode())
+	player.Dao().SetMergeState(s.Encode())
 	if deadline := s.NextDeadline(); deadline != 0 {
 		id := player.TimerComp().NewTimerAt(time.UnixMilli(deadline), playerentity.TimerChallenge, int64(s.Challenge.ID), 0, nil)
 		if id == 0 {
 			return casual.ErrRule
 		}
-		player.Dao().SetWakeTimer(id)
+		player.Dao().SetMergeWakeTimer(id)
 	}
 	return nil
 }
@@ -138,7 +182,7 @@ func saveMerge(player IMergePlayerEntity, s casual.State) error {
 //
 //roost:nest rollback=undo durability=strict
 func handlerMergeReceipt(player IMergePlayerEntity, epoch, seq uint64) (casual.Receipt, error) {
-	s, err := casual.Decode(player.Dao().GetState())
+	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {
 		return casual.Receipt{}, err
 	}

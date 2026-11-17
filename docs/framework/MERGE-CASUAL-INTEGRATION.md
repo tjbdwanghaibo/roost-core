@@ -1,6 +1,6 @@
 # 合成休闲框架学习与验收
 
-本手册把“单人合成棋盘 + 生产器 + 订单 + 限时挑战 + 激励广告到账”的主要业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明脚本证明什么、不证明什么。棋盘尺寸、物品链、数值和广告策略由游戏定义。下面的业务夹具（4×4 棋盘前 12 格开放、两条最高四级的物品链、四格仓库、一个生产器、一种订单配方、限时合出四级物品的挑战、模拟的签名广告回调）只是学习和验收样例：框架与生成器不包含任何合成玩法规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。跑酷、物理闯关这类需要服务器判分的超休闲玩法不在本例范围。其他游戏类型的手册见 [SLG](SLG-INTEGRATION.md)、[MMORPG](MMORPG-INTEGRATION.md)、[MOBA](MOBA-INTEGRATION.md)、[卡牌 RPG](CARD-RPG-INTEGRATION.md)。
+本手册把“单人合成棋盘 + 生产器 + 订单 + 限时挑战 + 激励广告到账”的主要业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明脚本证明什么、不证明什么。棋盘尺寸、物品链、数值和广告策略由游戏定义。工程按“装模块 + 只写模块没覆盖的部分”组织（R9，2026-11-17）：建档归 `enter`、金币归 `wallet`、体力归 `stamina`（Q1 A：体力跟 stamina 的规则惰性恢复，不再随棋盘冻结）；棋盘、生产器、订单、挑战与广告回调没有模块，手写。下面的业务夹具（4×4 棋盘前 12 格开放、两条最高四级的物品链、四格仓库、一个生产器、一种订单配方、限时合出四级物品的挑战、模拟的签名广告回调）只是学习和验收样例：框架与生成器不包含任何合成玩法规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。跑酷、物理闯关这类需要服务器判分的超休闲玩法不在本例范围。其他游戏类型的手册见 [SLG](SLG-INTEGRATION.md)、[MMORPG](MMORPG-INTEGRATION.md)、[MOBA](MOBA-INTEGRATION.md)、[卡牌 RPG](CARD-RPG-INTEGRATION.md)。
 
 ## 第一部分：学习
 
@@ -16,13 +16,16 @@
 
 | 业务状态 | 拥有者 | 框架接法 | 业务边界 |
 | --- | --- | --- | --- |
-| 棋盘、仓库、金币、体力、生产器次数、订单计数 | Player DAO 的 `State` | 生成的 Player DAO 字段，只在 Nest 事务里经 mutator 修改 | 整个 `State` 是一段业务 JSON；正式服按实际大小拆分 |
-| 操作回执、设备代际（Epoch）、存档版本（Revision） | Player DAO 的 `State` | 与资产同一事务提交 | 账本至多 128 条，满了拒绝新写 |
-| 限时挑战期限 | Player 的实体定时器 + `WakeTimer` | `roost add timer --entity Player`；节点存 DAO，驱动到期投递 Tick | 加载后到期节点只触发一次，框架不追帧 |
-| 体力、生产器次数恢复 | 业务时间计算 | 下一条命令到达时按服务器时间惰性恢复 | 不为每一点体力排定时器，不自动产出物品 |
-| 配置（恢复周期、价格、挑战时长、广告体力） | configdata Store / Snapshot | 注册对象定义 → Load 时校验 → 首登时捕获并整份写进存档 | 已有存档沿用首登那一代，不随热更换表 |
-| 广告奖励证明 | 业务验签 + Player 账本 | 服务器内部入口 `Sync_MergeAd`，验签与发奖同事务 | 本例的 HMAC 回调是模拟平台，不是真实广告 SDK |
-| 客户端看到的存档 | 业务视图 `View` / `Receipt` | 锁内读取，只返回允许的字段 | 原始 `State` 含私有随机密钥与广告账本，不加 Sync 标记 |
+| 建档做过没有、初始金币 | **enter 模块**（Player DAO 的 `Enter`） | `roost module add enter`；建档经 `EnterInit`，初始金币 30 写在 `event.EnterFirst` 的 Player 监听（`game/entities/player/merge_casual.go`）里，与建档标记同一笔；建棋盘要求 `Enter().Built()` | Q6：只装 enter，不装 login / portal；设备代际接管仍是合成自己的登录票（手写） |
+| 金币 | **wallet 模块**（Player DAO 的 `Wallet`） | 新命令的金币变化经 `Wallet().Add` 与合成存档同一笔提交 | “只做一次”由合成的 `Seq` 回执保证，不用 wallet 的去重窗口；合成自己的 100 万业务上限按读到的余额判断 |
+| 体力 | **stamina 模块**（Player DAO 的 `Stamina`；连带装上 rules） | 生产、开挑战经 `Stamina().Spend`，广告经 `Stamina().Grant`（要求实际发足），读数用 `Stamina().Current(now)` | Q1 A：规则在 `game/components/stamina/rules.go`（缺省上限 100、硬顶 999、每 5 分钟 1 点），每次读写取当前值、改了立刻对所有玩家生效，不随棋盘冻结 |
+| 棋盘、仓库、生产器次数、订单计数 | Player DAO 末尾的 `MergeState`（手写） | 生成的 Player DAO 字段，只在 Nest 事务里经 mutator 修改 | 整个 `MergeState` 是一段业务 JSON；正式服按实际大小拆分 |
+| 操作回执、设备代际（Epoch）、存档版本（Revision） | Player DAO 的 `MergeState` | 与资产同一事务提交 | 账本至多 128 条，满了拒绝新写；回执不再记金币与体力快照 |
+| 限时挑战期限 | Player 的实体定时器 + `MergeWakeTimer` | `roost add timer --entity Player`；节点存 DAO，驱动到期投递 Tick | 加载后到期节点只触发一次，框架不追帧 |
+| 生产器次数恢复 | 业务时间计算 | 下一条命令到达时按服务器时间惰性恢复 | 不为每一次充能排定时器，不自动产出物品 |
+| 棋盘配置（充能周期、价格、挑战时长、广告体力） | configdata Store / Snapshot | 注册对象定义 → Load 时校验 → 首登时捕获并整份写进存档 | 已有存档沿用首登那一代，不随热更换表（体力规则不在其中） |
+| 广告奖励证明 | 业务验签 + Player 账本 | 服务器内部入口 `Sync_MergeAd`，验签、到账回执与 stamina 发体力同事务；每日次数借鉴 checkin 的业务日，订单号格式借鉴 wallet 的业务键 | 本例的 HMAC 回调是模拟平台，不是真实广告 SDK |
+| 客户端看到的存档 | 业务视图 `View` / `Receipt` | 锁内读取，只返回允许的字段；`Gold` / `Energy` 是锁内读到的 wallet 余额与 stamina 当前体力 | 原始 `MergeState` 含私有随机密钥与广告账本，不加 Sync 标记 |
 | 登录、登录票与账号 | account / Player 静态 sid | 复用正式生命周期与登录鉴权 | 夹具直接用合成的已鉴权身份与登录票；账号链见 [玩家接入](PLAYER-ACCESS.md) 与 game-demo |
 
 ```mermaid
@@ -30,7 +33,7 @@ flowchart LR
     A[已鉴权请求] --> B[生成 Sender]
     B --> C[Nest 锁 Player]
     C --> D[核对 Epoch / Seq / Base]
-    D --> E[按服务器时间恢复体力并执行命令]
+    D --> E[按服务器时间恢复充能并执行命令；金币 / 体力交给 wallet / stamina]
     E --> F[留回执、替换挑战定时器]
     F --> G[strict WAL 提交]
     G --> H[回复回执 / 视图]
@@ -53,10 +56,10 @@ ROOST_MERGE_CASUAL_KEEP=1 bash scripts/test-merge-casual-generated.sh   # 保留
 脚本打印临时目录，生成工程在其中的 `project/`。它做的事就是一个新工程的接入步骤：
 
 1. `roost project new merge-casual-practice -module example.com/merge-casual-practice -template game`；
-2. `roost add dao Player --entity Player`、`roost add timer --entity Player`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；放入业务包 `game/modules/mergecasual/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/merge_casual.go`；
+2. 装模块：`roost module add enter wallet stamina`（脚本经公用的 [`genre-common/modules.sh`](../../scripts/testdata/genre-common/modules.sh) `add`；stamina 连带装上 rules；Player 的主 DAO 与玩家 TCP 接入由安装计划代办，不再 `add dao Player`），再 `roost add timer --entity Player`；
+3. 业务只改这几处：在 `db/def/player.go` 的 `PlayerDao` 末尾（模块字段之后）加 ``MergeState string `store:"merge_state" dao:"nosync"` `` 与 ``MergeWakeTimer int64 `store:"merge_wake_timer" dao:"nosync"` ``；放入业务包 `game/modules/mergecasual/`、定时回调 `game/entities/player/timer_handlers.go`、建档监听 `game/entities/player/merge_casual.go` 与 handler `game/handler/merge_casual.go`。体力规则用 stamina 自带的 `game/components/stamina/rules.go`，不改（改了 stamina 自带的场景会按它写死的数断言失败）；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> merge-casual`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
-5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
+5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "merge_state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Player 的定时器驱动（绑定 Nest、启动与停止投递循环；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` / `Start` / `Stop` 是用例自己搭 Nest、控制投递时机的替身接线，不是生产装配要抄的步骤。
 
@@ -67,10 +70,11 @@ ROOST_MERGE_CASUAL_KEEP=1 bash scripts/test-merge-casual-generated.sh   # 保留
 | 顺序 | 文件 | 先回答的问题 |
 | --- | --- | --- |
 | 1 | `game/modules/mergecasual/rules.go`（[rules.go.txt](../../scripts/testdata/merge-casual/rules.go.txt)） | 配置怎样经校验发布？存档为什么在首登时整份冻结一代？ |
-| 2 | `game/modules/mergecasual/state.go`（[state.go.txt](../../scripts/testdata/merge-casual/state.go.txt)） | 存档里有什么？哪些字段是私有的（随机密钥、广告账本）？体力怎样按服务器时间惰性恢复、保留余数？ |
-| 3 | `game/modules/mergecasual/operations.go`（[operations.go.txt](../../scripts/testdata/merge-casual/operations.go.txt)） | 一条命令的处理顺序：查旧回执 → 核对代际 / 序号 / 版本 → 恢复时间 → 执行 → 留回执 |
-| 4 | `game/modules/mergecasual/reward.go`（[reward.go.txt](../../scripts/testdata/merge-casual/reward.go.txt)） | 外部平台的证明怎样验签、绑定玩家、去重和限次？ |
-| 5 | `game/handler/merge_casual.go`（[handlers.go.txt](../../scripts/testdata/merge-casual/handlers.go.txt)） | 登录接管、离线批次、广告、查回执分别在哪个锁与提交边界里生效？挑战定时器在哪里替换？ |
+| 2 | `game/modules/mergecasual/state.go`（[state.go.txt](../../scripts/testdata/merge-casual/state.go.txt)） | 存档里有什么？哪些字段是私有的（随机密钥、广告账本）？生产器充能怎样按服务器时间惰性恢复、保留余数？`Purse` / `Effect` 怎样把金币与体力留给模块？ |
+| 3 | `game/modules/mergecasual/operations.go`（[operations.go.txt](../../scripts/testdata/merge-casual/operations.go.txt)） | 一条命令的处理顺序：查旧回执 → 核对代际 / 序号 / 版本 → 恢复时间 → 按读到的余额执行 → 留回执、交出 `Effect` |
+| 4 | `game/modules/mergecasual/reward.go`（[reward.go.txt](../../scripts/testdata/merge-casual/reward.go.txt)） | 外部平台的证明怎样验签、绑定玩家、去重和按业务日限次？ |
+| 5 | `game/handler/merge_casual.go`（[handlers.go.txt](../../scripts/testdata/merge-casual/handlers.go.txt)） | 登录接管、离线批次、广告、查回执分别在哪个锁与提交边界里生效？`Effect` 怎样在同一笔里交给 wallet / stamina？挑战定时器在哪里替换？ |
+| 5A | `game/entities/player/merge_casual.go`（[first_enter.go.txt](../../scripts/testdata/merge-casual/first_enter.go.txt)）与 enter / wallet / stamina 模块的 README（[enter](../../modules/enter/README.md)、[wallet](../../modules/wallet/README.md)、[stamina](../../modules/stamina/README.md)） | 初始金币为什么写在 `event.EnterFirst` 监听里、为什么不用发初始体力？模块管到哪、`roost module verify` 跑的是哪些场景 |
 | 6 | `game/entities/player/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/merge-casual/timer_handlers.go.txt)） | 到期回调怎样核对定时器身份？为什么到期只判负、不追补？ |
 | 7 | `game/handler/syncsender/` | 生成的 Sender 怎样把 Player ID 与业务参数交给 Nest；业务调用它，不手改 |
 | 8 | [gameplay_test.go.txt](../../scripts/testdata/merge-casual/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/merge-casual/rules_test.go.txt) | 并发、拒绝、回滚、旧请求与隐私怎样实际验证 |
@@ -80,7 +84,7 @@ ROOST_MERGE_CASUAL_KEEP=1 bash scripts/test-merge-casual-generated.sh   # 保留
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/mergeflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `mergecasual.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；Player ID 是完整 EntityID：
+下面的文件放进保留的生成工程（例如 `internal/mergeflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `mergecasual.OpenCatalog` 打开的配置；玩家已经经 enter 建过档（生产里是 `EnterGame`，夹具里是 `Sync_EnterInit`），否则 `Sync_MergeLogin` 被拒；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；Player ID 是完整 EntityID：
 
 ```go
 package mergeflow
@@ -141,47 +145,71 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 | 场景（测试名前缀 `TestMergeCasual`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
 | `CatalogReloadIsAtomicAndExistingBoardFrozen` | 非法热更被拒，合法热更发布新一代 | configdata 校验失败不替换当前快照；已捕获的值和旧快照不被新发布改写；存档创建时冻结规则 |
-| `MalformedStateFailsClosedAndPublicViewExcludesSecrets` | 加载时严格 JSON、范围与哈希校验 | 存档被改（未知字段、负金币、非法等级、错配置 hash）时拒绝解码；视图不含密钥、账本与配置，且不与存档共享内存 |
-| `BoundedLedgerRetainsOldReceiptsAndRejectsOverflow` | 命令账本填满 128 条 | 满了拒绝新命令而不淘汰旧回执，旧命令一小时后重放仍得原回执；金币溢出拒绝 |
+| `MalformedStateFailsClosedAndPublicViewExcludesSecrets` | 加载时严格 JSON、范围与哈希校验 | 存档被改（未知字段、负充能、非法等级、错配置 hash）时拒绝解码；视图不含密钥、账本与配置，且不与存档共享内存 |
+| `BoundedLedgerRetainsOldReceiptsAndRejectsOverflow` | 命令账本填满 128 条 | 满了拒绝新命令而不淘汰旧回执，旧命令一小时后重放仍得原回执、`Effect` 为零；出售会让金币超过业务上限时拒绝 |
 | `BoardAuthorityAndMergeRules` | 自合并、跨链、锁格、空格、越界 | 业务拒绝不写任何状态（存档与定时器字节不变）；移动交换不丢物品身份，合成精确消耗两格 |
-| `WarehouseAndUnlockHaveAtomicCosts` | 仓库存取、解锁扣金币 | 资产与棋盘同事务：重复解锁、存进已占用的仓库格、取到未解锁的格子都被拒，不重复扣费 |
-| `ProducerReplayDoesNotRerollOrChargeTwice` | 同一生产命令八个并发 | 单实体 Nest 串行 + 业务序号：一次扣体力与次数、一份掉落；同序号改目标被拒；次数用尽被拒且不扣体力 |
+| `WarehouseAndUnlockHaveAtomicCosts` | 仓库存取、解锁扣 wallet 金币 | 资产与棋盘同事务：重复解锁、存进已占用的仓库格、取到未解锁的格子都被拒，不重复扣费 |
+| `ProducerReplayDoesNotRerollOrChargeTwice` | 同一生产命令八个并发 | 单实体 Nest 串行 + 业务序号：一次 stamina 扣体力与一次充能、一份掉落；同序号改目标被拒；次数用尽被拒且不扣体力 |
 | `SellUndoCannotDuplicateItemsOrGold` | 出售后紧接着的一条命令内、十秒内可撤销 | 撤销与出售各留回执，重放撤销不再加物品；已撤销的出售再撤销、超过十秒再撤销都被拒 |
 | `OrdersConsumeRecipeAndRewardOnce` | 订单精确消耗一级链的二级、三级物品 | 订单奖励只随命令回执发一次，重放四次不再加金币；配方不符被拒 |
 | `OfflineBatchIsAtomicAndRejectsCloudConflicts` | 离线批次中途一步非法、过期 `Base`、跳号、上传整张存档 | 一个批次是一个 Nest 事务：任一步失败整批不落 DAO；整批重放得到原回执；版本冲突与未知命令被拒 |
 | `DeviceTakeoverFencesOldWritesAndFreezesRules` | 新设备用下一张登录票接管 | 接管提高 Epoch，旧设备的命令被拒、新设备能查旧回执；同票重试不再推进、旧票被拒；接管时传入的新配置不改已有存档 |
 | `ChallengeServerWinAndConcurrentClaim` | 挑战期内合出四级物品、八个并发领奖 | 胜负由服务器在合成那一刻判定并删除定时器；并发领奖只发一份 |
 | `PersistentDeadlineExpiresOnceAndCancelsOldChallenge` | 迟到一小时的 Tick、重复 Tick、新挑战上的旧期限、期限时刻到达的合成 | 定时器 ID + 挑战身份 + 原期限三重核对，迟到的一次 Tick 只判负一次；重试开局不重排期限；命令先按服务器时间判负，不能靠调度延迟赢（实体一直在内存，用例手动投递 Tick，不是离线重载；离线重载见第二部分） |
-| `UndoRestoresStateRandomResultAndTimer` | 生产 / 开局后 handler 失败 | 存档、随机结果与定时器节点一起回滚；重试得到与回滚前相同的掉落 |
-| `OfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock` | 体力 / 次数离线恢复 | 保留未满一周期的余数、满了丢弃溢出时间、不自动产出物品；服务器时钟回退被拒 |
-| `AdProofAuthorityBindingReplayAndDailyQuota` | 伪造签名、错绑玩家、过期、八个并发同一回调、同 UTC 日第四次 | 验签与到账同事务；同一证明并发只到账一次、过期后重试仍认原回执、同 ID 改内容被拒；每日三次上限 |
+| `UndoRestoresStateRandomResultAndTimer` | 生产 / 开局后 handler 失败 | 存档、随机结果、定时器节点与 stamina 的体力一起回滚；重试得到与回滚前相同的掉落 |
+| `OfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock` | 生产器次数与体力离线恢复 | 充能保留未满一周期的余数；体力由 stamina 惰性结算，`recover` 不写体力，未满一周期的零头不丢、满了停表；不自动产出物品；服务器时钟回退被拒 |
+| `AdProofAuthorityBindingReplayAndDailyQuota` | 伪造签名、错绑玩家、过期、八个并发同一回调、同一业务日第四次 | 验签、到账回执与 stamina 发体力同事务；同一证明并发只到账一次、过期后重试仍认原回执、同 ID 改内容被拒；每业务日三次上限 |
 | `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
-上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 11 节。
+所有 Nest 场景的夹具都先在建档之前登录一次（必须被拒、不建棋盘），再经 enter 的 `Sync_EnterInit` 建档、第一张票 `Sync_MergeLogin` 建棋盘；被拒的命令除了存档与定时器，还要求 wallet 余额与 stamina 状态都不变。上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 11 节。
+
+#### 3.5 模块化之后场景语义的变化（R9，2026-11-17）
+
+场景名与条数（16）不变；下面几条的断言改成读模块状态，旧断言 → 新断言。体力跟 stamina 的缺省规则（上限 10 → 100、每 3 秒 1 点 → 每 5 分钟 1 点），所以体力的数都变了：
+
+| 场景 | 旧断言 | 新断言 |
+| --- | --- | --- |
+| 全部 Nest 场景 | 首登 `Sync_MergeLogin` 建棋盘并发初始金币 30、体力 10 | enter 的 `Sync_EnterInit` 建档（`EnterFirst` 监听经 wallet 发 30 金币；stamina 零值即满体力），`Sync_MergeLogin` 要求 `Enter().Built()`；建档前的登录被拒 |
+| `WarehouseAndUnlockHaveAtomicCosts`、`DeviceTakeoverFencesOldWritesAndFreezesRules` | `State.Gold == 25` | `Wallet.Coins == 25` |
+| `SellUndoCannotDuplicateItemsOrGold` | `State.Gold == 30` / `31` | `Wallet.Coins == 30` / `31` |
+| `OrdersConsumeRecipeAndRewardOnce` | `State.Gold == 50` | `Wallet.Coins == 50` |
+| `ProducerReplayDoesNotRerollOrChargeTwice` | `State.Energy == 9`，之后 `7` | `Stamina().Current(now) == 99`，之后 `97` |
+| `ChallengeServerWinAndConcurrentClaim` | `State.Gold == 60`、`State.Energy == 8` | `Wallet.Coins == 60`、体力 `98` |
+| `PersistentDeadlineExpiresOnceAndCancelsOldChallenge` | 迟到一小时后 `State.Energy == 10`；`State.Gold == 30` | 体力 `100`（stamina 一小时恢复 12 点，早已回满）；`Wallet.Coins == 30` |
+| `UndoRestoresStateRandomResultAndTimer` | 存档、定时器回滚；重试结果等于 `Apply(c, now)` | 另加：stamina 的体力回滚；重试结果等于 `Apply(c, now, 余额)` |
+| `OfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock` | 4.5 秒后 `recover`：体力 9、`EnergyAt` 前进到 +3 秒（余数保留）、充能 1；+1000 秒体力回满 10 | 4.5 秒后 `recover`：充能 1、`ChargeAt` 不动（充能余数保留）、体力 98；+450 秒 `recover`：体力 99、stamina 的状态仍是 98 / 起点不动（`recover` 不写体力）；+599.999 秒仍 99、+600 秒 100（体力零头保留）；+1000 秒体力 100、充能 3、没有自动产出 |
+| `AdProofAuthorityBindingReplayAndDailyQuota` | 体力放不下（> 上限 − 2）时拒绝；广告后 `State.Energy == 10`；同一 UTC 日（毫秒整除）三次 | 广告经 stamina 的 `Grant` 发，可以超过上限、到硬顶 999 为止，发不足则整笔拒绝；广告后体力 `100`；同一业务日（`clock.BusinessDay`）三次 |
+| `MalformedStateFailsClosedAndPublicViewExcludesSecrets` | 坏存档样本 `"Gold":-1`、`"Energy"` 改成未知字段；视图不含 `EnergyAt` | 金币与体力不在存档里：样本换成 `"Charges":-1`、`"Orders"` 改成未知字段；视图不含 `ChargeAt` |
+| `CatalogReloadIsAtomicAndExistingBoardFrozen` | 坏配置样本 `EnergyMillis = 0` | 规则里没有体力了，样本换成 `ChargeMillis = 0` |
+| `BoundedLedgerRetainsOldReceiptsAndRejectsOverflow` | `State.Gold = 100 万` 时出售被拒 | 按调用方读到的余额（`Purse{Gold: 100 万}`）判断，被拒时 `Effect` 为零；旧回执重放 `Effect` 为零 |
+| `RobotBusiness` | 出售后 `State.Gold` 加 2 | `Wallet.Coins` 加 2（经 Nest 锁内读） |
+| `TestMergeCasualRealCrashRecovery` | WAL 6 条未投影；判负后 `State.Energy == 10`；最终 `State.Gold` = 屏障金币 + 30 | 7 条（多一次 enter 建档）；判负后 `Stamina().Current == 100`；最终 `Wallet.Coins` = 屏障金币 + 30；屏障里的视图按记下的那一刻（`At`）重算体力再比对 |
+
+变异证明（把模块调用去掉或改错，对应场景变红，恢复后变绿）记在 [R9 批 1B 证据](../maintenance/evidence/r9-1b-20261117/README.md)。
 
 ### 4. 配置为什么在首登时冻结
 
-`OpenCatalog` 用 `configdata.MustRegisterObject` 登记 `merge_rules`（`merge.json`），`Validate` 失败整次加载 / 重载被拒，旧快照继续服务（[业务表发布](guide/07-config.md#3-业务表发布)）。入口捕获 `catalog.Current()` 再 `CaptureRules` 得到 `Rules` 值传给 `Sync_MergeLogin`：首登时整份 `Rules` 与 hash 写进存档，之后的恢复周期、价格、挑战时长都用这一代；接管登录传入的新配置被忽略。
+`OpenCatalog` 用 `configdata.MustRegisterObject` 登记 `merge_rules`（`merge.json`），`Validate` 失败整次加载 / 重载被拒，旧快照继续服务（[业务表发布](guide/07-config.md#3-业务表发布)）。入口捕获 `catalog.Current()` 再 `CaptureRules` 得到 `Rules` 值传给 `Sync_MergeLogin`：首登时整份 `Rules` 与 hash 写进存档，之后的充能周期、价格、挑战时长、广告体力都用这一代；接管登录传入的新配置被忽略。
 
-这是本例的业务选择：合成棋盘的价格和恢复周期一旦改了会让玩家的离线预测全部失效，所以已有存档不静默换表。要让老玩家用新数值，需要业务写一次显式的存档迁移（按 hash 识别旧代、重算后写回），不是靠登录覆盖。回执里记了配置 hash，便于以后核对“这次扣款按哪一代价格”。公网请求**不携带** Rules。
+这是本例的业务选择：合成棋盘的价格和充能周期一旦改了会让玩家的离线预测全部失效，所以已有存档不静默换表。**体力是例外**（Q1 A）：体力跟 stamina 模块，规则在 `game/components/stamina/rules.go`，每次读写取当前值、改了立刻对所有玩家生效（stamina README“改规则立刻对所有人生效”）；“按存档冻结体力规则”是 stamina 明确不做的，R9 记为模块缺口、不补。要让老玩家用新数值，需要业务写一次显式的存档迁移（按 hash 识别旧代、重算后写回），不是靠登录覆盖。回执里记了配置 hash，便于以后核对“这次扣款按哪一代价格”。公网请求**不携带** Rules。
 
 ### 5. 离线批次、设备代际与结果未知
 
-`Sync_MergeBatch(player, commands, now)` 一次最多 16 条命令，在同一个 Player 事务里依次执行；任一步非法，整批不落 DAO（handler 只在全部成功后 `SetState`）。批次里的命令都用这一次请求的服务器时间，客户端的离线时间戳不作为收益依据，所以不能靠伪造离线时长连刷生产器。
+`Sync_MergeBatch(player, commands, now)` 一次最多 16 条命令，在同一个 Player 事务里依次执行；每一步按上一步交给 wallet / stamina 之后的余额判断；任一步非法（含模块拒绝），整批回滚、不落 DAO（handler 只在全部成功后 `SetMergeState`，模块的写入由 Nest undo 一起撤销）。批次里的命令都用这一次请求的服务器时间，客户端的离线时间戳不作为收益依据，所以不能靠伪造离线时长连刷生产器。
 
-- **原序号、原命令重发**：返回原回执，物品、金币、体力和定时器都不再变化。回执里的余额是原操作完成时的值，当前状态另读 `View`。
+- **原序号、原命令重发**：返回原回执，物品、金币、体力和定时器都不再变化（`Effect` 为零，不再调模块）。回执不记金币与体力（它们在 wallet / stamina），当前状态另读 `View`。
 - **同序号换内容、跳号、过期 `Base`**：拒绝。客户端先取服务器 `View`，按自己的冲突策略重新预测，不能把整张客户端棋盘上传覆盖。
 - **新设备接管**：已鉴权入口持久分配下一张登录票，调用 `Sync_MergeLogin` 提高 Epoch 并提高 Revision。同票重试只返回视图，旧票与跳票拒绝。登录票的分配与认证在业务接入层，不是客户端传一个数字就算登录。本例让 `Sync_MergeLogin` 同时承担首登与接管，接管时仍要传首登那把密钥（handler 核对相等，防止首登结果未知时给已有存档换一把新密钥）；正式服宜把“首登生成密钥”与“接管只提 Epoch”拆成两个入口。
 - **结果未知**：保持原 Epoch / Seq 用 `Sync_MergeReceipt(ctx, player, currentEpoch, originalSeq)` 查询（见 3.3 的 `resolveUnknown`）；新设备也能查到旧设备已提交的回执。不要改 Seq 再发一次。框架层面的提交未知按[回复错误判别](guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试)处理。
 - **服务器侧事实会改变 Revision**：挑战到期、广告到账、接管都会提高 Revision，客户端的离线预测要重新取视图。旧批次不会静默覆盖这些已提交事实。
 
-账本是 Player 上的持久业务事实，与资产同事务，所以长期有效；它不是服务的短期去重环。命令账本与广告账本各至多 128 条，满了拒绝新写而不淘汰旧回执（淘汰会让旧请求被当成新请求重复发放）；正式服需要归档 / 分片方案，不能靠删历史或只保留最近一个序号绕过。
+账本是 Player 上的持久业务事实，与资产同事务，所以长期有效；它不是服务的短期去重环。也因此金币走 wallet 的 `Add`（不留回执），不用 `Apply(业务键)`：wallet 的去重窗口只有 128 次。命令账本与广告账本各至多 128 条，满了拒绝新写而不淘汰旧回执（淘汰会让旧请求被当成新请求重复发放）；正式服需要归档 / 分片方案，不能靠删历史或只保留最近一个序号绕过。
 
 ### 6. 时间：惰性恢复、限时挑战与持久定时器
 
-体力（每 3 秒 1 点、上限 10）和生产器次数（每 5 秒 1 次、上限 3）不排定时器，而是在下一条命令（或显式的 `recover` 命令）到达时按服务器时间一次算完：保留未满一周期的余数，满了丢弃溢出时间。读视图不推进时间，所以客户端要先发 `recover` 再按新版本继续离线预测。
+生产器次数（每 5 秒 1 次、上限 3）不排定时器，而是在下一条命令（或显式的 `recover` 命令）到达时按服务器时间一次算完：保留未满一周期的余数，满了丢弃溢出时间。体力由 stamina 模块同样惰性结算（缺省每 5 分钟 1 点、上限 100；零头保留、满了停表、时钟回拨不恢复），在每次 `Current` / `Spend` / `Grant` 时按本条消息的业务时间现算，合成的 `recover` 不写体力。读视图不推进充能与挑战，所以客户端要先发 `recover` 再按新版本继续离线预测；视图里的体力是那一刻的当前值，客户端按 stamina 的公式（`db/def/stamina.go`）自己推算之后的恢复。
 
-限时挑战用持久定时器：`start` 扣两点体力、记下期限，handler 的 `saveMerge` 每次写存档时替换挑战定时器（`RemoveTimer` 旧节点、`NewTimerAt` 新期限、ID 记进 `WakeTimer`），挑战结束就不再挂。胜负只由服务器判定：
+限时挑战用持久定时器：`start` 经 stamina 扣两点体力、记下期限，handler 的 `saveMerge` 每次写存档时替换挑战定时器（`RemoveTimer` 旧节点、`NewTimerAt` 新期限、ID 记进 `MergeWakeTimer`），挑战结束就不再挂。胜负只由服务器判定：
 
 ```mermaid
 sequenceDiagram
@@ -190,7 +218,7 @@ sequenceDiagram
     participant P as Player DAO
     participant T as 实体定时器
     C->>N: start（Epoch / Seq / Base）
-    N->>P: 扣体力，记挑战身份与期限
+    N->>P: stamina 扣体力，记挑战身份与期限
     N->>T: 登记期限
     N-->>C: 回执
     C->>N: merge（期限前合出四级）
@@ -206,14 +234,14 @@ sequenceDiagram
 
 ### 7. 广告奖励与存储格式
 
-广告样例模拟受信任平台的“已完成观看”回调：HMAC-SHA256 签名绑定证明 ID、Player ID、过期时间和奖励类别，验签密钥由服务端注入。验签通过后先查原回执，再判断新证明是否过期：同一已到账证明过期后重试仍认原回执、不重新发放；同 ID 换内容拒绝；体力放不下时拒绝而不吞证明；新证明同一 UTC 日至多三次（样例按 UTC 日界；正式业务的“同一天”按 `time.business_timezone` / `time.business_day_start` 算，即 `app.BusinessCalendar(registry).BusinessDay(now)`，见 [guide/10-time §2A](guide/10-time.md#2a-业务时区与业务日)）。真实平台的签名协议、订单查询、撤销与补偿、激励广告 SDK 都未接入，不能相信客户端的“观看成功”。
+广告样例模拟受信任平台的“已完成观看”回调：HMAC-SHA256 签名绑定证明 ID、Player ID、过期时间和奖励类别，验签密钥由服务端注入。验签通过后先查原回执，再判断新证明是否过期：同一已到账证明过期后重试仍认原回执、不重新发放；同 ID 换内容拒绝；体力经 stamina 的 `Grant` 发，可以超过上限、到硬顶为止，发不足（到硬顶截断）时整笔拒绝而不吞证明；新证明同一业务日至多三次（借鉴 checkin：`clock.BusinessDay`，按 `time.business_timezone` / `time.business_day_start` 切日，缺省 UTC 零点，见 [guide/10-time §2A](guide/10-time.md#2a-业务时区与业务日)）；证明 ID 的格式借鉴 wallet 的业务键（1～64 个 ASCII 字母、数字与 `-` `_` `:`）。真实平台的签名协议、订单查询、撤销与补偿、激励广告 SDK 都未接入，不能相信客户端的“观看成功”。
 
-重连时调用锁内的 `Sync_MergeView` 取当前视图。`View` 裁掉私有随机密钥、命令与广告账本和整份配置。不要给 `State` 加 Sync 标记或直接下发整个实体；需要推送时按 [self_sync](PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 写业务视图。夹具只验证了字段裁剪，没有联调公网 TCP 协议或客户端引擎。
+重连时调用锁内的 `Sync_MergeView` 取当前视图。`View` 裁掉私有随机密钥、命令与广告账本和整份配置。不要给 `MergeState` 加 Sync 标记或直接下发整个实体（wallet、stamina 的状态各自标了 sync，经自身视图下发）；需要推送时按 [self_sync](PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 写业务视图。夹具只验证了字段裁剪，没有联调公网 TCP 协议或客户端引擎。
 
 存储格式要分两层看：
 
-- **DAO 持久键**：`State` / `WakeTimer` 的 `store` 键就是 Mongo 里的键（DESIGN-TODO D13），`roost add timer` 加的节点与种子字段同理。以后改 Go 字段名要保留原 `store` 键；改了 `store` 键或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
-- **业务 JSON**：`State` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、未知版本、越界数值与配置 hash 不符。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
+- **DAO 持久键**：`MergeState` / `MergeWakeTimer` 的 `store` 键（`merge_state` / `merge_wake_timer`）就是 Mongo 里的键（DESIGN-TODO D13），`roost add timer` 加的节点与种子字段同理。以后改 Go 字段名要保留原 `store` 键；改了 `store` 键或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
+- **业务 JSON**：`MergeState` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、未知版本、越界数值与配置 hash 不符。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
 
 ### 8. 更多合成休闲路线：接法、源码与业务边界
 
@@ -245,11 +273,11 @@ sequenceDiagram
 bash scripts/test-merge-casual-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 16 条顶层 race 场景（3.4，含 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_MERGE_CASUAL_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 16 条顶层 race 场景（3.4，含 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再跑已装模块自带的场景（`roost module verify`，经 `genre-common/modules.sh verify` 核对每个模块通过数等于本检出 `module.yaml` 的 `verify.pass`、0 skip；本类是 enter 29、wallet 17、stamina 26、rules 10、stamina+rules 2，末尾打印 `module verify: <名> n/n skipped=0`）；成功删除临时工程，失败或 `ROOST_MERGE_CASUAL_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
 
 业务 Robot 用例 `TestMergeCasualRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
-- **证明**：公共 CLI 生成的 Player DAO、实体定时器、Sender 与 Nest 在 15 个业务组合下的事务、undo 回滚、业务幂等和期限核对；配置原子发布与存档冻结；视图字段裁剪。
+- **证明**：公共 CLI 生成的 Player DAO、实体定时器、Sender 与 Nest，加上 enter / wallet / stamina 三个模块，在 15 个业务组合下的事务（合成存档与模块状态同一笔提交或回滚）、undo 回滚、业务幂等和期限核对；配置原子发布与存档冻结；视图字段裁剪。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例手动投递生成的 Tick Sender，实体一直在内存，没有经过驱动投递循环与加载后补触发；单进程，无 Redis / NATS；鉴权与登录票是合成的。代码里有上限但测试没有填满的：单批 16 条（未测超限）、广告账本 128 条（只到每日三次）。夹具里的数值是样例。
 
 ### 12. 真实 WAL / Mongo 崩溃恢复
@@ -262,16 +290,16 @@ ROOST_MERGE_CASUAL_REAL=1 bash scripts/test-merge-casual-generated.sh
 
 它在第 11 节之后追加 `TestMergeCasualRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交首登、两次生产、一次广告到账和开挑战；后台投影关闭，断言 WAL 有 6 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 5 条业务命令）后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经 strict 文件 WAL 提交 enter 建档、首登、两次生产、一次广告到账和开挑战；后台投影关闭，断言 WAL 有 7 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 enter 建档 1 条、5 条业务命令）后，父进程 SIGKILL 自己启动的子进程。屏障里的视图记下取于哪一刻：体力随业务时间恢复，冷加载后按同一刻重算再比对。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、公开视图与定时器 ID，并核对冷加载已把存量挑战期限报告给驱动索引（`DueOf`）；再重放第一次生产（同一掉落）与已过期的原广告证明（不再到账）。
-3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不手发 Tick、不调用 `DeliverDue`）：循环投递一次加载后的补触发，过期一小时的挑战只判负一次，体力与次数恢复到上限，挑战结束后不再挂期限；`entitytimer.delivered_total` 增量恰为 1。
+3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不手发 Tick、不调用 `DeliverDue`）：循环投递一次加载后的补触发，过期一小时的挑战只判负一次，充能恢复到上限、stamina 的当前体力回满 100，挑战结束后不再挂期限；`entitytimer.delivered_total` 增量恰为 1。
 4. 领取判负的挑战、重新开局，新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，挑战在期限时刻判负（`LastAt` 等于期限、修订号只加 1），投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。
-5. 再领取、再开局、合出四级物品获胜，领奖后重放三次只得一份；其间循环不再投递（总计数 2、`redelivered_total` 增量 0）。先停循环再关 Nest（`close` 里与 `t.Cleanup` 还会再停一次）。
+5. 再领取、再开局、合出四级物品获胜，领奖后重放三次只得一份（wallet 金币 = 屏障时的金币 + 30）；其间循环不再投递（总计数 2、`redelivered_total` 增量 0）。先停循环再关 Nest（`close` 里与 `t.Cleanup` 还会再停一次）。
 6. 正常关闭后再起第三个进程冷加载：核对存档摘要与视图，再重试第一次生产、领奖和原广告证明，存档不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
 去掉第 3 步的 `Start` 时，用例在补触发处等满 10 秒失败（`driver loop did not deliver the overdue challenge expiry …`），所以这一步的判负确实由循环完成。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（棋盘、资产、回执、广告账本与挑战定时器）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次（迟到一小时的挑战只判负一次），并按时投递下一个期限；跨进程重试不重复生产、到账或发奖。
+- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（棋盘、回执、广告账本、挑战定时器，以及同一 Player 上 wallet / stamina 的模块状态）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次（迟到一小时的挑战只判负一次），并按时投递下一个期限；跨进程重试不重复生产、到账或发奖。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例用冻结的业务时钟，循环按 `MaxWait` 重读）、准入失败重试与 Redeliver（见 entitytimer 包测试与 `TestEntityTimerGeneratedProjectEndToEnd`）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
 ### 13. 结论怎样给
