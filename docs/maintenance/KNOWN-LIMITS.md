@@ -865,10 +865,10 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 业务模块（roost module）
 
-- **CellWorld 业务适配进模块（D21 后半）：第一块已做（2026-11-17），其余按推荐留在 demo（Q1 A、Q2 随 Q1、Q3 以后单独做，维护者 2026-11-18 按推荐定）**：SceneActor 实体、分区状态映射、格心跳登记、Node 安装点、Player 的恢复快照 / 死亡回执进了 cellworld 模块（[证据](evidence/cellworld-module-d21-20261117/README.md)）。按证据里的推荐暂留 demo（维护者可改）：Player 的 Base 标量字段与面板 / 队伍副本（Q1 推荐 A：字段由工程按模块 README 的字段表声明；改成模块状态要同时改客户端 / drill / loadtest 的同步解码）、队伍视图 `with/team`（Q2 随 Q1）、mirror 编码与攻击结论推送、奖励规则、`scene.partition` 配置（Q3 推荐以后单独改成 `cellworld.*`）、分区地形转发（Q4 先定 demo 地形与 terrain 模块是否合一）。MMORPG 夹具的队伍、场景、怪物、战斗、副本不随 CellWorld 走，留作各模块的扩展项。
+- **CellWorld 业务适配进模块（D21 后半）：第一块已做（2026-11-17），其余按推荐留在 demo（Q1 A、Q2 随 Q1、Q3 以后单独做，维护者 2026-11-18 按推荐定）**：SceneActor 实体、分区状态映射、格心跳登记、Node 安装点、Player 的恢复快照 / 死亡回执进了 cellworld 模块（[证据](evidence/cellworld-module-d21-20261117/README.md)）。按证据里的推荐暂留 demo（维护者可改）：Player 的 Base 标量字段与面板 / 队伍副本（Q1 推荐 A：字段由工程按模块 README 的字段表声明；改成模块状态要同时改客户端 / drill / loadtest 的同步解码）、队伍视图 `with/team`（Q2 随 Q1）、mirror 编码与攻击结论推送、奖励规则、`scene.partition` 配置（Q3 推荐以后单独改成 `cellworld.*`）、分区地形转发（Q4 维护者 2026-11-18 定暂不合一，留在 demo，等 Q1 / Q3 再一起评估）。MMORPG 夹具的队伍、场景、怪物、战斗、副本不随 CellWorld 走，留作各模块的扩展项。
 - **登录外部边界**：双 account / game / Gate、真实 naming 与重启重连、casual 购买 / self_sync 已验；完整 naming 故障阶段、生产渠道、Redis 故障、跨机与长稳未验。跨机入口见 C-X4；时间推送仍为 best-effort。
 - **社交容量与归属**：两 game 共享 Team + toxiproxy、排队 SIGKILL / 重试与排队禁止建队 / 入队已验；容量未验。邀请的跨 game 投递已经 facebook 模块实现（2026-11-17，伴生共享 Remote 实体 + syncbus 广播告知）：告知广播给所有 game、尽力而为（普通 NATS 至多一次只用替身测过，真实依赖验的是 JetStream；靠 `TeamInvites` 补查）；投递在邀请事务之后，失败不撤销邀请；facebook 由第一次写它的 game 建（邀请不存在的玩家号也会建出一个空 facebook，数量有界）；认领后没切到共享就崩时，别的 game 得到 `ErrOpening` 直到所有权按 Remote 规则释放，等多久没测。谁建、投递在事务之后、广播告知、名字 facebook 四点按现状，维护者 2026-11-18 按推荐定（[证据](evidence/social-facebook-entity-20261117/README.md)）。Team 归 game 服务已由维护者确认（D14），见[CellWorld 固定分区](#cellworld-固定分区v1470)“无缝世界原型的产品简化”。
-- **Nest 只读请求会认领没有所有权记录的 Remote 实体（是否改框架尚未确认）**：2026-11-17 facebook 模块实施中发现，B 先在 game-1001 查一次空收件箱，这次只读请求把还没建的 Facebook(B) 独占认领，之后 game-1000 想建它时得到 `ErrOpening`。facebook 查收件箱前先看所有权绕开了；凡是“先读、再由别人建”的共享 Remote 实体都会踩到（[证据](evidence/social-facebook-entity-20261117/README.md)）。
+- **Nest 只读请求会认领没有所有权记录的 Remote 实体（维护者 2026-11-18 定查清并修框架，进行中）**：2026-11-17 facebook 模块实施中发现，B 先在 game-1001 查一次空收件箱，这次只读请求把还没建的 Facebook(B) 独占认领，之后 game-1000 想建它时得到 `ErrOpening`。facebook 查收件箱前先看所有权绕开了；凡是“先读、再由别人建”的共享 Remote 实体都会踩到（[证据](evidence/social-facebook-entity-20261117/README.md)）。
 
 ##### 2026-11-12：活动模块的驱动与验收边界
 
