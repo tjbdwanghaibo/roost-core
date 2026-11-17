@@ -25,7 +25,7 @@
 | 2 | `python3 scripts/test-genres-generated.py --out <scratchpad>/matrix1 --genres tower-defense` | `status passed`，自定义 module 名下 11 条再过，`custom_module_verify` enter 29 / room 33 / wallet 17 | [matrix.txt](matrix.txt) |
 | 3 | `source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_TOWER_DEFENSE_REAL=1 bash scripts/test-tower-defense-generated.sh` | exit 0：缺省 11 条 + `TestTowerDefenseRealCrashRecovery` PASS（23 条未投影记录，SIGKILL 后恢复、补触发一次、17 次投递打完三波、第三进程重试不重复发奖），0 SKIP，库已删 | [real.txt](real.txt) |
 | 4 | 变异（保留的生成工程里改 handler / 监听，跑对应场景，再恢复） | 五个变异全部变红，恢复后 11 条全绿 | [mutation.txt](mutation.txt) |
-| 5 | `git status`（本批文件全部提交）；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 见下文提交后记录 | — |
+| 5 | `git status -- <本批文件>`；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 本批文件在提交 `73c0706a` 之后无残留；文档测试 ok（同时跑过 `TrackedGoFilesAreGofmtClean`、`GeneratedScriptsAreInPretag`、`GeneratedProjectRealDependency…`，ok） | — |
 | 6 | 手册 + skill reference 同步；skill 命令块真跑（接 SKILL.md §3.2 前置，自定 module `example.com/acme/mytd`） | 11 PASS、`module verify` 三个模块 n/n | [skill-block.txt](skill-block.txt) |
 
 变异清单（第 4 条）：
