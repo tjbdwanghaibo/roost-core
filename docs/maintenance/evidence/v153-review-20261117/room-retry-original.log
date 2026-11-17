@@ -1,0 +1,93 @@
+2026/11/17 19:42:29 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=53.59µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:29 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:29 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:29 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:30 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:31 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/17 19:42:32 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+--- PASS: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.10s)
+PASS
+ok  	example.com/auto-chess-practice/game/modules/room	4.061s

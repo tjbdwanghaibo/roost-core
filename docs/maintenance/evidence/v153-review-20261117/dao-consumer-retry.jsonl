@@ -1,0 +1,8 @@
+{"Time":"2026-11-17T13:11:40.427644631Z","Action":"start","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao"}
+{"Time":"2026-11-17T13:11:40.475651086Z","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao","Test":"TestRemoteViewGeneratedConsumer"}
+{"Time":"2026-11-17T13:11:40.475702338Z","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao","Test":"TestRemoteViewGeneratedConsumer","Output":"=== RUN   TestRemoteViewGeneratedConsumer\n","OutputType":"frame"}
+{"Time":"2026-11-17T13:12:07.107740987Z","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao","Test":"TestRemoteViewGeneratedConsumer","Output":"--- PASS: TestRemoteViewGeneratedConsumer (26.63s)\n","OutputType":"frame"}
+{"Time":"2026-11-17T13:12:07.107989761Z","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao","Test":"TestRemoteViewGeneratedConsumer","Elapsed":26.63}
+{"Time":"2026-11-17T13:12:07.108058956Z","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-17T13:12:07.108312678Z","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao","Output":"ok  \tgithub.com/tjbdwanghaibo/roost-core/codegen/internal/dao\t26.680s\n"}
+{"Time":"2026-11-17T13:12:07.108356814Z","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao","Elapsed":26.681}

@@ -1,0 +1,52 @@
+[
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGAllianceRewardOnceBeyondWalletWindow",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGConstructionMarchAndReplay",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGCancelRefundAndRefusal",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGFailureRollsBackResourcesAndDeadline",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGOfflineIncomeIsBusinessBounded",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGTwoPlayersCompeteForOneTile",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/handler",
+    "test": "TestSLGResearchAndConstructionUseIndependentQueues",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/modules/alliance",
+    "test": "TestAllianceReportWindowFollowsTheCoordinatorReservationTTL",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/slg/game/modules/alliance",
+    "test": "TestAllianceReceiverBudgetRejectsLateSuccess",
+    "result": "pass"
+  }
+]

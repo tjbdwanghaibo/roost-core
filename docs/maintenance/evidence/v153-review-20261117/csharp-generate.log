@@ -1,0 +1,8 @@
+=== RUN   TestReviewExportCSharpNames
+    review_csharp_names_test.go:46: profile_name: source scan and C# generation accepted
+    review_csharp_names_test.go:46: name: source scan and C# generation accepted
+    review_csharp_names_test.go:46: message: source scan and C# generation accepted
+    review_csharp_names_test.go:46: error_codes: source scan and C# generation accepted
+--- PASS: TestReviewExportCSharpNames (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	0.065s

@@ -1,0 +1,11 @@
+  Determining projects to restore...
+  Restored /workspace/v153-review-artifacts/csharp/message/Review.csproj (in 499 ms).
+/workspace/v153-review-artifacts/csharp/message/ErrorCodes.cs(21,30): error CS0102: The type 'ErrorCodes' already contains a definition for 'Message' [/workspace/v153-review-artifacts/csharp/message/Review.csproj]
+
+Build FAILED.
+
+/workspace/v153-review-artifacts/csharp/message/ErrorCodes.cs(21,30): error CS0102: The type 'ErrorCodes' already contains a definition for 'Message' [/workspace/v153-review-artifacts/csharp/message/Review.csproj]
+    0 Warning(s)
+    1 Error(s)
+
+Time Elapsed 00:00:04.79

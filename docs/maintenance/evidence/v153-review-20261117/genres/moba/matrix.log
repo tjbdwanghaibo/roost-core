@@ -1,0 +1,120 @@
+$ bash /workspace/review-v153/scripts/test-moba-generated.sh
+MOBA generated consumer and logs: /workspace/v153-review-artifacts/genres-a/moba
+=== RUN   TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup
+--- PASS: TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup (2.00s)
+=== RUN   TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect
+    arena_network_test.go:443: reconnected before frame 296 asking from frame 41 (history starts at 232); players 2 and 8 restored from checkpoints [288] / [288]; all ten match the reference at frame 360
+--- PASS: TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect (6.42s)
+=== RUN   TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot
+    arena_network_test.go:748: Room: reconnected before frame 296 asking from frame 41; players 2 and 8 restored from committed checkpoints [288] / [288]; all ten match the authority at frame 360
+--- PASS: TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot (5.67s)
+=== RUN   TestMOBAFivePlayerTeamsDraftAndMatchIdentity
+--- PASS: TestMOBAFivePlayerTeamsDraftAndMatchIdentity (0.01s)
+=== RUN   TestMOBAArenaTargetingThreeLanesEconomyAndRespawn
+--- PASS: TestMOBAArenaTargetingThreeLanesEconomyAndRespawn (0.00s)
+=== RUN   TestMOBAArenaReplayVersionSeedAndFogBoundary
+--- PASS: TestMOBAArenaReplayVersionSeedAndFogBoundary (0.15s)
+=== RUN   TestMOBAArenaSurrenderAndTimeLimit
+--- PASS: TestMOBAArenaSurrenderAndTimeLimit (0.00s)
+=== RUN   TestMOBAMatchmakingAdmissionCancellationAndCommit
+--- PASS: TestMOBAMatchmakingAdmissionCancellationAndCommit (0.00s)
+=== RUN   TestMOBAInputIdentityReplayAndWindow
+--- PASS: TestMOBAInputIdentityReplayAndWindow (0.00s)
+=== RUN   TestMOBADeterministicDuelHealsLostBroadcasts
+--- PASS: TestMOBADeterministicDuelHealsLostBroadcasts (0.00s)
+=== RUN   TestMOBACatchupAndSpectatorCannotControlHeroes
+--- PASS: TestMOBACatchupAndSpectatorCannotControlHeroes (0.00s)
+=== RUN   TestMOBAHistoryExpiryAndDesyncAreExplicit
+--- PASS: TestMOBAHistoryExpiryAndDesyncAreExplicit (0.00s)
+=== RUN   TestMOBALaneTowersBaseAndServerResult
+--- PASS: TestMOBALaneTowersBaseAndServerResult (0.00s)
+=== RUN   TestMOBASkillCooldownShopAndCheckpoint
+--- PASS: TestMOBASkillCooldownShopAndCheckpoint (0.00s)
+PASS
+ok  	example.com/moba-practice/game/modules/moba	15.265s
+2026/11/17 13:15:31 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=60.781µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBAKCPRobotMatchSettlementAndClientResult
+--- PASS: TestMOBAKCPRobotMatchSettlementAndClientResult (0.31s)
+=== RUN   TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom
+--- PASS: TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom (0.13s)
+=== RUN   TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID
+--- PASS: TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID (0.14s)
+=== RUN   TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity
+--- PASS: TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity (0.37s)
+=== RUN   TestMOBARoundUndoRollsBackFrameAndCheckpoint
+--- PASS: TestMOBARoundUndoRollsBackFrameAndCheckpoint (0.07s)
+=== RUN   TestMOBARoomMailboxBoundAndDrain
+--- PASS: TestMOBARoomMailboxBoundAndDrain (0.09s)
+=== RUN   TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound
+--- PASS: TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound (0.10s)
+=== RUN   TestMOBADurableReplayAndDelayedObserverBeyond64Frames
+--- PASS: TestMOBADurableReplayAndDelayedObserverBeyond64Frames (0.80s)
+=== RUN   TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts
+--- PASS: TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts (0.33s)
+=== RUN   TestMOBARoomCatchupNeverSendsUncommittedFrames
+--- PASS: TestMOBARoomCatchupNeverSendsUncommittedFrames (0.74s)
+=== RUN   TestMOBASettlementConcurrentReplayAndIdentity
+--- PASS: TestMOBASettlementConcurrentReplayAndIdentity (0.02s)
+=== RUN   TestMOBASettlementRollbackAndRetry
+--- PASS: TestMOBASettlementRollbackAndRetry (0.01s)
+=== RUN   TestMOBANoWinnerSettlementNeverPays
+--- PASS: TestMOBANoWinnerSettlementNeverPays (0.01s)
+=== RUN   TestMOBAServerReferenceSettlesTheFinishedRound
+--- PASS: TestMOBAServerReferenceSettlesTheFinishedRound (0.00s)
+PASS
+ok  	example.com/moba-practice/game/handler	4.200s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+MOBA generated consumer kept: /workspace/v153-review-artifacts/genres-a/moba
+$ /workspace/v153-review-artifacts/genres-a/moba/roost generate
+==> module-service
+==> dao
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_databases.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_battle_directory_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_battle_round_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_match_result_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_player_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_wallet_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_wallet_ledger_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_wallet_receipt_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/protocol/proto/protocol.proto
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/protocol/pb/protocol.pb.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/protocol/msgid/msgid_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/protocol/protocol_manifest.json
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/protocol/player_bind/bind_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/loadtest/protocol/registry_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/controllers/controller.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/battle_directory/battle_directory_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/battle_directory/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/battle_round/battle_round_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/battle_round/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/match_result/match_result_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/match_result/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/player/player_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/player/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/world/world_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/moba/project/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> config-template
+tablegen: no table meta found
+==> config-data
+==> config-go
+tablegen: no table meta found
+table go: /workspace/v153-review-artifacts/genres-a/moba/project/configs/generated/gen_table_config.go
+==> endpoint
+==> registry
+$ go build -mod=mod ./...
+$ go vet -mod=mod ./...
+$ /workspace/v153-review-artifacts/genres-a/moba/roost id check
+IDs are valid
+$ /workspace/v153-review-artifacts/genres-a/moba/roost generate --check
+generated files are up to date
+$ bash /workspace/review-v153/scripts/testdata/genre-common/modules.sh verify /workspace/v153-review-artifacts/genres-a/moba/roost /workspace/review-v153 /workspace/v153-review-artifacts/genres-a/moba/custom-module-verify.json
+module verify: wallet 17/17 skipped=0

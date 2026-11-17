@@ -1,0 +1,45 @@
+{
+  "modules": [
+    {
+      "name": "enter",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "room",
+      "want": 34,
+      "passed": 33,
+      "skipped": 0,
+      "ok": false,
+      "detail": "2026/11/17 13:17:40 INFO room: player disconnected player_id=101 room_id=81902 epoch=3\n--- PASS: TestRoomPresenceLateLeaveReplyKeepsTheRejoinedSeatTracked (0.01s)\n=== RUN   TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin\n2026/11/17 13:17:40 INFO room: join completed player_id=102 room_id=81903 host_id=102\n2026/11/17 13:17:40 ERROR room join failed room_id=81903 player_id=101 err=\"nest: sync canceled\\ncontext canceled\"\n2026/11/17 13:17:40 INFO room: player disconnected player_id=101 room_id=81903 epoch=2\n--- PASS: TestRoomPresenceCanceledWaitStillTracksTheCommittedJoin (0.01s)\nPASS\nok  \texample.com/auto-chess-practice/game/controllers\t1.254s\n2026/11/17 13:17:42 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=40.394µs changed=0 added=0 removed=0 unchanged=0 members=[]\n=== RUN   TestRoomPresenceDisconnectsEveryRoomOfAClosedConnection\n--- PASS: TestRoomPresenceDisconnectsEveryRoomOfAClosedConnection (0.10s)\n=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp\n    room_presence_test.go:175: no disconnect, want {roomID:2 playerID:102 epoch:1}\n--- FAIL: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (2.05s)\n=== RUN   TestRoomPresenceStopsWithClose\n--- PASS: TestRoomPresenceStopsWithClose (0.05s)\n=== RUN   TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive\n--- PASS: TestRoomPresenceKeepsTheNewestEpochWhateverOrderCommitsArrive (0.15s)\nFAIL\nFAIL\texample.com/auto-chess-practice/game/modules/room\t2.385s\n2026/11/17 13:17:42 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=39.778µs changed=0 added=0 removed=0 unchanged=0 members=[]\n=== RUN   TestRoomPresenceRunsUnderTheManager\n2026/11/17 13:17:42 INFO manager start name=room.presence\n2026/11/17 13:17:42 INFO manager started name=room.presence elapsed=101.62µs\n2026/11/17 13:17:42 INFO manager stop name=room.presence\n--- PASS: TestRoomPresenceRunsUnderTheManager (0.00s)\nPASS\nok  \texample.com/auto-chess-practice/game/managers\t1.023s\nFAIL"
+    },
+    {
+      "name": "wallet",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": false
+}

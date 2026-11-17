@@ -1,0 +1,44 @@
+{
+  "modules": [
+    {
+      "name": "room",
+      "want": 34,
+      "passed": 34,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "turn",
+      "want": 25,
+      "passed": 25,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "wallet",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}

@@ -1,0 +1,126 @@
+$ bash /workspace/review-v153/scripts/test-party-room-generated.sh
+Party room generated consumer and logs: /workspace/v153-review-artifacts/genres-b/party-room
+=== RUN   TestPartyGameRulesValidateAndRoomCode
+--- PASS: TestPartyGameRulesValidateAndRoomCode (0.00s)
+=== RUN   TestPartyGameRulesVariableStepEquivalence
+--- PASS: TestPartyGameRulesVariableStepEquivalence (0.00s)
+=== RUN   TestPartyGameRulesBackfillSeats
+--- PASS: TestPartyGameRulesBackfillSeats (0.00s)
+PASS
+ok  	example.com/party-room-practice/game/modules/partyroom	1.016s
+2026/11/17 13:18:11 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=49.803µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestPartyGameMatchmakingOpensOneRoomPerMatch
+2026/11/17 13:18:11 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameMatchmakingOpensOneRoomPerMatch (0.06s)
+=== RUN   TestPartyGameCodeRoomFullAndLateJoinRejected
+2026/11/17 13:18:11 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameCodeRoomFullAndLateJoinRejected (0.06s)
+=== RUN   TestPartyGameHostLeaveTransfersHost
+2026/11/17 13:18:11 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameHostLeaveTransfersHost (0.04s)
+=== RUN   TestPartyGameHeartbeatDrivesRoundsAndGroupSync
+2026/11/17 13:18:11 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameHeartbeatDrivesRoundsAndGroupSync (0.30s)
+=== RUN   TestPartyGameFirstGrabWinsAndDuplicateInputDedup
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameFirstGrabWinsAndDuplicateInputDedup (0.05s)
+=== RUN   TestPartyGameFoulEliminationAndUndoRollback
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameFoulEliminationAndUndoRollback (0.04s)
+=== RUN   TestPartyGameReconnectWithinGraceReturnsToSameRoom
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameReconnectWithinGraceReturnsToSameRoom (0.03s)
+=== RUN   TestPartyGameGraceExpiryAndMidGameLeaveEndEarly
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameGraceExpiryAndMidGameLeaveEndEarly (0.10s)
+=== RUN   TestPartyGameSettlementRewardsOnceAndRoomDestroyed
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameSettlementRewardsOnceAndRoomDestroyed (0.14s)
+=== RUN   TestPartyGameMatchDeadlineTimerForcesSettlement
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameMatchDeadlineTimerForcesSettlement (0.07s)
+=== RUN   TestPartyGameSelfViewAndRoomShareOneConnection
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameSelfViewAndRoomShareOneConnection (0.06s)
+=== RUN   TestPartyGameBackfillAfterMidGameLeave
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameBackfillAfterMidGameLeave (0.04s)
+=== RUN   TestPartyGameBackfillConcurrentMatchesAdmitOne
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameBackfillConcurrentMatchesAdmitOne (0.04s)
+=== RUN   TestPartyGameBackfillDeadlineWithdrawsTicket
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameBackfillDeadlineWithdrawsTicket (0.05s)
+=== RUN   TestPartyGameBackfillPlayerJoinsGroupWithFullSync
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+--- PASS: TestPartyGameBackfillPlayerJoinsGroupWithFullSync (0.04s)
+=== RUN   TestPartyGameRobotBusiness
+2026/11/17 13:18:12 INFO entity sync started mode=periodic interval=1h0m0s on_change_batch_window=0s
+2026/11/17 13:18:12 INFO player tcp listener started addr=127.0.0.1:34381 max_connections=10000
+2026/11/17 13:18:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34381
+2026/11/17 13:18:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34381
+2026/11/17 13:18:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34381
+2026/11/17 13:18:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34381
+2026/11/17 13:18:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34381
+2026/11/17 13:18:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestPartyGameRobotBusiness (0.16s)
+PASS
+ok  	example.com/party-room-practice/game/handler	2.304s
+IDs are valid
+generated files are up to date
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0
+Party room generated consumer kept: /workspace/v153-review-artifacts/genres-b/party-room
+$ /workspace/v153-review-artifacts/genres-b/party-room/roost generate
+==> module-service
+==> dao
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_databases.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_party_room_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_player_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_party_room_timer_node_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_wallet_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_wallet_ledger_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_wallet_receipt_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_enter_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/protocol/proto/protocol.proto
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/protocol/pb/protocol.pb.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/protocol/msgid/msgid_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/protocol/protocol_manifest.json
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/protocol/player_bind/bind_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/loadtest/protocol/registry_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/controllers/controller.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/entities/party_room/party_room_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/entities/party_room/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/entities/player/player_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/entities/player/player_sync_packer_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/entities/player/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/entities/world/world_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-b/party-room/project/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> config-template
+tablegen: no table meta found
+==> config-data
+==> config-go
+tablegen: no table meta found
+table go: /workspace/v153-review-artifacts/genres-b/party-room/project/configs/generated/gen_table_config.go
+==> endpoint
+==> registry
+$ go build -mod=mod ./...
+$ go vet -mod=mod ./...
+$ /workspace/v153-review-artifacts/genres-b/party-room/roost id check
+IDs are valid
+$ /workspace/v153-review-artifacts/genres-b/party-room/roost generate --check
+generated files are up to date
+$ bash /workspace/review-v153/scripts/testdata/genre-common/modules.sh verify /workspace/v153-review-artifacts/genres-b/party-room/roost /workspace/review-v153 /workspace/v153-review-artifacts/genres-b/party-room/custom-module-verify.json
+module verify: enter 29/29 skipped=0
+module verify: wallet 17/17 skipped=0

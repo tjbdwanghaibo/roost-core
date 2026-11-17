@@ -1,0 +1,78 @@
+$ bash /workspace/review-v153/scripts/test-auto-chess-generated.sh
+Auto chess generated consumer and logs: /workspace/v153-review-artifacts/genres-b/auto-chess
+=== RUN   TestAutoChessMergeSellAndPoolConservation
+--- PASS: TestAutoChessMergeSellAndPoolConservation (0.00s)
+=== RUN   TestAutoChessCombatReplayOddByeAndElimination
+--- PASS: TestAutoChessCombatReplayOddByeAndElimination (0.00s)
+=== RUN   TestAutoChessStrictDecodeAndBoundedRecovery
+--- PASS: TestAutoChessStrictDecodeAndBoundedRecovery (0.01s)
+=== RUN   TestAutoChessCatalogReloadDoesNotRepriceFrozenMatch
+2026/11/17 13:17:09 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=885.571µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+2026/11/17 13:17:09 INFO config reload applied op=reload reason=manual version=2 live=2 elapsed=565.442µs changed=1 added=0 removed=0 unchanged=0 members=[chess_rules]
+2026/11/17 13:17:09 WARN config reload failed: the live generation is unchanged op=reload reason=manual version=3 live=2 elapsed=676.283µs stage=build error="configdata: validate object chess_rules: auto chess: invalid identity, phase, operation or limit"
+--- PASS: TestAutoChessCatalogReloadDoesNotRepriceFrozenMatch (0.00s)
+PASS
+ok  	example.com/auto-chess-practice/game/modules/autochess	1.041s
+2026/11/17 13:17:13 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=44.147µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestAutoChessSharedPoolConcurrentPurchaseAndRetry
+2026/11/17 13:17:13 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=565.092µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessSharedPoolConcurrentPurchaseAndRetry (0.14s)
+=== RUN   TestAutoChessReadyRaceFreezesOneBattle
+2026/11/17 13:17:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.041419ms changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessReadyRaceFreezesOneBattle (0.15s)
+=== RUN   TestAutoChessDeadlineRejectsLateInputAndDisconnectCannotStall
+2026/11/17 13:17:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=612.747µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessDeadlineRejectsLateInputAndDisconnectCannotStall (0.09s)
+=== RUN   TestAutoChessReconnectFencesAndPrivateView
+2026/11/17 13:17:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.128965ms changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessReconnectFencesAndPrivateView (0.06s)
+=== RUN   TestAutoChessFormationLevelShopLockAndConfigFrozen
+2026/11/17 13:17:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=481.767µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessFormationLevelShopLockAndConfigFrozen (0.16s)
+=== RUN   TestAutoChessUndoRestoresPoolRandomReceiptAndTimer
+2026/11/17 13:17:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=517.871µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessUndoRestoresPoolRandomReceiptAndTimer (0.04s)
+=== RUN   TestAutoChessTerminalRanksAndConcurrentRewards
+2026/11/17 13:17:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=415.095µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessTerminalRanksAndConcurrentRewards (0.32s)
+=== RUN   TestAutoChessLedgerFullKeepsOriginalReceipt
+2026/11/17 13:17:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=602.337µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+--- PASS: TestAutoChessLedgerFullKeepsOriginalReceipt (1.88s)
+=== RUN   TestAutoChessRobotBusiness
+2026/11/17 13:17:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=639.021µs changed=0 added=1 removed=0 unchanged=0 members=[chess_rules]
+2026/11/17 13:17:16 INFO player tcp listener started addr=127.0.0.1:32833 max_connections=10000
+2026/11/17 13:17:16 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:16 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:16 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:16 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:16 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:16 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:16 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:17 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:17 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:17 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:17 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:17 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:17 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:17 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:32833
+2026/11/17 13:17:17 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestAutoChessRobotBusiness (0.38s)
+PASS
+ok  	example.com/auto-chess-practice/game/handler	4.235s
+IDs are valid
+generated files are up to date
+2026/11/17 13:17:58 module verification failed
+modules.sh verify:
+  room: passed=33 skipped=0 want=34
+  roost module verify ok=False exit=1module verify: enter 29/29 skipped=0
+module verify: room 33/34 skipped=0
+module verify: wallet 17/17 skipped=0
+
+Auto chess generated consumer kept: /workspace/v153-review-artifacts/genres-b/auto-chess

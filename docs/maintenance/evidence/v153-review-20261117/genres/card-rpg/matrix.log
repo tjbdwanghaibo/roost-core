@@ -1,0 +1,170 @@
+$ bash /workspace/review-v153/scripts/test-card-rpg-generated.sh
+Card RPG generated consumer and logs: /workspace/v153-review-artifacts/genres-a/card-rpg
+=== RUN   TestCardRPGCatalogReloadIsAtomicAndFrozenRulesRemainUsable
+2026/11/17 13:18:33 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=10.017805ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+2026/11/17 13:18:33 WARN config reload failed: the live generation is unchanged op=reload reason=manual version=2 live=1 elapsed=4.045489ms stage=build error="configdata: validate object card_rules: card rpg: invalid identity, operation, state, funds or limit"
+2026/11/17 13:18:33 INFO config reload applied op=reload reason=manual version=3 live=3 elapsed=5.241521ms changed=1 added=0 removed=0 unchanged=4 members=[card_rules]
+--- PASS: TestCardRPGCatalogReloadIsAtomicAndFrozenRulesRemainUsable (0.02s)
+=== RUN   TestCardRPGGeneratedAttributesDeriveAndSnapshotIsIndependent
+--- PASS: TestCardRPGGeneratedAttributesDeriveAndSnapshotIsIndependent (0.00s)
+=== RUN   TestCardRPGPrivateKeysNeverAppearInPublicProjection
+--- PASS: TestCardRPGPrivateKeysNeverAppearInPublicProjection (0.00s)
+=== RUN   TestCardRPGMalformedStateAndFrozenBattleTamperingFailClosed
+--- PASS: TestCardRPGMalformedStateAndFrozenBattleTamperingFailClosed (0.01s)
+PASS
+ok  	example.com/card-rpg-practice/game/modules/cardrpg	1.062s
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.053935ms changed=0 added=4 removed=0 unchanged=0 members="[gacha_drop gacha_pool item task]"
+=== RUN   TestCardRPGDrawConcurrentReplayPityAndConfigIdentity
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.227523ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=2 live=2 elapsed=6.150179ms changed=1 added=0 removed=0 unchanged=4 members=[gacha_pool]
+--- PASS: TestCardRPGDrawConcurrentReplayPityAndConfigIdentity (0.04s)
+=== RUN   TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.332964ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=2 live=2 elapsed=4.882561ms changed=1 added=0 removed=0 unchanged=4 members=[gacha_pool]
+--- PASS: TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream (0.03s)
+=== RUN   TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.406223ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots (0.03s)
+=== RUN   TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=6.091508ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams (0.02s)
+=== RUN   TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.232426ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge (0.02s)
+=== RUN   TestCardRPGTurnAuthoritySequenceAndReplayDoNotRearmDeadline
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=4.724565ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGTurnAuthoritySequenceAndReplayDoNotRearmDeadline (0.05s)
+=== RUN   TestCardRPGCombatUsesShieldsManaPoisonAndHealing
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=6.260554ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGCombatUsesShieldsManaPoisonAndHealing (0.02s)
+=== RUN   TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=6.701894ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay (0.08s)
+=== RUN   TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.201604ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce (0.12s)
+=== RUN   TestCardRPGTurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.223169ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGTurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce (0.03s)
+=== RUN   TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=4.304629ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+--- PASS: TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact (0.02s)
+=== RUN   TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=3.830014ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+2026/11/17 13:18:41 INFO config reload applied op=reload reason=manual version=2 live=2 elapsed=6.135395ms changed=1 added=0 removed=0 unchanged=4 members=[gacha_pool]
+--- PASS: TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence (0.63s)
+=== RUN   TestCardRPGRobotBusiness
+2026/11/17 13:18:42 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=5.027036ms changed=0 added=5 removed=0 unchanged=0 members="[card_rules gacha_drop gacha_pool item task]"
+2026/11/17 13:18:42 INFO player tcp listener started addr=127.0.0.1:43073 max_connections=10000
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:18:42 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:43073
+2026/11/17 13:18:42 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestCardRPGRobotBusiness (0.14s)
+PASS
+ok  	example.com/card-rpg-practice/game/handler	2.274s
+IDs are valid
+generated files are up to date
+module verify: bag 20/20 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: gacha 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+stamina 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0
+Card RPG generated consumer kept: /workspace/v153-review-artifacts/genres-a/card-rpg
+$ /workspace/v153-review-artifacts/genres-a/card-rpg/roost generate
+==> module-service
+==> dao
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_databases.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_card_run_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_player_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_card_run_timer_node_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_stamina_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_task_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_task_period_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_wallet_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_wallet_ledger_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_wallet_receipt_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_enter_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_bag_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_gacha_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_gacha_ledger_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_gacha_receipt_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/protocol/proto/protocol.proto
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/protocol/pb/protocol.pb.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/protocol/msgid/msgid_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/protocol/protocol_manifest.json
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/protocol/player_bind/bind_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/loadtest/protocol/registry_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/controllers/controller.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/entities/card_run/card_run_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/entities/card_run/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/entities/player/player_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/entities/player/player_sync_packer_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/entities/player/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/entities/world/world_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> attribute
+unchanged: /workspace/v153-review-artifacts/genres-a/card-rpg/project/game/modules/gameplay/attribute/gen_hero_stats_attribute.go
+==> config-template
+table template: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/table_template/gacha_drop.csv
+table template: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/table_template/gacha_pool.csv
+table template: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/table_template/item.csv
+table template: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/table_template/task.csv
+==> config-data
+table json: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/data/gacha_drop.json
+table json: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/data/gacha_pool.json
+table json: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/data/item.json
+table json: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/data/task.json
+==> config-go
+table go: /workspace/v153-review-artifacts/genres-a/card-rpg/project/configs/generated/gen_table_config.go
+==> endpoint
+==> registry
+$ go build -mod=mod ./...
+$ go vet -mod=mod ./...
+$ /workspace/v153-review-artifacts/genres-a/card-rpg/roost id check
+IDs are valid
+$ /workspace/v153-review-artifacts/genres-a/card-rpg/roost generate --check
+generated files are up to date
+$ bash /workspace/review-v153/scripts/testdata/genre-common/modules.sh verify /workspace/v153-review-artifacts/genres-a/card-rpg/roost /workspace/review-v153 /workspace/v153-review-artifacts/genres-a/card-rpg/custom-module-verify.json
+module verify: bag 20/20 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: gacha 29/29 skipped=0
+module verify: rules 10/10 skipped=0
+module verify: stamina 26/26 skipped=0
+module verify: stamina+rules 2/2 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+stamina 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0

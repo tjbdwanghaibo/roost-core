@@ -1,0 +1,72 @@
+[
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGPartyDisbandRejectsTheOldParty",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGTradeBothConfirmAndReplay",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGTradeCancelAndExpiryRefundEscrow",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGTradeConfirmRacesWithCancel",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGCombatCooldownReplayLootAndQuest",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGCombatRefusesOtherScenesAndLivingBossCompletion",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGBuffRefreshAndDeadline",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGBuffFailureRollsBackAndOfflineExpiry",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGDeathAndDelayedRevive",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGPartyReplay",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGTradeConcurrentReplay",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGTradeRollback",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGTransferRollbackReplayAndStaleRequest",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/mmorpg/game/handler",
+    "test": "TestMMORPGRobotBusiness",
+    "result": "pass"
+  }
+]

@@ -1,0 +1,31 @@
+2026/11/17 19:42:47 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=178.995µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestReviewPresenceFixtureInjectionOrder
+=== RUN   TestReviewPresenceFixtureInjectionOrder/before_track_control
+2026/11/17 19:42:47 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+=== RUN   TestReviewPresenceFixtureInjectionOrder/after_track
+    review_fixture_order_test.go:36: first disconnect succeeded before fixture injected the failures; seat already retired
+    review_fixture_order_test.go:42: no disconnect, want {roomID:2 playerID:102 epoch:1}
+--- FAIL: TestReviewPresenceFixtureInjectionOrder (2.00s)
+    --- PASS: TestReviewPresenceFixtureInjectionOrder/before_track_control (0.00s)
+    --- FAIL: TestReviewPresenceFixtureInjectionOrder/after_track (2.00s)
+=== RUN   TestReviewPresenceFixtureInjectionOrder
+=== RUN   TestReviewPresenceFixtureInjectionOrder/before_track_control
+2026/11/17 19:42:49 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+=== RUN   TestReviewPresenceFixtureInjectionOrder/after_track
+    review_fixture_order_test.go:36: first disconnect succeeded before fixture injected the failures; seat already retired
+    review_fixture_order_test.go:42: no disconnect, want {roomID:2 playerID:102 epoch:1}
+--- FAIL: TestReviewPresenceFixtureInjectionOrder (2.00s)
+    --- PASS: TestReviewPresenceFixtureInjectionOrder/before_track_control (0.00s)
+    --- FAIL: TestReviewPresenceFixtureInjectionOrder/after_track (2.00s)
+=== RUN   TestReviewPresenceFixtureInjectionOrder
+=== RUN   TestReviewPresenceFixtureInjectionOrder/before_track_control
+2026/11/17 19:42:51 WARN room presence: gave up marking a closed connection offline room_id=2 player_id=102 epoch=1 err="room store unavailable"
+=== RUN   TestReviewPresenceFixtureInjectionOrder/after_track
+    review_fixture_order_test.go:36: first disconnect succeeded before fixture injected the failures; seat already retired
+    review_fixture_order_test.go:42: no disconnect, want {roomID:2 playerID:102 epoch:1}
+--- FAIL: TestReviewPresenceFixtureInjectionOrder (2.00s)
+    --- PASS: TestReviewPresenceFixtureInjectionOrder/before_track_control (0.00s)
+    --- FAIL: TestReviewPresenceFixtureInjectionOrder/after_track (2.00s)
+FAIL
+FAIL	example.com/auto-chess-practice/game/modules/room	6.098s
+FAIL

@@ -1,0 +1,62 @@
+[
+  {
+    "name": "profile_name",
+    "round": 1,
+    "exit_code": 0
+  },
+  {
+    "name": "profile_name",
+    "round": 2,
+    "exit_code": 0
+  },
+  {
+    "name": "profile_name",
+    "round": 3,
+    "exit_code": 0
+  },
+  {
+    "name": "name",
+    "round": 1,
+    "exit_code": 1
+  },
+  {
+    "name": "name",
+    "round": 2,
+    "exit_code": 1
+  },
+  {
+    "name": "name",
+    "round": 3,
+    "exit_code": 1
+  },
+  {
+    "name": "message",
+    "round": 1,
+    "exit_code": 1
+  },
+  {
+    "name": "message",
+    "round": 2,
+    "exit_code": 1
+  },
+  {
+    "name": "message",
+    "round": 3,
+    "exit_code": 1
+  },
+  {
+    "name": "error_codes",
+    "round": 1,
+    "exit_code": 1
+  },
+  {
+    "name": "error_codes",
+    "round": 2,
+    "exit_code": 1
+  },
+  {
+    "name": "error_codes",
+    "round": 3,
+    "exit_code": 1
+  }
+]

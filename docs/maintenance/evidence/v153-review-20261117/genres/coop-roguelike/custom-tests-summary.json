@@ -1,0 +1,52 @@
+[
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioRobotCompleteCoopAndClientViews",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioTeamBarrier",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioRewardExactlyOnce",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioRewardRollsBackBothEntities",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioSeedSurvivesReload",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioRobotTCPRetryAndReconnect",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioRetryAndConflict",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioCommitRejectionRollsBack",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioStaleRevision",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/coop-roguelike/game/handler",
+    "test": "TestScenarioMembership",
+    "result": "pass"
+  }
+]

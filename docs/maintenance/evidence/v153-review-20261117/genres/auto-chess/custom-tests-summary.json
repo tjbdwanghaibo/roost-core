@@ -1,0 +1,67 @@
+[
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessSharedPoolConcurrentPurchaseAndRetry",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessReadyRaceFreezesOneBattle",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessDeadlineRejectsLateInputAndDisconnectCannotStall",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessReconnectFencesAndPrivateView",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessFormationLevelShopLockAndConfigFrozen",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessUndoRestoresPoolRandomReceiptAndTimer",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessTerminalRanksAndConcurrentRewards",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessLedgerFullKeepsOriginalReceipt",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/handler",
+    "test": "TestAutoChessRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/modules/autochess",
+    "test": "TestAutoChessMergeSellAndPoolConservation",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/modules/autochess",
+    "test": "TestAutoChessCombatReplayOddByeAndElimination",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/modules/autochess",
+    "test": "TestAutoChessStrictDecodeAndBoundedRecovery",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/auto-chess/game/modules/autochess",
+    "test": "TestAutoChessCatalogReloadDoesNotRepriceFrozenMatch",
+    "result": "pass"
+  }
+]

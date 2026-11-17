@@ -1,0 +1,63 @@
+=== RUN   TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup
+--- PASS: TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup (2.00s)
+=== RUN   TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect
+    arena_network_test.go:443: reconnected before frame 296 asking from frame 41 (history starts at 232); players 2 and 8 restored from checkpoints [288] / [288]; all ten match the reference at frame 360
+--- PASS: TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect (6.42s)
+=== RUN   TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot
+    arena_network_test.go:748: Room: reconnected before frame 296 asking from frame 41; players 2 and 8 restored from committed checkpoints [288] / [288]; all ten match the authority at frame 360
+--- PASS: TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot (5.67s)
+=== RUN   TestMOBAFivePlayerTeamsDraftAndMatchIdentity
+--- PASS: TestMOBAFivePlayerTeamsDraftAndMatchIdentity (0.01s)
+=== RUN   TestMOBAArenaTargetingThreeLanesEconomyAndRespawn
+--- PASS: TestMOBAArenaTargetingThreeLanesEconomyAndRespawn (0.00s)
+=== RUN   TestMOBAArenaReplayVersionSeedAndFogBoundary
+--- PASS: TestMOBAArenaReplayVersionSeedAndFogBoundary (0.15s)
+=== RUN   TestMOBAArenaSurrenderAndTimeLimit
+--- PASS: TestMOBAArenaSurrenderAndTimeLimit (0.00s)
+=== RUN   TestMOBAMatchmakingAdmissionCancellationAndCommit
+--- PASS: TestMOBAMatchmakingAdmissionCancellationAndCommit (0.00s)
+=== RUN   TestMOBAInputIdentityReplayAndWindow
+--- PASS: TestMOBAInputIdentityReplayAndWindow (0.00s)
+=== RUN   TestMOBADeterministicDuelHealsLostBroadcasts
+--- PASS: TestMOBADeterministicDuelHealsLostBroadcasts (0.00s)
+=== RUN   TestMOBACatchupAndSpectatorCannotControlHeroes
+--- PASS: TestMOBACatchupAndSpectatorCannotControlHeroes (0.00s)
+=== RUN   TestMOBAHistoryExpiryAndDesyncAreExplicit
+--- PASS: TestMOBAHistoryExpiryAndDesyncAreExplicit (0.00s)
+=== RUN   TestMOBALaneTowersBaseAndServerResult
+--- PASS: TestMOBALaneTowersBaseAndServerResult (0.00s)
+=== RUN   TestMOBASkillCooldownShopAndCheckpoint
+--- PASS: TestMOBASkillCooldownShopAndCheckpoint (0.00s)
+PASS
+ok  	example.com/moba-practice/game/modules/moba	15.265s
+2026/11/17 13:15:31 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=60.781µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBAKCPRobotMatchSettlementAndClientResult
+--- PASS: TestMOBAKCPRobotMatchSettlementAndClientResult (0.31s)
+=== RUN   TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom
+--- PASS: TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom (0.13s)
+=== RUN   TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID
+--- PASS: TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID (0.14s)
+=== RUN   TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity
+--- PASS: TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity (0.37s)
+=== RUN   TestMOBARoundUndoRollsBackFrameAndCheckpoint
+--- PASS: TestMOBARoundUndoRollsBackFrameAndCheckpoint (0.07s)
+=== RUN   TestMOBARoomMailboxBoundAndDrain
+--- PASS: TestMOBARoomMailboxBoundAndDrain (0.09s)
+=== RUN   TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound
+--- PASS: TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound (0.10s)
+=== RUN   TestMOBADurableReplayAndDelayedObserverBeyond64Frames
+--- PASS: TestMOBADurableReplayAndDelayedObserverBeyond64Frames (0.80s)
+=== RUN   TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts
+--- PASS: TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts (0.33s)
+=== RUN   TestMOBARoomCatchupNeverSendsUncommittedFrames
+--- PASS: TestMOBARoomCatchupNeverSendsUncommittedFrames (0.74s)
+=== RUN   TestMOBASettlementConcurrentReplayAndIdentity
+--- PASS: TestMOBASettlementConcurrentReplayAndIdentity (0.02s)
+=== RUN   TestMOBASettlementRollbackAndRetry
+--- PASS: TestMOBASettlementRollbackAndRetry (0.01s)
+=== RUN   TestMOBANoWinnerSettlementNeverPays
+--- PASS: TestMOBANoWinnerSettlementNeverPays (0.01s)
+=== RUN   TestMOBAServerReferenceSettlesTheFinishedRound
+--- PASS: TestMOBAServerReferenceSettlesTheFinishedRound (0.00s)
+PASS
+ok  	example.com/moba-practice/game/handler	4.200s

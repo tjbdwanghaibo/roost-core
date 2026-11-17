@@ -1,0 +1,87 @@
+[
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGDrawConcurrentReplayPityAndConfigIdentity",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGTurnAuthoritySequenceAndReplayDoNotRearmDeadline",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGCombatUsesShieldsManaPoisonAndHealing",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGTurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/handler",
+    "test": "TestCardRPGRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/modules/cardrpg",
+    "test": "TestCardRPGCatalogReloadIsAtomicAndFrozenRulesRemainUsable",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/modules/cardrpg",
+    "test": "TestCardRPGGeneratedAttributesDeriveAndSnapshotIsIndependent",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/modules/cardrpg",
+    "test": "TestCardRPGPrivateKeysNeverAppearInPublicProjection",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/card-rpg/game/modules/cardrpg",
+    "test": "TestCardRPGMalformedStateAndFrozenBattleTamperingFailClosed",
+    "result": "pass"
+  }
+]

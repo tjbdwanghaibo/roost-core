@@ -1,0 +1,26 @@
+2026/11/17 13:09:27 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=107.976µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestSLGAllianceRewardOnceBeyondWalletWindow
+--- PASS: TestSLGAllianceRewardOnceBeyondWalletWindow (0.33s)
+=== RUN   TestSLGRobotBusiness
+2026/11/17 13:09:28 INFO player tcp listener started addr=127.0.0.1:39397 max_connections=10000
+2026/11/17 13:09:28 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:39397
+2026/11/17 13:09:28 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:28 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:39397
+2026/11/17 13:09:28 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:28 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:39397
+2026/11/17 13:09:28 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestSLGRobotBusiness (0.08s)
+=== RUN   TestSLGConstructionMarchAndReplay
+--- PASS: TestSLGConstructionMarchAndReplay (0.05s)
+=== RUN   TestSLGCancelRefundAndRefusal
+--- PASS: TestSLGCancelRefundAndRefusal (0.02s)
+=== RUN   TestSLGFailureRollsBackResourcesAndDeadline
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.02s)
+=== RUN   TestSLGOfflineIncomeIsBusinessBounded
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.03s)
+=== RUN   TestSLGTwoPlayersCompeteForOneTile
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.02s)
+=== RUN   TestSLGResearchAndConstructionUseIndependentQueues
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.02s)
+PASS
+ok  	example.com/slg-practice/game/handler	1.618s

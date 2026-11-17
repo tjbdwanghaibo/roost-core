@@ -1,0 +1,38 @@
+2026/11/17 13:17:08 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=56.03µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestScenarioTurnOrder
+--- PASS: TestScenarioTurnOrder (0.02s)
+=== RUN   TestScenarioTimeoutConsumesOneTurn
+--- PASS: TestScenarioTimeoutConsumesOneTurn (0.02s)
+=== RUN   TestScenarioTerminalCannotAttack
+--- PASS: TestScenarioTerminalCannotAttack (0.05s)
+=== RUN   TestScenarioReconnectReadsAuthoritativeTurn
+--- PASS: TestScenarioReconnectReadsAuthoritativeTurn (0.10s)
+=== RUN   TestScenarioTurnTimesOutByTheRoomTimer
+--- PASS: TestScenarioTurnTimesOutByTheRoomTimer (3.59s)
+=== RUN   TestScenarioRobotTCPRetryAndReconnect
+2026/11/17 13:17:12 INFO player tcp listener started addr=127.0.0.1:37355 max_connections=10000
+2026/11/17 13:17:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37355
+2026/11/17 13:17:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37355
+2026/11/17 13:17:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37355
+2026/11/17 13:17:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37355
+2026/11/17 13:17:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37355
+2026/11/17 13:17:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37355
+2026/11/17 13:17:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:17:12 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37355
+2026/11/17 13:17:12 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestScenarioRobotTCPRetryAndReconnect (0.09s)
+=== RUN   TestScenarioRetryAndConflict
+--- PASS: TestScenarioRetryAndConflict (0.03s)
+=== RUN   TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioCommitRejectionRollsBack (0.02s)
+=== RUN   TestScenarioStaleRevision
+--- PASS: TestScenarioStaleRevision (0.02s)
+=== RUN   TestScenarioMembership
+--- PASS: TestScenarioMembership (0.01s)
+PASS
+ok  	example.com/turn-pvp-practice/game/handler	4.972s

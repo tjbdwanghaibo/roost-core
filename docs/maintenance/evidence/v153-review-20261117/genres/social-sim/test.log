@@ -1,0 +1,34 @@
+2026/11/17 13:20:08 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=40.171µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestScenarioVisitorPermissions
+--- PASS: TestScenarioVisitorPermissions (0.02s)
+=== RUN   TestScenarioOfflineHarvestOnce
+--- PASS: TestScenarioOfflineHarvestOnce (0.02s)
+=== RUN   TestScenarioHelpChangesDeadlineOnlyOnce
+--- PASS: TestScenarioHelpChangesDeadlineOnlyOnce (0.01s)
+=== RUN   TestScenarioHarvestRollback
+--- PASS: TestScenarioHarvestRollback (0.01s)
+=== RUN   TestScenarioRobotTCPRetryAndReconnect
+2026/11/17 13:20:08 INFO player tcp listener started addr=127.0.0.1:37443 max_connections=10000
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestScenarioRobotTCPRetryAndReconnect (0.03s)
+=== RUN   TestScenarioRetryAndConflict
+--- PASS: TestScenarioRetryAndConflict (0.01s)
+=== RUN   TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioCommitRejectionRollsBack (0.01s)
+=== RUN   TestScenarioStaleRevision
+--- PASS: TestScenarioStaleRevision (0.01s)
+=== RUN   TestScenarioMembership
+--- PASS: TestScenarioMembership (0.00s)
+PASS
+ok  	example.com/social-sim-practice/game/handler	1.151s

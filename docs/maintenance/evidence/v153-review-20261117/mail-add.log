@@ -1,0 +1,92 @@
+service: game
+prerequisite (did run): roost add access player --service game
+prerequisite (did run): roost add transport tcp
+framework service account: declared (services.account.framework: account, added to services.game.uses; its config, deployment and collaborators come with the install)
+framework service mail: declared (services.mail.framework: mail, added to services.game.uses; its config, deployment and collaborators come with the install)
+module wallet: installed
+  state:     PlayerDao.Wallet (persist,sync)
+  state:     PlayerDao.WalletLedger (nosync)
+  component: Player.Wallet
+  id:        component Wallet = 2000
+  id:        errcode wallet_conflict = 100000
+  id:        errcode wallet_invalid = 100001
+  id:        errcode wallet_overflow = 100002
+  id:        errcode wallet_short = 100003
+  id:        protocol WalletSpend = 10000
+  file:      db/def/wallet.go
+  file:      game/components/wallet/wallet.go
+  file:      game/controllers/wallet.go
+  file:      game/event/wallet.go
+  file:      game/handler/wallet_grant.go
+  file:      game/handler/wallet_spend.go
+  file:      game/handler/wallet_test.go
+  file:      game/view/component_wallet.go
+  file:      internal/errors/wallet.go
+  file:      protocol/def/wallet_spend.go
+module mailbox: installed
+  runtime:   game/modules/mailbox.Start (before service Init; stop after service Shutdown)
+  state:     PlayerDao.MailboxLedger (nosync)
+  component: Player.Mailbox
+  id:        component Mailbox = 2001
+  id:        errcode mailbox_attachment = 100004
+  id:        errcode mailbox_invalid = 100005
+  id:        protocol MailboxClaim = 10001
+  id:        protocol MailboxList = 10002
+  file:      db/def/mailbox.go
+  file:      game/components/mailbox/grant.go
+  file:      game/components/mailbox/mailbox.go
+  file:      game/controllers/mailbox.go
+  file:      game/controllers/mailbox_integration_test.go
+  file:      game/controllers/mailbox_test.go
+  file:      game/handler/mailbox_claim_reward.go
+  file:      game/handler/mailbox_test.go
+  file:      game/modules/mailbox/mailbox.go
+  file:      game/modules/mailbox/mailbox_runtime.go
+  file:      game/modules/mailbox/mailbox_send.go
+  file:      game/modules/mailbox/mailbox_send_test.go
+  file:      game/modules/mailbox/mailbox_test.go
+  file:      game/view/component_mailbox.go
+  file:      internal/errors/mailbox.go
+  file:      protocol/def/mailbox_claim.go
+  file:      protocol/def/mailbox_list.go
+module rehome: installed
+  manager:   NewRehomeBackground() in game/managers/managers.go (started and stopped by the manager mod)
+  state:     PlayerDao.Rehome (nosync)
+  component: Player.Rehome
+  id:        component Rehome = 2002
+  id:        errcode rehome_cooldown = 100006
+  id:        errcode rehome_elsewhere = 100007
+  id:        errcode rehome_moving = 100008
+  id:        errcode rehome_refused = 100009
+  id:        protocol RehomeApply = 10003
+  file:      db/def/rehome.go
+  file:      game/components/rehome/rehome.go
+  file:      game/controllers/rehome.go
+  file:      game/controllers/rehome_test.go
+  file:      game/event/rehome.go
+  file:      game/handler/rehome_arrive.go
+  file:      game/handler/rehome_cancel.go
+  file:      game/handler/rehome_prepare.go
+  file:      game/handler/rehome_test.go
+  file:      game/managers/rehome_background.go
+  file:      game/managers/rehome_background_test.go
+  file:      game/modules/rehome/rehome.go
+  file:      game/modules/rehome/rehome_admit.go
+  file:      game/modules/rehome/rehome_admit_test.go
+  file:      game/modules/rehome/rehome_background.go
+  file:      game/modules/rehome/rehome_binding.go
+  file:      game/modules/rehome/rehome_conclusion_test.go
+  file:      game/modules/rehome/rehome_directory.go
+  file:      game/modules/rehome/rehome_driver.go
+  file:      game/modules/rehome/rehome_hooks.go
+  file:      game/modules/rehome/rehome_quiesce_test.go
+  file:      game/modules/rehome/rehome_residency.go
+  file:      game/modules/rehome/rehome_rules.go
+  file:      game/modules/rehome/rehome_test.go
+  file:      game/view/component_rehome.go
+  file:      internal/errors/rehome.go
+  file:      protocol/def/rehome_apply.go
+glue mailbox with rehome: written (换服离开前按旧范围合并一次全服邮件（rehome 的离开钩子，拉不成中止换服）；到新服由进入钩子按新的承载服范围拉)
+  file:      game/controllers/mailbox_rehome.go
+  file:      game/controllers/mailbox_rehome_test.go
+next: roost module verify

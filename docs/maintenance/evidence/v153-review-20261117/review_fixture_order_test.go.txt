@@ -1,0 +1,46 @@
+package room
+
+import (
+	"errors"
+	"testing"
+	"time"
+)
+
+// The late-injection branch forces the scheduling already allowed by the
+// shipped fixture: Track wakes a worker before the test queues its failures.
+func TestReviewPresenceFixtureInjectionOrder(t *testing.T) {
+	for _, before := range []bool{true, false} {
+		name := "after_track"
+		if before {
+			name = "before_track_control"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := newPresenceWorld(t)
+			inject := func() {
+				for range 3 {
+					w.fail <- errors.New("room store unavailable")
+				}
+			}
+			if before {
+				inject()
+			}
+			w.presence.Track(2, 102, "b", 1)
+			if !before {
+				deadline := time.Now().Add(2 * time.Second)
+				for w.presence.Tracked() != 0 && time.Now().Before(deadline) {
+					time.Sleep(time.Millisecond)
+				}
+				if w.presence.Tracked() != 0 {
+					t.Fatal("first successful disconnect did not finish")
+				}
+				t.Log("first disconnect succeeded before fixture injected the failures; seat already retired")
+				inject()
+			}
+			w.expect(t, presenceCall{2, 102, 1})
+			for range 2 {
+				w.presence.Sweep()
+				w.expect(t, presenceCall{2, 102, 1})
+			}
+		})
+	}
+}

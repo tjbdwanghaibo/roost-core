@@ -1,0 +1,26 @@
+{
+  "started_utc": "2026-11-17T19:42:26.438084+00:00",
+  "git": "44241b956fd0bb118c1ded7535425524b8ffa10d",
+  "dirty": false,
+  "go": "go version go1.27.2 linux/amd64",
+  "scope": "generated gameplay fixtures; persistence substitutes unless separately recorded; not a capacity certification",
+  "genres": [
+    {
+      "genre": "auto-chess",
+      "status": "passed",
+      "module": "example.com/acceptance/auto-chess",
+      "custom_module_verify": {
+        "enter": 29,
+        "room": 34,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 13,
+      "passed_tests": 13,
+      "skipped_tests": 0,
+      "elapsed_seconds": 82.522,
+      "log_sha256": "0fbf92babee4cbdba2d10ef9dca011c66c72a299ff22e3debe8855c34b93e88f"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+=== RUN   TestSurvivalExtractionDeathRefundsUnfinishedCraftAndConservesItems
+--- PASS: TestSurvivalExtractionDeathRefundsUnfinishedCraftAndConservesItems (0.00s)
+=== RUN   TestSurvivalExtractionOfflineDamageIsBoundedAndRaidEndFixed
+--- PASS: TestSurvivalExtractionOfflineDamageIsBoundedAndRaidEndFixed (0.00s)
+=== RUN   TestSurvivalExtractionStrictDecodeLedgerAndMissingAdmission
+--- PASS: TestSurvivalExtractionStrictDecodeLedgerAndMissingAdmission (0.01s)
+=== RUN   TestSurvivalExtractionConfigurationSnapshotPreservesPricesAndDuration
+2026/11/17 13:15:08 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=640.664µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:08 INFO config reload applied op=reload reason=manual version=2 live=2 elapsed=325.677µs changed=1 added=0 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:08 WARN config reload failed: the live generation is unchanged op=reload reason=manual version=3 live=2 elapsed=446.837µs stage=build error="configdata: validate object survival_rules: survival: invalid identity, phase, operation or limit"
+--- PASS: TestSurvivalExtractionConfigurationSnapshotPreservesPricesAndDuration (0.01s)
+PASS
+ok  	example.com/survival-extraction-practice/game/modules/survival	1.053s
+2026/11/17 13:15:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.265443ms changed=0 added=1 removed=0 unchanged=0 members=[item]
+=== RUN   TestSurvivalExtractionRobotBusiness
+2026/11/17 13:15:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=519.21µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=573.233µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+2026/11/17 13:15:15 INFO player tcp listener started addr=127.0.0.1:46243 max_connections=10000
+2026/11/17 13:15:15 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:46243
+2026/11/17 13:15:15 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:15:15 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:46243
+2026/11/17 13:15:15 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:15:15 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:46243
+2026/11/17 13:15:15 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:15:15 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:46243
+2026/11/17 13:15:15 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:15:15 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:46243
+2026/11/17 13:15:15 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestSurvivalExtractionRobotBusiness (0.10s)
+=== RUN   TestSurvivalExtractionAdmissionAtomicAndIdempotent
+2026/11/17 13:15:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=496.472µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=516.354µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionAdmissionAtomicAndIdempotent (0.06s)
+=== RUN   TestSurvivalExtractionSharedNodeCompetitionAndRetry
+2026/11/17 13:15:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=396.137µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=372.464µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionSharedNodeCompetitionAndRetry (0.14s)
+=== RUN   TestSurvivalExtractionCraftCapacityCancellationAndHealing
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=489.873µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=638.356µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionCraftCapacityCancellationAndHealing (0.12s)
+=== RUN   TestSurvivalExtractionDeathDropsAndConcurrentLoot
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=591.816µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.022568ms changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionDeathDropsAndConcurrentLoot (0.11s)
+=== RUN   TestSurvivalExtractionChannelCancellationAndAtomicClaim
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=468.04µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=497.55µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionChannelCancellationAndAtomicClaim (0.39s)
+=== RUN   TestSurvivalExtractionReconnectPrivateInventoryAndDeadline
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=598.618µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=733.064µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionReconnectPrivateInventoryAndDeadline (0.14s)
+=== RUN   TestSurvivalExtractionExpiryCannotReopenOrReenter
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=486.384µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=554.089µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionExpiryCannotReopenOrReenter (0.06s)
+=== RUN   TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=456.279µs changed=0 added=1 removed=0 unchanged=0 members=[survival_rules]
+2026/11/17 13:15:16 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=476.687µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer (0.06s)
+PASS
+ok  	example.com/survival-extraction-practice/game/handler	2.218s

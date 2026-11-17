@@ -1,0 +1,80 @@
+package controllers
+
+import (
+	"context"
+	gamerehome "example.com/mailreview/game/modules/rehome"
+	"fmt"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	"testing"
+	"time"
+)
+
+// The installed leaving hook uses the real mail service. Version stores and
+// envelope storage are in-memory, as in the shipped module fixture.
+func TestReviewMailboxRehomeFull(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		t.Run(fmt.Sprintf("full_%t", full), func(t *testing.T) {
+			ctx := context.Background()
+			const playerID int64 = 94309
+			mail := mailboxRehomeService(t)
+			pull := func(sid int32) {
+				t.Helper()
+				_, err := mail.PullBroadcasts(ctx, playerID, svcmail.BroadcastProfile{Scopes: []string{svcmail.ServerScope(sid)}, RegisteredAtUnix: time.Now().Add(-24 * time.Hour).Unix()})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			send := func(req svcmail.SendRequest) string {
+				t.Helper()
+				e, err := mail.Send(ctx, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return e.ID
+			}
+			pull(3)
+			count := svcmail.MaxMailboxEntries - 1
+			if full {
+				count++
+			}
+			var filler string
+			for i := 0; i < count; i++ {
+				id := send(svcmail.SendRequest{Audience: svcmail.AudienceDirect, Recipients: []int64{playerID}, Subject: "filler", Body: "filler", ExpiresInSeconds: 604800, RequestID: fmt.Sprintf("fill-%d", i)})
+				if i == 0 {
+					filler = id
+				}
+			}
+			oldID := send(svcmail.SendRequest{Audience: svcmail.AudienceBroadcast, Scope: svcmail.ServerScope(3), Subject: "old-before-leave", Body: "old", ExpiresInSeconds: 604800, RequestID: "old-before"})
+			newID := send(svcmail.SendRequest{Audience: svcmail.AudienceBroadcast, Scope: svcmail.ServerScope(4), Subject: "new-before-leave", Body: "new", ExpiresInSeconds: 604800, RequestID: "new-before"})
+			err := mailboxPullBroadcastsOnLeave(ctx, mail, gamerehome.Move{PlayerID: playerID, ID: "full-mailbox-move", From: 3, To: 4})
+			box, _, readErr := mail.Mailbox(ctx, playerID)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Logf("leave hook err=%v entries=%d watermark=%d", err, len(box.Entries), box.BroadcastWatermark)
+			if err != nil {
+				if full {
+					return
+				}
+				t.Fatal(err)
+			} // safe refusal on saturation is acceptable
+			pull(4)
+			if _, err = mail.Delete(ctx, playerID, filler); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = mail.Summary(ctx, playerID); err != nil {
+				t.Fatal(err)
+			}
+			box, _, err = mail.Mailbox(ctx, playerID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, oldPresent := box.Entries[oldID]
+			_, newPresent := box.Entries[newID]
+			t.Logf("after new-server pull and freeing space: old=%t new-before=%t watermark=%d", oldPresent, newPresent, box.BroadcastWatermark)
+			if !oldPresent || newPresent {
+				t.Errorf("move succeeded but broadcast ownership changed: old=%t want true; new-before=%t want false", oldPresent, newPresent)
+			}
+		})
+	}
+}

@@ -1,0 +1,106 @@
+[
+  {
+    "genre": "auto-chess",
+    "base_tests": 13,
+    "custom_tests": 13,
+    "module_scenarios": 80,
+    "skipped": 0,
+    "retry": true
+  },
+  {
+    "genre": "card-rpg",
+    "base_tests": 17,
+    "custom_tests": 17,
+    "module_scenarios": 174,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "coop-roguelike",
+    "base_tests": 10,
+    "custom_tests": 10,
+    "module_scenarios": 51,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "idle-sim",
+    "base_tests": 13,
+    "custom_tests": 13,
+    "module_scenarios": 74,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "merge-casual",
+    "base_tests": 16,
+    "custom_tests": 16,
+    "module_scenarios": 84,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "mmorpg",
+    "base_tests": 14,
+    "custom_tests": 14,
+    "module_scenarios": 75,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "moba",
+    "base_tests": 28,
+    "custom_tests": 28,
+    "module_scenarios": 17,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "party-room",
+    "base_tests": 19,
+    "custom_tests": 19,
+    "module_scenarios": 46,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "slg",
+    "base_tests": 8,
+    "custom_tests": 10,
+    "module_scenarios": 17,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "social-sim",
+    "base_tests": 9,
+    "custom_tests": 9,
+    "module_scenarios": 35,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "survival-extraction",
+    "base_tests": 13,
+    "custom_tests": 13,
+    "module_scenarios": 100,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "tower-defense",
+    "base_tests": 11,
+    "custom_tests": 11,
+    "module_scenarios": 80,
+    "skipped": 0,
+    "retry": false
+  },
+  {
+    "genre": "turn-pvp",
+    "base_tests": 10,
+    "custom_tests": 10,
+    "module_scenarios": 76,
+    "skipped": 0,
+    "retry": false
+  }
+]

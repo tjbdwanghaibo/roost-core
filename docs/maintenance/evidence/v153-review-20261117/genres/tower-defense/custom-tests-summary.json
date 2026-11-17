@@ -1,0 +1,57 @@
+[
+  {
+    "package": "example.com/acceptance/tower-defense/game/handler",
+    "test": "TestTowerDefenseRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/handler",
+    "test": "TestTowerDefenseConcurrentCellReservationAndRetry",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/handler",
+    "test": "TestTowerDefenseBlockingRouteAndForeignSaleRollback",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/handler",
+    "test": "TestTowerDefenseReadyDisconnectAndOldConnection",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/handler",
+    "test": "TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/handler",
+    "test": "TestTowerDefenseCooperativeVictoryAndAtomicRewards",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/handler",
+    "test": "TestTowerDefenseDefeatNoRewardAndViewCopy",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/modules/towerdefense",
+    "test": "TestTowerDefenseRouteAlwaysConnectsEntranceAndBase",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/modules/towerdefense",
+    "test": "TestTowerDefenseBattleDeterminismAndOneStepOfflineCatchup",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/modules/towerdefense",
+    "test": "TestTowerDefenseStrictBoundsAndFrozenConfiguration",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/tower-defense/game/modules/towerdefense",
+    "test": "TestTowerDefenseCatalogReloadOnlyAffectsNewRooms",
+    "result": "pass"
+  }
+]

@@ -1,0 +1,48 @@
+package errcode
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// Export through the production definition scanner and generator for an
+// independent netstandard2.1 compile (no protoc substitute is involved).
+func TestReviewExportCSharpNames(t *testing.T) {
+	root := os.Getenv("REVIEW_CS_OUT")
+	if root == "" {
+		t.Fatal("REVIEW_CS_OUT required")
+	}
+	for _, name := range []string{"profile_name", "name", "message", "error_codes"} {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		source := `package errors
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+var ErrReview = errcode.Define(190001, "` + name + `", "review")
+`
+		if err := os.WriteFile(filepath.Join(dir, "errors.go"), []byte(source), 0644); err != nil {
+			t.Fatal(err)
+		}
+		defs, err := Definitions(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(defs) != 1 {
+			t.Fatalf("%s: definitions=%v", name, defs)
+		}
+		raw, err := GenerateCSharp(defs, "Review.Protocol")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, "ErrorCodes.cs"), raw, 0644); err != nil {
+			t.Fatal(err)
+		}
+		project := `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>netstandard2.1</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup></Project>`
+		if err = os.WriteFile(filepath.Join(dir, "Review.csproj"), []byte(project), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: source scan and C# generation accepted", name)
+	}
+}

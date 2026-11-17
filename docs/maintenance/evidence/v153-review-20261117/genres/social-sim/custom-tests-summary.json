@@ -1,0 +1,47 @@
+[
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioVisitorPermissions",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioOfflineHarvestOnce",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioHelpChangesDeadlineOnlyOnce",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioHarvestRollback",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioRobotTCPRetryAndReconnect",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioRetryAndConflict",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioCommitRejectionRollsBack",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioStaleRevision",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/social-sim/game/handler",
+    "test": "TestScenarioMembership",
+    "result": "pass"
+  }
+]

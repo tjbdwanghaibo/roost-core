@@ -1,0 +1,95 @@
+{
+  "started_utc": "2026-11-17T13:06:20.899449+00:00",
+  "git": "44241b956fd0bb118c1ded7535425524b8ffa10d",
+  "dirty": false,
+  "go": "go version go1.27.2 linux/amd64",
+  "scope": "generated gameplay fixtures; persistence substitutes unless separately recorded; not a capacity certification",
+  "genres": [
+    {
+      "genre": "merge-casual",
+      "status": "passed",
+      "module": "example.com/acceptance/merge-casual",
+      "custom_module_verify": {
+        "enter": 29,
+        "rules": 10,
+        "stamina": 26,
+        "stamina+rules": 2,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 16,
+      "passed_tests": 16,
+      "skipped_tests": 0,
+      "elapsed_seconds": 531.177,
+      "log_sha256": "6a454a1b3b5b72944b223c846be1bfb7b940ed0e9a2e6c63d9385e3cd40e7f4f"
+    },
+    {
+      "genre": "idle-sim",
+      "status": "passed",
+      "module": "example.com/acceptance/idle-sim",
+      "custom_module_verify": {
+        "bag": 20,
+        "checkin": 8,
+        "enter": 29,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 13,
+      "passed_tests": 13,
+      "skipped_tests": 0,
+      "elapsed_seconds": 106.032,
+      "log_sha256": "c54ba6c8df2f1c0d4c431d13630622ddfec8f61fb5491b9c37c417db24c17049"
+    },
+    {
+      "genre": "turn-pvp",
+      "status": "passed",
+      "module": "example.com/acceptance/turn-pvp",
+      "custom_module_verify": {
+        "room": 34,
+        "turn": 25,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 10,
+      "passed_tests": 10,
+      "skipped_tests": 0,
+      "elapsed_seconds": 106.053,
+      "log_sha256": "f731e399ad271deeb43147d6caa0ec8aeafed00f25042c9b710aaf020437a4ed"
+    },
+    {
+      "genre": "coop-roguelike",
+      "status": "passed",
+      "module": "example.com/acceptance/coop-roguelike",
+      "custom_module_verify": {
+        "room": 34,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "tcp_pb_robot_complete_coop_rewards_client_views; substitute persistence",
+      "custom_module_passed_tests": 10,
+      "passed_tests": 10,
+      "skipped_tests": 0,
+      "elapsed_seconds": 76.998,
+      "log_sha256": "12225651b26e64c00ee9b732b8800a44dc5339bfb932150b57ddd192f2cd6456"
+    },
+    {
+      "genre": "social-sim",
+      "status": "passed",
+      "module": "example.com/acceptance/social-sim",
+      "custom_module_verify": {
+        "friends": 18,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 9,
+      "passed_tests": 9,
+      "skipped_tests": 0,
+      "elapsed_seconds": 56.875,
+      "log_sha256": "386daef9c695a39606223971430bfaf41d64f15d0da94da678d8ea1d242b810e"
+    }
+  ]
+}

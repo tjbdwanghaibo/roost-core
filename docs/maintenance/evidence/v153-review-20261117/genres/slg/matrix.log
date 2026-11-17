@@ -1,0 +1,105 @@
+$ bash /workspace/review-v153/scripts/test-slg-generated.sh
+SLG generated consumer and logs: /workspace/v153-review-artifacts/genres-a/slg
+2026/11/17 13:09:27 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=107.976µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestSLGAllianceRewardOnceBeyondWalletWindow
+--- PASS: TestSLGAllianceRewardOnceBeyondWalletWindow (0.33s)
+=== RUN   TestSLGRobotBusiness
+2026/11/17 13:09:28 INFO player tcp listener started addr=127.0.0.1:39397 max_connections=10000
+2026/11/17 13:09:28 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:39397
+2026/11/17 13:09:28 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:28 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:39397
+2026/11/17 13:09:28 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:28 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:39397
+2026/11/17 13:09:28 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestSLGRobotBusiness (0.08s)
+=== RUN   TestSLGConstructionMarchAndReplay
+--- PASS: TestSLGConstructionMarchAndReplay (0.05s)
+=== RUN   TestSLGCancelRefundAndRefusal
+--- PASS: TestSLGCancelRefundAndRefusal (0.02s)
+=== RUN   TestSLGFailureRollsBackResourcesAndDeadline
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.02s)
+=== RUN   TestSLGOfflineIncomeIsBusinessBounded
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.03s)
+=== RUN   TestSLGTwoPlayersCompeteForOneTile
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.02s)
+=== RUN   TestSLGResearchAndConstructionUseIndependentQueues
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.02s)
+PASS
+ok  	example.com/slg-practice/game/handler	1.618s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_expired
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_within
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_within
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_expired
+--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_expired (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_within (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_within (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_expired (0.00s)
+PASS
+ok  	example.com/slg-practice/game/modules/alliance	1.027s
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/blocked_until_budget
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/late_success
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/handler_error
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/in_time
+--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess (0.04s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/blocked_until_budget (0.02s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/late_success (0.02s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/handler_error (0.00s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/in_time (0.00s)
+PASS
+ok  	example.com/slg-practice/game/modules/alliance	1.075s
+SLG generated consumer kept: /workspace/v153-review-artifacts/genres-a/slg
+$ /workspace/v153-review-artifacts/genres-a/slg/roost generate
+==> module-service
+==> dao
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_databases.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_alliance_authority_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_player_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_tile_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_player_timer_node_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_wallet_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_wallet_ledger_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_wallet_receipt_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/protocol/proto/protocol.proto
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/protocol/pb/protocol.pb.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/protocol/msgid/msgid_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/protocol/protocol_manifest.json
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/protocol/player_bind/bind_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/loadtest/protocol/registry_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/controllers/controller.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/alliance_authority/alliance_authority_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/alliance_authority/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/player/player_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/player/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/tile/tile_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/tile/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/world/world_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-a/slg/project/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> config-template
+tablegen: no table meta found
+==> config-data
+==> config-go
+tablegen: no table meta found
+table go: /workspace/v153-review-artifacts/genres-a/slg/project/configs/generated/gen_table_config.go
+==> endpoint
+==> registry
+$ go build -mod=mod ./...
+$ go vet -mod=mod ./...
+$ /workspace/v153-review-artifacts/genres-a/slg/roost id check
+IDs are valid
+$ /workspace/v153-review-artifacts/genres-a/slg/roost generate --check
+generated files are up to date
+$ bash /workspace/review-v153/scripts/testdata/genre-common/modules.sh verify /workspace/v153-review-artifacts/genres-a/slg/roost /workspace/review-v153 /workspace/v153-review-artifacts/genres-a/slg/custom-module-verify.json
+module verify: wallet 17/17 skipped=0

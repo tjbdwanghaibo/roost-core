@@ -1,0 +1,4 @@
+=== RUN   TestBootScopedDaoFollowsTheProcessChoice
+--- PASS: TestBootScopedDaoFollowsTheProcessChoice (0.00s)
+PASS
+ok  	reviewdaoruntime	1.049s

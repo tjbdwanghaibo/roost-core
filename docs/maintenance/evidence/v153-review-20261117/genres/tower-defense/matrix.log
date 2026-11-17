@@ -1,0 +1,125 @@
+$ bash /workspace/review-v153/scripts/test-tower-defense-generated.sh
+Tower defense generated consumer and logs: /workspace/v153-review-artifacts/genres-b/tower-defense
+=== RUN   TestTowerDefenseRouteAlwaysConnectsEntranceAndBase
+--- PASS: TestTowerDefenseRouteAlwaysConnectsEntranceAndBase (0.00s)
+=== RUN   TestTowerDefenseBattleDeterminismAndOneStepOfflineCatchup
+--- PASS: TestTowerDefenseBattleDeterminismAndOneStepOfflineCatchup (0.02s)
+=== RUN   TestTowerDefenseStrictBoundsAndFrozenConfiguration
+--- PASS: TestTowerDefenseStrictBoundsAndFrozenConfiguration (0.00s)
+=== RUN   TestTowerDefenseCatalogReloadOnlyAffectsNewRooms
+2026/11/17 13:07:51 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=349.414µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+2026/11/17 13:07:51 INFO config reload applied op=reload reason=manual version=2 live=2 elapsed=391.184µs changed=1 added=0 removed=0 unchanged=0 members=[tower_rules]
+2026/11/17 13:07:51 WARN config reload failed: the live generation is unchanged op=reload reason=manual version=3 live=2 elapsed=359.866µs stage=build error="configdata: validate object tower_rules: tower defense: invalid identity, phase, operation or limit"
+--- PASS: TestTowerDefenseCatalogReloadOnlyAffectsNewRooms (0.00s)
+PASS
+ok  	example.com/tower-defense-practice/game/modules/towerdefense	1.096s
+2026/11/17 13:09:31 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=54.154µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestTowerDefenseRobotBusiness
+2026/11/17 13:09:31 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=382.824µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+2026/11/17 13:09:31 INFO player tcp listener started addr=127.0.0.1:34247 max_connections=10000
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:31 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:31 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:32 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:32 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:32 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:32 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:32 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:32 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:32 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:32 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:09:32 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:34247
+2026/11/17 13:09:32 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestTowerDefenseRobotBusiness (0.62s)
+=== RUN   TestTowerDefenseConcurrentCellReservationAndRetry
+2026/11/17 13:09:32 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=437.618µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+--- PASS: TestTowerDefenseConcurrentCellReservationAndRetry (0.06s)
+=== RUN   TestTowerDefenseBlockingRouteAndForeignSaleRollback
+2026/11/17 13:09:32 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=370.205µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+--- PASS: TestTowerDefenseBlockingRouteAndForeignSaleRollback (0.07s)
+=== RUN   TestTowerDefenseReadyDisconnectAndOldConnection
+2026/11/17 13:09:32 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=367.419µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+--- PASS: TestTowerDefenseReadyDisconnectAndOldConnection (0.16s)
+=== RUN   TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer
+2026/11/17 13:09:32 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=410.803µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+--- PASS: TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer (0.05s)
+=== RUN   TestTowerDefenseCooperativeVictoryAndAtomicRewards
+2026/11/17 13:09:32 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=313.053µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+--- PASS: TestTowerDefenseCooperativeVictoryAndAtomicRewards (0.49s)
+=== RUN   TestTowerDefenseDefeatNoRewardAndViewCopy
+2026/11/17 13:09:33 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=378.186µs changed=0 added=1 removed=0 unchanged=0 members=[tower_rules]
+--- PASS: TestTowerDefenseDefeatNoRewardAndViewCopy (0.32s)
+PASS
+ok  	example.com/tower-defense-practice/game/handler	2.855s
+IDs are valid
+generated files are up to date
+module verify: enter 29/29 skipped=0
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0
+Tower defense generated consumer kept: /workspace/v153-review-artifacts/genres-b/tower-defense
+$ /workspace/v153-review-artifacts/genres-b/tower-defense/roost generate
+==> module-service
+==> dao
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_databases.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_player_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_room_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_room_seat_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_room_timer_node_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_wallet_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_wallet_ledger_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_wallet_receipt_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_enter_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/protocol/proto/protocol.proto
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/protocol/pb/protocol.pb.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/protocol/msgid/msgid_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/protocol/protocol_manifest.json
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/protocol/player_bind/bind_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/loadtest/protocol/registry_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/controllers/controller.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/entities/player/player_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/entities/player/player_sync_packer_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/entities/player/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/entities/room/room_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/entities/room/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/entities/world/world_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-b/tower-defense/project/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> config-template
+tablegen: no table meta found
+==> config-data
+==> config-go
+tablegen: no table meta found
+table go: /workspace/v153-review-artifacts/genres-b/tower-defense/project/configs/generated/gen_table_config.go
+==> endpoint
+==> registry
+$ go build -mod=mod ./...
+$ go vet -mod=mod ./...
+$ /workspace/v153-review-artifacts/genres-b/tower-defense/roost id check
+IDs are valid
+$ /workspace/v153-review-artifacts/genres-b/tower-defense/roost generate --check
+generated files are up to date
+$ bash /workspace/review-v153/scripts/testdata/genre-common/modules.sh verify /workspace/v153-review-artifacts/genres-b/tower-defense/roost /workspace/review-v153 /workspace/v153-review-artifacts/genres-b/tower-defense/custom-module-verify.json
+module verify: enter 29/29 skipped=0
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0

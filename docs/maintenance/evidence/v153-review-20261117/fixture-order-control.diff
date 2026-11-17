@@ -1,0 +1,6 @@
+--- a/game/modules/room/room_presence_test.go
++++ b/game/modules/room/room_presence_test.go
+@@ -169 +168,0 @@
+-	w.presence.Track(2, 102, "b", 1) // 连接本来就不在：登记时就断线
+@@ -172,0 +172 @@
++	w.presence.Track(2, 102, "b", 1) // 错误先就位，再触发异步断线

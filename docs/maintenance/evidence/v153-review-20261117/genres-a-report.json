@@ -1,0 +1,83 @@
+{
+  "started_utc": "2026-11-17T13:06:17.888174+00:00",
+  "git": "44241b956fd0bb118c1ded7535425524b8ffa10d",
+  "dirty": false,
+  "go": "go version go1.27.2 linux/amd64",
+  "scope": "generated gameplay fixtures; persistence substitutes unless separately recorded; not a capacity certification",
+  "genres": [
+    {
+      "genre": "slg",
+      "status": "passed",
+      "module": "example.com/acceptance/slg",
+      "custom_module_verify": {
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 10,
+      "passed_tests": 8,
+      "skipped_tests": 0,
+      "elapsed_seconds": 540.574,
+      "log_sha256": "3faa88a2bab7d87cd983b2175513b24307f309a179a0baa2a1a79e360e7a9e4c"
+    },
+    {
+      "genre": "moba",
+      "status": "passed",
+      "module": "example.com/acceptance/moba",
+      "custom_module_verify": {
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "kcp_lockstep_robot_match_settlement_result; fixture auth",
+      "custom_module_passed_tests": 28,
+      "passed_tests": 28,
+      "skipped_tests": 0,
+      "elapsed_seconds": 84.924,
+      "log_sha256": "454414f8469dd26cd120a620f316997ab5900ae20a5948f0ba91105caac0b430"
+    },
+    {
+      "genre": "mmorpg",
+      "status": "passed",
+      "module": "example.com/acceptance/mmorpg",
+      "custom_module_verify": {
+        "bag": 20,
+        "task": 29,
+        "task+bag": 3,
+        "task+wallet": 6,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 14,
+      "passed_tests": 14,
+      "skipped_tests": 0,
+      "elapsed_seconds": 102.129,
+      "log_sha256": "b5acfb8b58404950a5e31df7aa895d5cb82e6e6c38bd2bd7f826594a91d56c8e"
+    },
+    {
+      "genre": "card-rpg",
+      "status": "passed",
+      "module": "example.com/acceptance/card-rpg",
+      "custom_module_verify": {
+        "bag": 20,
+        "enter": 29,
+        "gacha": 29,
+        "rules": 10,
+        "stamina": 26,
+        "stamina+rules": 2,
+        "task": 29,
+        "task+bag": 3,
+        "task+stamina": 3,
+        "task+wallet": 6,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 17,
+      "passed_tests": 17,
+      "skipped_tests": 0,
+      "elapsed_seconds": 159.42,
+      "log_sha256": "6c8de5a1c6a95e4e671a2d79491058783ba1162c60b016ec75b05f498263fdbd"
+    }
+  ]
+}

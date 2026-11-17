@@ -1,0 +1,142 @@
+[
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBAKCPRobotMatchSettlementAndClientResult",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBARoundUndoRollsBackFrameAndCheckpoint",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBARoomMailboxBoundAndDrain",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBADurableReplayAndDelayedObserverBeyond64Frames",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBARoomCatchupNeverSendsUncommittedFrames",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBASettlementConcurrentReplayAndIdentity",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBASettlementRollbackAndRetry",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBANoWinnerSettlementNeverPays",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/handler",
+    "test": "TestMOBAServerReferenceSettlesTheFinishedRound",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAFivePlayerTeamsDraftAndMatchIdentity",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAArenaTargetingThreeLanesEconomyAndRespawn",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAArenaReplayVersionSeedAndFogBoundary",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAArenaSurrenderAndTimeLimit",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAMatchmakingAdmissionCancellationAndCommit",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAInputIdentityReplayAndWindow",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBADeterministicDuelHealsLostBroadcasts",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBACatchupAndSpectatorCannotControlHeroes",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBAHistoryExpiryAndDesyncAreExplicit",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBALaneTowersBaseAndServerResult",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/moba/game/modules/moba",
+    "test": "TestMOBASkillCooldownShopAndCheckpoint",
+    "result": "pass"
+  }
+]

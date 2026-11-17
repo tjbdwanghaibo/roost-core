@@ -1,0 +1,97 @@
+[
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameMatchmakingOpensOneRoomPerMatch",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameCodeRoomFullAndLateJoinRejected",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameHostLeaveTransfersHost",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameHeartbeatDrivesRoundsAndGroupSync",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameFirstGrabWinsAndDuplicateInputDedup",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameFoulEliminationAndUndoRollback",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameReconnectWithinGraceReturnsToSameRoom",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameGraceExpiryAndMidGameLeaveEndEarly",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameSettlementRewardsOnceAndRoomDestroyed",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameMatchDeadlineTimerForcesSettlement",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameSelfViewAndRoomShareOneConnection",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameBackfillAfterMidGameLeave",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameBackfillConcurrentMatchesAdmitOne",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameBackfillDeadlineWithdrawsTicket",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameBackfillPlayerJoinsGroupWithFullSync",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/handler",
+    "test": "TestPartyGameRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/modules/partyroom",
+    "test": "TestPartyGameRulesValidateAndRoomCode",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/modules/partyroom",
+    "test": "TestPartyGameRulesVariableStepEquivalence",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/party-room/game/modules/partyroom",
+    "test": "TestPartyGameRulesBackfillSeats",
+    "result": "pass"
+  }
+]

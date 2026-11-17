@@ -1,0 +1,67 @@
+[
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimParallelQueuesReserveAndFinishIndependently",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimDriverCatchupCannotExtendOfflineHorizon",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimFullBufferPausesAndLedgerNeverEvicts",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/handler",
+    "test": "TestIdleSimRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/modules/idlesim",
+    "test": "TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/modules/idlesim",
+    "test": "TestIdleSimSegmentedTimeMatchesSingleIntegration",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/idle-sim/game/modules/idlesim",
+    "test": "TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed",
+    "result": "pass"
+  }
+]

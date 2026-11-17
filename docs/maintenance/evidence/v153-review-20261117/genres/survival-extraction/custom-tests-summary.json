@@ -1,0 +1,67 @@
+[
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionAdmissionAtomicAndIdempotent",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionSharedNodeCompetitionAndRetry",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionCraftCapacityCancellationAndHealing",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionDeathDropsAndConcurrentLoot",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionChannelCancellationAndAtomicClaim",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionReconnectPrivateInventoryAndDeadline",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionExpiryCannotReopenOrReenter",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/handler",
+    "test": "TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/modules/survival",
+    "test": "TestSurvivalExtractionDeathRefundsUnfinishedCraftAndConservesItems",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/modules/survival",
+    "test": "TestSurvivalExtractionOfflineDamageIsBoundedAndRaidEndFixed",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/modules/survival",
+    "test": "TestSurvivalExtractionStrictDecodeLedgerAndMissingAdmission",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/survival-extraction/game/modules/survival",
+    "test": "TestSurvivalExtractionConfigurationSnapshotPreservesPricesAndDuration",
+    "result": "pass"
+  }
+]

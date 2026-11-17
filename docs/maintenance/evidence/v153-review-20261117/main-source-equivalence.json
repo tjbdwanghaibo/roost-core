@@ -1,0 +1,11 @@
+{
+  "tested_main": "44241b956fd0bb118c1ded7535425524b8ffa10d",
+  "latest_fetched_main": "85814912f2bd1b14cad36ae044f7591ca8538d39",
+  "compared_paths": [
+    "codegen/internal/errcode/csharp.go",
+    "modules/mailbox/with/rehome",
+    "service/mail",
+    "modules/room/files/game/modules/room/room_presence_test.go.tmpl"
+  ],
+  "changed_paths": []
+}

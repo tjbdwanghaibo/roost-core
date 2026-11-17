@@ -1,0 +1,100 @@
+{
+  "modules": [
+    {
+      "name": "bag",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "enter",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "gacha",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rules",
+      "want": 10,
+      "passed": 10,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "stamina",
+      "want": 26,
+      "passed": 26,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "stamina+rules",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+bag",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+stamina",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "task+wallet",
+      "want": 6,
+      "passed": 6,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "wallet",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}

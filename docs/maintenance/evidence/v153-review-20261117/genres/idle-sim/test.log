@@ -1,0 +1,61 @@
+=== RUN   TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe
+2026/11/17 13:15:17 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.153291ms changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:17 WARN config reload failed: the live generation is unchanged op=reload reason=manual version=2 live=1 elapsed=712.141µs stage=build error="configdata: validate object idle_rules: idle sim: invalid identity, time, operation, inventory or limit"
+2026/11/17 13:15:17 INFO config reload applied op=reload reason=manual version=3 live=3 elapsed=1.10541ms changed=1 added=0 removed=0 unchanged=0 members=[idle_rules]
+--- PASS: TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe (0.00s)
+=== RUN   TestIdleSimSegmentedTimeMatchesSingleIntegration
+--- PASS: TestIdleSimSegmentedTimeMatchesSingleIntegration (0.00s)
+=== RUN   TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed
+--- PASS: TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed (0.00s)
+PASS
+ok  	example.com/idle-sim-practice/game/modules/idlesim	1.036s
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.035892ms changed=0 added=1 removed=0 unchanged=0 members=[item]
+=== RUN   TestIdleSimParallelQueuesReserveAndFinishIndependently
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=670.132µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=253.649µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimParallelQueuesReserveAndFinishIndependently (0.04s)
+=== RUN   TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=519.957µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=160.506µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce (0.02s)
+=== RUN   TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=500.664µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=194.145µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic (0.05s)
+=== RUN   TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=459.181µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=191.266µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem (0.04s)
+=== RUN   TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=625.241µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=255.064µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt (0.05s)
+=== RUN   TestIdleSimDriverCatchupCannotExtendOfflineHorizon
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=554.794µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=160.131µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimDriverCatchupCannotExtendOfflineHorizon (0.02s)
+=== RUN   TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=480.585µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=195.44µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards (0.02s)
+=== RUN   TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=485.228µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=154.127µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline (0.01s)
+=== RUN   TestIdleSimFullBufferPausesAndLedgerNeverEvicts
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=442.915µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:24 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=163.084µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+--- PASS: TestIdleSimFullBufferPausesAndLedgerNeverEvicts (2.26s)
+=== RUN   TestIdleSimRobotBusiness
+2026/11/17 13:15:26 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=874.229µs changed=0 added=1 removed=0 unchanged=0 members=[idle_rules]
+2026/11/17 13:15:26 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=288.732µs changed=0 added=1 removed=0 unchanged=0 members=[item]
+2026/11/17 13:15:26 INFO player tcp listener started addr=127.0.0.1:33599 max_connections=10000
+2026/11/17 13:15:26 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:33599
+2026/11/17 13:15:26 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:15:26 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:33599
+2026/11/17 13:15:26 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:15:26 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:33599
+2026/11/17 13:15:26 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestIdleSimRobotBusiness (0.04s)
+PASS
+ok  	example.com/idle-sim-practice/game/handler	3.565s

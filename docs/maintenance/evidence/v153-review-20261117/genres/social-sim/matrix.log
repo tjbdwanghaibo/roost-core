@@ -1,0 +1,84 @@
+$ bash /workspace/review-v153/scripts/test-social-sim-generated.sh
+2026/11/17 13:20:08 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=40.171µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestScenarioVisitorPermissions
+--- PASS: TestScenarioVisitorPermissions (0.02s)
+=== RUN   TestScenarioOfflineHarvestOnce
+--- PASS: TestScenarioOfflineHarvestOnce (0.02s)
+=== RUN   TestScenarioHelpChangesDeadlineOnlyOnce
+--- PASS: TestScenarioHelpChangesDeadlineOnlyOnce (0.01s)
+=== RUN   TestScenarioHarvestRollback
+--- PASS: TestScenarioHarvestRollback (0.01s)
+=== RUN   TestScenarioRobotTCPRetryAndReconnect
+2026/11/17 13:20:08 INFO player tcp listener started addr=127.0.0.1:37443 max_connections=10000
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/17 13:20:08 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:37443
+2026/11/17 13:20:08 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestScenarioRobotTCPRetryAndReconnect (0.03s)
+=== RUN   TestScenarioRetryAndConflict
+--- PASS: TestScenarioRetryAndConflict (0.01s)
+=== RUN   TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioCommitRejectionRollsBack (0.01s)
+=== RUN   TestScenarioStaleRevision
+--- PASS: TestScenarioStaleRevision (0.01s)
+=== RUN   TestScenarioMembership
+--- PASS: TestScenarioMembership (0.00s)
+PASS
+ok  	example.com/social-sim-practice/game/handler	1.151s
+IDs are valid
+generated files are up to date
+module verify: friends 18/18 skipped=0
+module verify: wallet 17/17 skipped=0
+Generated consumer and evidence: /workspace/v153-review-artifacts/genres-c/social-sim
+$ /workspace/v153-review-artifacts/genres-c/social-sim/roost generate
+==> module-service
+==> dao
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/db/gen_databases.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/db/gen_player_dao.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/db/gen_wallet_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/db/gen_wallet_ledger_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/db/gen_wallet_receipt_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/db/gen_friends_state_nested.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/db/gen_dao_bson_helpers.go
+==> errcode
+==> protocol
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/protocol/proto/protocol.proto
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/protocol/pb/protocol.pb.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/protocol/msgid/msgid_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/protocol/protocol_manifest.json
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/protocol/player_bind/bind_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/loadtest/protocol/registry_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/game/controllers/controller.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/internal/access/player/protocols_gen.go
+==> entity
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/game/entities/player/player_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/game/entities/player/lifecycle_gen.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/game/entities/world/world_gen_wire.go
+unchanged: /workspace/v153-review-artifacts/genres-c/social-sim/project/game/entities/world/lifecycle_gen.go
+==> nest
+all files up to date
+==> config-template
+tablegen: no table meta found
+==> config-data
+==> config-go
+tablegen: no table meta found
+table go: /workspace/v153-review-artifacts/genres-c/social-sim/project/configs/generated/gen_table_config.go
+==> endpoint
+==> registry
+$ go build -mod=mod ./...
+$ go vet -mod=mod ./...
+$ /workspace/v153-review-artifacts/genres-c/social-sim/roost id check
+IDs are valid
+$ /workspace/v153-review-artifacts/genres-c/social-sim/roost generate --check
+generated files are up to date
+$ bash /workspace/review-v153/scripts/testdata/genre-common/modules.sh verify /workspace/v153-review-artifacts/genres-c/social-sim/roost /workspace/review-v153 /workspace/v153-review-artifacts/genres-c/social-sim/custom-module-verify.json
+module verify: friends 18/18 skipped=0
+module verify: wallet 17/17 skipped=0

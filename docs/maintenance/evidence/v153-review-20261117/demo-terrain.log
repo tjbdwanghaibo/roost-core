@@ -1,0 +1,11 @@
+=== RUN   TestTerrainDocumentsFollowTheMapOwnership
+=== RUN   TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene
+2026/11/17 13:14:44 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=10.825001ms changed=0 added=6 removed=0 unchanged=0 members="[building building_param equipment_item featureflag item spawn]"
+=== RUN   TestTerrainDocumentsFollowTheMapOwnership/partitioned_scene
+=== RUN   TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene_again
+--- PASS: TestTerrainDocumentsFollowTheMapOwnership (0.35s)
+    --- PASS: TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene (0.15s)
+    --- PASS: TestTerrainDocumentsFollowTheMapOwnership/partitioned_scene (0.09s)
+    --- PASS: TestTerrainDocumentsFollowTheMapOwnership/ordinary_scene_again (0.11s)
+PASS
+ok  	example.com/demoreview/internal/service/game	1.455s

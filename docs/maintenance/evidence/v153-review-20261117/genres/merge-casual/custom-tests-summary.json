@@ -1,0 +1,82 @@
+[
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualBoardAuthorityAndMergeRules",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualWarehouseAndUnlockHaveAtomicCosts",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualSellUndoCannotDuplicateItemsOrGold",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualOrdersConsumeRecipeAndRewardOnce",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualChallengeServerWinAndConcurrentClaim",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualUndoRestoresStateRandomResultAndTimer",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/handler",
+    "test": "TestMergeCasualRobotBusiness",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/modules/mergecasual",
+    "test": "TestMergeCasualCatalogReloadIsAtomicAndExistingBoardFrozen",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/modules/mergecasual",
+    "test": "TestMergeCasualMalformedStateFailsClosedAndPublicViewExcludesSecrets",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/merge-casual/game/modules/mergecasual",
+    "test": "TestMergeCasualBoundedLedgerRetainsOldReceiptsAndRejectsOverflow",
+    "result": "pass"
+  }
+]

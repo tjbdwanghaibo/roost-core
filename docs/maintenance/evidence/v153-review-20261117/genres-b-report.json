@@ -1,0 +1,68 @@
+{
+  "started_utc": "2026-11-17T13:06:19.408271+00:00",
+  "git": "44241b956fd0bb118c1ded7535425524b8ffa10d",
+  "dirty": false,
+  "go": "go version go1.27.2 linux/amd64",
+  "scope": "generated gameplay fixtures; persistence substitutes unless separately recorded; not a capacity certification",
+  "genres": [
+    {
+      "genre": "tower-defense",
+      "status": "passed",
+      "module": "example.com/acceptance/tower-defense",
+      "custom_module_verify": {
+        "enter": 29,
+        "room": 34,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 11,
+      "passed_tests": 11,
+      "skipped_tests": 0,
+      "elapsed_seconds": 523.133,
+      "log_sha256": "0e8555e08fcf8d480eb945d00f3884f35e17a049f58e8a37666b0a3132b4c721"
+    },
+    {
+      "genre": "survival-extraction",
+      "status": "passed",
+      "module": "example.com/acceptance/survival-extraction",
+      "custom_module_verify": {
+        "bag": 20,
+        "enter": 29,
+        "room": 34,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 13,
+      "passed_tests": 13,
+      "skipped_tests": 0,
+      "elapsed_seconds": 120.505,
+      "log_sha256": "26eb3cd3edb65a3b9abe9d5b6c9b32b9ba2abe1718083659c99006c9ae508c6b"
+    },
+    {
+      "genre": "auto-chess",
+      "status": "failed",
+      "module": "example.com/acceptance/auto-chess",
+      "error": "Command '['bash', '/workspace/review-v153/scripts/test-auto-chess-generated.sh']' returned non-zero exit status 1.",
+      "elapsed_seconds": 55.3,
+      "log_sha256": "ff2d2b1c3a78844cc07ba09cd49fd96817a2cad918297816d2fd56aa221417be"
+    },
+    {
+      "genre": "party-room",
+      "status": "passed",
+      "module": "example.com/acceptance/party-room",
+      "custom_module_verify": {
+        "enter": 29,
+        "wallet": 17
+      },
+      "robot_pb_registry": true,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "custom_module_passed_tests": 19,
+      "passed_tests": 19,
+      "skipped_tests": 0,
+      "elapsed_seconds": 84.197,
+      "log_sha256": "7c22bf8e2fd074f74ca132e2e536383f5d06743aebdf12eb9c3d0202ed18ef6d"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+package errors
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+var ErrReview = errcode.Define(190001, "message", "review")

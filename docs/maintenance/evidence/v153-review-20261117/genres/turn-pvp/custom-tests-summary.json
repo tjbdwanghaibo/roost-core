@@ -1,0 +1,52 @@
+[
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioTurnOrder",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioTimeoutConsumesOneTurn",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioTerminalCannotAttack",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioReconnectReadsAuthoritativeTurn",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioTurnTimesOutByTheRoomTimer",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioRobotTCPRetryAndReconnect",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioRetryAndConflict",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioCommitRejectionRollsBack",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioStaleRevision",
+    "result": "pass"
+  },
+  {
+    "package": "example.com/acceptance/turn-pvp/game/handler",
+    "test": "TestScenarioMembership",
+    "result": "pass"
+  }
+]

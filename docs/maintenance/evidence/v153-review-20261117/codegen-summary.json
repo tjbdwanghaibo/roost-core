@@ -1,0 +1,142 @@
+{
+  "codegen-base.jsonl": {
+    "github.com/tjbdwanghaibo/roost-core/codegen/internal/dao": {
+      "passed": [
+        "TestParseRejectsOrphanMarker",
+        "TestParseRejectsMarkerBindingMultipleStructs",
+        "TestRunSweepsOrphansWhenAllDefinitionsRemoved",
+        "TestParseAcceptsMarkerAboveDocComment",
+        "TestParseRejectsMarkerWithoutParameters",
+        "TestParseRejectsMarkerWithoutRequiredParams",
+        "TestParseRejectsDaoTagTraps",
+        "TestParseRejectsPersistAndSyncOptionsOnNestedFields",
+        "TestParseAcceptsExplicitTagIntents",
+        "TestRunRemovesOrphansAndCollapsesDaoSuffix",
+        "TestParseRejectsUnsupportedFieldTypes",
+        "TestParseRefusesEachMalformedRedisMarkerAndConflictingDaoTag",
+        "TestGenerateRedisDaoRefusesEachIncompleteDefinition",
+        "TestGenerateDaoRefusesUnknownDatabaseScope",
+        "TestGenerationRejectsReferenceShapesTheAccessorsWouldShare",
+        "TestGenerationAcceptsTheShapesTheAccessorsCopyOrOwn",
+        "TestAFieldWhoseLowercaseNameIsAKeywordGenerates",
+        "TestANestedFieldWhoseLowercaseNameIsAKeywordGenerates",
+        "TestNestedStructsPersistTheirFieldsNotTheDirtyHook",
+        "TestTheDaoDocumentCarriesNestedWireFormsNotMarshalers",
+        "TestTransientFieldsHaveMutatorsAndStayOutOfStorageAndSync",
+        "TestTheDeclaredStoreTagIsTheStoredKey",
+        "TestInvalidDeclaredStoredKeysFailGeneration",
+        "TestGenerateWarnsWhenAStoredKeyChangesAgainstThePreviousOutput",
+        "TestEveryKeyTheGeneratedDaoSpellsIsATagOfItsDocumentStructs",
+        "TestAByteSliceFieldHasAWholeValueGetterThatReturnsACopy",
+        "TestAMapOfSlicesHandsOutAndStoresCopies",
+        "TestGoldenGeneratedOutput",
+        "TestNestedTypesAreFoundWhateverFileDefinesThem",
+        "TestDaoWithMoreThan64FieldsIsRefused",
+        "TestANoCollectionDaoKeepsSyncAndDropsEveryStoragePath",
+        "TestANoCollectionDaoWithPersistentFieldsIsRefusedByName",
+        "TestTheNoCollectionMarkerRefusesContradictions",
+        "TestACollectionDaoIsUnchangedByTheNoCollectionFlag",
+        "TestSwitchingADaoToNoCollectionRetiresItsStoragePaths",
+        "TestDaoCapabilitiesDefaultOnIndependently",
+        "TestParseDefDir",
+        "TestGenerateDao",
+        "TestGenerateNested",
+        "TestGenerateNestedPointerGetterDoesNotAddPointerLevel",
+        "TestFieldVarNamePreservesInitialisms",
+        "TestValidateGeneratedStorageFieldsRejectsCollisions",
+        "TestGenerateRedisDao",
+        "TestGenerateRawRedisDao",
+        "TestToSnakeDao",
+        "TestDatabaseMarkerIsALogicalNameAndGeneratesOneConstantPerDatabase",
+        "TestRemoteViewDeclarationsFailClosed",
+        "TestDaoSchemaVersionComesFromTheMarker",
+        "TestDaoSchemaVersionDefaultsToOne",
+        "TestDaoSchemaVersionRefusesNonsense",
+        "TestStoreTagIsRequiredAndBSONIsNotAnAlias",
+        "TestStoreTagChangeWarnsForSwapsOptionsAndTransientFields",
+        "TestSyncCSharpUsesProtocPropertyNames",
+        "TestSyncPBTypeShapes"
+      ],
+      "failed": [
+        "TestRemoteViewGeneratedConsumer"
+      ],
+      "skipped": [],
+      "package_result": "fail"
+    },
+    "github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol": {
+      "passed": [
+        "TestExportClientIDsMatchesCSharpOutput",
+        "TestControllerScaffoldsPreserveBusinessAndFollowMethods",
+        "TestControllerStubsAppendToTheGroupFile",
+        "TestControllerPackageChecksRunOnceForTheWholePackage",
+        "TestControllerSourceDeclaresTheSharedAPI",
+        "TestControllerStartChecksRunInModuleOrder",
+        "TestProtocolRegistrationRunsStartChecksBeforeRegistering",
+        "TestReplaceControllerMethodTakesOverOnlyThePlaceholder",
+        "TestCSharpCLIIDsAndRetirement",
+        "TestGoldenProtocolOutput",
+        "TestParseAndGenerateProtocol",
+        "TestRunDiscoversTargetModule",
+        "TestDuplicateMessageIDRejected",
+        "TestRunRetiresOutputsWhenLastDefinitionIsRemoved",
+        "TestRunRetiresBindingsButKeepsEmptyRegistration",
+        "TestRunPreservesUnrecognizedFilesWhenDefinitionsAreEmpty",
+        "TestRunDropsRemovedHandlerDomainFromRegistration",
+        "TestParseRejectsEachStructuralViolation",
+        "TestParseRejectsEachValueAndReferenceViolation",
+        "TestParseRejectsEachMarkerViolation",
+        "TestValidateDefinitionsEnforcesIDAndEnumInvariants",
+        "TestRegistrationRequiresModulePathWhenControllersExist"
+      ],
+      "failed": [],
+      "skipped": [],
+      "package_result": "pass"
+    },
+    "github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode": {
+      "passed": [
+        "TestGenerateCSharp",
+        "TestExtractDefinitionsAndWriteCSV",
+        "TestExtractDefinitionsIgnoresCommentAndStringLiterals",
+        "TestExtractDefinitionsRefusesWhatItCannotRead"
+      ],
+      "failed": [],
+      "skipped": [],
+      "package_result": "pass"
+    }
+  },
+  "codegen-roost.jsonl": {
+    "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost": {
+      "passed": [
+        "TestSDKGoogleProtobufVersionMatchesCodecs",
+        "TestClientExportProtocVersion",
+        "TestDemoStepsLeaveModuleComponentsToTheModules",
+        "TestDemoViewInterfacesListTheComponentMethods",
+        "TestDemoViewNamesDoNotCollideWithItsModules",
+        "TestDemoEntityPackagesHoldOnlyComponentWiring",
+        "TestModuleVerifyCountsTopLevelScenariosOnly",
+        "TestClientExportSpecValidation",
+        "TestClientSync",
+        "TestClientExportTransactionalCommitAndRetirement",
+        "TestModuleVerifyLoadsTheProjectConfigData",
+        "TestModuleVerifyCountsOnlyTheModulesOwnTests",
+        "TestGenerateClientExport",
+        "TestClientExportNamespace",
+        "TestUndeclaredClientExportChangesNothing",
+        "TestDemoTemplateGeneratesABuildableWritePath"
+      ],
+      "failed": [],
+      "skipped": [],
+      "package_result": "pass"
+    }
+  },
+  "dao-consumer-retry.jsonl": {
+    "github.com/tjbdwanghaibo/roost-core/codegen/internal/dao": {
+      "passed": [
+        "TestRemoteViewGeneratedConsumer"
+      ],
+      "failed": [],
+      "skipped": [],
+      "package_result": "pass"
+    }
+  }
+}
