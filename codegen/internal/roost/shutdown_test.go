@@ -170,11 +170,11 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 	// No read-only mirror: remote_entity serves it. The CLI's default list has manager anyway.
 	// Pin the Room driver as well as independently counting the generated bootstrap Mods.
 	assertContains(t, target, "internal/bootstrap/generated.go", "kitentitytimer.NewMod(EntityAccess, room.TimerDriver),")
-	if counts["game"] != 29 || !declares["game"].dataengine || !declares["game"].playerTCP || declares["game"].mirror {
-		t.Fatalf("game registers %d Mods (declaring: %+v), want 29 with dataengine and the player TCP Mod, without the read-only mirror", counts["game"], declares["game"])
+	if counts["game"] != 30 || !declares["game"].dataengine || !declares["game"].playerTCP || declares["game"].mirror {
+		t.Fatalf("game registers %d Mods (declaring: %+v), want 30 with dataengine and the player TCP Mod, without the read-only mirror", counts["game"], declares["game"])
 	}
-	// 30s + 10s + 3s x 27 + 5s + 3s singleton release; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s; account also hosts the login entry (web + the module host Mod): 3s x 8 + 5s.
-	pinned := map[string][2]int{"game": {129, 134}, "account": {29, 34}}
+	// 30s + 10s + 3s x 28 + 5s + 3s singleton release; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s; account also hosts the login entry (web + the module host Mod): 3s x 8 + 5s.
+	pinned := map[string][2]int{"game": {132, 137}, "account": {29, 34}}
 	for service, mods := range counts {
 		total, grace := expectedShutdown(mods, declares[service])
 		if want, ok := pinned[service]; ok && (want[0] != total || want[1] != grace) {
@@ -186,7 +186,7 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 		t.Fatalf("account registers %d Mods, game %d", counts["account"], counts["game"])
 	}
 	// The second game process runs the game service's Mods and waits as long.
-	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 134 ]`)
+	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 137 ]`)
 }
 
 // A service with few Mods gets a smaller window than the demo's game service.
@@ -203,7 +203,7 @@ func TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods(t *testing.T) {
 	}
 	total, grace := expectedShutdown(counts["gate"], declaringMods{})
 	if total >= 129 {
-		t.Fatalf("gate with %d Mods gets %ds, not less than the game service's 129s", counts["gate"], total)
+		t.Fatalf("gate with %d Mods gets %ds, not less than the game service's 132s", counts["gate"], total)
 	}
 	assertGeneratedShutdown(t, target, "gate", total, grace)
 }
@@ -336,7 +336,7 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 		end := shutdownBlockEnd(body)
 		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], handSet, 1))
 	}
-	// game: a hand-edited total above the formula's 129s. The helper fails if it
+	// game: a hand-edited total above the formula's 132s. The helper fails if it
 	// did not edit a value, so a stale search literal cannot silently skip this premise.
 	setShutdownTotal(t, target, "configs/service/config.game.yaml", "132s")
 	if _, err := SyncProject(target); err != nil {
@@ -395,7 +395,7 @@ func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
 	if item := items["shutdown:account"]; item.Status != StatusFail || !strings.Contains(item.Detail, "deploy/k8s/base/account.yaml grace period 34s < total_timeout 60s + 5s") {
 		t.Errorf("account on 60s before sync: %s %s", item.Status, item.Detail)
 	}
-	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 29 Mods (40s declared + 3s x 27 + 3s singleton release = 124s)") || !strings.Contains(item.Detail, "Set it to 129s") {
+	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 30 Mods (40s declared + 3s x 28 + 3s singleton release = 127s)") || !strings.Contains(item.Detail, "Set it to 132s") {
 		t.Errorf("game on 60s: %s %s", item.Status, item.Detail)
 	}
 	// Sync follows the configured total: the grace period is back above it.
@@ -519,18 +519,18 @@ func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testin
 	}
 	item := shutdownStatus(t, root)["shutdown:game"]
 	for _, rel := range []string{dev, prod, secret} {
-		if item.Status != StatusWarn || !strings.Contains(item.Detail, rel+": total_timeout 60s cannot cover 29 Mods (40s declared + 3s x 27 + 3s singleton release = 124s)") {
+		if item.Status != StatusWarn || !strings.Contains(item.Detail, rel+": total_timeout 60s cannot cover 30 Mods (40s declared + 3s x 28 + 3s singleton release = 127s)") {
 			t.Errorf("all three configs on 60s: %s %s (want a WARN naming %s)", item.Status, item.Detail, rel)
 		}
 	}
 
-	setShutdownTotal(t, root, dev, "129s")
+	setShutdownTotal(t, root, dev, "132s")
 	item = shutdownStatus(t, root)["shutdown:game"]
 	if item.Status != StatusWarn {
-		t.Fatalf("only %s raised to 129s, the examples still 60s: %s %s", dev, item.Status, item.Detail)
+		t.Fatalf("only %s raised to 132s, the examples still 60s: %s %s", dev, item.Status, item.Detail)
 	}
 	for _, rel := range []string{prod, secret} {
-		if !strings.Contains(item.Detail, rel+": total_timeout 60s cannot cover 29 Mods") {
+		if !strings.Contains(item.Detail, rel+": total_timeout 60s cannot cover 30 Mods") {
 			t.Errorf("WARN does not name %s: %s", rel, item.Detail)
 		}
 	}
@@ -538,16 +538,16 @@ func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testin
 		t.Errorf("WARN names %s, which covers the Mods: %s", dev, item.Detail)
 	}
 
-	setShutdownTotal(t, root, prod, "129s")
+	setShutdownTotal(t, root, prod, "132s")
 	item = shutdownStatus(t, root)["shutdown:game"]
 	if item.Status != StatusWarn || !strings.Contains(item.Detail, secret+":") || strings.Contains(item.Detail, prod+":") {
 		t.Errorf("only %s left on 60s: %s %s", secret, item.Status, item.Detail)
 	}
 
-	setShutdownTotal(t, root, secret, "129s")
+	setShutdownTotal(t, root, secret, "132s")
 	item = shutdownStatus(t, root)["shutdown:game"]
-	if item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 129s, grace period 134s") {
-		t.Errorf("every config on 129s: %s %s", item.Status, item.Detail)
+	if item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 132s, grace period 137s") {
+		t.Errorf("every config on 132s: %s %s", item.Status, item.Detail)
 	}
 }
 
@@ -1018,7 +1018,7 @@ func TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure(t *testing.T) 
 	if item.Status != StatusWarn {
 		t.Fatalf("%s %s, want a WARN", item.Status, item.Detail)
 	}
-	shortfall := secret + ": total_timeout 60s cannot cover 29 Mods (40s declared + 3s x 27 + 3s singleton release = 124s); " + staleShutdownAdvice + ". Set it to 129s"
+	shortfall := secret + ": total_timeout 60s cannot cover 30 Mods (40s declared + 3s x 28 + 3s singleton release = 127s); " + staleShutdownAdvice + ". Set it to 132s"
 	if !strings.Contains(item.Detail, shortfall) {
 		t.Errorf("WARN does not carry the shortfall with its advice %q: %s", shortfall, item.Detail)
 	}
@@ -1069,7 +1069,7 @@ func TestGeneratedShutdownCountsThePlayerTCPStopBudget(t *testing.T) {
 	}
 	for _, rel := range gameConfigs {
 		body := readProjectFile(t, root, rel)
-		wants := []string{"40s declared + 3s x 27\n", "3s for the singleton release = 129s", "total_timeout: 129s\n"}
+		wants := []string{"40s declared + 3s x 28\n", "3s for the singleton release = 132s", "total_timeout: 132s\n"}
 		if rel != gameConfigs[2] { // the k8s secret example carries no player_access block: the Mod's default 10s
 			wants = append(wants, "shutdown_timeout: 10s\n")
 		}
@@ -1079,7 +1079,7 @@ func TestGeneratedShutdownCountsThePlayerTCPStopBudget(t *testing.T) {
 			}
 		}
 	}
-	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 129s, grace period 134s") {
+	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 132s, grace period 137s") {
 		t.Errorf("fresh game-demo: %s %s", item.Status, item.Detail)
 	}
 }
@@ -1098,9 +1098,10 @@ func TestDoctorCountsTheConfiguredPlayerTCPStopBudget(t *testing.T) {
 		setPlayerTCPShutdownTimeout(t, root, rel, "30s")
 	}
 	item := shutdownStatus(t, root)["shutdown:game"]
-	// Pin 60s + 27*3s + 3s release = 144s, plus 5s margin, independently of the plan.
-	want := 149 * time.Second
-	if item.Status != StatusWarn || !strings.Contains(item.Detail, "(60s declared + 3s x 27 + 3s singleton release = 144s)") || !strings.Contains(item.Detail, "Set it to "+seconds(want)) {
+	// Pin 60s + 28*3s + 3s release = 147s, plus 5s margin, independently of the plan.
+	// (28 counted Mods since R5 2026-11-17: the game service also hosts the config-only modulehost Mod.)
+	want := 152 * time.Second
+	if item.Status != StatusWarn || !strings.Contains(item.Detail, "(60s declared + 3s x 28 + 3s singleton release = 147s)") || !strings.Contains(item.Detail, "Set it to "+seconds(want)) {
 		t.Fatalf("player_access.tcp.shutdown_timeout 30s with total_timeout %s: %s %s, want a WARN with 60s declared and advice %s",
 			seconds(plan.total), item.Status, item.Detail, seconds(want))
 	}
