@@ -109,8 +109,10 @@ echo "pretag: testing with GOWORK=off"
 # 2026-11-13: with 42 business modules the package takes 2024-2151s in full repo runs on this
 # host (each module scenario generates and compiles a project), so the v1.45.0 pretag panicked at
 # 30m with no failing test. The cap is now 60m, again well above the slowest observed run.
+# ROOST_REQUIRE_DOTNET=1：发版机器必须装 .NET 10 SDK。没有它时 TestClientConfigCSharpRuntime（导出的 C# 配置能编译、
+# Load 读回、规则违反报行与字段）只会 SKIP，go test 仍然 ok，发版就少了这条覆盖却看不出来；设了它缺 dotnet 直接失败。
 test_log="$(mktemp)"
-if ! GOWORK=off go test -timeout 60m ./... >"$test_log" 2>&1; then
+if ! ROOST_REQUIRE_DOTNET=1 GOWORK=off go test -timeout 60m ./... >"$test_log" 2>&1; then
   grep -E '^(--- FAIL|FAIL|panic:)' "$test_log" >&2 || tail -50 "$test_log" >&2
   fail "go test ./... failed (full output: $test_log)"
 fi
@@ -163,7 +165,7 @@ rm -rf "$genre_logs"
 [[ -z "$(git status --porcelain)" ]] || { git status --short >&2; fail "a genre script left files in the checkout"; }
 
 echo "pretag: C# client SDK golden and self tests"
-ROOST_DOTNET_GOLDEN_ONLY=1 ./scripts/test-client-dotnet.sh >/dev/null || fail "C# client SDK tests failed (rerun ./scripts/test-client-dotnet.sh to see the output)"
+ROOST_REQUIRE_DOTNET=1 ROOST_DOTNET_GOLDEN_ONLY=1 ./scripts/test-client-dotnet.sh >/dev/null || fail "C# client SDK tests failed (rerun ./scripts/test-client-dotnet.sh to see the output)"
 echo "pretag: TS client SDK tests"
 ./scripts/test-client-ts.sh >/dev/null 2>&1 || fail "TS client SDK tests failed (rerun ./scripts/test-client-ts.sh to see the output)"
 
