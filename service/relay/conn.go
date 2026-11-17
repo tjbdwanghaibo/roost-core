@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
@@ -26,6 +27,12 @@ type conn struct {
 
 	frames, roomFrames, roomBytes bucket
 
+	// 空闲检测不用读期限：WebSocket 接入（coder/websocket 的 NetConn）在读期限到期时直接关掉整条连接，relay 就来不及
+	// 告诉客户端原因。改由计时器检查最后一帧的时间，超时走 finish（先发 Closed{idle_timeout} 再关），TCP 与 WebSocket 一样。
+	lastFrame atomic.Int64 // 最近一帧（或开始计时）的 UnixNano
+	idleLimit atomic.Int64 // 当前的空闲上限：令牌阶段是 AuthTimeout，进房后是 IdleTimeout
+	idleTimer *time.Timer
+
 	mu           sync.Mutex
 	queue        [][]byte
 	queuedFrames int
@@ -46,7 +53,7 @@ func newConn(s *Server, netConn net.Conn) *conn {
 // readToken 读第一帧：message_id=0、flags=0 的令牌帧，载荷是 lobby 签的 rt1 令牌，按本实例名与共用密钥验签。
 func (c *conn) readToken() (token.Claims, wire.RelayReason) {
 	cfg := c.server.config
-	_ = c.netConn.SetReadDeadline(time.Now().Add(cfg.AuthTimeout))
+	c.watchIdle(cfg.AuthTimeout)
 	p, err := wire.ReadRelay(c.reader, token.MaxBytes)
 	if err != nil {
 		return token.Claims{}, readFailure(err)
@@ -59,6 +66,9 @@ func (c *conn) readToken() (token.Claims, wire.RelayReason) {
 		return token.Claims{}, wire.RelayReasonTokenRejected
 	}
 	c.account = claims.Account
+	c.idleLimit.Store(int64(cfg.IdleTimeout))
+	c.touch()
+	c.idleTimer.Reset(cfg.IdleTimeout) // 上限可能比 AuthTimeout 短：按新上限重新计时
 	return claims, wire.RelayReasonNone
 }
 
@@ -66,12 +76,12 @@ func (c *conn) readToken() (token.Claims, wire.RelayReason) {
 func (c *conn) readLoop(r *room) wire.RelayReason {
 	cfg := c.server.config
 	for {
-		_ = c.netConn.SetReadDeadline(time.Now().Add(cfg.IdleTimeout))
 		p, err := wire.ReadRelay(c.reader, cfg.MaxPayloadBytes)
 		if err != nil {
 			return readFailure(err)
 		}
 		now := time.Now()
+		c.lastFrame.Store(now.UnixNano())
 		if !c.frames.take(now, 1) {
 			return wire.RelayReasonRateLimited
 		}
@@ -112,6 +122,31 @@ func (c *conn) control(r *room, p *wire.Packet) wire.RelayReason {
 		r.mute(c, p.Seq, p.Payload[0] == 1)
 	}
 	return wire.RelayReasonNone
+}
+
+// watchIdle 开始空闲检测：limit 内没有新帧就 finish(RelayReasonIdleTimeout)。计时器每个上限周期最多触发一次。
+func (c *conn) watchIdle(limit time.Duration) {
+	c.idleLimit.Store(int64(limit))
+	c.touch()
+	c.idleTimer = time.AfterFunc(limit, c.checkIdle)
+}
+
+func (c *conn) touch() { c.lastFrame.Store(time.Now().UnixNano()) }
+
+func (c *conn) checkIdle() {
+	c.mu.Lock()
+	closing := c.closing
+	c.mu.Unlock()
+	if closing {
+		return
+	}
+	limit := time.Duration(c.idleLimit.Load())
+	idle := time.Since(time.Unix(0, c.lastFrame.Load()))
+	if idle >= limit {
+		c.finish(wire.RelayReasonIdleTimeout, true)
+		return
+	}
+	c.idleTimer.Reset(limit - idle)
 }
 
 // enqueueControl 往发送队列放一个 relay 生成的控制帧。
@@ -186,8 +221,11 @@ func (c *conn) signal() {
 	}
 }
 
-// writeLoop 是唯一写 socket 的 goroutine：每次取走整个队列一次写出（writev），写完再扣计数；
+// writeLoop 是唯一写 socket 的 goroutine：每次取走整个队列一次写出，写完再扣计数；
 // 写出错或超过 WriteTimeout 就关连接。连接 finish 之后把剩下的队列写完再关 socket。
+//
+// 队列里每一项是一个完整的帧。net.Buffers 在 TCP 上合成一次 writev；在别的 net.Conn 上逐项 Write——WebSocket
+// 接入层（infra/network/wsconn）一次 Write 是一条消息，所以浏览器收到的每条消息恰好是一帧。不要把多帧拼成一项再写。
 func (c *conn) writeLoop() {
 	defer close(c.writerDone)
 	defer c.netConn.Close()

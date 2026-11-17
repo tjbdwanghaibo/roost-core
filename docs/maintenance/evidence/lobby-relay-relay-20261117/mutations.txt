@@ -18,4 +18,12 @@ M15 空房超时关房	service/relay/room.go	TestHeartbeatAndEmptyRoomTimeout	RE
 M5 同账号顶号	service/relay/room.go	TestSlotsKickAndReplace	RED	relay_test.go:406: slot 2 read: read tcp 127.0.0.1:65336->127.0.0.1:65332: i/o timeout
 M6 发送队列满断开慢连接	service/relay/conn.go	TestSlowConsumerIsDisconnectedWithoutBlockingOthers	RED	relay_test.go:575: slot 1 read: read pipe: i/o timeout
 
+
+# 接上 WebSocket、空闲检测改成计时器之后（M15 重跑，M16～M19 新增）
+M15 空房超时关房	service/relay/room.go	TestHeartbeatAndEmptyRoomTimeout	RED	relay_test.go:639: slot 1 read: read tcp 127.0.0.1:52273->127.0.0.1:52272: i/o timeout
+M16 空闲计时器断开（TCP / WebSocket 同一套）	service/relay/conn.go	TestWebSocketLimitsMatchTCP	RED	ws_test.go:206: waiting for Closed{idle_timeout}: failed to get reader: context deadline exceeded
+M17 进房后换成 IdleTimeout 重新计时	service/relay/conn.go	TestConnectionLimits	RED	relay_test.go:531: slot 3 read: read tcp 127.0.0.1:52364->127.0.0.1:52359: i/o timeout
+M18 令牌首帧超时	service/relay/conn.go	TestTokenMustArriveInTime	RED	relay_test.go:666: slot 0 read: read tcp 127.0.0.1:52375->127.0.0.1:52374: i/o timeout
+M19 WebSocket 监听进 Serve	wiring/relay/server.go	TestWebSocketMembersShareRoomsWithTCP	RED	ws_test.go:74: websocket read: MessageType(0) failed to get reader: context deadline exceeded
+
 # 每条变异恢复后目标用例都重新跑过：全部 GREEN

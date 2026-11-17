@@ -1,3 +1,3 @@
---- PASS: TestRealRelayReportsCommandsAndAdvertisement (2.02s)
+--- PASS: TestRealRelayReportsCommandsAndAdvertisement (2.04s)
 PASS
-ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.644s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.665s

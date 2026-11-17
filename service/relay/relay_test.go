@@ -659,6 +659,13 @@ func TestShutdownClosesEveryConnection(t *testing.T) {
 	pending.expectClosed(wire.RelayReasonShutdown)
 }
 
+// 令牌首帧超时：没送令牌的连接收到 Closed{idle_timeout} 后断开（空闲检测用计时器，不靠读期限，WebSocket 上也能告诉原因）。
+func TestTokenMustArriveInTime(t *testing.T) {
+	h := newHarness(t, false, func(c *relay.Config) { c.AuthTimeout = 200 * time.Millisecond })
+	silent := h.raw()
+	silent.expectClosed(wire.RelayReasonIdleTimeout)
+}
+
 func TestConfigValidation(t *testing.T) {
 	for name, config := range map[string]relay.Config{
 		"no instance":          {TokenKey: testKey},

@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/wsconn"
 	"github.com/tjbdwanghaibo/roost-core/service/relay/token"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -43,6 +45,11 @@ type config struct {
 		Subject        string        `config:"subject" required:"true" example:"roost.{project}.lobby" help:"与 lobby.subject 相同：报告发到 <subject>.events，lobby 的命令从 <subject>.relay.<instance> 收"`
 		RegistryPrefix string        `config:"registry_prefix" required:"true" example:"/{project}/relays/" help:"与 lobby.relay_registry_prefix 相同：etcd 广播键是 <registry_prefix><instance>"`
 		RegistryTTL    time.Duration `config:"registry_ttl" default:"10s" min:"2s" example:"10s" help:"etcd 广播的租约：进程没了，键在这么久内消失，lobby 不再把新房间分到这里"`
+
+		WSListen         string   `config:"ws_listen" example:":7101" help:"WebSocket 监听地址（浏览器客户端）；不写就不开。每条二进制消息装一帧，令牌、转发、限额与 TCP 相同"`
+		WSPath           string   `config:"ws_path" default:"/relay" example:"/relay" help:"WebSocket 升级的路径（精确匹配）"`
+		WSAdvertiseAddr  string   `config:"ws_advertise_addr" example:"wss://relay1.example.com/relay" help:"客户端连 WebSocket 用的完整 ws:// 或 wss:// URL（含路径），经 etcd 广播给 lobby；开了 ws_listen 就必填。wss 由前置负载均衡终结"`
+		WSAllowedOrigins []string `config:"ws_allowed_origins" example:"[\"https://play.example.com\"]" help:"允许的游戏页面 Origin（不带 Origin 的原生客户端总是放行）；空表示拒绝所有浏览器页面，写法见 infra/network/wsconn"`
 
 		MaxPayloadBytes     int           `config:"max_payload_bytes" default:"65536" min:"1" example:"65536" help:"单帧载荷上限，超过断开连接"`
 		FramesPerSecond     int           `config:"frames_per_second" default:"200" min:"1" example:"200" help:"每条连接每秒帧数上限（所有通道合计，突发量同为一秒的额度），超过断开连接"`
@@ -97,6 +104,17 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if strings.ContainsAny(c.RegistryPrefix, " \t\r\n") {
 		return fmt.Errorf("relay mod: relay.registry_prefix %q contains whitespace", c.RegistryPrefix)
 	}
+	if c.WSListen != "" {
+		if !strings.HasPrefix(c.WSAdvertiseAddr, "ws://") && !strings.HasPrefix(c.WSAdvertiseAddr, "wss://") {
+			return fmt.Errorf("relay mod: relay.ws_advertise_addr %q must be a ws:// or wss:// URL when relay.ws_listen is set", c.WSAdvertiseAddr)
+		}
+		if err := wsconn.ValidatePath(c.WSPath); err != nil {
+			return fmt.Errorf("relay mod: relay.ws_path: %w", err)
+		}
+		if err := wsconn.ValidateOrigins(c.WSAllowedOrigins); err != nil {
+			return fmt.Errorf("relay mod: relay.ws_allowed_origins: %w", err)
+		}
+	}
 	key, err := token.KeyFromEnv(c.TokenKeyEnv)
 	if err != nil {
 		return fmt.Errorf("relay mod: relay.token_key_env: %w", err)
@@ -125,8 +143,16 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("relay mod: %w", err)
 	}
-	rt := &runtime{server: server, nats: raw, listen: c.Listen, commandSubject: CommandSubject(c.Subject, server.Config().Instance),
-		advertiser: newAdvertiser(etcdClient, c.RegistryPrefix, c.RegistryTTL, Advertisement{Instance: server.Config().Instance, TCPAddr: c.AdvertiseAddr}, server)}
+	advert := Advertisement{Instance: server.Config().Instance, TCPAddr: c.AdvertiseAddr}
+	rt := &runtime{server: server, nats: raw, listen: c.Listen, commandSubject: CommandSubject(c.Subject, server.Config().Instance)}
+	if c.WSListen != "" {
+		advert.WSAddr = c.WSAdvertiseAddr
+		rt.wsListen = c.WSListen
+		// 一条消息装一帧：消息上限取一个满帧（帧头 + 单帧载荷上限）；升级请求的期限沿用令牌首帧的期限。
+		rt.ws = wsconn.Config{Path: c.WSPath, AllowedOrigins: c.WSAllowedOrigins,
+			MaxMessageBytes: int64(server.Config().MaxPayloadBytes + wire.HeaderSize), HandshakeTimeout: server.Config().AuthTimeout}
+	}
+	rt.advertiser = newAdvertiser(etcdClient, c.RegistryPrefix, c.RegistryTTL, advert, server)
 	return mods.RegisterAll(r, mods.Capability{Name: CapabilityName, Value: server}, mods.Capability{Name: runtimeName, Value: rt})
 }
 

@@ -1,1 +1,1 @@
-go vet: ok
+go vet (含 -tags integration): ok

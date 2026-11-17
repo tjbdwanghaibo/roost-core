@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/wsconn"
 )
 
 // runtime 是 Mod 装配好、交给 Server 的东西。
@@ -22,13 +23,16 @@ type runtime struct {
 	server         *domain.Server
 	nats           fnats.RawClient
 	listen         string
+	wsListen       string        // 空表示不开 WebSocket
+	ws             wsconn.Config // wsListen 非空时有效
 	commandSubject string
 	advertiser     *advertiser
 }
 
 // Server 是 relay 进程的 app.Service。
 //
-// Init：开 TCP 监听、订阅 lobby 的命令主题（失败就起不来）。Serve：接受连接、每个房间定时心跳、etcd 广播，直到 ctx 结束。
+// Init：开 TCP 监听（配了 relay.ws_listen 时再开一个 WebSocket 监听，两种连接进同一批房间）、订阅 lobby 的命令主题
+// （失败就起不来）。Serve：接受连接、每个房间定时心跳、etcd 广播，直到 ctx 结束。
 // Shutdown：先停命令订阅，再关监听与全部房间（每条连接收到 Closed{shutdown}），最后撤掉 etcd 广播。
 type Server struct {
 	rt        *runtime
@@ -59,6 +63,14 @@ func (s *Server) Addr() net.Addr {
 	return s.listeners[0].Addr()
 }
 
+// WSAddr 是 WebSocket 监听的实际地址；没开 WebSocket 时为 nil。
+func (s *Server) WSAddr() net.Addr {
+	if len(s.listeners) < 2 {
+		return nil
+	}
+	return s.listeners[1].Addr()
+}
+
 // Init 取 Mod 的装配结果，开监听、订阅命令。
 func (s *Server) Init(r *app.Registry) error {
 	rt, ok := app.Lookup[*runtime](r, runtimeName)
@@ -71,6 +83,14 @@ func (s *Server) Init(r *app.Registry) error {
 		return fmt.Errorf("relay server: listen %s: %w", rt.listen, err)
 	}
 	s.listeners = append(s.listeners, tcp)
+	if rt.wsListen != "" {
+		ws, err := wsconn.Listen(rt.wsListen, rt.ws)
+		if err != nil {
+			s.closeListeners()
+			return fmt.Errorf("relay server: websocket listen %s: %w", rt.wsListen, err)
+		}
+		s.listeners = append(s.listeners, ws)
+	}
 	s.commands, err = rt.nats.SubscribeBounded(rt.commandSubject, fnats.PendingLimits{Messages: 4096, Bytes: 4 << 20,
 		OnError: func(err error) {
 			slog.Warn("relay: lobby command subscription", "subject", rt.commandSubject, "err", err)

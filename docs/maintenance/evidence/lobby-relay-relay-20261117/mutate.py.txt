@@ -47,6 +47,19 @@ M = [
  ("M15 空房超时关房", "service/relay/room.go",
   "if !r.aloneSince.IsZero() && now.Sub(r.aloneSince) >= r.server.config.EmptyRoomTimeout {", "if false {",
   "./service/relay", "TestHeartbeatAndEmptyRoomTimeout"),
+
+ ("M16 空闲计时器断开（TCP / WebSocket 同一套）", "service/relay/conn.go",
+  "\tif idle >= limit {\n\t\tc.finish(wire.RelayReasonIdleTimeout, true)\n\t\treturn\n\t}", "\tif idle >= limit {\n\t\treturn\n\t}",
+  "./wiring/relay", "TestWebSocketLimitsMatchTCP"),
+ ("M17 进房后换成 IdleTimeout 重新计时", "service/relay/conn.go",
+  "\tc.idleTimer.Reset(cfg.IdleTimeout) // 上限可能比 AuthTimeout 短：按新上限重新计时\n", "",
+  "./service/relay", "TestConnectionLimits"),
+ ("M18 令牌首帧超时", "service/relay/conn.go",
+  "\tc.watchIdle(cfg.AuthTimeout)\n", "\tc.idleTimer = time.AfterFunc(time.Hour, func() {})\n",
+  "./service/relay", "TestTokenMustArriveInTime"),
+ ("M19 WebSocket 监听进 Serve", "wiring/relay/server.go",
+  "\tfor _, listener := range s.listeners {\n\t\ts.serving.Add(1)", "\tfor _, listener := range s.listeners[:1] {\n\t\ts.serving.Add(1)",
+  "./wiring/relay", "TestWebSocketMembersShareRoomsWithTCP"),
 ]
 only = sys.argv[1:]
 for name, path, old, new, pkg, test in M:

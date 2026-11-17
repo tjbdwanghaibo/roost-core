@@ -21,7 +21,7 @@ relay 组证据（2026-11-17，大厅 / relay 实施第一批：转发核心，�
 测试（只跑本组包的快速检查）
 ----------------------------
     go vet ./client/wire ./service/relay/... ./wiring/relay                → vet.txt：ok
-    go test -race -count=3 -v ./client/wire ./service/relay/... ./wiring/relay → tests-race-count3.txt：96 PASS，0 FAIL
+    go test -race -count=3 -v ./client/wire ./service/relay/... ./wiring/relay → tests-race-count3.txt：108 PASS，0 FAIL（接上 WebSocket 后重跑）
 
 覆盖方案 §5 relay 条目（换 host 除外）：
 - 转发方向：TestGameChannelDirection（成员游戏帧只到房主、房主到单个 / 全体、不在线目标丢弃）
@@ -44,9 +44,20 @@ relay 组证据（2026-11-17，大厅 / relay 实施第一批：转发核心，�
 - 另跑过：go test ./wiring -run 'TestKitModsDoNotReachForRawDriverHandles|TestKitDependencyBoundary|TestForbiddenKitImport|
   TestBuiltInModsImplementContextStop|TestEveryModDependencyNamesAKitMod' → ok；go test . -run TestTrackedMarkdownRelativeLinksResolve → ok
 
+WebSocket（wsconn 67a2c9e5 提交后接上）
+--------------------------------------
+- relay.ws_listen / ws_path / ws_advertise_addr / ws_allowed_origins；Server.Init 用 wsconn.Listen 开第二个监听，
+  两种连接进同一批房间；etcd 广播带 ws_addr。
+- TestWebSocketMembersShareRoomsWithTCP：TCP 房主与 WebSocket 成员双向转发（游戏帧、房间帧），relay 写给浏览器的每条
+  消息恰好一帧，Origin 不在白名单 403；TestWebSocketLimitsMatchTCP：空闲超时与超大帧在 WebSocket 上同样先收到
+  Closed{原因}；TestWebSocketConfigIsChecked。
+- 发现并改掉：coder/websocket 的 NetConn 在读期限到期时直接关掉整条连接，relay 来不及发 Closed{idle_timeout}。
+  空闲与令牌首帧超时改成每连接一个计时器检查最后一帧时间（service/relay/conn.go watchIdle / checkIdle），不再用读期限；
+  新增 TestTokenMustArriveInTime。
+
 变异
 ----
-mutations.txt：15 条关键行各撤一次，目标用例全部变红，恢复后全部变绿（脚本 mutate.py.txt）。
+mutations.txt：19 条关键行各撤一次，目标用例全部变红，恢复后全部变绿（脚本 mutate.py.txt）。
 
 真实依赖
 --------
@@ -59,7 +70,6 @@ etcd Mod 自己的服务登记（/service/relay/9）与 relay 的广播键互不
 没有做的
 --------
 - 多进程演练（lobby + relay 真实进程、kill -9、两实例分布、吞吐基线）：按方案 §5 放到最后统一做。
-- WebSocket 监听：wsconn（ws 组）在本组收尾时尚未提交，relay 侧没有接 relay.ws_listen（见 RELAY.md §7）。
 - 换 host（下一批）。
 
 给协调者：CHANGELOG [Unreleased] 建议文字
@@ -76,10 +86,11 @@ etcd Mod 自己的服务登记（/service/relay/9）与 relay 的广播键互不
 - relay 房间只在一个实例的内存里，进程崩溃房间丢失；本期房主断开即关房（换 host 未做）。
 - relay 槽位只在在线期间属于账号，成员掉线重连可能换槽位（房主按 MemberJoined 里的账号对应）。
 - 语音走 TCP / WebSocket，丢包会卡住后面的包。
-- 尚未确认：真实 NATS / etcd 下的 relay 演练、WebSocket 接入（等 wsconn 提交后接线）。
+- 尚未确认：浏览器端到端（Playwright）与多进程演练（方案 §5，最后统一做）。
 
 给协调者：接线待办
 ------------------
 - frameworkCatalog / 生成器：relay 是 app.Service（relay.NewServer()）+ relay.NewMod()，依赖 NATS、etcd；没有 ClientMod。
+- relay.* 新增了 ws_* 四个键：生成器的 kitconfig_gen.go（configschemagen 读 relay.NewMod().ConfigSchema()）要在本组 WebSocket 提交之后重新生成。
 - wiring/config_schema_test.go 的 everyKitMod 建议加 new(relay.Mod)（本组没改这份共用测试，同样的检查在
   wiring/relay 的 TestModLoadsWhatItDeclares 里）。

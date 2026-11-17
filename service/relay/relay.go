@@ -292,6 +292,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) serveConn(c *conn) {
 	go c.writeLoop()
 	defer func() {
+		if c.idleTimer != nil {
+			c.idleTimer.Stop()
+		}
 		<-c.writerDone
 		s.mu.Lock()
 		delete(s.conns, c)

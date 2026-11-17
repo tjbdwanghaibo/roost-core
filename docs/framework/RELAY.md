@@ -25,7 +25,7 @@
 
 - Gate 的 `wire.Validate / Read / Write` 不认通道位：relay 帧发到 Gate 当非法包拒绝。relay 连接用 `wire.ReadRelay / WriteRelay / EncodeRelay / DecodeRelay`。
 - 金样：`client/spec/relay-packets.json`，`client/wire` 的 `TestRelayProtocolGolden` 锁住；`client/spec/packets.json`（Gate 帧）没有变。C# / TS 的 relay SDK 交付时消费这一份。
-- WebSocket 接入每条二进制消息装一帧，帧格式不变。
+- WebSocket 接入（`relay.ws_listen`）：relay 写给客户端的每条二进制消息恰好是一帧；客户端发来的帧拆成几条消息或几帧合在一条消息里都能读。帧格式、令牌、转发、限额与 TCP 完全相同。
 
 ### 2.1 转发规则
 
@@ -77,13 +77,15 @@
 | `send_queue_frames` | 1024 | 断开这一条（`slow_consumer`） | 排队 + 正在写的帧；放帧的一方从不等待 |
 | `send_queue_bytes` | 4 MiB | 同上 | 至少两个满帧 |
 | `idle_timeout` | 30s | 断开（`idle_timeout`） | 客户端约 10s 发一次 Ping |
-| `auth_timeout` | 5s | 断开 | |
+| `auth_timeout` | 5s | 断开（`idle_timeout`） | |
 | `write_timeout` | 10s | 断开这一条 | 一次写 socket 的期限 |
 | `empty_room_timeout` | 10m | 关房 | 房主等人进房的上限 |
 | `closed_room_retention` | 2m | — | 不短于 lobby 的令牌有效期（缺省 30s） |
 | `heartbeat_interval` | 5s | — | 明显短于 `lobby.room_ttl`（推荐 room_ttl/3） |
 
 内存预算：每条连接最多驻留 `send_queue_bytes`；多个收件人共用同一份编码好的帧。
+
+空闲与令牌首帧的超时用每条连接一个计时器检查最后一帧的时间，不用读期限：WebSocket 接入在读期限到期时会直接关掉整条连接，relay 就来不及发 `Closed`。用计时器后 TCP 与 WebSocket 都先收到 `Closed{idle_timeout}` 再断开。
 
 ## 5. 与 lobby 的契约
 
@@ -114,7 +116,7 @@ a.RegisterServer(relay.ServiceName, relay.NewServer(), relay.NewMod())
 ```
 
 - `relay.NewMod()` 依赖 NATS（`nats.raw`）与 etcd（`etcd`）：Init 读 `relay.*` 与令牌密钥（`relay.token_key_env` 指向的环境变量，`token.KeyFromEnv`），Provide 建好 relay 并登记能力 `relay`（`*service/relay.Server`）。Mod 不起 goroutine。
-- `relay.NewServer()`（app.Service）：Init 开 TCP 监听、订阅命令主题（失败就起不来）；Serve 接受连接、定时心跳、维护 etcd 广播；Shutdown 先停命令订阅，再关监听与全部房间（每条连接收到 `Closed{shutdown}`），最后撤销 etcd 租约。
+- `relay.NewServer()`（app.Service）：Init 开 TCP 监听（配了 `relay.ws_listen` 再开 WebSocket 监听，共用接入层 `infra/network/wsconn`）、订阅命令主题（失败就起不来）；Serve 接受连接、定时心跳、维护 etcd 广播；Shutdown 先停命令订阅，再关监听与全部房间（每条连接收到 `Closed{shutdown}`），最后撤销 etcd 租约。
 - etcd Mod 的自动登记（`etcd.advertise_addr`）与 relay 的广播是两个键，互不影响。
 - 监听：`service/relay.Server.Serve` 接受任意 `net.Listener`，可以对多个 listener 各调用一次，同一个房间里的连接可以来自不同的 listener（TCP 与 WebSocket 混在一起）。
 
@@ -128,11 +130,16 @@ relay:
   subject: roost.party.lobby             # 与 lobby.subject 相同
   registry_prefix: /party/relays/        # 与 lobby.relay_registry_prefix 相同
   # instance、registry_ttl 与第 4 节的限额都有缺省值
+  ws_listen: ":7101"                      # 可选：浏览器客户端
+  ws_path: /relay                         # 缺省 /relay
+  ws_advertise_addr: wss://relay1.example.com/relay   # 开了 ws_listen 就必填，经 etcd 广播为 ws_addr
+  ws_allowed_origins: ["https://play.example.com"]    # 不带 Origin 的原生客户端总是放行；空表示拒绝所有浏览器页面
 ```
+
+WebSocket 单条消息上限取一个满帧（`max_payload_bytes` + 16 字节帧头），升级请求的期限取 `auth_timeout`。TLS（wss）由前置负载均衡终结。
 
 ## 7. 本期限制与后续
 
 - 换 host（§4.6）未做：房主断开即关房。接入点是 `room.hostLostLocked`；报告里的 `epoch` 与 `room.host_changed`、控制帧操作码 64～127 已经留好。
-- WebSocket 监听（`relay.ws_listen`）等共用接入层 `infra/network/wsconn` 提交后接上：relay 侧只需把 `wsconn.Listen` 得到的 `net.Listener` 交给 `Server.Serve`，并在 etcd 广播里写 `ws_addr`。
 - 语音走 TCP / WebSocket，丢一个包会卡住后面的包；需要时以后加 UDP 通道。
 - 槽位只在在线期间属于账号：成员掉线后重连可能拿到别的槽位。
