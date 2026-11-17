@@ -100,6 +100,8 @@ MMORPG 夹具（`scripts/testdata/mmorpg`）是单进程玩法夹具，不用 Ce
 
 ## 五、要维护者定的
 
+> 维护者 2026-11-18 按推荐定（凡写了推荐的点都按推荐）。
+
 - **Q1 Player 的 Base 标量字段要不要也进模块状态**：现在 30 多个 Cell* / Saved* 字段仍由工程在 PlayerDao 里按 README 的表声明，模块经 `BaseDao` 接口用。改成模块 `state:` 的嵌套结构可以省掉手写，代价：CellHP / CellMaxHP / CellAttack / CellPower 在 player 命名空间的同步编码里（Base 的 mirror 借它给客户端看 SceneActor），变成嵌套同步字段后客户端、drill、loadtest 的解码一起改；PosX / PosY / Saved* 与普通场景的 Map 共用，要拆。推荐 A：保持现状（字段表已写进模块 README）；B：做嵌套状态并改客户端解码（M～L）。
 - **Q2 队伍视图（`cell_team.go`、TeamVer / TeamMembers）进模块的 `with/team` 联动**：依赖 Q1（GroupPlayer 要 Player 的字段）。推荐随 Q1 一起定。
 - **Q3 `scene.partition` 改成模块 config（R5 写法，键改 `cellworld.*`）**：要同步改 seamless 脚本、drill 与 demo 配置。推荐以后单独做。

@@ -71,6 +71,8 @@ accountctl 的红：新用例 `TestLoginAccountctlRevokesAnAccountsGameTokens` �
 
 ## 要维护者定的点
 
+> 维护者 2026-11-18 按推荐定（凡写了推荐的点都按推荐；C6 第 1 点另定为 B：登录时按凭证版本自动加一，见 c6-credential-version-20261118）。
+
 1. **“改密码自动加一”没有落点**：account 里没有改密码 / 改凭证 / 换绑的路径（身份由渠道确认）。现在的做法是：`RevokeGameTokens` 在总线上，由凭证变更发生的那一方调，接法写在 account_auth README。可选：
    - A（推荐，现状）：保持这样，不在 account 里加凭证变更入口；工程接渠道时自己在改密码处调总线接口。代价：靠工程记得调，框架没有自动的那一下。
    - B：在 account_auth 的协作者里加一个“凭证变更”的登记点（例如渠道验证器返回“凭证版本”，account 在 `Login` 时发现版本变了就自动加一）。代价：要改 `Verified` / `Verifier` 的契约与 account_auth 模板，工程的渠道实现要多返回一个字段。

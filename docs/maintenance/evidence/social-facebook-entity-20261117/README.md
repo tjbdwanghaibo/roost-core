@@ -190,6 +190,8 @@ alliance actual cases: passed=1, skipped=0
 
 ### 遗留（尚未确认）
 
+> 维护者 2026-11-18 按推荐定：1～4 按本轮的实施（第一次写的 game 建、事务之后投递、广播告知、名字 facebook）。5（框架只读认领）另议。
+
 1. 谁建 facebook（第一次写的 game vs 承载 game 进入时建）。
 2. 投递进不进邀请的同一笔事务。
 3. 告知广播 vs 按承载服路由。
