@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""SLG（R9 2C）变异：在保留的生成工程里改一处模块调用，跑对应场景看红，恢复再跑看绿。"""
+import os, subprocess, sys
+from pathlib import Path
+proj = Path(sys.argv[1])
+real = len(sys.argv) > 2 and sys.argv[2] == "real"
+env = dict(os.environ, GOWORK="off")
+cases = [
+    ("M1 取消不退款（去掉 Wallet().Add(BuildCost)）", "game/handler/slg_tasks.go",
+     "\tif _, err := target.Wallet().Add(player.BuildCost); err != nil {\n\t\treturn false, err\n\t}\n", "",
+     "./game/handler", "^TestSLGCancelRefundAndRefusal$"),
+    ("M2 扣费不走 wallet（slgPay 只查余额不扣）", "game/handler/slg_tasks.go",
+     "\t_, err := target.Wallet().Add(-cost)\n\treturn err\n", "\treturn nil\n",
+     "./game/handler", "^TestSLG(ConstructionMarchAndReplay|ResearchAndConstructionUseIndependentQueues|TwoPlayersCompeteForOneTile|RobotBusiness)$"),
+    ("M3 离线收益不入 wallet（去掉定时器里的 Add）", "game/entities/player/timer_handlers.go",
+     "\t\t\t_, _ = component.owner.Wallet().Add(min(periods, 1000-gold))\n", "\t\t\t_ = periods\n",
+     "./game/handler", "^TestSLGOfflineIncomeIsBusinessBounded$"),
+    ("M5 wallet 余额的 undo 不还原（生成工程里的 WalletState.SetCoins）", "db/gen_wallet_state_nested.go",
+     "\t\t\ts.coins = old\n", "\t\t\t_ = old\n",
+     "./game/handler", "^TestSLGFailureRollsBackResourcesAndDeadline$"),
+]
+if len(sys.argv) > 2 and sys.argv[2] == "only5":
+    cases = cases[3:]
+if real:
+    cases = [
+        ("M4 原服奖励到账 Apply 换成不带键的 Add", "game/handler/alliance_rewards.go",
+         "\treturn p.Wallet().Apply(allianceRewardKey(key), amount)\n", "\treturn p.Wallet().Add(amount)\n",
+         "./game/modules/alliance", "^TestSLGAlliancePlayerDelivery$"),
+    ]
+runs = 0
+def run(pkg, pattern):
+    global runs
+    runs += 1
+    if real:
+        # 每次用新的库与 WAL：上一轮（变异）留下的冷数据不能带进下一轮。
+        env["ROOST_SLG_DB"] = f"roost_slg_it_mut_{os.getpid()}_{runs}_player"
+        env["ROOST_SLG_WAL"] = str(Path(os.environ["ROOST_SLG_WAL"]) / str(runs))
+    r = subprocess.run(["go", "test", "-mod=mod", "-v", "-count=1", "-timeout", "4m", "-run", pattern, pkg], cwd=proj, env=env, capture_output=True, text=True)
+    lines = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith(("--- ", "ok", "FAIL")) or "Fatal" in l or "_test.go:" in l]
+    return r.returncode, lines[:12]
+for name, rel, old, new, pkg, pattern in cases:
+    path = proj / rel
+    orig = path.read_text()
+    assert orig.count(old) == 1, (name, rel)
+    path.write_text(orig.replace(old, new))
+    try:
+        code, lines = run(pkg, pattern)
+        print(f"== {name}\n   mutated: exit={code} ({'RED' if code else 'GREEN?!'})")
+        for l in lines: print("     " + l)
+    finally:
+        path.write_text(orig)
+    code, lines = run(pkg, pattern)
+    print(f"   restored: exit={code} ({'GREEN' if code == 0 else 'RED?!'})")
+    for l in lines: print("     " + l)

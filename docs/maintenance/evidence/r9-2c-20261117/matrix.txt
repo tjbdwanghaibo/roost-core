@@ -1,0 +1,11 @@
+# python3 scripts/test-genres-generated.py --out <scratchpad>/b1117-r9-2cd/matrix-slg --genres slg（2026-11-17）
+Running slg: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-r9-2cd/matrix-slg/slg
+slg: passed
+genre: slg
+status: passed
+module: example.com/acceptance/slg
+passed_tests: 7
+custom_module_passed_tests: 9
+skipped_tests: 0
+custom_module_verify: {'wallet': 17}
+# custom_module_passed_tests 9 = 7 条 TestSLG + 联盟纯内存 2 条（矩阵按 *.log 里的 --- PASS 计数）

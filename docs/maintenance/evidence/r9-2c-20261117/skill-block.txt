@@ -1,0 +1,27 @@
+# SKILL.md §3.2 公共前置（CORE=本检出，自定 module）+ references/slg.md 命令块，原样从 Markdown 抽出拼成脚本执行（2026-11-17）
+## §3（NAME=myslg，MOD=example.com/myslg）：exit=0；TestSLG PASS 7、SKIP 0
+--- PASS: TestSLGRobotBusiness (0.02s)
+--- PASS: TestSLGConstructionMarchAndReplay (0.01s)
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.00s)
+ok  	example.com/myslg/game/handler	1.639s
+module verify: wallet 17/17 skipped=0
+## §3.1 进阶（NAME=myslgadv）：exit=0；TestSLG PASS 7、TestAlliance PASS 2、SKIP 0
+--- PASS: TestSLGRobotBusiness (0.01s)
+--- PASS: TestSLGConstructionMarchAndReplay (0.00s)
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.00s)
+ok  	example.com/myslgadv/game/handler	1.646s
+--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL (0.00s)
+--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess (0.04s)
+ok  	example.com/myslgadv/game/modules/alliance	1.732s
+module verify: wallet 17/17 skipped=0
+# 第一次跑 §3.1 失败：旧命令块 perl 's/db=main/db=main dbscope=global/' 在 v1.47.0 起的骨架（已有 dbscope=sid）上写出重复的 dbscope（generator dao: duplicate marker option "dbscope"）——R9 之前就有的文档错误，改为 's/dbscope=sid/dbscope=global/' 后重跑通过
+# SKILL.md §3.4 收尾（两个工程）：go build / go vet ./... 通过；roost id check -> IDs are valid；roost generate --check -> up to date；project doctor FAIL 行 0
+# 手册 §3.3、§7.6 两段 Go 示例放进 slg-real/project/internal/{slgflow,slgalliance}/flow.go：go build + go vet 通过（检查后删除）

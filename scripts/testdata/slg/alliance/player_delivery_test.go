@@ -101,7 +101,7 @@ func rewardChild(t *testing.T, mode string) {
 			if e := unprojectedRewardCommits(n, 3); e != nil {
 				return e
 			}
-			raw, e := s.Sync_AllianceWallet(ctx, n.id)
+			raw, e := s.Sync_AllianceWallet(ctx, n.id, key)
 			if e != nil {
 				return e
 			}
@@ -127,21 +127,21 @@ func rewardChild(t *testing.T, mode string) {
 	}
 	expected, e := os.ReadFile(filepath.Join(root, "ready.json"))
 	check(t, e)
-	raw, e := s.Sync_AllianceWallet(ctx, n.id)
+	raw, e := s.Sync_AllianceWallet(ctx, n.id, key)
 	check(t, e)
 	if raw != string(expected) {
 		t.Fatal("cold wallet differs BEFORE retry", raw, string(expected))
 	}
+	// 金币在 wallet 模块（R9）：冷加载后余额 10，wallet 的回执窗口里恰好一条、就是这次活动的业务键（加 10、到账后余额 10）。
 	var wallet struct {
 		Home     int32
-		Gold     int64
-		Receipts string
+		Coins    int64
+		Receipts int
+		Receipt  struct{ Delta, Balance int64 }
 	}
 	check(t, json.Unmarshal([]byte(raw), &wallet))
-	var receipts map[string]int64
-	check(t, json.Unmarshal([]byte(wallet.Receipts), &receipts))
-	if wallet.Home != sid || wallet.Gold != 10 || len(receipts) != 1 || receipts[key.String()] != 10 {
-		t.Fatal("cold permanent receipt or asset missing", wallet)
+	if wallet.Home != sid || wallet.Coins != 10 || wallet.Receipts != 1 || wallet.Receipt.Delta != 10 || wallet.Receipt.Balance != 10 {
+		t.Fatal("cold wallet receipt or asset missing", wallet)
 	}
 	// 恢复先比钱包，再从原服账本发现未完成义务；第三进程必须已无待发工作。
 	delivered, e := h.deliverPending(ctx, 1, func(ctx context.Context, work activity.Key, p string, amount int64) error {
@@ -204,7 +204,7 @@ func rewardChild(t *testing.T, mode string) {
 	if g := creditObligation(t, h, key, n, name); g != 10 {
 		t.Fatal("obligation re-read credited twice")
 	}
-	after, e := s.Sync_AllianceWallet(ctx, n.id)
+	after, e := s.Sync_AllianceWallet(ctx, n.id, key)
 	check(t, e)
 	if after != raw {
 		t.Fatal("replay or refusal changed wallet")
@@ -227,7 +227,7 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_DB")).Drop(context.Background()))
 	// dbscope=sid 的 Player DAO（add dao --entity，v1.47.0 起）落在 <库>_<sid>，本用例的存储没有 sid（0）。
 	check(t, mongo.DatabaseForSid(os.Getenv("ROOST_SLG_DB"), 0).Drop(context.Background()))
-	t.Log("same activity workflow: both static homes credit generated Player DAO; three unprojected strict WAL records (create, initialize, reward) per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
+	t.Log("same activity workflow: both static homes credit generated Player DAO; three unprojected strict WAL records (create, initialize, reward) per home survive SIGKILL; cold wallet checked before replay; third process confirms one wallet receipt and 10 coins each; wrong home and changed amount refused")
 }
 func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 	for _, sid := range []int32{1000, 1001} {

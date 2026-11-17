@@ -4,14 +4,26 @@ import (
 	"errors"
 	db "example.com/slg-practice/db"
 	player "example.com/slg-practice/game/entities/player"
+	"example.com/slg-practice/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"time"
 )
 
+// ISLGEntity 是 SLG 玩家 handler 的参数：view.PlayerEntity 带着 Player 上装的 wallet 组件（Wallet()，金币，R9），
+// Dao() 末尾是 SLG 自己的队列字段，TimerComp() 是 Player 上的实体定时器（建造、研究、行军、离线收益）。
 type ISLGEntity interface {
-	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
+	view.PlayerEntity
 	TimerComp() *player.TimerComponent
+}
+
+// slgPay 从 wallet 扣 cost：不留回执（“这一次扣过没有”由目标等级 / 待完成队列号 / 地块归属保证，见各 handler），
+// 余额不足按玩法规则拒绝；其它错误（扣款事件监听失败等）原样交还 Nest，整笔回滚。
+func slgPay(target ISLGEntity, cost int64) error {
+	if target.Wallet().Balance() < cost {
+		return errSLGRule
+	}
+	_, err := target.Wallet().Add(-cost)
+	return err
 }
 
 var errSLGRule = errors.New("slg practice: invalid target, insufficient gold or unknown construction")
@@ -33,10 +45,9 @@ func handlerSLGResearch(target ISLGEntity, level int64) (int64, error) {
 	if id := dao.GetPendingResearch(); id != 0 {
 		return id, nil
 	}
-	if dao.GetGold() < 5 {
-		return 0, errSLGRule
+	if err := slgPay(target, 5); err != nil {
+		return 0, err
 	}
-	dao.SetGold(dao.GetGold() - 5)
 	id := target.TimerComp().NewTimer(3*time.Second, player.TimerResearch, 0, 0, nil)
 	if id == 0 {
 		return 0, errSLGRule
@@ -57,11 +68,10 @@ func handlerSLGClaimTile(target ISLGEntity, tile ISLGTileEntity) (bool, error) {
 	if owner := tile.Dao().GetOwnerID(); owner != 0 {
 		return owner == target.ID(), nil
 	}
-	if target.Dao().GetGold() < 1 {
-		return false, errSLGRule
+	if err := slgPay(target, 1); err != nil {
+		return false, err
 	}
 	tile.Dao().SetOwnerID(target.ID())
-	target.Dao().SetGold(target.Dao().GetGold() - 1)
 	return true, nil
 }
 
@@ -82,10 +92,9 @@ func handlerSLGStart(target ISLGEntity, level int64, destination int64) (int64, 
 	if pending := dao.GetPendingBuild(); pending != 0 {
 		return pending, nil
 	}
-	if dao.GetGold() < player.BuildCost {
-		return 0, errSLGRule
+	if err := slgPay(target, player.BuildCost); err != nil {
+		return 0, err
 	}
-	dao.SetGold(dao.GetGold() - player.BuildCost)
 	id := target.TimerComp().NewTimer(2*time.Second, player.TimerBuild, destination, 0, nil)
 	if id == 0 {
 		return 0, errSLGRule
@@ -103,6 +112,9 @@ func handlerSLGCancel(target ISLGEntity, id int64) (bool, error) {
 		return false, errSLGRule
 	}
 	target.Dao().SetPendingBuild(0)
-	target.Dao().SetGold(target.Dao().GetGold() + player.BuildCost)
+	// 退款同样不留回执：待完成队列号已清零，同一个 id 再取消答 false、不再退。
+	if _, err := target.Wallet().Add(player.BuildCost); err != nil {
+		return false, err
+	}
 	return true, nil
 }

@@ -2,7 +2,7 @@
 
 手册：`docs/framework/SLG-INTEGRATION.md`（下称 SLG §N）。路径相对 roost-core 根目录，以检出或 module cache 中的 `docs/` 为准。
 
-> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+> 本篇命令按当前检出的脚本写（R9 起先 `roost module add wallet` 再只写模块没覆盖的部分；v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
 
 ## 1. 适用与不适用
 
@@ -14,11 +14,12 @@
 
 | 业务 | 模块 / 生成入口 | 出处 |
 | --- | --- | --- |
-| 玩家资源、队列、期限 | Player DAO + `roost add timer --entity Player`（`entitytimer`） | SLG §3.1、§4 |
+| 玩家金币（扣费、退款、离线收益、原服奖励到账） | **装** wallet 模块：`Wallet().Add`（不留回执，判重靠目标等级 / 队列号）、到账 `Wallet().Apply(业务键)` | SLG §3.1、§3.5、§7.3 |
+| 玩家队列、期限 | Player DAO 字段 + `roost add timer --entity Player`（`entitytimer`），手写 | SLG §3.1、§4 |
 | 地块归属 | Tile 实体（World 锁档）+ 多实体 Sender | SLG §5 |
 | 联盟 / 国战权威 | `roost add mod remote_entity`，`category=entity.EntityCategoryRemote remote=managed`，DAO `dbscope=global` | SLG §7.4 |
 | 战争迷雾 / 侦察 / 联盟视野 | Interest 关系来源、Block AOI、Profile 白名单、Hold / Ready | SLG §7.1、§7.5；INTEREST-BLOCK-AOI.md |
-| 联盟活动 | `service/activity` 协调器；demo `ActivityRunner` 是接线参考 | SLG §7.1 |
+| 联盟活动 | `service/activity` 协调器；demo `ActivityRunner` 是接线参考；夹具的教学消费者（Redis CAS 联盟、Remote 托管联盟权威、原服奖励义务账本）手写保留（R9 Q4 A，不装 alliance / activity_alliance 模块） | SLG §7.1 |
 | 跨服奖励 / 交易 | Saga 原生步骤 / effect、邮件 | SLG §8；guide/06-saga.md |
 
 ### 普通 Player + Remote 联盟 View
@@ -34,14 +35,14 @@
 
 ## 3. 生成最小 demo
 
-接在 SKILL.md §3.2 公共前置命令之后（已 `cd "$DIR"`）。对应 `scripts/test-slg-generated.sh` 的建造 / 行军 / 抢地部分。
+接在 SKILL.md §3.2 公共前置命令之后（已 `cd "$DIR"`）。对应 `scripts/test-slg-generated.sh` 的建造 / 行军 / 抢地部分。模块清单只有 `wallet`（R9）；不再 `add dao Player`（game 模板已有），不给 Player 加 `Gold`。
 
 ```bash
-"$ROOST" add dao Player --entity Player
+bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet   # = roost module add + 核对已登记
 "$ROOST" add timer --entity Player
 "$ROOST" add entity Tile
 "$ROOST" add dao Tile --entity Tile
-dao_add Player db/def/player.go "Gold int64 gold" "BuildingLevel int64 building_level" \
+dao_add Player db/def/player.go "BuildingLevel int64 building_level" \
   "ResearchLevel int64 research_level" "PendingResearch int64 pending_research" \
   "PendingBuild int64 pending_build" "Marches int64 marches" "ArrivedX int64 arrived_x"
 dao_add Tile db/def/tile.go "OwnerID int64 owner_id"
@@ -55,29 +56,31 @@ gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/slg_tas
 python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" slg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler 2>&1 | tee "$WORK/test.log"
+bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" wallet
 ```
 
-期望：`--- PASS: TestSLG` 恰好 **7** 条（6 条业务 + `TestSLGRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。
+期望：`--- PASS: TestSLG` 恰好 **7** 条（6 条业务 + `TestSLGRobotBusiness`）、0 skip；`modules.sh verify` 打印 `wallet 17/17`（== 检出 `modules/wallet/module.yaml` 的 `verify.pass`、0 skip，并带 build / vet / `id check` / `generate --check`）；然后按 SKILL.md §3.4 收尾。
 
 ### 3.1 进阶：加联盟活动（Remote 托管联盟权威）
 
 用一个**新工程**从头执行（替换上面整段）；在上面基础上多三条 add、两段注解改动和联盟业务文件：
 
 ```bash
-"$ROOST" add dao Player --entity Player
+bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet   # = roost module add + 核对已登记
 "$ROOST" add timer --entity Player
 "$ROOST" add entity Tile
 "$ROOST" add dao Tile --entity Tile
 "$ROOST" add mod remote_entity -service game
 "$ROOST" add entity AllianceAuthority
 "$ROOST" add dao AllianceAuthority --entity AllianceAuthority
-dao_add Player db/def/player.go "Gold int64 gold" "BuildingLevel int64 building_level" \
+# 原服奖励到账走 wallet 的 Apply（SLG §7.3），Player 不再加 Gold / Receipts
+dao_add Player db/def/player.go "BuildingLevel int64 building_level" \
   "ResearchLevel int64 research_level" "PendingResearch int64 pending_research" \
   "PendingBuild int64 pending_build" "Marches int64 marches" "ArrivedX int64 arrived_x" \
-  "HomeSID int32 home_sid" "Receipts string receipts"
+  "HomeSID int32 home_sid"
 dao_add Tile db/def/tile.go "OwnerID int64 owner_id"
 dao_add AllianceAuthority db/def/alliance_authority.go "State string state"
-perl -pi -e 's/db=main/db=main dbscope=global/' db/def/alliance_authority.go
+perl -pi -e 's/dbscope=sid/dbscope=global/' db/def/alliance_authority.go   # 骨架缺省 dbscope=sid（v1.47.0 起），Remote 托管要 global
 world game/entities/tile/entity.go
 perl -pi -e 's/category=entity\.EntityCategoryOther/category=entity.EntityCategoryRemote remote=managed/; s/\*entity\.EntityBase/*entity.RemoteEntityBase/' \
   game/entities/alliance_authority/entity.go
@@ -95,9 +98,10 @@ python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" slg   # 
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler 2>&1 | tee "$WORK/test.log"
 go test -mod=mod -race -count=1 -timeout 2m -v \
   -run '^(TestAllianceReportWindowFollowsTheCoordinatorReservationTTL|TestAllianceReceiverBudgetRejectsLateSuccess)$' ./game/modules/alliance 2>&1 | tee "$WORK/alliance.log"
+bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" wallet
 ```
 
-期望：`test.log` 里 `--- PASS: TestSLG` 恰好 7 条（含 Robot）、`alliance.log` 里两条顶层 PASS（`grep -c '^--- PASS: TestAlliance'` = 2），合计 9 条，即 `scripts/test-slg-generated.sh` 缺省模式（pretag 跑的就是这个形态）的全部断言；0 SKIP，再按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。其余联盟用例（`TestSLGAlliance*` 四条）要真实 Mongo / Redis / NATS，缺省只编译与 vet（SLG §11、§12.1）；`-run '^TestSLG'` 只跑 `./game/handler`，不会碰到它们。
+期望：`test.log` 里 `--- PASS: TestSLG` 恰好 7 条（含 Robot）、`alliance.log` 里两条顶层 PASS（`grep -c '^--- PASS: TestAlliance'` = 2），合计 9 条，加 `modules.sh verify` 的 `wallet 17/17`，即 `scripts/test-slg-generated.sh` 缺省模式（pretag 跑的就是这个形态）的全部断言；0 SKIP，再按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。其余联盟用例（`TestSLGAlliance*` 四条）要真实 Mongo / Redis / NATS，缺省只编译与 vet（SLG §11、§12.1）；`-run '^TestSLG'` 只跑 `./game/handler`，不会碰到它们。
 
 ## 4. demo 的最小玩法范围（6 个业务场景 + 1 条 Robot，SLG §3.4）
 
@@ -108,7 +112,7 @@ go test -mod=mod -race -count=1 -timeout 2m -v \
 | 独立研究队列 | 同一实体多个期限独立到期 |
 | 建造事务失败 | 资源、待建节点、驱动索引一起回滚 |
 | 离线资源产出 | 加载后只补触发一次，补算公式与上限（样例 10 期 / 1000）由业务给 |
-| 两名玩家抢同一地块 | 多实体 Sender + 锁序；只有一人获胜，归属与扣款同提交 |
+| 两名玩家抢同一地块 | 多实体 Sender + 锁序；只有一人获胜，归属与扣款（wallet）同提交 |
 
 ## 5. 业务限制清单
 
@@ -124,6 +128,8 @@ go test -mod=mod -race -count=1 -timeout 2m -v \
 ## 6. 常见坑
 
 - 抢地拆成两次请求会留下“地占了钱没扣”；必须一个多实体事务（SLG §5）。
+- 原服奖励到账直接拿 `activity.Key.String()` 当 wallet 业务键：带 `/`、可能超 64 字节，wallet 答 `wallet_invalid`；夹具用身份的 SHA-256 前 16 字节（SLG §7.2）。wallet 回执窗口只有最近 128 次带键加减，长期“只发一次”靠原服义务账本的 Delivered（SLG §7.3）。
+- 联盟教学包放在 `game/modules/alliance/`，与 alliance 模块同路径：以后要装 alliance 模块先改名（SLG §3.5）。
 - 持玩家锁的 handler 里再发同步 Nest 请求取地块锁：被 `ErrSyncInHandler` 拒绝（SLG §5）。
 - 定时器回调里另建调度器或直接改节点 map：DAO 有节点、驱动没期限；只用组件 API（SLG §9 第一行）。
 - 手改生成的 Sender（如冲突参数名生成为 `idArg`）：下次生成被覆盖（SLG §9 第二行）。
@@ -132,7 +138,8 @@ go test -mod=mod -race -count=1 -timeout 2m -v \
 
 ## 7. 验证
 
-- 一档：§3 的 6 条 PASS + SKILL.md §3.4。2026-10-31 在 v1.33.0 检出、自定 module `example.com/myslg` 实测：6 PASS、build / vet / `id check` / `generate --check` 通过；进阶版另 2 条 alliance 用例 PASS。同日在 v1.33.1 复测：§3 自定 module 6 PASS、0 SKIP、§3.4 全过（doctor 仅 4 个 collaborators FAIL）；§3.1 进阶版 6 + 2 = 8 条 PASS，build / vet / `id check` / `generate --check` 通过。“pretag 报 8 条”即这 6 + 2，`scripts/test-slg-generated.sh` 的 `TestSLG` 断言仍是 6。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测（自定 module `example.com/myslg` / `myslgadv`）：§3 6 PASS；§3.1 6 + 2 PASS；均 0 SKIP，§3.4 全过，doctor 仅 4 项 collaborators FAIL。
+- 一档（R9 起）：§3 的 7 条 PASS（含 Robot）+ `module verify` 的 wallet 17/17 + SKILL.md §3.4；§3.1 进阶版 7 + 2 = 9 条。场景名与条数不变，金币断言改读 wallet、原服到账改为 wallet 回执（旧断言 → 新断言见 SLG §3.5）。2026-11-17 在 main（R9 批 2）按 SKILL.md §3.2（自定 module 名）+ 本篇 §3、§3.1 命令块实跑，见 SLG §3.5 的证据链接。以下为 R9 之前的记录（当时 Robot 未计入、金币是手写 `Gold`）。
+- 2026-10-31 在 v1.33.0 检出、自定 module `example.com/myslg` 实测：6 PASS、build / vet / `id check` / `generate --check` 通过；进阶版另 2 条 alliance 用例 PASS。同日在 v1.33.1 复测：§3 自定 module 6 PASS、0 SKIP、§3.4 全过（doctor 仅 4 个 collaborators FAIL）；§3.1 进阶版 6 + 2 = 8 条 PASS，build / vet / `id check` / `generate --check` 通过。“pretag 报 8 条”即这 6 + 2，`scripts/test-slg-generated.sh` 的 `TestSLG` 断言仍是 6。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测（自定 module `example.com/myslg` / `myslgadv`）：§3 6 PASS；§3.1 6 + 2 PASS；均 0 SKIP，§3.4 全过，doctor 仅 4 项 collaborators FAIL。
 - 二档：`ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh`（需隔离 Mongo 副本集、Redis、NATS，共享环境先持有 `$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock`）：协调器重启、原服 SIGKILL 后冷加载补完、Remote owner 交接（SLG §12.1）。
 - 不证明的（缺省模式）：无 WAL / Mongo、离线恢复用 DAO 序列化 + 手动投递 Tick，不是真实重载（SLG §11）。
 

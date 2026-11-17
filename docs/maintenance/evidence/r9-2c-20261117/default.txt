@@ -1,0 +1,18 @@
+# bash scripts/test-slg-generated.sh（ROOST_GENRE_OUTPUT=<scratchpad>/b1117-r9-2cd/slg1，2026-11-17，main cca4d9e9 + 本批未提交改动）
+# exit 0
+--- PASS: TestSLGRobotBusiness (0.01s)
+--- PASS: TestSLGConstructionMarchAndReplay (0.00s)
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.00s)
+ok  	example.com/slg-practice/game/handler	1.596s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL (0.00s)
+ok  	example.com/slg-practice/game/modules/alliance	1.683s
+--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess (0.04s)
+ok  	example.com/slg-practice/game/modules/alliance	1.497s
+# TestSLG PASS 数：7，SKIP：0

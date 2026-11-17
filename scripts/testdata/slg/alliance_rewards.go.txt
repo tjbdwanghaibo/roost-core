@@ -1,26 +1,21 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math"
 
-	db "example.com/slg-practice/db"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"example.com/slg-practice/game/view"
 	"github.com/tjbdwanghaibo/roost-core/service/activity"
 )
 
-type IAllianceRewardPlayerEntity interface {
-	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
-}
-
-var errAllianceReward = errors.New("alliance reward: invalid identity, home, amount or full ledger")
+var errAllianceReward = errors.New("alliance reward: invalid identity, home or amount")
 
 // 仅由受信任的原服建档入口调用。Player 始终归属首次持久写入的 sid，不迁移。
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, error) {
+func handlerAllianceHomeInit(p view.PlayerEntity, sid int32) (int64, error) {
 	if sid != 1000 && sid != 1001 {
 		return 0, errAllianceReward
 	}
@@ -28,53 +23,48 @@ func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, e
 		if old != sid {
 			return 0, errAllianceReward
 		}
-		return p.Dao().GetGold(), nil
+		return p.Wallet().Balance(), nil
 	}
 	p.Dao().SetHomeSID(sid)
-	p.Dao().SetReceipts("{}")
-	return p.Dao().GetGold(), nil
+	return p.Wallet().Balance(), nil
 }
 
-// 金币和永久回执同一 Player strict 事务。key 与 amount 来自原服持久义务，
-// sid 来自本进程可信配置；本方法不是公网 handler，不允许客户端自报奖励。
-// 同身份重试必须金额一致；账本满后拒新身份，不淘汰旧身份。RPC / Redis 读取在事务外。
+// allianceRewardKey 把活动身份换成 wallet 的业务键：activity.Key.String() 带 "/" 且可长于 64 字节，
+// wallet 只收 1～64 个 ASCII 字母、数字与 - _ :，所以取身份的 SHA-256 前 16 字节（32 个十六进制字符）。
+func allianceRewardKey(key activity.Key) string {
+	sum := sha256.Sum256([]byte(key.String()))
+	return "alliance-reward:" + hex.EncodeToString(sum[:16])
+}
+
+// 原服奖励到账（R9：金币走 wallet）。key 与 amount 来自原服持久义务，sid 来自本进程可信配置；
+// 本方法不是公网 handler，不允许客户端自报奖励。RPC / Redis 读取在事务外。
+//
+// “只发一次”分两段：原服的义务账本（game/modules/alliance 的 rewards，手写）在 Player 到账之后记 Delivered，
+// 之后不再重投；“Player 已到账、原服还没记 Delivered”这段的重投由 wallet 的 Apply 按业务键去重——
+// 同身份重投返回第一次的余额，同身份换金额答 wallet_conflict。wallet 的回执窗口是最近 128 次带键的加减，
+// 不是永久账本：重投必须在这名玩家又发生 128 次带键加减之前（原服 ACK 后立刻补投，满足这一点）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceCredit(p IAllianceRewardPlayerEntity, sid int32, key activity.Key, amount int64) (int64, error) {
+func handlerAllianceCredit(p view.PlayerEntity, sid int32, key activity.Key, amount int64) (int64, error) {
 	if p.Dao().GetHomeSID() != sid || (sid != 1000 && sid != 1001) || key.Validate() != nil || key.Phase != activity.PhaseSettle || amount <= 0 || amount > 100000 {
 		return 0, errAllianceReward
 	}
-	receipts := map[string]int64{}
-	if e := json.Unmarshal([]byte(p.Dao().GetReceipts()), &receipts); e != nil || receipts == nil {
-		return 0, errAllianceReward
-	}
-	if old, ok := receipts[key.String()]; ok {
-		if old != amount {
-			return 0, errAllianceReward
-		}
-		return p.Dao().GetGold(), nil
-	}
-	if len(receipts) >= 128 || p.Dao().GetGold() > math.MaxInt64-amount {
-		return 0, errAllianceReward
-	}
-	receipts[key.String()] = amount
-	raw, e := json.Marshal(receipts)
-	if e != nil {
-		return 0, e
-	}
-	p.Dao().SetGold(p.Dao().GetGold() + amount)
-	p.Dao().SetReceipts(string(raw))
-	return p.Dao().GetGold(), nil
+	return p.Wallet().Apply(allianceRewardKey(key), amount)
 }
 
-// 仅内部恢复核对使用，不能把永久账本同步给客户端。
+// 仅内部恢复核对使用：原服、wallet 余额与这次活动在 wallet 回执窗口里的那一条（不下发客户端）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceWallet(p IAllianceRewardPlayerEntity) (string, error) {
+func handlerAllianceWallet(p view.PlayerEntity, key activity.Key) (string, error) {
+	var receipt struct{ Delta, Balance int64 }
+	if r, ok := p.Dao().GetWalletLedger().GetReceipts(allianceRewardKey(key)); ok {
+		receipt.Delta, receipt.Balance = r.GetDelta(), r.GetBalance()
+	}
 	raw, e := json.Marshal(struct {
 		Home     int32
-		Gold     int64
-		Receipts string
-	}{p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
+		Coins    int64
+		Receipts int
+		Receipt  struct{ Delta, Balance int64 }
+	}{p.Dao().GetHomeSID(), p.Wallet().Balance(), p.Dao().GetWalletLedger().ReceiptsLen(), receipt})
 	return string(raw), e
 }

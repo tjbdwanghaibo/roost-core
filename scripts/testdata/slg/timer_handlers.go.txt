@@ -40,9 +40,10 @@ func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Han
 		// 框架只触发一次；业务补算已到期的周期，本例最多补 10 期、库存最多 1000。
 		periods := int64(1 + fire.Late()/fire.Interval)
 		periods = min(periods, 10)
-		dao := component.owner.Dao()
-		if gold := dao.GetGold(); gold >= 0 && gold < 1000 {
-			dao.SetGold(gold + min(periods, 1000-gold))
+		// 金币在 wallet 模块（R9）；收益不留回执：周期由本定时器的触发保证只结算一次。
+		// 余额已在 [0, 1000) 内、补发不超过 1000-余额，Add 不会溢出也不会是 0。
+		if gold := component.owner.Wallet().Balance(); gold >= 0 && gold < 1000 {
+			_, _ = component.owner.Wallet().Add(min(periods, 1000-gold))
 		}
 		return time.Minute
 	})

@@ -1,0 +1,30 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh；持有 $ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock（mkdir 锁）；ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh（2026-11-17）
+# exit 0
+--- PASS: TestSLGRobotBusiness (0.01s)
+--- PASS: TestSLGConstructionMarchAndReplay (0.00s)
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.00s)
+ok  	example.com/slg-practice/game/handler	1.577s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL (0.00s)
+ok  	example.com/slg-practice/game/modules/alliance	1.744s
+--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess (0.04s)
+ok  	example.com/slg-practice/game/modules/alliance	1.795s
+--- PASS: TestSLGAllianceActivity (3.17s)
+ok  	example.com/slg-practice/game/modules/alliance	4.651s
+--- PASS: TestSLGAlliancePlayerDelivery (8.10s)
+ok  	example.com/slg-practice/game/modules/alliance	9.567s
+--- PASS: TestSLGAllianceRemoteDelivery (9.61s)
+ok  	example.com/slg-practice/game/modules/alliance	11.101s
+--- PASS: TestSLGAllianceRPCReceiverBudget (0.62s)
+ok  	example.com/slg-practice/game/modules/alliance	2.097s
+alliance_test.go:263: real NATS + Redis: restarted coordinator; two static-home clients; alliance/scout source revocation; durable contribution replay once; frozen-window barrier; original-home obligations survive missing ACK and replay without rewrite (base workflow establishes obligations; optional generated consumer verifies Player delivery)
+alliance_test.go:263: real NATS + Redis: restarted coordinator; two static-home clients; alliance/scout source revocation; durable contribution replay once; frozen-window barrier; original-home obligations survive missing ACK and replay without rewrite (base workflow establishes obligations; optional generated consumer verifies Player delivery)
+player_delivery_test.go:230: same activity workflow: both static homes credit generated Player DAO; three unprojected strict WAL records (create, initialize, reward) per home survive SIGKILL; cold wallet checked before replay; third process confirms one wallet receipt and 10 coins each; wrong home and changed amount refused
+alliance_test.go:263: real NATS + Redis: restarted coordinator; two static-home clients; alliance/scout source revocation; durable contribution replay once; frozen-window barrier; original-home obligations survive missing ACK and replay without rewrite (base workflow establishes obligations; optional generated consumer verifies Player delivery)
+# SKIP 行数：0

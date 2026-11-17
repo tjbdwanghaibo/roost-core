@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# SLG 业务接入纵切：正式生成器、Player / Tile / AllianceAuthority（Remote 托管）DAO、组件、Sender、Nest 与按实体定时器。
-# 业务规则（建造 / 研究 / 行军、抢地、联盟成员与贡献意图、活动阶段屏障、原服奖励义务与 Player 到账）只在
-# scripts/testdata/slg，不是框架默认玩法，生成器也不生成这些文件。
+# SLG 业务接入纵切：正式生成器 + 业务模块（R9）+ 只手写模块没覆盖的部分。
+# 模块：wallet（玩家金币：建造 / 研究 / 抢地扣费、取消退款、离线收益、原服奖励到账都走它）。
+# 手写（scripts/testdata/slg）：Player / Tile / AllianceAuthority（Remote 托管）DAO 字段、建造 / 研究 / 行军队列与 Player 定时器、
+# 抢地（[Player, Tile] 多实体事务）、离线收益补发、联盟活动教学消费者（service/activity 协调器、Redis CAS 联盟、
+# AllianceAuthority Remote 托管、原服奖励义务账本；Q4 保留）。这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身，离线恢复用 DAO 序列化；联盟活动的业务文件与 Remote Sender 参与编译与 vet，
 # 另跑两条纯内存用例（补报截止跟随协调器保留期、普通 Bus RPC 接收端预算）。
 # ROOST_SLG_REAL=1（并提供隔离 Mongo 副本集、Redis、NATS：ROOST_DATAENGINE_IT_MONGO_URI / _REDIS_ADDR / _NATS_URL）
@@ -39,7 +41,10 @@ go build -o "$review_root/roost" ./codegen/cmd/roost
 cd "$project_root"
 # 先指向本检出：后面 generate 里的 go mod tidy 不去解析可能尚未发布的最低 core 版本，生成物也按本检出编译。
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
-"$review_root/roost" add dao Player --entity Player >> "$review_root/generate.log" 2>&1
+# 模块清单写在脚本里（Q8：不建配方）；Player 实体与主 DAO 来自 game 模板，wallet 把余额与回执窗口装在 PlayerDao 上。
+genre_modules=(wallet)
+modules_sh="$repo_root/scripts/testdata/genre-common/modules.sh"
+bash "$modules_sh" add "$review_root/roost" "${genre_modules[@]}" >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add timer --entity Player >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add entity Tile >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add dao Tile --entity Tile >> "$review_root/generate.log" 2>&1
@@ -47,21 +52,24 @@ go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 "$review_root/roost" add entity AllianceAuthority >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add dao AllianceAuthority --entity AllianceAuthority >> "$review_root/generate.log" 2>&1
 # DAO 定义与实体注解是业务文件；只修改它们，生成组件、访问器与 Sender 由 CLI 生成。
+# SLG 的玩家字段追加在 PlayerDao 末尾（wallet 的 Wallet / WalletLedger 之后）；金币与原服奖励的到账回执在 wallet 里，不再手写。
 python3 - "$project_root" <<'DEFS'
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
 for name, fields in {
-    'player': [('Gold', 'int64', 'gold'), ('BuildingLevel', 'int64', 'building_level'), ('ResearchLevel', 'int64', 'research_level'),
+    'player': [('BuildingLevel', 'int64', 'building_level'), ('ResearchLevel', 'int64', 'research_level'),
                ('PendingResearch', 'int64', 'pending_research'), ('PendingBuild', 'int64', 'pending_build'), ('Marches', 'int64', 'marches'),
-               ('ArrivedX', 'int64', 'arrived_x'), ('HomeSID', 'int32', 'home_sid'), ('Receipts', 'string', 'receipts')],
+               ('ArrivedX', 'int64', 'arrived_x'), ('HomeSID', 'int32', 'home_sid')],
     'tile': [('OwnerID', 'int64', 'owner_id')],
     'alliance_authority': [('State', 'string', 'state')],
 }.items():
     p = root / 'db/def' / f'{name}.go'
     typename = ''.join(part.title() for part in name.split('_')) + 'Dao'
     marker = 'type ' + typename + ' struct {'
-    text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"nosync"`\n' for field, typ, key in fields))
+    text = p.read_text()
+    end = text.index('\n}', text.index(marker))
+    text = text[:end] + '\n' + ''.join(f'\t{field} {typ} `store:"{key}" dao:"nosync"`\n' for field, typ, key in fields) + text[end:]
     assert 'db=main' in text, p  # 骨架写逻辑库 main；真实模式的唯一物理库由测试夹具的映射给出
     if name == 'alliance_authority':
         # Remote 托管实体由每个进程从同一个库提交 / 加载，DAO 必须是 dbscope=global；
@@ -98,6 +106,8 @@ go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+# 已装模块自带的场景照跑：每个模块通过数 == 本检出 modules/<名>/module.yaml 的 verify.pass、0 skip（结果 module-verify.json）。
+bash "$modules_sh" verify "$review_root/roost" "$repo_root" "$review_root/module-verify.json" "${genre_modules[@]}" | tee "$review_root/module-verify.txt"
 # 联盟测试缺省模式也复制并 vet；补报截止跟随协调器保留期、普通 Bus RPC 接收端预算两条用例是纯内存的，缺省模式就跑。
 cp "$repo_root"/scripts/testdata/slg/alliance/*_test.go game/modules/alliance/
 gofmt -w game/modules/alliance/*_test.go
