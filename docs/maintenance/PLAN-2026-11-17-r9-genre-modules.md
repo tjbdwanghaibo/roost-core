@@ -181,7 +181,7 @@ ChessMatch 并入 Room（容量 8，Q3）；按排名领奖 → wallet；建档 
 | 抢地（Tile 多实体事务） | 手写 | — | — |
 | 离线收益（定时器周期发、离线封顶） | 手写 | — | idle 是“领取时惰性结算”，`TestSLGOfflineIncomeIsBusinessBounded` 断言的是定时器补发，语义不同 |
 | 联盟活动教学消费者（`service/activity` 协调器、Redis CAS 联盟、AllianceAuthority Remote 托管、原服奖励义务账本） | 手写（Q4 推荐保留） | — | 这是框架原语的教学，REAL 四条都建在它上面；alliance 模块已有自己的真实验收（P7 / P8） |
-| 原服奖励到账（`alliance_rewards`） | 扩展 | wallet | 到账改 `Wallet().Apply(业务键)`，义务账本仍手写 |
+| 原服奖励到账（`alliance_rewards`） | 扩展 | wallet | 到账改 `Wallet().Add`，Player 上的永久到账回执 `SLGReceipts` 保留，义务账本仍手写（维护者 2026-11-17 收尾时定：恢复永久回执，`34147a1e`；2C 第一版的 `Apply(业务键)` 在 wallet 128 次窗口外会重复发） |
 
 模块缺口：无。
 
