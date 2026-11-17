@@ -1,0 +1,129 @@
+2026/11/17 07:05:14 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=518.549µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestReviewRoomPresenceCanceledWait
+=== RUN   TestReviewRoomPresenceCanceledWait/successful_wait_control
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81902 host_id=102
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+=== RUN   TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/17 07:05:14 ERROR room join failed room_id=81902 player_id=101 err="nest: sync canceled\ncontext canceled"
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+--- PASS: TestReviewRoomPresenceCanceledWait (0.03s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/successful_wait_control (0.02s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds (0.01s)
+=== RUN   TestReviewRoomPresencePostCommitOrder
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: leave completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/17 07:05:14 INFO room: leave completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+--- PASS: TestReviewRoomPresencePostCommitOrder (0.06s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control (0.01s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply (0.02s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control (0.01s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply (0.02s)
+=== RUN   TestReviewRoomPresenceCanceledWait
+=== RUN   TestReviewRoomPresenceCanceledWait/successful_wait_control
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81902 host_id=102
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+=== RUN   TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/17 07:05:14 ERROR room join failed room_id=81902 player_id=101 err="nest: sync canceled\ncontext canceled"
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+--- PASS: TestReviewRoomPresenceCanceledWait (0.02s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/successful_wait_control (0.01s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds (0.01s)
+=== RUN   TestReviewRoomPresencePostCommitOrder
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: leave completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/17 07:05:14 INFO room: leave completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+--- PASS: TestReviewRoomPresencePostCommitOrder (0.06s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control (0.01s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply (0.01s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control (0.01s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply (0.02s)
+=== RUN   TestReviewRoomPresenceCanceledWait
+=== RUN   TestReviewRoomPresenceCanceledWait/successful_wait_control
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81902 host_id=102
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+=== RUN   TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81902 host_id=102
+2026/11/17 07:05:14 ERROR room join failed room_id=81902 player_id=101 err="nest: sync canceled\ncontext canceled"
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81902 epoch=2
+--- PASS: TestReviewRoomPresenceCanceledWait (0.02s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/successful_wait_control (0.01s)
+    --- PASS: TestReviewRoomPresenceCanceledWait/canceled_wait_commit_succeeds (0.01s)
+=== RUN   TestReviewRoomPresencePostCommitOrder
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: reconnect completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: leave completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+=== RUN   TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=102 room_id=81901 host_id=101
+2026/11/17 07:05:14 INFO room: join completed player_id=101 room_id=81901 host_id=102
+2026/11/17 07:05:14 INFO room: leave completed player_id=101 room_id=81901
+2026/11/17 07:05:14 INFO room: player disconnected player_id=101 room_id=81901 epoch=3
+--- PASS: TestReviewRoomPresencePostCommitOrder (0.07s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/ordered_control (0.02s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/join_then_reconnect/delayed_reply (0.02s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/ordered_control (0.02s)
+    --- PASS: TestReviewRoomPresencePostCommitOrder/leave_then_rejoin/delayed_reply (0.02s)
+PASS
+ok  	example.com/mainaudit/game/controllers	1.330s

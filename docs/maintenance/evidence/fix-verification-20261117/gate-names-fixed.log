@@ -1,0 +1,128 @@
+=== RUN   TestRealGateHandshakeUsesActualServiceNames
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_game
+2026/11/17 07:02:42 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:42 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:42 INFO player tcp listener started addr=127.0.0.1:35035 max_connections=10000
+    names_real_test.go:166: actual services=gate/game singleton checks=[gate:11=true game:22=true game:22=true gate:11=true] discover=[game]
+2026/11/17 07:02:42 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:42 INFO nats: connection closed
+2026/11/17 07:02:42 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:42 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_game
+2026/11/17 07:02:42 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:41047 max_connections=10000
+    names_real_test.go:166: actual services=edge/game singleton checks=[edge:11=true game:22=true game:22=true edge:11=true] discover=[game]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_world
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:40533 max_connections=10000
+    names_real_test.go:166: actual services=gate/world singleton checks=[gate:11=true world:22=true world:22=true gate:11=true] discover=[world]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_world
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:37973 max_connections=10000
+    names_real_test.go:166: actual services=edge/world singleton checks=[edge:11=true world:22=true world:22=true edge:11=true] discover=[world]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+--- PASS: TestRealGateHandshakeUsesActualServiceNames (0.35s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_game (0.08s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_game (0.11s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_world (0.09s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_world (0.07s)
+=== RUN   TestRealGateHandshakeUsesActualServiceNames
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_game
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:39779 max_connections=10000
+    names_real_test.go:166: actual services=gate/game singleton checks=[gate:11=true game:22=true game:22=true gate:11=true] discover=[game]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_game
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:43811 max_connections=10000
+    names_real_test.go:166: actual services=edge/game singleton checks=[edge:11=true game:22=true game:22=true edge:11=true] discover=[game]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_world
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:36045 max_connections=10000
+    names_real_test.go:166: actual services=gate/world singleton checks=[gate:11=true world:22=true world:22=true gate:11=true] discover=[world]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_world
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:38839 max_connections=10000
+    names_real_test.go:166: actual services=edge/world singleton checks=[edge:11=true world:22=true world:22=true edge:11=true] discover=[world]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+--- PASS: TestRealGateHandshakeUsesActualServiceNames (0.37s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_game (0.09s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_game (0.07s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_world (0.10s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_world (0.11s)
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_game
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:44111 max_connections=10000
+    names_real_test.go:166: actual services=gate/game singleton checks=[gate:11=true game:22=true game:22=true gate:11=true] discover=[game]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_game
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:34561 max_connections=10000
+    names_real_test.go:166: actual services=edge/game singleton checks=[edge:11=true game:22=true game:22=true edge:11=true] discover=[game]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_world
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:46403 max_connections=10000
+    names_real_test.go:166: actual services=gate/world singleton checks=[gate:11=true world:22=true world:22=true gate:11=true] discover=[world]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_world
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:02:43 INFO player tcp listener started addr=127.0.0.1:34679 max_connections=10000
+    names_real_test.go:166: actual services=edge/world singleton checks=[edge:11=true world:22=true world:22=true edge:11=true] discover=[world]
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+2026/11/17 07:02:43 INFO nats: disconnected err=<nil>
+2026/11/17 07:02:43 INFO nats: connection closed
+--- PASS: TestRealGateHandshakeUsesActualServiceNames (0.30s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_game (0.08s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_game (0.08s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_world (0.08s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_world (0.06s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	2.038s

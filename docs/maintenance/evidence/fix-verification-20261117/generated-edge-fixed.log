@@ -1,0 +1,39 @@
+2026/11/17 07:05:15 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=42.758µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestReviewGeneratedGateServiceNames
+=== RUN   TestReviewGeneratedGateServiceNames/edge_game
+2026/11/17 07:05:15 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:05:15 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:05:15 INFO player tcp listener started addr=127.0.0.1:39069 max_connections=10000
+    review_gate_names_test.go:160: actual services=edge/game, singleton checks=[edge:11=true game:22=true game:22=true edge:11=true]
+2026/11/17 07:05:15 INFO nats: disconnected err=<nil>
+2026/11/17 07:05:15 INFO nats: connection closed
+2026/11/17 07:05:15 INFO nats: disconnected err=<nil>
+--- PASS: TestReviewGeneratedGateServiceNames (0.06s)
+    --- PASS: TestReviewGeneratedGateServiceNames/edge_game (0.06s)
+2026/11/17 07:05:15 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames
+=== RUN   TestReviewGeneratedGateServiceNames/edge_game
+2026/11/17 07:05:15 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:05:15 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:05:15 INFO player tcp listener started addr=127.0.0.1:44347 max_connections=10000
+    review_gate_names_test.go:160: actual services=edge/game, singleton checks=[edge:11=true game:22=true game:22=true edge:11=true]
+2026/11/17 07:05:15 INFO nats: disconnected err=<nil>
+2026/11/17 07:05:15 INFO nats: connection closed
+--- PASS: TestReviewGeneratedGateServiceNames (0.09s)
+    --- PASS: TestReviewGeneratedGateServiceNames/edge_game (0.09s)
+2026/11/17 07:05:15 INFO nats: disconnected err=<nil>
+2026/11/17 07:05:15 INFO nats: connection closed
+=== RUN   TestReviewGeneratedGateServiceNames
+=== RUN   TestReviewGeneratedGateServiceNames/edge_game
+2026/11/17 07:05:15 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:05:15 INFO nats: connected url=nats://127.0.0.1:14222
+2026/11/17 07:05:15 INFO player tcp listener started addr=127.0.0.1:34103 max_connections=10000
+    review_gate_names_test.go:160: actual services=edge/game, singleton checks=[edge:11=true game:22=true game:22=true edge:11=true]
+2026/11/17 07:05:15 INFO nats: disconnected err=<nil>
+2026/11/17 07:05:15 INFO nats: connection closed
+2026/11/17 07:05:15 INFO nats: disconnected err=<nil>
+2026/11/17 07:05:15 INFO nats: connection closed
+--- PASS: TestReviewGeneratedGateServiceNames (0.04s)
+    --- PASS: TestReviewGeneratedGateServiceNames/edge_game (0.04s)
+PASS
+ok  	example.com/mainaudit/internal/access/player/tcp	1.211s

@@ -1,0 +1,127 @@
+service: game
+prerequisite (did run): roost add access player --service game
+prerequisite (did run): roost add transport tcp
+prerequisite (did run): enable access.player.self_sync after module declarations; sync in the same installation transaction
+framework service account: declared (services.account.framework: account, added to services.game.uses; its config, deployment and collaborators come with the install)
+module login: installed
+  manager:   NewLoginNotices() in game/managers/managers.go (started and stopped by the manager mod)
+  manager:   NewLoginPresence() in game/managers/managers.go (started and stopped by the manager mod)
+  id:        errcode login_elsewhere = 100000
+  file:      cmd/accountctl/main.go
+  file:      cmd/accountctl/main_test.go
+  file:      game/managers/login_notices.go
+  file:      game/managers/login_notices_test.go
+  file:      game/managers/login_presence.go
+  file:      game/managers/login_presence_test.go
+  file:      game/modules/login/login.go
+  file:      game/modules/login/login_active.go
+  file:      game/modules/login/login_active_test.go
+  file:      game/modules/login/login_admit.go
+  file:      game/modules/login/login_test.go
+  file:      internal/access/player/tcp/auth.go (replaces the untouched generated stub)
+  file:      internal/access/player/tcp/login_test.go
+  file:      internal/errors/login.go
+  file:      services/account/collaborators.go (replaces the untouched generated stub)
+  file:      services/account/login_channels.go
+  file:      services/account/login_dev.go
+  file:      services/account/login_player_id.go
+  file:      services/account/login_test.go
+  todo:      打开玩家 TCP 监听：roost config enable player-tcp（鉴权已经不是拒绝桩；生产示例配置仍是关的）
+  todo:      开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录
+  todo:      登记区服：没有状态是 open 的服，新号进不了任何服、入口的清单也是空的。make dev-run 起完全部服务后会自动登记本机的服；别的环境在 account 与它的 Redis 起来之后执行 go run ./cmd/accountctl upsert-server -sid <game 进程的 sid>（list-servers 看已登记的）
+  todo:      客户端的登录入口：没装 portal 模块的话 roost module add portal（HTTP 的登录 / 清单与推荐 / 进服，握手用 enter:<进服票据>），或者由工程自己的入口代客户端调 account
+  todo:      装了 enter 模块时，用进服票据握手的会话要先发 EnterCreate（带角色名）再发 EnterGame；握手之后服务器会推 EnterStatus 告诉客户端要不要新建（只是告知，以两个请求的应答为准）
+  todo:      上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接
+  todo:      区服入口上报（给 portal 的清单配地址）：在 game 服务配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate；可选 login.presence.interval 缺省 10s、login.presence.tags），game 定期报给 account，停报三个间隔后自动消失；不写不报
+module enter: installed
+  state:     PlayerDao.Enter (nosync)
+  component: Player.Enter
+  id:        component Enter = 2000
+  id:        errcode enter_created = 100001
+  id:        errcode enter_name_long = 100002
+  id:        errcode enter_need_create = 100003
+  id:        protocol EnterCreate = 10000
+  id:        protocol EnterGame = 10001
+  id:        protocol EnterStatus = 10002
+  file:      db/def/enter.go
+  file:      game/components/enter/enter.go
+  file:      game/controllers/enter.go
+  file:      game/controllers/enter_test.go
+  file:      game/entities/player/enter.go
+  file:      game/event/enter.go
+  file:      game/handler/enter_built.go
+  file:      game/handler/enter_create.go
+  file:      game/handler/enter_create_test.go
+  file:      game/handler/enter_existing.go
+  file:      game/handler/enter_init.go
+  file:      game/handler/enter_test.go
+  file:      game/modules/login/enter.go
+  file:      game/modules/login/enter_create.go
+  file:      game/modules/login/enter_create_test.go
+  file:      game/modules/login/enter_first.go
+  file:      game/modules/login/enter_test.go
+  file:      game/view/component_enter.go
+  file:      internal/errors/enter.go
+  file:      protocol/def/enter_create.go
+  file:      protocol/def/enter_game.go
+  file:      protocol/def/enter_status.go
+module portal: installed
+  runtime:   services/account/portal.Start in the process of the hosted account service (after its Mods start, before service Init; stopped in reverse)
+  id:        errcode portal_request_invalid = 100004
+  file:      internal/errors/portal.go
+  file:      services/account/portal/portal.go
+  file:      services/account/portal/portal_config.go
+  file:      services/account/portal/portal_directory.go
+  file:      services/account/portal/portal_rules.go
+  file:      services/account/portal/portal_test.go
+  todo:      登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter；请求与响应见 roost-core 的 modules/portal/README.md
+  todo:      区服地址：game 配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate），game 定期报给 account、停报 30 秒后消失；或在 config.account.yaml 写静态的 portal.servers（服号 -> host:port），两者都有时上报的优先。都不写时清单照常列出、没有地址；别的来源改 services/account/portal/portal_rules.go 的 newDirectory
+  todo:      推荐规则（导量）在 services/account/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服
+  todo:      上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr
+module room: installed
+  manager:   NewRoomPresence() in game/managers/managers.go (started and stopped by the manager mod)
+  component: Room.Room
+  id:        entity Room = 3
+  id:        component Room = 2001
+  id:        errcode room_closed = 100005
+  id:        errcode room_full = 100006
+  id:        errcode room_invalid = 100007
+  id:        errcode room_not_host = 100008
+  id:        errcode room_not_member = 100009
+  id:        errcode room_stale_epoch = 100010
+  id:        errcode room_unopened = 100011
+  id:        protocol RoomClose = 10003
+  id:        protocol RoomJoin = 10004
+  id:        protocol RoomLeave = 10005
+  id:        protocol RoomReconnect = 10006
+  id:        protocol RoomView = 10007
+  file:      db/def/room.go
+  file:      game/components/room/room.go
+  file:      game/controllers/room.go
+  file:      game/controllers/room_test.go
+  file:      game/entities/room/entity.go
+  file:      game/event/room.go
+  file:      game/handler/room_close.go
+  file:      game/handler/room_disconnect.go
+  file:      game/handler/room_join.go
+  file:      game/handler/room_leave.go
+  file:      game/handler/room_open.go
+  file:      game/handler/room_reconnect.go
+  file:      game/handler/room_test.go
+  file:      game/handler/room_view.go
+  file:      game/managers/room_presence.go
+  file:      game/managers/room_presence_test.go
+  file:      game/modules/room/room.go
+  file:      game/modules/room/room_presence.go
+  file:      game/modules/room/room_presence_test.go
+  file:      game/view/component_room.go
+  file:      internal/errors/room.go
+  file:      protocol/def/room.go
+glue login with enter: written (进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player；用进服票据握手的会话先新建再进入（EnterGame 不代建，没建成答 enter_need_create）；会话激活之后把“能不能进、要不要先新建”推给客户端（EnterStatus），本服不该服务的会话推完断开)
+  file:      game/controllers/login_enter.go
+  file:      game/modules/login/login_enter.go
+  file:      game/modules/login/login_enter_test.go
+  file:      internal/access/player/tcp/login_enter.go
+glue portal with enter: written (整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（登录模块的认证器，account 按账号解析或新建玩家号）→ 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入游戏，以及入口给的地址与进入时认的是同一个承载服；只有测试，不加运行时代码)
+  file:      services/account/portal/portal_enter_test.go
+next: roost module verify

@@ -1,0 +1,154 @@
+package controllers
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	roomentity "example.com/mainaudit/game/entities/room"
+	"example.com/mainaudit/game/handler"
+	roomlogic "example.com/mainaudit/game/modules/room"
+	"example.com/mainaudit/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+func reviewRoomEndpointFixture(t *testing.T, committer nest.TransactionCommitter) *roomEndpointFixture {
+	t.Helper()
+	roomentity.RegisterEntity()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{handler.RegisterRoomOpenNestHandlersOn, handler.RegisterRoomJoinNestHandlersOn, handler.RegisterRoomViewNestHandlersOn, handler.RegisterRoomLeaveNestHandlersOn, handler.RegisterRoomReconnectNestHandlersOn, handler.RegisterRoomDisconnectNestHandlersOn, handler.RegisterRoomCloseNestHandlersOn} {
+		if err := register(engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(app.ModName("nest"), engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEntityRuntime, access); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &roomEndpointFixture{registry: registry, controller: controller, access: access}
+}
+
+type reviewDelayedCommit struct {
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *reviewDelayedCommit) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.armed.Swap(false) {
+		close(c.entered)
+		<-c.release
+	}
+	return nil // durable operation completed, even if caller stopped waiting
+}
+
+func TestReviewRoomPresenceCanceledWait(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		label := "successful_wait_control"
+		if canceled {
+			label = "canceled_wait_commit_succeeds"
+		}
+		t.Run(label, func(t *testing.T) {
+			commit := &reviewDelayedCommit{entered: make(chan struct{}), release: make(chan struct{})}
+			f := reviewRoomEndpointFixture(t, commit)
+			conns := &roomConns{active: map[roomConnKey]bool{}}
+			presence, err := roomlogic.NewPresence(f.controller.NestClient(), conns, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = f.registry.Register(roomlogic.PresenceCapability, presence); err != nil {
+				t.Fatal(err)
+			}
+			presence.Start()
+			t.Cleanup(func() { _ = presence.Close(context.Background()) })
+			const roomID int64 = 81902
+			if err = roomlogic.Open(context.Background(), f.registry, roomID, 3); err != nil {
+				t.Fatal(err)
+			}
+			conns.open(102, "viewer")
+			reply, err := f.controller.HandleRoomJoin(roomContext(102, "viewer"), &pb.RoomJoinRequest{RoomID: roomID})
+			if err != nil || reply.Code != 0 {
+				t.Fatalf("viewer join: %+v %v", reply, err)
+			}
+			conns.open(101, "player")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			pc := roomContext(101, "player")
+			pc.BaseCtx = ctx
+			commit.armed.Store(true)
+			done := make(chan *pb.RoomJoinResponse, 1)
+			go func() { r, _ := f.controller.HandleRoomJoin(pc, &pb.RoomJoinRequest{RoomID: roomID}); done <- r }()
+			select {
+			case <-commit.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("commit not entered")
+			}
+			if canceled {
+				cancel()
+				select {
+				case r := <-done:
+					if r == nil || r.Code == 0 {
+						t.Fatalf("cancel response: %+v", r)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("request wait did not cancel")
+				}
+			}
+			close(commit.release)
+			if !canceled {
+				if r := <-done; r == nil || r.Code != 0 {
+					t.Fatalf("join: %+v", r)
+				}
+			}
+			// A real Nest view queued after releasing the commit confirms the seat survived.
+			r, e := f.controller.HandleRoomView(roomContext(102, "viewer"), &pb.RoomViewRequest{RoomID: roomID})
+			if e != nil || r.Code != 0 || len(r.Info.Seats) != 2 {
+				t.Fatalf("committed seats: %+v %v", r, e)
+			}
+			conns.close(101, "player")
+			deadline := time.Now().Add(500 * time.Millisecond)
+			for {
+				presence.Sweep()
+				r, e = f.controller.HandleRoomView(roomContext(102, "viewer"), &pb.RoomViewRequest{RoomID: roomID})
+				if e != nil || r.Code != 0 {
+					t.Fatalf("view: %+v %v", r, e)
+				}
+				online := false
+				for _, s := range r.Info.Seats {
+					if s.PlayerID == 101 {
+						online = s.Connected
+					}
+				}
+				if !online {
+					return
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("Join committed after canceled wait, but no Presence registration: closed connection stays online; tracked=%d", presence.Tracked())
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		})
+	}
+}
