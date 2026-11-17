@@ -81,7 +81,7 @@ accountctl 的红：新用例 `TestLoginAccountctlRevokesAnAccountsGameTokens` �
 
 ## 建议写进 CHANGELOG `[Unreleased]` 的文字
 
-- **游戏账号 token 改成 gt2，可按账号整代吊销（交接 C6 选项 2，维护者 2026-11-17；升级需让客户端重新取 token）**：格式 `gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，旧 gt1 一律答 `ErrSessionInvalid`（未上线，不兼容）。账号记录多 `GameTokenGeneration`；签发时写进 token（签名覆盖它），`ValidateGameToken` 与重读的账号比较（不多一次读）。新总线接口 `Accounts.RevokeGameTokens(ctx, accountID) (generation, error)`：代数加一并落库，在此之前签发的全部失效、之后签发的照常可用，封号行为不变。login 模块的 `cmd/accountctl` 新增 `revoke-game-tokens -account <账号号>`（只对新安装的模块；login 场景 32 → 33）。account 没有改密码路径，凭证变更由渠道 / 账号中心经总线调 `RevokeGameTokens`（account_auth README）。不做单张吊销、不断开已连上 relay 的房间、portal 不加登出。lobby 接口不变。证据 [c6-gt-token-generation](docs/maintenance/evidence/c6-gt-token-generation-20261117/README.md)。
+- **游戏账号 token 改成 gt2，可按账号整代吊销（交接 C6 选项 2，维护者 2026-11-17；升级需让客户端重新取 token）**：格式 `gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，旧 gt1 一律答 `ErrSessionInvalid`（未上线，不兼容）。账号记录多 `GameTokenGeneration`；签发时写进 token（签名覆盖它），`ValidateGameToken` 与重读的账号比较（不多一次读）。新总线接口 `Accounts.RevokeGameTokens(ctx, accountID) (generation, error)`：代数加一并落库，在此之前签发的全部失效、之后签发的照常可用，封号行为不变。login 模块的 `cmd/accountctl` 新增 `revoke-game-tokens -account <账号号>`（只对新安装的模块；login 场景 32 → 33）。account 没有改密码路径，凭证变更由渠道 / 账号中心经总线调 `RevokeGameTokens`（account_auth README）。不做单张吊销、不断开已连上 relay 的房间、portal 不加登出。lobby 接口不变。证据 本目录。
 
 ## 建议的 KNOWN-LIMITS 改动
 
