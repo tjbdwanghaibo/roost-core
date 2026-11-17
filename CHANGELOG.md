@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.53.0**（2026-11-17）：生成的 Gate 装配会传 `wiring/gate.Options` 的 `GateService` / `GameService`（RV-20261116-02 修复新增），要 v1.53.0；framework-compat 的 minimum 一栏随之改为 v1.53.0。
+
 ## [v1.53.0] - 2026-11-17
 
 - **`roost module verify` 两项行为修正**（维护者 2026-11-17，R9 §9.5；只对新安装的模块）：
