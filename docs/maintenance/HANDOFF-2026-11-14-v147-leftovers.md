@@ -109,7 +109,7 @@ decisions.md 的 Q1～Q17、#154、#37、CellWorld B / C / E、self_sync RetryLa
 | R6 后台 manager | D22 | activity_world / activity_alliance 驱动、login 的 EnterStatus 协程、cellworldhost、rehome 静默 ticker 改成 manager，代码写在 `game/managers`，在 `game/managers/managers.go` 登记，由 manager Mod 统一启停；契约写进“一” | `modules/{activity_world,activity_alliance,login,cellworld,rehome}/**`、生成器的 managers 登记 | M～L |
 | R7 portal / room | D23、D24 | D23：game 经总线定期上报到 account 的带过期注册表，portal 读它；D24：room 自动断线订阅与重启后在线状态重建（广播、R11 写进“一”） | `modules/{portal,room}/**`、`service/account` 注册表 | M～L |
 | R8 game-demo | D25、D26 | D25：demo 的新玩家初始化搬进 `enter_first.go`，保留 demo 改写的 EnterGame；D26：副本 / 活动奖励加金币 | `demo/**` | M |
-| R9 玩法模块化（进行中） | D21 | 13 类玩法逐类改成“装模块 + 只写模块没覆盖的部分”（按 compose.md），每类保持场景数与 REAL 档全绿；CellWorld 业务适配进模块排在后面 | `scripts/testdata/<genre>/**`、`modules/**` | L（逐类） |
+| R9 玩法模块化（玩法部分已实施 2026-11-17；CellWorld 部分维护者定这一波先不做） | D21 | 13 类玩法逐类改成“装模块 + 只写模块没覆盖的部分”（按 compose.md），每类保持场景数与 REAL 档全绿；CellWorld 业务适配进模块排在后面 | `scripts/testdata/<genre>/**`、`modules/**` | L（逐类） |
 | 文档批 | D2～D6、D9、D10、D14、D15、D20 及各批结果 | D2～D5、D9、D10、D14 写进“一”；D6 确认后移到“一”；D15 关闭（#37）；D20 发版清单加“上线前冻结协议号 / 错误码”；各批关闭的条目回写 | `docs/maintenance/KNOWN-LIMITS.md`、发版清单 | M |
 
 不在本表：D13 先跑 M-15（性能测量）再定；后台 checkpoint 等 M-19。R2 与 R3 都碰换服，R3 只改 demo / terrain 的换服段，R2 改 rehome 模块与 account，开工前对一下文件。
@@ -131,7 +131,7 @@ v1.47.0 发版之后仍要做的：
 4. **R5**（D19 B）：模块清单声明配置结构、安装器接入 Mod 配置声明。
 5. **R6**（D22）：后台循环改成 `game/managers` 里的 manager。cellworldhost 现在特意不做成 manager（Node 要在实体心跳装好之后启动），实施时先解决启动先后。
 6. **R7**（D23、D24 A）：portal 读 account 的带过期注册表；room 自动断线订阅与重启后在线状态重建。
-7. **R9**（D21）：13 类玩法逐类改成模块组合，之后 CellWorld 业务适配进模块。
+7. **R9**（D21）：13 类玩法逐类改成模块组合，之后 CellWorld 业务适配进模块。2026-11-17：13 类玩法已完成（见 [R9 方案](PLAN-2026-11-17-r9-genre-modules.md)），CellWorld 部分这一波先不做（KNOWN-LIMITS 二）。
 8. **等测量再定**：D13（M-15 之后，真要动先 C）、后台 checkpoint（M-19 之后）。
 9. **测量与外部**：M-1～M-19、E-1 / E-3 正式测量；36 项外部环境验收（external.md）。
 10. **发版**：维护者说“发 v1.47.0”后合 main、`scripts/release.sh v1.47.0`（不加 `--min-core`），打 tag 之后单独一个提交把最低 core 提到 v1.47.0。

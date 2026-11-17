@@ -407,6 +407,46 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **协议号 / 错误码按“最小空号”分配，上线前冻结一次**（D20 B，维护者 2026-11-14）：工程删掉写死的号、换用模块时，空出来的号被列表里靠前的模块占走（例如 game-demo 换用邮件模块后 `ChatSend` 10016 → 10008）；“新模块加在末尾、前面的号不变”只对加模块成立。未上线，不做兼容、不加号锁定；上线那一版发版前按[维护手册“上线前冻结模块协议号 / 错误码”](README.md#上线前冻结模块协议号--错误码d20)冻结一次。
 - **模块登记点**：enter 的首次建档与进入、checkin、wallet 消费、shop 购买、stamina 消耗、profile 升级、dungeon 首次领奖、leaderboard 成功提交、mailbox 附件和 task 奖励都已有实际联动。事务内钩子只能改同一 Player；排行提交钩子在事务外。登记名空/nil/重名在启动时拒绝，模块库静态目录校验不推断动态 init 名称。
 - **事务内事件**：checkin / wallet / shop / stamina / profile / dungeon 的任务联动与原业务一起提交或回滚。钱包 Apply 与商店购买的回执重放不触发；未知事件不写任务。回调错误必须交还 Nest，不能吞错后提交半笔业务。
+- **13 类玩法是模块组合（R9，2026-11-17）**：
+  - 玩法脚本按“装模块 + 只写模块没覆盖的部分”生成。模块清单写在各脚本的 `genre_modules` 里，由 `scripts/testdata/genre-common/modules.sh` 安装，并核对 `module verify`：通过条数等于 `module.yaml` 的 `verify.pass`，0 skip。
+  - 各类的模块清单：
+
+    | 玩法 | 模块 | 留手写的部分 |
+    | --- | --- | --- |
+    | 塔防 | `room wallet enter` | — |
+    | 回合 PvP | `turn wallet`（room 随 turn 装上） | — |
+    | 合作 Roguelike | `room wallet` | — |
+    | 社交经营 | `friends wallet` | — |
+    | 放置 | `enter wallet bag checkin` | — |
+    | 合成 | `enter wallet stamina` | — |
+    | 卡牌 | `enter wallet bag stamina gacha task` | — |
+    | 撤离 | `room wallet bag enter` | — |
+    | 自走棋 | `room wallet enter` | — |
+    | 派对 | `wallet enter` | PartyRoom（Q3 B） |
+    | MMORPG | `wallet bag task` | 队伍、场景、怪物、战斗、副本（Q5 A） |
+    | SLG | `wallet` | 联盟活动教学消费者（Q4 A） |
+    | MOBA | `wallet` | Lockstep，按 D5 不迁 |
+
+  - 方案与逐类映射见 [R9 方案](PLAN-2026-11-17-r9-genre-modules.md)，各类“旧断言 → 新断言”写在各自的手册里。
+  - 跟随模块语义（Q1 A）带来的变化，维护者 2026-11-17 已接受：
+    - 回合 PvP 每次命中奖 1 金币。
+    - 撤离只有药剂按件入包，材料仍兑金币。
+    - 合成体力用 stamina 的缺省规则：上限 100，每 5 分钟回 1 点。
+    - 卡牌抽卡改扣金币，回执窗口满了淘汰最旧的一条。
+    - 房间类玩法重启后，要先 `RoomReconnect` 接管席位才能续局；旧代际的命令被拒，改按当前代际查回执。
+- **模块组合时的边界（R9 发现，按现状保留）**：
+  - room 的在线状态不落库，重启后全员断线。新命令走 `Room().Authorize`，核对代际、连接和在线；重放与查回执走 `Member` 加连接，不要求在线。写法见塔防的 `towerMember`。
+  - enter 的 `event.EnterFirst` 只带 `NowUnixMilli`，没有服务端密钥和配置快照。要冻结配置或棋盘的玩法存档建不进这个监听，放置、合成因此做成“enter 建档 + 玩法建档”两步。
+  - turn 没有“超时代价”或“提前结束”的钩子。回合 PvP 按 turn README 改工程里的 `turn.go`：`run.sh` 用文本锚点插入，模板一变就会显式失败。
+  - wallet：
+    - 业务键有字符集与 64 字节的限制。
+    - `Apply` 只在最近 128 次带键加减里去重，不是永久账本。要“永远只做一次”的入账，玩法侧留永久事实再用 `Add`。SLG 原服奖励、MOBA 结算、派对领奖都是这样做的。
+    - wallet 不设持有上限，玩法要上限就读 `Balance()` 自己判断。
+  - task 的 `Claim` 对已领过的任务答 `task_claimed`，不是幂等重放。要“重试拿到同样结果”的玩法，自己把它当成功处理（MMORPG）。
+  - gacha 只扣 wallet 的金币（Q2 B，wallet 单币种），所以卡牌的钻石只剩发放、没有消耗。
+  - 要读自身视图里模块的嵌套状态，先用生成的 `ApplySync<X>Dao` 合并增量，不能直接调 `Values()`（派对）。
+  - 玩法另开的 `configdata.Store` 会把工程的道具表顶掉。要先捕获玩法规则，再装载 `configs/data`；正式工程把玩法规则登记进工程同一个 Registry（撤离）。
+  - 夹具调用包级的 `room.TimerDriver.SetClock` 后撤不掉（`SetClock(nil)` 是空操作），同一进程里之后的定时器场景会读到这只时钟。玩法测试只拨 `clock.SetSource`，或者分开跑。
 - **前置骨架不回退**：安装会先执行缺失的 `roost add dao` / `roost add access player`；之后模块安装失败时这两步的结果保留（它们是完整的工程状态）。
 - **game-demo 接入登录链路的既定取舍**（2026-11-12；验证范围见[业务模块（roost module）](#业务模块roost-module)）：
   - **维护者 2026-11-12 接受了下面六项取舍**（“做的 6 个决定都接受”），按现状保留，不是待办：连错服有两个码、不再拒绝退役的计数键、demo 渠道经入口对外、告知在驻留表之外装载 Player、每条会话多一帧推送、发版后单独提最低 core 版本。
@@ -768,7 +808,11 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 业务模块（roost module）
 
-- **模块化顺序（N1）**：**已决定（D21 A，2026-11-14），v1.47.0 之后实施**：先把 13 类玩法逐类改成“装模块 + 只写模块没覆盖的部分”（按 compose.md，每类保持现有场景数与 REAL 档全绿），CellWorld 业务适配进模块排在后面，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R9）。现状：13 类玩法仍由 `scripts/testdata/genre-common` 与各玩法夹具生成，模块组合只有 casual / turn-pvp 两份配方；CellWorld 的分区装配与 Entity 适配仍在 demo。既定能力与模板边界已移到一。
+- **CellWorld 业务适配进模块（D21 后半）**：
+  - 13 类玩法已于 2026-11-17 改成模块组合（R9），见一“13 类玩法是模块组合”与三。
+  - 还留在 demo 的：CellWorld 的分区装配，Player / Monster / SceneActor 的 Cell 适配，mapview 的 Cell / Base，队伍视图，地形分区与转发。
+  - 维护者 2026-11-17 定“这一波先不处理”，以后再排。
+  - MMORPG 夹具里的队伍、场景、怪物、战斗、副本到那时一起定。R9 2B 写下的提示见 [r9-2b 证据](evidence/r9-2b-20261117/README.md)。
 - **模块的规则大多还是 Go 写的业务文件**：模块可以带配置表（bag 的道具表就是），但清单不能声明配置项。profile 的每级经验、stamina 的规则、leaderboard 的榜与周期（`leaderboard_board.go`）、mailbox 的账本宽限（600 秒）都是代码里的常量或业务文件，要调只能改已装的文件；task 与 shop 已使用配置表；rules 统一进入推送和补取，尚无热更广播或大目录分页。**已决定（D19 B，2026-11-14），v1.47.0 之后实施**：模块清单可声明配置结构，安装器接入 Mod 配置声明，`roost config check` / `--check-config` 能查；先迁 profile、stamina、leaderboard、mailbox 的常量与 `portal.servers`，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R5）。
 - **登录外部边界**：双 account / game / Gate、真实 naming 与重启重连、casual 购买 / self_sync 已验；完整 naming 故障阶段、生产渠道、Redis 故障、跨机与长稳未验。跨机入口见 C-X4；时间推送仍为 best-effort。
 - **社交容量与归属**：两 game 共享 Team + toxiproxy、排队 SIGKILL / 重试与排队禁止建队 / 入队已验；邀请的跨 game 自动投递没有实现，容量未验。Team 归 game 服务已由维护者确认（D14），见[CellWorld 固定分区](#cellworld-固定分区v1470)“无缝世界原型的产品简化”。
@@ -872,6 +916,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-17：13 类玩法改成模块组合（R9，维护者 D21 A；Q1～Q8 按推荐）**：原“二”里“模块化顺序（N1）”的玩法部分完成，CellWorld 部分留在“二”。各类场景名与条数不变、REAL 全绿，脚本加跑 `module verify`；room 补公开身份围栏 `Room().Authorize`（turn 改调）；pretag 清 REAL 开关补三个变量。证据：[批 0](evidence/r9-batch0-20261117/README.md)、[room Authorize](evidence/room-authorize-20261117/README.md)、[1A](evidence/r9-1a-20261117/README.md)、[1B](evidence/r9-1b-20261117/README.md)、[1C](evidence/r9-1c-20261117/README.md)、[1D](evidence/r9-1d-20261117/README.md)、[2A](evidence/r9-2a-20261117/README.md)、[2B](evidence/r9-2b-20261117/README.md)、[2C](evidence/r9-2c-20261117/README.md)、[2D](evidence/r9-2d-20261117/README.md)。
 - **2026-11-17：地形 DAO 按地图归属选库、换服时建筑与全服邮件的归属**（维护者 2026-11-14 D11 = Q17 A + N3 A，R3；原“二”里“game-demo 自己的地形 DAO 仍是 global”“建筑与全服邮件归属（N3）”两条删除）：生成器加 `dbscope=boot`（起服选定，缺省 sid），demo 的 `terrain_chunks` / `buildings` / `terrain_editors` 按 `Region.Shared` 选（普通场景 sid、分区场景 global），换服只交出 Player；mailbox 加 `with/rehome` 离开前按旧范围合并全服邮件。修前（三者 global）两个服写同一份块文档，真实 Mongo 上投影版本冲突致命。边界见[地形的库范围按地图归属](#地形的库范围按地图归属d11-q17-a--n3-a)，[证据](evidence/r3-terrain-scope-20261117/README.md)。
 - **2026-11-17：game-demo 自有组件迁到组件包写法**（维护者 2026-11-17 决定做；原“一”里“game-demo 自有组件仍是实体包写法”一条删除，那条把组件说成 monster、terrain、world、map、dungeonledger 五个，实际是十个）：mapview、dungeonledger、stats、activityphase、monsterbody、monsteractor、terrainsurface、terrainledger、terraincellledger、buildingsite 的类型号（2004、2103、2002、2102、2100、2101、2011、2012、2014、2013，不变）、`//roost:component` 与工厂登记挪进 `demo/game/components/<包>/`，实体字段写 `comp:"<包>.CompType<X>"`，实体包里的组件文件、别名 `XComponent` 与 `I<X>Entity` 删除，handler 与 game/terrainmap 改收 `view.I<X>Entity` / `view.PlayerEntity`（要组件包类型时经新加的 `terrainsurface.Of` / `buildingsite.Of`）；框架要的 `MapBasic` / `MoveComponent` 留在实体包的 `player/map.go`、`monster/actor.go`。这些组件上现在可以写 `//roost:listen`（本次没加监听，行为不变）。只有 World 的定时器组件（`timer_component.go`，2006）按“实体包只留接线”作为实体定时器宿主留在实体包。守卫 `TestDemoEntityPackagesHoldOnlyComponentWiring`；验证见 [demo-components-20261117](evidence/demo-components-20261117/README.md)。
 - **2026-11-17：RV-20261116-02 自定义 Gate / 玩家服务名握手全被拒**（P2，v1.51.0 起）：wiring/gate 把 gateway 按协议角色 gate / game 发起的单实例身份核对原样交给 App，而 App 按实际服务名持锁（`<key_prefix>:<服务名>:<sid>`），`roost add gate edge` 或玩家服务不叫 game 时查不到持锁实例，`ErrBindingStale`、客户端 EOF，doctor 与 `--check-config` 都放行。改为 `gatewiring.Options.GateService / GameService`（缺省 gate / game）：身份核对、发现登记与 FixedGameResolver 的查找都用实际服务名，incarnation 照常核对；本端锁键与接线名不符时 Provide 拒绝启动；生成器在两端接线里写入实际名字。真实 NATS 四组完整握手修前 3/4 红、修后绿，生成工程真实进程演练（`DRILL_GATE_NAME=edge`）修前 EOF、修后通过，变异见[证据](evidence/gate-identity-20261117/README.md)。
