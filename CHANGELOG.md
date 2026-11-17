@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **模块清单可以声明配置（R5，D19 B，维护者 2026-11-14 已定）**：`module.yaml` 新增 `config: {package, type, use}`，指向模块包里带 `config` tag 的结构体（与 Mod 配置声明同一写法）；安装器从模块源码读出键，把起步 YAML 写进宿主服务的开发、生产示例与 k8s secret 示例配置，生成的 bootstrap 把声明交给 `wiring/modulehost`（托管服务上是模块入口的 Mod，业务服务上另加一个只带配置的 Mod），`--check-config`、`roost config check`、`--print-config(-schema)`、doctor 都看得见，结构体的 `ValidateConfig` 走 App 的跨 Mod 检查，启动时装载一次、经 `Value[T]` 读。迁成配置（缺省值与原常量相同）：`profile.exp_per_level`；`stamina.{max,hard_cap,regen_interval,refill_daily_limit,refill_price_step}`；`leaderboard.{board_id,season,min_score,max_score,default_top,max_top}`（原 `leaderboard_board.go`）；`mailbox.ledger_prune_grace`（原 600 秒常量，缺省 10m、下限 2m、整秒）；`portal.servers`（只声明）。demo 的 clears 榜改写配置。`wiring/modulehost` 新增 `ConfigOf`、`Value[T]`，`Module.Start` 可为空。
+  - **行为变化**：装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s；模块配置写错时 `roost config check` 退出 3（由进程判断，`--keys-only` 不认模块键）。
+  - **升级**：只对新生成 / 新安装的工程生效，已有工程不迁移（线上未部署）；模块模板变了，digest 随之变化。
+  - **验证**：修前六个写错的值 `config check` 全部通过，修后按键名报错；12 个变异全红；模块脚本 `modules: ok`（各模块场景数不变）、`TestDemo*`、`TestRecipesCreateBuildableCompositions`、card-rpg / merge-casual 两类玩法通过。没有用改过的配置真实启动业务进程演练（尚未确认）。[证据](docs/maintenance/evidence/r5-module-config-d19-20261117/README.md)
 - **配置表：schema 包里的具名标量类型按底层类型处理**（交接 C5 (a)，维护者选推荐）：`type Rank int32` 这类声明在 schema 包里、底层是内建标量的具名类型，CSV 转换、index、客户端导出都按底层类型（C# 生成 `int`，不生成 enum；manifest 字段类型写底层类型）；服务端生成的 Go 写成 `meta0.Rank`（以前生成代码里是没有包名的类型名，无法编译）。别的包里的具名类型与底层不是内建标量的具名类型仍报错，报错说明原因。ref 的类型核对改按“导入路径 + 类型名”比较。
 - **配置表：数字规范写法两端一致**（交接 C5 (b)）：C# 运行部分的 `ConfigJson.Canonical` 改成与 `rules.Canonical` 相同的规则（`1e+21`、`1e-05`、`1.2345675e+06`，超出 double 范围取原文）；修前 57 条样例里 C# 有 24 条与 Go 不同，不只是大小写。两端共用样例表 `framework/configdata/rules/testdata/canonical_numbers.json`。规范字符串不进入任何哈希，`data_version` 不变；导出的 `csharp/ConfigJson.cs` 内容变化，`roost generate --check` 会报过期，重新生成并提交。
 - **配置表：横排表运行时转换报文件行号**（交接 C5 (c)）：生成的 `Convert<Type>CSV` 报错的 `row=` 是文件里的行号（注释行计数，跨行的带引号单元格报记录开始的行）。**升级**：重新生成并提交 `configs/generated/gen_table_config.go`。三项先红后绿、变异全红，[证据](docs/maintenance/evidence/c5-config-export-types-20261117/README.md)

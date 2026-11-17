@@ -381,6 +381,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 ### 生成器、配置与模块
 
+- **模块配置（D19 B，2026-11-17）**：模块清单 `config:` 指向模块包里带 `config` tag 的结构体，安装器写进宿主服务的配置段，进程启动时装载一次（`wiring/modulehost` 的 `ConfigOf` / `Value[T]`）。① `roost config check --keys-only` 不认模块声明的键：模块键的错值由编译出的进程 `--check-config` 报，`roost config check` 退出 3（与业务服务自己声明的键相同）。② 装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s。③ 清单指向 Go 结构体，不能只写 YAML 声明键。④ 仍是代码的规则：leaderboard 的榜范围（Scope）与按日历换周期、stamina 随玩家变化的规则、dungeon 的 `LedgerPruneGraceSeconds`；portal 的 `portal.servers` 只声明，入口仍在 Start 里自己读。⑤ mailbox 宽限下限 2m（启动时允许比高水位慢 1 分钟，留余量）。[证据](evidence/r5-module-config-d19-20261117/README.md)
 <a id="生成器配置与工具"></a>
 #### 生成器、配置与工具
 
@@ -866,7 +867,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
   - 还留在 demo 的：CellWorld 的分区装配，Player / Monster / SceneActor 的 Cell 适配，mapview 的 Cell / Base，队伍视图，地形分区与转发。
   - 维护者 2026-11-17 定“这一波先不处理”，以后再排。
   - MMORPG 夹具里的队伍、场景、怪物、战斗、副本到那时一起定。R9 2B 写下的提示见 [r9-2b 证据](evidence/r9-2b-20261117/README.md)。
-- **模块的规则大多还是 Go 写的业务文件**：模块可以带配置表（bag 的道具表就是），但清单不能声明配置项。profile 的每级经验、stamina 的规则、leaderboard 的榜与周期（`leaderboard_board.go`）、mailbox 的账本宽限（600 秒）都是代码里的常量或业务文件，要调只能改已装的文件；task 与 shop 已使用配置表；rules 统一进入推送和补取，尚无热更广播或大目录分页。**已决定（D19 B，2026-11-14），v1.47.0 之后实施**：模块清单可声明配置结构，安装器接入 Mod 配置声明，`roost config check` / `--check-config` 能查；先迁 profile、stamina、leaderboard、mailbox 的常量与 `portal.servers`，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R5）。
 - **登录外部边界**：双 account / game / Gate、真实 naming 与重启重连、casual 购买 / self_sync 已验；完整 naming 故障阶段、生产渠道、Redis 故障、跨机与长稳未验。跨机入口见 C-X4；时间推送仍为 best-effort。
 - **社交容量与归属**：两 game 共享 Team + toxiproxy、排队 SIGKILL / 重试与排队禁止建队 / 入队已验；邀请的跨 game 自动投递没有实现，容量未验。Team 归 game 服务已由维护者确认（D14），见[CellWorld 固定分区](#cellworld-固定分区v1470)“无缝世界原型的产品简化”。
 
