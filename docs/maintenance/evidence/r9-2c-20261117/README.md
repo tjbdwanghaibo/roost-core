@@ -69,6 +69,8 @@ M4 第一次恢复跑红过一次：复用了变异那次留下的库与 WAL（�
 
 ## 维护者决定后的修正（2026-11-17）
 
+提交：`34147a1e`（夹具、脚本、手册、skill reference、方案 §1 与本节证据）。
+
 **问题**：上面的改法把原服奖励到账换成 `Wallet().Apply(业务键)`、删掉了 Player 上的永久到账回执，判重只剩 wallet 最近 128 次带键加减的窗口。原服还没记 Delivered 就重投、而这期间这名玩家又有超过 128 笔带键入账时，这次活动的回执已被淘汰，金币会重复发。
 
 **维护者决定**：恢复 Player 上的永久到账回执，入账改回 `Wallet().Add`，跨服金币严格只发一次（与 §9.3“有自己事实的用 Add”、wallet README“长期只发一次由调用方记事实并改用 Add”一致；上文“拿不准的点”第一条即此）。
@@ -100,6 +102,7 @@ M4 第一次恢复跑红过一次：复用了变异那次留下的库与 WAL（�
 | 矩阵 | `python3 scripts/test-genres-generated.py --out <scratchpad>/matrix-slg --genres slg` | `status passed`，`custom_module_verify {'wallet': 17}`，passed 8 / custom 10 / skipped 0（[receipt-matrix.txt](receipt-matrix.txt)） |
 | REAL | `source ~/.roost-it/roost-dataengine-it/env.sh` + 持 `remote-acceptance.lock` + `ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh` | exit 0；四条 REAL 全过、0 SKIP（[receipt-real.txt](receipt-real.txt)） |
 | M6 变异 | 保留工程里删掉 `handlerAllianceCredit` 的永久回执检查（`if old, ok := receipts[...]` 整段） | 回归红 `coins=199, want 189`；恢复后绿（[receipt-mutation.txt](receipt-mutation.txt)） |
+| 文档用例 | 提交后 `GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | ok |
 | 命令块 | SKILL.md §3.2 + reference §3 / §3.1 原样抽出执行（自定 module `myslg` / `myslgadv`） | §3：7 PASS + wallet 17/17；§3.1：8 + 2 PASS + wallet 17/17；0 SKIP（[receipt-skill-block.txt](receipt-skill-block.txt)） |
 
 上文变异表的 M4（`Apply` 换成不带键的 `Add`）针对的是第一版写法，修正后不再适用；修正后的对应变异是 M6。
