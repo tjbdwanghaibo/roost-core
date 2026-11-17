@@ -2,7 +2,7 @@
 
 `portal` 给工程一个**客户端够得着的登录入口**：四个 HTTP 端点，代客户端去问只在内部总线上的 account 服务（游戏的账号服）。它就是常说的 manifest（清单）那一层：登录拿账号票据 → 凭票拿服务与区服清单与推荐 → 选定一个服换进服票据与该连的地址；开房间类游戏（大厅 + relay，没有区服）另凭票换一张**游戏账号 token**，大厅凭它认人。入口缺省挂在**托管 account 服务的进程**上，不挂在某个 game 服上；业务服务（game）不因此多出任何 HTTP 监听。
 
-入口只依赖 account 这一侧（[account_auth](../account_auth/README.md)：account 的登录协作者），不 import 任何 game 包，所以**不带 game 的开房间工程**（`roost project new <名> -template lobby`：只托管 account、lobby、relay）也能装：`roost module add portal` 一条命令。那种工程里客户端用的是 `/portal/login` 带 `game`（或 `/portal/game-token`）拿游戏账号 token（gt1），再去大厅；account 没有登记任何区服，所以 `/portal/servers` 的区服清单是空的、推荐的服是 0，`/portal/enter` 对任何服号都带着 account 的 `560104`（server_invalid）拒绝。
+入口只依赖 account 这一侧（[account_auth](../account_auth/README.md)：account 的登录协作者），不 import 任何 game 包，所以**不带 game 的开房间工程**（`roost project new <名> -template lobby`：只托管 account、lobby、relay）也能装：`roost module add portal` 一条命令。那种工程里客户端用的是 `/portal/login` 带 `game`（或 `/portal/game-token`）拿游戏账号 token（gt2），再去大厅；account 没有登记任何区服，所以 `/portal/servers` 的区服清单是空的、推荐的服是 0，`/portal/enter` 对任何服号都带着 account 的 `560104`（server_invalid）拒绝。
 
 ## 能力
 
@@ -13,7 +13,7 @@
 | `POST /portal/login` | `{channel, open_id, credential, game?}` | `{ok, account_ticket, account_ticket_expires_at, game_token?, game_token_expires_at?}` | 让 account 向渠道确认身份（`Login`），再向它要一张账号票据（`IssueAccountTicket`）；带了 `game` 时再凭票要一张那个游戏的游戏账号 token（`IssueGameToken`） |
 | `POST /portal/servers` | `{account_ticket, service?}` | `{ok, recommended_server_id, services[]?, servers[]}` | 区服清单：每个服的名字、所属服务、状态、是否并入别的服、地址、负载、标签、本账号在那里有没有角色；外加推荐的服。配置了 `account.services` 时另有服务清单（`ListServices`），`service` 只列那个 game 服务的服 |
 | `POST /portal/enter` | `{account_ticket, server_id}` | `{ok, ticket, server_id, serving_server_id, expires_at, addr, addr_source}` | 向 account 要一张进服票据（`IssueEnterTicket`），连同承载服的地址交给客户端；`ticket` 是握手时原样出示的 `enter:<进服票据>` |
-| `POST /portal/game-token` | `{account_ticket, game}` | `{ok, game, game_token, expires_at}` | 凭账号票据向 account 换一张游戏账号 token（`IssueGameToken`，`gt1.…`）；开房间类游戏的大厅（lobby）请求里带它，大厅经 account 的 `ValidateGameToken` 认人 |
+| `POST /portal/game-token` | `{account_ticket, game}` | `{ok, game, game_token, expires_at}` | 凭账号票据向 account 换一张游戏账号 token（`IssueGameToken`，`gt2.…`）；开房间类游戏的大厅（lobby）请求里带它，大厅经 account 的 `ValidateGameToken` 认人 |
 
 **服务端入口**（`services/account/portal`）
 
@@ -50,7 +50,7 @@
 - **上限**：请求体 16 KiB（`MaxRequestBytes`）；`channel` 32 字节、`open_id` 128 字节、`credential` 8 KiB、账号票据 1024 字节、`game` 与 `service` 32 字节（`MaxNameBytes`）；区服至多 1024 个（`MaxEntries`，与 account 的区服上限 `svcaccount.MaxServers` 一致，2026-11-17 由 256 放宽）；目录条目的地址至多 255 字节、标签至多 8 个、每个至多 32 字节；`portal.services` 至多 64 条；account 登记表一次登记的期限至多 600 秒（`svcaccount.MaxPresenceTTLSeconds`），至多 1024 个没过期的服。
 - **清单的开销随区服数增长**：每次 `/portal/servers` 是 1 次清单（account 读 1 + N 条记录）、1 次登记表（account 读一个 Redis 哈希）加每个服 1 次角色查询，顺序执行，没有缓存；`/portal/enter` 也多 1 次登记表。区服很多、请求很密的部署该把 manifest 拆出去并自己加缓存，或者换成分页的清单。
 - **清单要么完整要么失败**：account、目录（含 account 的登记表）、任何一个服的角色记录问不到（不是“没有角色”，而是出错），整个请求失败，不给一份缺了角色或缺了地址的清单——登记表问不到时也不回落到静态配置冒充全部。某个服上本账号的 slot 与角色对不上（`560113`）或合服别名两跳时也是整个请求失败。
-- **票据不能单张吊销**：账号票据、进服票据与游戏账号 token 都是无状态的签名，有效期内可以重复使用；封号对已经发出去的票据立即生效（account 每次校验都再读账号）。
+- **票据不能单张吊销**：账号票据、进服票据与游戏账号 token 都是无状态的签名，有效期内可以重复使用；封号对已经发出去的票据立即生效（account 每次校验都再读账号）。游戏账号 token（`gt2`）另可按账号整代吊销：account 的 `RevokeGameTokens` 把账号上的 token 代数加一，在此之前签发的全部失效（运维用 login 模块的 `accountctl revoke-game-tokens`；交接 C6，维护者 2026-11-17）。入口没有登出接口，不触发吊销；吊销不影响账号票据与进服票据，所以账号票据（`at1`，寿命 `account.ticket_ttl`）还在有效期内时仍能换到新的 gt2。
 - **游戏账号 token 只回答“哪个账号、哪个游戏”**：不带区服、不带角色。登录带了 `game` 而游戏不在 `account.games` 里时整个登录失败（不交出账号票据），客户端去掉 `game` 重试或改用 `/portal/game-token`。入口不核对 token 用在哪个大厅：大厅拿 `ValidateGameToken` 返回的游戏与自己服务的游戏比较（`GameAccount.RequireGame`）。同一张账号票据对同一个服反复 `enter` 不会多出玩家——映射的唯一性在 account。
 - **区服状态在 `/portal/enter` 不拦**：维护中的服老号照常能进；新号被送去非 `open` 的服时拿得到进服票据，握手才被拒，而握手失败客户端拿不到原因。客户端要按清单里的 `status` 与 `role` 自己判断。
 - **账号 ↔ 玩家号的映射在握手时才建**：拿了进服票据而没有去握手的新号，在 account 里没有角色，清单里仍是 `role: null`。反过来，握手过而没有在游戏服新建的账号，清单里已经有 `role`（“老号”），推荐规则把那个服当作他玩过的服；游戏服那边仍告知要新建。清单里的 `role` 说的是 account 的映射，不是游戏服的玩家数据。
@@ -120,7 +120,7 @@ roost project doctor      # collaborators:account 通过，0 FAIL
 
 - `roost module verify portal`：15 条场景（`services/account/portal`）；与 `login` 的联动 1 条，与 `enter`（还要 login）的联动 2 条。
 - 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）；握手那一侧直接问 account 的 `EnterServer`（认证器做的就是这件事；联动场景里用 login 真实的认证器）；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
-- 覆盖：从渠道身份走到 account 认的进服票据、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt1 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
+- 覆盖：从渠道身份走到 account 认的进服票据、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt2 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；game-demo 的这一段有可重复的脚本（仓库的 `scripts/test-demo-login.sh`：`make dev-run`、curl 三步、机器人 `-login portal` 新号与老号，最后经独立 Gate 再跑一遍）。已并入别的服的老角色也有脚本（`scripts/test-demo-merge.sh`：合服后原服 1001 的角色走三步，清单标出 `merged_into`、地址给承载服，1001 的进服票据在承载服 1000 上嵌入 TCP 与经独立 Gate 各握手一次，进到原角色、背包延续）。
 - `scripts/test-demo-login.sh` 的 casual + naming 阶段增加两个 account 进程：A 签发账号票据，B 校验并选服、签发进服票据；停掉 A 后 B 独立完成同一角色的重连。两个 game sid 共用正式 Redis Directory，验证建角、重名拒绝与换名；嵌入 TCP 和双 Gate 都走真实入口。
 - 没有验证：动态地址经真实进程（game 上报 → NATS → account → Redis → 入口）、换服中的角色、生产配置、跨机。可重复步骤见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
@@ -197,7 +197,7 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 | `credential` | 8 KiB | 交给渠道校验的凭据（开发登录是 `login.dev_token` 的值）。不记日志、不回显 |
 | `game` | 32 字节，可选 | 开房间类游戏的游戏名（`account.games` 里的）。写了就在答复里一并给一张游戏账号 token |
 
-响应：`{"ok": true, "account_ticket": "at1.…", "account_ticket_expires_at": 1800000600}`；带了 `game` 时另有 `"game_token": "gt1.…", "game_token_expires_at": 1800007200`。票据有效期 `account.ticket_ttl`（缺省 10 分钟），期内可以重复使用；过期了重新登录。游戏账号 token 的寿命是 `account.games.<游戏>.token_ttl`。`game` 不在 `account.games` 里时整个登录答 `560120`，不给账号票据。
+响应：`{"ok": true, "account_ticket": "at1.…", "account_ticket_expires_at": 1800000600}`；带了 `game` 时另有 `"game_token": "gt2.…", "game_token_expires_at": 1800007200`。票据有效期 `account.ticket_ttl`（缺省 10 分钟），期内可以重复使用；过期了重新登录。游戏账号 token 的寿命是 `account.games.<游戏>.token_ttl`。`game` 不在 `account.games` 里时整个登录答 `560120`，不给账号票据。
 
 ### POST /portal/servers
 
@@ -244,11 +244,11 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 
 ### POST /portal/game-token
 
-请求 `{"account_ticket": "…", "game": "party"}`（`game` 必填，至多 32 字节）。响应 `{"ok": true, "game": "party", "game_token": "gt1.<过期秒>.party.<账号>.<签名>", "expires_at": 1800007200}`。
+请求 `{"account_ticket": "…", "game": "party"}`（`game` 必填，至多 32 字节）。响应 `{"ok": true, "game": "party", "game_token": "gt2.<过期秒>.party.<账号>.<代数>.<签名>", "expires_at": 1800007200}`。
 
 - 账号只取自账号票据（account 在 `IssueGameToken` 里校验它）；被封的账号拿不到（`560102`）；`game` 不在 `account.games` 里答 `560120`。
 - 寿命是 `account.games.<游戏>.token_ttl`（至多 24h），期内可以重复使用；过期了凭新的账号票据再换一张。
-- 大厅请求里带它（方案约定 `Authorization: Bearer gt1.…`）；大厅不持有密钥，经 account 的 `ValidateGameToken` 校验，拿返回的游戏与自己服务的游戏比较。A 游戏的 token 进不了 B 游戏的大厅。
+- 大厅请求里带它（方案约定 `Authorization: Bearer gt2.…`）；大厅不持有密钥，经 account 的 `ValidateGameToken` 校验，拿返回的游戏与自己服务的游戏比较。A 游戏的 token 进不了 B 游戏的大厅。
 - 游戏账号 token 不能当账号票据用（拿清单、进服票据、再换 token 都答 `560111`），反过来也一样。
 
 ## 区服目录
@@ -313,7 +313,7 @@ account：登记表（Redis 哈希 <prefix>:presence，到期的不给出）
 | --- | --- | --- | --- |
 | 账号票据 `at1.…` | account 的 `IssueAccountTicket`（入口在 `Login` 之后调） | account 的 `ValidateAccountTicket`（入口每个带票据的请求都调） | `account.ticket_ttl`，缺省 10 分钟 |
 | 进服票据 `et1.…`（握手时写作 `enter:et1.…`） | account 的 `IssueEnterTicket`（入口的 `/portal/enter` 调） | account 的 `EnterServer`（握手的认证器调） | `account.session_ttl`，缺省 30 分钟 |
-| 游戏账号 token `gt1.…` | account 的 `IssueGameToken`（入口的 `/portal/game-token` 与带 `game` 的登录调） | account 的 `ValidateGameToken`（大厅调） | `account.games.<游戏>.token_ttl`，至多 24h |
+| 游戏账号 token `gt2.…` | account 的 `IssueGameToken`（入口的 `/portal/game-token` 与带 `game` 的登录调） | account 的 `ValidateGameToken`（大厅调） | `account.games.<游戏>.token_ttl`，至多 24h |
 
 三种票据与角色会话令牌用的是同一把 `account.session_secret`，各有各的域，互相冒充不了；换 `account.session_secret` 同时作废全部在外的票据。
 

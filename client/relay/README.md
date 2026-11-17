@@ -5,7 +5,7 @@ lobby 的 HTTP 调用（`Lobby`）与 relay 的 TCP 连接（`Client`）。方�
 帧编解码直接用 `client/wire`（`EncodeRelay` / `ReadRelay`），不另起一套。
 
 ```go
-lobby := relay.NewLobby("https://lobby.example.com", relay.StaticGameToken(gt1), nil)
+lobby := relay.NewLobby("https://lobby.example.com", relay.StaticGameToken(gt2), nil)
 ticket, err := lobby.CreateRoom(ctx, relay.CreateRoomRequest{Game: "party", Mode: "duel"}) // 房主；成员用 JoinRoom
 client := relay.NewClient(lobby, relay.Options{
 	Game:      "party",

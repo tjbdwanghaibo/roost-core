@@ -35,8 +35,8 @@
 
 ```
 客户端 ──HTTP──▶ account/portal：登录，拿账号票据 at1
-客户端 ──HTTP──▶ account/portal：凭 at1 + game 换游戏账号 token gt1（新增）
-客户端 ──HTTP──▶ lobby：凭 gt1 建房 / 列房 / 加入
+客户端 ──HTTP──▶ account/portal：凭 at1 + game 换游戏账号 token gt2（新增）
+客户端 ──HTTP──▶ lobby：凭 gt2 建房 / 列房 / 加入
                    └─ 返回 relay 地址 + 短期 relay 令牌
 客户端 ──TCP / WebSocket──▶ relay：凭令牌接入房间
                    成员 → relay → 房主
@@ -57,7 +57,7 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
 在现有能力之上**另加**，不改已有的三种票据和登录流程。
 
 - **是什么**：一张带游戏名的短期账号凭证，回答"这是哪个账号、要玩哪个游戏"。不带区服、不带角色：开房间场景没有区服和角色。
-- **格式**：`gt1.<过期秒>.<游戏>.<账号>.<签名>`，与现有票据同一把会话密钥、独立的域前缀 `roost.account.game-token\n`。和 at1、et1 互相不能冒充，长度上限同为 `MaxTicketBytes`。
+- **格式**：`gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，与现有票据同一把会话密钥、独立的域前缀 `roost.account.game-token\n`。和 at1、et1 互相不能冒充，长度上限同为 `MaxTicketBytes`。
 - **配置**：`account.games` 列出这套 account 服务的游戏；不在列表里的游戏不签发。
   ```yaml
   account:
@@ -67,13 +67,14 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
   ```
 - **怎么拿**（两条路，都只是新增）：
   - 已登录的客户端：portal 新增 `POST /portal/game-token`（实施后：请求体 `{account_ticket, game}`，答 `{ok, game, game_token, expires_at}`，见 `modules/portal/README.md`）；
-  - 一步到位：登录接口新增可选参数 `game`，登录成功时在原有答复里多带一张 `gt1`。
+  - 一步到位：登录接口新增可选参数 `game`，登录成功时在原有答复里多带一张 `gt2`。
 - **account 新增 RPC**：
   - `IssueGameToken(ctx, accountTicket, game) (GameToken, error)`：校验 at1、检查账号状态与 `game` 在 `account.games` 里，再签发；
   - `ValidateGameToken(ctx, token, game) (Account, error)`：验签、看过期、核对 token 里的游戏等于 `game`，再读一次账号状态，被封的当场拒绝。错误码与 `ValidateAccountTicket` 同一套（`ErrSessionInvalid` / `ErrIdentityDenied`）。
 - **谁用**：lobby。每个 lobby 配置自己服务的游戏列表 `lobby.games`，收到请求时调用 `ValidateGameToken(token, 请求里的 game)`；拿别的游戏的 token 来，当场拒绝。lobby 不持有密钥，也不自己验签。
 - **多个游戏共用一套账号**：账号是全局的，同一个人在各个游戏里是同一个账号号；封号仍是全局的（按游戏封号以后需要再加，不在本期）。token 里带了游戏名，大厅和 relay 的房间都按游戏隔开。
-- **为什么不直接用 at1**：at1 不带游戏，一个游戏的客户端拿它可以去另一个游戏的大厅。gt1 把游戏写进签名，lobby 只认自己的游戏；寿命也可以按游戏单独配置。
+- **为什么不直接用 at1**：at1 不带游戏，一个游戏的客户端拿它可以去另一个游戏的大厅。gt2 把游戏写进签名，lobby 只认自己的游戏；寿命也可以按游戏单独配置。
+- **吊销（交接 C6，维护者 2026-11-17 选“代数”，已实施）**：账号记录多一个 token 代数（`Account.GameTokenGeneration`，只增不减），签发时写进 token 的“代数”段（签名覆盖它；格式因此从 `gt1.<过期秒>.<游戏>.<账号>.<签名>` 改成六段的 `gt2`，与 at1 四段、et1 五段、角色会话令牌两段都不同，旧 gt1 不再认），`ValidateGameToken` 把它与重读到的账号比较（校验本来就为封号重读账号，不多一次读），不等答 `ErrSessionInvalid`。`RevokeGameTokens(ctx, accountID)`（总线接口）把代数加一并落库：在此之前签发的全部失效，之后签发的照常可用；封号行为不变。触发：运维用 `accountctl revoke-game-tokens -account <账号号>`；改密码自动加一——account 没有改密码 / 改凭证的路径（身份由渠道确认，`Verifier`），由凭证变更发生的那一方经总线调 `RevokeGameTokens`（是否要 account 自己提供凭证变更入口，待维护者定）。不做：单张吊销、吊销时把人从正在进行的房间断开、portal 登出接口。
 
 #### 4.1.2 多个服务
 
@@ -93,7 +94,7 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
 ### 4.2 lobby（大厅服）
 
 - **定位**：框架服务 `service/lobby` + `wiring/lobby`，进 `frameworkCatalog`。生成工程用 `roost add lobby` 加一个 lobby 服务（`framework: lobby` 托管），不写业务代码就能用。
-- **接口**（HTTP + JSON，全部要带游戏账号 token `Authorization: Bearer gt1...`；请求里的 `game` 必须与 token 里的游戏一致）：
+- **接口**（HTTP + JSON，全部要带游戏账号 token `Authorization: Bearer gt2...`；请求里的 `game` 必须与 token 里的游戏一致）：
 
   | 接口 | 作用 |
   |---|---|
@@ -375,7 +376,7 @@ relay 只负责：存最新一份、限间隔与大小、换 host 时交出去�
 | 项 | 估计 |
 |---|---|
 | account：`account.services`、区服归属服务、portal 按服务列出 | 1.5～2 小时 |
-| account：游戏账号 token（`account.games`、gt1、两个 RPC、portal 接口、登录可选参数） | 1.5～2 小时 |
+| account：游戏账号 token（`account.games`、gt2、两个 RPC、portal 接口、登录可选参数） | 1.5～2 小时 |
 | lobby 框架服务（HTTP 接口、Redis 目录、选 relay、签令牌） | 3～4 小时 |
 | relay 框架服务（令牌、转发、控制帧、限额、心跳、etcd 广播） | 3～4 小时 |
 | 生成器（`add lobby` / `add relay`、无 game 工程、doctor）与客户端 SDK（C# / Go） | 2.5～3.5 小时 |

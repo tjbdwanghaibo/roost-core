@@ -246,7 +246,7 @@ func Release() session.Releaser {
 	"lobby": {
 		Package: "lobby", Direct: true, Depends: []string{"redis", "nats", "etcd"}, Clients: []string{"account"},
 		ModArgs: []string{"Tokens()"},
-		Collabs: `// Tokens validates the game account token (gt1) a client sends to the lobby.
+		Collabs: `// Tokens validates the game account token (gt2) a client sends to the lobby.
 // nil is the default and the usual answer: the lobby asks the account service
 // (account.ValidateGameToken through the account ClientMod this process
 // assembles), and the game in the token must be the game of the request.

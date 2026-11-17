@@ -353,7 +353,7 @@ dirtyMeshes.Clear();
 
 三份共同的做法：
 
-- **lobby**：建房、列房、加入、离开、改状态，请求带 `Authorization: Bearer gt1…`，可选 `transport`（tcp / ws）；lobby 的错误名映射成各语言自己的错误类型（Go `*LobbyError` + `errors.Is(err, relay.ErrRoomFull)`，C# `LobbyException.Code`，TS `LobbyError.code`）。
+- **lobby**：建房、列房、加入、离开、改状态，请求带 `Authorization: Bearer gt2…`，可选 `transport`（tcp / ws）；lobby 的错误名映射成各语言自己的错误类型（Go `*LobbyError` + `errors.Is(err, relay.ErrRoomFull)`，C# `LobbyException.Code`，TS `LobbyError.code`）。
 - **relay 帧**：直接是 RS v2 帧，通道在 flags bits3..4、seq 是槽位（上行目标，0 = 全体；下行发送者），编码与 [relay-packets.json](spec/relay-packets.json) 逐字节相同（Go 用 `client/wire`，C# / TS 各自实现并用这份金样核对）。连接后首帧发令牌，等 Welcome（13 字节：角色、房主槽位、房间此刻的 epoch；旧的 5 字节 Welcome 不再接受）；收发游戏通道与房间通道；房主收成员上下线，房主可以踢人、禁言。
 - **心跳与断线**：成员缺省每 10s 一个 Ping（relay 的 `idle_timeout` 缺省 30s），房主与候选缺省每 600ms 一个（relay 的 `host_idle_timeout` 缺省 2s），Pong 测 RTT；30s 一帧都没收到就当断线。断线后重连先调 lobby 的 join（对已在房间里的人幂等，开局后掉线也能回原座）拿新令牌，再连 relay；自动重连缺省关闭，打开后只在连接自己断掉或 relay 判 `idle_timeout` 时重连，被踢、房间关闭、被顶号、经 lobby 离开、relay 停机都不重连；尝试中 relay 答 `lobby_rejected` 就停，答 `lobby_unavailable` 按退避再试。
 - **被踢**：记在 lobby，被踢的账号再 join 答 403 `kicked`；拿没过期的旧令牌直连 relay 收到 `Closed{kicked}`。房主能踢已离线的座位（收到这个槽位的第二条 `MemberLeft{kicked}`）。

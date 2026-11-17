@@ -15,7 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
-// accountctl 的场景。account 是内存存储上的正式服务：子命令只经 serverRecords 用它，与连着 Redis 的那一个
+// accountctl 的场景。account 是内存存储上的正式服务：子命令只经 accountRecords 用它，与连着 Redis 的那一个
 // 是同一份实现。没有连真实的 Redis——openService 那一段（地址、前缀）这里验不到。
 
 // loginCtlAccount 给出一个空的 account：一个区服都没登记。
@@ -24,14 +24,15 @@ func loginCtlAccount(t *testing.T) *svcaccount.Service {
 	return loginCtlAccountOn(t, versionstore.NewMemoryStore[int32, svcaccount.GameServer](), nil)
 }
 
-// loginCtlAccountOn 是在给定的区服存储上、按 account.services（services，可以为空）配置的 account。
-func loginCtlAccountOn(t *testing.T, servers versionstore.Store[int32, svcaccount.GameServer], services []svcaccount.ServiceSpec) *svcaccount.Service {
+// loginCtlAccountOn 是在给定的区服存储上、按 account.services（services，可以为空）配置的 account；
+// mutate 再改其余配置（例如 account.games）。
+func loginCtlAccountOn(t *testing.T, servers versionstore.Store[int32, svcaccount.GameServer], services []svcaccount.ServiceSpec, mutate ...func(*svcaccount.Config)) *svcaccount.Service {
 	t.Helper()
 	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := svcaccount.New(svcaccount.Config{
+	cfg := svcaccount.Config{
 		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
 		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
 		Servers:  servers,
@@ -44,7 +45,11 @@ func loginCtlAccountOn(t *testing.T, servers versionstore.Store[int32, svcaccoun
 		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
 		SessionSecret: "accountctl-test",
 		Services:      services,
-	})
+	}
+	for _, change := range mutate {
+		change(&cfg)
+	}
+	service, err := svcaccount.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +147,11 @@ func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 		"show without -sid":       {[]string{"show-server"}, "-sid is required"},
 		"list with an argument":   {[]string{"list-servers", "-sid", "1000"}, "list-servers: takes no arguments"},
 		"show with a bad flag":    {[]string{"show-server", "-id", "1000"}, "show-server: flag provided but not defined"},
+		"revoke without -account": {[]string{"revoke-game-tokens"}, "-account is required"},
+		"revoke with a blank one": {[]string{"revoke-game-tokens", "-account", "  "}, "-account is required"},
+		"revoke with an argument": {[]string{"revoke-game-tokens", "-account", "dev:alice", "now"}, "unexpected arguments"},
+		"revoke with a bad flag":  {[]string{"revoke-game-tokens", "-player", "100001"}, "revoke-game-tokens: flag provided but not defined"},
+		"revoke a missing one":    {[]string{"revoke-game-tokens", "-account", "dev:nobody"}, "account not found"},
 	} {
 		_, printed, err := loginCtlRun(t, service, test.args...)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -251,7 +261,7 @@ func TestLoginAccountctlListsTheRegisteredServers(t *testing.T) {
 
 // loginCtlListing 是只答 ListServers 的 account 替身：清单是 nil，或者出错。
 type loginCtlListing struct {
-	serverRecords
+	accountRecords
 	err error
 }
 
@@ -349,5 +359,69 @@ func TestLoginAccountctlWritesTheServerService(t *testing.T) {
 	withService := loginCtlAccountOn(t, servers, []svcaccount.ServiceSpec{{Name: "party", Kind: svcaccount.ServiceKindGame}})
 	if again, _, err := loginCtlRun(t, withService, "upsert-server", "-sid", "2000", "-status", "maintenance", "-service", "party"); err != nil || again.Service != "party" || again.Status != svcaccount.ServerMaintenance {
 		t.Fatalf("upsert-server -service party -status maintenance = %+v, %v", again, err)
+	}
+}
+
+// revoke-game-tokens（交接 C6）：经 account 的 RevokeGameTokens 把账号上的 token 代数加一，打印账号与新代数。
+// 之前签发的游戏账号 token 校验被拒，之后签发的照常可用，别的账号不受影响；再执行一次再加一。
+func TestLoginAccountctlRevokesAnAccountsGameTokens(t *testing.T) {
+	service := loginCtlAccountOn(t, versionstore.NewMemoryStore[int32, svcaccount.GameServer](), nil, func(c *svcaccount.Config) {
+		c.Games = []svcaccount.GameSpec{{Name: "party"}}
+	})
+	ctx := context.Background()
+	gameToken := func(accountID string) string {
+		t.Helper()
+		ticket, err := service.IssueAccountTicket(ctx, accountID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := service.IssueGameToken(ctx, ticket.Ticket, "party")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token.Token
+	}
+	alice, err := service.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := service.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, bobs := gameToken(alice.ID), gameToken(bob.ID)
+	revoke := func() uint64 {
+		t.Helper()
+		var out bytes.Buffer
+		if err := dispatch(ctx, service, []string{"revoke-game-tokens", "-account", alice.ID}, &out); err != nil {
+			t.Fatalf("accountctl revoke-game-tokens -account %s: %v", alice.ID, err)
+		}
+		var printed struct {
+			AccountID  string  `json:"account_id"`
+			Generation *uint64 `json:"game_token_generation"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &printed); err != nil || printed.AccountID != alice.ID || printed.Generation == nil {
+			t.Fatalf("revoke-game-tokens printed %q (%v)", out.String(), err)
+		}
+		return *printed.Generation
+	}
+	if generation := revoke(); generation != 1 {
+		t.Fatalf("the first revocation printed generation %d, want 1", generation)
+	}
+	if _, err := service.ValidateGameToken(ctx, before); !errors.Is(err, svcaccount.ErrSessionInvalid) {
+		t.Fatalf("alice's token from before the revocation: %v, want ErrSessionInvalid", err)
+	}
+	after := gameToken(alice.ID)
+	if got, err := service.ValidateGameToken(ctx, after); err != nil || got.AccountID != alice.ID {
+		t.Fatalf("alice's token from after the revocation: %+v, %v", got, err)
+	}
+	if got, err := service.ValidateGameToken(ctx, bobs); err != nil || got.AccountID != bob.ID {
+		t.Fatalf("bob's token after alice's revocation: %+v, %v", got, err)
+	}
+	if generation := revoke(); generation != 2 {
+		t.Fatalf("the second revocation printed generation %d, want 2", generation)
+	}
+	if _, err := service.ValidateGameToken(ctx, after); !errors.Is(err, svcaccount.ErrSessionInvalid) {
+		t.Fatalf("the generation-1 token after the second revocation: %v", err)
 	}
 }

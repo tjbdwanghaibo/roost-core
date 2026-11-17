@@ -134,7 +134,7 @@ namespace Roost.Client.Relay
     }
 
     /// <summary>
-    /// lobby 的 HTTP 客户端（docs/framework/LOBBY.md §2）。每个请求带 Authorization: Bearer gt1...（游戏账号 token）；
+    /// lobby 的 HTTP 客户端（docs/framework/LOBBY.md §2）。每个请求带 Authorization: Bearer gt2...（游戏账号 token）；
     /// 请求的 game 必须等于 token 里的游戏。线程安全。
     /// </summary>
     public sealed class LobbyClient
@@ -144,7 +144,7 @@ namespace Roost.Client.Relay
         private readonly HttpClient http;
 
         /// <param name="baseUrl">lobby 的根地址，例如 https://lobby.example.com。</param>
-        /// <param name="gameToken">每个请求取一次 gt1；gt1 有寿命，长时间运行的客户端在这里换新的。</param>
+        /// <param name="gameToken">每个请求取一次 gt2；gt2 有寿命，长时间运行的客户端在这里换新的。</param>
         /// <param name="http">null 时新建一个 HttpClient。</param>
         public LobbyClient(string baseUrl, Func<CancellationToken, Task<string>> gameToken, HttpClient? http = null)
         {
@@ -213,7 +213,7 @@ namespace Roost.Client.Relay
         private static RoomTicket Ticket(JsonObject reply) =>
             new RoomTicket(RoomInfo.From(reply.Object("room")), reply.String("relay_addr") ?? "", reply.String("token") ?? "", reply.Long("expires_at"));
 
-        /// <summary>发一个请求：带上 gt1；200 解成 JSON 对象，其余答复换成 LobbyException。</summary>
+        /// <summary>发一个请求：带上 gt2；200 解成 JSON 对象，其余答复换成 LobbyException。</summary>
         private async Task<JsonObject> CallAsync(HttpMethod method, string path, string? body, CancellationToken cancellation)
         {
             var token = await gameToken(cancellation).ConfigureAwait(false);

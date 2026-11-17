@@ -13,8 +13,8 @@ import (
 	"strings"
 )
 
-// lobby 的 HTTP 接口（契约见 docs/framework/LOBBY.md §2）。全部是 JSON，每个请求带 Authorization: Bearer gt1...；
-// 请求里的 game 必须等于 gt1 里的游戏。
+// lobby 的 HTTP 接口（契约见 docs/framework/LOBBY.md §2）。全部是 JSON，每个请求带 Authorization: Bearer gt2...；
+// 请求里的 game 必须等于 gt2 里的游戏。
 
 // Transport 是向 lobby 要的 relay 接入方式：tcp 时 relay_addr 是 host:port，ws 时是完整的 ws:// / wss:// URL。
 // Go SDK 只连 TCP；ws 留给浏览器（TS SDK）。
@@ -138,11 +138,11 @@ func (e *LobbyError) Temporary() bool { return e.Status >= 500 }
 // maxLobbyReplyBytes 是读 lobby 答复的上限；最大的答复是 100 个房间的列表，远小于它。
 const maxLobbyReplyBytes = 1 << 20
 
-// GameTokenSource 返回当前的游戏账号 token（gt1）。gt1 有寿命（account.games 的 token_ttl），长时间运行的客户端
+// GameTokenSource 返回当前的游戏账号 token（gt2）。gt2 有寿命（account.games 的 token_ttl），长时间运行的客户端
 // 在这里换新的；每个请求调用一次。
 type GameTokenSource func(ctx context.Context) (string, error)
 
-// StaticGameToken 把一张固定的 gt1 当 GameTokenSource 用。
+// StaticGameToken 把一张固定的 gt2 当 GameTokenSource 用。
 func StaticGameToken(token string) GameTokenSource {
 	return func(context.Context) (string, error) { return token, nil }
 }
@@ -205,7 +205,7 @@ func (l *Lobby) SetRoomState(ctx context.Context, roomID string, req SetRoomStat
 	return ticket.Room, err
 }
 
-// call 发一个请求：带上 gt1，body 非 nil 时按 JSON 发；200 解进 out，其余答复换成 *LobbyError。
+// call 发一个请求：带上 gt2，body 非 nil 时按 JSON 发；200 解进 out，其余答复换成 *LobbyError。
 func (l *Lobby) call(ctx context.Context, method, path string, body, out any) error {
 	gameToken, err := l.token(ctx)
 	if err != nil {

@@ -1,5 +1,5 @@
 // Command accountctl 是 account 服务故意不放上总线的那部分运维操作里，登录要用到的最小一块：
-// 登记一个区服、改它的状态、看它的记录。
+// 登记一个区服、改它的状态、看它的记录；另带一个按账号吊销游戏账号 token 的命令。
 //
 //	go run ./cmd/accountctl upsert-server -sid 1000                       # 登记并开放 1000 服（名字缺省 {{GAME_SERVICE}}-1000）
 //	go run ./cmd/accountctl upsert-server -sid 1000 -status maintenance   # 停止在这个服建角（已有角色照常登录）
@@ -7,6 +7,7 @@
 //	go run ./cmd/accountctl list-servers                                  # 登记过的全部区服，按服号升序
 //	go run ./cmd/accountctl -redis 10.0.0.5:6379 -redis-password ... -prefix roost:{{PROJECT}}:account upsert-server -sid 1001 -name 二服
 //	go run ./cmd/accountctl upsert-server -sid 2000 -service brawl         # 区服归属的 game 服务（account.services 有几个 game 时）
+//	go run ./cmd/accountctl revoke-game-tokens -account dev:alice          # 让这个账号此前签发的游戏账号 token（gt2）全部失效
 //
 // 为什么要有它：account 里没有状态是 open 的服，新号进不了任何服（握手时建不出账号与玩家号的映射，
 // CreateRole 也一律拒绝），登录入口的区服清单也是空的；而登记区服（UpsertServer）改的是
@@ -27,6 +28,11 @@
 //
 // 旗标的名字与 roost-core demo 的同名命令相同：生成的 deploy/dev/run.sh 发现工程里有 cmd/accountctl 时，
 // 在全部服务起来之后用它们登记本机的服（upsert-server -sid $SID）。改旗标名字会让那一步失败。
+//
+// revoke-game-tokens（交接 C6，维护者 2026-11-17）：调 account 的 RevokeGameTokens（总线接口上的同一个方法，这里在
+// 同一份存储上直接调），把账号上的 token 代数加一：在此之前签发的游戏账号 token 全部失效，之后签发的照常可用；
+// 封号、账号票据、进服票据不受影响，已经连上 relay 的房间也不断开（只拦以后的大厅调用）。-account 是 account 的
+// 账号号（“渠道:open_id”，例如开发登录的 dev:alice），不是玩家号。
 //
 // 合服、单个角色换服的人工兜底不在这里。工程要加自己的子命令时不用改这个文件：在这个包里另写一个文件，
 // 用 init 调 registerCommand 登记（见它的注释）。roost-core 的 game-demo 就是这样加的
@@ -53,7 +59,8 @@ import (
 )
 
 const usage = "usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-redis-password P] [-redis-db N] [-prefix key_prefix] " +
-	"upsert-server -sid N [-name NAME] [-status open|maintenance|full|closed] [-region R] [-service GAME_SERVICE] | show-server -sid N | list-servers"
+	"upsert-server -sid N [-name NAME] [-status open|maintenance|full|closed] [-region R] [-service GAME_SERVICE] | show-server -sid N | list-servers | " +
+	"revoke-game-tokens -account ACCOUNT_ID"
 
 func main() {
 	target, command, err := parseConnection(os.Args[1:])
@@ -107,16 +114,18 @@ func parseConnection(args []string) (connection, []string, error) {
 	return connection{redis: cfg, prefix: *prefix}, flags.Args(), nil
 }
 
-// serverRecords 是子命令用到的 account 接口；*svcaccount.Service 满足它。UpsertServer 不在总线接口
-// （svcaccount.Accounts）上，所以这里要的是服务本身，不是它的客户端。
-type serverRecords interface {
+// accountRecords 是自带子命令用到的 account 接口；*svcaccount.Service 满足它。UpsertServer 不在总线接口
+// （svcaccount.Accounts）上，所以这里要的是服务本身，不是它的客户端。RevokeGameTokens 在总线接口上，这里与它
+// 一样在同一份存储上直接调。
+type accountRecords interface {
 	UpsertServer(ctx context.Context, server svcaccount.GameServer) (svcaccount.GameServer, error)
 	GetServer(ctx context.Context, serverID int32) (svcaccount.GameServer, error)
 	ListServers(ctx context.Context) ([]svcaccount.GameServer, error)
+	RevokeGameTokens(ctx context.Context, accountID string) (uint64, error)
 }
 
-// builtinCommands 是这个文件自带的三个子命令的名字，按用法里的顺序。
-var builtinCommands = []string{"upsert-server", "show-server", "list-servers"}
+// builtinCommands 是这个文件自带的子命令的名字，按用法里的顺序。
+var builtinCommands = []string{"upsert-server", "show-server", "list-servers", "revoke-game-tokens"}
 
 // operatorCommand 是工程自己登记的一个子命令。
 type operatorCommand struct {
@@ -135,7 +144,7 @@ var operatorCommands = map[string]operatorCommand{}
 //	}
 //
 // run 拿到的是 account 服务本身（与运行中的 account 进程共用同一份存储），args 是子命令名之后的参数，
-// 结果写到 out；返回错误时命令以非零状态退出。空名、nil、与自带的三个命令重名、重复登记都是写错了，直接 panic。
+// 结果写到 out；返回错误时命令以非零状态退出。空名、nil、与自带的命令重名、重复登记都是写错了，直接 panic。
 func registerCommand(name, usage string, run func(ctx context.Context, service *svcaccount.Service, args []string, out io.Writer) error) {
 	if name == "" || run == nil {
 		panic("accountctl: registerCommand needs a name and a run function")
@@ -151,7 +160,7 @@ func registerCommand(name, usage string, run func(ctx context.Context, service *
 	operatorCommands[name] = operatorCommand{usage: usage, run: run}
 }
 
-// commandNames 是全部子命令的名字：自带的三个，然后是工程登记的（按名字排序）。
+// commandNames 是全部子命令的名字：自带的，然后是工程登记的（按名字排序）。
 func commandNames() []string {
 	names := make([]string, 0, len(operatorCommands))
 	for name := range operatorCommands {
@@ -182,7 +191,7 @@ func dispatch(ctx context.Context, service *svcaccount.Service, args []string, o
 
 // run 执行一个自带的子命令，把结果记录以 JSON 写到 out。参数不对、account 拒绝都返回错误，什么也不写。
 // 工程登记的子命令不经过这里（dispatch 先认它们）。
-func run(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+func run(ctx context.Context, records accountRecords, args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New(usageText())
 	}
@@ -193,6 +202,8 @@ func run(ctx context.Context, records serverRecords, args []string, out io.Write
 		return showServer(ctx, records, args[1:], out)
 	case "list-servers":
 		return listServers(ctx, records, args[1:], out)
+	case "revoke-game-tokens":
+		return revokeGameTokens(ctx, records, args[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q (commands: %s)", args[0], strings.Join(commandNames(), ", "))
 	}
@@ -241,7 +252,7 @@ func recordService(command []string) string {
 // upsertServer 登记或更新一个区服。它整条覆盖名字、状态与区域（合服字段由 account 原样保留）：
 // 只想改状态时也要把名字带上，不带就回到缺省名。-sid 必填、没有缺省：写错服号是登记了一个没有进程的服。
 // -service 写区服归属的 game 服务；不写时沿用记录里已有的（account 的规则）。
-func upsertServer(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+func upsertServer(ctx context.Context, records accountRecords, args []string, out io.Writer) error {
 	request, err := parseUpsertServer(args)
 	if err != nil {
 		return err
@@ -261,7 +272,7 @@ func upsertServer(ctx context.Context, records serverRecords, args []string, out
 }
 
 // showServer 打印一个区服的记录（含合服字段）；没登记过的服是错误。
-func showServer(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+func showServer(ctx context.Context, records accountRecords, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("show-server", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	sid := flags.Int("sid", 0, "区服号")
@@ -281,7 +292,7 @@ func showServer(ctx context.Context, records serverRecords, args []string, out i
 // listServers 打印登记过的全部区服（account 的 ListServers：登录入口给客户端的清单就是从它来的），
 // 一个 JSON 数组，按服号升序；一个都没有时是 []。区服索引是随 upsert-server 维护的：
 // 这个命令之前登记的服不在清单里，对它再执行一次 upsert-server 即补上。
-func listServers(ctx context.Context, records serverRecords, args []string, out io.Writer) error {
+func listServers(ctx context.Context, records accountRecords, args []string, out io.Writer) error {
 	if len(args) != 0 {
 		return fmt.Errorf("list-servers: takes no arguments, got %q", strings.Join(args, " "))
 	}
@@ -295,6 +306,37 @@ func listServers(ctx context.Context, records serverRecords, args []string, out 
 	return printJSON(out, servers)
 }
 
+// gameTokenRevocation 是 revoke-game-tokens 打印的结果。
+type gameTokenRevocation struct {
+	AccountID string `json:"account_id"`
+	// GameTokenGeneration 是吊销之后账号上的代数：之后签发的 token 带它，之前的全部失效。
+	GameTokenGeneration uint64 `json:"game_token_generation"`
+}
+
+// revokeGameTokens 吊销一个账号此前签发的全部游戏账号 token（account 的 RevokeGameTokens），打印账号与新的代数。
+// -account 必填；账号不存在时 account 拒绝（ErrAccountMissing），什么都不写。再执行一次会再加一：每次都是
+// “让到此刻为止签发的全部失效”。
+func revokeGameTokens(ctx context.Context, records accountRecords, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("revoke-game-tokens", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	account := flags.String("account", "", "account 的账号号（渠道:open_id，例如 dev:alice），不是玩家号")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("revoke-game-tokens: %w", err)
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("revoke-game-tokens: unexpected arguments %q", strings.Join(flags.Args(), " "))
+	}
+	accountID := strings.TrimSpace(*account)
+	if accountID == "" {
+		return errors.New("revoke-game-tokens: -account is required (the account id, channel:open_id)")
+	}
+	generation, err := records.RevokeGameTokens(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("revoke-game-tokens: %w", err)
+	}
+	return printJSON(out, gameTokenRevocation{AccountID: accountID, GameTokenGeneration: generation})
+}
+
 func printJSON(out io.Writer, value any) error {
 	encoded, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
@@ -305,7 +347,7 @@ func printJSON(out io.Writer, value any) error {
 }
 
 // openService 在运行中的 account 进程用的同一份 Redis 存储上建一个 account 服务。协作者用工程自己的那一套
-// （bootstrap 交给 account Mod 的同一份），名字规则因此一致；两个子命令不登录也不建角，所以身份校验与
+// （bootstrap 交给 account Mod 的同一份），名字规则因此一致；子命令不登录也不建角，所以身份校验与
 // 玩家号分配器不会被调用，它们要的 Registry 绑定这里不需要。
 //
 // gameService 非空时（upsert-server -service），它作为 account.services 里唯一的 game 服务交给 account：account 据此检查名字的
@@ -328,7 +370,8 @@ func openService(cfg *fredis.Config, prefix, gameService string) (*svcaccount.Se
 	service, err := svcaccount.New(svcaccount.Config{
 		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names,
 		Verifier: accountcollaborators.Verifier(), Allocator: accountcollaborators.Allocator(), NameRules: accountcollaborators.NameRules(),
-		// 构造服务必须给一把会话密钥；这个工具从不签发会话，值无所谓，而且不能是真的那一把。
+		// 构造服务必须给一把会话密钥；这个工具从不签发也不校验会话与票据（吊销只改账号上的代数），值无所谓，
+		// 而且不能是真的那一把。
 		SessionSecret: "accountctl-does-not-mint-sessions",
 		Services:      services,
 	})

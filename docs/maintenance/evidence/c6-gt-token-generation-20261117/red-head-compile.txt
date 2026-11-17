@@ -1,0 +1,9 @@
+# github.com/tjbdwanghaibo/roost-core/service/account [github.com/tjbdwanghaibo/roost-core/service/account.test]
+service/account/game_token_test.go:296:31: accounts.RevokeGameTokens undefined (type Accounts has no field or method RevokeGameTokens)
+service/account/game_token_test.go:323:33: record.Value.GameTokenGeneration undefined (type Account has no field or method GameTokenGeneration)
+service/account/game_token_test.go:324:84: record.Value.GameTokenGeneration undefined (type Account has no field or method GameTokenGeneration)
+service/account/game_token_test.go:336:34: accounts.RevokeGameTokens undefined (type Accounts has no field or method RevokeGameTokens)
+service/account/game_token_test.go:354:26: s.RevokeGameTokens undefined (type *Service has no field or method RevokeGameTokens)
+service/account/game_token_test.go:377:27: s.RevokeGameTokens undefined (type *Service has no field or method RevokeGameTokens)
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account [build failed]
+FAIL

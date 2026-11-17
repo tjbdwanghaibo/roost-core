@@ -430,7 +430,7 @@ func TestHeartbeatKeepsTheConnectionAlive(t *testing.T) {
 // lobby 的错误映射成 *LobbyError，可以 errors.Is 判断。
 func TestLobbyErrorsMapToSentinels(t *testing.T) {
 	peer := startPeer(t, relaysvc.Config{})
-	bad := relay.NewLobby(peer.LobbyURL, relay.StaticGameToken("gt1.not-issued"), nil)
+	bad := relay.NewLobby(peer.LobbyURL, relay.StaticGameToken("gt2.not-issued"), nil)
 	_, err := bad.ListRooms(context.Background(), game, "duel", 0)
 	var lobbyErr *relay.LobbyError
 	if !errors.Is(err, relay.ErrUnauthorized) || !errors.As(err, &lobbyErr) || lobbyErr.Status != 401 || lobbyErr.Code != "unauthorized" {

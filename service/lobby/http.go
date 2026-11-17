@@ -16,7 +16,7 @@ import (
 // MaxRequestBytes 是请求体上限。最大的合法请求是带 1KB 属性的建房，16KiB 留足余量。
 const MaxRequestBytes = 16 << 10
 
-// Handler 返回大厅的 HTTP 接口（全部 JSON；除 OPTIONS 预检外都要 `Authorization: Bearer gt1...`）：
+// Handler 返回大厅的 HTTP 接口（全部 JSON；除 OPTIONS 预检外都要 `Authorization: Bearer gt2...`）：
 //
 //	POST /rooms               建房（CreateRequest）               → Ticket
 //	GET  /rooms?game=&mode=   列房（可选 limit，缺省 50、上限 100）→ {"rooms": [RoomView]}

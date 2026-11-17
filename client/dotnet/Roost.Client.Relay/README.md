@@ -3,7 +3,7 @@
 lobby 的 HTTP 调用（`LobbyClient`）与 relay 的 TCP 连接（`RelayClient`）。`netstandard2.1`、可空引用、警告即错误；与 `Roost.Client` 一样不带第三方依赖（lobby 的 JSON 用内置的最小读写）。三份 SDK 的共同说明见 [client/README](../../README.md#开房间-sdklobby--relay)。
 
 ```csharp
-var lobby = new LobbyClient("https://lobby.example.com", gt1);
+var lobby = new LobbyClient("https://lobby.example.com", gt2);
 var ticket = await lobby.CreateRoomAsync(new CreateRoomRequest { Game = "party", Mode = "duel" }); // 成员用 JoinRoomAsync
 var client = new RelayClient(lobby, new RelayClientOptions { Game = "party", ReconnectAttempts = 5 });
 client.GameFrame += frame => { /* 房主：frame.Slot 是成员槽位；成员：来自房主 */ };

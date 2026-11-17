@@ -1,0 +1,15 @@
+✔ visibilitychange: back in time cancels the handoff; no online successor keeps the host; mobile hands off at once (35.5425ms)
+✔ the host's own rules output reaches the page; members' frames go to the rules; outputs go out over relay (13.937417ms)
+✔ refresh: sessionStorage keeps the snapshot; reconnecting within the grace as host restores it and continues the seq (10.807792ms)
+✔ a new host started by YouAreHost gets the decompressed snapshot and the SDK answers HostReady (10.391125ms)
+✔ the app's own client callbacks do not displace WebHost (YouAreHost starts the rules, snapshots are still stored) (5.909333ms)
+✔ foreground first: a hidden host hands off to the member in the foreground; WebHost declares that order unless the game declared its own (7.986416ms)
+✔ a member page reports visibilitychange as Presence (and its state when it connects) (2.138ms)
+ℹ tests 60
+ℹ suites 0
+ℹ pass 60
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25619.994292

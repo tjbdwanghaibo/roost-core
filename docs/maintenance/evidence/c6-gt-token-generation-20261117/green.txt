@@ -1,0 +1,10 @@
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.00s)
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+--- PASS: TestABanRefusesGameTokensAtOnce (0.00s)
+--- PASS: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.00s)
+--- PASS: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.496s

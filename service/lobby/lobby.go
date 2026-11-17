@@ -8,7 +8,7 @@
 //     （崩溃、房间关闭）时房间在 room TTL 后不在了，客户端反复 join 也不续命。
 //     lobby 进程无状态，可以多开；同一个房间的并发修改（加入、relay 报告、房主改状态）都经 RoomStore.Update 的
 //     compare-and-set，不存在“读、判断、写”的窗口。
-//   - 身份只认 account 签发的游戏账号 token（gt1），校验交给 account 的 ValidateGameToken（GameTokenValidator），
+//   - 身份只认 account 签发的游戏账号 token（gt2），校验交给 account 的 ValidateGameToken（GameTokenValidator），
 //     lobby 不持有 account 的密钥。
 //   - relay 实例从 etcd 发现（RelayDirectory），建房时选房间数最少的那个；房间固定在这个实例上，不迁移。
 //   - relay 经 NATS 报告房间事件（RoomEvent，HandleRelayEvent 处理）；lobby 经 NATS 让 relay 执行 leave（RelayCommand）。
@@ -88,7 +88,7 @@ var (
 	ErrNoRelay = errors.New("lobby: no relay instance is available")
 )
 
-// GameTokenValidator 校验游戏账号 token（gt1），返回账号。生产实现是 account 的 ValidateGameToken RPC
+// GameTokenValidator 校验游戏账号 token（gt2），返回账号。生产实现是 account 的 ValidateGameToken RPC
 // （wiring/lobby 接线），token 里的游戏必须等于 game。token 无效、过期、游戏不符、账号被封都返回包着
 // ErrUnauthorized 的错误；其他错误（account 不可达）按服务不可用处理。
 type GameTokenValidator interface {

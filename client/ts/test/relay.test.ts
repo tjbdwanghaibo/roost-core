@@ -156,7 +156,7 @@ async function until(what: string, cond: () => Promise<boolean> | boolean): Prom
 }
 
 test("lobby errors map to LobbyError codes", async () => {
-  const bad = new LobbyClient(peer.lobbyUrl, "gt1.not-issued");
+  const bad = new LobbyClient(peer.lobbyUrl, "gt2.not-issued");
   const unauthorized = await rejects(bad.listRooms(GAME, "duel"), LobbyError);
   assert.deepEqual([unauthorized.status, unauthorized.code], [401, "unauthorized"]);
   const p = await Player.create("ts-errs");

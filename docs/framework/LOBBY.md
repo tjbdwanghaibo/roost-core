@@ -13,7 +13,7 @@
 
 ## 2. HTTP 接口
 
-全部是 JSON。除 OPTIONS 预检外，每个请求都要带 `Authorization: Bearer gt1...`（account 签发的游戏账号 token）；请求里的 `game` 必须是 `lobby.games` 里的游戏，且等于 token 里的游戏。
+全部是 JSON。除 OPTIONS 预检外，每个请求都要带 `Authorization: Bearer gt2...`（account 签发的游戏账号 token）；请求里的 `game` 必须是 `lobby.games` 里的游戏，且等于 token 里的游戏。
 
 | 接口 | 请求 | 答复 |
 |---|---|---|
@@ -79,13 +79,14 @@ lobby 不持有 account 的密钥，也不自己验签。
 - 返回的 `GameAccount` 经 `RequireGame(请求的 game)` 核对游戏。
 - `wiring/lobby.AccountTokens` 负责转换结果：`session_invalid`、`identity_denied`、`account_missing`、`game_invalid` 都答 401；其他错误（account 不可达）答 503。
 - `service/lobby.GameTokenValidator` 是 lobby 里的最小接口；单测用替身，也可以由 `lobby.NewMod(validator)` 注入。
+- **吊销**（交接 C6，维护者 2026-11-17）：token 是 `gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，account 校验时把代数与账号记录上的当前值比较（校验本来就要重读账号看封号，不多一次读）。account 的 `RevokeGameTokens(账号)` 把代数加一：在此之前签发的 token 一律答 `session_invalid`（401），之后签发的照常可用。触发的入口是运维的 `accountctl revoke-game-tokens -account <账号号>`（login 模块的命令）与账号凭证变更的那一方经总线调用。lobby 只拿校验结果，接口不变；吊销只拦以后的大厅调用（建房、列房、加入、离开、改状态），已经发出的 relay 令牌与已经连上的 relay 连接不受影响，不能单张吊销。封号的行为不变（被封答 `identity_denied`）。
 
-### 3.1 客户端怎样拿到 gt1
+### 3.1 客户端怎样拿到 gt2
 
-gt1 由 account 签发（`IssueGameToken`，寿命 `account.games.<游戏>.token_ttl`），account 只在内部总线上，客户端经 **portal 模块**的 HTTP 入口拿（挂在托管 account 的进程上，`web.addr`）：
+gt2 由 account 签发（`IssueGameToken`，寿命 `account.games.<游戏>.token_ttl`），account 只在内部总线上，客户端经 **portal 模块**的 HTTP 入口拿（挂在托管 account 的进程上，`web.addr`）：
 
-1. `POST /portal/login {channel, open_id, credential, game}`：渠道登录，带 `game` 时答复里一并有 `game_token`（gt1）与 `game_token_expires_at`；不带 `game` 时只有账号票据，再 `POST /portal/game-token {account_ticket, game}` 换。`game` 必须在 `account.games` 里（`roost add lobby` 写入），否则整个请求答 `560120`。
-2. 之后每个大厅请求带 `Authorization: Bearer <gt1>`；过期了重新登录或凭新的账号票据再换一张。
+1. `POST /portal/login {channel, open_id, credential, game}`：渠道登录，带 `game` 时答复里一并有 `game_token`（gt2）与 `game_token_expires_at`；不带 `game` 时只有账号票据，再 `POST /portal/game-token {account_ticket, game}` 换。`game` 必须在 `account.games` 里（`roost add lobby` 写入），否则整个请求答 `560120`。
+2. 之后每个大厅请求带 `Authorization: Bearer <gt2>`；过期了重新登录或凭新的账号票据再换一张。
 
 装法：
 
@@ -93,7 +94,7 @@ gt1 由 account 签发（`IssueGameToken`，寿命 `account.games.<游戏>.token
 - 有 game 的工程：`roost module add login portal`（login 管握手，portal 管入口；account_auth 跟着装）。
 - 生成器只出框架骨架，`-template lobby` 不预装这两个模块；没装时 `services/account/collaborators.go` 是拒绝一切的桩，doctor 的 `collaborators:account` 报 FAIL 并给出这条命令。
 
-真实进程演练（`-template lobby` + `roost module add portal`，account / lobby / relay 三个进程，两个账号经 `/portal/login` 带 `game` 拿 gt1 → 建房、加入 → relay 两个通道收发 → 主动转交房主 → 踢人）：`docs/maintenance/evidence/lobby-relay-portal-20261117/`。
+真实进程演练（`-template lobby` + `roost module add portal`，account / lobby / relay 三个进程，两个账号经 `/portal/login` 带 `game` 拿游戏账号 token（当时的格式是 gt1）→ 建房、加入 → relay 两个通道收发 → 主动转交房主 → 踢人）：`docs/maintenance/evidence/lobby-relay-portal-20261117/`。
 
 ## 4. 房间目录（Redis）
 

@@ -132,7 +132,7 @@ match、platform、rank、session），`-framework rank,chat` 只托管列出的
 `lobby` 不带业务服务，只托管 account、lobby、relay（开房间联机，`roost help lobby`）。生成器只出框架骨架：
 `services/account/collaborators.go` 是拒绝一切的生成桩，doctor 的 `collaborators:account` 报 FAIL；`roost project new`
 的最后一行提示 `roost module add portal`——它连同 account_auth（account 的登录协作者：开发登录、渠道入口、玩家号计数器）
-一起装，两者都不要业务服务。之后客户端 `POST /portal/login` 带 `game`（或 `/portal/game-token`）拿游戏账号 token（gt1）
+一起装，两者都不要业务服务。之后客户端 `POST /portal/login` 带 `game`（或 `/portal/game-token`）拿游戏账号 token（gt2）
 去大厅；这种工程没有区服，`/portal/servers` 的区服清单为空、`/portal/enter` 答 account 的 `560104`。
 
     roost project new party -module github.com/acme/party -template lobby

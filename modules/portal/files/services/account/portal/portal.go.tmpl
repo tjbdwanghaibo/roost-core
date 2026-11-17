@@ -527,7 +527,7 @@ type gameTokenRequest struct {
 // gameTokenResponse 是游戏账号 token。
 type gameTokenResponse struct {
 	OK bool `json:"ok"`
-	// Game 是 token 绑定的游戏，GameToken 是 token 本身（gt1.…），大厅请求里原样带上（Authorization: Bearer <token>）。
+	// Game 是 token 绑定的游戏，GameToken 是 token 本身（gt2.…），大厅请求里原样带上（Authorization: Bearer <token>）。
 	Game      string `json:"game"`
 	GameToken string `json:"game_token"`
 	// ExpiresAt 是 token 的过期时刻（Unix 秒，服务器的系统时间）：寿命按游戏配置（account.games.<游戏>.token_ttl）。

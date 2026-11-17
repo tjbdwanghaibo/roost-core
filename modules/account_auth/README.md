@@ -44,6 +44,7 @@ roost module verify
 1. 开发登录（只在开发配置里）：`configs/service/config.account.yaml` 末尾加 `login:` 下的 `dev_token: dev-随便什么`。
 2. 上线前接渠道：在 `services/account/login_channels.go` 的 `verifyChannel` 里按 `identity.Channel` 分支接平台验签。必须守住三条：验不过返回包着 `svcaccount.ErrIdentityDenied` 的错误；问不到渠道返回包着 `svcaccount.ErrVerifierUnavailable` 的错误；返回渠道确认的 `OpenID`，不是客户端提交的那个。
 3. 给客户端一个登录入口：`roost module add portal`。
+4. 凭证变更时吊销游戏账号 token（交接 C6，维护者 2026-11-17）：account 没有改密码 / 换绑的路径——身份由渠道确认，密码在渠道那一侧。工程的渠道或账号中心在玩家改密码、换绑、报告 token 泄露时，经总线调 account 的 `RevokeGameTokens(ctx, accountID)`（`svcaccount.Accounts`，账号号就是 `Identity{Channel, OpenID}.AccountID()`）：这个账号此前签发的游戏账号 token（gt2）全部失效，之后签发的照常可用。运维手动吊销用 login 模块的 `accountctl revoke-game-tokens`。
 
 需求比它多一点：把区服编进玩家号改 `login_player_id.go` 的 `Allocate`（有玩家之后不要调小 `firstPlayerID`）；换名字规则改 `collaborators.go` 的 `NameRules`。工程已经有自己的 account 协作者时不要装它（装不上），可以借鉴的是“拒绝”与“问不到渠道”分成两种错误、返回渠道确认的身份。
 

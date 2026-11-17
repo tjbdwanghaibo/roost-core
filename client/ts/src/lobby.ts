@@ -1,4 +1,4 @@
-// lobby 的 HTTP 客户端（docs/framework/LOBBY.md §2）。全部 JSON，每个请求带 Authorization: Bearer gt1...（游戏账号 token），
+// lobby 的 HTTP 客户端（docs/framework/LOBBY.md §2）。全部 JSON，每个请求带 Authorization: Bearer gt2...（游戏账号 token），
 // 请求里的 game 必须等于 token 里的游戏。浏览器跨域调用要 lobby 的 cors_origins 放行游戏页面的 Origin。
 
 /** 向 lobby 要的 relay 接入方式：浏览器用 ws（relay_addr 是完整的 ws:// / wss:// URL）。 */
@@ -97,7 +97,7 @@ export class LobbyError extends Error {
   }
 }
 
-/** 返回当前的 gt1；每个请求调用一次，gt1 过期前在这里换新的。 */
+/** 返回当前的 gt2；每个请求调用一次，gt2 过期前在这里换新的。 */
 export type GameTokenSource = string | (() => string | Promise<string>);
 
 interface RoomJSON {
@@ -148,7 +148,7 @@ export class LobbyClient {
 
   /**
    * @param baseUrl lobby 的根地址，例如 https://lobby.example.com
-   * @param gameToken gt1，或每个请求取一次 gt1 的函数
+   * @param gameToken gt2，或每个请求取一次 gt2 的函数
    * @param fetchImpl 缺省用全局 fetch（浏览器与 node 18+ 都有）
    */
   constructor(

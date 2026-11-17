@@ -155,7 +155,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		fmt.Fprintf(stdout, "project ready: %s\n", target)
 		if *template == lobbyTemplateName {
 			// 生成器只出框架骨架；account 的登录协作者与 HTTP 登录入口是模块，按需装（roost help lobby）。
-			fmt.Fprintln(stdout, "next: roost module add portal   # account's login collaborators (module account_auth) and the HTTP login entry: POST /portal/login with game returns the gt1 game account token the lobby takes; doctor's collaborators:account passes after it")
+			fmt.Fprintln(stdout, "next: roost module add portal   # account's login collaborators (module account_auth) and the HTTP login entry: POST /portal/login with game returns the gt2 game account token the lobby takes; doctor's collaborators:account passes after it")
 		}
 		return nil
 	case "sync", "diff", "doctor", "next", "upgrade", "deps":

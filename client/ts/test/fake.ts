@@ -102,7 +102,7 @@ export class FakeLobby {
   readonly client: LobbyClient;
 
   constructor(readonly roomId = "r1") {
-    this.client = new LobbyClient("http://lobby.fake", "gt1.fake", async (input) => {
+    this.client = new LobbyClient("http://lobby.fake", "gt2.fake", async (input) => {
       const url = String(input);
       if (url.endsWith("/join")) {
         this.joins++;

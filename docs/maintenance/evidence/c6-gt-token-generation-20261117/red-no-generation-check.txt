@@ -1,0 +1,13 @@
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.00s)
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+--- PASS: TestABanRefusesGameTokensAtOnce (0.00s)
+    game_token_test.go:302: local: alice's party token issued before the revocation: {AccountID:store:alice-local Game:party ExpiresAtUnix:1700007200}, <nil>; want ErrSessionInvalid
+--- FAIL: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.00s)
+    game_token_test.go:361: a token revoked while banned came back after the unban: <nil>
+--- FAIL: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.504s
+FAIL

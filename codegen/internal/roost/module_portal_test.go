@@ -138,7 +138,7 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 		}
 		counts[module.Name] = module.Passed
 	}
-	if counts["account_auth"] != 6 || counts["login"] != 32 || counts["portal"] != 15 || counts["portal+login"] != 1 ||
+	if counts["account_auth"] != 6 || counts["login"] != 33 || counts["portal"] != 15 || counts["portal+login"] != 1 ||
 		counts["portal+enter"] != 2 || counts["login+enter"] != 6 || counts["enter"] != 29 {
 		t.Fatalf("scenario counts = %v", counts)
 	}

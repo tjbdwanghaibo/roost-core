@@ -1546,7 +1546,7 @@ func TestPortalHandsOutGameTokensByEndpointAndAtLogin(t *testing.T) {
 	// 第一条路：凭账号票据换。请求里夹带的账号不起作用。
 	reply := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party", "account_id": "dev:bob"})
 	if reply.status != http.StatusOK || reply.body["ok"] != true || reply.text("game") != "party" || reply.number("expires_at") != 1_800_007_200 ||
-		!strings.HasPrefix(reply.text("game_token"), "gt1.1800007200.party.") {
+		!strings.HasPrefix(reply.text("game_token"), "gt2.1800007200.party.") {
 		t.Fatalf("/portal/game-token: %d %s", reply.status, reply.raw)
 	}
 	got, err := w.service.ValidateGameToken(ctx, reply.text("game_token"))
@@ -1592,7 +1592,7 @@ func TestPortalRefusesGameTokensItCannotStandBehind(t *testing.T) {
 		if reply.status != status || reply.code() != code || reply.body["ok"] != false {
 			t.Fatalf("%s: %d %s; want %d with code %d", label, reply.status, reply.raw, status, code)
 		}
-		for _, leak := range []string{"gt1.", "at1.", "10.9.8."} {
+		for _, leak := range []string{"gt2.", "at1.", "10.9.8."} {
 			if strings.Contains(reply.raw, leak) {
 				t.Fatalf("%s: the refusal carries %q: %s", label, leak, reply.raw)
 			}

@@ -9,7 +9,7 @@ package relay_test
 //     {"lobby_url":"http://127.0.0.1:...","relay_tcp":"127.0.0.1:...","relay_ws":"ws://127.0.0.1:.../relay","backend":"redis","game":"party"}
 //
 //     ROOST_RELAYPEER_WS=0 时不开 WebSocket 监听（C# 只连 TCP）。测试拿 POST <lobby_url>/harness/game-token {"account":"a"}
-//     换一张测试 gt1，再按 lobby 的正式接口建房、加入。POST <lobby_url>/harness/admission {"mode":"ok|reject|down"}
+//     换一张测试 gt2，再按 lobby 的正式接口建房、加入。POST <lobby_url>/harness/admission {"mode":"ok|reject|down"}
 //     切换 relay 向 lobby 验权的结果（缺省 ok：照 lobby 的真实答复；reject：一律拒绝，relay 发 Closed{lobby_rejected}；
 //     down：一律不可用，relay 发 Closed{lobby_unavailable}），用来测自动重连遇到这两种拒绝时停还是退避重试。
 //
@@ -249,11 +249,11 @@ func (p *testPeer) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// IssueGameToken 给 account 签一张 game 的测试 token（代替 account 的 IssueGameToken；形如 gt1.peer.<随机>）。
+// IssueGameToken 给 account 签一张 game 的测试 token（代替 account 的 IssueGameToken；形如 gt2.peer.<随机>）。
 func (p *testPeer) IssueGameToken(account, game string) string {
 	raw := make([]byte, 12)
 	_, _ = rand.Read(raw)
-	gameToken := "gt1.peer." + hex.EncodeToString(raw)
+	gameToken := "gt2.peer." + hex.EncodeToString(raw)
 	p.mu.Lock()
 	p.tokens[gameToken] = identity{account: account, game: game}
 	p.mu.Unlock()

@@ -15,7 +15,7 @@ config:
 errcodes: [portal_request_invalid]
 next:
   - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter、/portal/game-token；请求与响应见 roost-core 的 modules/portal/README.md"
-  - "不带 game 的开房间工程（-template lobby）：客户端 POST /portal/login 带 game（或 /portal/game-token）拿 gt1，再以 Authorization: Bearer <gt1> 调大厅；/portal/servers 与 /portal/enter 在这种工程里没有区服可给"
+  - "不带 game 的开房间工程（-template lobby）：客户端 POST /portal/login 带 game（或 /portal/game-token）拿 gt2，再以 Authorization: Bearer <gt2> 调大厅；/portal/servers 与 /portal/enter 在这种工程里没有区服可给"
   - "区服地址：game 配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate），game 定期报给 account、停报 30 秒后消失；或在 config.account.yaml 写静态的 portal.servers（服号 -> host:port），两者都有时上报的优先。都不写时清单照常列出、没有地址；别的来源改 services/account/portal/portal_rules.go 的 newDirectory"
   - "推荐规则（导量）在 services/account/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服"
   - "上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr"

@@ -244,13 +244,13 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 ```
 
 - 生成的配置可以直接 `make dev-run`：lobby 端口 8080+N、relay 7100+N、relay WebSocket 7200+N（N 是端口块）；`lobby.games` 里有一个以工程名命名的游戏（`max_members: 8`），`account.games` 同名；两边的 `token_key_env` 都是 `ROOST_RELAY_TOKEN_KEY`，开发时 `run.sh` 给开发密钥，生产由 Secret / 环境变量注入（至少 16 字节）。改游戏名、人数上限时两处一起改（doctor 的 `account-games` 会查）。
-- **登录入口**：客户端要先拿游戏账号 token（gt1）。两种工程都装 `portal`（第 3A 步），客户端用 `POST /portal/login {channel, open_id, credential, game}` 一步拿到（答复里的 `game_token`），或拿账号票据后 `POST /portal/game-token {account_ticket, game}`。
+- **登录入口**：客户端要先拿游戏账号 token（gt2）。两种工程都装 `portal`（第 3A 步），客户端用 `POST /portal/login {channel, open_id, credential, game}` 一步拿到（答复里的 `game_token`），或拿账号票据后 `POST /portal/game-token {account_ticket, game}`。
   - `-template lobby` 的工程：`"$ROOST" module add portal`，一条命令连同 `account_auth`（account 的登录协作者：开发登录、渠道入口、玩家号计数器，替换生成的拒绝桩）一起装，web Mod 由前置命令加在 account 上；两个模块都不要 game 服务。装完 doctor 的 `collaborators:account` 通过、没有 FAIL。开发登录在 `configs/service/config.account.yaml` 末尾写 `login:` 下的 `dev_token: dev-…`（渠道 `dev`、凭据就是这个值）。这种工程没有区服：`/portal/servers` 的区服清单为空，`/portal/enter` 答 account 的 `560104`；不要装 `login`（它要 game 服务，装不上）。
   - 有 game 的工程：`"$ROOST" module add login portal`。
   - 上线前的渠道验签（`services/account/login_channels.go`）、入口前面的 TLS 与限流仍归工程，写进报告的“没做的”。
 - 生产：relay 的每个实例要能被客户端直连（`advertise_addr` 不能是回环，每个实例不同），浏览器要用时配 `relay.ws_listen`、`ws_advertise_addr`（`wss://…`）、`ws_allowed_origins`（空表示拒绝所有浏览器页面），lobby 配 `cors_origins`。
 
-**客户端流程**（写进 DEMO 第 7 节）：`POST /portal/login` 带 `game` 拿 gt1（或登录拿账号票据 → `POST /portal/game-token`）→ 房主 `POST /rooms`（`Authorization: Bearer gt1…`，`transport` 选 tcp / ws）得到 `{room, relay_addr, token}` → 连 relay、首帧发令牌、收 Welcome；成员 `GET /rooms?game=&mode=` → `POST /rooms/{id}/join` → 连 relay。房主 `POST /rooms/{id}/state` 改成已开始后新人进不来；开局后掉线的人席位一直留着、再 join 回原座，不回来的要房主踢掉。断线重连由 SDK 先经 lobby join 拿新令牌再连 relay。
+**客户端流程**（写进 DEMO 第 7 节）：`POST /portal/login` 带 `game` 拿 gt2（或登录拿账号票据 → `POST /portal/game-token`）→ 房主 `POST /rooms`（`Authorization: Bearer gt2…`，`transport` 选 tcp / ws）得到 `{room, relay_addr, token}` → 连 relay、首帧发令牌、收 Welcome；成员 `GET /rooms?game=&mode=` → `POST /rooms/{id}/join` → 连 relay。房主 `POST /rooms/{id}/state` 改成已开始后新人进不来；开局后掉线的人席位一直留着、再 join 回原座，不回来的要房主踢掉。断线重连由 SDK 先经 lobby join 拿新令牌再连 relay。
 
 **玩法逻辑必须跑在客户端**（维护者 §6 第 5 条）：relay 不解析载荷、服务器不托管房间逻辑，所以本 skill **不为局内玩法写服务器代码**；交付的是工程（lobby、relay、account）、对接说明与房主规则的写法建议。DEMO 第 2 节的边界表里，局内的判定（命中、结算、随机、胜负）都标“房主客户端”，风险写明“房主可以改包作弊，成员之间结果以房主为准”；专业模式由开发者逐条确认。
 

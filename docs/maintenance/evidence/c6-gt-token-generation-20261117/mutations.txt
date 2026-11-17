@@ -1,0 +1,15 @@
+== KILLED M1 校验不比较代数
+    --- FAIL: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.00s)
+    game_token_test.go:302: local: alice's party token issued before the revocation: {AccountID:store:alice-local Game:party ExpiresAtUnix:1700007200}, <nil>; want ErrSessionInvalid
+    --- FAIL: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+    game_token_test.go:367: a token revoked while banned came back after the unban: <nil>
+== KILLED M2 加一不持久化（只在返回值里加一，不写账号记录）
+    --- FAIL: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.00s)
+    game_token_test.go:302: bus: alice's party token issued before the revocation: {AccountID:store:alice-bus Game:party ExpiresAtUnix:1700007200}, <nil>; want ErrSessionInvalid
+    --- FAIL: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+    game_token_test.go:367: a token revoked while banned came back after the unban: <nil>
+== KILLED M3 签发时不写当前代数（总写 0）
+    --- FAIL: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.00s)
+    game_token_test.go:316: local: a token issued after the revocation = {Token:gt2.1700007200.party.c3RvcmU6YWxpY2UtbG9jYWw.0.JjW23p_pE0PQm3isN3gVgSOd5he2AaHTILLdXIOgEEg Game:party ExpiresAtUnix:1700007200}, <nil>; want generation 1 in it
+    --- FAIL: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+    game_token_test.go:374: a token from the same account ticket after the revocation: account: session token is invalid: the ticket is not valid

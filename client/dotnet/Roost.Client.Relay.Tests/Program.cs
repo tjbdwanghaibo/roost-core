@@ -415,7 +415,7 @@ internal static class Program
 
     private static async Task LobbyErrors(Peer peer)
     {
-        var bad = new LobbyClient(peer.LobbyUrl, "gt1.not-issued");
+        var bad = new LobbyClient(peer.LobbyUrl, "gt2.not-issued");
         var unauthorized = await Throws<LobbyException>(() => bad.ListRoomsAsync(Game, "duel"));
         Check(unauthorized.Code == LobbyErrorCode.Unauthorized && unauthorized.Status == 401 && unauthorized.ErrorName == "unauthorized", "bad token → unauthorized");
         var lobby = new LobbyClient(peer.LobbyUrl, await peer.GameTokenAsync("cs-errs"));

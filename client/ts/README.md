@@ -5,7 +5,7 @@ lobby 的 HTTP 调用（`LobbyClient`，用 `fetch`）、relay 的 WebSocket 连
 ```ts
 import { ALL, LobbyClient, RelayClient } from "@roost/relay-client";
 
-const lobby = new LobbyClient("https://lobby.example.com", gt1);               // 跨域要 lobby.cors_origins 放行页面 Origin
+const lobby = new LobbyClient("https://lobby.example.com", gt2);               // 跨域要 lobby.cors_origins 放行页面 Origin
 const ticket = await lobby.createRoom({ game: "party", mode: "duel" });        // transport 缺省 ws；成员用 joinRoom
 const client = new RelayClient(lobby, {
   game: "party",

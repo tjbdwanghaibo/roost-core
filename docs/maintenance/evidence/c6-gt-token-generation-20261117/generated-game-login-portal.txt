@@ -1,0 +1,34 @@
+--- PASS: TestLoginAccountctlRegistersAServerSoRolesCanBeCreated (0.00s)
+--- PASS: TestLoginAccountctlRefusesBadArgumentsWithoutWriting (0.00s)
+--- PASS: TestLoginAccountctlListsTheRegisteredServers (0.00s)
+--- PASS: TestLoginAccountctlReadsTheConnectionFlagsTheDevScriptPasses (0.00s)
+--- PASS: TestLoginAccountctlWritesTheServerService (0.00s)
+--- PASS: TestLoginAccountctlRevokesAnAccountsGameTokens (0.00s)
+PASS
+ok  	example.com/ctlgame/cmd/accountctl	1.421s
+--- PASS: TestLoginDevTokenLogsInAndGetsASession (0.00s)
+--- PASS: TestLoginDevTokenIsRefusedWhenWrongOrOff (0.00s)
+--- PASS: TestLoginDevTokenIsRefusedByAProductionConfig (0.00s)
+--- PASS: TestLoginOtherChannelsAreRefusedUntilTheProjectWiresThem (0.00s)
+--- PASS: TestLoginPlayerIDsComeFromOneCounterUnderTheAccountPrefix (0.00s)
+--- PASS: TestLoginPlayerIDCounterFailsClosed (0.00s)
+PASS
+ok  	example.com/ctlgame/services/account	1.231s
+--- PASS: TestWithPortalLoginAuthenticatorTakesThePortalEnterTicket (0.00s)
+--- PASS: TestPortalWalksFromAChannelIdentityToAnAuthenticatedHandshake (0.00s)
+--- PASS: TestPortalTakesTheAccountOnlyFromTheAccountTicket (0.00s)
+--- PASS: TestPortalRefusesOversizedAndMalformedRequestsWithoutAskingAccount (0.00s)
+--- PASS: TestPortalSeparatesAccountRefusalsFromOutages (0.00s)
+--- PASS: TestPortalDoesNotPassOnAnAccountAnswerThatDoesNotMatchTheQuestion (0.00s)
+--- PASS: TestPortalListsWhatAccountAndTheDirectoryKnow (0.00s)
+--- PASS: TestPortalRecommendsByRoleThenByTheNewestOpenServer (0.00s)
+--- PASS: TestPortalEnterHandsOutATicketAndTheServingAddress (0.00s)
+--- PASS: TestPortalReadsTheServerPresenceAccountHolds (0.00s)
+--- PASS: TestPortalDropsBadDirectoryEntries (0.00s)
+--- PASS: TestPortalStartsInTheAccountProcessWithZeroConfig (0.01s)
+--- PASS: TestPortalNewRefusesIncompleteOptions (0.00s)
+--- PASS: TestPortalHandsOutGameTokensByEndpointAndAtLogin (0.00s)
+--- PASS: TestPortalRefusesGameTokensItCannotStandBehind (0.00s)
+--- PASS: TestPortalListsServersByService (0.00s)
+PASS
+ok  	example.com/ctlgame/services/account/portal	1.637s

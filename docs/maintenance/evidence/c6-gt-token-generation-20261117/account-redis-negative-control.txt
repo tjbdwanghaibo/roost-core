@@ -1,0 +1,7 @@
+    game_token_test.go:285: dial tcp 127.0.0.1:1: connect: connection refused
+--- FAIL: TestRevokingGameTokensRefusesTheOnesIssuedBefore (2.62s)
+    game_token_test.go:348: dial tcp 127.0.0.1:1: connect: connection refused
+--- FAIL: TestRevokingGameTokensLeavesBansAndTicketsAlone (2.64s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	5.918s
+FAIL

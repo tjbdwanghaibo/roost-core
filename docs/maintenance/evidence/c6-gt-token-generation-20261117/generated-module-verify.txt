@@ -1,0 +1,10 @@
+roost module verify --json（-template game + module add login portal，依赖指向本分支）
+ok=True
+account_auth passed=6 skipped=0 ok=True
+login passed=33 skipped=0 ok=True
+portal passed=15 skipped=0 ok=True
+portal+login passed=1 skipped=0 ok=True
+check go build ./... ok=True
+check go vet ./... ok=True
+check roost id check ok=True
+check roost generate --check ok=True

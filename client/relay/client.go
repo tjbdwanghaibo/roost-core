@@ -6,7 +6,7 @@
 //
 // 流程：
 //
-//	lobby := relay.NewLobby(lobbyURL, relay.StaticGameToken(gt1), nil)
+//	lobby := relay.NewLobby(lobbyURL, relay.StaticGameToken(gt2), nil)
 //	ticket, err := lobby.CreateRoom(ctx, relay.CreateRoomRequest{Game: "party", Mode: "duel"}) // 或 JoinRoom
 //	client := relay.NewClient(lobby, relay.Options{Game: "party"})
 //	client.OnGame(func(f relay.Frame) { ... })            // 注册回调，都在读 goroutine 上依次调用
