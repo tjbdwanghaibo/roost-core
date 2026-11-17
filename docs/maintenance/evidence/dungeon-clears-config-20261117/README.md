@@ -8,8 +8,7 @@
   端点提交到 `total:global:0:1`，用例要 `clears:global:0:1`（`red-before.txt`）。
 - 根因（已确认）：**测试夹具缺装载，运行时代码没有问题。** R5（`7256ab66`）把 leaderboard 的榜名等从 Go 常量改为模块配置
   `leaderboard.*`（`leaderboard_config.go` 的 `Value[Config]`），demo 的 `clears` 改为由 `demoLeaderboardConfig` 写进 game 服务三份配置的
-  `leaderboard:` 段。真实进程里，生成的 bootstrap 给 game 服务加了只带配置的 `kitmodulehost.NewMod("game", "", …{Name: "leaderboard",
-  Config: ConfigOf[leaderboardConfig.Config](leaderboardConfig.UseConfig)}…)`，Init 时按声明装载并 `UseConfig`，端点读到 `clears`。
+  `leaderboard:` 段。真实进程里，生成的 bootstrap 给 game 服务加了只带配置的 `kitmodulehost.NewMod("game", "", …{Name: "leaderboard", Config: ConfigOf[leaderboardConfig.Config](leaderboardConfig.UseConfig)}…)`，Init 时按声明装载并 `UseConfig`，端点读到 `clears`。
   单测不经 bootstrap，`Value.Get()` 在没装载过时按设计返回声明的缺省值（`board_id` 缺省 `total`）。R5 给 demo 的
   `game/modules/leaderboard/leaderboard_board_test.go` 加了 `useDemoBoardConfig`（读开发配置的 `leaderboard:` 段），但漏了同样钉住字面
   `clears` 的 `game/controllers/player_finish_dungeon_test.go`。
