@@ -632,7 +632,11 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
   - 搬档之后、中止删目标副本之前崩溃：目标库留一份旧副本；下一次换去那个服时被覆盖（提交前的复制用 overwrite）。
   - 复制的提交应答丢失（结果未知）（RV-20261114-01 已修，2026-11-15）：core 的复制出错时连同错误列出可能已写进目标库的文档，驱动器先重做复制（最多 3 次，已写进去的答 already_present，拿到确定结果照常换服），一直失败才中止，撤屏障之前按这份清单删目标库副本；中止时 account 答已在别处提交的按没搬过补搬。剩下的窗口：三次都失败之后，迟迟未生效的那次提交若晚于删副本才落地，目标库仍会留一份（与上一条同样在下一次换去时被覆盖）；结果未知期间源服重启的续做同 D8，未自动恢复。
   - 运维在模块之外用 `accountctl` 提交、源服又没有续做时，目标服没有他的档（新建空档）；续做时才补搬。
-  - 崩溃窗口没有自动清理、验证范围见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
+  - **源服重启后的恢复**（D7 A / D8 A，2026-11-17）：恢复循环在 `service.started` 之后起，先做起服核对（account 绑在别处的旧档不加载、补搬确认后按版本删除），再按 account 的在途索引接着做本服发起的换服，不等玩家登录；account 每 30s 清扫，期限之后的提交答 `ErrTransferStale` 并记为中止。[R2 证据](evidence/r2-rehome-d7-d8-20261117/README.md)
+  - **提交后源档与目标服已有别的版本冲突**：起服核对补搬时目标服已有**别的**版本（目标服在源服重启前已写过他，或模块外提交后目标服新建了他）——源档保留、屏障立着（本进程不加载、不写）、记 Error，由运维对账；只看版本号判断不了哪一份是他的数据。
+  - **Player 不预加载时的起服核对窗口**：起服后恢复循环把本服库列一遍再问 account（每 500 人一次），做完之前若有业务路径加载了旧档玩家，他的定时逻辑可能写这份旧档（只写源库，不影响目标服），落定时交出屏障卸载它。代价随本服库玩家数增长；大库起服核对的耗时没有测。
+  - **Redis Cluster 上 account 的 `key_prefix` 必须带 hash tag**（如 `{acct}`）：在途换服索引与角色记录同一个脚本维护，否则 Mod 初始化报错。
+  - 验证范围见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
 - **没装 enter 的工程要自己接两处**：加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive`，否则换走的玩家仍能进旧服、目标服不做到达。工程改写了进入端点（game-demo 就改写了）时要自己调 `gamelogin.RunEntering`。
 - **费用不在模块里**：模块不依赖货币，没有实现费用；规则文件里写了做法。
 
@@ -651,7 +655,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **建角服不再可得**：`OriginServerIDClaim` 在换服之后是当前绑定服；业务要按“最初的服”做显示或归属，得自己在玩家数据里记。
 - **物理库不同的服**：account 不知道两个服是否把玩家数据映射到同一个 Mongo 与前缀（v1.47.0 起搬档由 rehome 模块做，前提见上一节）；独立 Gate 转交给 game 的绑定不带 claims（两个新 claim 只在认证器那一侧可见）。
 - **绕开 rehome 模块直接改绑不安全**：游戏侧的停写、断开、交出实体、到达处理由 `rehome` 模块完成（v1.45.0 起；game-demo 的 `PlayerOwners` 与 saga 准入用它的绑定与“换服中”状态）。account 自己不检查源服是否已经停写：直接调这四个接口（或 `accountctl transfer-role commit`）改绑一个在线玩家，会出现两个进程写同一个玩家。
-- 端到端、在途换服的列举与清扫（D8，已决定）与验证边界见[单个角色换服（account 一侧）：遗留](#单个角色换服account-一侧遗留)。
+- 在途换服的列举与清扫（D8 A，2026-11-17 已实施）：在途索引、期限之后的提交被拒并记为中止、每 30s 清扫、`accountctl transfer-role list`，见[单个玩家换服（rehome）：既定设计](#单个玩家换服rehome既定设计)；遗留见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
 
 ### 地形与无缝世界
 
@@ -823,7 +827,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 起服预加载与按服分库：遗留
 
-- **换服 committed 后源库旧档（Q4）**：account 已改绑、Transfer 已清空，而源库删除尚未执行时崩溃，旧源档会被重新预加载。随后源服用 account 当前会话再次进入时被归属检查拒绝（P1 观测为 `player_elsewhere`，owner sid 1001），不保证触发 `Resume` 或源档清理；目标服继续唯一服务玩家入口。旧副本的内存 / 定时器权威写尚未全部隔离，需运维恢复；没有后台清扫。六个真实 SIGKILL 点的验收并未关闭此窗口，见[换服报告](evidence/rehome-20261114/README.md)。**已决定（D7 A，2026-11-14），v1.47.0 之后实施**：源服预加载时向 account 核对绑定，不属于本服的跳过并带版本守护删除，由 P1 的 committed 点验收这条窗口关闭，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R2）。
 
 #### Remote：遗留
 
@@ -884,7 +887,7 @@ room 自动断线订阅与重启后在线状态（全部断线、重连上线）
 
 #### 联盟（alliance）
 
-P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 已验（其中 committed 保留 Q4），本机脚本 11 / 11 与当批模块矩阵 594 / 594 是不同统计口径。历史 demo 压测不是模块容量；本轮 M 与 C-Q1 / Q2 尚未提供正式容量结论。见[社交报告](evidence/social-real-20261114/README.md)。
+P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 已验（committed 点的 Q4 已于 2026-11-17 由 D7 A 关闭），本机脚本 11 / 11 与当批模块矩阵 594 / 594 是不同统计口径。历史 demo 压测不是模块容量；本轮 M 与 C-Q1 / Q2 尚未提供正式容量结论。见[社交报告](evidence/social-real-20261114/README.md)。
 
 #### 配置表导出：遗留
 
@@ -905,12 +908,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
 
-- **向前恢复只由登录触发**：源服受理后重启、玩家又不再来登录源服的，换服停在在途；account 没有“列出在途换服”的索引，要用 `accountctl transfer-role commit|abort` 人工了结。`rehome.Binding`（saga 准入用）不触发恢复。**已决定（D8 A，2026-11-14），v1.47.0 之后实施**：account 加在途换服索引，按期限自动向前恢复或中止，`accountctl` 能列出，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R2）。
-- **committed 崩溃窗口（Q4）**：见[起服预加载遗留](#起服预加载与按服分库遗留)。P1 在嵌入式玩家 TCP 上覆盖六个 SIGKILL 点各两次与 checkpoint 负对照（不含独立 Gate），证明 account / 玩家入口唯一归属、资产与 WAL 恢复；不证明旧副本 / 定时器写已全部隔离。committed 明列 `KNOWN_LIMIT`，需人工恢复；脚本退出 0 不表示 Q4 关闭。D7 的实施（已决定，v1.47.0 之后）由这个点验收关闭。
-
-#### 单个角色换服（account 一侧）：遗留
-
-- **期限只记录**：account 不自动中止过期的换服，也不拒绝迟到的提交；没有在途换服的列举与清扫（方案三期）。**已决定（D8 A，2026-11-14），v1.47.0 之后实施**，与[向前恢复只由登录触发](#单个玩家换服模块-rehome-与-game-demo-接线)是同一项，见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)（R2）。
+- **合服与在途换服**：`MergeServer` 不检查指向被合并服的在途换服，靠提交时拒绝与期限中止兜底（方案三期“sidmerge 清单加无在途换服”）。联盟 e2e `TestAllianceE2ESocialRehome` 的 handed-off 点改成不登录、等 account 改绑后没有跑过；Player 预加载工程的准入检查路径只有离线覆盖；Cluster 下 account 进程级装配与“源服一直没起来”的清扫中止只有契约测试（尚未确认，[R2 证据](evidence/r2-rehome-d7-d8-20261117/README.md)）。
 
 #### 大厅 lobby 与转发 relay：遗留
 

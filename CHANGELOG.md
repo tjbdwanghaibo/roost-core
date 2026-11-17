@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+- **换服：源服重启后不等登录也能恢复，committed 崩溃窗口（Q4）关闭**（R2，D7 A / D8 A，维护者 2026-11-14 已定）：
+  - **account**：在途换服索引（Redis 上 `<key_prefix>:transfers` 有序集合，与角色记录同一个脚本维护）与 `ListRoleTransfers(from)` / `RoleBindingsAway(sid, ids)`（上总线）；每 30s 清扫过期的在途换服；期限（`now >= DeadlineUnix`）之后的 `CommitRoleTransfer` 答 `ErrTransferStale` 并记为已中止（`LastTransfer.Note` 以 `expired:` 开头），原来期限只记录。`accountctl transfer-role list [-from SID]`。**Redis Cluster 上 account 的 `key_prefix` 必须带 hash tag**，否则 Mod 初始化报错。
+  - **DataEngine**：本地起服预加载的准入检查（`PreloadAdmitter`，`PreloadAdmitCapability(kind)`，被否决的计 `dataengine.local_preload_total{result="skipped"}`）与只列不加载的 `Mod.ListLocalEntityIDs`。
+  - **rehome 模块**：恢复循环（`service.started` 之后起）——起服核对本服库里的玩家，account 绑在别处的旧档不加载、补搬确认后按版本删除（D7）；之后定期按在途索引接着做本服发起的换服（D8）。模块场景 50 → 62。演练中发现并修复：恢复循环早于 game-demo 的 Service.Init 发布 Residency，缺省实现抢先注册写闸门导致起服失败。
+  - **验证**：`scripts/test-demo-rehome.sh` 六个真实 SIGKILL 点重启后都不登录，committed 点要求源档删除（原来按 Q4 保留），私有 mirror-local 连续两遍 7 / 7；12 个变异全红；account 契约在单机 Redis 与私有 Cluster（3 主 3 从）上通过。联盟 e2e 没跑（尚未确认）。
+  - **升级**：先停旧 account 再起新的；已有的在途换服不在索引里（未部署，不做迁移），需要时用 `accountctl transfer-role abort` 了结。[证据](docs/maintenance/evidence/r2-rehome-d7-d8-20261117/README.md)
 - **生成器：生产 compose 发布 ops，只绑本机**（维护者 2026-11-17）：每个服务的容器里 ops 都是 9100，`docker-compose.prod.yaml` 现在给每个服务发布 `"127.0.0.1:<9100+端口块>:9100"`（与开发环境同一个号，各服务不撞）：管理端口不对公网，宿主机上的采集器能抓 `/metrics`、`/readyz`，与 k8s 只放行监控命名空间同一口径。之前 compose 不发布 ops，从容器外抓不到指标。所有工程的 compose 都多这一行（每个服务都有 `ports:`）；已有工程 `roost project sync` 后生效。新用例 `TestProductionComposePublishesOpsOnLoopback`（修前红，宿主机端口两两不同）。
 - **模块清单可以声明配置（R5，D19 B，维护者 2026-11-14 已定）**：`module.yaml` 新增 `config: {package, type, use}`，指向模块包里带 `config` tag 的结构体（与 Mod 配置声明同一写法）；安装器从模块源码读出键，把起步 YAML 写进宿主服务的开发、生产示例与 k8s secret 示例配置，生成的 bootstrap 把声明交给 `wiring/modulehost`（托管服务上是模块入口的 Mod，业务服务上另加一个只带配置的 Mod），`--check-config`、`roost config check`、`--print-config(-schema)`、doctor 都看得见，结构体的 `ValidateConfig` 走 App 的跨 Mod 检查，启动时装载一次、经 `Value[T]` 读。迁成配置（缺省值与原常量相同）：`profile.exp_per_level`；`stamina.{max,hard_cap,regen_interval,refill_daily_limit,refill_price_step}`；`leaderboard.{board_id,season,min_score,max_score,default_top,max_top}`（原 `leaderboard_board.go`）；`mailbox.ledger_prune_grace`（原 600 秒常量，缺省 10m、下限 2m、整秒）；`portal.servers`（只声明）。demo 的 clears 榜改写配置。`wiring/modulehost` 新增 `ConfigOf`、`Value[T]`，`Module.Start` 可为空。
   - **行为变化**：装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s；模块配置写错时 `roost config check` 退出 3（由进程判断，`--keys-only` 不认模块键）。

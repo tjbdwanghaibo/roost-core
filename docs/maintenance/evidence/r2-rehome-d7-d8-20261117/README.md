@@ -15,12 +15,12 @@
 
 | 提交 | 内容 |
 | --- | --- |
-| `39701409` feat(account) | **在途换服索引**：与角色记录在同一次原子写里维护。Redis 上用 `versionstore.RedisIndex` 有序集合 `<prefix>:transfers`，进程内用 `MemoryRoles`。<br>**新接口**：`ListRoleTransfers(from)` 和 `RoleBindingsAway(sid, ids)`，两者都上总线。<br>**期限**（`now >= DeadlineUnix`）**之后的提交**答 `ErrTransferStale`，并当场记为中止；中止只在同一次 CAS 里再看到“仍在途、已过期”才落地，与并发的提交是先落者生效。<br>**清扫**：account 进程每 30 秒清一次，每次至多 100 个。<br>**Cluster**：wiring/account 要求 Cluster 的 `key_prefix` 带 hash tag。<br>**真实 Redis 用例**：`TestAccountTransferDeadlinesAndIndexOnRedis`。 |
-| `6460f435` feat(dataengine) | **本地起服预加载的准入检查**：`PreloadAdmitter` 和 `PreloadAdmitCapability(kind)`；被否决的计 `Skipped`、不加载；检查出错时起服失败。<br>**只列不加载**：`ListLocalEntityIDs`。 |
-| `6d24605e` feat(demo) | `accountctl transfer-role list [-from SID]`。 |
-| `cb059f9a` feat(rehome) | **恢复循环** `RunRecovery`（`rehome_recover.go`），做两件事：<br>• **起服核对本服库里的玩家**。Player 预加载时走准入检查；不预加载时把本服库列一遍。account 绑在别处的不加载，按已迁走落定：立屏障、补搬并确认、按版本删本服的。<br>• **接着做在途换服**：每 30 秒把本服发起、迁出表里没有的在途换服交给 `Resume`。<br>**Directory** 加 `Transfers` 和 `BindingsAway`。<br>**模块场景** 50 → 61。<br>**`test-demo-rehome.sh`**：每个栅栏点重启后都不登录。 |
-| `77cf6ca5` docs | PLAYER-MIGRATION §7、guide/02、OBSERVABILITY、FEATURE 换服方案，以及根包真实进程登记。 |
-| `18c45c76` fix(rehome) | **问题**：真实进程演练第一遍发现，manager Start 时就起了恢复循环，而 game-demo 要到 `Service.Init` 才发布自己的 Residency。恢复循环先用到迁出表，建出了缺省的 LocalResidency 并抢先发布写闸门，源服重启时起服失败。<br>**修法**：恢复循环改在 `service.started` 之后起。<br>**用例**：新增 1 条，模块场景 61 → 62。 |
+| `dd4b3d05` feat(account) | **在途换服索引**：与角色记录在同一次原子写里维护。Redis 上用 `versionstore.RedisIndex` 有序集合 `<prefix>:transfers`，进程内用 `MemoryRoles`。<br>**新接口**：`ListRoleTransfers(from)` 和 `RoleBindingsAway(sid, ids)`，两者都上总线。<br>**期限**（`now >= DeadlineUnix`）**之后的提交**答 `ErrTransferStale`，并当场记为中止；中止只在同一次 CAS 里再看到“仍在途、已过期”才落地，与并发的提交是先落者生效。<br>**清扫**：account 进程每 30 秒清一次，每次至多 100 个。<br>**Cluster**：wiring/account 要求 Cluster 的 `key_prefix` 带 hash tag。<br>**真实 Redis 用例**：`TestAccountTransferDeadlinesAndIndexOnRedis`。 |
+| `7f51bea8` feat(dataengine) | **本地起服预加载的准入检查**：`PreloadAdmitter` 和 `PreloadAdmitCapability(kind)`；被否决的计 `Skipped`、不加载；检查出错时起服失败。<br>**只列不加载**：`ListLocalEntityIDs`。 |
+| `0fe42b5f` feat(demo) | `accountctl transfer-role list [-from SID]`。 |
+| `57c710ee` feat(rehome) | **恢复循环** `RunRecovery`（`rehome_recover.go`），做两件事：<br>• **起服核对本服库里的玩家**。Player 预加载时走准入检查；不预加载时把本服库列一遍。account 绑在别处的不加载，按已迁走落定：立屏障、补搬并确认、按版本删本服的。<br>• **接着做在途换服**：每 30 秒把本服发起、迁出表里没有的在途换服交给 `Resume`。<br>**Directory** 加 `Transfers` 和 `BindingsAway`。<br>**模块场景** 50 → 61。<br>**`test-demo-rehome.sh`**：每个栅栏点重启后都不登录。 |
+| `fdbb56e5` docs | PLAYER-MIGRATION §7、guide/02、OBSERVABILITY、FEATURE 换服方案，以及根包真实进程登记。 |
+| `e0a3e8cd` fix(rehome) | **问题**：真实进程演练第一遍发现，manager Start 时就起了恢复循环，而 game-demo 要到 `Service.Init` 才发布自己的 Residency。恢复循环先用到迁出表，建出了缺省的 LocalResidency 并抢先发布写闸门，源服重启时起服失败。<br>**修法**：恢复循环改在 `service.started` 之后起。<br>**用例**：新增 1 条，模块场景 61 → 62。 |
 | 本目录所在提交 | 证据。<br>`social_test.go.txt`（联盟 e2e）在 handed-off 点不再登录源服：登录会与恢复循环赛跑。<br>根包登记的范围文字同步更新。 |
 
 ### 与 D7 字面的出入
@@ -115,9 +115,9 @@ offset 17500，3 主 3 从，用完 clean。
 
 | 运行 | 结果 |
 | --- | --- |
-| run1（`cb059f9a`，修复前） | **失败**。accepted 点 SIGKILL 后源服重启起不来：`service game init: game: publish player write gate: registry: capability "access.player.write_gate" already registered by *rehome.LocalResidency`。首次起服没有可恢复的工作，所以没有暴露。修复见 `18c45c76`。 |
-| run2（`18c45c76`） | 7 / 7 PASS。 |
-| run3（`18c45c76`） | 7 / 7 PASS。 |
+| run1（`57c710ee`，修复前） | **失败**。accepted 点 SIGKILL 后源服重启起不来：`service game init: game: publish player write gate: registry: capability "access.player.write_gate" already registered by *rehome.LocalResidency`。首次起服没有可恢复的工作，所以没有暴露。修复见 `e0a3e8cd`。 |
+| run2（`e0a3e8cd`） | 7 / 7 PASS。 |
+| run3（`e0a3e8cd`） | 7 / 7 PASS。 |
 | mutant-d7（committed 点；模板里把认出的旧档改为不入队，跑完恢复） | **按预期失败**：`FAIL: source documents not dropped without a login`。 |
 
 run2 和 run3 的每个点，重启后都**没有任何登录**。脚本只读 account 绑定和两个库，直到绑定指向 1001、源库无档，才登录核对：
