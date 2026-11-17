@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **配置表：schema 包里的具名标量类型按底层类型处理**（交接 C5 (a)，维护者选推荐）：`type Rank int32` 这类声明在 schema 包里、底层是内建标量的具名类型，CSV 转换、index、客户端导出都按底层类型（C# 生成 `int`，不生成 enum；manifest 字段类型写底层类型）；服务端生成的 Go 写成 `meta0.Rank`（以前生成代码里是没有包名的类型名，无法编译）。别的包里的具名类型与底层不是内建标量的具名类型仍报错，报错说明原因。ref 的类型核对改按“导入路径 + 类型名”比较。
+- **配置表：数字规范写法两端一致**（交接 C5 (b)）：C# 运行部分的 `ConfigJson.Canonical` 改成与 `rules.Canonical` 相同的规则（`1e+21`、`1e-05`、`1.2345675e+06`，超出 double 范围取原文）；修前 57 条样例里 C# 有 24 条与 Go 不同，不只是大小写。两端共用样例表 `framework/configdata/rules/testdata/canonical_numbers.json`。规范字符串不进入任何哈希，`data_version` 不变；导出的 `csharp/ConfigJson.cs` 内容变化，`roost generate --check` 会报过期，重新生成并提交。
+- **配置表：横排表运行时转换报文件行号**（交接 C5 (c)）：生成的 `Convert<Type>CSV` 报错的 `row=` 是文件里的行号（注释行计数，跨行的带引号单元格报记录开始的行）。**升级**：重新生成并提交 `configs/generated/gen_table_config.go`。三项先红后绿、变异全红，[证据](docs/maintenance/evidence/c5-config-export-types-20261117/README.md)
 - **WebSocket 接入：七层负载均衡后取真实 IP**（维护者 2026-11-17 选 C3 推荐 A）：`wsconn.Config.TrustedProxies` / `gateway.WebSocketConfig.TrustedProxies`，生成工程的键 `player_access.tcp.websocket.trusted_proxies`、`player_access.gate.websocket.trusted_proxies`（逗号分隔的 CIDR 或单个地址）。不写时行为不变（不读请求头，按 TCP 对端计数）。写上负载均衡的地址后，对端在列表里的连接按 `X-Forwarded-For` 从右往左第一个不可信的地址计 `max_connections_per_ip`、交给鉴权器；取不出时退回对端地址并计 `player_tcp_websocket_forwarded_fallback_total{reason=missing|invalid|all_trusted}`。只认 `X-Forwarded-For`。`0.0.0.0/0`、`::/0` 与 IPv4 映射的 IPv6 前缀被拒（运行时 `ValidateTCPConfig`；生成工程的启动前检查、`--check-config`、`roost config check`、doctor `config-check`，生成的 `tcpConfig` / `gateConfig` 多了 `ValidateConfig`）。
   - **行为变化**：配了可信代理且对端可信时 `wsconn.Conn.RemoteAddr()` 返回转发的客户端地址（端口 0），TCP 对端改由 `Conn.PeerAddr()` 给出；按 IP 拒绝的连接写 Debug 日志（`client`、`peer`）。relay 不开放这一项、没有按 IP 的连接限额；PROXY protocol 不做。
   - **升级**：声明了 websocket 的已生成工程要 `roost project sync` 重新生成 `server_gen.go` 才读得到这个键。

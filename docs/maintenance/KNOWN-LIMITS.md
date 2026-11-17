@@ -537,10 +537,9 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 `client_export.config` 与 tablegen 的按端分组、`layout=kv`、`index`、`#` 注释行（未发版），方案 [FEATURE-2026-11-17-client-config-export](FEATURE-2026-11-17-client-config-export.md)，说明见 [CODEGEN_REFERENCE §2.2](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)，证据 [tablegen 组](evidence/client-config-export-tablegen-20261117/README.md)、[导出组](evidence/client-config-export-20261117/README.md)。
 
-- **具名类型不支持**：客户端导出只支持内建标量、指向标量的指针、切片与 `map[string]T`。具名类型（如 `type Kind int32`）、结构体、`time.Duration`、`[]byte` 的字段导出时报错，要改成 parser（客户端拿原文字符串）或 `side:"s"`。生成器只看 Go 类型表达式、不知道具名类型的底层类型；`index` 同样只支持内建 string / 整数 / bool 字段，具名类型、浮点、指针、带 parser 的字段上写 index 生成时拒绝。
+- **别的包里的具名类型、底层不是内建标量的具名类型不支持**（2026-11-17 起 schema 包里的具名标量可用，交接 C5）：schema 包里底层是内建标量的具名类型（`type Rank int32`）按底层类型导出与建索引（C# 是底层类型，不生成 enum）；别的包里的（`time.Duration`、`foo.Kind`，生成器只读 schema 包自己的声明）与底层是结构体等的具名类型，导出与 index 报错并说明原因，要改成 parser 或 `side:"s"`。结构体、`[]byte`、键不是 string 的 map 同样不支持。
 - **带 parser 的字段在客户端是 string**（方案第 7 节）：导出的 JSON 与 C# 里是 CSV 原文字符串，由游戏自己解析。
-- **浮点的规范形式 Go 与 C# 不同**：unique / enum 比较浮点值时 C# 用 `"R"` 格式、Go 用 `'g'`，极大 / 极小值的指数写法不同（如 `1E+21` 与 `1e+21`）。只影响浮点列上的 unique / enum 报错文字与极端值的比较。
-- **横排表转换报错的行号是去掉注释后的序号**：横排表（`//roost:table`、横排 `//roost:object`）生成的运行时 `Convert<Type>CSV` 忽略 `#` 行，报错里的 `row=` 是去掉注释行后的记录序号，有注释行时与文件行号不同；生成步骤与 kv 表的转换报文件行号。
+- **C# 的数字规范写法依赖 `double.ToString("R")` 给出最短往返位数**：两端按共用样例表 `framework/configdata/rules/testdata/canonical_numbers.json`（57 条）一致（2026-11-17，交接 C5）；这一点在 .NET Core 3.0 起成立，Unity Mono / IL2CPP 上随“Unity 没有实跑”一起待验。
 - **只给客户端的字段在服务端结构体里是零值**（决定 1）：不另生成一份服务端结构体，服务端代码读这些字段得到零值。
 - **数据版本不做运行时核对**（决定 4）：`manifest.json` 的 `data_version` 与 C# 的 `ConfigTables.DataVersion` 只供查看或上报；登录不核对，SDK 不比较，热更也不提示过期。
 - **同步覆盖手改过的已同步文件**：与协议同步相同，上次同步写过、之后在客户端被手改的文件照样覆盖并提示；拒绝覆盖的只有“不是上次同步写的同名文件”和被手改的服务端导出目录。
