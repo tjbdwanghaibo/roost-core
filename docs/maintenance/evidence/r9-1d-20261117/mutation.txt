@@ -1,0 +1,72 @@
+# 变异：在保留的生成工程（scratchpad/b1117-r9-1d/se1、ac1）里改一处 handler / 监听，跑对应场景看红，恢复看绿（mutate.py：go test -race -count=1 -run <场景> ./game/handler）
+
+## 生存撤离
+[S3-claim-without-wallet] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionChannelCancellationAndAtomicClaim (0.06s)
+    survival_extraction_test.go:459: duplicated payout
+[S3-claim-without-wallet] restored: exit=0 GREEN
+[S4-claim-without-bag] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionChannelCancellationAndAtomicClaim (0.06s)
+    survival_extraction_test.go:492: medkit payout duplicated or missing 95 0
+[S4-claim-without-bag] restored: exit=0 GREEN
+[S5-claim-ignores-claimed] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionChannelCancellationAndAtomicClaim (0.04s)
+    survival_extraction_test.go:459: duplicated payout
+[S5-claim-ignores-claimed] restored: exit=0 GREEN
+[S6-entry-fee-not-charged] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionAdmissionAtomicAndIdempotent (0.03s)
+    survival_extraction_test.go:302: entry duplicated
+[S6-entry-fee-not-charged] restored: exit=0 GREEN
+[S8-first-enter-no-gold] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionAdmissionAtomicAndIdempotent (0.01s)
+    survival_extraction_test.go:277: wallet_short: not enough coins
+    --- FAIL: TestSurvivalExtractionChannelCancellationAndAtomicClaim (0.01s)
+    survival_extraction_test.go:411: wallet_short: not enough coins
+[S8-first-enter-no-gold] restored: exit=0 GREEN
+[S1-replay-skips-connection] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionReconnectPrivateInventoryAndDeadline (0.05s)
+    survival_extraction_test.go:526: old connection used the new epoch <nil>
+[S1-replay-skips-connection] restored: exit=0 GREEN
+[S2-enter-without-room-fence] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionAdmissionAtomicAndIdempotent (0.04s)
+    survival_extraction_test.go:284: stale connection paid the entry <nil>
+[S2-enter-without-room-fence] restored: exit=0 GREEN
+[S7-roster-admits-anyone] mutated: exit=1 RED
+    --- FAIL: TestSurvivalExtractionReconnectPrivateInventoryAndDeadline (0.03s)
+    survival_extraction_test.go:533: outsider joined the roster room room_full: room is full
+[S7-roster-admits-anyone] restored: exit=0 GREEN
+
+## 自走棋
+[C1-replay-skips-connection] mutated: exit=1 RED
+    --- FAIL: TestAutoChessReconnectFencesAndPrivateView (0.03s)
+    auto_chess_test.go:322: old connection used the new epoch <nil>
+[C1-replay-skips-connection] restored: exit=0 GREEN
+[C2-claim-without-wallet] mutated: exit=1 RED
+    --- FAIL: TestAutoChessTerminalRanksAndConcurrentRewards (0.23s)
+    auto_chess_test.go:443: rank or duplicated reward 0 0
+    --- FAIL: TestAutoChessRobotBusiness (0.12s)
+    robot_network_test.go:116: rank reward duplicated or missing
+[C2-claim-without-wallet] restored: exit=0 GREEN
+[C3-claim-ignores-claimed] mutated: exit=1 RED
+    --- FAIL: TestAutoChessTerminalRanksAndConcurrentRewards (0.12s)
+    auto_chess_test.go:443: rank or duplicated reward 0 320
+[C3-claim-ignores-claimed] restored: exit=0 GREEN
+[C4-roster-admits-anyone] mutated: exit=1 RED
+    --- FAIL: TestAutoChessReconnectFencesAndPrivateView (0.04s)
+    auto_chess_test.go:329: outsider joined the roster room room_full: room is full
+[C4-roster-admits-anyone] restored: exit=0 GREEN
+[C5-member-ignores-generation] mutated: exit=1 RED
+    --- FAIL: TestAutoChessReconnectFencesAndPrivateView (0.02s)
+    auto_chess_test.go:316: accepted invalid command
+    --- FAIL: TestAutoChessRobotBusiness (0.02s)
+    robot_network_test.go:86: robot: {Scheduled:1 DroppedCapacity:0 DroppedSchedule:0 LaunchFailed:0 PeakOnline:1 Started:1 Online:0 Success:0 Failure:1 Canceled:0}
+[C5-member-ignores-generation] restored: exit=0 GREEN
+[C6-offline-seat-may-command] mutated: exit=0 GREEN(unexpected)
+[C6-offline-seat-may-command] restored: exit=0 GREEN
+[C7-online-fence-removed-both] mutated:
+    --- FAIL: TestAutoChessDeadlineRejectsLateInputAndDisconnectCannotStall (0.04s)
+        auto_chess_test.go:284: accepted invalid command
+    FAIL
+    FAIL	example.com/auto-chess-practice/game/handler	0.646s
+    FAIL
+[C7-online-fence-removed-both] restored: ok  	example.com/auto-chess-practice/game/handler	3.231s

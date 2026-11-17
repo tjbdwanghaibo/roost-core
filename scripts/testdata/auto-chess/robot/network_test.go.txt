@@ -1,6 +1,7 @@
 package handler
 
 import (
+	sender "GENRE_MODULE/game/handler/syncsender"
 	robotdomain "GENRE_MODULE/game/modules/autochess"
 	"GENRE_MODULE/game/modules/robotaccess"
 	bots "GENRE_MODULE/loadtest"
@@ -59,24 +60,43 @@ func TestAutoChessRobotBusiness(t *testing.T) {
 			t.Fatalf("robot: %+v", s)
 		}
 	}
-	command := f.command(t, 0, "buy", 0, 0)
-	first := pb.PlayRequest{RoomID: f.match.ID(), Seq: uint64(command.Seq), Epoch: uint64(command.Epoch), Round: int32(command.Round), Kind: string(command.Kind), A: int32(command.A), B: int32(command.B)}
+	// 每条新的 TCP 连接先接管席位：带这个席位当前的代际发 reconnect（room 的 RoomReconnect，CAS 分配 EpochSeed+1），
+	// 之后的命令带新代际。旧代际的命令（包括原样重放）被 room 的代际围栏拒绝。
+	takeover := func() (pb.PlayRequest, uint64) {
+		t.Helper()
+		v := robotRead(t, f.engine, f.match, func() [2]uint64 {
+			seat, _ := f.match.Dao().GetSeats(f.ids[0])
+			return [2]uint64{seat.GetEpoch(), f.match.Dao().GetEpochSeed()}
+		})
+		return pb.PlayRequest{Kind: "reconnect", RoomID: f.match.ID(), Epoch: v[0]}, v[1] + 1
+	}
+	// 席位 0 的第一条命令：序号与回合取自已提交的状态（视图要当前连接，Robot 接管之后夹具的连接已经旧了）。
+	s := robotDecode(t, f.engine, f.match, f.match.Dao().GetChessState, robotdomain.Decode)
+	take, epoch := takeover()
+	first := pb.PlayRequest{RoomID: f.match.ID(), Seq: uint64(len(s.Seats[0].Receipts) + 1), Epoch: epoch, Round: int32(s.Round), Kind: "buy"}
+	again := pb.PlayRequest{Kind: "reconnect", RoomID: f.match.ID(), Epoch: epoch}
 	second := first
 	second.Seq++
+	second.Epoch = epoch + 1
 	second.Kind = "sell"
 	second.A = 3
 	invalid := second
 	invalid.Seq++
 	invalid.Kind = "not-a-command"
-	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
-	state := robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode)
+	run("owner", []bots.Step{{Request: take}, {Request: first}, {Request: first}, {Request: again, Reconnect: true}, {Request: first, WantCode: 1}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
+	state := robotDecode(t, f.engine, f.match, f.match.Dao().GetChessState, robotdomain.Decode)
 	if len(state.Seats[0].Receipts) != 2 || state.Seats[0].Units[3].Copies != 0 || state.Seats[0].Shop[0] != 0 {
 		t.Fatalf("wrong committed business state: %+v", state)
 	}
-	before := robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetState() })
-	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
-	if robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetState() }) != before {
+	before := robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetChessState() })
+	run("outsider", []bots.Step{{Request: take, WantCode: 1}, {Request: second, WantCode: 1}})
+	if robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetChessState() }) != before {
 		t.Fatal("unauthorized command changed authoritative state")
+	}
+	// 席位 0 交还夹具的连接（同样是带代际的 RoomReconnect），之后 f.view / f.step 照常用。
+	back, _ := takeover()
+	if _, err := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(context.Background(), f.match.ID(), f.ids[0], back.Epoch, f.conns[0]); err != nil {
+		t.Fatal(err)
 	}
 
 	for range 32 {
@@ -85,14 +105,14 @@ func TestAutoChessRobotBusiness(t *testing.T) {
 		}
 		f.step(t)
 	}
-	terminal := robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode)
+	terminal := robotDecode(t, f.engine, f.match, f.match.Dao().GetChessState, robotdomain.Decode)
 	if terminal.Phase != "done" {
 		t.Fatal("ranked match did not finish")
 	}
 	claim := pb.PlayRequest{Kind: "claim", RoomID: f.match.ID()}
 	for i := range f.ids {
 		run(fmt.Sprintf("seat-%d", i), []bots.Step{{Request: claim}, {Request: claim, Reconnect: true}})
-		if robotRead(t, f.engine, f.players[i], func() int64 { return f.players[i].Dao().GetGold() }) != int64((9-terminal.Seats[i].Rank)*10) {
+		if robotRead(t, f.engine, f.players[i], func() int64 { return f.players[i].Dao().GetWallet().GetCoins() }) != int64((9-terminal.Seats[i].Rank)*10) {
 			t.Fatal("rank reward duplicated or missing")
 		}
 	}

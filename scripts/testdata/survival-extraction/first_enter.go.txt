@@ -1,0 +1,15 @@
+package player
+
+import (
+	"example.com/survival-extraction-practice/game/event"
+	survival "example.com/survival-extraction-practice/game/modules/survival"
+)
+
+// OnEnterFirst 是撤离的新玩家初始金币：在 enter 的首次初始化事务里（与建档标记同一笔、同一把 Player 锁）经 wallet 发。
+// “只发一次”由 enter 的建档标记保证，所以用不留回执的 Add；返回错误时整笔建档回滚，下次进入再做。
+//
+//roost:listen
+func (e *Player) OnEnterFirst(ev event.EnterFirst) error {
+	_, err := e.Wallet().Add(survival.StartGold)
+	return err
+}

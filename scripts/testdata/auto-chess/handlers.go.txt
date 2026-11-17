@@ -2,63 +2,96 @@ package handler
 
 import (
 	db "example.com/auto-chess-practice/db"
+	roomentity "example.com/auto-chess-practice/game/entities/room"
 	chess "example.com/auto-chess-practice/game/modules/autochess"
-	matchentity "example.com/auto-chess-practice/game/entities/chess_match"
+	"example.com/auto-chess-practice/game/view"
+	apperrors "example.com/auto-chess-practice/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"time"
 )
 
+// IChessMatchEntity 是自走棋挂在 room 模块的 Room 实体上的 handler 参数（Q3：ChessMatch 并入 Room，容量 8）：
+// Room() 是 room 模块的席位、代际与连接；RoomDao 末尾的 ChessState / ChessWakeTimer 是自走棋自己的字段；
+// TimerComp() 是 Room 上的实体定时器（roost add timer --entity Room，阶段期限一个类型）。
 type IChessMatchEntity interface {
 	entity.IThreadSafeEntity
-	Dao() *db.ChessMatchDao
-	TimerComp() *matchentity.TimerComponent
+	Dao() *db.RoomDao
+	view.RoomHolder
+	TimerComp() *roomentity.TimerComponent
 }
+
+// IChessPlayerEntity 只用到 wallet（排名奖励）与 enter（建档做过没有）两个模块组件。
 type IChessPlayerEntity interface {
 	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
+	Wallet() view.Wallet
+	Enter() view.Enter
 }
 
-// 创建内存实体不代表已持久化；玩家建档必须经过一次正式事务。
+// 开房与成局名单是同一笔事务：房间一开就带着名单，event.RoomJoining 的监听（game/entities/room/chess.go）
+// 只放名单里的玩家入座。名单、随机种子、配置来自服务端；开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的
+// 分发包装从 fctx 填，调用方不传）。相同 Room 不允许改名单或重新掷种子；已有人入座的普通房不能改造成对局房。
 //
 //roost:nest rollback=undo durability=strict
-func handlerChessPlayerInit(p IChessPlayerEntity) error { p.Dao().SetInitialized(true); return nil }
-
-// 成局名单、随机种子、配置来自服务端；开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的分发包装从 fctx 填，
-// 调用方不传）。相同 Match ID 不允许改名单或重新掷种子。
-//
-//roost:nest rollback=undo durability=strict
-func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules, seed string, nowUnixMilli int64) (chess.View, error) {
-	if m.Dao().GetState() != "" {
-		s, e := chess.Decode(m.Dao().GetState())
+func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules, seed string, nowUnixMilli int64) error {
+	if raw := m.Dao().GetChessState(); raw != "" {
+		s, e := chess.Decode(raw)
 		if e != nil {
-			return chess.View{}, e
+			return e
 		}
 		for i, id := range ids {
 			if s.Seats[i].PlayerID != id {
-				return chess.View{}, chess.ErrRule
+				return chess.ErrRule
 			}
 		}
-		return s.View(ids[0])
+		return nil
+	}
+	if m.Dao().SeatsLen() != 0 {
+		return chess.ErrRule
+	}
+	if e := m.Room().Open(chess.Seats); e != nil {
+		return e
 	}
 	s, e := chess.New(ids, r, seed, nowUnixMilli)
 	if e != nil {
-		return chess.View{}, e
+		return e
 	}
-	if e = saveChess(m, s); e != nil {
-		return chess.View{}, e
+	return saveChess(m, s)
+}
+
+// chessMember 是自走棋命令的身份围栏，全部交给 room：新命令经 room 的 Authorize（代际、连接、在线一并核对）。
+// 已有回执的重放与查回执（replay=true）不要求在线——重启后全员断线时，原连接、原代际的重试仍得原回执——所以只核对
+// Member 的代际与席位认下的那条连接（connection 由接入层从服务端 Session 取，room.ConnectionKey）。旧代际、旧连接、
+// 新命令时断线一律 room_stale_epoch；断线接管就是 room 的 RoomReconnect（带上次代际 CAS 拿新代际）。
+func chessMember(m IChessMatchEntity, playerID int64, epoch uint64, connection string, replay bool) error {
+	if !replay {
+		_, e := m.Room().Authorize(playerID, epoch, connection)
+		return e
 	}
-	return s.View(ids[0])
+	seat, e := m.Room().Member(playerID, epoch)
+	if e != nil {
+		return e
+	}
+	if seat.GetConnection() != connection {
+		return apperrors.ErrRoomStaleEpoch
+	}
+	return nil
 }
 
 // 命令按本条消息冻结的业务时间判期限（nowUnixMilli 同上，客户端不能用自报时间绕过截止）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerChessCommand(m IChessMatchEntity, playerID int64, c chess.Command, nowUnixMilli int64) (chess.Receipt, error) {
-	s, e := chess.Decode(m.Dao().GetState())
+func handlerChessCommand(m IChessMatchEntity, playerID int64, connection string, c chess.Command, nowUnixMilli int64) (chess.Receipt, error) {
+	s, e := chess.Decode(m.Dao().GetChessState())
 	if e != nil {
 		return chess.Receipt{}, e
 	}
-	r, changed, e := s.Apply(playerID, c, nowUnixMilli)
+	// Seq 落在本席已有回执之内就是重放（内容是否一致由 Apply 核对），其余是新命令。
+	i := s.Index(playerID)
+	replay := i >= 0 && c.Seq > 0 && c.Seq <= uint64(len(s.Seats[i].Receipts))
+	if e := chessMember(m, playerID, c.Epoch, connection, replay); e != nil {
+		return chess.Receipt{}, e
+	}
+	r, changed, e := s.Apply(playerID, c, m.Room().Connected(playerID), nowUnixMilli)
 	if e != nil {
 		return r, e
 	}
@@ -68,80 +101,77 @@ func handlerChessCommand(m IChessMatchEntity, playerID int64, c chess.Command, n
 	return r, e
 }
 
+// 成员用自己当前的连接读视图（room 的 View 做成员与连接检查）；Self.Epoch 是 room 席位的当前代际，
+// 各席位的 Connected 是 room 的在线状态。
+//
 //roost:nest rollback=undo durability=strict
-func handlerChessView(m IChessMatchEntity, playerID int64) (chess.View, error) {
-	s, e := chess.Decode(m.Dao().GetState())
+func handlerChessView(m IChessMatchEntity, playerID int64, connection string) (chess.View, error) {
+	snapshot, e := m.Room().View(playerID, connection)
 	if e != nil {
 		return chess.View{}, e
 	}
-	return s.View(playerID)
-}
-
-//roost:nest rollback=undo durability=strict
-func handlerChessConnect(m IChessMatchEntity, playerID int64, ticket uint64, connected bool) error {
-	s, e := chess.Decode(m.Dao().GetState())
+	s, e := chess.Decode(m.Dao().GetChessState())
 	if e != nil {
-		return e
+		return chess.View{}, e
 	}
-	if e = s.Connect(playerID, ticket, connected); e != nil {
-		return e
-	}
-	m.Dao().SetState(s.Encode())
-	return nil
+	return s.View(playerID, snapshot.Epoch, m.Room().Connected)
 }
 
-// 当前鉴权连接可查旧 Epoch 回执，但不能把旧命令换成新 Seq 重做。
+// 当前代际、当前连接可以查旧代际的回执，但不能把旧命令换成新 Seq 重做。
 //
 //roost:nest rollback=undo durability=strict
-func handlerChessReceipt(m IChessMatchEntity, playerID int64, epoch, seq uint64) (chess.Receipt, error) {
-	s, e := chess.Decode(m.Dao().GetState())
+func handlerChessReceipt(m IChessMatchEntity, playerID int64, connection string, epoch, seq uint64) (chess.Receipt, error) {
+	if e := chessMember(m, playerID, epoch, connection, true); e != nil {
+		return chess.Receipt{}, e
+	}
+	s, e := chess.Decode(m.Dao().GetChessState())
 	if e != nil {
 		return chess.Receipt{}, e
 	}
 	i := s.Index(playerID)
-	if i < 0 || s.Seats[i].Epoch != epoch || seq == 0 || seq > uint64(len(s.Seats[i].Receipts)) {
+	if i < 0 || seq == 0 || seq > uint64(len(s.Seats[i].Receipts)) {
 		return chess.Receipt{}, chess.ErrRule
 	}
 	return s.Seats[i].Receipts[seq-1], nil
 }
 
 // Player 静态归属；本地同 database 示例用 MultiSync。跨 sid 应另接 Remote/Saga，不伪装成本地事务。
-// Match 的 Claimed 与 Player 金币在同一个 strict 事务内；奖励仅由服务端终态排名推导。
+// “领过没有”是长期事实，记在 Room 的 Claimed；金币经 wallet 的 Add（不留回执：只发一次由 Claimed 保证，
+// wallet README 的写法），两者在同一个 strict 事务内。奖励仅由服务端终态排名推导；建档看 enter 的 Built。
 //
 //roost:nest rollback=undo durability=strict
 func handlerChessClaim(p IChessPlayerEntity, m IChessMatchEntity) (int64, error) {
-	s, e := chess.Decode(m.Dao().GetState())
+	s, e := chess.Decode(m.Dao().GetChessState())
 	if e != nil {
 		return 0, e
 	}
 	i := s.Index(p.ID())
-	if i < 0 || s.Phase != "done" || !p.Dao().GetInitialized() {
+	if i < 0 || s.Phase != "done" || !p.Enter().Built() {
 		return 0, chess.ErrRule
 	}
 	reward := int64((chess.Seats + 1 - s.Seats[i].Rank) * 10)
 	if s.Seats[i].Claimed {
 		return reward, nil
 	}
-	if p.Dao().GetGold() > 1000000-reward {
-		return 0, chess.ErrRule
+	if _, e = p.Wallet().Add(reward); e != nil {
+		return 0, e
 	}
-	p.Dao().SetGold(p.Dao().GetGold() + reward)
 	s.Seats[i].Claimed = true
-	m.Dao().SetState(s.Encode())
+	m.Dao().SetChessState(s.Encode())
 	return reward, nil
 }
 func saveChess(m IChessMatchEntity, s chess.State) error {
-	if id := m.Dao().GetWakeTimer(); id != 0 {
+	if id := m.Dao().GetChessWakeTimer(); id != 0 {
 		m.TimerComp().RemoveTimer(id)
 	}
-	m.Dao().SetWakeTimer(0)
-	m.Dao().SetState(s.Encode())
+	m.Dao().SetChessWakeTimer(0)
+	m.Dao().SetChessState(s.Encode())
 	if s.Deadline > 0 {
-		id := m.TimerComp().NewTimerAt(time.UnixMilli(s.Deadline), matchentity.TimerPhase, s.Deadline, 0, nil)
+		id := m.TimerComp().NewTimerAt(time.UnixMilli(s.Deadline), roomentity.TimerChessPhase, s.Deadline, 0, nil)
 		if id == 0 {
 			return chess.ErrRule
 		}
-		m.Dao().SetWakeTimer(id)
+		m.Dao().SetChessWakeTimer(id)
 	}
 	return nil
 }

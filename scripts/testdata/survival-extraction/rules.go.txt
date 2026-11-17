@@ -18,16 +18,24 @@ const Seats = 4
 const LedgerLimit = 128
 const MaxTime int64 = 4000000000000
 
+// MedkitItem 是撤离带出的药剂进 bag 时的道具号：bag 模块自带道具表（configs/table/item.csv）的 1001 药水。
+// 道具号发布后不要挪用（玩家背包里记的是道具号）；换表时一起改这里。
+const MedkitItem int64 = 1001
+
+// StartGold 是新玩家建档时经 wallet 发的初始金币（enter 的首次初始化事务里，game/entities/player/survival.go）。
+const StartGold int64 = 100
+
 type Rules struct {
 	Version                                              string
 	RaidMillis, HazardMillis, CraftMillis, ExtractMillis int64
 	HP, Capacity, EntryCost                              int
 	Nodes                                                [3]int
-	Prices                                               [4]int
+	// Prices 是三种材料（木材、矿石、食物）兑金币的单价；药剂不兑金币，按件进 bag（MedkitItem）。
+	Prices [3]int
 }
 
 func DemoRules() Rules {
-	return Rules{"survival-v1", 120000, 5000, 3000, 2000, 6, 6, 5, [3]int{6, 6, 6}, [4]int{1, 3, 1, 5}}
+	return Rules{"survival-v1", 120000, 5000, 3000, 2000, 6, 6, 5, [3]int{6, 6, 6}, [3]int{1, 3, 1}}
 }
 func (r Rules) Validate() error {
 	if r.Version == "" || len(r.Version) > 64 || r.RaidMillis < 10000 || r.RaidMillis > 3600000 || r.HazardMillis < 1000 || r.HazardMillis > r.RaidMillis || r.CraftMillis < 100 || r.CraftMillis >= r.RaidMillis || r.ExtractMillis < 100 || r.ExtractMillis >= r.RaidMillis || r.HP < 1 || r.HP > 100 || r.Capacity < 3 || r.Capacity > 50 || r.EntryCost < 1 || r.EntryCost > 100 {

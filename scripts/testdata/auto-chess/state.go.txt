@@ -19,10 +19,12 @@ type Receipt struct {
 	Gold, Round int
 	Phase       string
 }
+
+// Seat 只记自走棋自己的席位事实（生命、经济、商店、棋子、准备 / 锁店 / 领奖、命令回执）。谁坐在哪、代际与连接、
+// 在不在线归 room 模块（RoomDao.Seats / Online），这里不另存一份：命令的代际与连接由 handler 经 Room().Authorize / Member 核对。
 type Seat struct {
-	PlayerID                          int64
-	Epoch                             uint64
-	Connected, Ready, Locked, Claimed bool
+	PlayerID                int64
+	Ready, Locked, Claimed  bool
 	HP, Gold, Level, XP, Rank         int
 	Shop                              [3]int
 	Units                             [9]Unit
@@ -68,18 +70,19 @@ type SeatView struct {
 	Units           [9]Unit
 }
 
-func (s State) View(id int64) (View, error) {
+// View 的 epoch 是请求者在 room 席位上的当前代际，connected 报告某名成员在 room 里在不在线（Room().Connected）。
+func (s State) View(id int64, epoch uint64, connected func(int64) bool) (View, error) {
 	i := s.Index(id)
 	if i < 0 {
 		return View{}, ErrRule
 	}
 	v := View{Phase: s.Phase, Round: s.Round, Deadline: s.Deadline, ConfigHash: s.Rules.Hash()}
 	for j, p := range s.Seats {
-		v.Players[j] = PublicSeat{PlayerID: p.PlayerID, HP: p.HP, Rank: p.Rank, Ready: p.Ready, Connected: p.Connected}
+		v.Players[j] = PublicSeat{PlayerID: p.PlayerID, HP: p.HP, Rank: p.Rank, Ready: p.Ready, Connected: connected(p.PlayerID)}
 		copy(v.Players[j].Board[:], p.Units[:3])
 	}
 	p := s.Seats[i]
-	v.Self = SeatView{p.Epoch, uint64(len(p.Receipts) + 1), p.Gold, p.Level, p.XP, p.Locked, p.Claimed, p.Shop, p.Units}
+	v.Self = SeatView{epoch, uint64(len(p.Receipts) + 1), p.Gold, p.Level, p.XP, p.Locked, p.Claimed, p.Shop, p.Units}
 	return v, nil
 }
 func (s State) Index(id int64) int {
@@ -107,7 +110,7 @@ func New(ids [Seats]int64, r Rules, seed string, now int64) (State, error) {
 				return State{}, ErrRule
 			}
 		}
-		s.Seats[i] = Seat{PlayerID: id, Epoch: 1, Connected: true, HP: 6, Gold: 10, Level: 1}
+		s.Seats[i] = Seat{PlayerID: id, HP: 6, Gold: 10, Level: 1}
 		s.refresh(i)
 	}
 	return s, s.Validate()
@@ -133,7 +136,7 @@ func (s State) Validate() error {
 	total := s.Pool
 	ranks := map[int]bool{}
 	for i, p := range s.Seats {
-		if p.PlayerID <= 0 || s.Index(p.PlayerID) != i || p.Epoch == 0 || p.HP < 0 || p.HP > 6 || p.Gold < 0 || p.Gold > 1000 || p.Level < 1 || p.Level > 3 || p.XP < 0 || p.XP > 3 || p.Rank < 0 || p.Rank > Seats || len(p.Receipts) > LedgerLimit {
+		if p.PlayerID <= 0 || s.Index(p.PlayerID) != i || p.HP < 0 || p.HP > 6 || p.Gold < 0 || p.Gold > 1000 || p.Level < 1 || p.Level > 3 || p.XP < 0 || p.XP > 3 || p.Rank < 0 || p.Rank > Seats || len(p.Receipts) > LedgerLimit {
 			return ErrRule
 		}
 		if p.Rank > 0 {
@@ -172,8 +175,9 @@ func (s State) Validate() error {
 				total[k-1]++
 			}
 		}
+		// 代际由 room 分配、只增不减：同一席位的回执按代际不降（重连之后的命令不会带回更旧的代际）。
 		for j, r := range p.Receipts {
-			if r.Command.Seq != uint64(j+1) || r.Command.Epoch == 0 || r.Command.Epoch > p.Epoch || r.Round < 1 || r.Round > s.Round {
+			if r.Command.Seq != uint64(j+1) || r.Command.Epoch == 0 || (j > 0 && r.Command.Epoch < p.Receipts[j-1].Command.Epoch) || r.Round < 1 || r.Round > s.Round {
 				return ErrRule
 			}
 		}

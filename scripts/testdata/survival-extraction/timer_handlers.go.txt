@@ -1,4 +1,4 @@
-package survival_raid
+package room
 
 import (
 	survival "example.com/survival-extraction-practice/game/modules/survival"
@@ -6,15 +6,18 @@ import (
 	"time"
 )
 
-const TimerPhase int32 = 1
+// TimerSurvivalPhase 是撤离探险的期限（制作完成 / 撤离完成 / 环境伤害 / 探险结束中最早的一个）在 Room 实体定时器上的
+// 类型号。类型号随节点存进 RoomDao，发布后不要改号；同一个 Room 以后再装带定时器的模块（例如 turn 的 TurnDeadline），
+// 安装器会避开这里已用的号另分一个（turn README：已有定时器时复用这个组件）。
+const TimerSurvivalPhase int32 = 1
 
 func (c *TimerComponent) registerTimerHandlers(h *entitytimer.Handlers) {
-	h.Register(TimerPhase, func(f entitytimer.Fire) time.Duration {
+	h.Register(TimerSurvivalPhase, func(f entitytimer.Fire) time.Duration {
 		d := c.owner.Dao()
-		if d.GetWakeTimer() != f.ID {
+		if d.GetSurvivalWakeTimer() != f.ID {
 			return 0
 		}
-		s, e := survival.Decode(d.GetState())
+		s, e := survival.Decode(d.GetSurvivalState())
 		if e != nil {
 			panic(e)
 		}
@@ -24,14 +27,14 @@ func (c *TimerComponent) registerTimerHandlers(h *entitytimer.Handlers) {
 		if e = s.Advance(f.Now.UnixMilli()); e != nil {
 			panic(e)
 		}
-		d.SetState(s.Encode())
-		d.SetWakeTimer(0)
+		d.SetSurvivalState(s.Encode())
+		d.SetSurvivalWakeTimer(0)
 		if s.Deadline > 0 {
-			id := c.NewTimerAt(time.UnixMilli(s.Deadline), TimerPhase, s.Deadline, 0, nil)
+			id := c.NewTimerAt(time.UnixMilli(s.Deadline), TimerSurvivalPhase, s.Deadline, 0, nil)
 			if id == 0 {
 				panic(survival.ErrRule)
 			}
-			d.SetWakeTimer(id)
+			d.SetSurvivalWakeTimer(id)
 		}
 		return 0
 	})

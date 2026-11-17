@@ -1,0 +1,40 @@
+# skill reference room-coop-pve.md §3.2 / §3.3 命令块（接 SKILL.md §3.2 前置，自定 module example.com/acme/myraid、example.com/acme/mychess），2026-11-17
+--- PASS: TestSurvivalExtractionDeathRefundsUnfinishedCraftAndConservesItems (0.00s)
+--- PASS: TestSurvivalExtractionOfflineDamageIsBoundedAndRaidEndFixed (0.00s)
+--- PASS: TestSurvivalExtractionStrictDecodeLedgerAndMissingAdmission (0.00s)
+--- PASS: TestSurvivalExtractionConfigurationSnapshotPreservesPricesAndDuration (0.00s)
+ok  	example.com/acme/myraid/game/modules/survival	1.449s
+--- PASS: TestSurvivalExtractionRobotBusiness (0.04s)
+--- PASS: TestSurvivalExtractionAdmissionAtomicAndIdempotent (0.02s)
+--- PASS: TestSurvivalExtractionSharedNodeCompetitionAndRetry (0.04s)
+--- PASS: TestSurvivalExtractionCraftCapacityCancellationAndHealing (0.04s)
+--- PASS: TestSurvivalExtractionDeathDropsAndConcurrentLoot (0.04s)
+--- PASS: TestSurvivalExtractionChannelCancellationAndAtomicClaim (0.05s)
+--- PASS: TestSurvivalExtractionReconnectPrivateInventoryAndDeadline (0.03s)
+--- PASS: TestSurvivalExtractionExpiryCannotReopenOrReenter (0.02s)
+--- PASS: TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer (0.02s)
+ok  	example.com/acme/myraid/game/handler	2.033s
+module verify: bag 20/20 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0
+se exit 0
+--- PASS: TestAutoChessMergeSellAndPoolConservation (0.00s)
+--- PASS: TestAutoChessCombatReplayOddByeAndElimination (0.00s)
+--- PASS: TestAutoChessStrictDecodeAndBoundedRecovery (0.01s)
+--- PASS: TestAutoChessCatalogReloadDoesNotRepriceFrozenMatch (0.00s)
+ok  	example.com/acme/mychess/game/modules/autochess	1.467s
+--- PASS: TestAutoChessSharedPoolConcurrentPurchaseAndRetry (0.07s)
+--- PASS: TestAutoChessReadyRaceFreezesOneBattle (0.06s)
+--- PASS: TestAutoChessDeadlineRejectsLateInputAndDisconnectCannotStall (0.03s)
+--- PASS: TestAutoChessReconnectFencesAndPrivateView (0.02s)
+--- PASS: TestAutoChessFormationLevelShopLockAndConfigFrozen (0.04s)
+--- PASS: TestAutoChessUndoRestoresPoolRandomReceiptAndTimer (0.02s)
+--- PASS: TestAutoChessTerminalRanksAndConcurrentRewards (0.11s)
+--- PASS: TestAutoChessLedgerFullKeepsOriginalReceipt (0.70s)
+--- PASS: TestAutoChessRobotBusiness (0.11s)
+ok  	example.com/acme/mychess/game/handler	2.709s
+module verify: enter 29/29 skipped=0
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0
+ac exit 0

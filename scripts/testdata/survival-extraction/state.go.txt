@@ -30,10 +30,12 @@ type Receipt struct {
 	Status    string
 	At        int64
 }
+
+// Seat 只记撤离自己的席位事实（入场、位置 / 生命 / 背包、读条、领奖、命令回执）。谁坐在哪、代际与连接、在不在线
+// 归 room 模块（RoomDao.Seats / Online），这里不另存一份：命令的代际与连接由 handler 经 Room().Authorize / Member 核对。
 type Seat struct {
 	PlayerID                     int64
-	Epoch                        uint64
-	Connected, Joined, Claimed   bool
+	Joined, Claimed              bool
 	Status                       string
 	Pos, HP                      int
 	Inventory, Extracted         Inventory
@@ -83,17 +85,19 @@ func (s State) Index(id int64) int {
 	}
 	return -1
 }
-func (s State) View(id int64) (View, error) {
+
+// View 的 epoch 是请求者在 room 席位上的当前代际，connected 报告某名成员在 room 里在不在线（Room().Connected）。
+func (s State) View(id int64, epoch uint64, connected func(int64) bool) (View, error) {
 	i := s.Index(id)
 	if i < 0 {
 		return View{}, ErrRule
 	}
 	v := View{Phase: s.Phase, ConfigHash: s.Rules.Hash(), LastAt: s.LastAt, EndAt: s.EndAt, Deadline: s.Deadline, Nodes: s.Nodes, Drops: s.Drops}
 	for j, p := range s.Seats {
-		v.Players[j] = PublicSeat{p.PlayerID, p.Status, p.Pos, p.HP, p.Connected}
+		v.Players[j] = PublicSeat{p.PlayerID, p.Status, p.Pos, p.HP, connected(p.PlayerID)}
 	}
 	p := s.Seats[i]
-	v.Self = SeatView{p.Epoch, uint64(len(p.Receipts) + 1), p.Inventory, p.Extracted, p.CraftAt, p.ExtractAt, p.Claimed}
+	v.Self = SeatView{epoch, uint64(len(p.Receipts) + 1), p.Inventory, p.Extracted, p.CraftAt, p.ExtractAt, p.Claimed}
 	return v, nil
 }
 func New(ids [Seats]int64, r Rules, now int64) (State, error) {
@@ -110,7 +114,7 @@ func New(ids [Seats]int64, r Rules, now int64) (State, error) {
 				return State{}, ErrRule
 			}
 		}
-		s.Seats[i] = Seat{PlayerID: id, Epoch: 1, Connected: true, Status: "pending"}
+		s.Seats[i] = Seat{PlayerID: id, Status: "pending"}
 	}
 	s.schedule()
 	return s, s.Validate()
@@ -172,7 +176,7 @@ func (s State) Validate() error {
 		}
 	}
 	for i, p := range s.Seats {
-		if p.PlayerID <= 0 || s.Index(p.PlayerID) != i || p.Epoch == 0 || p.Pos < 0 || p.Pos > 3 || p.HP < 0 || p.HP > s.Rules.HP || !p.Inventory.Valid() || !p.Extracted.Valid() || p.Load() > s.Rules.Capacity || p.Extracted.Count() > s.Rules.Capacity || len(p.Receipts) > LedgerLimit || p.NextMove < 0 || p.NextMove >= MaxTime {
+		if p.PlayerID <= 0 || s.Index(p.PlayerID) != i || p.Pos < 0 || p.Pos > 3 || p.HP < 0 || p.HP > s.Rules.HP || !p.Inventory.Valid() || !p.Extracted.Valid() || p.Load() > s.Rules.Capacity || p.Extracted.Count() > s.Rules.Capacity || len(p.Receipts) > LedgerLimit || p.NextMove < 0 || p.NextMove >= MaxTime {
 			return ErrRule
 		}
 		if p.Joined {
@@ -221,8 +225,9 @@ func (s State) Validate() error {
 		if p.ExtractAt != 0 && (p.Pos != 0 || p.CraftAt != 0) {
 			return ErrRule
 		}
+		// 代际由 room 分配、只增不减：同一席位的回执按代际不降（重连之后的命令不会带回更旧的代际）。
 		for j, r := range p.Receipts {
-			if r.Command.Seq != uint64(j+1) || r.Command.Epoch == 0 || r.Command.Epoch > p.Epoch || r.At <= 0 || r.At > s.LastAt {
+			if r.Command.Seq != uint64(j+1) || r.Command.Epoch == 0 || (j > 0 && r.Command.Epoch < p.Receipts[j-1].Command.Epoch) || r.At <= 0 || r.At > s.LastAt {
 				return ErrRule
 			}
 		}
@@ -250,13 +255,23 @@ func (s State) Validate() error {
 	}
 	return nil
 }
+
+// Reward 是封存清单里材料（木材、矿石、食物）按冻结单价兑的金币，经 wallet 到账；死亡为 0。
 func (s State) Reward(i int) int64 {
 	if s.Seats[i].Status != "extracted" {
 		return 0
 	}
 	n := int64(0)
-	for k, v := range s.Seats[i].Extracted {
-		n += int64(v * s.Rules.Prices[k])
+	for k, price := range s.Rules.Prices {
+		n += int64(s.Seats[i].Extracted[k] * price)
 	}
 	return n
+}
+
+// Medkits 是封存清单里的药剂件数：按件放进玩家的 bag（道具 MedkitItem），不兑金币；死亡为 0。
+func (s State) Medkits(i int) int64 {
+	if s.Seats[i].Status != "extracted" {
+		return 0
+	}
+	return int64(s.Seats[i].Extracted[3])
 }

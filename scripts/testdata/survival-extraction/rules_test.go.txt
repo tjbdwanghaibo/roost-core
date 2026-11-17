@@ -30,7 +30,7 @@ func TestSurvivalExtractionDeathRefundsUnfinishedCraftAndConservesItems(t *testi
 			t.Fatal(e)
 		}
 	}
-	if _, _, e := s.Apply(1, Command{Seq: 1, Epoch: 1, Kind: "craft"}, s.HazardAt-500); e != nil {
+	if _, _, e := s.Apply(1, Command{Seq: 1, Epoch: 1, Kind: "craft"}, true, s.HazardAt-500); e != nil {
 		t.Fatal(e)
 	}
 	if e := s.Advance(s.Deadline); e != nil {
@@ -75,18 +75,18 @@ func TestSurvivalExtractionStrictDecodeLedgerAndMissingAdmission(t *testing.T) {
 	for n := 0; n < LedgerLimit; n++ {
 		s.Seats[0].Receipts = append(s.Seats[0].Receipts, Receipt{Command: Command{Seq: uint64(n + 1), Epoch: 1, Kind: "extract"}, At: s.LastAt})
 	}
-	if _, _, e := s.Apply(1, Command{Seq: 129, Epoch: 1, Kind: "extract"}, s.LastAt); e == nil {
+	if _, _, e := s.Apply(1, Command{Seq: 129, Epoch: 1, Kind: "extract"}, true, s.LastAt); e == nil {
 		t.Fatal("ledger overflow")
 	}
 	r := s.Seats[0].Receipts[0]
-	if got, changed, e := s.Apply(1, r.Command, s.LastAt); e != nil || changed || got != r {
+	if got, changed, e := s.Apply(1, r.Command, true, s.LastAt); e != nil || changed || got != r {
 		t.Fatal("old receipt evicted")
 	}
 	fresh, e := New([Seats]int64{1, 2, 3, 4}, DemoRules(), s.LastAt)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, _, e = fresh.Apply(1, Command{Seq: 1, Epoch: 1, Kind: "extract"}, s.LastAt); e == nil {
+	if _, _, e = fresh.Apply(1, Command{Seq: 1, Epoch: 1, Kind: "extract"}, true, s.LastAt); e == nil {
 		t.Fatal("unpaid entry played")
 	}
 	if e = fresh.Advance(fresh.EndAt); e != nil {

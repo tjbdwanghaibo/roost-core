@@ -1,6 +1,7 @@
 package handler
 
 import (
+	sender "GENRE_MODULE/game/handler/syncsender"
 	"GENRE_MODULE/game/modules/robotaccess"
 	robotdomain "GENRE_MODULE/game/modules/survival"
 	bots "GENRE_MODULE/loadtest"
@@ -53,36 +54,58 @@ func TestSurvivalExtractionRobotBusiness(t *testing.T) {
 			t.Fatalf("robot: %+v", s)
 		}
 	}
-	command := f.command(t, 0, "move", 1, 0)
-	first := pb.PlayRequest{RoomID: f.match.ID(), Seq: uint64(command.Seq), Epoch: uint64(command.Epoch), Kind: string(command.Kind), A: int32(command.A), B: int32(command.B)}
+	// 每条新的 TCP 连接先接管席位：带这个席位当前的代际发 reconnect（room 的 RoomReconnect，CAS 分配 EpochSeed+1），
+	// 之后的命令带新代际。旧代际的命令（包括原样重放）被 room 的代际围栏拒绝。
+	takeover := func() (pb.PlayRequest, uint64) {
+		t.Helper()
+		v := robotRead(t, f.engine, f.match, func() [2]uint64 {
+			seat, _ := f.match.Dao().GetSeats(f.ids[0])
+			return [2]uint64{seat.GetEpoch(), f.match.Dao().GetEpochSeed()}
+		})
+		return pb.PlayRequest{Kind: "reconnect", RoomID: f.match.ID(), Epoch: v[0]}, v[1] + 1
+	}
+	// next 是席位 0 的下一条命令：序号取自已提交的状态（视图要当前连接，Robot 接管之后夹具的连接已经旧了）。
+	next := func(epoch uint64, kind string, a int) pb.PlayRequest {
+		t.Helper()
+		s := robotDecode(t, f.engine, f.match, f.match.Dao().GetSurvivalState, robotdomain.Decode)
+		return pb.PlayRequest{RoomID: f.match.ID(), Seq: uint64(len(s.Seats[0].Receipts) + 1), Epoch: epoch, Kind: kind, A: int32(a)}
+	}
+	take, epoch := takeover()
+	first := next(epoch, "move", 1)
+	again := pb.PlayRequest{Kind: "reconnect", RoomID: f.match.ID(), Epoch: epoch}
 	second := first
 	second.Seq++
+	second.Epoch = epoch + 1
 	second.Kind = "gather"
 	second.A = 0
 	invalid := second
 	invalid.Seq++
 	invalid.Kind = "not-a-command"
-	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
-	state := robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode)
+	run("owner", []bots.Step{{Request: take}, {Request: first}, {Request: first}, {Request: again, Reconnect: true}, {Request: first, WantCode: 1}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
+	state := robotDecode(t, f.engine, f.match, f.match.Dao().GetSurvivalState, robotdomain.Decode)
 	if len(state.Seats[0].Receipts) != 2 || state.Seats[0].Pos != 1 || state.Seats[0].Inventory[0] <= 0 {
 		t.Fatalf("wrong committed business state: %+v", state)
 	}
-	before := robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetState() })
-	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
-	if robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetState() }) != before {
+	before := robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetSurvivalState() })
+	run("outsider", []bots.Step{{Request: take, WantCode: 1}, {Request: second, WantCode: 1}})
+	if robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetSurvivalState() }) != before {
 		t.Fatal("unauthorized command changed authoritative state")
 	}
 
 	f.clock.Add(100)
-	move := first
-	move.Seq = 3
-	move.A = 0
+	take, epoch = takeover()
+	move := next(epoch, "move", 0)
 	extract := move
-	extract.Seq = 4
+	extract.Seq++
 	extract.Kind = "extract"
-	run("owner", []bots.Step{{Request: move}, {Request: extract}})
+	run("owner", []bots.Step{{Request: take}, {Request: move}, {Request: extract}})
+	// 席位 0 交还夹具的连接（同样是带代际的 RoomReconnect），之后 f.view / f.step 照常用。
+	back, _ := takeover()
+	if _, err := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(context.Background(), f.match.ID(), f.ids[0], back.Epoch, f.conns[0]); err != nil {
+		t.Fatal(err)
+	}
 	f.step(t)
-	state = robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode)
+	state = robotDecode(t, f.engine, f.match, f.match.Dao().GetSurvivalState, robotdomain.Decode)
 	if state.Seats[0].Status != "extracted" {
 		t.Fatal("extraction not finished")
 	}
@@ -90,7 +113,7 @@ func TestSurvivalExtractionRobotBusiness(t *testing.T) {
 	claim := pb.PlayRequest{Kind: "claim", RoomID: f.match.ID()}
 	run("owner", []bots.Step{{Request: claim}, {Request: claim, Reconnect: true}})
 	run("outsider", []bots.Step{{Request: claim, WantCode: 1}})
-	if robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetGold() }) != want || !robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode).Seats[0].Claimed {
+	if robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetWallet().GetCoins() }) != want || !robotDecode(t, f.engine, f.match, f.match.Dao().GetSurvivalState, robotdomain.Decode).Seats[0].Claimed {
 		t.Fatal("extraction payout duplicated or missing")
 	}
 

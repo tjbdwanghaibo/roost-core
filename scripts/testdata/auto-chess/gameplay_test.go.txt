@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	chess "example.com/auto-chess-practice/game/modules/autochess"
-	matchentity "example.com/auto-chess-practice/game/entities/chess_match"
+	matchentity "example.com/auto-chess-practice/game/entities/room"
 	playerentity "example.com/auto-chess-practice/game/entities/player"
 	sender "example.com/auto-chess-practice/game/handler/syncsender"
+	chess "example.com/auto-chess-practice/game/modules/autochess"
+	apperrors "example.com/auto-chess-practice/internal/errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -49,11 +50,14 @@ func (chessCommitter) Commit(context.Context, dataengine.CommitRecord) error { r
 
 const chessNow int64 = 1800000000000
 
+// match 是 room 模块的 Room 实体（对局状态是 RoomDao 末尾的 ChessState / ChessWakeTimer）；conns 是每个席位当前
+// 认下的连接标识（生产里来自服务端 Session，room.ConnectionKey），命令、视图与回执都带它。
 type chessFixture struct {
 	engine  *nest.NestMgr
-	match   *matchentity.ChessMatch
+	match   *matchentity.Room
 	players [chess.Seats]*playerentity.Player
 	ids     [chess.Seats]int64
+	conns   [chess.Seats]string
 	clock   atomic.Int64
 	rules   chess.Rules
 }
@@ -80,7 +84,7 @@ func newChessFixture(t *testing.T) *chessFixture {
 	playerentity.RegisterEntity()
 	matchentity.RegisterEntity()
 	RegisterAutoChessNestHandlers()
-	RegisterTickChessMatchTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	f := &chessFixture{rules: loadChessRules(t, chess.DemoRules())}
 	f.clock.Store(chessNow)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
@@ -105,8 +109,14 @@ func newChessFixture(t *testing.T) *chessFixture {
 		f.players[i] = build(int64(1000+i), playerentity.EntityKindPlayer).(*playerentity.Player)
 		f.ids[i] = f.players[i].ID()
 	}
-	f.match = build(2000, matchentity.EntityKindChessMatch).(*matchentity.ChessMatch)
+	f.match = build(2000, matchentity.EntityKindRoom).(*matchentity.Room)
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(chessCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 128}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	// room 模块与 Room 定时器的 handler 归属 game 服务，按引擎实例注册（与进程装配同一入口）。
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomJoinNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterTickRoomTimerGenNestHandlersOn} {
+		if e := register(f.engine); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if e := f.engine.Start(); e != nil {
 		t.Fatal(e)
 	}
@@ -118,11 +128,16 @@ func newChessFixture(t *testing.T) *chessFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, f.rules, fmt.Sprintf("%064x", 17)); e != nil {
+	// 开房 + 名单一笔事务；之后八个席位经 room 的 RoomJoin 入座（名单监听放行），建档走 enter 的 EnterInit。
+	if e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, f.rules, fmt.Sprintf("%064x", 17)); e != nil {
 		t.Fatal(e)
 	}
-	for _, id := range f.ids {
-		if e := sender.NewAutoChessSender(f.engine).Sync_ChessPlayerInit(context.Background(), id); e != nil {
+	for i, id := range f.ids {
+		f.conns[i] = fmt.Sprintf("chess-conn-%d", i)
+		if _, e := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.match.ID(), id, f.conns[i]); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), id); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -130,7 +145,7 @@ func newChessFixture(t *testing.T) *chessFixture {
 }
 func (f *chessFixture) state(t *testing.T) chess.State {
 	t.Helper()
-	s, e := chess.Decode(f.match.Dao().GetState())
+	s, e := chess.Decode(f.match.Dao().GetChessState())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -138,7 +153,7 @@ func (f *chessFixture) state(t *testing.T) chess.State {
 }
 func (f *chessFixture) view(t *testing.T, i int) chess.View {
 	t.Helper()
-	v, e := sender.NewAutoChessSender(f.engine).Sync_ChessView(context.Background(), f.match.ID(), f.ids[i])
+	v, e := sender.NewAutoChessSender(f.engine).Sync_ChessView(context.Background(), f.match.ID(), f.ids[i], f.conns[i])
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -149,7 +164,7 @@ func (f *chessFixture) command(t *testing.T, i int, kind string, a, b int) chess
 	return chess.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: kind, A: a, B: b}
 }
 func (f *chessFixture) send(i int, c chess.Command) (chess.Receipt, error) {
-	return sender.NewAutoChessSender(f.engine).Sync_ChessCommand(context.Background(), f.match.ID(), f.ids[i], c)
+	return sender.NewAutoChessSender(f.engine).Sync_ChessCommand(context.Background(), f.match.ID(), f.ids[i], f.conns[i], c)
 }
 func (f *chessFixture) do(t *testing.T, i int, kind string, a, b int) chess.Receipt {
 	t.Helper()
@@ -161,12 +176,12 @@ func (f *chessFixture) do(t *testing.T, i int, kind string, a, b int) chess.Rece
 }
 func (f *chessFixture) refuse(t *testing.T, i int, c chess.Command) {
 	t.Helper()
-	before := f.match.Dao().GetState()
-	timer := f.match.Dao().GetWakeTimer()
+	before := f.match.Dao().GetChessState()
+	timer := f.match.Dao().GetChessWakeTimer()
 	if _, e := f.send(i, c); e == nil {
 		t.Fatal("accepted invalid command")
 	}
-	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+	if before != f.match.Dao().GetChessState() || timer != f.match.Dao().GetChessWakeTimer() {
 		t.Fatal("rejected command changed state or timer")
 	}
 }
@@ -244,7 +259,7 @@ func TestAutoChessReadyRaceFreezesOneBattle(t *testing.T) {
 	if s.Phase != "battle" || len(s.Fights) != 4 || len(f.match.TimerComp().Timers()) != 1 {
 		t.Fatal("barrier duplicated")
 	}
-	f.refuse(t, 0, chess.Command{Seq: 2, Epoch: 1, Round: 1, Kind: "refresh"})
+	f.refuse(t, 0, chess.Command{Seq: 2, Epoch: f.view(t, 0).Self.Epoch, Round: 1, Kind: "refresh"})
 	f.step(t)
 	s = f.state(t)
 	if s.Round != 2 || s.Phase != "prep" {
@@ -258,9 +273,13 @@ func TestAutoChessReadyRaceFreezesOneBattle(t *testing.T) {
 }
 func TestAutoChessDeadlineRejectsLateInputAndDisconnectCannotStall(t *testing.T) {
 	f := newChessFixture(t)
-	s := sender.NewAutoChessSender(f.engine)
-	if e := s.Sync_ChessConnect(context.Background(), f.match.ID(), f.ids[0], 1, false); e != nil {
-		t.Fatal(e)
+	// 断线是 room 的在线标记（生产里由断线订阅在连接关闭时调 RoomDisconnect）：断线的席位不能下新命令，
+	// 但不能拖住阶段推进。
+	if changed, e := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(context.Background(), f.match.ID(), f.ids[0], f.view(t, 0).Self.Epoch); e != nil || !changed {
+		t.Fatal("disconnect", changed, e)
+	}
+	if f.view(t, 1).Players[0].Connected {
+		t.Fatal("offline seat still shown online")
 	}
 	f.refuse(t, 0, f.command(t, 0, "buy", 0, 0))
 	c := f.command(t, 1, "ready", 0, 0)
@@ -280,19 +299,34 @@ func TestAutoChessReconnectFencesAndPrivateView(t *testing.T) {
 	r := f.do(t, 0, "buy", 0, 0)
 	s := sender.NewAutoChessSender(f.engine)
 	ctx := context.Background()
-	if e := s.Sync_ChessConnect(ctx, f.match.ID(), f.ids[0], 2, true); e != nil {
-		t.Fatal(e)
+	// 断线接管走 room 模块：换连接是带上次代际的 RoomReconnect（CAS 拿新代际），旧代际迟到的断线不影响新连接；
+	// 自走棋命令按 room 的代际与连接围栏拒绝旧身份。
+	oldEpoch, oldConn := f.view(t, 0).Self.Epoch, f.conns[0]
+	snapshot, e := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(ctx, f.match.ID(), f.ids[0], oldEpoch, "chess-conn-0-new")
+	if e != nil || snapshot.Epoch <= oldEpoch {
+		t.Fatal("reconnect", snapshot.Epoch, e)
 	}
-	if e := s.Sync_ChessConnect(ctx, f.match.ID(), f.ids[0], 1, false); e == nil {
-		t.Fatal("old disconnect accepted")
+	f.conns[0] = "chess-conn-0-new"
+	if changed, e := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(ctx, f.match.ID(), f.ids[0], oldEpoch); e != nil || changed {
+		t.Fatal("old disconnect kicked new connection", changed, e)
+	}
+	if !f.view(t, 1).Players[0].Connected {
+		t.Fatal("new connection lost its seat")
 	}
 	f.refuse(t, 0, r.Command)
-	got, e := s.Sync_ChessReceipt(ctx, f.match.ID(), f.ids[0], 2, 1)
+	got, e := s.Sync_ChessReceipt(ctx, f.match.ID(), f.ids[0], f.conns[0], snapshot.Epoch, 1)
 	if e != nil || got != r {
 		t.Fatal("old receipt lost", e)
 	}
-	if _, e = s.Sync_ChessView(ctx, f.match.ID(), 999); e == nil {
+	if _, e := s.Sync_ChessReceipt(ctx, f.match.ID(), f.ids[0], oldConn, snapshot.Epoch, 1); !errors.Is(e, apperrors.ErrRoomStaleEpoch) {
+		t.Fatal("old connection used the new epoch", e)
+	}
+	if _, e = s.Sync_ChessView(ctx, f.match.ID(), 999, "outsider"); e == nil {
 		t.Fatal("outsider viewed")
+	}
+	// 名单之外的人不能经 room 的 RoomJoin 入座：自走棋的 RoomJoining 监听在占座（和满员检查）之前拒绝。
+	if _, e := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(ctx, f.match.ID(), 999, "outsider"); !errors.Is(e, apperrors.ErrRoomNotMember) {
+		t.Fatal("outsider joined the roster room", e)
 	}
 	v := f.view(t, 1)
 	v.Self.Shop[0] = 0
@@ -329,7 +363,7 @@ func TestAutoChessFormationLevelShopLockAndConfigFrozen(t *testing.T) {
 	patched := f.rules
 	patched.Version = "v2"
 	patched.Units[0].Cost = 9
-	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, patched, fmt.Sprintf("%064x", 999)); e != nil {
+	if e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, patched, fmt.Sprintf("%064x", 999)); e != nil {
 		t.Fatal(e)
 	}
 	if f.state(t).Rules != f.rules {
@@ -338,14 +372,14 @@ func TestAutoChessFormationLevelShopLockAndConfigFrozen(t *testing.T) {
 }
 func TestAutoChessUndoRestoresPoolRandomReceiptAndTimer(t *testing.T) {
 	f := newChessFixture(t)
-	before := f.match.Dao().GetState()
-	timer := f.match.Dao().GetWakeTimer()
+	before := f.match.Dao().GetChessState()
+	timer := f.match.Dao().GetChessWakeTimer()
 	c := f.command(t, 0, "refresh", 0, 0)
 	refused := errors.New("injected after mutation")
 	name := nest.NewHandlerName("chess_undo_refresh")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		// 手写的分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
-		_, e := handlerChessCommand(es[0].(IChessMatchEntity), f.ids[0], c, fctx.NowMilli())
+		_, e := handlerChessCommand(es[0].(IChessMatchEntity), f.ids[0], f.conns[0], c, fctx.NowMilli())
 		if e != nil {
 			return nil, e
 		}
@@ -354,7 +388,7 @@ func TestAutoChessUndoRestoresPoolRandomReceiptAndTimer(t *testing.T) {
 	if _, e := f.engine.Request(context.Background(), name, f.match.ID(), nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
-	if f.match.Dao().GetState() != before || f.match.Dao().GetWakeTimer() != timer || len(f.match.TimerComp().Timers()) != 1 {
+	if f.match.Dao().GetChessState() != before || f.match.Dao().GetChessWakeTimer() != timer || len(f.match.TimerComp().Timers()) != 1 {
 		t.Fatal("rollback lost pool, RNG, receipt or timer")
 	}
 	if _, e := f.send(0, c); e != nil {
@@ -374,7 +408,7 @@ func TestAutoChessTerminalRanksAndConcurrentRewards(t *testing.T) {
 		t.Fatal("no bounded terminal")
 	}
 	// 在两个 DAO 都已修改后注入拒绝，不能只撤回 Claimed 或只撤回余额。
-	before := f.match.Dao().GetState()
+	before := f.match.Dao().GetChessState()
 	refused := errors.New("after reward mutation")
 	name := nest.NewHandlerName("chess_undo_reward")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
@@ -387,7 +421,7 @@ func TestAutoChessTerminalRanksAndConcurrentRewards(t *testing.T) {
 	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
-	if f.match.Dao().GetState() != before || f.players[0].Dao().GetGold() != 0 {
+	if f.match.Dao().GetChessState() != before || f.players[0].Dao().GetWallet().GetCoins() != 0 {
 		t.Fatal("reward undo was partial")
 	}
 	var wg sync.WaitGroup
@@ -405,8 +439,8 @@ func TestAutoChessTerminalRanksAndConcurrentRewards(t *testing.T) {
 	}
 	wg.Wait()
 	for i, p := range f.players {
-		if s.Seats[i].Rank != i+1 || p.Dao().GetGold() != int64((8-i)*10) {
-			t.Fatal("rank or duplicated reward", i, p.Dao().GetGold())
+		if s.Seats[i].Rank != i+1 || p.Dao().GetWallet().GetCoins() != int64((8-i)*10) {
+			t.Fatal("rank or duplicated reward", i, p.Dao().GetWallet().GetCoins())
 		}
 	}
 	waitChess(t, func() bool { _, ok := matchentity.TimerDriver.DueOf(f.match); return !ok })

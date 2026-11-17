@@ -1,0 +1,18 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_SURVIVAL_EXTRACTION_REAL=1 bash scripts/test-survival-extraction-generated.sh，2026-11-17，exit 0
+    survival_extraction_recovery_test.go:559: SIGKILL: 24 unprojected strict records; four-player materials, crafting and extraction restored; driver loop delivered one overdue tick after cold load and the next deadline on time; every seat reconnected on the room module's Room with a new generation; third process retried admission, commands (old generations by receipt lookup) and sealed payouts (wallet coins and bag medkits)
+--- PASS: TestSurvivalExtractionRealCrashRecovery (3.23s)
+ok  	example.com/survival-extraction-practice/game/handler	4.854s
+default scenarios passed in the same run: 13
+module verify: bag 20/20 skipped=0
+module verify: enter 29/29 skipped=0
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0
+
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_AUTO_CHESS_REAL=1 bash scripts/test-auto-chess-generated.sh，2026-11-17，exit 0
+    auto_chess_recovery_test.go:500: SIGKILL: 50 unprojected strict records; eight-seat frozen battle restored on the room module's Room (seats kept, online state cleared), driver loop delivered one catch-up stage after cold load and 14 later stages at their deadlines (redelivered 0), third process retried all commands and eight rewards
+--- PASS: TestAutoChessRealCrashRecovery (16.77s)
+ok  	example.com/auto-chess-practice/game/handler	18.406s
+default scenarios passed in the same run: 13
+module verify: enter 29/29 skipped=0
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0

@@ -3,6 +3,7 @@ package robotaccess
 import (
 	domain "GENRE_MODULE/game/modules/autochess"
 	sender "GENRE_MODULE/game/handler/syncsender"
+	roomlogic "GENRE_MODULE/game/modules/room"
 	"GENRE_MODULE/protocol/msgid"
 	"GENRE_MODULE/protocol/pb"
 	"context"
@@ -11,9 +12,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
 
-// Dispatch 只转换协议；玩家身份来自已鉴权会话，规则、时间、资源与权限仍由正式 Nest handler 决定。
+// Dispatch 只转换协议；玩家身份与连接标识来自已鉴权会话（room.ConnectionKey），规则、时间、资源与权限仍由正式
+// Nest handler 决定。Robot 只有 Play 一条消息，所以换连接后的席位接管（Kind "reconnect"）也经它转给 room 的
+// RoomReconnect；真实客户端直接发 room 模块自带的 RoomReconnect 协议。
 func Dispatch(engine *nest.NestMgr) gateway.TCPDispatch {
 	business := sender.NewAutoChessSender(engine)
+	reconnect := sender.NewRoomReconnectSender(engine)
 	return func(ctx context.Context, session gateway.Session, id, seq uint32, kind wire.PayloadKind, data []byte) (any, error) {
 		if id != msgid.MsgPlay || kind != wire.PayloadProtobuf {
 			return nil, gateway.ErrInvalidRequest
@@ -22,11 +26,18 @@ func Dispatch(engine *nest.NestMgr) gateway.TCPDispatch {
 		if err != nil {
 			return nil, err
 		}
-		if request.Kind == "claim" {
-			_, err = business.MultiSync_ChessClaim(ctx, session.Principal().PlayerID, request.RoomID)
-		} else {
-			command := domain.Command{Seq: request.Seq, Epoch: request.Epoch, Round: int(request.Round), Kind: request.Kind, A: int(request.A), B: int(request.B)}
-			_, err = business.Sync_ChessCommand(ctx, request.RoomID, session.Principal().PlayerID, command)
+		player := session.Principal().PlayerID
+		connection, err := roomlogic.ConnectionKey(session)
+		if err == nil {
+			switch request.Kind {
+			case "claim":
+				_, err = business.MultiSync_ChessClaim(ctx, player, request.RoomID)
+			case "reconnect":
+				_, err = reconnect.Sync_RoomReconnect(ctx, request.RoomID, player, request.Epoch, connection)
+			default:
+				command := domain.Command{Seq: request.Seq, Epoch: request.Epoch, Round: int(request.Round), Kind: request.Kind, A: int(request.A), B: int(request.B)}
+				_, err = business.Sync_ChessCommand(ctx, request.RoomID, player, connection, command)
+			}
 		}
 		response := &pb.PlayResponse{Seq: request.Seq}
 		if err != nil {

@@ -40,7 +40,7 @@ func TestAutoChessMergeSellAndPoolConservation(t *testing.T) {
 	if e := s.Validate(); e != nil {
 		t.Fatal(e)
 	}
-	r, _, e := s.Apply(1, Command{Seq: 1, Epoch: 1, Round: 1, Kind: "sell", A: 0}, s.LastAt)
+	r, _, e := s.Apply(1, Command{Seq: 1, Epoch: 1, Round: 1, Kind: "sell", A: 0}, true, s.LastAt)
 	if e != nil || r.Gold != 19 || s.Pool[0] != s.Rules.Units[0].Copies {
 		t.Fatal("sell did not return nine copies", e)
 	}

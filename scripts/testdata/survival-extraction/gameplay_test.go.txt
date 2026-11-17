@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	generated "example.com/survival-extraction-practice/configs/generated"
 	playerentity "example.com/survival-extraction-practice/game/entities/player"
-	matchentity "example.com/survival-extraction-practice/game/entities/survival_raid"
+	matchentity "example.com/survival-extraction-practice/game/entities/room"
 	sender "example.com/survival-extraction-practice/game/handler/syncsender"
 	survival "example.com/survival-extraction-practice/game/modules/survival"
+	apperrors "example.com/survival-extraction-practice/internal/errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -50,13 +53,38 @@ func (survivalCommitter) Commit(context.Context, dataengine.CommitRecord) error 
 
 const survivalNow int64 = 1800000000000
 
+// match 是 room 模块的 Room 实体（撤离状态是 RoomDao 末尾的 SurvivalState / SurvivalWakeTimer）；conns 是每个席位当前
+// 认下的连接标识（生产里来自服务端 Session，room.ConnectionKey），命令、入场、视图与回执都带它。
 type survivalFixture struct {
 	engine  *nest.NestMgr
-	match   *matchentity.SurvivalRaid
+	match   *matchentity.Room
 	players [survival.Seats]*playerentity.Player
 	ids     [survival.Seats]int64
+	conns   [survival.Seats]string
 	clock   atomic.Int64
 	rules   survival.Rules
+}
+
+// survivalUseItems 装载工程自己的配置（configs/data，含 bag 模块自带道具表里的 1001 药水），并发布成进程当前的配置：
+// bag 的 Add 经生成的 generated.ItemByID 读请求钉住的配置快照，没装载过配置的进程里任何道具都不合法。装载会发布
+// 缺省 Store 与新请求钉住的快照两处进程级状态，用例结束时原样换回（写法同 bag 模块场景的 bagTestUseStore）。
+func survivalUseItems(t *testing.T, dir string) {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	registry := configdata.NewRegistry()
+	if e := generated.RegisterGeneratedConfigData(registry); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := configdata.NewStore(registry, dir).Load(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	if _, ok := generated.ItemByID(survival.MedkitItem); !ok {
+		t.Fatal("item table has no medkit row")
+	}
 }
 
 func loadSurvivalRules(t *testing.T, r survival.Rules) survival.Rules {
@@ -81,8 +109,10 @@ func newSurvivalFixture(t *testing.T, enter ...bool) *survivalFixture {
 	playerentity.RegisterEntity()
 	matchentity.RegisterEntity()
 	RegisterSurvivalExtractionNestHandlers()
-	RegisterTickSurvivalRaidTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	f := &survivalFixture{rules: loadSurvivalRules(t, survival.DemoRules())}
+	// 先捕获撤离规则（按值冻结进探险），再发布工程的道具表：夹具里两份配置是两个 Store，后装载的才是进程当前配置。
+	survivalUseItems(t, filepath.Join("..", "..", "configs", "data"))
 	f.clock.Store(survivalNow)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
 	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
@@ -106,8 +136,14 @@ func newSurvivalFixture(t *testing.T, enter ...bool) *survivalFixture {
 		f.players[i] = build(int64(1000+i), playerentity.EntityKindPlayer).(*playerentity.Player)
 		f.ids[i] = f.players[i].ID()
 	}
-	f.match = build(2000, matchentity.EntityKindSurvivalRaid).(*matchentity.SurvivalRaid)
+	f.match = build(2000, matchentity.EntityKindRoom).(*matchentity.Room)
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(survivalCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 128}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	// room 模块与 Room 定时器的 handler 归属 game 服务，按引擎实例注册（与进程装配同一入口）。
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomJoinNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterTickRoomTimerGenNestHandlersOn} {
+		if e := register(f.engine); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if e := f.engine.Start(); e != nil {
 		t.Fatal(e)
 	}
@@ -119,26 +155,42 @@ func newSurvivalFixture(t *testing.T, enter ...bool) *survivalFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalInit(context.Background(), f.match.ID(), f.ids, f.rules); e != nil {
+	// 开房 + 名单一笔事务；之后各席位经 room 的 RoomJoin 入座（名单监听放行），建档走 enter 的 EnterInit（初始 100 金币
+	// 由 EnterFirst 监听经 wallet 发），付费入场是撤离自己的 SurvivalEnter。
+	if e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalInit(context.Background(), f.match.ID(), f.ids, f.rules); e != nil {
 		t.Fatal(e)
 	}
-	for _, id := range f.ids {
-		if e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalPlayerInit(context.Background(), id); e != nil {
+	for i, id := range f.ids {
+		f.conns[i] = fmt.Sprintf("survival-conn-%d", i)
+		if _, e := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.match.ID(), id, f.conns[i]); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), id); e != nil {
 			t.Fatal(e)
 		}
 	}
 	if len(enter) == 0 || enter[0] {
-		for _, id := range f.ids {
-			if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID()); e != nil {
+		for i := range f.ids {
+			if e := f.enter(t, i); e != nil {
 				t.Fatal(e)
 			}
 		}
 	}
 	return f
 }
+
+// enter 是席位 i 用自己当前的代际与连接付费入场。
+func (f *survivalFixture) enter(t *testing.T, i int) error {
+	t.Helper()
+	return sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), f.ids[i], f.match.ID(), f.view(t, i).Self.Epoch, f.conns[i])
+}
+func (f *survivalFixture) coins(i int) int64 { return f.players[i].Dao().GetWallet().GetCoins() }
+func (f *survivalFixture) claim(i int) (int64, error) {
+	return sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalClaim(context.Background(), f.ids[i], f.match.ID())
+}
 func (f *survivalFixture) state(t *testing.T) survival.State {
 	t.Helper()
-	s, e := survival.Decode(f.match.Dao().GetState())
+	s, e := survival.Decode(f.match.Dao().GetSurvivalState())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -146,7 +198,7 @@ func (f *survivalFixture) state(t *testing.T) survival.State {
 }
 func (f *survivalFixture) view(t *testing.T, i int) survival.View {
 	t.Helper()
-	v, e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalView(context.Background(), f.match.ID(), f.ids[i])
+	v, e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalView(context.Background(), f.match.ID(), f.ids[i], f.conns[i])
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -157,7 +209,7 @@ func (f *survivalFixture) command(t *testing.T, i int, kind string, a, b int) su
 	return survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: kind, A: a, B: b}
 }
 func (f *survivalFixture) send(i int, c survival.Command) (survival.Receipt, error) {
-	return sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalCommand(context.Background(), f.match.ID(), f.ids[i], c)
+	return sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalCommand(context.Background(), f.match.ID(), f.ids[i], f.conns[i], c)
 }
 func (f *survivalFixture) do(t *testing.T, i int, kind string, a, b int) survival.Receipt {
 	t.Helper()
@@ -173,12 +225,12 @@ func (f *survivalFixture) do(t *testing.T, i int, kind string, a, b int) surviva
 }
 func (f *survivalFixture) refuse(t *testing.T, i int, c survival.Command) {
 	t.Helper()
-	before := f.match.Dao().GetState()
-	timer := f.match.Dao().GetWakeTimer()
+	before := f.match.Dao().GetSurvivalState()
+	timer := f.match.Dao().GetSurvivalWakeTimer()
 	if _, e := f.send(i, c); e == nil {
 		t.Fatal("accepted invalid command")
 	}
-	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+	if before != f.match.Dao().GetSurvivalState() || timer != f.match.Dao().GetSurvivalWakeTimer() {
 		t.Fatal("rejected command changed state or timer")
 	}
 }
@@ -210,12 +262,13 @@ func (f *survivalFixture) step(t *testing.T) {
 }
 func TestSurvivalExtractionAdmissionAtomicAndIdempotent(t *testing.T) {
 	f := newSurvivalFixture(t, false)
-	before := f.match.Dao().GetState()
+	before := f.match.Dao().GetSurvivalState()
+	epoch := f.view(t, 0).Self.Epoch
 	refused := errors.New("after entry fee")
 	name := nest.NewHandlerName("survival_undo_entry")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
-		if e := handlerSurvivalEnter(es[0].(ISurvivalPlayerEntity), es[1].(ISurvivalRaidEntity), fctx.NowMilli()); e != nil {
+		if e := handlerSurvivalEnter(es[0].(ISurvivalPlayerEntity), es[1].(ISurvivalRaidEntity), epoch, f.conns[0], fctx.NowMilli()); e != nil {
 			return nil, e
 		}
 		return nil, refused
@@ -223,24 +276,29 @@ func TestSurvivalExtractionAdmissionAtomicAndIdempotent(t *testing.T) {
 	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
-	if before != f.match.Dao().GetState() || f.players[0].Dao().GetGold() != 100 {
+	if before != f.match.Dao().GetSurvivalState() || f.coins(0) != 100 {
 		t.Fatal("partial admission rollback")
 	}
+	// 入场带这一席的代际与连接（room 的身份围栏）：旧连接不能替这一席付费入场。
+	if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), f.ids[0], f.match.ID(), epoch, "survival-conn-stale"); !errors.Is(e, apperrors.ErrRoomStaleEpoch) || f.coins(0) != 100 {
+		t.Fatal("stale connection paid the entry", e)
+	}
 	var wg sync.WaitGroup
-	for _, id := range f.ids {
+	for i := range f.ids {
+		epoch := f.view(t, i).Self.Epoch
 		for range 4 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID()); e != nil {
+				if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), f.ids[i], f.match.ID(), epoch, f.conns[i]); e != nil {
 					t.Error(e)
 				}
 			}()
 		}
 	}
 	wg.Wait()
-	for i, p := range f.players {
-		if p.Dao().GetGold() != 95 || !f.state(t).Seats[i].Joined {
+	for i := range f.players {
+		if f.coins(i) != 95 || !f.state(t).Seats[i].Joined {
 			t.Fatal("entry duplicated")
 		}
 	}
@@ -342,7 +400,7 @@ func TestSurvivalExtractionDeathDropsAndConcurrentLoot(t *testing.T) {
 	if n != 1 || f.state(t).Drops[0].Inventory[2] != 0 {
 		t.Fatal("single drop had multiple winners")
 	}
-	if got, e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalClaim(context.Background(), f.ids[0], f.match.ID()); e != nil || got != 0 || f.players[0].Dao().GetGold() != 95 {
+	if got, e := f.claim(0); e != nil || got != 0 || f.coins(0) != 95 || f.players[0].Bag().Count(survival.MedkitItem) != 0 {
 		t.Fatal("dead player exported loot", e)
 	}
 	if e := f.state(t).Validate(); e != nil {
@@ -359,7 +417,7 @@ func TestSurvivalExtractionChannelCancellationAndAtomicClaim(t *testing.T) {
 	f.do(t, 0, "move", 0, 0)
 	start := f.do(t, 0, "extract", 0, 0)
 	f.refuse(t, 0, f.command(t, 0, "craft", 0, 0))
-	if _, e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalClaim(context.Background(), f.ids[0], f.match.ID()); e == nil {
+	if _, e := f.claim(0); e == nil {
 		t.Fatal("channel start paid out")
 	}
 	f.step(t)
@@ -369,7 +427,7 @@ func TestSurvivalExtractionChannelCancellationAndAtomicClaim(t *testing.T) {
 	if _, e := f.send(0, start.Command); e != nil {
 		t.Fatal(e)
 	}
-	before := f.match.Dao().GetState()
+	before := f.match.Dao().GetSurvivalState()
 	refused := errors.New("after extraction payout")
 	name := nest.NewHandlerName("survival_undo_claim")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
@@ -382,7 +440,7 @@ func TestSurvivalExtractionChannelCancellationAndAtomicClaim(t *testing.T) {
 	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
-	if f.match.Dao().GetState() != before || f.players[0].Dao().GetGold() != 95 {
+	if f.match.Dao().GetSurvivalState() != before || f.coins(0) != 95 {
 		t.Fatal("partial payout rollback")
 	}
 	var wg sync.WaitGroup
@@ -390,15 +448,48 @@ func TestSurvivalExtractionChannelCancellationAndAtomicClaim(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalClaim(context.Background(), f.ids[0], f.match.ID())
+			got, e := f.claim(0)
 			if e != nil || got != 3 {
 				t.Error(got, e)
 			}
 		}()
 	}
 	wg.Wait()
-	if f.players[0].Dao().GetGold() != 98 {
+	if f.coins(0) != 98 {
 		t.Fatal("duplicated payout")
+	}
+	// 带出的药剂按件进 bag（道具表 1001 药水），不兑金币：玩家 1 在安全区做好一个药剂再撤离，兑付得 0 金币 + 1 件药水；
+	// 写入后失败时金币、背包与 Claimed 一起回滚，并发重试只入包一次。
+	f.do(t, 1, "craft", 0, 0)
+	for f.state(t).Seats[1].CraftAt != 0 {
+		f.step(t)
+	}
+	f.do(t, 1, "extract", 0, 0)
+	for f.state(t).Seats[1].Status != "extracted" {
+		f.step(t)
+	}
+	if got := f.state(t).Seats[1].Extracted; got != (survival.Inventory{0, 0, 0, 1}) {
+		t.Fatal("medkit manifest", got)
+	}
+	before = f.match.Dao().GetSurvivalState()
+	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[1], f.match.ID()}, nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if f.match.Dao().GetSurvivalState() != before || f.coins(1) != 95 || f.players[1].Bag().Count(survival.MedkitItem) != 0 {
+		t.Fatal("partial medkit payout rollback")
+	}
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got, e := f.claim(1); e != nil || got != 0 {
+				t.Error(got, e)
+			}
+		}()
+	}
+	wg.Wait()
+	if f.coins(1) != 95 || f.players[1].Bag().Count(survival.MedkitItem) != 1 {
+		t.Fatal("medkit payout duplicated or missing", f.coins(1), f.players[1].Bag().Count(survival.MedkitItem))
 	}
 }
 func TestSurvivalExtractionReconnectPrivateInventoryAndDeadline(t *testing.T) {
@@ -406,22 +497,40 @@ func TestSurvivalExtractionReconnectPrivateInventoryAndDeadline(t *testing.T) {
 	r := f.do(t, 0, "craft", 0, 0)
 	api := sender.NewSurvivalExtractionSender(f.engine)
 	ctx := context.Background()
-	if e := api.Sync_SurvivalConnect(ctx, f.match.ID(), f.ids[0], 1, false); e != nil {
-		t.Fatal(e)
+	// 断线与旧连接走 room 模块：断线是 room 的在线标记（生产里由断线订阅在连接关闭时调 RoomDisconnect），
+	// 换连接是带上次代际的 RoomReconnect（CAS 拿新代际）；撤离命令按 room 的代际与连接围栏拒绝旧身份。
+	if changed, e := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(ctx, f.match.ID(), f.ids[0], f.view(t, 0).Self.Epoch); e != nil || !changed {
+		t.Fatal("disconnect", changed, e)
+	}
+	if f.view(t, 1).Players[0].Connected {
+		t.Fatal("offline seat still shown online")
 	}
 	f.refuse(t, 0, f.command(t, 0, "move", 1, 0))
-	if e := api.Sync_SurvivalConnect(ctx, f.match.ID(), f.ids[0], 2, true); e != nil {
-		t.Fatal(e)
+	oldEpoch, oldConn := f.view(t, 0).Self.Epoch, f.conns[0]
+	snapshot, e := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(ctx, f.match.ID(), f.ids[0], oldEpoch, "survival-conn-0-new")
+	if e != nil || snapshot.Epoch <= oldEpoch {
+		t.Fatal("reconnect", snapshot.Epoch, e)
 	}
-	if e := api.Sync_SurvivalConnect(ctx, f.match.ID(), f.ids[0], 1, false); e == nil {
-		t.Fatal("old disconnect accepted")
+	f.conns[0] = "survival-conn-0-new"
+	if changed, e := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(ctx, f.match.ID(), f.ids[0], oldEpoch); e != nil || changed {
+		t.Fatal("old disconnect kicked new connection", changed, e)
+	}
+	if !f.view(t, 1).Players[0].Connected {
+		t.Fatal("new connection lost its seat")
 	}
 	f.refuse(t, 0, r.Command)
-	if got, e := api.Sync_SurvivalReceipt(ctx, f.match.ID(), f.ids[0], 2, 1); e != nil || got != r {
+	if got, e := api.Sync_SurvivalReceipt(ctx, f.match.ID(), f.ids[0], f.conns[0], snapshot.Epoch, 1); e != nil || got != r {
 		t.Fatal("old receipt lost", e)
 	}
-	if _, e := api.Sync_SurvivalView(ctx, f.match.ID(), 999); e == nil {
+	if _, e := api.Sync_SurvivalReceipt(ctx, f.match.ID(), f.ids[0], oldConn, snapshot.Epoch, 1); !errors.Is(e, apperrors.ErrRoomStaleEpoch) {
+		t.Fatal("old connection used the new epoch", e)
+	}
+	if _, e := api.Sync_SurvivalView(ctx, f.match.ID(), 999, "outsider"); e == nil {
 		t.Fatal("outsider read")
+	}
+	// 名单之外的人不能经 room 的 RoomJoin 入座：撤离的 RoomJoining 监听在占座（和满员检查）之前拒绝。
+	if _, e := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(ctx, f.match.ID(), 999, "outsider"); !errors.Is(e, apperrors.ErrRoomNotMember) {
+		t.Fatal("outsider joined the roster room", e)
 	}
 	raw, _ := json.Marshal(f.view(t, 1).Players[0])
 	if strings.Contains(string(raw), "Inventory") {
@@ -452,16 +561,16 @@ func TestSurvivalExtractionExpiryCannotReopenOrReenter(t *testing.T) {
 	if s.Seats[0].Status != "extracted" || s.Seats[1].Status != "dead" {
 		t.Fatal("expiry overwrote confirmed channel or left player alive")
 	}
-	for _, id := range f.ids {
-		if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID()); e != nil {
+	for i := range f.ids {
+		if e := f.enter(t, i); e != nil {
 			t.Fatal("admission retry should preserve fact", e)
 		}
 	}
-	if f.match.Dao().GetState() != s.Encode() {
+	if f.match.Dao().GetSurvivalState() != s.Encode() {
 		t.Fatal("reentry resurrected raid")
 	}
-	for _, p := range f.players {
-		if p.Dao().GetGold() != 95 {
+	for i := range f.players {
+		if f.coins(i) != 95 {
 			t.Fatal("entry charged twice")
 		}
 	}
@@ -469,14 +578,14 @@ func TestSurvivalExtractionExpiryCannotReopenOrReenter(t *testing.T) {
 }
 func TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer(t *testing.T) {
 	f := newSurvivalFixture(t)
-	before := f.match.Dao().GetState()
-	timer := f.match.Dao().GetWakeTimer()
+	before := f.match.Dao().GetSurvivalState()
+	timer := f.match.Dao().GetSurvivalWakeTimer()
 	c := f.command(t, 0, "craft", 0, 0)
 	refused := errors.New("after craft mutation")
 	name := nest.NewHandlerName("survival_undo_craft")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
-		_, e := handlerSurvivalCommand(es[0].(ISurvivalRaidEntity), f.ids[0], c, fctx.NowMilli())
+		_, e := handlerSurvivalCommand(es[0].(ISurvivalRaidEntity), f.ids[0], f.conns[0], c, fctx.NowMilli())
 		if e != nil {
 			return nil, e
 		}
@@ -485,7 +594,7 @@ func TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer(t *testing.T) {
 	if _, e := f.engine.Request(context.Background(), name, f.match.ID(), nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
-	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+	if before != f.match.Dao().GetSurvivalState() || timer != f.match.Dao().GetSurvivalWakeTimer() {
 		t.Fatal("partial craft rollback")
 	}
 	if _, e := f.send(0, c); e != nil {

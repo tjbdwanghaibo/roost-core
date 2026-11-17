@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	db "example.com/auto-chess-practice/db"
-	runentity "example.com/auto-chess-practice/game/entities/chess_match"
+	runentity "example.com/auto-chess-practice/game/entities/room"
 	playerentity "example.com/auto-chess-practice/game/entities/player"
 	sender "example.com/auto-chess-practice/game/handler/syncsender"
 	chess "example.com/auto-chess-practice/game/modules/autochess"
@@ -32,7 +32,7 @@ import (
 type chessNoEffects struct{}
 
 func (chessNoEffects) Publish(context.Context, engine.OutboxItem) error {
-	return errors.New("unexpected effect in local card RPG workflow")
+	return errors.New("unexpected effect in local auto chess workflow")
 }
 
 type chessRuntime struct {
@@ -44,6 +44,7 @@ type chessRuntime struct {
 	database        string
 	playerID, runID int64
 	ids             [chess.Seats]int64
+	conns           [chess.Seats]string
 	clock           atomic.Int64
 }
 
@@ -68,7 +69,7 @@ func openChessRuntime(t *testing.T, manual bool, now int64) *chessRuntime {
 	playerentity.RegisterEntity()
 	runentity.RegisterEntity()
 	RegisterAutoChessNestHandlers()
-	RegisterTickChessMatchTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	h := &chessRuntime{database: database}
 	h.clock.Store(now)
 	// handler 的 nowUnixMilli 与 Tick 取进程业务时钟（fctx），驱动到期查询用 SetClock：两处读同一个 h.clock。
@@ -119,6 +120,12 @@ func openChessRuntime(t *testing.T, manual bool, now int64) *chessRuntime {
 		t.Fatal(err)
 	}
 	h.scheduler = nest.NewEngine(append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access))...)
+	// room 模块与 Room 定时器的 handler 归属 game 服务，按引擎实例注册（与进程装配同一入口）。
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomJoinNestHandlersOn, RegisterTickRoomTimerGenNestHandlersOn} {
+		if err := register(h.scheduler); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := h.scheduler.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +136,7 @@ func openChessRuntime(t *testing.T, manual bool, now int64) *chessRuntime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.runID, err = entity.BuildEntityID(82001, runentity.EntityKindChessMatch)
+	h.runID, err = entity.BuildEntityID(82001, runentity.EntityKindRoom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +145,8 @@ func openChessRuntime(t *testing.T, manual bool, now int64) *chessRuntime {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// 连接标识落在 room 的席位上（持久），新进程里同一个标识照样认得出是这名成员的那条连接。
+		h.conns[i] = fmt.Sprintf("chess-real-conn-%d", i)
 	}
 	t.Cleanup(func() { h.close(t) })
 	return h
@@ -157,7 +166,7 @@ func (h *chessRuntime) close(t *testing.T) {
 	}
 }
 
-// chessTimerCounter 读 ChessMatch 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
+// chessTimerCounter 读 Room 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
 func chessTimerCounter(name string) int64 {
 	var total int64
 	for _, m := range metrics.Snapshot() {
@@ -175,14 +184,14 @@ type chessBarrier struct {
 	Unprojected uint64
 }
 
-func chessRuntimeState(t *testing.T, h *chessRuntime) (*runentity.ChessMatch, chess.State) {
+func chessRuntimeState(t *testing.T, h *chessRuntime) (*runentity.Room, chess.State) {
 	t.Helper()
 	v, e := h.access.Get(context.Background(), h.runID, entity.EntityCategoryWorld)
 	if e != nil {
 		t.Fatal(e)
 	}
-	m := v.(*runentity.ChessMatch)
-	s, e := chess.Decode(m.Dao().GetState())
+	m := v.(*runentity.Room)
+	s, e := chess.Decode(m.Dao().GetChessState())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -191,13 +200,13 @@ func chessRuntimeState(t *testing.T, h *chessRuntime) (*runentity.ChessMatch, ch
 func chessFacts(t *testing.T, h *chessRuntime) chessBarrier {
 	t.Helper()
 	m, s := chessRuntimeState(t, h)
-	b := chessBarrier{State: s.Encode(), Timer: m.Dao().GetWakeTimer()}
+	b := chessBarrier{State: s.Encode(), Timer: m.Dao().GetChessWakeTimer()}
 	for i, id := range h.ids {
 		v, e := h.access.Get(context.Background(), id, entity.EntityCategoryOther)
 		if e != nil {
 			t.Fatal(e)
 		}
-		b.Gold[i] = v.(*playerentity.Player).Dao().GetGold()
+		b.Gold[i] = v.(*playerentity.Player).Dao().GetWallet().GetCoins()
 	}
 	return b
 }
@@ -223,14 +232,14 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		for _, id := range append(h.ids[:], h.runID) {
 			kind := playerentity.EntityKindPlayer
 			if id == h.runID {
-				kind = runentity.EntityKindChessMatch
+				kind = runentity.EntityKindRoom
 			}
 			if _, e := h.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind}); e != nil {
 				t.Fatal(e)
 			}
 		}
 		for _, id := range h.ids {
-			if e := s.Sync_ChessPlayerInit(ctx, id); e != nil {
+			if _, e := sender.NewEnterInitSender(h.scheduler).Sync_EnterInit(ctx, id); e != nil {
 				t.Fatal(e)
 			}
 		}
@@ -250,26 +259,31 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Sync_ChessInit(ctx, h.runID, h.ids, rules, fmt.Sprintf("%064x", 17)); e != nil {
+		if e = s.Sync_ChessInit(ctx, h.runID, h.ids, rules, fmt.Sprintf("%064x", 17)); e != nil {
 			t.Fatal(e)
 		}
 		for i, id := range h.ids {
+			seat, e := sender.NewRoomJoinSender(h.scheduler).Sync_RoomJoin(ctx, h.runID, id, h.conns[i])
+			if e != nil {
+				t.Fatal(i, "join", e)
+			}
 			for j, kind := range []string{"buy", "move", "ready"} {
 				a, b := 0, 0
 				if kind == "move" {
 					a = 3
 				}
-				if _, e = s.Sync_ChessCommand(ctx, h.runID, id, chess.Command{Seq: uint64(j + 1), Epoch: 1, Round: 1, Kind: kind, A: a, B: b}); e != nil {
+				if _, e = s.Sync_ChessCommand(ctx, h.runID, id, h.conns[i], chess.Command{Seq: uint64(j + 1), Epoch: seat.Epoch, Round: 1, Kind: kind, A: a, B: b}); e != nil {
 					t.Fatal(i, kind, e)
 				}
 			}
 		}
 		m, state := chessRuntimeState(t, h)
 		stats := h.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 42 || state.Phase != "battle" || len(state.Fights) != 4 || m.Dao().GetWakeTimer() == 0 {
-			t.Fatal("not at frozen unprojected battle boundary")
+		// 9 个实体创建 + 8 次建档（enter）+ 开房与名单 + 8 次入座（room）+ 24 条命令 = 50 条未投影的 strict 记录。
+		if stats.Projected != 0 || stats.WALUnacked != 50 || state.Phase != "battle" || len(state.Fights) != 4 || m.Dao().GetChessWakeTimer() == 0 {
+			t.Fatal("not at frozen unprojected battle boundary", stats.WALUnacked)
 		}
-		b := chessBarrier{State: state.Encode(), Timer: m.Dao().GetWakeTimer(), Unprojected: stats.WALUnacked}
+		b := chessBarrier{State: state.Encode(), Timer: m.Dao().GetChessWakeTimer(), Unprojected: stats.WALUnacked}
 		writeChessBarrier(t, root, "ready.json", b)
 		select {}
 	}
@@ -290,7 +304,7 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		_, state := chessRuntimeState(t, h)
 		for i, id := range h.ids {
 			for _, r := range state.Seats[i].Receipts {
-				got, e := s.Sync_ChessCommand(ctx, h.runID, id, r.Command)
+				got, e := s.Sync_ChessCommand(ctx, h.runID, id, h.conns[i], r.Command)
 				if e != nil || got != r {
 					t.Fatal("command replay changed", e)
 				}
@@ -368,13 +382,20 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 	}
 	h := openChessRuntime(t, false, chessNow+3600000)
 	m, state := chessRuntimeState(t, h)
-	if state.Encode() != barrier.State || m.Dao().GetWakeTimer() != barrier.Timer {
+	if state.Encode() != barrier.State || m.Dao().GetChessWakeTimer() != barrier.Timer {
 		t.Fatal("lost pool, frozen battle, receipts or timer")
+	}
+	// room 的在线状态不落库：新进程里全部席位是断线（成员 RoomReconnect 才重新上线）；席位、代际与连接标识落库，
+	// 所以下面同一连接、同一代际的命令重放仍得到原回执，全员断线也不妨碍阶段按定时器推进到终局。
+	for _, id := range h.ids {
+		if seat, ok := m.Dao().GetSeats(id); !ok || seat.GetEpoch() == 0 || m.Room().Connected(id) {
+			t.Fatal("room seats lost or stale online state survived the crash", id)
+		}
 	}
 	s := sender.NewAutoChessSender(h.scheduler)
 	for i, id := range h.ids {
 		for _, r := range state.Seats[i].Receipts {
-			got, e := s.Sync_ChessCommand(ctx, h.runID, id, r.Command)
+			got, e := s.Sync_ChessCommand(ctx, h.runID, id, h.conns[i], r.Command)
 			if e != nil || got != r {
 				t.Fatal("retry changed purchase or phase", e)
 			}
@@ -385,7 +406,7 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		t.Fatal("cold load did not report deadline")
 	}
 	// 启动驱动自己的投递循环（与进程装配同一入口），用例不调用 DeliverDue、不手发 Tick。
-	// 计数来源：本进程里 ChessMatch 驱动只投递 TimerPhase 一种节点，Tick 回调每次恰好推进一个阶段
+	// 计数来源：本进程里 Room 驱动只投递 TimerChessPhase 一种节点，Tick 回调每次恰好推进一个阶段
 	// （准备→战斗、战斗→下一回合准备或终局），所以投递计数与阶段推进一一对应。下面重试的玩家命令都命中
 	// 原回执、不重排定时器；即使业务命令经 saveChess 重排，也只是改索引里的期限，不算投递。
 	deliveredBefore, redeliveredBefore := chessTimerCounter(entitytimer.DeliveredMetric), chessTimerCounter(entitytimer.RedeliveredMetric)
@@ -393,7 +414,7 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	view := func() chess.View {
-		v, e := s.Sync_ChessView(ctx, h.runID, h.ids[0])
+		v, e := s.Sync_ChessView(ctx, h.runID, h.ids[0], h.conns[0])
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -476,5 +497,5 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; eight-seat frozen battle restored, driver loop delivered one catch-up stage after cold load and %d later stages at their deadlines (redelivered 0), third process retried all commands and eight rewards", barrier.Unprojected, delivered-1)
+	t.Logf("SIGKILL: %d unprojected strict records; eight-seat frozen battle restored on the room module's Room (seats kept, online state cleared), driver loop delivered one catch-up stage after cold load and %d later stages at their deadlines (redelivered 0), third process retried all commands and eight rewards", barrier.Unprojected, delivered-1)
 }

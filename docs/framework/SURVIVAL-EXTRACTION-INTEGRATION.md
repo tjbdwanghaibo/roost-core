@@ -1,6 +1,6 @@
 # 合作生存撤离框架学习与验收
 
-本手册把“四人付费入局、采集制作、扛环境伤害、读条撤离后把带出的物资兑成永久资产”的主要业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，按配置、成局、入场、局内命令、期限、兑付的顺序给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明脚本证明什么、不证明什么。地图、物资、配方、伤害、价格由游戏定义。下面的业务夹具（四个相邻区域：0 是安全撤离区，1 / 2 / 3 分别产木材、矿石、食物；2 木材 + 1 食物制作一个药剂；死亡掉落整个背包；撤离读条完成后按固定单价兑换永久金币）只是学习和验收样例：框架与生成器不包含任何生存撤离规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。其他游戏类型的手册见 [SLG](SLG-INTEGRATION.md)、[MMORPG](MMORPG-INTEGRATION.md)、[MOBA](MOBA-INTEGRATION.md)、[卡牌 RPG](CARD-RPG-INTEGRATION.md)、[合作塔防](TOWER-DEFENSE-INTEGRATION.md)。
+本手册把“四人付费入局、采集制作、扛环境伤害、读条撤离后把带出的物资兑成永久资产”的主要业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，按配置、成局、入场、局内命令、期限、兑付的顺序给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明脚本证明什么、不证明什么。地图、物资、配方、伤害、价格由游戏定义。下面的业务夹具（四个相邻区域：0 是安全撤离区，1 / 2 / 3 分别产木材、矿石、食物；2 木材 + 1 食物制作一个药剂；死亡掉落整个背包；撤离读条完成后材料按固定单价兑换永久金币、药剂按件放进背包）只是学习和验收样例：框架与生成器不包含任何生存撤离规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。其他游戏类型的手册见 [SLG](SLG-INTEGRATION.md)、[MMORPG](MMORPG-INTEGRATION.md)、[MOBA](MOBA-INTEGRATION.md)、[卡牌 RPG](CARD-RPG-INTEGRATION.md)、[合作塔防](TOWER-DEFENSE-INTEGRATION.md)。
 
 ## 第一部分：学习
 
@@ -8,15 +8,20 @@
 
 适合准备用 core 做合作生存、搜打撤一类“局内物资只有带出来才算数”的游戏的后端工程师。先读[入门](../GETTING-STARTED.md)、[Nest / Entity](guide/02-nest-entity.md)、[DataEngine](guide/03-dataengine.md)；第一次学建议先读完 [SLG 手册](SLG-INTEGRATION.md)的第一部分（它把 Entity / DAO / Nest / 实体定时器的基本接法讲得最细），再读本篇；同样是“多人共享一个房间实体”的写法，[合作塔防](TOWER-DEFENSE-INTEGRATION.md)更短，可以先读。
 
-本类型选择**服务器权威探险**：一个探险实体拥有名单、公共资源点、每名玩家的位置 / 生命 / 背包、制作与撤离读条、死亡掉落和期限；玩家命令都在这个实体的 Nest 锁内裁决，客户端不上报坐标、背包或伤害。局内物品只在探险实体内改变归属，永久资产只在入场扣费与撤离兑付两个多实体事务里跨到 Player。
+本类型选择**服务器权威探险**：一个探险房间拥有名单、公共资源点、每名玩家的位置 / 生命 / 背包、制作与撤离读条、死亡掉落和期限；玩家命令都在这个房间的 Nest 锁内裁决，客户端不上报坐标、背包或伤害。局内物品只在房间内改变归属，永久资产只在入场扣费与撤离兑付两个多实体事务里跨到 Player。
+
+R9（2026-11-17）起本夹具按“装模块 + 只写模块没覆盖的部分”组装（[R9 方案 §3.8](../maintenance/PLAN-2026-11-17-r9-genre-modules.md#38-生存撤离survival-extraction)）：探险房间就是 **room** 模块的 `Room` 实体（席位、代际与连接、在线），永久金币走 **wallet**，带出的药剂按件进 **bag**，建档与初始金币走 **enter**；采集、制作、伤害、掉落、读条与兑付规则仍是手写的玩法核心。
 
 ### 2. 模块分工：生存撤离里的状态归谁
 
 | 业务状态 | 拥有者 | 框架接法 | 业务边界 |
 | --- | --- | --- | --- |
-| 永久金币、建档标记 | Player DAO | 生成的 Player DAO 字段，只在 Nest 事务里经 mutator 修改 | 局外逐件仓库、装备携入携出另建模；本例只用金币 |
-| 一次探险：名单、冻结配置、资源点、各席位置 / 生命 / 背包 / 制作 / 撤离 / 封存清单、死亡掉落、期限、每席命令账本 | SurvivalRaid 实体的 DAO | `roost add entity SurvivalRaid` + `add dao`；与 Player 同一原服，入场 / 兑付用多实体 Sender | 状态整段存成一个业务 JSON，每席账本至多 128 条 |
-| 制作完成、撤离完成、环境伤害、探险结束这些期限 | SurvivalRaid 的实体定时器（一个节点，取最早期限） | `roost add timer --entity SurvivalRaid`；节点存 DAO，驱动到期投递 Tick | 离线到期只在加载后触发一次，框架不追帧；一次触发里业务处理所有已到期事件、环境伤害只算一次 |
+| 永久金币 | **wallet** 模块（`PlayerDao.Wallet`） | 入场费 `Wallet().Add(-费)`（不足答 `wallet_short`），兑付 `Wallet().Add(金额)`；只在持有 Player 锁的 Nest 事务里调 | “扣过 / 发过没有”由房间上的 `Joined` / `Claimed` 保证，所以用不留回执的 `Add`（wallet README）；只有一种货币 |
+| 带出的药剂（永久道具） | **bag** 模块（`PlayerDao.Bag`） | 兑付时 `Bag().Add(survival.MedkitItem, 件数)`；道具号 1001 是 bag 自带道具表 `configs/table/item.csv` 的“药水” | 进程要装载 `configs/data`（道具表），否则 `bag_item_invalid`；单种上限 99，满了整笔兑付被拒（`bag_stack_full`） |
+| 建档、初始金币 | **enter** 模块（`PlayerDao.Enter`）+ `event.EnterFirst` 监听 | 进入游戏时 `EnterInit`；初始 100 金币写在 `game/entities/player/survival.go` 的 `OnEnterFirst`（与建档同一笔）；入场 / 兑付查 `Enter().Built()` | 只装 enter（Q6），不装 login / portal；夹具用合成的已鉴权身份 |
+| 席位、代际与连接、在线、名单准入 | **room** 模块的 `Room`（`RoomDao.Seats` / `Online`） | 开房在撤离的 `SurvivalInit` 里 `Room().Open(4)`；玩家经 `RoomJoin` 入座、`RoomReconnect` 换连接；名单准入是 `event.RoomJoining` 监听（`game/entities/room/survival.go`）；命令先过 `Room().Authorize` | 在线状态不落库，重启后全员断线；房间不广播 |
+| 一次探险：名单、冻结配置、资源点、各席位置 / 生命 / 背包 / 制作 / 撤离 / 封存清单、死亡掉落、入场 / 领奖事实、期限、每席命令账本 | `RoomDao` 末尾追加的 `SurvivalState`（业务 JSON）与 `SurvivalWakeTimer` | room 模块的 `Room` 已是 World 锁档；与 Player 同一原服，入场 / 兑付用多实体 Sender | 状态整段存成一个业务 JSON，每席账本至多 128 条；席位的代际与连接不在 JSON 里（归 room） |
+| 制作完成、撤离完成、环境伤害、探险结束这些期限 | Room 的实体定时器（一个节点，取最早期限；类型号 `TimerSurvivalPhase`） | `roost add timer --entity Room`；节点存 DAO，驱动到期投递 Tick | 离线到期只在加载后触发一次，框架不追帧；一次触发里业务处理所有已到期事件、环境伤害只算一次 |
 | 配置（探险时长、伤害间隔、制作 / 撤离时长、生命、背包容量、入场费、资源量、单价） | configdata Store / Snapshot | 注册对象定义 → Load 时校验 → 成局时捕获一份快照，按值传给 Sender | 字段范围由业务 `Validate` 定义；失败不发布 |
 | 物资守恒 | 纯函数 | 加载与每次修改后 `Validate` 计算整局物资账 | 守恒公式属于业务 |
 | 客户端看到的探险 | 业务视图 `View` | 已鉴权入口经 Nest 锁内读取，只返回允许的字段 | 不公开他人背包、制作、撤离清单和账本；死亡掉落公开 |
@@ -26,8 +31,8 @@
 flowchart LR
     A[已鉴权请求] --> B[生成 Sender]
     B --> C{入场 / 兑付?}
-    C -- 是 --> D[Nest 同时锁 Player 与 Raid]
-    C -- 否 --> E[Nest 锁 Raid]
+    C -- 是 --> D[Nest 同时锁 Player 与 Room]
+    C -- 否 --> E[Nest 锁 Room]
     D --> F[局部副本上校验，扣费或兑付]
     E --> F2[局部副本上校验命令、改背包 / 资源 / 读条]
     F --> G[写回 DAO、替换探险定时器]
@@ -53,12 +58,12 @@ ROOST_SURVIVAL_EXTRACTION_KEEP=1 bash scripts/test-survival-extraction-generated
 脚本打印临时目录，生成工程在其中的 `project/`。它做的事就是一个新工程的接入步骤：
 
 1. `roost project new survival-extraction-practice -module example.com/survival-extraction-practice -template game`；
-2. `roost add dao Player --entity Player`、`roost add entity SurvivalRaid`、`roost add dao SurvivalRaid --entity SurvivalRaid`、`roost add timer --entity SurvivalRaid`；
-3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"nosync"` `` 与 ``Initialized bool `store:"initialized" dao:"nosync"` ``，在 `db/def/survival_raid.go` 加 ``State string `store:"state" dao:"nosync"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"nosync"` ``；把 `game/entities/survival_raid/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（入场 / 兑付时 Raid 与 Player 一起锁，Raid 放在更低的锁档，锁序固定）；放入业务包 `game/modules/survival/`、定时回调 `game/entities/survival_raid/timer_handlers.go` 与 handler `game/handler/survival_extraction.go`；
+2. 装模块：`roost module add room wallet bag enter`（脚本经公用的 [`genre-common/modules.sh`](../../scripts/testdata/genre-common/modules.sh) `add`；Player / Room 的主 DAO 与玩家 TCP 接入由安装计划代办），再 `roost add timer --entity Room`；
+3. 业务只改这几处：在 room 模块的 `db/def/room.go` 的 `RoomDao` 末尾加 ``SurvivalState string `store:"survival_state" dao:"nosync"` `` 与 ``SurvivalWakeTimer int64 `store:"survival_wake_timer" dao:"nosync"` ``；放入业务包 `game/modules/survival/`、定时回调 `game/entities/room/timer_handlers.go`（覆盖 `add timer` 生成的示例）、名单监听 `game/entities/room/survival.go`、初始金币监听 `game/entities/player/survival.go` 与 handler `game/handler/survival_extraction.go`。Room 的实体注解已经是 `EntityCategoryWorld`（room 模块写的），入场 / 兑付时 Room 与 Player 一起锁，锁序固定，不用再改；Player 不再加金币与建档字段（wallet / bag / enter 的状态由安装器追加）；
 4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> survival-extraction`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
 5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 DAO 持久键变化的 WARN（加字段不需要迁移，老文档读成零值），见第 8 节。
 
-生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 SurvivalRaid 的定时器驱动（绑定 Nest、Nest 可用后启动投递循环、停机时先停驱动；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。夹具的测试不起整个 App，所以在用例里手动 `TimerDriver.SetClock` / `Bind` / `Start`，顺序与 Mod 相同。
+生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Room 的定时器驱动（绑定 Nest、Nest 可用后启动投递循环、停机时先停驱动；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。夹具的测试不起整个 App，所以在用例里手动 `TimerDriver.SetClock` / `Bind` / `Start`，顺序与 Mod 相同。
 
 #### 3.2 阅读顺序
 
@@ -68,14 +73,14 @@ ROOST_SURVIVAL_EXTRACTION_KEEP=1 bash scripts/test-survival-extraction-generated
 | --- | --- | --- |
 | 1 | `game/modules/survival/rules.go`（[rules.go.txt](../../scripts/testdata/survival-extraction/rules.go.txt)） | 配置怎样经校验发布？一次探险怎样固定一代？ |
 | 2 | `game/modules/survival/state.go`（[state.go.txt](../../scripts/testdata/survival-extraction/state.go.txt)） | 探险状态存了什么、视图裁掉什么？物资守恒怎样算？下一期限怎样取？ |
-| 3 | `game/modules/survival/match.go`（[match.go.txt](../../scripts/testdata/survival-extraction/match.go.txt)） | 入场、命令身份怎样核对？期限到达时按什么顺序处理制作、撤离、结束和环境伤害？ |
-| 4 | `game/handler/survival_extraction.go`（[handlers.go.txt](../../scripts/testdata/survival-extraction/handlers.go.txt)） | 入场费与入场事实、兑付与封存清单在哪个锁与提交边界里一起生效？ |
-| 5 | `game/entities/survival_raid/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/survival-extraction/timer_handlers.go.txt)） | 回调怎样核对节点身份与期限？ |
+| 3 | `game/modules/survival/match.go`（[match.go.txt](../../scripts/testdata/survival-extraction/match.go.txt)） | 入场、命令序号怎样核对？期限到达时按什么顺序处理制作、撤离、结束和环境伤害？ |
+| 4 | `game/handler/survival_extraction.go`（[handlers.go.txt](../../scripts/testdata/survival-extraction/handlers.go.txt)） | 命令身份怎样交给 room（`survivalMember`）？入场费与入场事实、兑付（wallet + bag）与封存清单在哪个锁与提交边界里一起生效？ |
+| 5 | `game/entities/room/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/survival-extraction/timer_handlers.go.txt)）、`game/entities/room/survival.go`（[room_roster.go.txt](../../scripts/testdata/survival-extraction/room_roster.go.txt)）、`game/entities/player/survival.go`（[first_enter.go.txt](../../scripts/testdata/survival-extraction/first_enter.go.txt)） | 回调怎样核对节点身份与期限？名单怎样拦在 room 的入座之前？初始金币在哪一笔里发？ |
 | 6 | `game/handler/syncsender/` | 生成的 Sender 怎样把目标 ID 与业务参数交给 Nest；业务调用它，不手改 |
 | 7 | [gameplay_test.go.txt](../../scripts/testdata/survival-extraction/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/survival-extraction/rules_test.go.txt) | 并发、拒绝、回滚、重连与守恒怎样实际验证 |
 | 8 | [persistence/recovery_test.go](../../scripts/testdata/survival-extraction/persistence/recovery_test.go) | 制作与撤离都在途时被 SIGKILL 后怎样从未投影 WAL 恢复？兑付后再重启会不会再到账？ |
 
-身份要分开理解：Player / SurvivalRaid 用框架完整 EntityID；“这名玩家进过这一局”是 Raid 上这一席的 `Joined` 事实（固定 Raid ID + Player ID）；每席的命令序号是这一席的单调序号域，Epoch 是这一席的会话代际；定时器节点 ID 是 Raid 内的独立身份。配置内容 hash、业务 State 里的 `Schema`、DAO 的 `_schema` 与 core 版本是四个不同的概念。
+身份要分开理解：Player / Room 用框架完整 EntityID；“这名玩家进过这一局”是房间里这一席的 `Joined` 事实（固定 Room ID + Player ID）；每席的命令序号是这一席的单调序号域，Epoch 是 room 分配的席位代际（只增不减），连接标识是服务端 Session 给的这条物理连接；定时器节点 ID 是房间内的独立身份。配置内容 hash、业务 State 里的 `Schema`、DAO 的 `_schema` 与 core 版本是四个不同的概念。
 
 #### 3.3 用 Sender 调用
 
@@ -87,56 +92,71 @@ package raidflow
 import (
 	"context"
 
+	roomentity "example.com/survival-extraction-practice/game/entities/room"
 	syncsender "example.com/survival-extraction-practice/game/handler/syncsender"
+	roomlogic "example.com/survival-extraction-practice/game/modules/room"
 	survival "example.com/survival-extraction-practice/game/modules/survival"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
 
-// openRaid 由成局服务在名单确定后调用：配置、名单与时间来自服务器。同一 Raid ID 重试返回原探险，名单不同则拒绝。
-func openRaid(ctx context.Context, client nest.Client, catalog *configdata.Store,
-	raidID int64, players [survival.Seats]int64) error {
+// openRaid 由成局服务在名单确定后调用：配置、名单与时间来自服务器。raidUnique 是服务端分配、不复用的房号；
+// 开房与名单同一笔事务（SurvivalInit 里调 Room().Open），同号重试不重新开局，名单不同则拒绝。
+// 玩家建档与初始 100 金币走 enter 模块（进入游戏时的 EnterInit + EnterFirst 监听），这里不再另建。
+func openRaid(ctx context.Context, registry *app.Registry, client nest.Client, catalog *configdata.Store,
+	raidUnique int64, players [survival.Seats]int64) (int64, error) {
 	rules, err := survival.CaptureRules(catalog.Current()) // 一次探险只捕获一份快照
 	if err != nil {
-		return err
+		return 0, err
 	}
-	s := syncsender.NewSurvivalExtractionSender(client)
-	for _, id := range players {
-		// Create 的持久化不等于业务初始化；首次送初始金币要经过正式事务，重复调用不再加钱。
-		if err := s.Sync_SurvivalPlayerInit(ctx, id); err != nil {
-			return err
-		}
+	raidID, err := roomlogic.EntityID(raidUnique)
+	if err != nil {
+		return 0, err
 	}
-	_, err = s.Sync_SurvivalInit(ctx, raidID, players, rules)
-	return err
+	rooms, err := roomentity.LifecycleFromRegistry(registry) // 与 room.Open 相同：先经 lifecycle 取到或建出实体
+	if err != nil {
+		return 0, err
+	}
+	if _, _, err = rooms.GetOrCreate(ctx, raidUnique); err != nil {
+		return 0, err
+	}
+	return raidID, syncsender.NewSurvivalExtractionSender(client).Sync_SurvivalInit(ctx, raidID, players, rules)
 }
 
-// enterAndGather 是已鉴权入口：付费入场（重试只查原事实、不重复扣费），再走到木材区采集一件。
-// playerID 来自鉴权会话；超时重试时原样重发同一条命令，不分配新序号。
-func enterAndGather(ctx context.Context, client nest.Client, raidID, playerID int64) (survival.Receipt, error) {
-	s := syncsender.NewSurvivalExtractionSender(client)
-	if err := s.MultiSync_SurvivalEnter(ctx, playerID, raidID); err != nil {
+// enterAndGather 是已鉴权入口：玩家先经 room 的 RoomJoin（或换连接后的 RoomReconnect）入座，再付费入场（重试只查
+// 原事实、不重复扣费），然后走到木材区采集一件。playerID 与连接标识都来自服务端 Session；超时重试时原样重发同一条
+// 命令，不分配新序号。
+func enterAndGather(ctx context.Context, client nest.Client, session gateway.Session, raidID int64) (survival.Receipt, error) {
+	playerID := session.Principal().PlayerID
+	connection, err := roomlogic.ConnectionKey(session)
+	if err != nil {
 		return survival.Receipt{}, err
 	}
-	v, err := s.Sync_SurvivalView(ctx, raidID, playerID)
+	s := syncsender.NewSurvivalExtractionSender(client)
+	v, err := s.Sync_SurvivalView(ctx, raidID, playerID, connection)
 	if err != nil {
+		return survival.Receipt{}, err
+	}
+	if err := s.MultiSync_SurvivalEnter(ctx, playerID, raidID, v.Self.Epoch, connection); err != nil {
 		return survival.Receipt{}, err
 	}
 	move := survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: "move", A: 1}
-	if _, err := s.Sync_SurvivalCommand(ctx, raidID, playerID, move); err != nil {
+	if _, err := s.Sync_SurvivalCommand(ctx, raidID, playerID, connection, move); err != nil {
 		return survival.Receipt{}, err
 	}
 	gather := survival.Command{Seq: move.Seq + 1, Epoch: move.Epoch, Kind: "gather", A: 0} // A 是资源索引：0 木材
-	return s.Sync_SurvivalCommand(ctx, raidID, playerID, gather)
+	return s.Sync_SurvivalCommand(ctx, raidID, playerID, connection, gather)
 }
 
-// claim 在本人撤离完成（或死亡）后调用；金额只按服务器封存的清单与冻结单价计算，重试返回同一金额。
+// claim 在本人撤离完成（或死亡）后调用；金额只按服务器封存的清单与冻结单价计算（药剂同一笔按件进背包），重试返回同一金额。
 func claim(ctx context.Context, client nest.Client, playerID, raidID int64) (int64, error) {
 	return syncsender.NewSurvivalExtractionSender(client).MultiSync_SurvivalClaim(ctx, playerID, raidID)
 }
 ```
 
-`raidID` 要用 id-gen 发的新号并先创建实体：直接 `Create` 不读存储，不能复用删过档或存了没加载的 ID（[删档后该 ID 不可再用，D10](guide/03-dataengine.md#4-冷加载与-schema)；框架只在 GetOrCreate 上守这一点）。归档旧探险时要保留入场与兑付身份，不能删掉 Raid 后用同一 ID 重开来绕过账本。夹具在测试里直接建实体，没有演示 id-gen 与匹配接线。每次调用的错误都要按业务逐次处理，示例只演示调用方式。
+`raidUnique` 要用 id-gen 发的新号，经生成的 lifecycle `GetOrCreate` 取到或建出实体（与 `room.Open` 相同）：直接 `Create` 不读存储，不能复用删过档或存了没加载的 ID（[删档后该 ID 不可再用，D10](guide/03-dataengine.md#4-冷加载与-schema)；框架只在 GetOrCreate 上守这一点）。归档旧探险时要保留入场与兑付身份，不能删掉 Raid 后用同一 ID 重开来绕过账本。夹具在测试里直接建实体，没有演示 id-gen、lifecycle 与匹配接线。每次调用的错误都要按业务逐次处理，示例只演示调用方式。
 
 命令字段：`move` 的 A 是目标区域（只能到相邻区域，两次移动至少隔 100ms）；`gather` 的 A 是资源索引 0～2，玩家必须站在区域 A+1；`loot` 的 A 是死亡玩家的席位 0～3、B 是物资索引 0～3（木材、矿石、食物、药剂）；`craft`、`cancel_craft`、`heal`、`extract`、`cancel_extract` 的 A、B 都是 0。客户端不提供坐标、背包、伤害、时间和兑付金额。
 
@@ -148,31 +168,50 @@ func claim(ctx context.Context, client nest.Client, playerID, raidID int64) (int
 | `OfflineDamageIsBoundedAndRaidEndFixed` | 期限过去 30 秒只扣一次血；结束时刻不因此延后，到点时在场玩家死亡 | “一次触发只算一次伤害、结束时刻不延长”是业务选择（纯状态测试，框架的加载后补触发见第二部分） |
 | `StrictDecodeLedgerAndMissingAdmission` | 尾随数据、超大状态被拒；某席账本直接填满 128 条后新命令被拒、旧回执仍可重放；没入场的席位不能操作，结束时记为 missed | 加载时严格解码并校验不变量；准入事实是持久业务状态 |
 | `ConfigurationSnapshotPreservesPricesAndDuration` | 合法热更发布新一代、已开探险的单价与时长不变；非法热更被拒 | configdata 校验失败不替换当前快照；已捕获的值不被新发布改写 |
-| `AdmissionAtomicAndIdempotent` | 入场写入后 handler 失败；四人各四次并发入场 | 多实体事务：入场费与 `Joined` 一起提交或一起回滚，每人只扣一次 |
+| `AdmissionAtomicAndIdempotent` | 入场写入后 handler 失败；旧连接替这一席入场；四人各四次并发入场 | 多实体事务：wallet 扣费与 `Joined` 一起提交或一起回滚，每人只扣一次；入场也过 room 的身份围栏 |
 | `SharedNodeCompetitionAndRetry` | 四人在同一资源点各把同一采集命令并发发三次；资源耗尽、站错区域 | 单实体 Nest 串行 + 业务序号：每条命令只采一次，资源点不被多扣；业务拒绝不写状态 |
 | `CraftCapacityCancellationAndHealing` | 制作预扣原料并占住 3 格；背包满后采集被拒；取消退料、重发取消不重复退；期限到达完成制作；治疗只用一个药剂 | 期限由驱动 `DeliverDue` 投递；回执重放不重复改背包 |
-| `DeathDropsAndConcurrentLoot` | 野外连扛六次伤害死亡、整包掉落；三人并发抢同一件食物；死者兑付为 0 | 竞争同一件物品只有一人成功；死亡不复活、不重复掉落 |
-| `ChannelCancellationAndAtomicClaim` | 移动打断撤离读条；读条中不能制作；读条完成前兑付被拒；完成后封存清单；兑付写入后失败回滚；八次并发兑付 | 多实体兑付：Player 金币与 Raid 的 `Claimed` 一起提交，只到账一次 |
-| `ReconnectPrivateInventoryAndDeadline` | 断线后不能操作；新会话票提升 Epoch，旧票断开与旧 Epoch 命令被拒，新会话按序号查旧回执；局外人查看被拒，队友视图不含他人背包；期限到达后的新命令被拒，定时器完成制作 | 会话代际由业务存在探险里；准入以期限为界 |
+| `DeathDropsAndConcurrentLoot` | 野外连扛六次伤害死亡、整包掉落；三人并发抢同一件食物；死者兑付为 0（金币与背包都不变） | 竞争同一件物品只有一人成功；死亡不复活、不重复掉落 |
+| `ChannelCancellationAndAtomicClaim` | 移动打断撤离读条；读条中不能制作；读条完成前兑付被拒；完成后封存清单；兑付写入后失败回滚；八次并发兑付；另一人做好药剂再撤离，兑付 0 金币 + 1 件药水，写入后失败回滚、四次并发只入包一次 | 多实体兑付：wallet 金币、bag 药剂与房间的 `Claimed` 一起提交，只到账一次 |
+| `ReconnectPrivateInventoryAndDeadline` | room 标断线后不能操作；`RoomReconnect` 换连接拿新代际，旧代际迟到的断线不影响新连接，旧代际命令被拒，新连接按序号查旧回执、旧连接拿新代际查被拒；局外人查看与入座被拒，队友视图不含他人背包；期限到达后的新命令被拒，定时器完成制作 | 席位代际与连接归 room，命令身份经 `Authorize` / `Member`；准入以期限为界 |
 | `ExpiryCannotReopenOrReenter` | 业务时钟越过结束时刻一小时后投递一次（实体一直在内存，不是进程重启）：已开始且在结束前完成的撤离保留，其他人死亡；之后重复入场不复活、不再扣费 | 终态由服务器判定；一次触发处理到结束为止的全部到期事件 |
 | `UndoRestoresMaterialsJobAndTimer` | 制作写入后 handler 失败 | undo 回滚后背包、制作任务和定时器节点一起恢复，重试同一命令成功 |
-| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
+| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：每条新连接先接管席位（`reconnect` → room 的 `RoomReconnect`），业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 11 节。
+
+#### 3.5 模块化之后场景语义的变化（R9，2026-11-17）
+
+场景名与条数（13）不变；下面几条的断言改成读模块状态，旧断言 → 新断言：
+
+| 场景 | 旧断言 | 新断言 |
+| --- | --- | --- |
+| 全部 Nest 场景 | 建档 `Sync_SurvivalPlayerInit` 置 `Initialized`、送 100 金币 | enter 的 `Sync_EnterInit`（初始 100 金币是 `event.EnterFirst` 监听经 wallet 发）；入场 / 兑付查 `Enter().Built()`；每席先经 room 的 `RoomJoin` 入座 |
+| `AdmissionAtomicAndIdempotent` | `Player.Gold` 回滚后 100、入场后 95 | wallet 的 `Wallet.Coins` 回滚后 100、入场后 95；入场请求带席位代际与连接，另加“旧连接替这一席入场被拒（`room_stale_epoch`），不扣费” |
+| `DeathDropsAndConcurrentLoot`、`ExpiryCannotReopenOrReenter` | `Player.Gold == 95` | `Wallet.Coins == 95`；死者背包里没有药水 |
+| `ChannelCancellationAndAtomicClaim`、`RobotBusiness` | `Player.Gold` 95 → 98（清单 2 木材 + 1 食物，单价含药剂 5） | `Wallet.Coins` 95 → 98（单价只剩三种材料）；另加一人带 1 个药剂撤离：兑付 0 金币、`Bag` 里 1001 药水 1 件，写入后失败时金币、背包、`Claimed` 一起回滚，并发重试只入包一次；原夹具的 100 万金币上限换成 wallet 的溢出检查 |
+| `ReconnectPrivateInventoryAndDeadline` | 夹具自己的 `Sync_SurvivalConnect(ticket)` 标断开 / 用新票提升 Epoch；旧票的断开返回错误 | room 的 `RoomDisconnect` 标断线（changed=true，队友视图 `Connected=false`）；`RoomReconnect(旧代际, 新连接)` 拿新代际；旧代际的断线返回 changed=false、不报错、新连接仍在线；另加“旧连接拿新代际查回执被拒（`room_stale_epoch`）”“局外人 `RoomJoin` 被名单监听拒绝（`room_not_member`）” |
+| `RobotBusiness` | TCP 重连后原样重放第一条命令得到原回执 | 每条新连接先接管席位；TCP 重连并接管之后，旧代际的原样重放被拒（客户端改用 `SurvivalReceipt` 按新代际查旧回执） |
+| `ConfigurationSnapshotPreservesPricesAndDuration` 等 4 条规则场景 | `Rules.Prices` 四项（含药剂） | 三项（木材、矿石、食物）；`Apply` 多一个参数“room 报告的在线状态”，规则场景传 true |
+| `TestSurvivalExtractionRealCrashRecovery` | WAL 20 条未投影；冷加载后直接续局；最终金币 100 / 99 / 98 / 98 | 24 条（多 4 次 `RoomJoin`）；冷加载后断言 room 席位与代际都在、全员断线，断线时的新命令被拒，四人各 `RoomReconnect` 换连接后续局；最终金币 95 / 99 / 98 / 98，玩家 0 的药剂进了背包（1 件）；第三个进程里换连接之前的旧代际命令按代际围栏被拒、改按新代际查回执 |
+
+变异证明（把模块调用去掉或改错，对应场景变红，恢复后变绿）记在 [R9 批 1D 证据](../maintenance/evidence/r9-1d-20261117/README.md)。
 
 ### 4. 配置为什么要按值捕获
 
 `OpenCatalog` 用 `configdata.MustRegisterObject` 登记 `survival_rules`（`survival.json`），`Validate` 失败整次加载 / 重载被拒，旧快照继续服务（[业务表发布](guide/07-config.md#3-业务表发布)）。成局入口捕获 `catalog.Current()` 再 `CaptureRules` 得到 `Rules` 值交给 `Sync_SurvivalInit`；整份 `Rules` 写进探险状态，之后的入场费、时长、伤害间隔与兑付单价都用开局那一代，热更只影响新探险。公网请求**不携带** Rules。
 
+一个进程只有一份“当前配置”：`configdata.Store` 装载成功就成为进程当前配置，兑付时 bag 的 `Bag().Add` 经 `generated.ItemByID` 读的就是它。夹具为了独立演示，`OpenCatalog` 另开了一个只含 `survival_rules` 的 Store，它一装载就把工程的道具表顶掉（用例因此先捕获规则、再装载 `configs/data`）。正式工程把 `survival_rules` 登记进工程自己的 Registry，与道具表等生成的表同一次装载，不要另开 Store。
+
 ### 5. 入场、命令身份与物资守恒
 
-`MultiSync_SurvivalEnter(player, raid, now)` 同时锁 Player 与 Raid：Player 必须已建档，这一席若已 `Joined` 就直接返回（不再扣费、不复活）；否则扣 5 永久金币、置 `Joined`、给初始物资（2 木材 + 1 食物），一个事务提交。入场同样受期限约束，结束后未入场的席位记为 missed。
+`MultiSync_SurvivalEnter(player, raid, epoch, connection)` 同时锁 Player 与 Room：先经 room 核对身份（这一席已 `Joined` 时走重放那一支，只核对代际与连接、不要求在线；没入场时经 `Authorize`，还要求在线），Player 必须已建档；已 `Joined` 就直接返回（不再扣费、不复活）；否则经 wallet 扣 5 永久金币（`Wallet().Add(-5)`，不足答 `wallet_short`）、置 `Joined`、给初始物资（2 木材 + 1 食物），一个事务提交。入场同样受期限约束，结束后未入场的席位记为 missed（入座了但没付费也算）。
 
-`Sync_SurvivalCommand(raid, player, command, now)`：每席的命令序号从 1 单调递增，相同序号与逐字段相同的命令重放返回原回执；换内容或跳序被拒。命令还带 Epoch（本席当前会话代际），不符即拒绝。收到未知结果时按序号重发同一命令或用 `Sync_SurvivalReceipt` 查回执，不要为“再试一次”分配新序号。每席账本至多 128 条，满了拒绝新命令而不淘汰旧回执；后台期限和兑付不受账本影响。
+`Sync_SurvivalCommand(raid, player, connection, command)`：每席的命令序号从 1 单调递增，相同序号与逐字段相同的命令重放返回原回执；换内容或跳序被拒。命令还带 Epoch（本席在 room 的当前代际）与连接标识：新命令经 `Room().Authorize` 要求代际、连接都对且在线；已有回执的重放只经 `Room().Member` + 连接核对、不要求在线（重启后全员断线时原连接、原代际的重试仍得原回执）；旧代际、旧连接一律 `room_stale_epoch`。收到未知结果时按序号重发同一命令或用 `Sync_SurvivalReceipt` 查回执，不要为“再试一次”分配新序号。每席账本至多 128 条，满了拒绝新命令而不淘汰旧回执；后台期限和兑付不受账本影响。
 
 所有业务写 handler 都是 `rollback=undo durability=strict`：规则先在解码出的局部副本上执行，校验成功才写回 DAO；写入之后的拒绝由 Nest undo 撤回 DAO 与定时器。`Validate` 计算整局物资账：资源点 + 所有背包 + 所有死亡掉落 + 封存清单 + 在途制作的原料 + 已完成制作消耗的原料，要等于初始资源与已入场玩家的初始物资之和；药剂存量 + 已使用数要等于完成制作数。只检查余额非负发现不了“凭空多出一件”。
 
-制作在途时原料仍占背包 3 格，玩家不能靠预扣腾出空位、采满后再让取消或死亡退料溢出。完成撤离时局内背包清空，物资写进不可变的 `Extracted` 清单；兑付不删除清单，所以重试返回同一金额。
+制作在途时原料仍占背包 3 格，玩家不能靠预扣腾出空位、采满后再让取消或死亡退料溢出。完成撤离时局内背包清空，物资写进不可变的 `Extracted` 清单；兑付不删除清单，所以重试返回同一金额（与同样件数的药剂）。
 
 ### 6. 期限与持久探险定时器
 
@@ -180,10 +219,10 @@ func claim(ctx context.Context, client nest.Client, playerID, raidID int64) (int
 sequenceDiagram
     participant C as 已鉴权入口
     participant N as Nest
-    participant R as SurvivalRaid DAO
+    participant R as Room DAO（SurvivalState）
     participant T as 实体定时器
-    C->>N: Raid ID + Player ID + 命令
-    N->>R: 校验席位 / Epoch / 序号 / 期限，局部计算
+    C->>N: Room ID + Player ID + 连接 + 命令
+    N->>R: room 核对代际 / 连接 / 在线，校验序号 / 期限，局部计算
     N->>R: 写回状态与回执
     N->>T: 删除旧节点，登记最早期限
     N->>N: strict WAL 提交
@@ -192,7 +231,7 @@ sequenceDiagram
     N->>R: 完成到期制作与撤离、结束或一次环境伤害，登记下一最早期限
 ```
 
-探险只用一个定时器节点：期限取探险结束、下次环境伤害、四席制作完成与撤离完成中最早的一个。最早期限已到、Tick 还没提交时，新命令一律被拒（等定时器提交后重发原命令即可，已成功的回执查询不受影响），所以玩家命令不能越过待处理的死亡或撤离。回调核对节点 ID 与 `WakeTimer`、`Param1` 与原期限后，按固定顺序处理：
+探险只用一个定时器节点：期限取探险结束、下次环境伤害、四席制作完成与撤离完成中最早的一个。最早期限已到、Tick 还没提交时，新命令一律被拒（等定时器提交后重发原命令即可，已成功的回执查询不受影响），所以玩家命令不能越过待处理的死亡或撤离。回调核对节点 ID 与 `SurvivalWakeTimer`、`Param1` 与原期限后，按固定顺序处理：
 
 1. 完成已经到期的制作与撤离。开始制作和撤离时都要求完成时刻早于探险结束，二者不能在同一玩家身上同时进行。
 2. 到达探险结束时刻时，仍在场的玩家死亡，未入场的席位记为 missed；已经到期的撤离在第 1 步保留成功。
@@ -204,29 +243,33 @@ sequenceDiagram
 
 ### 7. 重连与视图
 
-可信入口签发新的会话票，`Sync_SurvivalConnect(raid, player, ticket, true)` 把这一席的 Epoch 提升到新票；旧票的断开与旧 Epoch 的命令都被拒，旧连接不能踢掉新连接。新会话用 `Sync_SurvivalReceipt(raid, player, epoch, seq)` 查旧序号的回执（Epoch 填当前值）。掉线的玩家仍按期限承受环境伤害与探险结束，不能靠断线停表。
+席位代际与连接归 room 模块：连接断了，断线订阅自动调 `RoomDisconnect` 把席位标成断线（业务也可以主动调）；换了连接的玩家带上次确认的代际发 `RoomReconnect`（CAS 拿新代际，同一代际并发重连至多一条成功）。旧代际迟到的断线返回 `false`、不影响新连接；旧代际、旧连接的命令被拒（`room_stale_epoch`）。新连接用 `Sync_SurvivalReceipt(raid, player, connection, epoch, seq)` 查旧序号的回执（Epoch 填当前值）。room 的在线状态不落库：进程重启后全员断线，玩家先 `RoomReconnect` 才能下新命令（第 12 节的第二个进程就这样续局）。掉线的玩家仍按期限承受环境伤害与探险结束，不能靠断线停表。
 
-`View` 返回阶段、期限、资源点、死亡掉落、各席公开状态（ID、状态、位置、生命、在线），以及本席自己的背包、封存清单、制作 / 撤离完成时刻和下一序号；不含他人背包、制作、清单与账本，配置只给 hash。不要给 `State` 加 Sync 标记或直接下发整个实体；需要推送时按 [self_sync](PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 写业务视图。夹具只验证了字段与归属校验，没有联调公网 TCP 协议或客户端引擎。
+`Sync_SurvivalView(raid, player, connection)` 先经 room 的 `View` 核对成员与连接（断线也能读），返回阶段、期限、资源点、死亡掉落、各席公开状态（ID、状态、位置、生命、room 报告的在线），以及本席的当前代际、自己的背包、封存清单、制作 / 撤离完成时刻和下一序号；不含他人背包、制作、清单与账本，配置只给 hash。不要给 `State` 加 Sync 标记或直接下发整个实体；需要推送时按 [self_sync](PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 写业务视图。夹具只验证了字段与归属校验，没有联调公网 TCP 协议或客户端引擎。
 
 ### 8. 兑付与存储格式
 
-`MultiSync_SurvivalClaim(player, raid)` 同时锁 Player 与 Raid，只在本人已撤离或已死亡时可用：撤离者按封存清单与冻结单价得金币，死亡为 0；Player 金币与这一席的 `Claimed` 一起提交，并发重试和冷加载后的重试都只得一份。这是同一原服内的多实体原子提交，不是跨 sid 的分布式事务；Player 在别的 sid 时走 Remote / Saga 原服协作（[Saga](guide/06-saga.md)；原生步骤单进程容量有限，见 Saga 指南 §5）。
+`MultiSync_SurvivalClaim(player, raid)` 同时锁 Player 与 Room，只在本人已撤离或已死亡时可用：撤离者的清单里三种材料按冻结单价兑金币（`Wallet().Add`），药剂按件放进背包（`Bag().Add(survival.MedkitItem, n)`，道具 1001 药水），死亡为 0；wallet、bag 与这一席的 `Claimed` 一起提交，并发重试和冷加载后的重试都只得一份。“领过没有”只看 `Claimed`，所以 wallet / bag 都用不留回执的 `Add`。背包里药水已到单种上限（道具表 99）时 `Bag().Add` 答 `bag_stack_full`，整笔兑付回滚、金币也不到账，玩家处理背包后重试。兑付不要求在线，也不过 room 的身份围栏（玩家身份取自会话，与塔防领奖相同）。这是同一原服内的多实体原子提交，不是跨 sid 的分布式事务；Player 在别的 sid 时走 Remote / Saga 原服协作（[Saga](guide/06-saga.md)；原生步骤单进程容量有限，见 Saga 指南 §5）。
 
 存储格式要分两层看：
 
-- **DAO 持久键**：`gold` / `initialized` / `state` / `wake_timer` 这些 `store` 键就是 Mongo 里的键（[DESIGN-TODO D13](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。以后改 Go 字段名要保留原 `store` 键；改了 `store` 键或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
-- **业务 JSON**：`State` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、尾随数据、超过 256 KiB 的状态以及违反守恒的物资账。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
+- **DAO 持久键**：`survival_state` / `survival_wake_timer`（以及模块的 `wallet` / `bag` / `enter` / `seats` 等）这些 `store` 键就是 Mongo 里的键（[DESIGN-TODO D13](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。以后改 Go 字段名要保留原 `store` 键；改了 `store` 键或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
+- **业务 JSON**：`SurvivalState` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、尾随数据、超过 256 KiB 的状态以及违反守恒的物资账。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
 
 ### 9. 接入时容易踩的问题
 
 - **锁目标没被识别**：Nest 生成器在不写 `target` / `targets` 时，把类型名含 `Entity` 的参数推断为锁目标；本夹具的锁接口叫 `ISurvivalRaidEntity` / `ISurvivalPlayerEntity`。名字不含 `Entity` 又没写 `target(s)` 时，`roost generate` 报 `//roost:nest found no entity parameter` 并点名 handler（[Nest 生成器](../../codegen/docs/NEST_RUNTIME.zh-CN.md)）。
-- **多实体锁档**：入场与兑付同时锁 Player 与 Raid。分类的取值就是锁序等级（`framework/entity/category_order.go`），Raid 是多名玩家争用的场景对象，放在 `EntityCategoryWorld`（3.1 第 3 步），总比 Player 先取锁，锁序固定。
+- **多实体锁档**：入场与兑付同时锁 Player 与 Room。分类的取值就是锁序等级（`framework/entity/category_order.go`），房间是多名玩家争用的场景对象，room 模块的 `Room` 已放在 `EntityCategoryWorld`，总比 Player 先取锁，锁序固定；自己另建房间实体时要自己改锁档。
+- **名单监听要放行普通房**：`OnSurvivalJoining` 只拦 `SurvivalState` 非空的房；把普通房也拦住，room 模块自带的 34 条场景（用的就是普通房）在 `module verify` 里会失败。
+- **连接标识必须来自服务端 Session**：`room.ConnectionKey(session)`；从客户端 PB 里取或用玩家号代替，旧连接就能操作新席位（room README“连接标识必须可信”）。
+- **兑付要道具表**：药剂进 bag 要进程已装载 `configs/data`（bag 自带的道具表）；没装载、或另开的 Store 把它顶掉（第 4 节）时 `Bag().Add` 答 `bag_item_invalid`，整笔兑付回滚。
 - **handler 里不发同步 Nest 请求**：已知参与者一次传给多实体 Sender；handler 内的同步请求被框架拒绝（`ErrSyncInHandler`）。
-- **实体创建与业务初始化分开**：启用 DataEngine 后，普通持久实体事务外 `Create` 会补 strict 提交；Nest 内随本事务提交。没有 DataEngine 的离线夹具只建内存。初始金币、首次入场仍需自己的事务与幂等事实；Remote 新建规则见 [DataEngine](guide/03-dataengine.md)。
+- **实体创建与业务初始化分开**：启用 DataEngine 后，普通持久实体事务外 `Create` 会补 strict 提交；Nest 内随本事务提交。没有 DataEngine 的离线夹具只建内存。初始金币由 enter 的首次初始化事务（`EnterFirst` 监听）发，首次入场是房间上的 `Joined` 事实；Remote 新建规则见 [DataEngine](guide/03-dataengine.md)。
+- **测试里的全局定时器时钟**：夹具调 `room.TimerDriver.SetClock`（Room 的定时器驱动是包级的），`SetClock(nil)` 撤不掉；同一测试进程里先跑本玩法再跑别的 Room 定时器场景（例如再装 turn）会读到这只时钟。脚本与 `module verify` 按 `-run` 分开跑，不受影响（[说明](../maintenance/evidence/room-authorize-20261117/README.md)）。
 
 ### 10. 练习
 
-加“局外仓库：撤离时把药剂按件存进 Player 而不是兑成金币”或“队友复活”。先写清拥有者、幂等身份（哪个序号域、哪个准入事实）、事务参与者、配置代际和恢复语义，再选 Nest / 定时器 / Saga，不另造一套与框架平行的持久或并发状态机。
+加“局外仓库：撤离时把木材、矿石也按件存进背包（bag 道具表加行），不再兑成金币”或“队友复活”。先写清拥有者、幂等身份（哪个序号域、哪个准入事实）、事务参与者、配置代际和恢复语义，再选 Nest / 定时器 / Saga，不另造一套与框架平行的持久或并发状态机。
 
 ## 第二部分：验收
 
@@ -236,12 +279,12 @@ sequenceDiagram
 bash scripts/test-survival-extraction-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 13 条顶层 race 场景（3.4：4 条规则 + 8 条 Nest + 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SURVIVAL_EXTRACTION_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 13 条顶层 race 场景（3.4：4 条规则 + 8 条 Nest + 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再经 `genre-common/modules.sh verify` 跑已装模块自带的场景（`roost module verify --json`：room 34、wallet 17、bag 20、enter 29，每个模块通过数等于本检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip）；成功删除临时工程，失败或 `ROOST_SURVIVAL_EXTRACTION_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
 
 业务 Robot 用例 `TestSurvivalExtractionRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
-- **证明**：公共 CLI 生成的 Player / SurvivalRaid DAO、SurvivalRaid 实体定时器、多实体 Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与按值冻结；物资守恒校验；视图字段与归属校验。Nest 用例里的期限经驱动的 `DeliverDue` 投递（实体一直在内存）。
-- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；没有经过加载后补触发与驱动投递循环的计时（`ExpiryCannotReopenOrReenter` 是业务时钟跳过结束时刻，不是重启）；单进程，无 Redis / NATS；鉴权与会话票是合成身份；账本上限在纯状态测试里直接填满，没有经 Nest 跑满 128 条命令。夹具里的数值是样例。
+- **证明**：公共 CLI 与模块安装器生成的 Player / Room DAO（room、wallet、bag、enter 的状态加上撤离追加的字段）、Room 实体定时器、多实体 Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚（wallet、bag 与房间状态一起）、锁顺序、业务幂等、room 身份围栏与期限核对；配置原子发布与按值冻结；物资守恒校验；视图字段与归属校验。Nest 用例里的期限经驱动的 `DeliverDue` 投递（实体一直在内存）。
+- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；没有经过加载后补触发与驱动投递循环的计时（`ExpiryCannotReopenOrReenter` 是业务时钟跳过结束时刻，不是重启）；单进程，无 Redis / NATS；鉴权是合成身份，连接标识是夹具给的固定串，断线由用例直接调 `RoomDisconnect`（不经断线订阅）；账本上限在纯状态测试里直接填满，没有经 Nest 跑满 128 条命令。夹具里的数值是样例。
 
 ### 12. 真实 WAL / Mongo 崩溃恢复
 
@@ -253,18 +296,18 @@ ROOST_SURVIVAL_EXTRACTION_REAL=1 bash scripts/test-survival-extraction-generated
 
 它在第 11 节之后追加 `TestSurvivalExtractionRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交四名玩家建档、开局、四人入场，以及 6 条命令：玩家 0 开始制作；玩家 1 去木材区采集一件、回安全区开始撤离读条；玩家 2 走进野外。后台投影关闭，断言 WAL 有 20 条已确认未投影的记录（5 个实体新建 + 4 建档 + 1 开局 + 4 入场 + 6 命令；Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务）、制作与撤离都在途且有待执行定时器后，父进程 SIGKILL 自己启动的子进程。
-2. 父进程用同一 WAL 与 Mongo 冷加载，业务时间比开局晚 10 秒（撤离读条、制作与第一个环境期限都已过；若一直在线，按 5 秒间隔玩家 2 会扣两次血）：整份探险状态与定时器 ID 和崩溃前逐字节一致；6 条命令按原样重放，回执不变。
-3. 断言冷加载已把存量最早期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`）：循环投递一次加载后的补触发，投递计数恰为 1——这一次里玩家 0 得到药剂、玩家 1 的清单封存为 3 木材 + 1 食物、玩家 2 只扣 1 血，结束时刻不变。重复入场不再扣费；玩家 1 先兑付得 4。另外三人在安全区开始撤离（玩家 2 先走回安全区），业务时间推进到读条完成时刻，循环按时投递第 2 次，三人同时撤离、本局结束，全程无重投。
-4. 停驱动后四人各兑付三次，最终永久金币为 100 / 99 / 98 / 98（初始 100、入场费 5，加各自清单 5 / 4 / 3 / 3）；正常关闭后再起第三个进程冷加载：核对探险状态与四人金币和关闭前一致，再重试入场、重放所有命令并重试兑付，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
+1. 子进程经 strict 文件 WAL 提交四名玩家建档（enter，含初始金币）、开房与名单、四人经 room 入座、四人付费入场，以及 6 条命令：玩家 0 开始制作；玩家 1 去木材区采集一件、回安全区开始撤离读条；玩家 2 走进野外。后台投影关闭，断言 WAL 有 24 条已确认未投影的记录（5 个实体新建 + 4 建档 + 1 开房与名单 + 4 入座 + 4 入场 + 6 命令；Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务）、制作与撤离都在途且有待执行定时器后，父进程 SIGKILL 自己启动的子进程。
+2. 父进程用同一 WAL 与 Mongo 冷加载，业务时间比开局晚 10 秒（撤离读条、制作与第一个环境期限都已过；若一直在线，按 5 秒间隔玩家 2 会扣两次血）：整份探险状态与定时器 ID 和崩溃前逐字节一致；room 的席位、代际与连接标识都在，在线状态为空（全员断线）；6 条命令用原连接、原代际按原样重放，回执不变（重放不要求在线）。
+3. 断言冷加载已把存量最早期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`）：循环投递一次加载后的补触发，投递计数恰为 1——这一次里玩家 0 得到药剂、玩家 1 的清单封存为 3 木材 + 1 食物、玩家 2 只扣 1 血，结束时刻不变（全员断线不妨碍定时器推进）。重复入场不再扣费；玩家 1 先兑付得 4。断线时玩家 0 的新命令被 room 拒绝（`room_stale_epoch`）；四人各换一条新连接 `RoomReconnect`（带上次代际，拿新代际）后，另外三人在安全区开始撤离（玩家 2 先走回安全区），业务时间推进到读条完成时刻，循环按时投递第 2 次，三人同时撤离、本局结束，全程无重投。
+4. 停驱动后四人各兑付三次，最终永久金币为 95 / 99 / 98 / 98（初始 100、入场费 5，加各自清单里材料兑的 0 / 4 / 3 / 3），玩家 0 清单里的 1 个药剂进了背包（1001 药水 1 件，其余三人 0）；正常关闭后再起第三个进程冷加载：核对探险状态、四人金币与药水和关闭前一致，再用换过的连接重试入场、重放命令（换连接之前的旧代际命令被代际围栏拒绝，改按当前代际查回执，回执不变）并重试兑付，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
 对照：在真实依赖模式下把第 3 步的 `Start` 换掉跑一次，用例在等补触发的有界等待处失败（`bounded wait expired`，脚本退出码 1），所以补触发确实由循环完成。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复，在途的制作与撤离读条、背包、资源点、回执与定时器节点完整恢复；驱动投递循环在冷加载后自动补触发一次、不追帧，业务在这一次里有界地处理到期事件；之后按时投递下一期限；跨进程重试不重复扣入场费或重复兑付。
+- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复，在途的制作与撤离读条、背包、资源点、回执、room 席位与代际、定时器节点完整恢复，在线状态按 room 的契约清空、成员换连接重连后续局；驱动投递循环在冷加载后自动补触发一次、不追帧，业务在这一次里有界地处理到期事件；之后按时投递下一期限；跨进程重试不重复扣入场费或重复兑付（wallet 金币与 bag 药水）。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；探险结束时刻在恢复路径上的处理（恢复用例在结束前收局，结束处理由 Nest 用例覆盖）；循环在系统时钟下的长时间计时（用例冻结业务时钟、由循环按 MaxWait 重读）、准入失败重试与 Redeliver（由 entitytimer 包测试覆盖）；多进程 / 跨机、Redis / NATS；四个逻辑玩家是同进程 Sender 并发，不是四台客户端，容量与长稳未测。
 
 ### 13. 结论怎样给
 
 地图、物资、配方、伤害和价格缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 到账、物资凭空增减、状态越权或生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷。当前存储是教学规模：每席账本 128 条、单个状态至多 256 KiB 整体提交、加载时整段校验，没有生产吞吐或延迟承诺。
 
-尚未实施或验收：真实客户端与公网鉴权、会话票签发、匹配与队友补位、开放世界地图与 AOI / 视野、命中 / 物理移动 / 反作弊、PvP 与队友伤害、完整 Skill Host、局外逐件仓库与装备携入携出、自动结算、长期归档、跨 sid 兑付与权威 HA（均不因此算框架缺陷）。本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。
+尚未实施或验收：真实客户端与公网鉴权、经真实 TCP / Gate 的断线订阅、匹配与队友补位、开放世界地图与 AOI / 视野、命中 / 物理移动 / 反作弊、PvP 与队友伤害、完整 Skill Host、局外逐件仓库与装备携入携出、自动结算、长期归档、跨 sid 兑付与权威 HA（均不因此算框架缺陷）。本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。

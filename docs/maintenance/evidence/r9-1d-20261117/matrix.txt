@@ -1,0 +1,7 @@
+# python3 scripts/test-genres-generated.py --out scratchpad/b1117-r9-1d/matrix --genres survival-extraction auto-chess，2026-11-17，exit 0
+Running survival-extraction: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-r9-1d/matrix/survival-extraction
+survival-extraction: passed
+Running auto-chess: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-r9-1d/matrix/auto-chess
+auto-chess: passed
+survival-extraction passed passed 13 skipped 0 custom_module_passed 13 custom_module_verify {'bag': 20, 'enter': 29, 'room': 34, 'wallet': 17}
+auto-chess passed passed 13 skipped 0 custom_module_passed 13 custom_module_verify {'enter': 29, 'room': 34, 'wallet': 17}
