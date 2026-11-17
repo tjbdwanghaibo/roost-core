@@ -1,6 +1,6 @@
 # R9 批 1D：生存撤离与自走棋改为“装模块 + 只写模块没覆盖的部分”（2026-11-17）
 
-依据：[R9 方案](../../PLAN-2026-11-17-r9-genre-modules.md) §3.8、§3.9，写法照 §9（批 0 塔防样板），房间类玩法新命令改调 room 的 `Room().Authorize`（1b38c2b8）。场景名与条数不变：撤离 13、自走棋 13（各含 1 条业务 Robot），0 SKIP。
+提交：`3d9b8933`（实现、手册、证据）。依据：[R9 方案](../../PLAN-2026-11-17-r9-genre-modules.md) §3.8、§3.9，写法照 §9（批 0 塔防样板），房间类玩法新命令改调 room 的 `Room().Authorize`（1b38c2b8）。场景名与条数不变：撤离 13、自走棋 13（各含 1 条业务 Robot），0 SKIP。
 
 ## 改法
 
@@ -29,7 +29,7 @@
 | 2 | `python3 scripts/test-genres-generated.py --out <scratchpad>/matrix --genres survival-extraction auto-chess` | 两类 `passed`，自定 module 名下 13 / 13，`custom_module_verify` 与上同（[matrix.txt](matrix.txt)） |
 | 3 | `source ~/.roost-it/roost-dataengine-it/env.sh` 后 `ROOST_SURVIVAL_EXTRACTION_REAL=1 …`、`ROOST_AUTO_CHESS_REAL=1 …` | `TestSurvivalExtractionRealCrashRecovery`（24 条未投影）、`TestAutoChessRealCrashRecovery`（50 条未投影）PASS，0 SKIP（[real.txt](real.txt)） |
 | 4 | 变异 | 撤离 8 个、自走棋 7 个，见下（[mutation.txt](mutation.txt)） |
-| 5 | `git status`；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 本组文件全部提交；文档测试见提交后的复跑（下节） |
+| 5 | `git status`；`GOWORK=off go test -count=1 -run 'Link\|Anchor\|Doc' .` | 本组文件全部提交（3d9b8933），主检出里本组路径无残留；提交后复跑文档测试：`TestDocumentedCommitsAreReachableFromHEAD`、`TestCoreContractsDoNotLinkDrivers`、`TestObservabilityDocNamesExistingMetrics` 过，`TestTrackedMarkdownRelativeLinksResolve` 只剩 2 处、都是 2B（MMORPG）尚未提交的 `r9-2b-20261117` 证据链接，与本组无关；本组的 6 处链接在提交后都能解析 |
 | 6 | 手册与 reference | 两份手册 §3.5 写旧断言 → 新断言；reference §3.2 / §3.3 命令块接 SKILL.md §3.2、自定 module 名实跑：13 / 13 PASS、module verify 全过（[skill-block.txt](skill-block.txt)）；两份手册 §3.3 的 Go 示例放进生成工程 `go vet` 通过 |
 
 ## 变异（红 → 恢复绿）
