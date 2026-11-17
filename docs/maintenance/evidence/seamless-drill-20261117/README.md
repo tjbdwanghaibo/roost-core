@@ -81,6 +81,6 @@ ROOST_SEAMLESS_TERRAIN=1 ROOST_SEAMLESS_PORT_OFFSET=3000 ROOST_SEAMLESS_OUT=<abs
 
 CHANGELOG `[Unreleased]`：
 
-> - **测试：`scripts/test-seamless-demo.sh` 支持整体端口偏移**（`ROOST_SEAMLESS_PORT_OFFSET=N`，缺省 0 行为不变）：生成配置里 demo 的全部端口（玩家 TCP、ops、注册地址、account web / portal 目录）、派生的 sid 1001～1004、drill / loadtest 的地址、缺省 etcd 端口一起加 N，起进程前核对配置与 endpoints 一致；端口占用检查多查 account 的 8081。CellWorld 业务适配进模块（D21 后半第一块）与 facebook 模块之后，在本机私有依赖（mirror-local）上以偏移 3000 复跑：缺省档 15 步 + 普通场景机器人、`ROOST_SEAMLESS_TERRAIN=1` 档 7 步全部通过（[证据](docs/maintenance/evidence/seamless-drill-20261117/README.md)）。
+> - **测试：`scripts/test-seamless-demo.sh` 支持整体端口偏移**（`ROOST_SEAMLESS_PORT_OFFSET=N`，缺省 0 行为不变）：生成配置里 demo 的全部端口（玩家 TCP、ops、注册地址、account web / portal 目录）、派生的 sid 1001～1004、drill / loadtest 的地址、缺省 etcd 端口一起加 N，起进程前核对配置与 endpoints 一致；端口占用检查多查 account 的 8081。CellWorld 业务适配进模块（D21 后半第一块）与 facebook 模块之后，在本机私有依赖（mirror-local）上以偏移 3000 复跑：缺省档 15 步 + 普通场景机器人、`ROOST_SEAMLESS_TERRAIN=1` 档 7 步全部通过（（证据：本目录））。
 
 KNOWN-LIMITS：如果有“cellworld 模块化之后真实多进程演练未复跑”一条（D21 证据第六节建议过），可以删；本轮不新增条目。
