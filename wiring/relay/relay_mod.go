@@ -39,14 +39,14 @@ type config struct {
 	app.ServiceIdentity
 	Relay struct {
 		Instance       string        `config:"instance" example:"relay-1" help:"本实例名：令牌里的 relay 实例、etcd 广播键与命令主题的最后一段都是它；字母、数字、_、-，1～64 个字符。不写取 <server_type>-<sid>"`
-		Listen         string        `config:"listen" required:"true" example:":7100" help:"TCP 监听地址"`
+		Listen         string        `config:"listen" listen:"always" required:"true" example:":7100" help:"TCP 监听地址"`
 		AdvertiseAddr  string        `config:"advertise_addr" required:"true" example:"10.0.0.5:7100" help:"客户端连 TCP 用的 host:port，经 etcd 广播给 lobby；生产环境不要写回环地址"`
 		TokenKeyEnv    string        `config:"token_key_env" required:"true" example:"ROOST_RELAY_TOKEN_KEY" help:"放 relay 令牌密钥的环境变量名，与 lobby 写同一个变量（至少 16 字节）"`
 		Subject        string        `config:"subject" required:"true" example:"roost.{project}.lobby" help:"与 lobby.subject 相同：报告发到 <subject>.events，lobby 的命令从 <subject>.relay.<instance> 收"`
 		RegistryPrefix string        `config:"registry_prefix" required:"true" example:"/{project}/relays/" help:"与 lobby.relay_registry_prefix 相同：etcd 广播键是 <registry_prefix><instance>"`
 		RegistryTTL    time.Duration `config:"registry_ttl" default:"10s" min:"2s" example:"10s" help:"etcd 广播的租约：进程没了，键在这么久内消失，lobby 不再把新房间分到这里"`
 
-		WSListen         string   `config:"ws_listen" example:":7101" help:"WebSocket 监听地址（浏览器客户端）；不写就不开。每条二进制消息装一帧，令牌、转发、限额与 TCP 相同"`
+		WSListen         string   `config:"ws_listen" listen:"always" example:":7101" help:"WebSocket 监听地址（浏览器客户端）；不写就不开。每条二进制消息装一帧，令牌、转发、限额与 TCP 相同"`
 		WSPath           string   `config:"ws_path" default:"/relay" example:"/relay" help:"WebSocket 升级的路径（精确匹配）"`
 		WSAdvertiseAddr  string   `config:"ws_advertise_addr" example:"wss://relay1.example.com/relay" help:"客户端连 WebSocket 用的完整 ws:// 或 wss:// URL（含路径），经 etcd 广播给 lobby；开了 ws_listen 就必填。wss 由前置负载均衡终结"`
 		WSAllowedOrigins []string `config:"ws_allowed_origins" example:"https://play.example.com" help:"允许的游戏页面 Origin（不带 Origin 的原生客户端总是放行）；空表示拒绝所有浏览器页面，写法见 infra/network/wsconn"`

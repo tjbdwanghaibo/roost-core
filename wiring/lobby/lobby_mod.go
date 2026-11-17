@@ -65,7 +65,7 @@ func (m *Mod) DependsOn() []app.ModName {
 // config 是 lobby.* 的声明。
 type config struct {
 	Lobby struct {
-		Listen              string                `config:"listen" default:"127.0.0.1:8090" example:"0.0.0.0:8090" help:"大厅 HTTP 的监听地址（对客户端开放；接口自带鉴权）"`
+		Listen              string                `config:"listen" listen:"always" default:"127.0.0.1:8090" example:"0.0.0.0:8090" help:"大厅 HTTP 的监听地址（对客户端开放；接口自带鉴权）"`
 		KeyPrefix           string                `config:"key_prefix" required:"true" example:"roost:{project}:lobby" help:"Redis 键前缀：必填、没有缺省（共用一个 Redis 的两套部署会静默共享房间目录）；Redis Cluster 上要带 hash tag"`
 		Games               map[string]gameConfig `config:"games" help:"本大厅服务的游戏：games.<游戏名>.max_members（房间人数上限，含房主）。不在这里的游戏一律拒绝，至少写一个"`
 		RoomTTL             time.Duration         `config:"room_ttl" default:"30s" min:"1s" max:"10m" example:"30s" help:"房间记录的寿命，relay 的每条报告续一次；relay 的心跳间隔要明显短于它（推荐 room_ttl/3）"`
