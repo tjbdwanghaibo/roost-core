@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/buildingsite"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
@@ -18,7 +19,7 @@ const SyncNamespaceBuilding = "building"
 type IBuildingEntity interface{ entity.IThreadSafeEntity }
 
 // Building 是放在地形上的一座建筑（可编辑地形 P4，方案 §6 / §27）：一种预制的整体建筑（ConfigID，配置表 building）加
-// 玩家给的修改参数值（Params），以及属主、锚点、朝向、地基高度，数据在 BuildingDao（SiteComponent）。放置、拆除、改参数
+// 玩家给的修改参数值（Params），以及属主、锚点、朝向、地基高度，数据在 BuildingDao（BuildingSite 组件，game/components/buildingsite）。放置、拆除、改参数
 // 由地形服务（game/terrainmap 的 Place / Remove / SetParams）发起：放置 / 拆除时建筑与它占地覆盖的地形块、玩家的编辑账本
 // 在同一笔 Nest 事务里锁住、一起提交或回滚；改参数只锁建筑与账本（参数不改变占地）。
 //
@@ -39,8 +40,8 @@ type Building struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	site *SiteComponent `comp:"CompTypeSite"`
-	dao  *db.BuildingDao `dao:"building"`
+	site *buildingsite.Component `comp:"buildingsite.CompTypeBuildingSite"`
+	dao  *db.BuildingDao         `dao:"building"`
 }
 
 // anchorSide 是锚点编号的行宽：地图每边至多 terrain.MaxChunksPerSide × 64 = 65536 个节点。
@@ -74,7 +75,7 @@ func AnchorOf(entityID int64) (gx, gy int64) {
 func (b *Building) Anchor() (gx, gy int64) { return AnchorOf(b.ID()) }
 
 // PublishSyncDirty 把这次改动标脏的同步字段交给本建筑的 subject（与 TerrainChunk / Player 的 PublishSyncDirty 同一做法）。
-// SiteComponent 每次写完 DAO 调一次。场景装了提交观察者时，提交准入也会按事务条目标脏，这里的标记并入同一事务条目，不会
+// BuildingSite 组件每次写完 DAO 调一次。场景装了提交观察者时，提交准入也会按事务条目标脏，这里的标记并入同一事务条目，不会
 // 双发；没登记为 subject 的建筑（放置事务提交之后才登记）标了也不记，登记后进入视野发全量。
 func (b *Building) PublishSyncDirty() {
 	if b == nil {

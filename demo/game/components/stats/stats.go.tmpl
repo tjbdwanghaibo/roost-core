@@ -10,7 +10,17 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-// Owner 是 Stats 组件的宿主（World 的接线见 game/entities/world/stats_component.go）：view 的 WorldEntity。
+// CompTypeStats 是 Stats 组件的类型号（2002，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2002
+const CompTypeStats entity.ComponentType = 2002
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"stats.CompTypeStats"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeStats, NewComponent)
+}
+
+// Owner 是 Stats 组件的宿主（挂在 World 上：实体字段的标签 comp:"stats.CompTypeStats"）：view 的 WorldEntity。
 // 只在实体被 Nest 锁住期间使用。
 type Owner = view.WorldEntity
 
@@ -21,7 +31,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；World 在 game/entities/world/stats_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

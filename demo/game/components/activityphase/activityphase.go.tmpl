@@ -16,6 +16,16 @@ import (
 	"{{MODULE}}/game/view"
 )
 
+// CompTypeActivityPhase 是 ActivityPhase 组件的类型号（2102，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2102
+const CompTypeActivityPhase entity.ComponentType = 2102
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"activityphase.CompTypeActivityPhase"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeActivityPhase, NewComponent)
+}
+
 // TimerType 是关窗节点的定时器类型号：活动窗口（id 在 Payload 里）到了关闭阶段。类型号是找回回调的依据——存下来的
 // 节点带不了函数，只带一个号，World 的定时器组件按它把节点交回 OnDue。它是持久数据契约，不能改号。
 const TimerType int32 = 1
@@ -23,7 +33,7 @@ const TimerType int32 = 1
 // retry 是记不上 effect 时节点隔多久再试。
 const retry = 30 * time.Second
 
-// Owner 是 ActivityPhase 组件的宿主（World 的接线见 game/entities/world/activity_phase_component.go）：view 的
+// Owner 是 ActivityPhase 组件的宿主（挂在 World 上：实体字段的标签 comp:"activityphase.CompTypeActivityPhase"）：view 的
 // WorldEntity（定时节点存在 WorldDao.Timers 里），加上实体上建定时节点的适配 ArmActivityPhase（节点挂在 World 的
 // 定时器组件上，见 timer_component.go）。只在实体被 Nest 锁住期间使用。
 type Owner interface {
@@ -38,7 +48,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；World 在 game/entities/world/activity_phase_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

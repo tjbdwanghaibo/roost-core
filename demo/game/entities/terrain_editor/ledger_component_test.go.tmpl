@@ -11,7 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// 账本在 DAO 上的读写（LedgerComponent）；判定规则 SeqWindow 的用例在 game/components/terrainledger。
+// 账本在 DAO 上的读写（TerrainLedger 组件）；判定规则 SeqWindow 的用例在 game/components/terrainledger。
 
 type nullCommitter struct{}
 
@@ -32,9 +32,9 @@ func newTestEditor(t *testing.T, playerID int64) *TerrainEditor {
 }
 
 // in 在一笔独立事务（rollback=undo）里跑 f；f 返回错误时事务回滚。
-func in(e *TerrainEditor, f func(*LedgerComponent) error) error {
+func in(e *TerrainEditor, f func(*terrainledger.Component) error) error {
 	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "terrain_editor_ledger", func() (any, error) {
-		return nil, f(e.LedgerComp())
+		return nil, f(e.TerrainLedgerComp())
 	})
 	return err
 }
@@ -46,7 +46,7 @@ func TestLedgerPersistsAllSixtyFourBitsAndRollsBack(t *testing.T) {
 		t.Fatalf("player id %d", e.PlayerID())
 	}
 	for _, seq := range []int64{1, 65, 2} {
-		if err := in(e, func(l *LedgerComponent) error {
+		if err := in(e, func(l *terrainledger.Component) error {
 			if v := l.Check(seq); v != terrainledger.Fresh {
 				t.Fatalf("seq %d: %v", seq, v)
 			}
@@ -57,7 +57,7 @@ func TestLedgerPersistsAllSixtyFourBitsAndRollsBack(t *testing.T) {
 		}
 	}
 	want := terrainledger.SeqWindow{Last: 65, Bits: 1<<63 | 1<<62}
-	if got := e.LedgerComp().Window(); got != want {
+	if got := e.TerrainLedgerComp().Window(); got != want {
 		t.Fatalf("window %+v, want %+v", got, want)
 	}
 	if e.Dao().GetWindow() >= 0 {
@@ -72,11 +72,11 @@ func TestLedgerPersistsAllSixtyFourBitsAndRollsBack(t *testing.T) {
 		t.Fatalf("restored last %d window %064b", restored.GetLastSeq(), uint64(restored.GetWindow()))
 	}
 	rollback := errors.New("a later step of the transaction failed")
-	if err := in(e, func(l *LedgerComponent) error { l.Record(66); return rollback }); !errors.Is(err, rollback) {
+	if err := in(e, func(l *terrainledger.Component) error { l.Record(66); return rollback }); !errors.Is(err, rollback) {
 		t.Fatalf("rolled-back record: %v", err)
 	}
-	if got := e.LedgerComp().Window(); got != want || e.LedgerComp().Check(66) != terrainledger.Fresh {
-		t.Fatalf("after a rolled-back record: %+v, 66 %v", got, e.LedgerComp().Check(66))
+	if got := e.TerrainLedgerComp().Window(); got != want || e.TerrainLedgerComp().Check(66) != terrainledger.Fresh {
+		t.Fatalf("after a rolled-back record: %+v, 66 %v", got, e.TerrainLedgerComp().Check(66))
 	}
 	for _, bad := range []int64{0, -1, int64(entity.UniqueIDMask) + 1} {
 		if _, err := UniqueID(bad); err == nil {

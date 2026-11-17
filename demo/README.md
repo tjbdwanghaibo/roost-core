@@ -37,7 +37,8 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `protocol/def/` | 玩家协议定义（`//roost:protocol` / `//roost:msg`） |
 | `game/controllers/player.go`、`game/controllers/player_*.go` | 端点：协议 → Controller → 生成的 Sender，错误在这里换成 `(code, reason)`。`game/controllers` 是一个包，`Controller` 由生成器写在 `controller.go`；demo 玩家端点共用的依赖在 `player.go`（`moduleState` 懒建），每条协议一个 `player_<协议>.go`，模块的端点在 `<模块>.go` |
 | `game/handler/` | Nest handler（背包、经验、领奖、送礼开始等） |
-| `game/entities/`、`db/def/` | Player / World / Scene / Monster 实体与 DAO 定义 |
+| `game/entities/`、`db/def/` | Player / World / Scene / Monster 等实体与 DAO 定义。实体包只留接线：框架接口的实现（`movement.MapOwner` / `MoveOwner`、`cellworld.Actor` / `BasePlayer`）、事件监听、同步 packer，以及 World 的定时器组件（实体定时器宿主，`game/entities/world/timer_component.go`） |
+| `game/components/<包>/`、`game/view/component_<包>.go` | demo 自己的组件：`mapview`（Player 的位置与行走）、`dungeonledger`（副本领奖账本）、`stats` 与 `activityphase`（World 的计数与关窗）、`monsterbody` 与 `monsteractor`（怪物）、`terrainsurface`、`terrainledger`、`terraincellledger`、`buildingsite`（可编辑地形与建筑）。与模块同一种组件包写法：类型号（与迁移前相同）、`//roost:component` 与工厂登记在组件包里，实体字段写 `comp:"<包>.CompType<X>"`，访问器 `<X>()` 与 `game/view` 的实体接口由生成器写；别的包经 `view.<X>` / `<X>Holder` 用组件，handler 收 `view.I<X>Entity` 或 `view.<E>Entity`，要组件包自己的类型时经 `terrainsurface.Of` / `buildingsite.Of` 取回。这些组件上可以写 `//roost:listen` |
 | `game/`（其余子目录） | 玩法与策略：`matchmaking`、`dungeon`、`rewards`、`battle`、`scene`、`skills`、`gift` 等；`actor` 是玩家与怪物共用的心跳驱动、动作词表、状态目录与移动接线 |
 | `game/modules/purchase/`、`game/components/purchase/`、`game/controllers/purchase.go` | 付费发货来自 [purchase 模块](../modules/purchase/README.md)，Player 仅存连续游标；本目录只留商品数据、模拟渠道与演示购买端点。模拟支付不扣钱，不能用于生产 |
 | `game/modules/skillbook/`、`game/modules/skills/catalog.go`、`game/controllers/skillbook.go`、`protocol/def/skillbook_catalog.go` | 技能目录来自 [skillbook 模块](../modules/README.md)，服务启动编译、客户端查询共用一份目录；本目录只提供 `game/modules/skills/fireball.json` 规则数据 |

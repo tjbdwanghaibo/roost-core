@@ -41,9 +41,9 @@ import (
 	"{{MODULE}}/game/components/buildingsite"
 	"{{MODULE}}/game/components/terrainsurface"
 	"{{MODULE}}/game/components/terrainledger"
+	"{{MODULE}}/game/view"
 	building "{{MODULE}}/game/entities/building"
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
-	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
@@ -361,11 +361,11 @@ func (m *Map) issue(ctx context.Context, playerID, seq int64) (terrainledger.Iss
 // ApplyIssue 是 handler TerrainEditIssue 的业务（分区场景的 Base，转发之前）：在玩家面向客户端的账本里判序号——Stale /
 // Ahead 答 *SeqError（什么都不写）；Duplicate 答 Again（这个序号发过：客户端的重试，照样再转发）；Fresh 记下。账本的锁内、
 // rollback=undo 事务里运行，只读写内存。
-func ApplyIssue(editor terrain_editor.ILedgerEntity, seq int64) (terrainledger.Issue, error) {
+func ApplyIssue(editor view.ITerrainLedgerEntity, seq int64) (terrainledger.Issue, error) {
 	if seq < 1 {
 		return terrainledger.Issue{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
 	}
-	ledger := editor.LedgerComp()
+	ledger := editor.TerrainLedger()
 	switch verdict := ledger.Check(seq); verdict {
 	case terrainledger.Duplicate:
 		return terrainledger.Issue{Again: true, LastSeq: ledger.LastSeq()}, nil

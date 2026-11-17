@@ -304,7 +304,7 @@ func (p *relayProc) cellLedger(t *testing.T) terrainledger.SeqWindow {
 		t.Fatal(err)
 	}
 	if e, _ := p.process.entities.Get(id).(*terrain_cell_editor.TerrainCellEditor); e != nil {
-		return e.LedgerComp().Window()
+		return e.TerrainCellLedgerComp().Window()
 	}
 	return terrainledger.SeqWindow{}
 }

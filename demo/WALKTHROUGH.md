@@ -95,7 +95,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
   同步的白名单按顶层字段列，所以“别人看不到经验”就是别人的视图里不列 `ProfilePrivate`（[同步视图](README.md#同步视图谁看见哪些字段)）。存储键是
   `profile` / `profile_private`，里面是数字短键（`profile.1` 名字、`profile.2` 等级、`profile_private.1` 经验）。
 - **demo 只覆盖模块留给工程的一个文件**：升级邮件的奖励规则 `game/components/mailbox/mailbox_profile_rules.go`（见下一节）。
-- **demo 的副本领奖账本**是 demo 自己的 Player 组件 `DungeonLedger`（`game/components/dungeonledger`，`view.DungeonLedger`：`ClaimDungeonRun`、通关计数；组件号 2103），状态在 demo 的 `PlayerDao.DungeonClaims` / `DungeonClears`；领奖事务 `handlerClaimDungeon` 锁的 `IDungeonClaimEntity` 同时给出它与 Profile。联盟展示已由 alliance 模块的独立 AllianceComponent 提供，状态是 `PlayerDao.Alliance.ID`。
+- **demo 的副本领奖账本**是 demo 自己的 Player 组件 `DungeonLedger`（`game/components/dungeonledger`，`view.DungeonLedger`：`ClaimDungeonRun`、通关计数；组件号 2103），状态在 demo 的 `PlayerDao.DungeonClaims` / `DungeonClears`；领奖事务 `handlerClaimDungeon` 收 `view.PlayerEntity`，在同一把锁里拿到它、Profile 与 Wallet。联盟展示已由 alliance 模块的独立 AllianceComponent 提供，状态是 `PlayerDao.Alliance.ID`。
 - **两实体的 `AddExp` 是 demo 的**（Player 加经验、World 记全服累计，见[实体锁档与跨实体事务](#实体锁档与跨实体事务)），它调模块的
   `CheckAddExp` 与 `AddExp`。模块的 `ProfileAddExp` 只动 Player，不记 World 的累计，demo 的入口（端点、GM、副本结算）都不走它。
 - 生成步骤里锁 Profile 组件的 handler（`AddExp`、`ClaimDungeon`）与背包的那些一样，
@@ -105,7 +105,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 ## 事件链：升级 → 奖励邮件（事务性 outbox）
 
 经验发放在任何 DAO 写入之前先做只读校验（`handler.checkExpGrant`）：Player 这一半问 profile 模块的 `profile.Component.CheckAddExp`（数额不是正数是
-`profile_exp_invalid`，int64 经验加法或 int32 等级放不下是 `profile_exp_overflow`），World 这一半问 `StatsComponent.CheckRecordExp`（int64 累计放不下是 demo 的
+`profile_exp_invalid`，int64 经验加法或 int32 等级放不下是 `profile_exp_overflow`），World 这一半问 demo 的 Stats 组件 `stats.Component.CheckRecordExp`（int64 累计放不下是 demo 的
 `exp_amount`，100004）。任何一方拒绝时 Player、属性、副本领奖账本、World 与升级效果都不写，也没有新的提交记录；`AddExp` / `RecordExp` 自己再查一次只是兜底，不靠写完再由 `rollback=undo` 撤回。`ClaimDungeon` 先判“已领取”（重放照旧返回 Claimed=false），再校验，最后才写账本。等级按平坦曲线用除余计算，不按奖励数量逐级循环（修前 `amount=MaxInt64` 会一直占住业务 worker）。GM `gm.player.add_exp`、`AddExp` 端点、副本结算 `FinishDungeon` 都经这两个 handler，同一道校验。生成工程回归在 `game/handler/add_exp_test.go`。
 
 ```
@@ -378,7 +378,7 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find, r
 
 - **system 自带锁，不借实体锁**。地形查询来自端点、来自成员的心跳、来自 AOI tick；让它们都去拿 Scene 的实体锁，
   等于让地图成为这个场景里所有事情的瓶颈。实体锁排的是**实体状态**的事务顺序，"这里能不能站"不是那个问题。
-- **位置的权威在 DAO，别处不缓存**。读位置 → `MapComponent.Pos()` → DAO；写位置只经 `movement.MapBasic`（`MapComponent` 持有）→ DAO，
+- **位置的权威在 DAO，别处不缓存**。读位置 → Map 组件（`game/components/mapview`）的 `Pos()` → DAO；写位置只经 `movement.MapBasic`（Map 组件持有）→ DAO，
   同一次写在事务里把新位置排进 AOI（`Space.QueueMove`，走提交门：回滚的一步不进 AOI）。AOI 的 id→坐标索引是索引不是第二个真相，
   永远不被当作"X 在哪"的答案读出来。两个可写的真相就是重连之后玩家出现在别处的那种 bug。
 - **位置不每拍落库**（D20 决定 ⑮）：`PosX/PosY/SceneID/Facing` 是 `nopersist,sync`；落库的是 `SavedSceneID/SavedPosX/SavedPosY/SavedFacing`，
@@ -425,7 +425,7 @@ move_target(x, y | follow) ─▶ handlerMoveTarget（Scene + Player 两实体�
 
 ## 怪物：巡逻、定身与状态门控（D21）
 
-`game/entities/monster/actor_component.go` 把框架的组件按游戏会用的方式接起来，全部跑在怪物自己的锁与心跳上：
+MonsterActor 组件（`game/components/monsteractor`，挂在 Monster 上的 `comp:"monsteractor.CompTypeMonsterActor"`；实体包只剩 `game/entities/monster/actor.go` 里框架要的 `MapBasic` / `MoveComponent`）把框架的组件按游戏会用的方式接起来，全部跑在怪物自己的锁与心跳上：
 
 | 组件 | 做什么 |
 | --- | --- |
@@ -829,7 +829,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
 `entity.EntityCategory` 的值就是锁的获取顺序（低的先锁）：Remote(1) → World(2) → PlayerScoped(3) → Player(4) → Other(5)。
 生成器默认把新实体放在 Other——"持有它之后什么都锁不了"，对还没决定顺序的实体是安全的。demo 把 Player 放到
 `EntityCategoryPlayer`、World 放到 `EntityCategoryWorld`，因为 `AddExp` 是一个**两实体事务**：
-`handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount int64)`——Player 加经验升级、World 累计
+`handlerAddExp(target view.IProfileEntity, stats view.IStatsEntity, amount int64)`——Player 加经验升级、World 累计
 `ExpGranted`，两处变更进同一条 WAL 记录，要么都落库要么都不。Nest 按档位锁：World 先、Player 后。生成的 Sender 变成
 `MultiSync_AddExp(ctx, target, stats, amount)`，一个实体一个 id；`roost add endpoint` 只接单实体 handler，所以这个端点手写。
 

@@ -225,7 +225,7 @@ func TestMainViewMeasureSyncBytes(t *testing.T) {
 	monsterFull := payloadSizes(w.recorder.take(watcherID))
 	first := spawn.monster(spawn.IDs()[0])
 	eventually(t, "the patrol starts walking", func() (bool, string) {
-		return locked(w, first.ID(), first.ActorComp().Moving), "idle"
+		return locked(w, first.ID(), first.MonsterActorComp().Moving), "idle"
 	})
 	if err := w.bridge.Flush(w.ctx); err != nil {
 		t.Fatal(err)

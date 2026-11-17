@@ -1,7 +1,7 @@
 package handler
 
 import (
-	monster "{{MODULE}}/game/entities/monster"
+	"{{MODULE}}/game/view"
 )
 
 // handlerRootMonster applies (rooted, for seconds; 0 is until dispelled) or
@@ -17,7 +17,7 @@ import (
 // and the state with it.
 //
 //roost:nest rollback=undo durability=async
-func handlerRootMonster(target monster.IActorEntity, rooted bool, seconds int64) (bool, error) {
-	target.ActorComp().SetRooted(rooted, seconds)
-	return target.ActorComp().Rooted(), nil
+func handlerRootMonster(target view.IMonsterActorEntity, rooted bool, seconds int64) (bool, error) {
+	target.MonsterActor().SetRooted(rooted, seconds)
+	return target.MonsterActor().Rooted(), nil
 }

@@ -7,6 +7,16 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
+// CompTypeTerrainLedger 是 TerrainLedger 组件的类型号（2012，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2012
+const CompTypeTerrainLedger entity.ComponentType = 2012
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"terrainledger.CompTypeTerrainLedger"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTerrainLedger, NewComponent)
+}
+
 // WindowSize 是 LastSeq 下面记得住的序号个数（位图宽度）：序号在 [LastSeq−WindowSize, LastSeq] 里的请求能确定是否已
 // 应用；更小的序号答过期（Stale），不再执行。64 足够容纳正常的乱序（客户端顺序发、少量重试与断线重发）。
 const WindowSize = 64
@@ -71,7 +81,7 @@ func RecordSeq(w SeqWindow, seq int64) SeqWindow {
 	return w
 }
 
-// Owner 是 TerrainLedger 组件的宿主（TerrainEditor 的接线见 game/entities/terrain_editor/ledger_component.go）：view 的 TerrainEditorEntity。
+// Owner 是 TerrainLedger 组件的宿主（挂在 TerrainEditor 上：实体字段的标签 comp:"terrainledger.CompTypeTerrainLedger"）：view 的 TerrainEditorEntity。
 // 只在实体被 Nest 锁住期间使用。
 type Owner = view.TerrainEditorEntity
 
@@ -82,7 +92,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；TerrainEditor 在 game/entities/terrain_editor/ledger_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"{{MODULE}}/game/components/terraincellledger"
 	"{{MODULE}}/game/components/terrainledger"
 	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -17,7 +18,7 @@ func TestCellLedgerNeverRefusesAFarAheadSequence(t *testing.T) {
 	e := newTestCellEditor(t, 7)
 	far := int64(terrainledger.MaxSeqAhead) * 3
 	for _, seq := range []int64{far, far + 1} {
-		if err := in(e, func(l *LedgerComponent) error {
+		if err := in(e, func(l *terraincellledger.Component) error {
 			if v := l.Check(seq); v != terrainledger.Fresh {
 				t.Fatalf("seq %d on last %d: %v, want fresh", seq, l.LastSeq(), v)
 			}
@@ -27,7 +28,7 @@ func TestCellLedgerNeverRefusesAFarAheadSequence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	l := e.LedgerComp()
+	l := e.TerrainCellLedgerComp()
 	if l.Check(far) != terrainledger.Duplicate || l.Check(far+1) != terrainledger.Duplicate {
 		t.Fatalf("recorded sequences are not duplicates: %+v", l.Window())
 	}
@@ -45,7 +46,7 @@ func TestCellLedgerNeverRefusesAFarAheadSequence(t *testing.T) {
 // 账本在 DAO 上原样持久、原样读回（含建筑数）；回滚的事务撤销 Record 与建筑数。
 func TestCellLedgerPersistsAndRollsBack(t *testing.T) {
 	e := newTestCellEditor(t, 4242)
-	if err := in(e, func(l *LedgerComponent) error {
+	if err := in(e, func(l *terraincellledger.Component) error {
 		l.Record(65)
 		l.Record(2)
 		l.AddBuildings(1)
@@ -62,10 +63,10 @@ func TestCellLedgerPersistsAndRollsBack(t *testing.T) {
 		t.Fatalf("restored last %d window %064b buildings %d", restored.GetLastSeq(), uint64(restored.GetWindow()), restored.GetBuildings())
 	}
 	rollback := errors.New("a later step of the transaction failed")
-	if err := in(e, func(l *LedgerComponent) error { l.Record(66); l.AddBuildings(1); return rollback }); !errors.Is(err, rollback) {
+	if err := in(e, func(l *terraincellledger.Component) error { l.Record(66); l.AddBuildings(1); return rollback }); !errors.Is(err, rollback) {
 		t.Fatalf("rolled-back record: %v", err)
 	}
-	if l := e.LedgerComp(); l.Check(66) != terrainledger.Fresh || l.LastSeq() != 65 || l.Buildings() != 1 {
+	if l := e.TerrainCellLedgerComp(); l.Check(66) != terrainledger.Fresh || l.LastSeq() != 65 || l.Buildings() != 1 {
 		t.Fatalf("after a rolled-back record: last %d buildings %d, 66 %v", l.LastSeq(), l.Buildings(), l.Check(66))
 	}
 	for _, bad := range []int64{0, -1, int64(entity.UniqueIDMask) + 1} {
@@ -94,9 +95,9 @@ func newTestCellEditor(t *testing.T, playerID int64) *TerrainCellEditor {
 }
 
 // in 在一笔独立事务（rollback=undo）里跑 f；f 返回错误时事务回滚。
-func in(e *TerrainCellEditor, f func(*LedgerComponent) error) error {
+func in(e *TerrainCellEditor, f func(*terraincellledger.Component) error) error {
 	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "terrain_cell_editor_ledger", func() (any, error) {
-		return nil, f(e.LedgerComp())
+		return nil, f(e.TerrainCellLedgerComp())
 	})
 	return err
 }

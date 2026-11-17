@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 )
 
 // handlerLeaveScene takes a player off the map in its own transaction:
@@ -16,8 +16,8 @@ import (
 // has nothing to save: no error.
 //
 //roost:nest rollback=undo durability=async
-func handlerLeaveScene(target player.IMapEntity) error {
-	component := target.MapComp()
+func handlerLeaveScene(target view.IMapEntity) error {
+	component := target.Map()
 	if !component.InScene() {
 		return nil
 	}

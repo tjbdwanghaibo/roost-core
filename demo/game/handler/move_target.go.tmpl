@@ -8,6 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
@@ -36,8 +37,8 @@ import (
 // any subsequent error restores the previous move as well as position.
 //
 //roost:nest rollback=undo durability=async
-func handlerMoveTarget(target player.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64, follow int64) (int64, error) {
-	component := target.MapComp()
+func handlerMoveTarget(target view.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64, follow int64) (int64, error) {
+	component := target.Map()
 	if !component.InScene() || component.SceneID() != area.ID() {
 		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in this scene")
 	}

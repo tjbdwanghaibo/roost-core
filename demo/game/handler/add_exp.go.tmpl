@@ -3,7 +3,6 @@ package handler
 import (
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/view"
-	world "{{MODULE}}/game/entities/world"
 )
 
 // handlerAddExp is a two-entity transaction: the Player gains experience and
@@ -16,7 +15,7 @@ import (
 // (MultiSync_AddExp, one id per entity parameter).
 //
 //roost:nest rollback=undo durability=strict
-func handlerAddExp(target view.IProfileEntity, stats world.IStatsEntity, amount int64) (int32, error) {
+func handlerAddExp(target view.IProfileEntity, stats view.IStatsEntity, amount int64) (int32, error) {
 	// 两个实体的范围先只读校验：超出 int64 经验 / int32 等级 / World 累计时在任何 DAO 写入前拒绝，
 	// 不靠写完再由 rollback=undo 撤回。AddExp / RecordExp 自己也检查，只是兜底。
 	if err := checkExpGrant(target, stats, amount); err != nil {
@@ -27,7 +26,7 @@ func handlerAddExp(target view.IProfileEntity, stats world.IStatsEntity, amount 
 		return 0, err
 	}
 	publishExpGrant(target)
-	if err := stats.StatsComp().RecordExp(amount); err != nil {
+	if err := stats.Stats().RecordExp(amount); err != nil {
 		return 0, err
 	}
 	return gained, nil
@@ -39,11 +38,11 @@ func handlerAddExp(target view.IProfileEntity, stats world.IStatsEntity, amount 
 // must all stay in range, or nothing is written. The Player's half is the
 // profile module's CheckAddExp (codes profile_exp_invalid /
 // profile_exp_overflow); the World's half is the demo's own (exp_amount).
-func checkExpGrant(target view.IProfileEntity, stats world.IStatsEntity, amount int64) error {
+func checkExpGrant(target view.IProfileEntity, stats view.IStatsEntity, amount int64) error {
 	if err := target.Profile().CheckAddExp(amount); err != nil {
 		return err
 	}
-	return stats.StatsComp().CheckRecordExp(amount)
+	return stats.Stats().CheckRecordExp(amount)
 }
 
 // publishExpGrant 把这次发放改动的同步字段交给场景同步，一次发放调一次。档案是 profile 模块的，它的 AddExp 只经

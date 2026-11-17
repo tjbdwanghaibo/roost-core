@@ -117,7 +117,7 @@ func buildingAt(t *testing.T, p *terrainProcess, gx, gy int64) buildingsite.Stat
 		t.Fatal(err)
 	}
 	if e, _ := p.entities.Get(id).(*building.Building); e != nil {
-		return e.SiteComp().State()
+		return e.BuildingSiteComp().State()
 	}
 	return buildingsite.State{}
 }
@@ -141,7 +141,7 @@ func buildingsOf(p *terrainProcess) []buildingsite.State {
 	var out []buildingsite.State
 	p.entities.Range(func(e entity.IThreadSafeEntity) bool {
 		if b, ok := e.(*building.Building); ok && b != nil {
-			if s := b.SiteComp().State(); s.Standing {
+			if s := b.BuildingSiteComp().State(); s.Standing {
 				out = append(out, s)
 			}
 		}
@@ -159,7 +159,7 @@ func ledgerBuildings(t *testing.T, p *terrainProcess, player int64) int64 {
 		t.Fatal(err)
 	}
 	if e, _ := p.entities.Get(id).(*terrain_editor.TerrainEditor); e != nil {
-		return e.LedgerComp().Buildings()
+		return e.TerrainLedgerComp().Buildings()
 	}
 	return 0
 }
@@ -228,7 +228,7 @@ func snapshotBuildings(t *testing.T, p *terrainProcess) buildingSnapshot {
 	}
 	p.entities.Range(func(e entity.IThreadSafeEntity) bool {
 		if b, ok := e.(*building.Building); ok && b != nil {
-			s.buildings = append(s.buildings, b.SiteComp().State())
+			s.buildings = append(s.buildings, b.BuildingSiteComp().State())
 		}
 		return true
 	})
@@ -771,7 +771,7 @@ func TestBuildingRestartRealMongo(t *testing.T) {
 	if standing := second.m.ReconciledBuildings(); len(standing) != 1 || standing[0].Building == nil ||
 		standing[0].Building.Dao().GetConfigID() != 2 || standing[0].Lot != (terrainsurface.Lot{GX: 60, GY: 20, W: 8, H: 6}) {
 		t.Fatalf("the reconciled buildings after the restart: %+v", standing)
-	} else if got := standing[0].Building.SiteComp().State().Params; !slices.Equal(got, []int32{5, 9}) {
+	} else if got := standing[0].Building.BuildingSiteComp().State().Params; !slices.Equal(got, []int32{5, 9}) {
 		t.Fatalf("the hall's parameters after the restart: %v, want [5 9]", got)
 	}
 	if !occupied(second.m, 60, 20) || !occupied(second.m, 67, 25) || occupied(second.m, 10, 10) || occupied(second.m, 68, 20) {

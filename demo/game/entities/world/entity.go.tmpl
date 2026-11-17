@@ -2,6 +2,8 @@ package world
 
 import (
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/stats"
+	"{{MODULE}}/game/components/activityphase"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -19,8 +21,8 @@ type World struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	stats         *StatsComponent         `comp:"CompTypeStats"`
-	activityPhase *ActivityPhaseComponent `comp:"CompTypeActivityPhase"`
-	timer         *TimerComponent         `comp:"CompTypeTimer"`
-	dao           *db.WorldDao            `dao:"world"`
+	stats         *stats.Component         `comp:"stats.CompTypeStats"`
+	activityPhase *activityphase.Component `comp:"activityphase.CompTypeActivityPhase"`
+	timer         *TimerComponent          `comp:"CompTypeTimer"`
+	dao           *db.WorldDao             `dao:"world"`
 }

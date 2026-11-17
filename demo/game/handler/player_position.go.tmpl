@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -11,6 +11,6 @@ import (
 // There is no cached copy to read instead, by design.
 //
 //roost:nest
-func handlerPlayerPosition(target player.IMapEntity) (spatial.Point, error) {
-	return target.MapComp().Pos(), nil
+func handlerPlayerPosition(target view.IMapEntity) (spatial.Point, error) {
+	return target.Map().Pos(), nil
 }

@@ -1,8 +1,8 @@
 package handler
 
 import (
+	"{{MODULE}}/game/view"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	player "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -19,12 +19,13 @@ import (
 // rank 4, so a transaction that takes both always takes them in that order
 // and cannot deadlock against one that takes them for something else.
 //
-// The terrain check itself is not here: it is in MapComponent.Teleport,
-// which is the only path that writes a position this way. The AOI follows
-// from the same write (MapBasic.SetPos queues the position, commit-gated), so
-// the endpoint has nothing to tell the scene afterwards.
+// The terrain check itself is not here: it is in the Map component's Teleport
+// (game/components/mapview), which is the only path that writes a position
+// this way. The AOI follows from the same write (MapBasic.SetPos queues the
+// position, commit-gated), so the endpoint has nothing to tell the scene
+// afterwards.
 //
 //roost:nest rollback=undo durability=async
-func handlerMovePlayer(target player.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
-	return target.MapComp().Teleport(area.Terrain(), spatial.Point{X: x, Y: y})
+func handlerMovePlayer(target view.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
+	return target.Map().Teleport(area.Terrain(), spatial.Point{X: x, Y: y})
 }

@@ -303,6 +303,97 @@ func TestDemoEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
 		// 交给 Node.SetGroup 写 Base 的那份成员表（原来是 game/handler 里经 OnTeamChanged 登记的钩子）。
 		"game/entities/player/cell_team.go.tmpl Player.OnTeamChanged": "listens to the team module's event.TeamChanged and hands the roster to cellworld's Node.SetGroup, the base side's copy of the team (cellworld.GroupPlayer)",
 	})
+	checkDemoComponentsMountedFromTheirPackages(t)
+}
+
+// game-demo 自己的组件同模块一样按组件包写法挂载（2026-11-17）：类型号、//roost:component 与 RegisterComponentFactory 在
+// game/components/<包>/，实体字段写 comp:"<包>.CompType<X>"。实体包里不再有组件的类型号、别名（XComponent = <包>.Component）
+// 与组件窄接口（I<X>Entity；handler 收 game/view 的 I<X>Entity 或 <E>Entity）。唯一的例外是 World 的定时器组件
+// （timer_component.go）：它是实体定时器宿主，按规则留在实体包。步骤里因此没有 roost add component（它把组件写在实体包里），
+// roost add handler --component 只剩锁定时器组件的那一个（别的组件在实体包里没有组件文件，骨架无从生成）。
+func checkDemoComponentsMountedFromTheirPackages(t *testing.T) {
+	t.Helper()
+	const timerFile = "game/entities/world/timer_component.go.tmpl"
+	marker := regexp.MustCompile(`(?m)^//roost:component type=(\d+)`)
+	alias := regexp.MustCompile(`(?m)^type (\w+Component) = `)
+	narrow := regexp.MustCompile(`(?m)^type I(\w+)Entity interface`)
+	entityMarker := regexp.MustCompile(`(?m)^//roost:entity[^\n]*\n(?://[^\n]*\n)?type (\w+) struct`)
+	localComp := regexp.MustCompile("`comp:\"(CompType\\w+)\"`")
+	entityFiles, err := fs.Glob(demo.Files, "game/entities/*/*.go.tmpl")
+	if err != nil || len(entityFiles) == 0 {
+		t.Fatalf("no demo entity templates (err=%v)", err)
+	}
+	entities := map[string]bool{} // 实体名（I<实体>Entity 是实体自己的接口，不是组件窄接口）
+	for _, name := range entityFiles {
+		raw, _ := fs.ReadFile(demo.Files, name)
+		for _, m := range entityMarker.FindAllStringSubmatch(string(raw), -1) {
+			entities[m[1]] = true
+		}
+	}
+	for _, name := range entityFiles {
+		if strings.HasSuffix(name, "_test.go.tmpl") {
+			continue
+		}
+		raw, _ := fs.ReadFile(demo.Files, name)
+		body := string(raw)
+		if name == timerFile {
+			if !strings.Contains(body, "//roost:component type=2006") {
+				t.Errorf("%s lost the World's timer component type 2006", name)
+			}
+			continue
+		}
+		for _, m := range marker.FindAllStringSubmatch(body, -1) {
+			t.Errorf("%s declares //roost:component type=%s in the entity package; the type goes to the component package (game/components/<package>)", name, m[1])
+		}
+		for _, m := range alias.FindAllStringSubmatch(body, -1) {
+			t.Errorf("%s keeps the alias %s; the entity field names the component package's type", name, m[1])
+		}
+		for _, m := range narrow.FindAllStringSubmatch(body, -1) {
+			if !entities[m[1]] {
+				t.Errorf("%s declares I%sEntity in the entity package; handlers take game/view's I<X>Entity or <E>Entity", name, m[1])
+			}
+		}
+		for _, m := range localComp.FindAllStringSubmatch(body, -1) {
+			if !(name == "game/entities/world/entity.go.tmpl" && m[1] == "CompTypeTimer") {
+				t.Errorf("%s mounts %s from the entity package; write comp:\"<package>.%s\"", name, m[1], m[1])
+			}
+		}
+	}
+	// 迁过去的组件：类型号不变（存档与同步数据不带类型号，实体内的组件按它升序初始化），每个包一个类型号与一次工厂登记。
+	moved := map[string]string{
+		"mapview": "2004", "dungeonledger": "2103", "monsterbody": "2100", "monsteractor": "2101", "stats": "2002",
+		"activityphase": "2102", "terrainsurface": "2011", "terrainledger": "2012", "terraincellledger": "2014", "buildingsite": "2013",
+	}
+	for pkg, id := range moved {
+		files, err := fs.Glob(demo.Files, "game/components/"+pkg+"/*.go.tmpl")
+		if err != nil || len(files) == 0 {
+			t.Errorf("no demo component package game/components/%s (err=%v)", pkg, err)
+			continue
+		}
+		var ids []string
+		registered := 0
+		for _, name := range files {
+			raw, _ := fs.ReadFile(demo.Files, name)
+			for _, m := range marker.FindAllStringSubmatch(string(raw), -1) {
+				ids = append(ids, m[1])
+			}
+			registered += strings.Count(string(raw), "entity.RegisterComponentFactory(")
+		}
+		if len(ids) != 1 || ids[0] != id || registered != 1 {
+			t.Errorf("game/components/%s: //roost:component types %v and %d factory registrations, want type %s registered once", pkg, ids, registered, id)
+		}
+	}
+	for _, step := range demoScaffoldSteps("game") {
+		if step.add == nil {
+			continue
+		}
+		if step.add.Kind == "component" {
+			t.Errorf("the demo adds component %s with roost add component, which writes it into the entity package", step.add.Name)
+		}
+		if step.add.Kind == "handler" && step.add.Component != "" && step.add.Component != "Timer" {
+			t.Errorf("add handler %s --component %s cannot run: the component has no file in the entity package; write the handler file instead", step.add.Name, step.add.Component)
+		}
+	}
 }
 
 // 邮件由 mailbox 模块带来（连同它依赖的 wallet；模块在同一步里装、顺序由上一条用例钉住）。demo 不再有自己的邮件协议、
@@ -474,6 +565,23 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// 组件包写法（2026-11-16 起）：类型号与工厂登记在组件包里，实体包里没有 bag 的接线文件。
 	if _, err := os.Stat(filepath.Join(target, "game", "entities", "player", "bag_component.go")); !os.IsNotExist(err) {
 		t.Errorf("game/entities/player/bag_component.go exists (err=%v); the bag component is mounted the component-package way", err)
+	}
+	// demo 自己的组件也一样（2026-11-17）：实体包里只剩 World 的定时器组件，roost add component 的脚手架（实体包的组件文件、
+	// game/view 里空的 component_<x>.go）一个都没有。
+	for _, rel := range []string{
+		"game/entities/player/map_component.go", "game/entities/player/dungeon_ledger_component.go",
+		"game/entities/monster/body_component.go", "game/entities/monster/actor_component.go",
+		"game/entities/world/stats_component.go", "game/entities/world/activity_phase_component.go",
+		"game/entities/terrain_chunk/surface_component.go", "game/entities/terrain_editor/ledger_component.go",
+		"game/entities/terrain_cell_editor/ledger_component.go", "game/entities/building/site_component.go",
+		"game/view/component_body.go", "game/view/component_actor.go",
+	} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Errorf("%s exists (err=%v); the demo's components are mounted the component-package way", rel, err)
+		}
+	}
+	if aggregate := read("game/entities/player/entity.go"); !strings.Contains(aggregate, "`comp:\"mapview.CompTypeMap\"`") || !strings.Contains(aggregate, "`comp:\"dungeonledger.CompTypeDungeonLedger\"`") {
+		t.Errorf("Player does not mount the demo's Map and DungeonLedger components from their packages:\n%s", aggregate)
 	}
 	if rule := read("game/components/bag/items.go"); !strings.Contains(rule, "generated.ItemByID(itemID)") {
 		t.Errorf("the bag's item rule does not read the item table:\n%s", rule)

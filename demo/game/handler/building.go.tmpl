@@ -2,11 +2,8 @@ package handler
 
 import (
 	"{{MODULE}}/game/components/buildingsite"
-	building "{{MODULE}}/game/entities/building"
-	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
-	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/terrainmap"
+	"{{MODULE}}/game/view"
 )
 
 // 建筑的四个事务（可编辑地形 P4 / 方案 §27，game/terrainmap 发起）：都是 rollback=undo durability=strict——回复、占位表的
@@ -19,7 +16,7 @@ import (
 // 建筑实体、每块记占地、账本记序号（terrainmap.Map.ApplyPlace）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerBuildingPlace(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64, placement buildingsite.Placement) (buildingsite.Result, error) {
+func handlerBuildingPlace(targets []view.ITerrainSurfaceEntity, site view.IBuildingSiteEntity, editor view.ITerrainLedgerEntity, seq int64, placement buildingsite.Placement) (buildingsite.Result, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return buildingsite.Result{}, terrainmap.ErrDisabled
@@ -30,7 +27,7 @@ func handlerBuildingPlace(targets []terrain_chunk.ISurfaceEntity, site building.
 // handlerBuildingRemove 是属主拆除一座建筑（Map.Remove 发起，terrainmap.Map.ApplyRemove）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerBuildingRemove(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64) (buildingsite.Result, error) {
+func handlerBuildingRemove(targets []view.ITerrainSurfaceEntity, site view.IBuildingSiteEntity, editor view.ITerrainLedgerEntity, seq int64) (buildingsite.Result, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return buildingsite.Result{}, terrainmap.ErrDisabled
@@ -42,7 +39,7 @@ func handlerBuildingRemove(targets []terrain_chunk.ISurfaceEntity, site building
 // 建筑的配置补齐与校验，写 Params、账本记序号。提交后观看它的客户端按 on_change 收到增量。
 //
 //roost:nest rollback=undo durability=strict
-func handlerBuildingParams(site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64, params []int32) (buildingsite.Result, error) {
+func handlerBuildingParams(site view.IBuildingSiteEntity, editor view.ITerrainLedgerEntity, seq int64, params []int32) (buildingsite.Result, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return buildingsite.Result{}, terrainmap.ErrDisabled
@@ -54,7 +51,7 @@ func handlerBuildingParams(site building.ISiteEntity, editor terrain_editor.ILed
 // 转发来的放置 / 拆除 / 改参数（P5，Map.Exec 发起）：同上面三个，账本是玩家在本格的 TerrainCellEditor。
 //
 //roost:nest rollback=undo durability=strict
-func handlerBuildingPlacePart(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, placement buildingsite.Placement) (buildingsite.Result, error) {
+func handlerBuildingPlacePart(targets []view.ITerrainSurfaceEntity, site view.IBuildingSiteEntity, editor view.ITerrainCellLedgerEntity, seq int64, placement buildingsite.Placement) (buildingsite.Result, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return buildingsite.Result{}, terrainmap.ErrDisabled
@@ -63,7 +60,7 @@ func handlerBuildingPlacePart(targets []terrain_chunk.ISurfaceEntity, site build
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerBuildingRemovePart(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_cell_editor.ILedgerEntity, seq int64) (buildingsite.Result, error) {
+func handlerBuildingRemovePart(targets []view.ITerrainSurfaceEntity, site view.IBuildingSiteEntity, editor view.ITerrainCellLedgerEntity, seq int64) (buildingsite.Result, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return buildingsite.Result{}, terrainmap.ErrDisabled
@@ -72,7 +69,7 @@ func handlerBuildingRemovePart(targets []terrain_chunk.ISurfaceEntity, site buil
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerBuildingParamsPart(site building.ISiteEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, params []int32) (buildingsite.Result, error) {
+func handlerBuildingParamsPart(site view.IBuildingSiteEntity, editor view.ITerrainCellLedgerEntity, seq int64, params []int32) (buildingsite.Result, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return buildingsite.Result{}, terrainmap.ErrDisabled
@@ -84,7 +81,7 @@ func handlerBuildingParamsPart(site building.ISiteEntity, editor terrain_cell_ed
 // 一致、配置对得上，原始地形换版时按新版本处置（terrainmap.Map.ApplyRebase）。lot 是块记录里的占地（terrainsurface.Lot 的打包值）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerBuildingRebase(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, lot int64) (buildingsite.Rebase, error) {
+func handlerBuildingRebase(targets []view.ITerrainSurfaceEntity, site view.IBuildingSiteEntity, lot int64) (buildingsite.Rebase, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return buildingsite.Rebase{}, terrainmap.ErrDisabled

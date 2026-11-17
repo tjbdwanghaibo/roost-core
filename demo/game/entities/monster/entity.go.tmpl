@@ -2,6 +2,8 @@ package monster
 
 import (
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/monsterbody"
+	"{{MODULE}}/game/components/monsteractor"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -31,9 +33,9 @@ type Monster struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	body  *BodyComponent  `comp:"CompTypeBody"`
-	act   *ActorComponent `comp:"CompTypeActor"`
-	dao  *db.MonsterDao  `dao:"monster"`
+	body *monsterbody.Component  `comp:"monsterbody.CompTypeMonsterBody"`
+	act  *monsteractor.Component `comp:"monsteractor.CompTypeMonsterActor"`
+	dao  *db.MonsterDao          `dao:"monster"`
 }
 
 // PublishSyncDirty hands the DAO's accumulated sync mask to the subject, the

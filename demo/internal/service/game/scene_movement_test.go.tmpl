@@ -607,7 +607,7 @@ func TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols(t *testing.T) {
 	ids := spawn.IDs()
 	for _, id := range ids {
 		w.settle(id)
-		if value := spawn.monster(id); value == nil || !locked(w, id, value.ActorComp().InScene) {
+		if value := spawn.monster(id); value == nil || !locked(w, id, value.MonsterActorComp().InScene) {
 			t.Fatalf("monster %d is counted but not on the map", id)
 		}
 	}
@@ -617,7 +617,7 @@ func TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols(t *testing.T) {
 	first := spawn.monster(ids[0])
 	home := first.MapBasic().Published().Pos
 	eventually(t, "the patrol starts walking", func() (bool, string) {
-		return locked(w, first.ID(), first.ActorComp().Moving), "idle"
+		return locked(w, first.ID(), first.MonsterActorComp().Moving), "idle"
 	})
 	w.clock.advance(time.Second)
 	corner := spatial.Point{X: home.X + 12, Y: home.Y}
@@ -627,7 +627,7 @@ func TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols(t *testing.T) {
 	})
 	// ... and the next decision walks to the second corner (+Y).
 	eventually(t, "the patrol starts the second corner", func() (bool, string) {
-		return locked(w, first.ID(), first.ActorComp().Moving), "idle"
+		return locked(w, first.ID(), first.MonsterActorComp().Moving), "idle"
 	})
 	w.clock.advance(time.Second)
 	second := spatial.Point{X: home.X + 12, Y: home.Y + 12}
@@ -689,9 +689,9 @@ func waitSceneBeats(t *testing.T, w *moveWorld, n int64) {
 // at least one of those beats froze the business time set before the call.
 func waitBuffBeats(t *testing.T, w *moveWorld, value *monster.Monster) {
 	t.Helper()
-	before := value.ActorComp().CombatBeats()
+	before := value.MonsterActorComp().CombatBeats()
 	eventually(t, "two buff beats", func() (bool, string) {
-		got := value.ActorComp().CombatBeats()
+		got := value.MonsterActorComp().CombatBeats()
 		return got >= before+2, fmt.Sprint(got - before)
 	})
 	w.settle(value.ID())
@@ -711,7 +711,7 @@ func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
 	target := spawn.monster(spawn.IDs()[0])
 	home := target.MapBasic().Published().Pos
 	eventually(t, "the patrol starts walking", func() (bool, string) {
-		return locked(w, target.ID(), target.ActorComp().Moving), "idle"
+		return locked(w, target.ID(), target.MonsterActorComp().Moving), "idle"
 	})
 	// Half way to the first corner: 6 of 12 cells.
 	w.clock.advance(300 * time.Millisecond)
@@ -726,12 +726,12 @@ func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
 		t.Fatalf("root: %v %v", rooted, err)
 	}
 	w.settle(target.ID())
-	moveReg := locked(w, target.ID(), func() *heartbeat.Reg { return target.ActorComp().Behavior().Beat().Reg(actor.GroupMove) })
-	frozen := locked(w, target.ID(), func() bool { return target.ActorComp().Behavior().Frozen(actor.GroupMove) })
+	moveReg := locked(w, target.ID(), func() *heartbeat.Reg { return target.MonsterActorComp().Behavior().Beat().Reg(actor.GroupMove) })
+	frozen := locked(w, target.ID(), func() bool { return target.MonsterActorComp().Behavior().Frozen(actor.GroupMove) })
 	if active := locked(w, target.ID(), moveReg.Active); !frozen || active {
 		t.Fatalf("rooted: move group frozen %v, heartbeat active %v; want frozen and not beating", frozen, active)
 	}
-	if !locked(w, target.ID(), target.ActorComp().Moving) {
+	if !locked(w, target.ID(), target.MonsterActorComp().Moving) {
 		t.Fatal("rooted with FreezePause: the walk was dropped instead of paused")
 	}
 	w.clock.advance(5 * time.Second)
@@ -761,25 +761,25 @@ func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
 	// A timed root (2s) wears off on the monster's own buff heartbeat: held
 	// while less than 2s of business time has passed, walking again after.
 	eventually(t, "the patrol walks on to the next corner", func() (bool, string) {
-		return locked(w, target.ID(), target.ActorComp().Moving), "idle"
+		return locked(w, target.ID(), target.MonsterActorComp().Moving), "idle"
 	})
 	if rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), true, 2); err != nil || !rooted {
 		t.Fatalf("timed root: %v %v", rooted, err)
 	}
 	w.settle(target.ID())
-	combatReg := locked(w, target.ID(), func() *heartbeat.Reg { return target.ActorComp().CombatBeat() })
+	combatReg := locked(w, target.ID(), func() *heartbeat.Reg { return target.MonsterActorComp().CombatBeat() })
 	if combatReg == nil || !locked(w, target.ID(), combatReg.Active) {
 		t.Fatal("a timed buff is on but the monster's buff heartbeat is not running")
 	}
 	held := target.MapBasic().Published().Pos
 	w.clock.advance(1500 * time.Millisecond)
 	waitBuffBeats(t, w, target)
-	if !locked(w, target.ID(), target.ActorComp().Rooted) || target.MapBasic().Published().Pos != held {
-		t.Fatalf("1.5s into a 2s root: rooted %v at %v, want still held at %v", locked(w, target.ID(), target.ActorComp().Rooted), target.MapBasic().Published().Pos, held)
+	if !locked(w, target.ID(), target.MonsterActorComp().Rooted) || target.MapBasic().Published().Pos != held {
+		t.Fatalf("1.5s into a 2s root: rooted %v at %v, want still held at %v", locked(w, target.ID(), target.MonsterActorComp().Rooted), target.MapBasic().Published().Pos, held)
 	}
 	w.clock.advance(time.Second)
 	eventually(t, "the timed root wears off", func() (bool, string) {
-		return !locked(w, target.ID(), target.ActorComp().Rooted), "rooted"
+		return !locked(w, target.ID(), target.MonsterActorComp().Rooted), "rooted"
 	})
 	eventually(t, "the buff heartbeat stops with no timed buff left", func() (bool, string) {
 		return !locked(w, target.ID(), combatReg.Active), "active"

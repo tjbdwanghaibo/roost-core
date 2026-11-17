@@ -3,10 +3,8 @@ package handler
 import (
 	"{{MODULE}}/game/components/terrainsurface"
 	"{{MODULE}}/game/components/terrainledger"
-	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
-	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/terrainmap"
+	"{{MODULE}}/game/view"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
@@ -19,7 +17,7 @@ import (
 // 写入改动、Version + 1，返回新 Version。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrainsurface.PointEdit) (int64, error) {
+func handlerTerrainEdit(target view.ITerrainSurfaceEntity, edits []terrainsurface.PointEdit) (int64, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return 0, terrainmap.ErrDisabled
@@ -32,7 +30,7 @@ func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrainsurf
 // 判重、算笔刷、逐块写、序号记进账本（terrainmap.Map.ApplyBrush）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
+func handlerTerrainBrush(targets []view.ITerrainSurfaceEntity, editor view.ITerrainLedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return terrainsurface.BrushResult{}, terrainmap.ErrDisabled
@@ -46,7 +44,7 @@ func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 // （TerrainCellEditor）；判重、算笔刷、写块、记序号同 TerrainBrush（terrainmap.Map.ApplyBrushPart）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
+func handlerTerrainBrushPart(targets []view.ITerrainSurfaceEntity, editor view.ITerrainCellLedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return terrainsurface.BrushResult{}, terrainmap.ErrDisabled
@@ -59,7 +57,7 @@ func handlerTerrainBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terr
 // 记下之后才转发，所以 LastSeq 查询答的序号覆盖每一个可能已在某个格执行了的编辑。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainEditIssue(editor terrain_editor.ILedgerEntity, seq int64) (terrainledger.Issue, error) {
+func handlerTerrainEditIssue(editor view.ITerrainLedgerEntity, seq int64) (terrainledger.Issue, error) {
 	return terrainmap.ApplyIssue(editor, seq)
 }
 
@@ -67,15 +65,15 @@ func handlerTerrainEditIssue(editor terrain_editor.ILedgerEntity, seq int64) (te
 // 在账本的锁内读，看到的是已提交的值。
 //
 //roost:nest
-func handlerTerrainEditSeq(editor terrain_editor.ILedgerEntity) (int64, error) {
-	return editor.LedgerComp().LastSeq(), nil
+func handlerTerrainEditSeq(editor view.ITerrainLedgerEntity) (int64, error) {
+	return editor.TerrainLedger().LastSeq(), nil
 }
 
 // handlerTerrainDiscard 丢弃一块基于旧原始地形的改动（维护者 2026-11-08：原始地形换版后改过的块丢弃改动；Map.Load
 // 在启动时、发布 Map 之前发起，所以不经 terrainmap.Active()）：记录仍基于 staleRevision、且它不是当前包的
-// currentRevision 时重置为 Version 0 的空记录，返回是否重置（SurfaceComponent.Discard）。
+// currentRevision 时重置为 Version 0 的空记录，返回是否重置（TerrainSurface 组件的 Discard）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainDiscard(target terrain_chunk.ISurfaceEntity, staleRevision int64, currentRevision int64) (bool, error) {
-	return target.SurfaceComp().Discard(staleRevision, currentRevision), nil
+func handlerTerrainDiscard(target view.ITerrainSurfaceEntity, staleRevision int64, currentRevision int64) (bool, error) {
+	return target.TerrainSurface().Discard(staleRevision, currentRevision), nil
 }

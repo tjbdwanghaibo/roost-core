@@ -1192,7 +1192,7 @@ func ledgerOf(t *testing.T, p *terrainProcess, player int64) terrainledger.SeqWi
 		t.Fatal(err)
 	}
 	if e, _ := p.entities.Get(id).(*terrain_editor.TerrainEditor); e != nil {
-		return e.LedgerComp().Window()
+		return e.TerrainLedgerComp().Window()
 	}
 	return terrainledger.SeqWindow{}
 }

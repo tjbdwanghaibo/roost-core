@@ -12,7 +12,17 @@ import (
 	"{{MODULE}}/game/dungeon"
 )
 
-// Owner 是 DungeonLedger 组件的宿主（Player 的接线见 game/entities/player/dungeon_ledger_component.go）：只用到
+// CompTypeDungeonLedger 是 DungeonLedger 组件的类型号（2103，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2103
+const CompTypeDungeonLedger entity.ComponentType = 2103
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"dungeonledger.CompTypeDungeonLedger"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeDungeonLedger, NewComponent)
+}
+
+// Owner 是 DungeonLedger 组件的宿主（挂在 Player 上：实体字段的标签 comp:"dungeonledger.CompTypeDungeonLedger"）：只用到
 // 玩家 DAO。只在实体被 Nest 锁住期间使用。
 type Owner interface {
 	entity.IThreadSafeEntity
@@ -25,7 +35,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/dungeon_ledger_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

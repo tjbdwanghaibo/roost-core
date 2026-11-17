@@ -1,7 +1,7 @@
 package handler
 
 import (
-	monster "{{MODULE}}/game/entities/monster"
+	"{{MODULE}}/game/view"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
@@ -18,10 +18,10 @@ import (
 // step — comes after the monster is visible, never before.
 //
 //roost:nest rollback=undo durability=async
-func handlerSpawnMonster(target monster.IActorEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
+func handlerSpawnMonster(target view.IMonsterActorEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
 	var walkable func(spatial.Point) bool
 	if terrain := area.Terrain(); terrain != nil {
 		walkable = terrain.Standable
 	}
-	return target.ActorComp().Spawn(area.ID(), area.Space(), spatial.Point{X: x, Y: y}, walkable)
+	return target.MonsterActor().Spawn(area.ID(), area.Space(), spatial.Point{X: x, Y: y}, walkable)
 }

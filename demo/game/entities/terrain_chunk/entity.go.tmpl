@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/terrainsurface"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
@@ -16,7 +17,7 @@ type ITerrainChunkEntity interface{ entity.IThreadSafeEntity }
 
 // TerrainChunk 是一块被玩家改过的地形（可编辑地形方案 §3）：数据在 TerrainChunkDao，覆盖原始地形包里的同一块。
 // 从没改过的块没有实体；第一次改一块时由地形服务（game/terrainmap）经 lifecycle 的 GetOrCreate 建出（数据为空、
-// Version 0），随后的改块事务用原始块数据填满它（SurfaceComponent.Apply）。
+// Version 0），随后的改块事务用原始块数据填满它（game/components/terrainsurface 的 Component.Apply）。
 //
 // 一块只归包含它的格的进程写（格到进程静态映射、块不跨格，方案 §4）；邻格 Ghost 带里的块在本进程只读，不建、不装
 // 实体，只把持久记录装进地形视图。
@@ -37,8 +38,8 @@ type TerrainChunk struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	surface *SurfaceComponent   `comp:"CompTypeSurface"`
-	dao     *db.TerrainChunkDao `dao:"terrain_chunk"`
+	surface *terrainsurface.Component `comp:"terrainsurface.CompTypeTerrainSurface"`
+	dao     *db.TerrainChunkDao        `dao:"terrain_chunk"`
 }
 
 // UniqueID 返回块的实体唯一号（BuildEntityID 的第一个参数）。块必须在地图内（坐标非负）。
@@ -67,7 +68,7 @@ func KeyOf(entityID int64) terrain.ChunkKey {
 func (c *TerrainChunk) Key() terrain.ChunkKey { return KeyOf(c.ID()) }
 
 // PublishSyncDirty 把这次改动标脏的同步字段交给本块的 subject（与 Player / Monster 的 PublishSyncDirty 同一做法）。
-// SurfaceComponent 每次写完 DAO 调一次。demo 的 Nest 已经装了提交观察者（场景的生产者），提交准入时也会按事务条目
+// TerrainSurface 组件每次写完 DAO 调一次。demo 的 Nest 已经装了提交观察者（场景的生产者），提交准入时也会按事务条目
 // 标脏；在 Nest 事务里调用时，这里的标记并入同一事务条目（SubjectSyncState 的 mutation），不会双发。
 //
 // 取的是客户端同步专用的掩码（生成的 TakeEntitySyncChanges，读 TakeEntitySyncDirty），不动服务间同步的掩码。

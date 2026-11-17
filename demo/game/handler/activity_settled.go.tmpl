@@ -1,7 +1,7 @@
 package handler
 
 import (
-	world "{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/view"
 )
 
 // handlerActivitySettled reports whether this server has paid an activity's
@@ -13,6 +13,6 @@ import (
 // finished event has not paid, while the mail is already in their box.
 //
 //roost:nest rollback=undo durability=strict
-func handlerActivitySettled(target world.IStatsEntity, activityID string) (bool, error) {
-	return target.StatsComp().ActivitySettled(activityID), nil
+func handlerActivitySettled(target view.IStatsEntity, activityID string) (bool, error) {
+	return target.Stats().ActivitySettled(activityID), nil
 }

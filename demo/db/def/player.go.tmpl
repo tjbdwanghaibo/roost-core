@@ -23,7 +23,8 @@ type PlayerDao struct {
 	// index of positions so it can answer "who is near whom" without walking
 	// every player, but an index is not a second authority: it is written
 	// from the one path that writes these fields (movement.MapBasic, reached
-	// through MapComponent) and never read as the answer to "where is X".
+	// through the Map component, game/components/mapview) and never read as
+	// the answer to "where is X".
 	//
 	// They are `nopersist,sync`: a moving player changes them on every
 	// movement beat (5 a second at the default move period), and writing that

@@ -1,0 +1,14 @@
+package player
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+
+// MapBasic 与 MoveComponent 让 Player 成为 movement.MapOwner / movement.MoveOwner（框架移动运行时找宿主的接口）：
+// 行走的部件是 Map 组件（game/components/mapview，挂在 Player 上的 comp:"mapview.CompTypeMap"）里 actor 的 Body。
+// 只在 Player 被 Nest 锁住期间调用。
+func (p *Player) MapBasic() *movement.MapBasic  { return p.MapComp().Body().Map }
+func (p *Player) MoveComponent() *movement.Move { return p.MapComp().Body().Move }
+
+var (
+	_ movement.MapOwner  = (*Player)(nil)
+	_ movement.MoveOwner = (*Player)(nil)
+)

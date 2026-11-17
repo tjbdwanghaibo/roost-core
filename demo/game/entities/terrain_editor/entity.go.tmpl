@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/terrainledger"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -14,7 +15,7 @@ const EntityKindTerrainEditor entity.EntityKind = 12
 type ITerrainEditorEntity interface{ entity.IThreadSafeEntity }
 
 // TerrainEditor 是一个玩家在本进程的地形编辑账本（可编辑地形 T01/T02）：玩家编辑请求的身份是（玩家 ID, 编辑序号），
-// 账本记着已应用的最大序号与它下面 64 个序号的应用位图（LedgerComponent，数据在 TerrainEditorDao）。玩家第一次编辑时
+// 账本记着已应用的最大序号与它下面 64 个序号的应用位图（TerrainLedger 组件，game/components/terrainledger；数据在 TerrainEditorDao）。玩家第一次编辑时
 // 由 game/terrainmap 经 lifecycle 的 GetOrCreate 建出，之后每次笔刷编辑都和笔刷覆盖到的块在同一笔 Nest 事务里锁住：
 // 判重、改块、记序号一起提交或一起回滚。
 //
@@ -36,8 +37,8 @@ type TerrainEditor struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	ledger *LedgerComponent     `comp:"CompTypeLedger"`
-	dao    *db.TerrainEditorDao `dao:"terrain_editor"`
+	ledger *terrainledger.Component `comp:"terrainledger.CompTypeTerrainLedger"`
+	dao    *db.TerrainEditorDao     `dao:"terrain_editor"`
 }
 
 // UniqueID 返回玩家账本的实体唯一号（BuildEntityID 的第一个参数）：就是玩家的 unique ID，须在 1～entity.UniqueIDMask。

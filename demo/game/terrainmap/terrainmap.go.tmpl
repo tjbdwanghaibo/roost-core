@@ -39,6 +39,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"{{MODULE}}/game/components/terrainsurface"
 	"{{MODULE}}/game/components/terrainledger"
+	"{{MODULE}}/game/view"
 	db "{{MODULE}}/db"
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
@@ -452,7 +453,7 @@ func (m *Map) CommitFailures() int64 { return m.commitFailures.Load() }
 // 记录基于另一版原始地形（BaseRevision 与包不同，原始地形换了版本）：
 //   - 本进程写的块：丢弃改动（维护者 2026-11-08）——经正式写路径（GetOrCreate 冷加载 + handler TerrainDiscard 的
 //     strict 事务）把记录重置为 Version 0 的空记录，然后按原始块装入、计入 Discarded、记 Warn。为什么是重置而不是
-//     删档见 terrain_chunk.SurfaceComponent.Discard。丢弃失败时不装入、计入 StaleBase、记 Error：不用原始块盖住还在
+//     删档见 terrainsurface.Component.Discard。丢弃失败时不装入、计入 StaleBase、记 Error：不用原始块盖住还在
 //     库里的旧记录（否则查询与库不一致，下一次改动还会被 BaseRevision 校验拒绝）。
 //   - 邻格 Ghost 带里的块（不归本进程写）：不越权丢弃，不装入、计入 StaleBase；它的格进程启动时会丢弃，本进程重启后
 //     读到的是 Version 0 的记录、按原始块装入（P3 之前 Ghost 带只在启动时读一次快照）。
@@ -708,8 +709,11 @@ func (m *Map) Edit(ctx context.Context, edits []SampleEdit) (map[terrain.ChunkKe
 //
 // Version 0（第一次改这块）时从视图取原始块（必须装着、且是原始块）作初值。改动写进 DAO 后由 afterCommit 登记
 // 提交后装视图：提交被接受才 SetOverlay 给视图；事务回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图不变。
-func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrainsurface.PointEdit) (int64, error) {
-	surface := target.SurfaceComp()
+func (m *Map) ApplyEdit(target view.ITerrainSurfaceEntity, edits []terrainsurface.PointEdit) (int64, error) {
+	surface, err := terrainsurface.Of(target)
+	if err != nil {
+		return 0, err
+	}
 	key := surface.Owner().Key()
 	if !m.Owns(key) {
 		return 0, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
@@ -735,7 +739,7 @@ func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrainsurf
 
 // baseFor 是一块编辑前的数据：记录有数据（Version ≥ 1）时是记录，否则是视图里的原始块（必须装着、且是原始块）。
 // 在块的锁内调用（handler），只读内存。
-func (m *Map) baseFor(surface *terrain_chunk.SurfaceComponent) (data terrain.Chunk, fromRecord bool, err error) {
+func (m *Map) baseFor(surface *terrainsurface.Component) (data terrain.Chunk, fromRecord bool, err error) {
 	key := surface.Owner().Key()
 	if data, ok, err := surface.Data(); err != nil || ok {
 		return data, ok, err
@@ -755,7 +759,7 @@ func (m *Map) baseFor(surface *terrain_chunk.SurfaceComponent) (data terrain.Chu
 // 之后调用，取这块新数据的副本，登记为提交后回调——提交被接受才 SetOverlay 给视图并通知同步（SetCommitted），事务
 // 回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图与同步都不变。不在事务里时立即执行。
 func (m *Map) afterCommit(chunk *terrain_chunk.TerrainChunk) {
-	overlay, ok, err := chunk.SurfaceComp().Overlay()
+	overlay, ok, err := chunk.TerrainSurface().Overlay()
 	if err != nil {
 		// Apply 写之前已校验记录的材质值域、写入口只接受 byte，这里不会失败；万一失败，视图保留旧数据（与 commit
 		// 失败同样计数、记 Error，重启后按数据库重新装入）。
@@ -1045,31 +1049,35 @@ func (m *Map) checkBrushParams(playerID int64, seq uint64, brush terrain.Brush) 
 //  1. 判重：账本对 seq 答 Duplicate → 返回 Duplicate，什么都不写；答 Stale / Ahead → *SeqError（整笔回滚，什么都不写）。
 //  2. 校验：每块归本进程写、可用；目标组正是笔刷覆盖到的块（防止调用方给错目标）。
 //  3. 在锁内从当前数据算笔刷（Version 0 的块用视图里的原始块），建筑占位钩子查每个改动点。
-//  4. 写：有改动的块 SurfaceComponent.Apply（整字段守卫、Version + 1），账本 Record(seq)（没有一块改到值也记：这次
+//  4. 写：有改动的块 terrainsurface.Component.Apply（整字段守卫、Version + 1），账本 Record(seq)（没有一块改到值也记：这次
 //     编辑已经“执行过”，重放应答 Duplicate），提交后逐块装视图并通知同步（afterCommit）。
 //
 // 1～3 的拒绝在第一次写之前；4 之后不会失败。事务回滚（提交被拒）时块与账本都由 setter 的逆操作还原，提交后回调不执行。
-func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
-	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
+func (m *Map) ApplyBrush(targets []view.ITerrainSurfaceEntity, editor view.ITerrainLedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
+	return m.applyBrush(targets, editor.TerrainLedger(), seq, brush)
 }
 
 // ApplyBrushPart 是 handler TerrainBrushPart 的业务（分区场景的格执行 Base 转发来的笔刷，P5；名字沿用拆分设计，维护者
 // 2026-11-10 撤回跨格笔刷之后格执行整笔）：同 ApplyBrush，账本是玩家在本格的 TerrainCellEditor，目标组同样是笔刷覆盖到的
 // 全部块、都归本进程写。
-func (m *Map) ApplyBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
-	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
+func (m *Map) ApplyBrushPart(targets []view.ITerrainSurfaceEntity, editor view.ITerrainCellLedgerEntity, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
+	return m.applyBrush(targets, editor.TerrainCellLedger(), seq, brush)
 }
 
 // applyBrush 是 ApplyBrush / ApplyBrushPart 的共同部分（步骤见 ApplyBrush）。
-func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedger, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
+func (m *Map) applyBrush(targets []view.ITerrainSurfaceEntity, ledger seqLedger, seq int64, brush terrain.Brush) (terrainsurface.BrushResult, error) {
 	if seq < 1 {
 		return terrainsurface.BrushResult{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
 	}
-	surfaces := make([]*terrain_chunk.SurfaceComponent, len(targets))
+	surfaces := make([]*terrainsurface.Component, len(targets))
 	for i, target := range targets {
-		surfaces[i] = target.SurfaceComp()
+		surface, err := terrainsurface.Of(target)
+		if err != nil {
+			return terrainsurface.BrushResult{}, err
+		}
+		surfaces[i] = surface
 	}
-	slices.SortFunc(surfaces, func(a, b *terrain_chunk.SurfaceComponent) int {
+	slices.SortFunc(surfaces, func(a, b *terrainsurface.Component) int {
 		ka, kb := a.Owner().Key(), b.Owner().Key()
 		return cmp.Or(cmp.Compare(ka.Y, kb.Y), cmp.Compare(ka.X, kb.X))
 	})
@@ -1269,6 +1277,6 @@ func Active() *Map { return active.Load() }
 
 // chunkOf 是块面组件所在的块实体。组件包（game/components/terrainsurface）的宿主是接口、不依赖实体包；地形同步按块实体
 // 登记 subject（SetCommitted），所以提交后的通知在这里换回实体——宿主只会是 TerrainChunk（组件只挂在它上面）。
-func chunkOf(surface *terrain_chunk.SurfaceComponent) *terrain_chunk.TerrainChunk {
+func chunkOf(surface *terrainsurface.Component) *terrain_chunk.TerrainChunk {
 	return surface.Owner().(*terrain_chunk.TerrainChunk)
 }

@@ -1,13 +1,13 @@
 package handler
 
-import world "{{MODULE}}/game/entities/world"
+import "{{MODULE}}/game/view"
 
 // handlerRecordMatch is called by the game service's matchmaker after the
 // match service committed a group. The remote call happened first, outside
 // any Entity lock; only the count crosses into the World.
 //
 //roost:nest rollback=undo durability=strict
-func handlerRecordMatch(target world.IStatsEntity) error {
-	target.StatsComp().RecordMatch()
+func handlerRecordMatch(target view.IStatsEntity) error {
+	target.Stats().RecordMatch()
 	return nil
 }

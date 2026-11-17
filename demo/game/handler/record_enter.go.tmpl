@@ -1,6 +1,6 @@
 package handler
 
-import world "{{MODULE}}/game/entities/world"
+import "{{MODULE}}/game/view"
 
 // handlerRecordEnter is sent by the EnterGame endpoint after the Player is
 // loaded: the World counts the login. Player and World are different Entities
@@ -12,7 +12,7 @@ import world "{{MODULE}}/game/entities/world"
 // （EnterGame 用 Send_RecordEnter）：登录潮里计数在 World 上排队补记，不占登录的请求预算。
 //
 //roost:nest rollback=undo durability=strict
-func handlerRecordEnter(target world.IStatsEntity) error {
-	target.StatsComp().RecordEnter()
+func handlerRecordEnter(target view.IStatsEntity) error {
+	target.Stats().RecordEnter()
 	return nil
 }

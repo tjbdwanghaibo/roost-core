@@ -10,6 +10,16 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
+// CompTypeBuildingSite 是 BuildingSite 组件的类型号（2013，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2013
+const CompTypeBuildingSite entity.ComponentType = 2013
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"buildingsite.CompTypeBuildingSite"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeBuildingSite, NewComponent)
+}
+
 // Placement 是一次放置请求（越过 Nest 边界的值）：view.BuildingPlacement 的别名（纯数据，定义在 game/view）。修改参数值
 // 个数不多于配置的槽数，没给的取缺省值，见 Spec.Normalize。
 type Placement = view.BuildingPlacement
@@ -46,7 +56,7 @@ type Rebase struct {
 // State 是建筑的一份只读快照：view.BuildingState 的别名（纯数据，定义在 game/view；含切片，比较用 StatesEqual）。
 type State = view.BuildingState
 
-// Owner 是 BuildingSite 组件的宿主（Building 的接线见 game/entities/building/site_component.go）：view 的 BuildingEntity，
+// Owner 是 BuildingSite 组件的宿主（挂在 Building 上：实体字段的标签 comp:"buildingsite.CompTypeBuildingSite"）：view 的 BuildingEntity，
 // 加上锚点（Anchor，由实体号算出）与把 DAO 的同步脏位交给订阅主体（PublishSyncDirty）。只在实体被 Nest 锁住期间使用。
 type Owner interface {
 	view.BuildingEntity
@@ -61,7 +71,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Building 在 game/entities/building/site_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -74,6 +84,16 @@ func (component *Component) Name() string { return "building_site" }
 
 // Owner is available only while the Entity is alive and locked by Nest.
 func (component *Component) Owner() Owner { return component.owner }
+
+// Of 返回 holder 上挂的建筑组件。handler 收 game/view 的接口（view.IBuildingSiteEntity）；
+// game/terrainmap 的放置、拆除、改参数与换版对账要换回建筑实体（Owner()）、用本包的类型（Placement、Spec），
+// 这些不进 game/view，经它取回组件再用。取不到说明实体没挂这个组件（接线错误）。
+func Of(holder view.BuildingSiteHolder) (*Component, error) {
+	if c, ok := holder.BuildingSite().(*Component); ok && c != nil {
+		return c, nil
+	}
+	return nil, fmt.Errorf("buildingsite: %T does not hold the buildingsite component", holder)
+}
 
 // noFoundation 是 BuildingDao.Foundation 里“没有整平”的值。
 const noFoundation = -1 << 31

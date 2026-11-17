@@ -2,6 +2,8 @@ package player
 
 import (
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/mapview"
+	"{{MODULE}}/game/components/dungeonledger"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -75,7 +77,7 @@ type Player struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	mapComp       *MapComponent           `comp:"CompTypeMap"`
-	dungeonLedger *DungeonLedgerComponent `comp:"CompTypeDungeonLedger"`
-	dao           *db.PlayerDao           `dao:"player"`
+	mapComp       *mapview.Component       `comp:"mapview.CompTypeMap"`
+	dungeonLedger *dungeonledger.Component `comp:"dungeonledger.CompTypeDungeonLedger"`
+	dao           *db.PlayerDao            `dao:"player"`
 }

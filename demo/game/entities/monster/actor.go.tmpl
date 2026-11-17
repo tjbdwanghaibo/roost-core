@@ -1,0 +1,15 @@
+package monster
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+
+// MapBasic 与 MoveComponent 让 Monster 成为 movement.MapOwner / movement.MoveOwner（框架移动运行时找宿主的接口）：
+// 行走的部件在 MonsterActor 组件里（game/components/monsteractor，挂在 Monster 上的 comp:"monsteractor.CompTypeMonsterActor"）。
+// 只在 Monster 被 Nest 锁住期间调用。
+func (monster *Monster) MapBasic() *movement.MapBasic { return monster.MonsterActorComp().MapBasic() }
+
+func (monster *Monster) MoveComponent() *movement.Move { return monster.MonsterActorComp().Move() }
+
+var (
+	_ movement.MapOwner  = (*Monster)(nil)
+	_ movement.MoveOwner = (*Monster)(nil)
+)

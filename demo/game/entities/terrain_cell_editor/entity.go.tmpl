@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/components/terraincellledger"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -29,8 +30,8 @@ type TerrainCellEditor struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	ledger *LedgerComponent         `comp:"CompTypeLedger"`
-	dao    *db.TerrainCellEditorDao `dao:"terrain_cell_editor"`
+	ledger *terraincellledger.Component `comp:"terraincellledger.CompTypeTerrainCellLedger"`
+	dao    *db.TerrainCellEditorDao     `dao:"terrain_cell_editor"`
 }
 
 // UniqueID 返回玩家在本格的账本的实体唯一号：就是玩家的 unique ID，须在 1～entity.UniqueIDMask。

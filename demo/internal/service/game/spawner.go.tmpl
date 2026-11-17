@@ -190,7 +190,7 @@ func (s *spawner) build(ctx context.Context, batch []gamescene.SpawnRequest) {
 			continue
 		}
 		// 2. Its body, before anybody can see it.
-		value.BodyComp().Place(request.Template, request.HP, request.At)
+		value.MonsterBodyComp().Place(request.Template, request.HP, request.At)
 		// 3. Replicated and shown at that point.
 		if err := s.bridge.ShowSubject(ctx, value.Sync(), value.ID(), request.At); err != nil {
 			slog.Warn("spawner: monster not replicated", "monster_id", value.ID(), "err", err)

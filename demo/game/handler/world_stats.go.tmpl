@@ -1,7 +1,6 @@
 package handler
 
 import (
-	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/view"
 )
 
@@ -10,6 +9,6 @@ import (
 // consistent pair of counters.
 //
 //roost:nest
-func handlerWorldStats(target world.IStatsEntity) (view.StatsSnapshot, error) {
-	return target.StatsComp().Snapshot(), nil
+func handlerWorldStats(target view.IStatsEntity) (view.StatsSnapshot, error) {
+	return target.Stats().Snapshot(), nil
 }

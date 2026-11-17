@@ -15,7 +15,17 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 )
 
-// Owner 是 Map 组件的宿主（Player 的接线见 game/entities/player/map_component.go）：view 的 PlayerEntity，
+// CompTypeMap 是 Map 组件的类型号（2004，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2004
+const CompTypeMap entity.ComponentType = 2004
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"mapview.CompTypeMap"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeMap, NewComponent)
+}
+
+// Owner 是 Map 组件的宿主（挂在 Player 上：实体字段的标签 comp:"mapview.CompTypeMap"）：view 的 PlayerEntity，
 // 加上把 DAO 的同步脏位交给订阅主体（PublishSyncDirty）与分区场景的 Base 接口（cellworld.BasePlayer：
 // cell.base 心跳与属性面板更新把宿主交给 Node；实体一侧的实现在 game/entities/player/cell_base.go）。
 // 只在实体被 Nest 锁住期间使用。
@@ -36,7 +46,7 @@ type Component struct {
 	cellBase *heartbeat.Reg
 }
 
-// NewComponent 是组件工厂；Player 在 game/entities/player/map_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

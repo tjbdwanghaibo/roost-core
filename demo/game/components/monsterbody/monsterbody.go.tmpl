@@ -8,7 +8,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// Owner 是 MonsterBody 组件的宿主（Monster 的接线见 game/entities/monster/body_component.go）：view 的 MonsterEntity，
+// CompTypeMonsterBody 是 MonsterBody 组件的类型号（2100，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2100
+const CompTypeMonsterBody entity.ComponentType = 2100
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"monsterbody.CompTypeMonsterBody"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeMonsterBody, NewComponent)
+}
+
+// Owner 是 MonsterBody 组件的宿主（挂在 Monster 上：实体字段的标签 comp:"monsterbody.CompTypeMonsterBody"）：view 的 MonsterEntity，
 // 加上把 DAO 的同步脏位交给订阅主体（PublishSyncDirty）。只在实体被 Nest 锁住期间使用。
 type Owner interface {
 	view.MonsterEntity
@@ -16,14 +26,14 @@ type Owner interface {
 }
 
 // Component is where a monster is and how much of it is left. It is the
-// Player's MapComponent with fewer questions: the same rule applies, which is
+// Player's Map component with fewer questions: the same rule applies, which is
 // that the position is read and written here and nowhere else.
 type Component struct {
 	entity.ComponentBase
 	owner Owner
 }
 
-// NewComponent 是组件工厂；Monster 在 game/entities/monster/body_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

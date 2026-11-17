@@ -8,7 +8,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Owner 是 TerrainCellLedger 组件的宿主（TerrainCellEditor 的接线见 game/entities/terrain_cell_editor/ledger_component.go）：view 的 TerrainCellEditorEntity。
+// CompTypeTerrainCellLedger 是 TerrainCellLedger 组件的类型号（2014，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2014
+const CompTypeTerrainCellLedger entity.ComponentType = 2014
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"terraincellledger.CompTypeTerrainCellLedger"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTerrainCellLedger, NewComponent)
+}
+
+// Owner 是 TerrainCellLedger 组件的宿主（挂在 TerrainCellEditor 上：实体字段的标签 comp:"terraincellledger.CompTypeTerrainCellLedger"）：view 的 TerrainCellEditorEntity。
 // 只在实体被 Nest 锁住期间使用。
 type Owner = view.TerrainCellEditorEntity
 
@@ -19,7 +29,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；TerrainCellEditor 在 game/entities/terrain_cell_editor/ledger_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {

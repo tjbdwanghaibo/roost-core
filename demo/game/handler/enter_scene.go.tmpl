@@ -1,7 +1,7 @@
 package handler
 
 import (
-	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
@@ -27,8 +27,8 @@ import (
 // endpoint's next call (Scene.Join), after this commits.
 //
 //roost:nest rollback=undo durability=async
-func handlerEnterScene(target player.IMapEntity, area sceneentity.ISceneEntity, spawnX int64, spawnY int64) (spatial.Point, error) {
-	component := target.MapComp()
+func handlerEnterScene(target view.IMapEntity, area sceneentity.ISceneEntity, spawnX int64, spawnY int64) (spatial.Point, error) {
+	component := target.Map()
 	if component.InScene() && component.SceneID() == area.ID() {
 		return component.Pos(), nil
 	}

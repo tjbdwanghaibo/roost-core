@@ -12,6 +12,16 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
+// CompTypeTerrainSurface 是 TerrainSurface 组件的类型号（2011，与迁到组件包之前相同：存档与同步数据不带它，实体内的组件按它升序初始化）。
+//
+//roost:component type=2011
+const CompTypeTerrainSurface entity.ComponentType = 2011
+
+// init 登记组件工厂：挂这个组件的实体（标签 comp:"terrainsurface.CompTypeTerrainSurface"）构造时经它创建组件。
+func init() {
+	entity.RegisterComponentFactory(CompTypeTerrainSurface, NewComponent)
+}
+
 // BrushResult 是 view.TerrainBrushResult（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
 type BrushResult = view.TerrainBrushResult
 
@@ -21,7 +31,7 @@ type ChunkVersion = view.TerrainChunkVersion
 // PointEdit 是 view.TerrainPointEdit（结构体定义在 game/view，这里留同名别名，组件与 handler 的写法不变）。
 type PointEdit = view.TerrainPointEdit
 
-// Owner 是 TerrainSurface 组件的宿主（TerrainChunk 的接线见 game/entities/terrain_chunk/surface_component.go）：view 的
+// Owner 是 TerrainSurface 组件的宿主（挂在 TerrainChunk 上：实体字段的标签 comp:"terrainsurface.CompTypeTerrainSurface"）：view 的
 // TerrainChunkEntity，加上块的坐标（Key，由实体号算出）与把 DAO 的同步脏位交给订阅主体（PublishSyncDirty）。
 // 只在实体被 Nest 锁住期间使用。
 type Owner interface {
@@ -37,7 +47,7 @@ type Component struct {
 	owner Owner
 }
 
-// NewComponent 是组件工厂；TerrainChunk 在 game/entities/terrain_chunk/surface_component.go 登记它。
+// NewComponent 是组件工厂（本包的 init 登记它）；DAO 在实体构造时先于组件装好。
 func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
 	owner, ok := value.(Owner)
 	if !ok {
@@ -50,6 +60,16 @@ func (component *Component) Name() string { return "terrain_surface" }
 
 // Owner is available only while the Entity is alive and locked by Nest.
 func (component *Component) Owner() Owner { return component.owner }
+
+// Of 返回 holder 上挂的块面组件。handler 收 game/view 的接口（view.ITerrainSurfaceEntity）；
+// game/terrainmap 的改块、笔刷与建筑事务要按块排序（Owner().Key()）、换回块实体（Owner()），
+// 这些不进 game/view，经它取回组件再用。取不到说明实体没挂这个组件（接线错误）。
+func Of(holder view.TerrainSurfaceHolder) (*Component, error) {
+	if c, ok := holder.TerrainSurface().(*Component); ok && c != nil {
+		return c, nil
+	}
+	return nil, fmt.Errorf("terrainsurface: %T does not hold the terrainsurface component", holder)
+}
 
 // Version 是块的提交版本；0 表示还没提交过改动（实体刚由 GetOrCreate 建出，数据为空）。
 func (component *Component) Version() int64 { return component.owner.Dao().GetVersion() }

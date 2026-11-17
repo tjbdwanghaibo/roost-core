@@ -149,7 +149,7 @@ func TestTerrainWALCrashRealMongo(t *testing.T) {
 			if mode == "building" {
 				standing := recovered.m.ReconciledBuildings()
 				if recovered.buildingStats != (terrainmap.BuildingStats{Standing: 1}) || len(standing) != 1 ||
-					standing[0].Building == nil || !buildingsite.StatesEqual(standing[0].Building.SiteComp().State(), receipt.Building) ||
+					standing[0].Building == nil || !buildingsite.StatesEqual(standing[0].Building.BuildingSiteComp().State(), receipt.Building) ||
 					standing[0].Lot != (terrainsurface.Lot{GX: 60, GY: 20, W: 8, H: 6}) {
 					t.Fatalf("recovered building: stats %+v, standing %+v, want %+v", recovered.buildingStats, standing, receipt.Building)
 				}
