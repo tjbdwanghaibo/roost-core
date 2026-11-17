@@ -336,5 +336,5 @@ genre-common 只服务 11～13 类（回合 PvP、合作、经营）。
 
 ### 9.5 试点发现的模块缺口（按 Q1 只记录，不在 R9 改模块）
 
-- **room 没有“代际 + 连接 + 在线”一并核对的公开入口**：turn 的组件私有 `authorize` 与塔防的 `towerMember` 写的是同一段（`Member` + `GetConnection() == connection` + `Connected`）。批 1 的撤离、自走棋、合作、回合 PvP 都要这一段，符合 Q1“两类以上都要、简单工程不必多做事”的 B 条件：建议给 room 组件加 `Authorize(playerID, epoch, connection) (*db.RoomSeat, error)`，turn 改调它。R9 内先各自手写同一段，等维护者定。
+- **room 没有“代际 + 连接 + 在线”一并核对的公开入口**：**已补，1b38c2b8**（维护者 Q1 B）。room 组件与 `view.Room` 新增 `Authorize(playerID, epoch, connection) (*db.RoomSeat, error)`（先 `Member`，再要求连接是席位认下的那条且在线，否则 `room_stale_epoch`），turn 删掉私有 `authorize` 改调它；塔防 `towerMember` 的新命令经它，已有回执的重放与查回执仍是 `Member` + 连接核对（不要求在线）。批 1 的玩法新命令直接用 `m.Room().Authorize`，有“重放不要求在线”的照塔防分两支。[证据](evidence/room-authorize-20261117/README.md)。
 
