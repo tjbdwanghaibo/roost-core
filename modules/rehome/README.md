@@ -67,7 +67,7 @@
 2. **后台**（受理之后等 500 毫秒让应答先到客户端）：安静下来（`Quiesce`：断开他的会话，等标记之前已经准入的请求执行完）→ 复核（事务内检查重跑一遍）→ 离开钩子 → 交出实体（`Depart`：已准入的写入落库、从内存卸载、立起屏障）→ 搬档（`Documents.Copy`：把他的文档复制到目标服的库，覆盖那里的旧副本）→ 向 account 提交（`Commit`：改绑到目标服）→ 落定（迁出表记“已迁走”，屏障保持）→ 删本服库里的那几份（`Documents.Drop`，只删版本仍是复制时版本的文档）。
 3. 后台任何一步不成（安静不下来、复核不过、离开钩子失败、交出失败、搬档失败、account 明确拒绝提交）：向 account 中止；已经搬过档的，先删掉写到目标服库里的副本；再撤屏障与标记，断开仍连着的会话，清意图。玩家留在本服，可以再申请。
 4. **后台由 manager 执行**（D22）：第 2、3 步与各处“重发到 account 给出结论为止”的循环都交给 `rehome.Background`（`game/modules/rehome/rehome_background.go`），它归 `game/managers/rehome_background.go` 的 `NewRehomeBackground()`——安装时登记进 `game/managers/managers.go`，由 manager Mod 启停：Start 建好并以 `game.rehome.background` 发布，Stop 不再接新的步骤、取消在途步骤的 ctx、在停机期限内等它们返回（期限先到时返回期限错误，ManagerMod 用新期限再停）。每一步、每一次重发之间的等待（含“安静下来”时按 10 毫秒查看会话收尾的那个 ticker）都看这个 ctx；**被取消的步骤不按失败处理**：不中止、不撤屏障、不清意图，与进程在那一刻崩溃相同，重启之后由恢复循环（第 5 条）或玩家再来进入时的 `Admit` 接着做（`Resume`）。`Background` 不在（`Managers()` 里没有这一行，或者进程在停机）时申请答 `retryable`、什么都不做，`Resume` 也不做。
-5. **源服重启之后的恢复**（D7 A / D8 A，`game/modules/rehome/rehome_recover.go`）：rehome manager 在 `Background` 里起恢复循环 `RunRecovery`，不等玩家登录：
+5. **源服重启之后的恢复**（D7 A / D8 A，`game/modules/rehome/rehome_recover.go`）：rehome manager 在 `Service.Init` 之后（生命周期 `service.started`）在 `Background` 里起恢复循环 `RunRecovery`，不等玩家登录（早于 Init 用到迁出表会抢在工程自己的 Residency 之前建出缺省的、抢先发布写闸门）：
    - **起服核对本服库里的玩家**（D7）：account 把他绑在别的服、本服库里却还有他的档（提交之后、删源库之前崩溃留下的旧档）。Player 起服预加载时，预加载的准入检查（驱动器以 `wiringde.PreloadAdmitCapability(Player 的 kind)` 发布为 `PreloadAdmitter`）在加载之前问 account（`RoleBindingsAway`，一次至多 500 个），这样的不加载；Player 不预加载时，恢复循环起来后经 DataEngine 的 `ListLocalEntityIDs` 把本服库里的 Player 列一遍（只读 `_id`，不加载），同样问 account。认出来的按“已迁走”落定：立屏障（本进程从此不写他）、补搬到他现在的服（那里已有同一版本只是确认）、按版本删本服的；那里已有**别的**版本时不覆盖、不删，记 Error 留给运维。正在换回本服的（在途的目标是本服）不加载也不落定。account 问不到时预加载失败（起服失败）；不预加载时按 1 秒重试。
    - **接着做在途的换服**（D8）：每 30 秒（起来时先做一次）按 account 的在途索引（`ListRoleTransfers`）把从本服发起、此刻在途、迁出表里没有的换服交给 `Resume`。期限（account 记的 `DeadlineUnix`，缺省 10 分钟）之内做完的照常提交；过了期限的提交被 account 拒绝并记为中止，驱动器按“没换成”收尾（删目标库副本、撤屏障、清意图）；源服一直没起来的由 account 的清扫到期中止。
 
@@ -146,7 +146,7 @@
 
 ## 验证范围
 
-- `roost module verify rehome`：61 条场景（`game/modules/rehome` 45、`game/handler` 8、`game/controllers` 6、`game/managers` 2）；与 `enter` 的联动 5 条，与 `gm` 的联动 4 条。
+- `roost module verify rehome`：62 条场景（`game/modules/rehome` 45、`game/handler` 8、`game/controllers` 7、`game/managers` 2）；与 `enter` 的联动 5 条，与 `gm` 的联动 4 条。
 - **上述模块场景是离线的**：account 是真实的 `service/account` 服务但存储在进程内；Nest 是真实的引擎加替身提交器；玩家传输与 DataEngine 是只记事件的替身，所以“断开会话”“交出实体”与“搬档”都没有经过真实实现（搬档的 DataEngine 一侧另有框架单测与真实 Mongo 副本集上的 `TestRealMongoLocalPreloadAndCopyAcrossServers`）；两个服共用同一个进程内的 account 与同一份玩家档。没有 NATS、Redis、Mongo。
 - 覆盖：整条顺序、各种拒绝不写任何东西、发起被拒清意图、发起结果未知用中止拿结论、离开钩子与交出失败时中止、提交结果未知重发直到有结论、提交被拒转中止、搬档失败先重做（提交应答丢失、结果未知时重做得到确定结果照常换服）、一直失败才中止并删掉目标库里可能已写入的副本（中止时 account 答已在别处提交的，按没搬过补搬，不凭这份清单删本服的档）、中止时删目标副本、删除失败重试、补搬冲突时保留源档、撤屏障忙时重试、迁出表一人一行、`Binding` 先表后 account、离开中的玩家在闸门被拒、排空等待先前的请求、排空不完中止、复核不过中止、应答丢失后按当前绑定落定、对不上的绑定继续问、`Admit` 的三种回答、换回来的玩家重新放行、源服重启后续做（登录触发；恢复循环不等登录：在途的接着做完、过了期限的被拒后按没换成收尾、提交后未删的旧档起服核对时删掉、目标服已有别的版本时保留、正在换回本服的不落定、account 问不到时预加载失败）、到达只做一次、意图对账、GM 入口。
 - **真实进程**：`scripts/test-demo-rehome.sh` 在 macOS ARM64 的私有 Mongo 副本集 / Redis / NATS / etcd 上连续两遍通过（2026-11-14）：生成 game-demo 的 account、两个 game 与正式协作者，受理、断开排空、离开钩子、真实 HandOffEntity、account 提交、删除源档六点之后分别 SIGKILL 源服，原 WAL 重启；前四点经登录续做。核对 account 单一绑定、玩家入口拒绝、背包 / 钱包与扣款去重、Mongo 到达次数 1、源档删除及最终 WAL 排空；提交后删除前的 Q4 窗口明确保留旧源档，不宣称全部写入入口都被隔离。另压住最后 LeaveScene 投影之后的 checkpoint，观察到等待、放行后交出；详见[演练证据](../../docs/maintenance/evidence/rehome-20261114/README.md)。

@@ -2,12 +2,14 @@ package managers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	gamerehome "{{MODULE}}/game/modules/rehome"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle"
 )
 
 // 这个文件是 rehome 模块的 manager（维护者 D22：不在模块 runtime: 里的后台循环做成 manager，由 manager Mod 统一启停）。
@@ -17,8 +19,11 @@ import (
 // 复核、离开钩子、交出、搬档、提交、落定，以及结果未知时重发到 account 给出结论为止的循环）：
 //
 //   - Start：建一个 gamerehome.Background，以 gamerehome.BackgroundCapability 发布。Driver 交出步骤时按能力名取它；
-//     取不到（这一行被删了、manager 已经停了）时不受理新的换服（答可重试）。并在 Background 里起恢复循环
-//     （gamerehome.RunRecovery，D7 / D8）：起服核对本服库里的旧档，之后定期接着做本服受理过、还在途的换服。
+//     取不到（这一行被删了、manager 已经停了）时不受理新的换服（答可重试）。并登记一个 service.started 的生命周期钩子：
+//     Service.Init 做完之后在 Background 里起恢复循环（gamerehome.RunRecovery，D7 / D8）——起服核对本服库里的旧档，
+//     之后定期接着做本服受理过、还在途的换服。不在 Start 里直接起：恢复循环要用迁出表，工程自己的 Residency
+//     （game-demo 的驻留表）在 Service.Init 里才发布；更早用到会建出缺省的 LocalResidency 并抢先发布写闸门，
+//     工程随后发布自己的写闸门时起服失败（2026-11-17 的真实进程演练里出现过）。
 //   - Stop：不再接新的步骤，取消在途步骤的 ctx，在停机期限之内等它们返回（ManagerMod 带着期限调 StopWithContext）。
 //     被取消的步骤不按失败处理、不去中止：与进程在那一刻崩溃相同，重启之后由恢复循环或玩家的下一次进入接着做（见 Driver 的注释）。
 
@@ -40,10 +45,17 @@ func (m *rehomeBackground) Start(registry *app.Registry) error {
 		return fmt.Errorf("rehome background: %w", err)
 	}
 	m.background = background
-	if err := background.Go(func(ctx context.Context) { gamerehome.RunRecovery(ctx, registry) }); err != nil {
-		return fmt.Errorf("rehome background: start recovery: %w", err)
+	life, ok := app.Lookup[*lifecycle.Registry](registry, app.ModLifecycle)
+	if !ok || life == nil {
+		return fmt.Errorf("rehome background: capability %q not found", app.ModLifecycle)
 	}
-	return nil
+	return life.Register(lifecycle.Hook{Name: "rehome.recovery", Phase: lifecycle.PhaseServiceStarted, Handler: func(context.Context, lifecycle.Event) error {
+		// 停机已经开始（Background 已关）时不再起：与崩溃相同，下次起服再做。
+		if err := background.Go(func(ctx context.Context) { gamerehome.RunRecovery(ctx, registry) }); err != nil && !errors.Is(err, gamerehome.ErrBackgroundStopped) {
+			return fmt.Errorf("rehome background: start recovery: %w", err)
+		}
+		return nil
+	}})
 }
 
 func (m *rehomeBackground) Stop() {

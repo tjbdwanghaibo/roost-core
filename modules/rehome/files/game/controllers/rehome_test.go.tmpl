@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
@@ -270,9 +271,17 @@ func (w *rehomeWorld) server(sid int32) *rehomeServer {
 	return server
 }
 
-// restart 像生成的工程那样起这个服的进程：rehome manager（managers.NewRehomeBackground）发布 Background 并在里面
-// 跑恢复循环（D7 / D8）。engine 是这个进程的 DataEngine 替身（本服库里存着哪些 Player）。
+// restart 像生成的工程那样起这个服的进程：rehome manager（managers.NewRehomeBackground）发布 Background，
+// Service.Init 之后（service.started）在里面跑恢复循环（D7 / D8）。engine 是这个进程的 DataEngine 替身（本服库里存着哪些 Player）。
 func (w *rehomeWorld) restart(sid int32, engine *rehomeEngine) *rehomeServer {
+	w.t.Helper()
+	server := w.boot(sid, engine)
+	server.serviceStarted(w.t)
+	return server
+}
+
+// boot 起到 manager Start 为止（Service.Init 之前）。
+func (w *rehomeWorld) boot(sid int32, engine *rehomeEngine) *rehomeServer {
 	w.t.Helper()
 	server := w.process(sid, engine)
 	manager := managers.NewRehomeBackground()
@@ -281,6 +290,18 @@ func (w *rehomeWorld) restart(sid int32, engine *rehomeEngine) *rehomeServer {
 	}
 	w.t.Cleanup(manager.Stop)
 	return server
+}
+
+// serviceStarted 像 app 在 Service.Init 之后那样发出 service.started。
+func (s *rehomeServer) serviceStarted(t *testing.T) {
+	t.Helper()
+	life, ok := app.Lookup[*lifecycle.Registry](s.registry, app.ModLifecycle)
+	if !ok {
+		t.Fatal("no lifecycle registry")
+	}
+	if err := life.Emit(context.Background(), lifecycle.Event{Phase: lifecycle.PhaseServiceStarted, Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // crash 停掉这个进程的 Background：在途的后台步骤被取消、什么都不落定，与进程在那一刻崩溃相同。
@@ -615,5 +636,58 @@ func TestRehomeSourceRestartAfterTheDeadlineEndsTheTransferWithoutALogin(t *test
 			t.Fatalf("after the refused commit: intent %q, tracked %v; want both cleared", pendingID, tracked)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// ownResidency 站在工程自己的 Residency（game-demo 的驻留表）的位置上：Service.Init 里发布，连同自己的写闸门。
+type ownResidency struct {
+	events  *rehomeServerEvents
+	mu      sync.Mutex
+	settled map[int64]gamerehome.Whereabouts
+}
+
+func (r *ownResidency) Reserve(gamerehome.Move) error                  { return nil }
+func (r *ownResidency) Quiesce(context.Context, gamerehome.Move) error { return nil }
+func (r *ownResidency) Depart(context.Context, gamerehome.Move) error  { return nil }
+func (r *ownResidency) Settle(_ context.Context, move gamerehome.Move, outcome gamerehome.Outcome) error {
+	r.events.add(fmt.Sprintf("own settle %d %v", move.PlayerID, outcome))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.settled[move.PlayerID] = gamerehome.Whereabouts{Move: move}
+	return nil
+}
+func (r *ownResidency) Where(playerID int64) (gamerehome.Whereabouts, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	where, ok := r.settled[playerID]
+	return where, ok
+}
+
+// 恢复循环等到 Service.Init 之后才用迁出表：工程自己的 Residency 与写闸门在 Init 里发布（game-demo），在那之前用到
+// 迁出表会建出缺省的 LocalResidency、抢先发布写闸门，工程随后发布自己的写闸门时起服失败（2026-11-17 的真实进程演练）。
+func TestRehomeRecoveryWaitsForTheServiceToPublishItsOwnResidency(t *testing.T) {
+	w := newRehomeWorld(t, rehomeSourceSID, rehomeTargetSID)
+	entityID := w.crashedWhile("drop")
+	restarted := w.boot(rehomeSourceSID, &rehomeEngine{stored: []int64{entityID}})
+	const writeGate = app.ModName("access.player.write_gate")
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if gate, ok := restarted.registry.Get(writeGate); ok {
+			t.Fatalf("before Service.Init the recovery loop already published %T as the write gate", gate)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	own := &ownResidency{events: restarted.events, settled: map[int64]gamerehome.Whereabouts{}}
+	if err := restarted.registry.RegisterBatch(
+		app.Capability{Name: gamerehome.ResidencyCapability, Value: gamerehome.Residency(own)},
+		app.Capability{Name: writeGate, Value: own},
+	); err != nil {
+		t.Fatalf("Service.Init publishing its own residency: %v", err)
+	}
+	restarted.serviceStarted(t)
+	want := []string{fmt.Sprintf("own settle %d %v", w.playerID, gamerehome.Committed), fmt.Sprintf("copy %d to 1001 overwrite=false", entityID),
+		fmt.Sprintf("drop %d at 1000", entityID)}
+	if got := restarted.waitEvents(t, len(want)); !slices.Equal(got, want) {
+		t.Fatalf("on the restarted source: %v, want %v", got, want)
 	}
 }
