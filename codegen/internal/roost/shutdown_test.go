@@ -336,21 +336,21 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 		end := shutdownBlockEnd(body)
 		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], handSet, 1))
 	}
-	// game: a hand-edited total above the formula's 132s. The helper fails if it
+	// game: a hand-edited total above the formula's 132s (135s). The helper fails if it
 	// did not edit a value, so a stale search literal cannot silently skip this premise.
-	setShutdownTotal(t, target, "configs/service/config.game.yaml", "132s")
+	setShutdownTotal(t, target, "configs/service/config.game.yaml", "135s")
 	if _, err := SyncProject(target); err != nil {
 		t.Fatal(err)
 	}
 	assertDeployedGrace(t, target, "account", 65)
-	assertDeployedGrace(t, target, "game", 137)
+	assertDeployedGrace(t, target, "game", 140)
 	// Services nobody touched keep the formula.
 	assertDeployedGrace(t, target, "chat", 28)
 	// Neither config was rewritten.
 	assertContains(t, target, "configs/service/config.account.yaml", handSet)
-	assertContains(t, target, "configs/service/config.game.yaml", "total_timeout: 132s\n")
+	assertContains(t, target, "configs/service/config.game.yaml", "total_timeout: 135s\n")
 	// The second game process waits as long as the first.
-	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 137 ]`)
+	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 140 ]`)
 
 	// A config with no total_timeout key runs on the App's 30s fallback.
 	rel := "configs/service/config.chat.yaml"
@@ -568,18 +568,18 @@ func TestOneSyncConvergesAfterAServiceLosesAMod(t *testing.T) {
 	}
 	counts, declares := bootstrapModCounts(t, root)
 	total, grace := expectedShutdown(counts["game"], declares["game"])
-	if counts["game"] != 28 || total != 126 || grace != 131 {
-		t.Fatalf("game after dropping session: %d Mods, %ds / %ds; want 28 Mods, 126s / 131s", counts["game"], total, grace)
+	if counts["game"] != 29 || total != 129 || grace != 134 {
+		t.Fatalf("game after dropping session: %d Mods, %ds / %ds; want 29 Mods, 129s / 134s", counts["game"], total, grace)
 	}
 	assertGeneratedShutdown(t, root, "game", total, grace)
-	assertContains(t, root, "deploy/dev/second-game.sh", `[ "$i" -lt 131 ]`)
+	assertContains(t, root, "deploy/dev/second-game.sh", `[ "$i" -lt 134 ]`)
 	assertProjectDiffEmpty(t, root)
 	for name, item := range shutdownStatus(t, root) {
 		if item.Status != StatusOK {
 			t.Errorf("%s after one sync: %s %s", name, item.Status, item.Detail)
 		}
 	}
-	if item := shutdownStatus(t, root)["shutdown:game"]; !strings.Contains(item.Detail, "total_timeout 126s, grace period 131s") {
+	if item := shutdownStatus(t, root)["shutdown:game"]; !strings.Contains(item.Detail, "total_timeout 129s, grace period 134s") {
 		t.Errorf("shutdown:game after one sync: %s", item.Detail)
 	}
 }
