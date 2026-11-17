@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,18 +8,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	db "GENRE_MODULE/db"
-	room "GENRE_MODULE/game/entities/game_room"
 	player "GENRE_MODULE/game/entities/player"
-	sender "GENRE_MODULE/game/handler/syncsender"
-	rules "GENRE_MODULE/game/modules/rules"
+	rules "GENRE_MODULE/game/modules/scenariorules"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -39,29 +36,36 @@ func (sessionNoEffects) Publish(context.Context, engine.OutboxItem) error {
 	return errors.New("unexpected effect in local session workflow")
 }
 
-// 两个离散玩法共用相同的 Player/Coins、GameRoom/State DAO 与 Scenario Sender；这里只共享真实接线和崩溃屏障，
-// 种子命令、未完成状态与奖励断言都留在各玩法 persistence/recovery_test.go，不能拿一种玩法的通过替代另一种。
+// 合作与经营共用真实 Runtime 接线与崩溃屏障；实体集合、开局、状态与命令都来自 scenarioEnv 的玩法钩子
+// （合作：room 模块的 Room + 两名 Player；经营：两名 Player，命令目标是主人自己）。种子命令、未完成状态与奖励断言
+// 留在各玩法 persistence/recovery_test.go，不能拿一种玩法的通过替代另一种。
 type sessionRuntime struct {
+	scenarioEnv
 	runtime   *engine.Runtime
-	nest      *nest.NestMgr
 	access    *entity.ManagerAccess
 	mongo     *mongodriver.Client
 	database  string
 	root      string
-	now       atomic.Int64
-	room      *room.GameRoom
-	players   [2]*player.Player
 	closeOnce sync.Once
 }
 
+// sessionFacts 是命令目标与两名成员的完整持久文档；比较时按 BSON 解码（map 字段编码顺序不固定）。
 type sessionFacts struct {
-	Room           []byte
-	Players        [2][]byte
+	Docs           [][]byte
 	Records, Syncs uint64
 }
 
-func (facts sessionFacts) equal(other sessionFacts) bool {
-	return bytes.Equal(facts.Room, other.Room) && bytes.Equal(facts.Players[0], other.Players[0]) && bytes.Equal(facts.Players[1], other.Players[1])
+func (facts sessionFacts) equal(t *testing.T, other sessionFacts) bool {
+	t.Helper()
+	if len(facts.Docs) != len(other.Docs) {
+		return false
+	}
+	for i := range facts.Docs {
+		if !reflect.DeepEqual(scenarioDoc(t, facts.Docs[i]), scenarioDoc(t, other.Docs[i])) {
+			return false
+		}
+	}
+	return true
 }
 
 func sessionMongo(t *testing.T) *mongodriver.Client {
@@ -83,15 +87,17 @@ func sessionMongo(t *testing.T) *mongodriver.Client {
 	return client
 }
 
+// openSessionRuntime 建（write：manual=true，宿主开局）或冷加载（manual=false）同一组实体。冷加载后先 adopt：
+// 连接与代际从持久席位读回，原连接、原代际的重放不要求在线（在线状态不落库，新进程里全部断线）。
 func openSessionRuntime(t *testing.T, database, root string, manual bool, now int64) *sessionRuntime {
 	t.Helper()
 	if !strings.HasPrefix(database, "roost_session_it_") || root == "" {
 		t.Fatal("unique session database and WAL root required")
 	}
-	room.RegisterEntity()
 	player.RegisterEntity()
-	RegisterScenarioNestHandlers()
+	kind, category, separate := scenarioTargetKind()
 	h := &sessionRuntime{database: database, root: root, mongo: sessionMongo(t)}
+	h.conns, h.epochs = map[int64]string{}, map[int64]uint64{}
 	h.now.Store(now)
 	clock.SetSource(func() time.Time { return time.UnixMilli(h.now.Load()) })
 	t.Cleanup(func() { clock.SetSource(nil) })
@@ -133,13 +139,16 @@ func openSessionRuntime(t *testing.T, database, root string, manual bool, now in
 		t.Fatal(err)
 	}
 	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
-	h.nest = nest.NewEngine(options...)
-	if err := h.nest.Start(); err != nil {
+	h.engine = nest.NewEngine(options...)
+	if err := registerScenario(h.engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { h.close(t) })
-	for i, kind := range []entity.EntityKind{room.EntityKindGameRoom, player.EntityKindPlayer, player.EntityKindPlayer} {
-		id, err := entity.BuildEntityID(int64(83001+i), kind)
+	load := func(unique int64, kind entity.EntityKind, category entity.EntityCategory) entity.IThreadSafeEntity {
+		id, err := entity.BuildEntityID(unique, kind)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,25 +156,24 @@ func openSessionRuntime(t *testing.T, database, root string, manual bool, now in
 		if manual {
 			e, err = h.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
 		} else {
-			category := entity.EntityCategoryOther
-			if i == 0 {
-				category = entity.EntityCategoryWorld
-			}
 			e, err = h.access.Get(ctx, id, category)
 		}
 		if err != nil {
 			t.Fatalf("WAL recovery lost acknowledged entity %d: %v", id, err)
 		}
-		if i == 0 {
-			h.room = e.(*room.GameRoom)
-		} else {
-			h.players[i-1] = e.(*player.Player)
-		}
+		return e
+	}
+	for i := range h.players {
+		h.players[i] = load(int64(83001+i), player.EntityKindPlayer, entity.EntityCategoryOther).(*player.Player)
+	}
+	h.target = h.players[0]
+	if separate {
+		h.target = load(83000, kind, category)
 	}
 	if manual {
-		if err := sender.NewScenarioSender(h.nest).Sync_ScenarioOpen(ctx, h.room.ID(), []int64{h.players[0].ID(), h.players[1].ID()}); err != nil {
-			t.Fatal(err)
-		}
+		h.open(t)
+	} else {
+		h.adopt(t)
 	}
 	return h
 }
@@ -175,41 +183,24 @@ func (h *sessionRuntime) close(t *testing.T) {
 	h.closeOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if err := h.nest.Shutdown(ctx); err != nil {
+		if err := h.engine.Shutdown(ctx); err != nil {
 			t.Error(err)
 		}
+		h.closeScenario()
 		if err := h.runtime.Shutdown(ctx); err != nil {
 			t.Error(err)
 		}
 	})
 }
 
-func (h *sessionRuntime) facts(t *testing.T) sessionFacts {
+func (h *sessionRuntime) persisted(t *testing.T) sessionFacts {
 	t.Helper()
-	return sessionFacts{Room: robotRead(t, h.nest, h.room, func() []byte { return h.room.Dao().Marshal() }), Players: [2][]byte{
-		robotRead(t, h.nest, h.players[0], func() []byte { return h.players[0].Dao().Marshal() }),
-		robotRead(t, h.nest, h.players[1], func() []byte { return h.players[1].Dao().Marshal() }),
-	}}
-}
-
-func (h *sessionRuntime) state(t *testing.T) rules.State {
-	t.Helper()
-	var state rules.State
-	raw := robotRead(t, h.nest, h.room, func() string { return h.room.Dao().GetState() })
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		t.Fatal(err)
-	}
-	return state
+	return sessionFacts{Docs: h.rawFacts(t)}
 }
 
 func (h *sessionRuntime) command(t *testing.T, index int, kind string, choice int) rules.Command {
 	t.Helper()
-	state := h.state(t)
-	return rules.Command{Seq: state.Last[h.players[index].ID()].Command.Seq + 1, Revision: state.Revision, Kind: kind, Choice: choice}
-}
-
-func (h *sessionRuntime) send(index int, command rules.Command) (rules.Result, error) {
-	return sender.NewScenarioSender(h.nest).MultiSync_ScenarioCommand(context.Background(), h.room.ID(), h.players[index].ID(), command)
+	return h.next(t, index, kind, choice)
 }
 
 func (h *sessionRuntime) act(t *testing.T, index int, kind string, choice int) rules.Result {
@@ -221,17 +212,7 @@ func (h *sessionRuntime) act(t *testing.T, index int, kind string, choice int) r
 	return result
 }
 
-func (h *sessionRuntime) refuse(t *testing.T, index int, command rules.Command) {
-	t.Helper()
-	before := h.facts(t)
-	if _, err := h.send(index, command); err == nil {
-		t.Fatal("invalid command accepted", command)
-	}
-	if !h.facts(t).equal(before) {
-		t.Fatal("rejected command changed persisted facts")
-	}
-}
-
+// replayLast 用当前连接与代际重发每人最后一条回执：结果不变，持久文档一个字段都不变（奖励不重发）。
 func (h *sessionRuntime) replayLast(t *testing.T) {
 	t.Helper()
 	before := h.facts(t)
@@ -246,22 +227,22 @@ func (h *sessionRuntime) replayLast(t *testing.T) {
 			t.Fatalf("recovered last receipt changed: %v %+v want %+v", err, result, receipt.Result)
 		}
 	}
-	if !h.facts(t).equal(before) {
-		t.Fatal("receipt replay duplicated reward or changed room")
+	if !reflect.DeepEqual(before, h.facts(t)) {
+		t.Fatal("receipt replay duplicated reward or changed state")
 	}
 }
 
-func (h *sessionRuntime) coins(t *testing.T) [2]int64 {
+func (h *sessionRuntime) wallets(t *testing.T) [2]int64 {
 	t.Helper()
-	return [2]int64{robotRead(t, h.nest, h.players[0], func() int64 { return h.players[0].Dao().GetCoins() }), robotRead(t, h.nest, h.players[1], func() int64 { return h.players[1].Dao().GetCoins() })}
+	return [2]int64{h.coins(t, 0), h.coins(t, 1)}
 }
 
-// assertSessionMongoEmpty 在父子进程都查两张真实业务集合；WAL receipt 之外还必须证明没有投影可兜底。
+// assertSessionMongoEmpty 在父子进程都查本玩法的业务集合；WAL receipt 之外还必须证明没有投影可兜底。
 func assertSessionMongoEmpty(t *testing.T, client *mongodriver.Client, database string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for _, coll := range []string{db.GameRoomDaoCollection, db.PlayerDaoCollection} {
+	for _, coll := range scenarioCollections() {
 		count, err := client.DatabaseForSid(database, 0).Collection(coll).CountDocuments(ctx, map[string]any{})
 		if err != nil || count != 0 {
 			t.Fatalf("%s: %d documents (%v), want WAL-only zero", coll, count, err)
@@ -275,7 +256,8 @@ type sessionCrashCase struct {
 }
 
 // runSessionCrash 把业务确认、落盘屏障与 SIGKILL 分开：FD 3 报告完整快照；父进程读完后验证 Mongo 为空再杀。
-// 恢复使用原 WAL，第三个进程再次冷加载最终奖励并重试。只覆盖 strict 已确认提交，不模拟回复未知或磁盘断电。
+// 恢复使用原 WAL：先用原连接、原代际重放最后回执，再换连接重连（rejoin）继续业务；第三个进程再次冷加载最终奖励，
+// 同样先重放、再重连重试。只覆盖 strict 已确认提交，不模拟回复未知或磁盘断电。
 func runSessionCrash(t *testing.T, cases []sessionCrashCase) {
 	t.Helper()
 	if role := os.Getenv("ROOST_SESSION_CHILD"); role != "" {
@@ -299,10 +281,11 @@ func runSessionCrash(t *testing.T, cases []sessionCrashCase) {
 			if err := json.Unmarshal(raw, &expected); err != nil {
 				t.Fatal(err)
 			}
-			if !h.facts(t).equal(expected) {
+			if !h.persisted(t).equal(t, expected) {
 				t.Fatal("cold terminal room/reward facts changed")
 			}
 			h.replayLast(t)
+			h.rejoin(t)
 			selected.verify(t, h)
 			return
 		}
@@ -315,7 +298,7 @@ func runSessionCrash(t *testing.T, cases []sessionCrashCase) {
 			t.Fatalf("not durably WAL-only: %+v", stats)
 		}
 		assertSessionMongoEmpty(t, h.mongo, database)
-		facts := h.facts(t)
+		facts := h.persisted(t)
 		facts.Records, facts.Syncs = stats.Appended, stats.Syncs
 		report := os.NewFile(3, "session WAL-only receipt")
 		if err := json.NewEncoder(report).Encode(facts); err != nil {
@@ -402,16 +385,18 @@ func runSessionCrash(t *testing.T, cases []sessionCrashCase) {
 			}
 			assertSessionMongoEmpty(t, client, database)
 			h := openSessionRuntime(t, database, root, false, sessionRealT0+2*time.Hour.Milliseconds())
-			if !h.facts(t).equal(expected) {
+			if !h.persisted(t).equal(t, expected) {
 				t.Fatal("WAL recovery lost acknowledged room or player state")
 			}
+			// 原连接、原代际的重放不要求在线；新命令要先换连接重连（房间玩法），经营没有席位，rejoin 不做事。
 			h.replayLast(t)
+			h.rejoin(t)
 			scenario.recover(t, h)
 			scenario.verify(t, h)
 			if err := h.runtime.Flush(ctx); err != nil {
 				t.Fatal(err)
 			}
-			raw, err := json.Marshal(h.facts(t))
+			raw, err := json.Marshal(h.persisted(t))
 			if err != nil {
 				t.Fatal(err)
 			}

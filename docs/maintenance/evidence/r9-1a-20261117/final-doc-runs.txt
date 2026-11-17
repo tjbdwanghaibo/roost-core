@@ -1,0 +1,4 @@
+# 文档命令块（SESSION-GENRES“生成与运行”三条：ROOST_GENRE_KEEP=1 + ROOST_GENRE_MODULE=example.com/myduel|mycoop|myfarm），最后一次夹具改动之后跑，三条 rc=0
+# 逐条输出见 default-turn-pvp.txt（myduel）、default-coop-roguelike.txt（mycoop）、default-social-sim.txt（myfarm）
+# REAL 两条命令块（回合 PvP 一段、合作 / 经营一段）：见 real-*.txt（同一轮，三条 rc=0）
+# 矩阵：matrix.json 的 final_run

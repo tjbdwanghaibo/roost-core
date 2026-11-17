@@ -1,0 +1,22 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_TURN_PVP_OUT=… ROOST_TURN_PVP_REAL=1 GOWORK=off GOFLAGS=-p=2 bash scripts/test-turn-pvp-generated.sh  → rc=0
+# 输出
+--- PASS: TestScenarioTurnOrder
+--- PASS: TestScenarioTimeoutConsumesOneTurn
+--- PASS: TestScenarioTerminalCannotAttack
+--- PASS: TestScenarioReconnectReadsAuthoritativeTurn
+--- PASS: TestScenarioTurnTimesOutByTheRoomTimer
+--- PASS: TestScenarioRobotTCPRetryAndReconnect
+--- PASS: TestScenarioRetryAndConflict
+--- PASS: TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioStaleRevision
+--- PASS: TestScenarioMembership
+ok  	example.com/turn-pvp-practice/game/handler
+module verify: room 34/34 skipped=0
+module verify: turn 25/25 skipped=0
+module verify: wallet 17/17 skipped=0
+ok  	example.com/turn-pvp-practice/game/handler [no tests to run]
+    turn_timer_real_test.go:193: PASS real timer seed: open, joins, turn start, strict attack with receipt, reward and deadline node flushed
+    turn_timer_real_test.go:277: PASS real timer recover: complete cold DAO, indexed deadline, offline seats refused until RoomReconnect, offline timeout once, replay and terminal cleanup
+    recipe_test.go:94: PASS real turn seed: room=1 round=2 sequence=1; replay stayed round=2; deadline=1794882948170
+    recipe_test.go:151: PASS real turn recovery: room=1; old connections rejected; epochs advanced; offline timeout once; sequence retained; replay and finish exactly once
+[drill 10:35:59] PASS real turn-pvp recipe: Gate/TCP/NATS/Mongo/WAL, SIGKILL recovery, offline timeout once and replay; evidence <scratchpad>/b1117-r9-1a/final/turn-recipe

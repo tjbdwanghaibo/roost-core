@@ -1,0 +1,16 @@
+# 缺省档 回合 PvP（module example.com/myduel）
+--- PASS: TestScenarioTurnOrder
+--- PASS: TestScenarioTimeoutConsumesOneTurn
+--- PASS: TestScenarioTerminalCannotAttack
+--- PASS: TestScenarioReconnectReadsAuthoritativeTurn
+--- PASS: TestScenarioTurnTimesOutByTheRoomTimer
+--- PASS: TestScenarioRobotTCPRetryAndReconnect
+--- PASS: TestScenarioRetryAndConflict
+--- PASS: TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioStaleRevision
+--- PASS: TestScenarioMembership
+ok  	example.com/myduel/game/handler
+module verify: room 34/34 skipped=0
+module verify: turn 25/25 skipped=0
+module verify: wallet 17/17 skipped=0
+ok  	example.com/myduel/game/handler [no tests to run]

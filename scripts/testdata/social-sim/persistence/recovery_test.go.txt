@@ -6,7 +6,8 @@ import (
 )
 
 // 两个崩溃点分别覆盖离线待成熟的种植/帮助，与已确认但未投影的收获奖励。
-// ReadyAt 来自持久状态；恢复不自动积累离线收益，只有主人显式 harvest 才付一次 5 金币。
+// 农场在主人的 PlayerDao.SocialFarm，好友关系在两人的 friends 状态里，金币在 wallet；ReadyAt 来自持久状态；
+// 恢复不自动积累离线收益，只有主人显式 harvest 才付一次 5 金币；冷加载后好友仍在，访客的帮助回执可重放。
 func TestSocialSimRealCrashRecovery(t *testing.T) {
 	if os.Getenv("ROOST_SOCIAL_SIM_REAL") != "1" {
 		t.Skip("ROOST_SOCIAL_SIM_REAL not set")
@@ -17,8 +18,8 @@ func TestSocialSimRealCrashRecovery(t *testing.T) {
 
 	verify := func(t *testing.T, h *sessionRuntime) {
 		s := h.state(t)
-		if s.Planted || !s.Helped || s.ReadyAt != sessionRealT0+50000 || s.Harvests != 1 || s.Revision != 3 || h.coins(t) != [2]int64{5, 0} {
-			t.Fatalf("social terminal/rewards: %+v coins=%v", s, h.coins(t))
+		if s.Planted || !s.Helped || s.ReadyAt != sessionRealT0+50000 || s.Harvests != 1 || s.Revision != 3 || h.wallets(t) != [2]int64{5, 0} {
+			t.Fatalf("social terminal/rewards: %+v coins=%v", s, h.wallets(t))
 		}
 		h.replayLast(t)
 		for i := range h.players {
@@ -40,7 +41,7 @@ func TestSocialSimRealCrashRecovery(t *testing.T) {
 	runSessionCrash(t, []sessionCrashCase{
 		{name: "growing", seed: plant, recover: func(t *testing.T, h *sessionRuntime) {
 			s := h.state(t)
-			if !s.Planted || s.Harvests != 0 || h.coins(t) != [2]int64{} {
+			if !s.Planted || s.Harvests != 0 || h.wallets(t) != [2]int64{} {
 				t.Fatal("offline load paid income before harvest", s)
 			}
 			h.refuse(t, 1, h.command(t, 1, "harvest", 0))
@@ -53,11 +54,11 @@ func TestSocialSimRealCrashRecovery(t *testing.T) {
 			plant(t, h)
 			h.now.Store(sessionRealT0 + 50000)
 			h.act(t, 0, "harvest", 0)
-			if h.coins(t) != [2]int64{5, 0} {
+			if h.wallets(t) != [2]int64{5, 0} {
 				t.Fatal("wrong acknowledged reward")
 			}
 		}, recover: func(t *testing.T, h *sessionRuntime) {
-			if h.coins(t) != [2]int64{5, 0} {
+			if h.wallets(t) != [2]int64{5, 0} {
 				t.Fatal("acknowledged harvest lost or doubled")
 			}
 			h.replayLast(t)

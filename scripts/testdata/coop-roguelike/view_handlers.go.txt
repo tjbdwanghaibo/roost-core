@@ -1,21 +1,23 @@
 package handler
 
 import (
-	"encoding/json"
-
-	"GENRE_MODULE/game/modules/rules"
+	rules "GENRE_MODULE/game/modules/scenariorules"
 )
 
+// 成员用自己当前的连接读视图（room 的 View 做成员与连接检查）；金币是 wallet 的余额。
+//
 //roost:nest rollback=undo durability=strict
-func handlerCoopView(room IGameRoomEntity, player IScenarioPlayerEntity) (rules.View, error) {
-	var state rules.State
-	if err := json.Unmarshal([]byte(room.Dao().GetState()), &state); err != nil {
+func handlerCoopView(m IScenarioRoomEntity, p IScenarioPlayerEntity, connection string) (rules.View, error) {
+	if _, err := m.Room().View(p.ID(), connection); err != nil {
 		return rules.View{}, err
 	}
-	for seat, id := range state.Members {
-		if id == player.ID() {
-			return rules.View{Revision: state.Revision, NextSeq: state.Last[id].Command.Seq + 1, Stage: state.Stage, Cleared: state.Cleared, Claimed: state.Claimed[seat], Coins: player.Dao().GetCoins()}, nil
-		}
+	s, err := rules.Decode(m.Dao().GetCoopState())
+	if err != nil {
+		return rules.View{}, err
 	}
-	return rules.View{}, rules.ErrRule
+	seat := s.Index(p.ID())
+	if seat < 0 {
+		return rules.View{}, rules.ErrRule
+	}
+	return rules.View{Revision: s.Revision, NextSeq: s.Last[p.ID()].Command.Seq + 1, Stage: s.Stage, Cleared: s.Cleared, Claimed: s.Claimed[seat], Coins: p.Wallet().Balance()}, nil
 }

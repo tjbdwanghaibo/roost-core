@@ -1,0 +1,21 @@
+# source …/env.sh; GOWORK=off GOFLAGS=-p=2 ROOST_COOP_ROGUELIKE_REAL=1 bash scripts/test-coop-roguelike-generated.sh  → rc=0
+# 输出
+--- PASS: TestScenarioRobotCompleteCoopAndClientViews
+--- PASS: TestScenarioTeamBarrier
+--- PASS: TestScenarioRewardExactlyOnce
+--- PASS: TestScenarioRewardRollsBackBothEntities
+--- PASS: TestScenarioSeedSurvivesReload
+--- PASS: TestScenarioRobotTCPRetryAndReconnect
+--- PASS: TestScenarioRetryAndConflict
+--- PASS: TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioStaleRevision
+--- PASS: TestScenarioMembership
+ok  	example.com/coop-roguelike-practice/game/handler
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0
+    session_real_runtime_test.go:413: PASS WAL-only SIGKILL: 9 strict records, 9 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+    session_real_runtime_test.go:413: PASS WAL-only SIGKILL: 13 strict records, 13 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+--- PASS: TestCoopRoguelikeRealCrashRecovery
+    --- PASS: TestCoopRoguelikeRealCrashRecovery/partial_vote
+    --- PASS: TestCoopRoguelikeRealCrashRecovery/first_reward
+ok  	example.com/coop-roguelike-practice/game/handler

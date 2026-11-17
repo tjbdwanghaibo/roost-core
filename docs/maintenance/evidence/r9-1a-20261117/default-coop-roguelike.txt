@@ -1,0 +1,14 @@
+# 缺省档 合作 Roguelike（module example.com/mycoop）
+--- PASS: TestScenarioRobotCompleteCoopAndClientViews
+--- PASS: TestScenarioTeamBarrier
+--- PASS: TestScenarioRewardExactlyOnce
+--- PASS: TestScenarioRewardRollsBackBothEntities
+--- PASS: TestScenarioSeedSurvivesReload
+--- PASS: TestScenarioRobotTCPRetryAndReconnect
+--- PASS: TestScenarioRetryAndConflict
+--- PASS: TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioStaleRevision
+--- PASS: TestScenarioMembership
+ok  	example.com/mycoop/game/handler
+module verify: room 34/34 skipped=0
+module verify: wallet 17/17 skipped=0

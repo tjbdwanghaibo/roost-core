@@ -1,0 +1,45 @@
+package turn
+
+import (
+	db "GENRE_MODULE/db"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+)
+
+// 回合 PvP 对 turn 组件的扩展（scripts/testdata/turn-pvp/turn_hooks.go.txt；turn README“超时要做别的事（扣分、托管）：
+// 改 game/components/turn/turn.go 的 OnDeadline”）。genre-common/run.sh 在本包 turn.go 里插两处调用：
+//   - OnDeadline 计完超时之后 pvpTimeout：当前行动者扣 1 点生命，与超时计数、下一回合、期限续期同一笔事务；
+//   - advance 的结束条件加上 pvpOver：对局已分胜负时 turn 一并结束（不再续期限，终局后定时器节点为 0）。
+//
+// RoomDao.PvpState 为空（不是回合 PvP 的房，例如 turn 模块自己的 25 条场景）时两者都不做事。状态读不出是程序错误，
+// 与塔防的定时器一样 panic，让整笔事务回滚。
+func pvpTimeout(dao *db.RoomDao) {
+	raw := dao.GetPvpState()
+	if raw == "" {
+		return
+	}
+	match, err := rules.Decode(raw)
+	if err != nil {
+		panic(err)
+	}
+	state := dao.GetTurn()
+	actor, ok := state.GetPlayers(int(state.GetActive()))
+	if !ok || match.Finished {
+		return
+	}
+	if err := match.Timeout(actor.GetPlayerID()); err != nil {
+		panic(err)
+	}
+	dao.SetPvpState(match.Encode())
+}
+
+func pvpOver(dao *db.RoomDao) bool {
+	raw := dao.GetPvpState()
+	if raw == "" {
+		return false
+	}
+	match, err := rules.Decode(raw)
+	if err != nil {
+		panic(err)
+	}
+	return match.Finished
+}

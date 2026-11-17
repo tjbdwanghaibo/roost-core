@@ -1,0 +1,13 @@
+# 缺省档 社交经营（module example.com/myfarm）
+--- PASS: TestScenarioVisitorPermissions
+--- PASS: TestScenarioOfflineHarvestOnce
+--- PASS: TestScenarioHelpChangesDeadlineOnlyOnce
+--- PASS: TestScenarioHarvestRollback
+--- PASS: TestScenarioRobotTCPRetryAndReconnect
+--- PASS: TestScenarioRetryAndConflict
+--- PASS: TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioStaleRevision
+--- PASS: TestScenarioMembership
+ok  	example.com/myfarm/game/handler
+module verify: friends 18/18 skipped=0
+module verify: wallet 17/17 skipped=0

@@ -1,0 +1,36 @@
+package scenarionet
+
+import (
+	"context"
+
+	syncsender "GENRE_MODULE/game/handler/syncsender"
+	roomlogic "GENRE_MODULE/game/modules/room"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// Command 是房间玩法（回合 PvP、合作）的接入：RoomID 是房间唯一号（与 room 自带协议同一口径），经 room.EntityID 换成
+// Room 的 Entity ID，客户端不能把别的种类的 Entity ID 当房间交给 Sender。操作者取自鉴权会话，连接标识取自服务端 Session
+// （room.ConnectionKey，不能从 PB 里取）。Kind "reconnect" 转 room 的 RoomReconnect（Robot 只有这一条消息；真实客户端直接发 RoomReconnect），
+// 其余转本玩法的多实体命令 [Room, Player]，代际与连接由持锁 handler 交给 room 核对。
+func Command(ctx context.Context, engine *nest.NestMgr, session gateway.Session, request *pb.ScenarioCommandRequest) (Reply, error) {
+	player := session.Principal().PlayerID
+	room, err := roomlogic.EntityID(request.RoomID)
+	if err != nil {
+		return Reply{}, err
+	}
+	connection, err := roomlogic.ConnectionKey(session)
+	if err != nil {
+		return Reply{}, err
+	}
+	if request.Kind == "reconnect" {
+		snapshot, err := syncsender.NewRoomReconnectSender(engine).Sync_RoomReconnect(ctx, room, player, request.Epoch, connection)
+		return Reply{Epoch: snapshot.Epoch}, err
+	}
+	command := rules.Command{Seq: request.Seq, Revision: request.Revision, Kind: request.Kind, Choice: int(request.Choice)}
+	result, err := syncsender.NewScenarioSender(engine).MultiSync_ScenarioCommand(ctx, room, player, request.Epoch, connection, command)
+	return Reply{Result: result}, err
+}

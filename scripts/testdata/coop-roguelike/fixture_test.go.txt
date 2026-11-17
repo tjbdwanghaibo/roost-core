@@ -1,0 +1,62 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	playerentity "GENRE_MODULE/game/entities/player"
+	sender "GENRE_MODULE/game/handler/syncsender"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+	bots "GENRE_MODULE/loadtest"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 合作 Roguelike 的夹具差异（genre-common/gameplay_test.go.txt 的约定）：命令目标是 room 模块的 Room
+// （genre-common/room_test.go.txt），玩法状态是 RoomDao.CoopState。
+
+// registerScenario：本玩法的 handler 是全局注册；room 的 handler 归属 game 服务，按引擎实例注册。
+func registerScenario(engine *nest.NestMgr) error {
+	RegisterScenarioNestHandlers()
+	RegisterCoopViewHandlersNestHandlers()
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomJoinNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn} {
+		if err := register(engine); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// open：宿主开房 + 名单（一笔事务）→ 两人 RoomJoin 入座。
+func (e *scenarioEnv) open(t *testing.T) {
+	t.Helper()
+	if err := sender.NewScenarioSender(e.engine).Sync_ScenarioOpen(context.Background(), e.target.ID(), [2]int64{e.players[0].ID(), e.players[1].ID()}); err != nil {
+		t.Fatal(err)
+	}
+	e.seat(t)
+}
+
+func (e *scenarioEnv) state(t *testing.T) rules.State {
+	t.Helper()
+	raw := scenarioRead(t, e, e.target, func() string { return e.room().Dao().GetCoopState() })
+	s, err := rules.Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func (e *scenarioEnv) sendAs(p *playerentity.Player, c rules.Command) (rules.Result, error) {
+	return sender.NewScenarioSender(e.engine).MultiSync_ScenarioCommand(context.Background(), e.target.ID(), p.ID(), e.epochs[p.ID()], e.conn(p), c)
+}
+
+func (e *scenarioEnv) closeScenario() {}
+
+// scenarioSmoke：接管席位 → 第一票 → 同连接重发 → 换连接再接管 → 重发；都只提交一次。
+func scenarioSmoke(t *testing.T, f *scenarioFixture) []bots.Step {
+	t.Helper()
+	c := f.command(t, 0, "vote")
+	vote := bots.Step{Request: pb.ScenarioCommandRequest{RoomID: f.roomKey(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}, Revision: 1}
+	return []bots.Step{f.takeover(t, 0), vote, vote, f.retake(), vote}
+}

@@ -2,17 +2,25 @@ package protocoldef
 
 //roost:proto package=game.protocol go_package=GENRE_MODULE/protocol/pb;pb
 
+// ScenarioCommandRequest 是三类玩法共用的命令外壳。RoomID 是命令目标的唯一号（不是 Entity ID）：房间玩法（回合 PvP、合作）
+// 是 room 模块的房间号（与 room 自带协议同一口径），社交经营是农场主人的玩家号。Epoch 是请求者在 room 里当前的席位代际（经营不用，填 0）。
+// 操作者与连接标识只取自已鉴权的会话，不在请求里。Kind "reconnect" 只给 Robot 换连接后接管席位用（转 room 的
+// RoomReconnect）；真实客户端直接发 room 模块自带的 RoomReconnect。
 type ScenarioCommandRequest struct {
 	RoomID   int64  `pb:"1"`
 	Seq      uint64 `pb:"2"`
 	Revision uint64 `pb:"3"`
 	Kind     string `pb:"4"`
 	Choice   int32  `pb:"5"`
+	Epoch    uint64 `pb:"6"`
 }
+
+// ScenarioCommandResponse 的 Epoch 只在 reconnect 成功时填：接管之后的新席位代际。
 type ScenarioCommandResponse struct {
 	Code     int32  `pb:"1"`
 	Revision uint64 `pb:"2"`
 	Reward   int32  `pb:"3"`
+	Epoch    uint64 `pb:"4"`
 }
 type ScenarioProtocol interface {
 	//roost:msg id=15001 tags=local

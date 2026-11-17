@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# usage: mutations.sh <pvp project> <coop project> <social project> <coop REAL project> <out>
+set -uo pipefail
+S="$(cd "$(dirname "$0")" && pwd)"
+PV=$1 CO=$2 SO=$3 CR=$4 out=$5
+mut() { python3 "$S/mutate.py" "$@" >> "$out" 2>&1; }
+: > "$out"
+echo "# 回合 PvP（$PV）" >> "$out"
+mut $PV P1-wallet game/handler/scenario.go $'\tif _, err = p.Wallet().Add(int64(reward)); err != nil {\n\t\treturn rules.Result{}, err\n\t}\n' '' 'TestScenarioTurnOrder'
+mut $PV P2-conflict game/handler/scenario.go 'if !ok || last.Command != cmd {' 'if !ok {' 'TestScenarioRetryAndConflict'
+mut $PV P3-stale-round game/handler/scenario.go 'round, sequence := int64(cmd.Revision)+1, int64(cmd.Seq)' 'round, sequence := m.Dao().GetTurn().GetRound(), int64(cmd.Seq)' 'TestScenarioStaleRevision'
+mut $PV P4-epoch-bypass game/handler/scenario.go $'\treplay, err := m.Turn().CheckEnd(' $'\tif seat, ok := m.Dao().GetSeats(p.ID()); ok {\n\t\tepoch = seat.GetEpoch()\n\t}\n\treplay, err := m.Turn().CheckEnd(' 'TestScenarioReconnectReadsAuthoritativeTurn'
+mut $PV P5-nonmember-ok game/handler/scenario.go $'\tif cmd.Seq == 0 || cmd.Seq >= math.MaxInt64' $'\tif match.Index(p.ID()) < 0 {\n\t\treturn rules.Result{}, nil\n\t}\n\tif cmd.Seq == 0 || cmd.Seq >= math.MaxInt64' 'TestScenarioMembership'
+mut $PV P6-no-timeout-penalty game/components/turn/turn.go $'\tpvpTimeout(component.owner.Dao()) // 回合 PvP：超时的行动者扣 1 点生命（pvp.go）\n' '' 'TestScenarioTimeoutConsumesOneTurn|TestScenarioTurnTimesOutByTheRoomTimer'
+mut $PV P7-no-game-over game/components/turn/turn.go ' || pvpOver(dao) {' ' {' 'TestScenarioTerminalCannotAttack|TestScenarioTurnTimesOutByTheRoomTimer'
+mut $PV P8-robot-no-epoch game/modules/scenarionet/dispatch.go 'Epoch: reply.Epoch}' 'Epoch: 0}' 'TestScenarioRobotTCPRetryAndReconnect'
+mut $PV P9-result-cache game/handler/scenario.go $'func handlerScenarioCommand(@@\treplay, err := m.Turn().CheckEnd(@@\tm.Dao().SetPvpState(match.Encode())\n\tif _, err = m.Turn().End(' $'var scenarioResultCache = map[[2]int64]rules.Result{}\n\nfunc handlerScenarioCommand(@@\tif r, ok := scenarioResultCache[[2]int64{p.ID(), int64(cmd.Seq)}]; ok {\n\t\treturn r, nil\n\t}\n\treplay, err := m.Turn().CheckEnd(@@\tscenarioResultCache[[2]int64{p.ID(), int64(cmd.Seq)}] = result\n\tm.Dao().SetPvpState(match.Encode())\n\tif _, err = m.Turn().End(' 'TestScenarioCommitRejectionRollsBack'
+mut $PV P10-room-as-entity-id game/modules/scenarionet/command.go $'\troom, err := roomlogic.EntityID(request.RoomID)' $'\troom, err := request.RoomID, error(nil)' 'TestScenarioRobotTCPRetryAndReconnect'
+echo "# 合作 Roguelike（$CO；C6 在 REAL 工程 $CR）" >> "$out"
+mut $CO C1-no-wallet game/handler/scenario.go $'\tif result.Reward > 0 {\n\t\tif _, err = p.Wallet().Add(int64(result.Reward)); err != nil {\n\t\t\treturn rules.Result{}, err\n\t\t}\n\t}\n' '' 'TestScenarioRewardExactlyOnce|TestScenarioRobotCompleteCoopAndClientViews'
+mut $CO C2-result-cache game/handler/scenario.go $'func handlerScenarioCommand(@@\tresult, err := s.Apply(p.ID(), cmd, nowUnixMilli)@@\tm.Dao().SetCoopState(s.Encode())\n\treturn result, nil' $'var scenarioResultCache = map[[2]int64]rules.Result{}\n\nfunc handlerScenarioCommand(@@\tif r, ok := scenarioResultCache[[2]int64{p.ID(), int64(cmd.Seq)}]; ok {\n\t\treturn r, nil\n\t}\n\tresult, err := s.Apply(p.ID(), cmd, nowUnixMilli)@@\tscenarioResultCache[[2]int64{p.ID(), int64(cmd.Seq)}] = result\n\tm.Dao().SetCoopState(s.Encode())\n\treturn result, nil' 'TestScenarioRewardRollsBackBothEntities|TestScenarioCommitRejectionRollsBack'
+mut $CO C3-room-reconnect-keeps-old-conn game/components/room/room.go $'\tseat.SetEpoch(next)\n\tseat.SetConnection(connection)\n' $'\tseat.SetEpoch(next)\n' 'TestScenarioSeedSurvivesReload'
+mut $CO C4-nonmember-ok game/handler/scenario.go $'\tprevious := s.Last[p.ID()]\n\treplay :=' $'\tif s.Index(p.ID()) < 0 {\n\t\treturn rules.Result{}, nil\n\t}\n\tprevious := s.Last[p.ID()]\n\treplay :=' 'TestScenarioMembership'
+mut $CO C5-robot-no-epoch game/modules/scenarionet/dispatch.go 'Epoch: reply.Epoch}' 'Epoch: 0}' 'TestScenarioRobotCompleteCoopAndClientViews|TestScenarioRobotTCPRetryAndReconnect'
+mut $CO C6-replay-needs-online-default game/handler/scenario.go $'\tif !replay {\n\t\t_, err := m.Room().Authorize(playerID, epoch, connection)' $'\tif true {\n\t\t_, err := m.Room().Authorize(playerID, epoch, connection)' 'TestScenarioRetryAndConflict'
+( source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_COOP_ROGUELIKE_REAL=1 python3 "$S/mutate.py" $CR C6-replay-needs-online-REAL game/handler/scenario.go $'\tif !replay {\n\t\t_, err := m.Room().Authorize(playerID, epoch, connection)' $'\tif true {\n\t\t_, err := m.Room().Authorize(playerID, epoch, connection)' 'TestCoopRoguelikeRealCrashRecovery' >> "$out" 2>&1 )
+echo "# 社交经营（$SO）" >> "$out"
+mut $SO S1-not-friend game/handler/scenario.go 'friend := slices.Contains(' 'friend := false && slices.Contains(' 'TestScenarioVisitorPermissions|TestScenarioHelpChangesDeadlineOnlyOnce|TestScenarioRobotTCPRetryAndReconnect'
+mut $SO S2-no-wallet game/handler/scenario.go $'\tif result.Reward > 0 {\n\t\tif _, err = actor.Wallet().Add(int64(result.Reward)); err != nil {\n\t\t\treturn rules.Result{}, err\n\t\t}\n\t}\n' '' 'TestScenarioOfflineHarvestOnce|TestScenarioRobotTCPRetryAndReconnect'
+mut $SO S3-result-cache game/handler/scenario.go $'func applyScenario(@@\tresult, err := farm.Apply(actor.ID(), friend, cmd, now)@@\towner.Dao().SetSocialFarm(farm.Encode())\n\treturn result, nil' $'var scenarioResultCache = map[[2]int64]rules.Result{}\n\nfunc applyScenario(@@\tif r, ok := scenarioResultCache[[2]int64{actor.ID(), int64(cmd.Seq)}]; ok {\n\t\treturn r, nil\n\t}\n\tresult, err := farm.Apply(actor.ID(), friend, cmd, now)@@\tscenarioResultCache[[2]int64{actor.ID(), int64(cmd.Seq)}] = result\n\towner.Dao().SetSocialFarm(farm.Encode())\n\treturn result, nil' 'TestScenarioHarvestRollback|TestScenarioCommitRejectionRollsBack'
+mut $SO S4-nonfriend-ok game/handler/scenario.go $'\treturn applyScenario(owner, visitor, friend, cmd, nowUnixMilli)' $'\tif !friend {\n\t\treturn rules.Result{}, nil\n\t}\n\treturn applyScenario(owner, visitor, friend, cmd, nowUnixMilli)' 'TestScenarioMembership'

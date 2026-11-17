@@ -56,7 +56,9 @@ func TestScenarioRobotCompleteCoopAndClientViews(t *testing.T) {
 	ticket := func(token string) robot.AuthProvider {
 		return func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(token), nil }
 	}
-	run := bots.Coop(runner.Config{Duration: 10 * time.Second, Transport: transport.Config{Endpoint: server.Addr().String()}}, f.room.ID(), [2]robot.AuthProvider{ticket("first"), ticket("second")})
+	// 两人已经由夹具 RoomJoin 入座；Robot 在每条新连接上带席位当前的代际接管（room 的 RoomReconnect）。
+	epochs := [2]uint64{f.epochs[f.players[0].ID()], f.epochs[f.players[1].ID()]}
+	run := bots.Coop(runner.Config{Duration: 10 * time.Second, Transport: transport.Config{Endpoint: server.Addr().String()}}, f.roomKey(), [2]robot.AuthProvider{ticket("first"), ticket("second")}, epochs)
 	if err = run.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +89,10 @@ func TestScenarioRobotCompleteCoopAndClientViews(t *testing.T) {
 	if err = outsider.Do(ctx, action.NameConnect, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = bots.CoopView(ctx, outsider, f.room.ID()); !errors.Is(err, session.ErrRejected) {
+	if _, err = bots.CoopView(ctx, outsider, f.roomKey()); !errors.Is(err, session.ErrRejected) {
 		t.Fatalf("outsider saw private view: %v", err)
 	}
-	if _, err = bots.CoopCommand(ctx, outsider, &pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: 1, Revision: 8, Kind: "claim"}); !errors.Is(err, session.ErrRejected) {
+	if _, err = bots.CoopCommand(ctx, outsider, &pb.ScenarioCommandRequest{RoomID: f.roomKey(), Seq: 1, Revision: 8, Kind: "claim"}); !errors.Is(err, session.ErrRejected) {
 		t.Fatalf("non-member claimed reward: %v", err)
 	}
 

@@ -19,45 +19,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
-// Smoke 验证新房间的第一个合法动作、同连接重试、重连后重试都只提交一次。
-// 这是功能验收；重复同一回执不代表正常业务吞吐，不能用其结果声明服务器容量。
-func Smoke(cfg runner.Config, roomID int64, auth robot.AuthProvider) *runner.Runner {
-	protocols := protocol.NewRegistry(nil)
-	generated.RegisterDefaults(protocols)
-	scenarios := scenario.NewRegistry()
-	actions := action.NewRegistry()
-	command := scenario.NodeFunc(func(ctx context.Context, rb *robot.Context) error {
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		message, err := rb.Session().CallChecked(ctx, msgid.MsgScenarioCommand, msgid.MsgScenarioCommand, &pb.ScenarioCommandRequest{RoomID: roomID, Seq: 1, Kind: FIRST_COMMAND}, func(m *session.Message) error {
-			response, ok := m.Value.(*pb.ScenarioCommandResponse)
-			if !ok {
-				return fmt.Errorf("invalid command response")
-			}
-			if response.Code != 0 {
-				return session.ErrRejected
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		response, ok := message.Value.(*pb.ScenarioCommandResponse)
-		if !ok || response.Code != 0 || response.Revision != 1 || response.Reward != 0 {
-			return fmt.Errorf("unexpected command result: %#v", message.Value)
-		}
-		return nil
-	})
-	scenarios.MustRegister(scenario.New("smoke", scenario.Sequence(
-		scenario.Action(action.NameConnect, nil), command, command,
-		scenario.Action(action.NameConnect, nil), command,
-	)))
-	cfg.Scenario = "smoke"
-	cfg.Transport.Type = transport.PlayerTCPType
-	return runner.New(cfg, runner.WithProtocolRegistry(protocols), runner.WithScenarioRegistry(scenarios), runner.WithActionRegistry(actions), runner.WithAuthProvider(auth))
-}
+// KindReconnect 是 Robot 换了 TCP 连接之后接管自己席位的请求（服务端转 room 模块的 RoomReconnect，应答带新代际）；
+// 只有房间玩法（回合 PvP、合作）用。真实客户端直接发 room 模块自带的 RoomReconnect 协议。
+const KindReconnect = "reconnect"
 
-// Step 描述一个业务动作及其预期结果；身份只由鉴权提供。
+// Step 描述一个业务动作及其预期结果；身份只由鉴权提供。Request.Epoch 为 0 时用本 Robot 最近一次成功接管拿到的代际
+// （第一次接管必须显式给出席位当前的代际，来自 RoomJoin / 上次接管的应答）；非 0 原样发送（用来验证旧代际被拒）。
+// Reconnect 为动作前重建 TCP 连接；房间玩法在新连接上的第一步应是 KindReconnect。
 type Step struct {
 	Request   pb.ScenarioCommandRequest
 	WantCode  int32
@@ -66,6 +34,7 @@ type Step struct {
 	Reconnect bool
 }
 
+// Commands 按步骤发 ScenarioCommand：同一回执的重放只用于功能验收，不能用其结果声明服务器容量。
 func Commands(cfg runner.Config, auth robot.AuthProvider, steps []Step) *runner.Runner {
 	protocols := protocol.NewRegistry(nil)
 	generated.RegisterDefaults(protocols)
@@ -78,14 +47,19 @@ func Commands(cfg runner.Config, auth robot.AuthProvider, steps []Step) *runner.
 		if err := rb.Do(ctx, action.NameConnect, nil); err != nil {
 			return err
 		}
+		epoch := uint64(0)
 		for i, step := range steps {
 			if step.Reconnect {
 				if err := rb.Do(ctx, action.NameConnect, nil); err != nil {
 					return err
 				}
 			}
+			request := step.Request
+			if request.Epoch == 0 {
+				request.Epoch = epoch
+			}
 			callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			m, err := rb.Session().CallChecked(callCtx, msgid.MsgScenarioCommand, msgid.MsgScenarioCommand, &step.Request, func(m *session.Message) error {
+			m, err := rb.Session().CallChecked(callCtx, msgid.MsgScenarioCommand, msgid.MsgScenarioCommand, &request, func(m *session.Message) error {
 				v, ok := m.Value.(*pb.ScenarioCommandResponse)
 				if !ok {
 					return fmt.Errorf("invalid response")
@@ -97,11 +71,14 @@ func Commands(cfg runner.Config, auth robot.AuthProvider, steps []Step) *runner.
 			})
 			cancel()
 			if err != nil && !(step.WantCode != 0 && errors.Is(err, session.ErrRejected)) {
-				return err
+				return fmt.Errorf("step %d: %w", i, err)
 			}
 			v, ok := m.Value.(*pb.ScenarioCommandResponse)
 			if !ok || v.Code != step.WantCode || (v.Code == 0 && (v.Revision != step.Revision || v.Reward != step.Reward)) {
-				return fmt.Errorf("step %d: unexpected result", i)
+				return fmt.Errorf("step %d: unexpected result %+v", i, m.Value)
+			}
+			if v.Code == 0 && request.Kind == KindReconnect {
+				epoch = v.Epoch
 			}
 		}
 		return nil

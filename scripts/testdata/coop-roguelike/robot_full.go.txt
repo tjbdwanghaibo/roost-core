@@ -18,9 +18,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
-// Coop 完成一对客户端的整局；每个 Runner 实例只使用这一对已分配房间的身份。
+// Coop 完成一对客户端的整局；每个 Runner 实例只使用这一对已分配房间的身份。epochs 是两人在 room 里当前的席位代际
+// （来自各自的 RoomJoin）：每条新 TCP 连接先带它接管席位（KindReconnect → room 的 RoomReconnect），之后的命令带新代际。
 // 规模压测应为每对机器人分配不同房间和票据，不能复用本次领奖后的存档刷吞吐。
-func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider) *runner.Runner {
+func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider, epochs [2]uint64) *runner.Runner {
 	protocols := protocol.NewRegistry(nil)
 	generated.RegisterDefaults(protocols)
 	scenarios := scenario.NewRegistry()
@@ -36,6 +37,11 @@ func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider) *runner.R
 			if err := client.Do(ctx, action.NameConnect, nil); err != nil {
 				return err
 			}
+			epoch, err := CoopReconnect(ctx, client, roomID, epochs[i])
+			if err != nil {
+				return err
+			}
+			epochs[i] = epoch
 			view, err := CoopView(ctx, client, roomID)
 			if err != nil {
 				return err
@@ -51,7 +57,7 @@ func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider) *runner.R
 				if err != nil {
 					return err
 				}
-				request := &pb.ScenarioCommandRequest{RoomID: roomID, Seq: view.NextSeq, Revision: view.Revision, Kind: "vote", Choice: int32((stage + seat) % 2)}
+				request := &pb.ScenarioCommandRequest{RoomID: roomID, Seq: view.NextSeq, Revision: view.Revision, Kind: "vote", Choice: int32((stage + seat) % 2), Epoch: epochs[seat]}
 				if _, err = CoopCommand(ctx, client, request); err != nil {
 					return err
 				}
@@ -65,7 +71,7 @@ func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider) *runner.R
 			if !view.Cleared || view.Stage != 3 || view.Claimed {
 				return fmt.Errorf("unexpected stage before claim: %+v", view)
 			}
-			request := &pb.ScenarioCommandRequest{RoomID: roomID, Seq: view.NextSeq, Revision: view.Revision, Kind: "claim"}
+			request := &pb.ScenarioCommandRequest{RoomID: roomID, Seq: view.NextSeq, Revision: view.Revision, Kind: "claim", Epoch: epochs[seat]}
 			for range 2 {
 				response, err := CoopCommand(ctx, client, request)
 				if err != nil {
@@ -75,9 +81,14 @@ func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider) *runner.R
 					return fmt.Errorf("wrong reward: %d", response.Reward)
 				}
 			}
+			// 换一条 TCP 连接：先接管席位拿新代际，再用新代际重发同一条领奖（回执比对内容，不比代际）。
 			if err = client.Do(ctx, action.NameConnect, nil); err != nil {
 				return err
 			}
+			if epochs[seat], err = CoopReconnect(ctx, client, roomID, epochs[seat]); err != nil {
+				return err
+			}
+			request.Epoch = epochs[seat]
 			if _, err = CoopCommand(ctx, client, request); err != nil {
 				return err
 			}
@@ -111,6 +122,14 @@ func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider) *runner.R
 	cfg.Scenario = "coop-full"
 	cfg.Transport.Type = transport.PlayerTCPType
 	return runner.New(cfg, runner.WithProtocolRegistry(protocols), runner.WithScenarioRegistry(scenarios), runner.WithAuthProvider(auth[0]))
+}
+// CoopReconnect 在当前连接上接管自己的席位，返回新代际。
+func CoopReconnect(ctx context.Context, client *robot.Context, roomID int64, epoch uint64) (uint64, error) {
+	response, err := CoopCommand(ctx, client, &pb.ScenarioCommandRequest{RoomID: roomID, Kind: KindReconnect, Epoch: epoch})
+	if err != nil {
+		return 0, err
+	}
+	return response.Epoch, nil
 }
 func CoopView(ctx context.Context, client *robot.Context, roomID int64) (*pb.CoopViewResponse, error) {
 	msg, err := client.Session().CallChecked(ctx, msgid.MsgCoopView, msgid.MsgCoopView, &pb.CoopViewRequest{RoomID: roomID}, func(m *session.Message) error {

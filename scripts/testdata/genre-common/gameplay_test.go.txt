@@ -1,25 +1,39 @@
 package handler
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	roomentity "GENRE_MODULE/game/entities/game_room"
 	playerentity "GENRE_MODULE/game/entities/player"
-	sender "GENRE_MODULE/game/handler/syncsender"
-	rules "GENRE_MODULE/game/modules/rules"
+	rules "GENRE_MODULE/game/modules/scenariorules"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// 三类玩法（回合 PvP、合作 Roguelike、社交经营）共用的夹具外壳与 4 条公共场景。玩法差异由各玩法的
+// game/handler/scenario_genre_test.go（scripts/testdata/<玩法>/fixture_test.go.txt）提供：
+//
+//	newScenarioTarget(build, owner)  命令目标实体：房间玩法建 room 模块的 Room，经营就是主人 owner 自己
+//	registerScenario(engine)         按引擎注册本玩法与所装模块的 Nest handler（engine.Start 之前）
+//	(*scenarioEnv).open(t)           服务端准备：开房 + 名单 + 入座（回合 PvP 再由房主开局）/ 加好友
+//	(*scenarioEnv).state(t)          把玩法 JSON 与模块状态拼成 rules.State（Revision 与每人最后一条回执）
+//	(*scenarioEnv).sendAs(p, c)      以 p 的身份、连接与代际发一条命令（经生成的 Sender，与接入层同一入口）
+//	(*scenarioEnv).targetFacts()     命令目标的持久字节（经营的目标是主人自己，返回 nil）
+//	(*scenarioEnv).closeScenario()   引擎停止后的清理（回合 PvP 撤掉 Room 定时器在驱动里的登记）
+//	scenarioSmoke(t, f)              TCP Robot 首动作 / 同连接重发 / 换连接重发的步骤（network_test）
+//	真实档另用 scenarioTargetKind、scenarioCollections、(*scenarioEnv).adopt / rejoin（合作、经营）
+//
+// 房间玩法的 Room 部分（命令目标、入座、接管、重连）在 genre-common/room_test.go.txt，两类共用。
 type scenarioGetter map[int64]entity.IThreadSafeEntity
 
 func (g scenarioGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
@@ -49,26 +63,45 @@ func (c *scenarioCommitter) Commit(context.Context, dataengine.CommitRecord) err
 	return nil
 }
 
+// scenarioEnv 是离线夹具与真实档（persistence/runtime_test）共用的部分。conns / epochs 是每名成员当前认下的连接标识与
+// room 席位代际（生产里连接来自服务端 Session，room.ConnectionKey；经营不用，留空）。
+type scenarioEnv struct {
+	engine   *nest.NestMgr
+	target   entity.IThreadSafeEntity
+	players  [2]*playerentity.Player
+	outsider *playerentity.Player
+	conns    map[int64]string
+	epochs   map[int64]uint64
+	now      atomic.Int64
+}
+
+// roomKey 是请求里的 RoomID：命令目标的唯一号（接入层再换成 Entity ID）。
+func (e *scenarioEnv) roomKey() int64 { return entity.GetUniqueIDFromEntityID(e.target.ID()) }
+
+func (e *scenarioEnv) conn(p *playerentity.Player) string {
+	if c, ok := e.conns[p.ID()]; ok {
+		return c
+	}
+	return fmt.Sprintf("scenario-conn-%d", p.ID())
+}
+
 type scenarioFixture struct {
-	engine    *nest.NestMgr
-	room      *roomentity.GameRoom
-	players   [2]*playerentity.Player
-	outsider  *playerentity.Player
-	now       atomic.Int64
+	scenarioEnv
 	committer *scenarioCommitter
 }
 
 func newScenario(t *testing.T) *scenarioFixture {
 	t.Helper()
-	roomentity.RegisterEntity()
 	playerentity.RegisterEntity()
-	RegisterScenarioNestHandlers()
 	f := &scenarioFixture{committer: &scenarioCommitter{}}
+	f.conns, f.epochs = map[int64]string{}, map[int64]uint64{}
 	f.now.Store(1800000000000)
+	// handler 的 nowUnixMilli、turn 的期限与 Room 定时器驱动（缺省读 fctx 业务时钟）都读同一只业务时钟；
+	// 不调用驱动的 SetClock，SetSource(nil) 就能撤掉，不串到同进程后面的场景。
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
 	t.Cleanup(func() { clock.SetSource(nil) })
 	getter := scenarioGetter{}
-	makeEntity := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
+	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
 		id, err := entity.BuildEntityID(unique, kind)
 		if err != nil {
 			t.Fatal(err)
@@ -80,13 +113,16 @@ func newScenario(t *testing.T) *scenarioFixture {
 		getter[id] = e
 		return e
 	}
-	f.room = makeEntity(81001, roomentity.EntityKindGameRoom).(*roomentity.GameRoom)
 	for i := range f.players {
-		f.players[i] = makeEntity(int64(82001+i), playerentity.EntityKindPlayer).(*playerentity.Player)
+		f.players[i] = build(int64(82001+i), playerentity.EntityKindPlayer).(*playerentity.Player)
 	}
-	// 有效但不在房间名单的身份，用于验证业务成员授权而非只验证实体不存在。
-	f.outsider = makeEntity(82003, playerentity.EntityKindPlayer).(*playerentity.Player)
+	// 有效但不在房间名单 / 不是主人好友的身份，用于验证业务成员授权而非只验证实体不存在。
+	f.outsider = build(82003, playerentity.EntityKindPlayer).(*playerentity.Player)
+	f.target = newScenarioTarget(build, f.players[0])
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := registerScenario(f.engine); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -94,46 +130,95 @@ func newScenario(t *testing.T) *scenarioFixture {
 		if err := f.engine.Shutdown(context.Background()); err != nil {
 			t.Error(err)
 		}
+		f.closeScenario()
 	})
-	if err := sender.NewScenarioSender(f.engine).Sync_ScenarioOpen(context.Background(), f.room.ID(), []int64{f.players[0].ID(), f.players[1].ID()}); err != nil {
-		t.Fatal(err)
-	}
+	f.open(t)
 	return f
 }
-func (f *scenarioFixture) state(t *testing.T) rules.State {
+
+// read 在业务 worker 持实体锁读取（robot-common 的 robotRead）。
+func scenarioRead[T any](t *testing.T, e *scenarioEnv, target entity.IThreadSafeEntity, read func() T) T {
 	t.Helper()
-	var s rules.State
-	if err := json.Unmarshal([]byte(robotRead(t, f.engine, f.room, func() string { return f.room.Dao().GetState() })), &s); err != nil {
+	return robotRead(t, e.engine, target, read)
+}
+
+// rawFacts 是两名成员与命令目标（不是成员自己时）的完整持久文档；facts 按 BSON 解码后比较（map 字段的编码顺序不固定，
+// 不能比字节）。
+func (e *scenarioEnv) rawFacts(t *testing.T) [][]byte {
+	t.Helper()
+	raws := [][]byte{
+		scenarioRead(t, e, e.players[0], func() []byte { return e.players[0].Dao().Marshal() }),
+		scenarioRead(t, e, e.players[1], func() []byte { return e.players[1].Dao().Marshal() }),
+	}
+	if e.target != e.players[0] {
+		raws = append(raws, scenarioRead(t, e, e.target, e.targetFacts))
+	}
+	return raws
+}
+
+func (e *scenarioEnv) facts(t *testing.T) []bson.M {
+	t.Helper()
+	raws := e.rawFacts(t)
+	out := make([]bson.M, len(raws))
+	for i, raw := range raws {
+		out[i] = scenarioDoc(t, raw)
+	}
+	return out
+}
+
+func scenarioDoc(t *testing.T, raw []byte) bson.M {
+	t.Helper()
+	d := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(raw)))
+	d.DefaultDocumentM()
+	var value bson.M
+	if err := d.Decode(&value); err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return value
 }
+
+func (e *scenarioEnv) coins(t *testing.T, i int) int64 {
+	t.Helper()
+	return scenarioRead(t, e, e.players[i], func() int64 { return e.players[i].Dao().GetWallet().GetCoins() })
+}
+
+// next 是成员 i 的下一条命令：序号接在自己最后一条回执之后，期望版本取当前权威状态（回合 PvP 是已消耗的回合数）。
+func (e *scenarioEnv) next(t *testing.T, i int, kind string, choice int) rules.Command {
+	t.Helper()
+	s := e.state(t)
+	return rules.Command{Seq: s.Last[e.players[i].ID()].Command.Seq + 1, Revision: s.Revision, Kind: kind, Choice: choice}
+}
+func (e *scenarioEnv) send(i int, c rules.Command) (rules.Result, error) {
+	return e.sendAs(e.players[i], c)
+}
+
 func (f *scenarioFixture) command(t *testing.T, player int, kind string) rules.Command {
 	t.Helper()
-	s := f.state(t)
-	return rules.Command{Seq: s.Last[f.players[player].ID()].Command.Seq + 1, Revision: s.Revision, Kind: kind}
-}
-func (f *scenarioFixture) send(player int, c rules.Command) (rules.Result, error) {
-	return sender.NewScenarioSender(f.engine).MultiSync_ScenarioCommand(context.Background(), f.room.ID(), f.players[player].ID(), c)
+	return f.next(t, player, kind, 0)
 }
 func (f *scenarioFixture) do(t *testing.T, player int, kind string) rules.Result {
 	t.Helper()
 	r, err := f.send(player, f.command(t, player, kind))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(kind, err)
 	}
 	return r
 }
-func (f *scenarioFixture) refuse(t *testing.T, player int, c rules.Command) {
+
+// refuseAs 断言 p 的命令被拒，且命令目标与两名成员的持久文档（玩法状态、模块状态、钱包）一个字节都没变。
+func (e *scenarioEnv) refuseAs(t *testing.T, p *playerentity.Player, c rules.Command) {
 	t.Helper()
-	before := f.room.Dao().GetState()
-	coins := f.players[player].Dao().GetCoins()
-	if _, err := f.send(player, c); err == nil {
-		t.Fatal("command accepted")
+	before := e.facts(t)
+	if _, err := e.sendAs(p, c); err == nil {
+		t.Fatal("command accepted", c)
 	}
-	if before != f.room.Dao().GetState() || coins != f.players[player].Dao().GetCoins() {
+	if !reflect.DeepEqual(before, e.facts(t)) {
 		t.Fatal("refusal mutated DAO")
 	}
+}
+func (e *scenarioEnv) refuse(t *testing.T, player int, c rules.Command) {
+	t.Helper()
+	e.refuseAs(t, e.players[player], c)
 }
 
 func TestScenarioRetryAndConflict(t *testing.T) {
@@ -143,22 +228,28 @@ func TestScenarioRetryAndConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := f.room.Dao().GetState()
+	facts := f.facts(t)
 	again, err := f.send(0, c)
-	if err != nil || again != first || raw != f.room.Dao().GetState() {
+	if err != nil || again != first || !reflect.DeepEqual(facts, f.facts(t)) {
 		t.Fatal("retry changed result", err)
 	}
 	c.Choice++
 	f.refuse(t, 0, c)
 }
+
+// 提交被拒时玩法状态、模块状态（回合 / 席位）与钱包一起回滚；放开后同一条命令真正生效一次（不是从进程内缓存答复）。
 func TestScenarioCommitRejectionRollsBack(t *testing.T) {
 	f := newScenario(t)
 	c := f.command(t, 0, FIRST_COMMAND)
 	f.committer.reject.Store(true)
 	f.refuse(t, 0, c)
 	f.committer.reject.Store(false)
-	if _, err := f.send(0, c); err != nil {
-		t.Fatal(err)
+	r, err := f.send(0, c)
+	if err != nil || r.Revision != 1 {
+		t.Fatal(r, err)
+	}
+	if s := f.state(t); s.Revision != 1 || s.Last[f.players[0].ID()].Command != c {
+		t.Fatalf("retry after the rejected commit did not apply exactly once: %+v", s)
 	}
 }
 func TestScenarioStaleRevision(t *testing.T) {
@@ -167,10 +258,9 @@ func TestScenarioStaleRevision(t *testing.T) {
 	f.do(t, 0, FIRST_COMMAND)
 	f.refuse(t, 1, c)
 }
+
+// 非成员（不在房间名单 / 不是主人的好友）经正式 handler 被拒，什么都不写。
 func TestScenarioMembership(t *testing.T) {
 	f := newScenario(t)
-	s := f.state(t)
-	if _, err := s.Apply(999, rules.Command{Seq: 1, Kind: FIRST_COMMAND}, f.now.Load()); err == nil {
-		t.Fatal("outsider admitted")
-	}
+	f.refuseAs(t, f.outsider, rules.Command{Seq: 1, Kind: FIRST_COMMAND})
 }

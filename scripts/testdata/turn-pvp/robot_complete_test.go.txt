@@ -1,14 +1,17 @@
 package handler
 
 import (
+	"context"
+	"testing"
+	"time"
+
+	rules "GENRE_MODULE/game/modules/scenariorules"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
-	"context"
+
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
-	"testing"
-	"time"
 )
 
 func completeScenarioRobot(t *testing.T, f *scenarioFixture, addr string) {
@@ -24,7 +27,8 @@ func completeScenarioRobot(t *testing.T, f *scenarioFixture, addr string) {
 		}
 	}
 
-	// Smoke 已完成第一拍，后续双方交替直到胜负；重连重投仍是同一业务命令。
+	// Smoke 已完成第一拍，后续双方交替直到胜负。每次运行是一条新 TCP 连接：先接管席位（room 的 RoomReconnect），
+	// 换连接后再接管一次重投，仍是同一业务命令（turn 判为重放，回执比对内容后返回原结果）。
 	for turn := 1; turn < 5; turn++ {
 		actor := turn % 2
 		token := "fixture-owner"
@@ -32,17 +36,19 @@ func completeScenarioRobot(t *testing.T, f *scenarioFixture, addr string) {
 			token = "fixture-peer"
 		}
 		c := f.command(t, actor, "attack")
-		request := pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}
-		run(token, bots.Step{Request: request, Revision: c.Revision + 1}, bots.Step{Request: request, Revision: c.Revision + 1, Reconnect: true})
+		attack := bots.Step{Request: pb.ScenarioCommandRequest{RoomID: f.roomKey(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}, Revision: c.Revision + 1, Reward: rules.HitReward}
+		run(token, f.takeover(t, actor), attack, f.retake(), attack)
 	}
 	s := f.state(t)
-	if !s.Finished || s.Winner != 0 || s.Revision != 5 {
-		t.Fatal("match did not finish with one winner")
+	if !s.Finished || s.Winner != 0 || s.Revision != 5 || f.coins(t, 0) != 3*rules.HitReward || f.coins(t, 1) != 2*rules.HitReward {
+		t.Fatal("match did not finish with one winner and one reward per hit", s, f.coins(t, 0), f.coins(t, 1))
 	}
 	c := f.command(t, 0, "attack")
-	request := pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}
-	run("fixture-owner", bots.Step{Request: request, WantCode: 1})
-	run("fixture-outsider", bots.Step{Request: request, WantCode: 1})
+	request := pb.ScenarioCommandRequest{RoomID: f.roomKey(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}
+	run("fixture-owner", f.takeover(t, 0), bots.Step{Request: request, WantCode: 1})
+	outsider := f.takeover(t, 0)
+	outsider.WantCode = 1
+	run("fixture-outsider", outsider, bots.Step{Request: request, WantCode: 1})
 	if f.state(t).Revision != 5 {
 		t.Fatal("terminal changed")
 	}

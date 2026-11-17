@@ -1,0 +1,92 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	turncomp "GENRE_MODULE/game/components/turn"
+	playerentity "GENRE_MODULE/game/entities/player"
+	sender "GENRE_MODULE/game/handler/syncsender"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+	bots "GENRE_MODULE/loadtest"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 回合 PvP 的夹具差异（genre-common/gameplay_test.go.txt 的约定）：命令目标是 room 模块的 Room（genre-common/room_test.go.txt），
+// 回合与期限来自 turn，每回合 30 秒；总回合数取 turn 的上限，对局靠生命分胜负。
+const (
+	scenarioTurnMillis int64 = 30000
+	scenarioMaxTurns   int64 = 10000
+)
+
+// registerScenario：本玩法的 handler 是全局注册；room / turn 与 Room 定时器的 handler 归属 game 服务，按引擎实例注册。
+func registerScenario(engine *nest.NestMgr) error {
+	RegisterScenarioNestHandlers()
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomJoinNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterTurnStartNestHandlersOn, RegisterTurnViewNestHandlersOn, RegisterTickRoomTimerGenNestHandlersOn} {
+		if err := register(engine); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// open：宿主开房 + 名单（一笔事务）→ 两人 RoomJoin 入座 → 房主 TurnStart 开局（登记第一个回合期限）。
+func (e *scenarioEnv) open(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	if err := sender.NewScenarioSender(e.engine).Sync_ScenarioOpen(ctx, e.target.ID(), [2]int64{e.players[0].ID(), e.players[1].ID()}); err != nil {
+		t.Fatal(err)
+	}
+	e.seat(t)
+	host := e.players[0].ID()
+	if _, err := sender.NewTurnStartSender(e.engine).Sync_TurnStart(ctx, e.target.ID(), host, e.epochs[host], e.conns[host], scenarioTurnMillis, scenarioMaxTurns); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type pvpFacts struct {
+	match    string
+	running  bool
+	round    int64
+	actor    int64
+	deadline int64
+}
+
+// state 把 RoomDao.PvpState 与 turn 的回合事实拼成 rules.State（在 Room 锁内一次读出）。
+func (e *scenarioEnv) state(t *testing.T) rules.State {
+	t.Helper()
+	facts := scenarioRead(t, e, e.target, func() pvpFacts {
+		dao := e.room().Dao()
+		turn := dao.GetTurn()
+		actor := int64(0)
+		if p, ok := turn.GetPlayers(int(turn.GetActive())); ok {
+			actor = p.GetPlayerID()
+		}
+		return pvpFacts{dao.GetPvpState(), turn.GetStatus() == turncomp.TurnRunning, turn.GetRound(), actor, turn.GetDeadline()}
+	})
+	match, err := rules.Decode(facts.match)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return match.State(facts.running, facts.round, facts.actor, facts.deadline)
+}
+
+func (e *scenarioEnv) sendAs(p *playerentity.Player, c rules.Command) (rules.Result, error) {
+	return sender.NewScenarioSender(e.engine).MultiSync_ScenarioCommand(context.Background(), e.target.ID(), p.ID(), e.epochs[p.ID()], e.conn(p), c)
+}
+
+// closeScenario 撤掉 Room 定时器在全局驱动里的登记（实体不再用）。
+func (e *scenarioEnv) closeScenario() {
+	e.room().TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+}
+
+// scenarioSmoke：接管席位 → 第一拍攻击 → 同连接重发 → 换连接再接管 → 重发；都只提交一次（命中奖励 1）。
+func scenarioSmoke(t *testing.T, f *scenarioFixture) []bots.Step {
+	t.Helper()
+	c := f.command(t, 0, "attack")
+	attack := bots.Step{Request: pb.ScenarioCommandRequest{RoomID: f.roomKey(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}, Revision: 1, Reward: rules.HitReward}
+	return []bots.Step{f.takeover(t, 0), attack, attack, f.retake(), attack}
+}

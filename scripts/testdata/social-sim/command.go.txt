@@ -1,0 +1,38 @@
+package scenarionet
+
+import (
+	"context"
+
+	syncsender "GENRE_MODULE/game/handler/syncsender"
+	playerentity "GENRE_MODULE/game/entities/player"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// Command 是社交经营的接入：RoomID 是农场主人的玩家唯一号（换成 Player 的 Entity ID，客户端不能把别的种类的 Entity ID
+// 交给 Sender），操作者取自鉴权会话。操作自己的农场只锁自己；
+// 去别人的农场是 [主人, 访客] 两个 Player 的事务（两人都在本进程，同 friends 的双边动作），访客资格由持锁 handler
+// 按主人的好友名单判断。没有房间，不用连接标识与代际。
+func Command(ctx context.Context, engine *nest.NestMgr, session gateway.Session, request *pb.ScenarioCommandRequest) (Reply, error) {
+	player := session.Principal().PlayerID
+	command := rules.Command{Seq: request.Seq, Revision: request.Revision, Kind: request.Kind, Choice: int(request.Choice)}
+	if request.RoomID <= 0 {
+		return Reply{}, rules.ErrRule
+	}
+	owner, err := entity.BuildEntityID(request.RoomID, playerentity.EntityKindPlayer)
+	if err != nil {
+		return Reply{}, err
+	}
+	scenario := syncsender.NewScenarioSender(engine)
+	var result rules.Result
+	if owner == player {
+		result, err = scenario.Sync_ScenarioOwn(ctx, player, command)
+	} else {
+		result, err = scenario.MultiSync_ScenarioVisit(ctx, owner, player, command)
+	}
+	return Reply{Result: result}, err
+}

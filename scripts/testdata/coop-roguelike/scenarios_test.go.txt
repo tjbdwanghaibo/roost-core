@@ -21,6 +21,8 @@ func TestScenarioTeamBarrier(t *testing.T) {
 		t.Fatal("did not advance")
 	}
 }
+
+// “领过没有”是 Room 上的 Claimed，金币经 wallet：同一条领奖重发只返回原结果，新序号再领被拒，钱包各只多 10。
 func TestScenarioRewardExactlyOnce(t *testing.T) {
 	f := newScenario(t)
 	f.refuse(t, 0, f.command(t, 0, "claim"))
@@ -32,15 +34,17 @@ func TestScenarioRewardExactlyOnce(t *testing.T) {
 			t.Fatal(r, err)
 		}
 	}
-	if f.players[0].Dao().GetCoins() != 10 {
+	if f.coins(t, 0) != 10 {
 		t.Fatal("double paid")
 	}
 	f.refuse(t, 0, f.command(t, 0, "claim"))
 	f.do(t, 1, "claim")
-	if f.players[1].Dao().GetCoins() != 10 {
+	if f.coins(t, 1) != 10 {
 		t.Fatal("teammate unpaid")
 	}
 }
+
+// 领奖是 [Room, Player] 一笔事务：提交被拒时 Room 的 Claimed / 回执与 Player 的钱包一起回滚。
 func TestScenarioRewardRollsBackBothEntities(t *testing.T) {
 	f := newScenario(t)
 	clearScenario(t, f)
@@ -48,14 +52,18 @@ func TestScenarioRewardRollsBackBothEntities(t *testing.T) {
 	f.refuse(t, 0, f.command(t, 0, "claim"))
 	f.committer.reject.Store(false)
 	f.do(t, 0, "claim")
-	if f.players[0].Dao().GetCoins() != 10 {
+	if f.coins(t, 0) != 10 {
 		t.Fatal("reward lost")
 	}
 }
+
+// 路线种子是持久事实：掉线后换连接（room 的 RoomReconnect，新代际）读到的仍是同一阶段与种子，新代际继续投票；
+// 本地按解码出的状态预演的结果与服务端一致，重连不重抽。
 func TestScenarioSeedSurvivesReload(t *testing.T) {
 	f := newScenario(t)
 	f.do(t, 0, "vote")
 	s := f.state(t)
+	f.reconnect(t, 1)
 	c := f.command(t, 1, "vote")
 	c.Choice = 1
 	if _, err := s.Apply(f.players[1].ID(), c, f.now.Load()); err != nil {

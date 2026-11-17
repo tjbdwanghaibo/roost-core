@@ -6,7 +6,8 @@ import (
 )
 
 // 两个严格 WAL 崩溃点：第二关只有一人投票，以及通关后仅第一人领奖。
-// 恢复必须保留路线种子/已投票与两实体领奖事实；第三个进程仍只有各 10 金币。
+// 恢复必须保留路线种子 / 已投票 / 席位与代际，以及两实体领奖事实（Room 的 Claimed + wallet 余额）；
+// 冷加载后全部席位断线：原连接、原代际的重放照常得原回执，新命令先 RoomReconnect 换代际；第三个进程仍只有各 10 金币。
 func TestCoopRoguelikeRealCrashRecovery(t *testing.T) {
 	if os.Getenv("ROOST_COOP_ROGUELIKE_REAL") != "1" {
 		t.Skip("ROOST_COOP_ROGUELIKE_REAL not set")
@@ -17,8 +18,8 @@ func TestCoopRoguelikeRealCrashRecovery(t *testing.T) {
 
 	verify := func(t *testing.T, h *sessionRuntime) {
 		s := h.state(t)
-		if s.Stage != 3 || s.Seed != 8129822322734983565 || !s.Cleared || s.Claimed != [2]bool{true, true} || s.Votes != [2]int{-1, -1} || s.Revision != 8 || h.coins(t) != [2]int64{10, 10} {
-			t.Fatalf("cooperative terminal/rewards: %+v coins=%v", s, h.coins(t))
+		if s.Stage != 3 || s.Seed != 8129822322734983565 || !s.Cleared || s.Claimed != [2]bool{true, true} || s.Votes != [2]int{-1, -1} || s.Revision != 8 || h.wallets(t) != [2]int64{10, 10} {
+			t.Fatalf("cooperative terminal/rewards: %+v coins=%v", s, h.wallets(t))
 		}
 		for i := range h.players {
 			h.refuse(t, i, h.command(t, i, "claim", 0))
@@ -56,7 +57,7 @@ func TestCoopRoguelikeRealCrashRecovery(t *testing.T) {
 			h.refuse(t, 1, h.command(t, 1, "claim", 0))
 		}, recover: func(t *testing.T, h *sessionRuntime) {
 			s := h.state(t)
-			if s.Stage != 1 || s.Votes != [2]int{0, -1} || h.coins(t) != [2]int64{} {
+			if s.Stage != 1 || s.Votes != [2]int{0, -1} || h.wallets(t) != [2]int64{} {
 				t.Fatal("partial vote/rewards changed", s)
 			}
 			finish(t, h)
@@ -68,11 +69,11 @@ func TestCoopRoguelikeRealCrashRecovery(t *testing.T) {
 			}
 			h.act(t, 0, "claim", 0)
 			s := h.state(t)
-			if !s.Cleared || s.Claimed != [2]bool{true, false} || s.Revision != 7 || h.coins(t) != [2]int64{10, 0} {
+			if !s.Cleared || s.Claimed != [2]bool{true, false} || s.Revision != 7 || h.wallets(t) != [2]int64{10, 0} {
 				t.Fatal("wrong reward crash state", s)
 			}
 		}, recover: func(t *testing.T, h *sessionRuntime) {
-			if s := h.state(t); s.Claimed != [2]bool{true, false} || h.coins(t) != [2]int64{10, 0} {
+			if s := h.state(t); s.Claimed != [2]bool{true, false} || h.wallets(t) != [2]int64{10, 0} {
 				t.Fatal("acknowledged reward was lost or doubled", s)
 			}
 			finish(t, h)

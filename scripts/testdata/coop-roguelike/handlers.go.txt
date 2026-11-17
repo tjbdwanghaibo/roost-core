@@ -1,0 +1,100 @@
+// 合作 Roguelike 的玩法 handler：room（双人席位、代际、连接与在线）+ wallet（通关金币）。
+// 只手写模块没覆盖的部分：同时投票、路线种子、三关推进、“领过没有”（RoomDao.CoopState）。
+package handler
+
+import (
+	db "GENRE_MODULE/db"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+	"GENRE_MODULE/game/view"
+	apperrors "GENRE_MODULE/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// IScenarioRoomEntity 是挂在 room 模块 Room 实体上的 handler 参数（Q3 A：GameRoom 并入 Room）；
+// RoomDao 末尾的 CoopState 是本玩法自己的字段。
+type IScenarioRoomEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.RoomDao
+	view.RoomHolder
+}
+
+// IScenarioPlayerEntity 只用到 wallet。
+type IScenarioPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Wallet() view.Wallet
+}
+
+// 开房与成局名单是同一笔事务：名单来自宿主的鉴权与成局结果。房间一开就带着名单，game/entities/room/scenario.go 的
+// RoomJoining 监听只放名单里的两人入座。相同 Room 重试只核对名单；已有人入座的普通房不能改造成合作房。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioOpen(m IScenarioRoomEntity, members [2]int64, nowUnixMilli int64) error {
+	if raw := m.Dao().GetCoopState(); raw != "" {
+		s, err := rules.Decode(raw)
+		if err != nil {
+			return err
+		}
+		if s.Members[0] != members[0] || s.Members[1] != members[1] {
+			return rules.ErrRule
+		}
+		return nil
+	}
+	if m.Dao().SeatsLen() != 0 {
+		return rules.ErrRule
+	}
+	if err := m.Room().Open(2); err != nil {
+		return err
+	}
+	s, err := rules.New(members[:], nowUnixMilli)
+	if err != nil {
+		return err
+	}
+	m.Dao().SetCoopState(s.Encode())
+	return nil
+}
+
+// scenarioMember 是身份围栏，全部交给 room（照塔防的 towerMember）：新命令经 Authorize（代际、连接、在线一并核对）；
+// 最后一条回执的重放（replay=true）不要求在线——重启后全员断线时，原连接、原代际的重试仍得原回执——只核对 Member 的
+// 代际与席位认下的那条连接。旧代际、旧连接、新命令时断线一律 room_stale_epoch。
+func scenarioMember(m IScenarioRoomEntity, playerID int64, epoch uint64, connection string, replay bool) error {
+	if !replay {
+		_, err := m.Room().Authorize(playerID, epoch, connection)
+		return err
+	}
+	seat, err := m.Room().Member(playerID, epoch)
+	if err != nil {
+		return err
+	}
+	if seat.GetConnection() != connection {
+		return apperrors.ErrRoomStaleEpoch
+	}
+	return nil
+}
+
+// 投票与领奖都是 [Room, Player] 一笔事务。同序号同内容返回原结果，改内容的重试拒绝；每人只保留最后一条回执。
+// “领过没有”（Claimed）是 Room 上的长期事实，金币经 wallet 的 Add（不留回执：只发一次由 Claimed 保证）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioCommand(m IScenarioRoomEntity, p IScenarioPlayerEntity, epoch uint64, connection string, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
+	s, err := rules.Decode(m.Dao().GetCoopState())
+	if err != nil {
+		return rules.Result{}, err
+	}
+	previous := s.Last[p.ID()]
+	replay := cmd.Seq != 0 && cmd.Seq == previous.Command.Seq
+	if err := scenarioMember(m, p.ID(), epoch, connection, replay); err != nil {
+		return rules.Result{}, err
+	}
+	result, err := s.Apply(p.ID(), cmd, nowUnixMilli)
+	if err != nil || replay {
+		return result, err
+	}
+	if result.Reward > 0 {
+		if _, err = p.Wallet().Add(int64(result.Reward)); err != nil {
+			return rules.Result{}, err
+		}
+	}
+	m.Dao().SetCoopState(s.Encode())
+	return result, nil
+}

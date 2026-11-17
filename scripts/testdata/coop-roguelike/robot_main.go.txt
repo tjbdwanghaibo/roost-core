@@ -1,4 +1,5 @@
 // Command robot verifies a fresh, already allocated room through the real player TCP or Gate endpoint.
+// Both tickets must already be seated (RoomJoin); -epoch / -peer-epoch are their current seat epochs.
 package main
 
 import (
@@ -21,16 +22,18 @@ func main() {
 	endpoint := flag.String("endpoint", "127.0.0.1:7000", "embedded player TCP or Gate endpoint")
 	room := flag.Int64("room", 0, "existing fresh room assigned to the authenticated player")
 	timeout := flag.Duration("timeout", 15*time.Second, "whole match deadline")
+	epoch := flag.Uint64("epoch", 0, "current room seat epoch of the first ticket (from its RoomJoin)")
+	peerEpoch := flag.Uint64("peer-epoch", 0, "current room seat epoch of the peer ticket (from its RoomJoin)")
 	flag.Parse()
 	ticket := os.Getenv("ROOST_ROBOT_TICKET")
 	peerTicket := os.Getenv("ROOST_ROBOT_PEER_TICKET")
-	if *room == 0 || ticket == "" || peerTicket == "" {
-		fmt.Fprintln(os.Stderr, "-room, ROOST_ROBOT_TICKET and ROOST_ROBOT_PEER_TICKET are required")
+	if *room == 0 || *epoch == 0 || *peerEpoch == 0 || ticket == "" || peerTicket == "" {
+		fmt.Fprintln(os.Stderr, "-room, -epoch, -peer-epoch, ROOST_ROBOT_TICKET and ROOST_ROBOT_PEER_TICKET are required")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	run := bots.Coop(runner.Config{Count: 1, Duration: *timeout, Transport: transport.Config{Endpoint: *endpoint}}, *room, [2]robot.AuthProvider{func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(ticket), nil }, func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(peerTicket), nil }})
+	run := bots.Coop(runner.Config{Count: 1, Duration: *timeout, Transport: transport.Config{Endpoint: *endpoint}}, *room, [2]robot.AuthProvider{func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(ticket), nil }, func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(peerTicket), nil }}, [2]uint64{*epoch, *peerEpoch})
 	err := run.Run(ctx)
 	stats := run.Stats()
 	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"scenarios": stats, "requests": run.MessageReport(), "traffic": run.TrafficReport()})

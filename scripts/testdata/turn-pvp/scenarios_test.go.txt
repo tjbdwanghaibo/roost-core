@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
-	game_room "GENRE_MODULE/game/entities/game_room"
-	rules "GENRE_MODULE/game/modules/rules"
+	roomentity "GENRE_MODULE/game/entities/room"
+	sender "GENRE_MODULE/game/handler/syncsender"
+	rules "GENRE_MODULE/game/modules/scenariorules"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -17,19 +19,36 @@ func TestScenarioTurnOrder(t *testing.T) {
 	f.do(t, 0, "attack")
 	f.do(t, 1, "attack")
 	s := f.state(t)
-	if s.Turn != 0 || s.HP != [2]int{2, 2} {
-		t.Fatal(s)
+	if s.Turn != 0 || s.HP != [2]int{2, 2} || f.coins(t, 0) != rules.HitReward || f.coins(t, 1) != rules.HitReward {
+		t.Fatal(s, f.coins(t, 0), f.coins(t, 1))
 	}
 }
+
+// tick 经生成的 Tick Sender 投递一次 Room 定时器（与驱动投递循环同一个 handler），按当前业务时间处理到期节点。
+func (f *scenarioFixture) tick(t *testing.T) {
+	t.Helper()
+	if _, err := sender.NewTickRoomTimerGenSender(f.engine).Sync_TickRoomTimer(context.Background(), f.target.ID()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 超时由 turn 的 TurnDeadline 推进（Room 定时器，服务端），客户端不能上报超时。离线 / 迟到多久都只消费当前这一回合：
+// 行动方扣 1 点生命，交给对方，新期限从触发时刻起算；按旧回合准备的命令被拒。
 func TestScenarioTimeoutConsumesOneTurn(t *testing.T) {
 	f := newScenario(t)
 	f.now.Add(90000)
-	f.refuse(t, 0, f.command(t, 0, "attack"))
-	f.do(t, 1, "timeout")
+	stale := f.command(t, 0, "attack")
+	f.refuse(t, 0, stale)
+	f.tick(t)
 	s := f.state(t)
-	if s.Turn != 1 || s.HP[0] != 2 || s.Deadline != f.now.Load()+30000 {
+	if s.Turn != 1 || s.HP != [2]int{2, 3} || s.Revision != 1 || s.Deadline != f.now.Load()+30000 {
 		t.Fatal(s)
 	}
+	f.tick(t)
+	if again := f.state(t); !reflect.DeepEqual(again, s) {
+		t.Fatalf("one late deadline consumed two turns: %+v", again)
+	}
+	f.refuse(t, 0, stale)
 	f.refuse(t, 0, f.command(t, 0, "timeout"))
 }
 func TestScenarioTerminalCannotAttack(t *testing.T) {
@@ -38,39 +57,50 @@ func TestScenarioTerminalCannotAttack(t *testing.T) {
 		f.do(t, i%2, "attack")
 	}
 	s := f.state(t)
-	if !s.Finished || s.Winner != 0 {
+	if !s.Finished || s.Winner != 0 || s.Revision != 5 || s.Deadline != 0 {
 		t.Fatal(s)
 	}
 	f.refuse(t, 1, f.command(t, 1, "attack"))
 }
+
+// 掉线的行动方不能行动；换连接经 room 的 RoomReconnect 拿到新代际后，用 turn 的 TurnView 读到权威回合（轮到自己、
+// 回合 2），旧代际的命令被 room 拒绝，新代际行动成功。
 func TestScenarioReconnectReadsAuthoritativeTurn(t *testing.T) {
 	f := newScenario(t)
+	ctx := context.Background()
 	f.do(t, 0, "attack")
-	s := f.state(t)
-	if s.Turn != 1 || s.Revision != 1 {
-		t.Fatal(s)
+	id := f.players[1].ID()
+	old := f.epochs[id]
+	if changed, err := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(ctx, f.target.ID(), id, old); err != nil || !changed {
+		t.Fatal("disconnect", changed, err)
 	}
 	c := f.command(t, 1, "attack")
-	if _, err := s.Apply(f.players[1].ID(), c, f.now.Load()); err != nil {
-		t.Fatal(err)
+	f.refuse(t, 1, c)
+	f.reconnect(t, 1)
+	before := f.facts(t)
+	if _, err := sender.NewScenarioSender(f.engine).MultiSync_ScenarioCommand(ctx, f.target.ID(), id, old, f.conns[id], c); err == nil || !reflect.DeepEqual(before, f.facts(t)) {
+		t.Fatal("stale epoch acted", err)
+	}
+	v, err := sender.NewTurnViewSender(f.engine).Sync_TurnView(ctx, f.target.ID(), id, f.epochs[id], f.conns[id])
+	if err != nil || v.ActorID != id || v.Round != 2 || v.Sequence != 0 {
+		t.Fatal("authoritative turn after reconnect", v, err)
 	}
 	f.do(t, 1, "attack")
 	live := f.state(t)
-	if live.HP != s.HP || live.Turn != s.Turn {
-		t.Fatal("decoded state diverged")
+	if live.HP != [2]int{2, 2} || live.Turn != 0 || live.Revision != 2 {
+		t.Fatal(live)
 	}
 }
 
-// 回合期限由房间的持久定时器自动推进（roost add timer --entity GameRoom，wiring/entitytimer 同一个驱动）：没有任何
-// 客户端上报 timeout，业务时间到了期限，驱动投递 Tick、回调消费当前回合；期限内的行动把期限后移，定时器续到新期限
-// 而不提前消费；终局后定时器结束。驱动按真实的投递循环运行（MaxWait 1s 内看到业务时间前进），不手动调用 DeliverDue。
+// 回合期限由 Room 的持久定时器自动推进（turn 的 TurnDeadline，生成的 Room TimerDriver）：没有任何客户端上报超时，
+// 业务时间到了期限，驱动投递 Tick、turn 消费当前回合（本玩法扣行动方 1 点生命）；期限内的行动换掉期限节点，
+// 旧期限不再触发；终局后节点为 0。驱动按真实的投递循环运行（MaxWait 1s 内看到业务时间前进），不手动调用 DeliverDue。
 func TestScenarioTurnTimesOutByTheRoomTimer(t *testing.T) {
 	f := newScenario(t)
-	RegisterTickGameRoomTimerGenNestHandlers()
-	driver := game_room.TimerDriver
+	driver := roomentity.TimerDriver
 	if err := driver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity {
-		if id == f.room.ID() {
-			return f.room
+		if id == f.target.ID() {
+			return f.target
 		}
 		return nil
 	}); err != nil {
@@ -85,16 +115,16 @@ func TestScenarioTurnTimesOutByTheRoomTimer(t *testing.T) {
 		}
 	})
 	timers := func() int {
-		return len(robotRead(t, f.engine, f.room, func() []int64 {
+		return len(robotRead(t, f.engine, f.target, func() []int64 {
 			var ids []int64
-			for _, node := range f.room.TimerComp().Timers() {
+			for _, node := range f.room().TimerComp().Timers() {
 				ids = append(ids, node.ID)
 			}
 			return ids
 		}))
 	}
 	if n := timers(); n != 1 {
-		t.Fatalf("open armed %d turn timers, want 1", n)
+		t.Fatalf("start armed %d turn timers, want 1", n)
 	}
 	// 还差 1ms：驱动循环至少每秒看一次业务时间，等过一轮也不消费。
 	f.now.Add(29999)
@@ -123,9 +153,9 @@ func TestScenarioTurnTimesOutByTheRoomTimer(t *testing.T) {
 	if s.Turn != 1 || s.HP != [2]int{2, 3} || s.Deadline != f.now.Load()+30000 || s.Finished {
 		t.Fatalf("after the first timeout: %+v", s)
 	}
-	// 按旧修订号准备的行动按过期拒绝；行动方是新的回合。
+	// 按旧回合准备的行动被拒；行动方是新的回合。
 	f.refuse(t, 0, stale)
-	// 玩家 1 在期限内行动（期限后移到行动时刻 + 30s）：原来的触发时刻到了，定时器续到新期限，不消费。
+	// 玩家 1 在期限内行动（End 换掉期限节点，新期限 = 行动时刻 + 30s）：原来的触发时刻到了也不消费。
 	f.now.Add(10000)
 	f.do(t, 1, "attack")
 	moved := f.state(t)

@@ -1,0 +1,84 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	db "GENRE_MODULE/db"
+	friends "GENRE_MODULE/game/components/friends"
+	playerentity "GENRE_MODULE/game/entities/player"
+	sender "GENRE_MODULE/game/handler/syncsender"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+	bots "GENRE_MODULE/loadtest"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 社交经营的夹具差异（genre-common/gameplay_test.go.txt 的约定）：没有房间，命令目标是主人 players[0] 自己，
+// 农场是主人 PlayerDao.SocialFarm；访客 players[1] 是主人的好友（friends 模块），局外人 outsider 不是。
+
+func newScenarioTarget(_ func(int64, entity.EntityKind) entity.IThreadSafeEntity, owner *playerentity.Player) entity.IThreadSafeEntity {
+	return owner
+}
+
+// scenarioTargetKind：真实档里命令目标就是主人，不另建实体。
+func scenarioTargetKind() (entity.EntityKind, entity.EntityCategory, bool) { return 0, 0, false }
+
+func scenarioCollections() []string { return []string{db.PlayerDaoCollection} }
+
+func registerScenario(*nest.NestMgr) error {
+	RegisterScenarioNestHandlers()
+	RegisterFriendsChangeNestHandlers()
+	return nil
+}
+
+// open：主人申请、访客同意，两人成为好友（friends 的双边动作；以服务端身份调 Sender，两人的档都在本进程）。
+func (e *scenarioEnv) open(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	change := sender.NewFriendsChangeSender(e.engine)
+	owner, visitor := e.players[0].ID(), e.players[1].ID()
+	if err := change.MultiSync_FriendsChange(ctx, owner, visitor, friends.FriendsApply); err != nil {
+		t.Fatal(err)
+	}
+	if err := change.MultiSync_FriendsChange(ctx, visitor, owner, friends.FriendsAccept); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *scenarioEnv) state(t *testing.T) rules.State {
+	t.Helper()
+	owner := e.players[0]
+	s, err := rules.Load(scenarioRead(t, e, owner, func() string { return owner.Dao().GetSocialFarm() }), owner.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func (e *scenarioEnv) sendAs(p *playerentity.Player, c rules.Command) (rules.Result, error) {
+	scenario := sender.NewScenarioSender(e.engine)
+	if p == e.players[0] {
+		return scenario.Sync_ScenarioOwn(context.Background(), p.ID(), c)
+	}
+	return scenario.MultiSync_ScenarioVisit(context.Background(), e.players[0].ID(), p.ID(), c)
+}
+
+func (e *scenarioEnv) targetFacts() []byte { return nil }
+func (e *scenarioEnv) closeScenario()     {}
+
+// 没有席位：冷加载后不用读回连接，也不用重连。
+func (e *scenarioEnv) adopt(*testing.T)  {}
+func (e *scenarioEnv) rejoin(*testing.T) {}
+
+// scenarioSmoke：主人种植 → 同连接重发 → 换连接重发；都只提交一次。
+func scenarioSmoke(t *testing.T, f *scenarioFixture) []bots.Step {
+	t.Helper()
+	c := f.command(t, 0, "plant")
+	plant := bots.Step{Request: pb.ScenarioCommandRequest{RoomID: f.roomKey(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}, Revision: 1}
+	again := plant
+	again.Reconnect = true
+	return []bots.Step{plant, plant, again}
+}

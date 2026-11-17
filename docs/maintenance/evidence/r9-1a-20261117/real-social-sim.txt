@@ -1,0 +1,20 @@
+# source …/env.sh; GOWORK=off GOFLAGS=-p=2 ROOST_SOCIAL_SIM_REAL=1 bash scripts/test-social-sim-generated.sh  → rc=0
+# 输出
+--- PASS: TestScenarioVisitorPermissions
+--- PASS: TestScenarioOfflineHarvestOnce
+--- PASS: TestScenarioHelpChangesDeadlineOnlyOnce
+--- PASS: TestScenarioHarvestRollback
+--- PASS: TestScenarioRobotTCPRetryAndReconnect
+--- PASS: TestScenarioRetryAndConflict
+--- PASS: TestScenarioCommitRejectionRollsBack
+--- PASS: TestScenarioStaleRevision
+--- PASS: TestScenarioMembership
+ok  	example.com/social-sim-practice/game/handler
+module verify: friends 18/18 skipped=0
+module verify: wallet 17/17 skipped=0
+    session_real_runtime_test.go:413: PASS WAL-only SIGKILL: 6 strict records, 6 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+    session_real_runtime_test.go:413: PASS WAL-only SIGKILL: 7 strict records, 7 fsyncs; complete cold facts, continuation, reward replay and third-process verification
+--- PASS: TestSocialSimRealCrashRecovery
+    --- PASS: TestSocialSimRealCrashRecovery/growing
+    --- PASS: TestSocialSimRealCrashRecovery/harvested
+ok  	example.com/social-sim-practice/game/handler

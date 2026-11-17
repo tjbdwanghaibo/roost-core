@@ -2,6 +2,7 @@ package handler
 
 import "testing"
 
+// 访客资格来自 friends：好友能帮助不能种植 / 收获，主人不能帮自己，同一次种植只能帮一次。
 func TestScenarioVisitorPermissions(t *testing.T) {
 	f := newScenario(t)
 	f.refuse(t, 1, f.command(t, 1, "plant"))
@@ -22,7 +23,7 @@ func TestScenarioOfflineHarvestOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.players[0].Dao().GetCoins() != 5 || f.state(t).Harvests != 1 {
+	if f.coins(t, 0) != 5 || f.state(t).Harvests != 1 {
 		t.Fatal("offline reward duplicated")
 	}
 	f.refuse(t, 0, f.command(t, 0, "harvest"))
@@ -42,6 +43,7 @@ func TestScenarioHelpChangesDeadlineOnlyOnce(t *testing.T) {
 	f.now.Add(50000)
 	f.do(t, 0, "harvest")
 }
+// 收获的农场状态与 wallet 都在主人这一个 Player 上，同一笔事务：提交被拒时一起回滚。
 func TestScenarioHarvestRollback(t *testing.T) {
 	f := newScenario(t)
 	f.do(t, 0, "plant")
@@ -50,7 +52,7 @@ func TestScenarioHarvestRollback(t *testing.T) {
 	f.refuse(t, 0, f.command(t, 0, "harvest"))
 	f.committer.reject.Store(false)
 	f.do(t, 0, "harvest")
-	if f.players[0].Dao().GetCoins() != 5 {
+	if f.coins(t, 0) != 5 {
 		t.Fatal("harvest lost")
 	}
 }

@@ -345,3 +345,5 @@ genre-common 只服务 11～13 类（回合 PvP、合作、经营）。
 - **（1D 撤离 / 自走棋）没有新的模块缺口**（§3.8、§3.9 结论不变；撤离初始 100 金币只发 wallet，不碰 1B / 1C 那条 bag 建档问题）。接入注意一条、不改模块：bag 的 `Add` 读进程当前配置（道具表），玩法夹具的 `OpenCatalog` 另开一个只含玩法规则的 `configdata.Store`，它一装载就把工程的道具表顶掉，撤离兑付药剂随之答 `bag_item_invalid`——夹具改为先捕获规则、再装载 `configs/data`，手册写明正式工程把玩法规则登记进工程同一个 Registry；凡“玩法自带 Catalog + 装 bag”的类型都会碰到。[证据](evidence/r9-1d-20261117/README.md)。
 
 - **（2B MMORPG）没有要改模块的缺口**（装 `wallet bag task`，没装 enter，所以没碰到 1C 那条）；记两点边界：task 的 `Claim` 对已领答 `task_claimed`、不是幂等重放，要“重试拿同样结果”的玩法 handler 自己把它当成功（MMORPG 的 `MMORPGQuest`）；wallet 不设持有上限，玩法上限读 `Balance()` 手写。队伍 / 场景 / 怪物 / 战斗 / 副本留到 CellWorld 那轮，各块缺什么写在证据的“对 CellWorld 进模块那一轮的提示”。[证据](evidence/r9-2b-20261117/README.md)。
+
+- **（1A 回合 PvP / 合作 / 经营）没有要改模块的缺口**（§3.1～3.3 结论不变）；记两点、都不改模块：turn 没有“超时代价 / 对局提前结束”的钩子，回合 PvP 按 turn README 改工程里的 `game/components/turn/turn.go`（`OnDeadline` 计超时后扣行动方生命、`advance` 结束条件加“已分胜负”，`genre-common/run.sh` 插两行、调 `pvp.go`），玩法状态为空时不做事、turn 自带 25 条照过；`roost module verify` 按测试名前缀选场景（turn 是 `^TestTurn`），工程里同前缀的测试会被算进模块条数——纵切的 `TestTurnPVPRealTimerRecovery` 缺省档 SKIP 让矩阵的 turn 校验失败过一次，夹具改带构建标签 `turnreal`。[证据](evidence/r9-1a-20261117/README.md)。

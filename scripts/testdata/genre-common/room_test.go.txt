@@ -1,0 +1,100 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	db "GENRE_MODULE/db"
+	roomentity "GENRE_MODULE/game/entities/room"
+	playerentity "GENRE_MODULE/game/entities/player"
+	sender "GENRE_MODULE/game/handler/syncsender"
+	bots "GENRE_MODULE/loadtest"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// 房间玩法（回合 PvP、合作 Roguelike）共用：命令目标是 room 模块的 Room（Q3 A：GameRoom 并入 Room，玩法状态是
+// RoomDao 末尾的字段）。席位、代际、连接与在线都归 room；夹具给每名成员一条固定连接串，命令带它与当前代际。
+func (e *scenarioEnv) room() *roomentity.Room { return e.target.(*roomentity.Room) }
+
+func newScenarioTarget(build func(int64, entity.EntityKind) entity.IThreadSafeEntity, _ *playerentity.Player) entity.IThreadSafeEntity {
+	roomentity.RegisterEntity()
+	return build(81001, roomentity.EntityKindRoom)
+}
+
+// scenarioTargetKind 给真实档（persistence/runtime_test）建 / 冷加载命令目标：Room 是 World 锁档。
+func scenarioTargetKind() (entity.EntityKind, entity.EntityCategory, bool) {
+	roomentity.RegisterEntity()
+	return roomentity.EntityKindRoom, entity.EntityCategoryWorld, true
+}
+
+// scenarioCollections 是真实档 WAL-only 窗口里必须为空的业务集合。
+func scenarioCollections() []string { return []string{db.RoomDaoCollection, db.PlayerDaoCollection} }
+
+func (e *scenarioEnv) targetFacts() []byte { return e.room().Dao().Marshal() }
+
+// seat 让两名成员经 room 的 RoomJoin 入座（玩法的 RoomJoining 名单监听放行），记下各自的连接与代际；先入座的是房主。
+func (e *scenarioEnv) seat(t *testing.T) {
+	t.Helper()
+	for _, p := range e.players {
+		conn := fmt.Sprintf("scenario-conn-%d", p.ID())
+		snapshot, err := sender.NewRoomJoinSender(e.engine).Sync_RoomJoin(context.Background(), e.target.ID(), p.ID(), conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.conns[p.ID()], e.epochs[p.ID()] = conn, snapshot.Epoch
+	}
+}
+
+// reconnect 让成员 i 换一条新连接接管自己的席位（room 的 RoomReconnect：带当前代际 CAS，分配新代际）。
+func (e *scenarioEnv) reconnect(t *testing.T, i int) {
+	t.Helper()
+	p := e.players[i]
+	conn := fmt.Sprintf("scenario-conn-%d-after-%d", p.ID(), e.epochs[p.ID()])
+	snapshot, err := sender.NewRoomReconnectSender(e.engine).Sync_RoomReconnect(context.Background(), e.target.ID(), p.ID(), e.epochs[p.ID()], conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.conns[p.ID()], e.epochs[p.ID()] = conn, snapshot.Epoch
+}
+
+// adopt 是真实档冷加载之后的第一步：连接与代际从持久的席位读回（Seats 落库，Online 不落库），用来验证
+// “原连接、原代际的重放不要求在线”。
+func (e *scenarioEnv) adopt(t *testing.T) {
+	t.Helper()
+	for _, p := range e.players {
+		id := p.ID()
+		seat := scenarioRead(t, e, e.target, func() [2]any {
+			s, _ := e.room().Dao().GetSeats(id)
+			return [2]any{s.GetConnection(), s.GetEpoch()}
+		})
+		e.conns[id], e.epochs[id] = seat[0].(string), seat[1].(uint64)
+	}
+}
+
+// rejoin 是真实档冷加载之后的一步：在线状态不落库，新进程里全部席位断线，成员各自换连接重连才能发新命令。
+func (e *scenarioEnv) rejoin(t *testing.T) {
+	t.Helper()
+	for i := range e.players {
+		e.reconnect(t, i)
+	}
+}
+
+// takeover 是 Robot 在新 TCP 连接上的第一步：带席位 i 当前的代际发 reconnect（服务端转 RoomReconnect）。
+// 之后 Robot 的命令沿用应答里的新代际；夹具自己的连接从此是旧的，只读状态（不经 room 的视图）。
+func (e *scenarioEnv) takeover(t *testing.T, i int) bots.Step {
+	t.Helper()
+	id := e.players[i].ID()
+	epoch := scenarioRead(t, e, e.target, func() uint64 {
+		seat, _ := e.room().Dao().GetSeats(id)
+		return seat.GetEpoch()
+	})
+	return bots.Step{Request: pb.ScenarioCommandRequest{RoomID: e.roomKey(), Kind: bots.KindReconnect, Epoch: epoch}}
+}
+
+// retake 是同一个 Robot 换了 TCP 连接之后再接管（代际沿用它上一次接管拿到的，Request.Epoch 留 0）。
+func (e *scenarioEnv) retake() bots.Step {
+	return bots.Step{Request: pb.ScenarioCommandRequest{RoomID: e.roomKey(), Kind: bots.KindReconnect}, Reconnect: true}
+}

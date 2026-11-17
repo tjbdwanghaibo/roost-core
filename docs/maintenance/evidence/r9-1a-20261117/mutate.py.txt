@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Apply one textual mutation to a generated project, run the named scenarios, restore, rerun; print a summary."""
+import subprocess, sys, os, re
+from pathlib import Path
+project, name, rel, old, new, tests = sys.argv[1:7]
+path = Path(project) / rel
+orig = path.read_text()
+mutated = orig
+for o, n in zip(old.split("@@"), new.split("@@")):  # 多处改动用 @@ 分隔，按顺序一一对应
+    assert mutated.count(o) == 1, f"{name}: mutation anchor not unique ({mutated.count(o)}) in {rel}: {o!r}"
+    mutated = mutated.replace(o, n)
+env = dict(os.environ, GOWORK="off")
+def run():
+    cmd = ["go", "test", "-mod=mod", "-count=1", "-v", "-run", "^(" + tests + ")$", "./game/handler"]
+    r = subprocess.run(cmd, cwd=project, env=env, capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    passes = re.findall(r"^--- PASS: (\S+)", out, re.M)
+    fails = re.findall(r"^--- FAIL: (\S+)", out, re.M)
+    reason = [l.strip() for l in out.splitlines() if re.search(r"_test\.go:\d+:", l)][:2]
+    return r.returncode, passes, fails, reason
+roost = os.environ.get("REGEN")  # 改了 //roost:nest 注解时要重新 generate
+def regen():
+    if roost:
+        subprocess.run([roost, "generate"], cwd=project, env=env, check=True, capture_output=True)
+try:
+    path.write_text(mutated)
+    regen()
+    rc, p, f, why = run()
+    print(f"[{name}] mutated {rel}: exit={rc} FAIL={f} PASS={p}")
+    for w in why: print(f"    {w}")
+finally:
+    path.write_text(orig)
+    regen()
+rc2, p2, f2, _ = run()
+print(f"[{name}] restored: exit={rc2} PASS={p2} FAIL={f2}")

@@ -1,6 +1,10 @@
-package rules
+package scenariorules
 
-import "errors"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+)
 
 var ErrRule = errors.New("invalid or stale game command")
 
@@ -19,9 +23,11 @@ type Receipt struct {
 	Result  Result
 }
 
-// 状态整体放在生成 DAO，局内缓存不持有另一个可变副本；失败由正式 DAO undo 回滚。
+// State 是主人的农场，存进主人 PlayerDao.SocialFarm（严格 JSON；挂在已有实体上的状态是那个实体 DAO 的字段）。
+// 访客资格来自 friends 模块（主人的好友名单），这里只记每名操作者（主人与各位来过的好友）最后一条回执；
+// 回执数以好友上限 + 1 为界。失败由正式 DAO undo 回滚。
 type State struct {
-	Members  []int64
+	Owner    int64
 	Revision uint64
 	Last     map[int64]Receipt
 	Planted  bool
@@ -30,21 +36,45 @@ type State struct {
 	Helped   bool
 }
 
-func New(members []int64, now int64) (State, error) {
-	if len(members) != 2 || members[0] <= 0 || members[1] <= 0 || members[0] == members[1] || now <= 0 {
+// Load 读主人的农场；还没种过（字段为空）时是一块空地。
+func Load(raw string, owner int64) (State, error) {
+	if owner <= 0 {
 		return State{}, ErrRule
 	}
-	return State{Members: append([]int64(nil), members...), Last: make(map[int64]Receipt), ReadyAt: 0}, nil
+	if raw == "" {
+		return State{Owner: owner, Last: map[int64]Receipt{}}, nil
+	}
+	var s State
+	d := json.NewDecoder(bytes.NewReader([]byte(raw)))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&s); err != nil {
+		return State{}, err
+	}
+	if s.Owner != owner || s.Last == nil {
+		return State{}, ErrRule
+	}
+	return s, nil
 }
-func (s *State) Apply(actor int64, cmd Command, now int64) (Result, error) {
-	if len(s.Members) != 2 || s.Last == nil {
+
+func (s State) Encode() string {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// Apply 的 friend 由 handler 在同一笔事务里从主人的好友名单得出：主人是 0 号角色，好友访客是 1 号，其余拒绝。
+func (s *State) Apply(actor int64, friend bool, cmd Command, now int64) (Result, error) {
+	if s.Last == nil {
 		return Result{}, ErrRule
 	}
 	index := -1
-	for i, id := range s.Members {
-		if id == actor {
-			index = i
-		}
+	switch {
+	case actor == s.Owner:
+		index = 0
+	case friend:
+		index = 1
 	}
 	if index < 0 || cmd.Seq == 0 {
 		return Result{}, ErrRule
@@ -69,7 +99,7 @@ func (s *State) Apply(actor int64, cmd Command, now int64) (Result, error) {
 	return result, nil
 }
 
-// owner 为 Members[0]，受邀访客为 Members[1]。收益只在收获时领取；访问不延长生产期。
+// 主人种植与收获，好友访客帮助一次缩短 10 秒。收益只在收获时领取；访问不延长生产期。
 func (s *State) execute(index int, cmd Command, now int64) (int, error) {
 	switch cmd.Kind {
 	case "plant":

@@ -1,0 +1,120 @@
+{
+  "final_run": {
+    "command": "env -u ROOST_TURN_PVP_REAL python3 scripts/test-genres-generated.py --out <scratchpad>/b1117-r9-1a/matrix-final --genres turn-pvp coop-roguelike social-sim",
+    "results": {
+      "started_utc": "2026-11-17T02:37:22.304487+00:00",
+      "git": "0827fff24ba09c494f98adc08fb2e8ab851b3b37",
+      "dirty": true,
+      "go": "go version go1.27.3 darwin/arm64",
+      "scope": "generated gameplay fixtures; persistence substitutes unless separately recorded; not a capacity certification",
+      "genres": [
+        {
+          "genre": "turn-pvp",
+          "status": "passed",
+          "module": "example.com/acceptance/turn-pvp",
+          "custom_module_verify": {
+            "room": 34,
+            "turn": 25,
+            "wallet": 17
+          },
+          "robot_pb_registry": true,
+          "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+          "custom_module_passed_tests": 10,
+          "passed_tests": 10,
+          "skipped_tests": 0,
+          "elapsed_seconds": 69.326,
+          "log_sha256": "e91a9fddce137b5dfa4e93392f8ce7ab43390e57a1e3d5898fe4879ae3d82be2"
+        },
+        {
+          "genre": "coop-roguelike",
+          "status": "passed",
+          "module": "example.com/acceptance/coop-roguelike",
+          "custom_module_verify": {
+            "room": 34,
+            "wallet": 17
+          },
+          "robot_pb_registry": true,
+          "genre_network_acceptance": "tcp_pb_robot_complete_coop_rewards_client_views; substitute persistence",
+          "custom_module_passed_tests": 10,
+          "passed_tests": 10,
+          "skipped_tests": 0,
+          "elapsed_seconds": 55.06,
+          "log_sha256": "74809c40ebc406449c7902895061fa1c281d50ce2fed9ce9f1ec42d8320b3db3"
+        },
+        {
+          "genre": "social-sim",
+          "status": "passed",
+          "module": "example.com/acceptance/social-sim",
+          "custom_module_verify": {
+            "friends": 18,
+            "wallet": 17
+          },
+          "robot_pb_registry": true,
+          "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+          "custom_module_passed_tests": 9,
+          "passed_tests": 9,
+          "skipped_tests": 0,
+          "elapsed_seconds": 55.522,
+          "log_sha256": "7b033144dda37b4d4f8e9357726a8809052b1b5f1ad8572df2967f22ff7fffa2"
+        }
+      ]
+    }
+  },
+  "earlier_runs": [
+    {
+      "genre": "turn-pvp",
+      "status": "failed",
+      "note": "第一次矩阵：custom module verify 的 turn skipped=1（TestTurnPVPRealTimerRecovery 被 ^TestTurn 选中并 SKIP），已加构建标签 turnreal 修正后重跑见下一行",
+      "error": "Command '['bash', '<repo>/scripts/testdata/genre-common/modules.sh', 'verify', '<scratchpad>/b1117-r9-1a/matrix/turn-pvp/roost', '<repo>', '<scratchpad>/b1117-r9-1a/matrix/turn-pvp/custom-module-verify.json']' returned non-zero exit status 1."
+    },
+    {
+      "genre": "coop-roguelike",
+      "status": "passed",
+      "module": "example.com/acceptance/coop-roguelike",
+      "custom_module_verify": {
+        "room": 34,
+        "wallet": 17
+      },
+      "custom_module_passed_tests": 10,
+      "passed_tests": 10,
+      "skipped_tests": 0,
+      "genre_network_acceptance": "tcp_pb_robot_complete_coop_rewards_client_views; substitute persistence",
+      "elapsed_seconds": 48.413,
+      "git": "953d79e09b3d75b32785600423f3b5443590c089",
+      "dirty": true
+    },
+    {
+      "genre": "social-sim",
+      "status": "passed",
+      "module": "example.com/acceptance/social-sim",
+      "custom_module_verify": {
+        "friends": 18,
+        "wallet": 17
+      },
+      "custom_module_passed_tests": 9,
+      "passed_tests": 9,
+      "skipped_tests": 0,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "elapsed_seconds": 45.241,
+      "git": "953d79e09b3d75b32785600423f3b5443590c089",
+      "dirty": true
+    },
+    {
+      "genre": "turn-pvp",
+      "status": "passed",
+      "module": "example.com/acceptance/turn-pvp",
+      "custom_module_verify": {
+        "room": 34,
+        "turn": 25,
+        "wallet": 17
+      },
+      "custom_module_passed_tests": 10,
+      "passed_tests": 10,
+      "skipped_tests": 0,
+      "genre_network_acceptance": "embedded_tcp_pb_retry_reconnect; substitute persistence",
+      "elapsed_seconds": 68.738,
+      "git": "098ddd09079e5a9437b9476f6dff8121a10b7732",
+      "dirty": true
+    }
+  ]
+}

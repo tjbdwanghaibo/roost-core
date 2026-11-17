@@ -1,0 +1,56 @@
+// 社交经营的玩法 handler：friends（访客资格）+ wallet（收获金币）。不再需要房间：农场是主人 PlayerDao.SocialFarm。
+// 只手写模块没覆盖的部分：种植、成熟时刻、帮助缩短一次、收获（样板是 friends 的两 Player 事务）。
+package handler
+
+import (
+	"slices"
+
+	db "GENRE_MODULE/db"
+	rules "GENRE_MODULE/game/modules/scenariorules"
+	"GENRE_MODULE/game/view"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+type IScenarioPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+	Wallet() view.Wallet
+	Friends() view.Friends
+}
+
+// 主人操作自己的农场（种植、收获）：只锁主人一人；收获的金币经 wallet 与农场同一笔事务。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioOwn(owner IScenarioPlayerEntity, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
+	return applyScenario(owner, owner, false, cmd, nowUnixMilli)
+}
+
+// 访客操作主人的农场（帮助）：照 friends 的写法锁 [主人, 访客] 两个 Player 一笔事务（两人都在本进程）；访客资格是
+// 主人好友名单里有他（friends 模块的状态，同一把锁内读）。访客的回执记在主人的农场里；访客的奖励（目前为 0）经他自己的 wallet。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioVisit(owner IScenarioPlayerEntity, visitor IScenarioPlayerEntity, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
+	friend := slices.Contains(owner.Friends().Snapshot().Peers, entity.GetUniqueIDFromEntityID(visitor.ID()))
+	return applyScenario(owner, visitor, friend, cmd, nowUnixMilli)
+}
+
+// 同序号同内容返回原结果且不重复支付；同序号改内容、跳序、过旧序号、旧 Revision 拒绝。
+func applyScenario(owner, actor IScenarioPlayerEntity, friend bool, cmd rules.Command, now int64) (rules.Result, error) {
+	farm, err := rules.Load(owner.Dao().GetSocialFarm(), owner.ID())
+	if err != nil {
+		return rules.Result{}, err
+	}
+	previous := farm.Last[actor.ID()]
+	result, err := farm.Apply(actor.ID(), friend, cmd, now)
+	if err != nil || cmd.Seq <= previous.Command.Seq {
+		return result, err
+	}
+	if result.Reward > 0 {
+		if _, err = actor.Wallet().Add(int64(result.Reward)); err != nil {
+			return rules.Result{}, err
+		}
+	}
+	owner.Dao().SetSocialFarm(farm.Encode())
+	return result, nil
+}

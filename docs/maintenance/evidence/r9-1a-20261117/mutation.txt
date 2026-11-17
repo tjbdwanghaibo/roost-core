@@ -1,0 +1,75 @@
+# 最终一轮变异（mutations.sh → mutate.py；工程是最后一次夹具改动后 ROOST_GENRE_KEEP=1 保留的三份生成物；C6-REAL 带 env.sh + ROOST_COOP_ROGUELIKE_REAL=1）
+# 回合 PvP（<scratchpad>/b1117-r9-1a/tmp/roost-turn-pvp.zNpWVN/project）
+[P1-wallet] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioTurnOrder'] PASS=[]
+    genre_test.go:23: {[83969029 83970053] 2 map[83969029:{{1 0 attack 0} {1 1}} 83970053:{{1 1 attack 0} {2 1}}] 0 [2 2] 1800000030000 false -1} 0 0
+[P1-wallet] restored: exit=0 PASS=['TestScenarioTurnOrder'] FAIL=[]
+[P2-conflict] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioRetryAndConflict'] PASS=[]
+    scenario_test.go:237: command accepted {1 0 attack 1}
+[P2-conflict] restored: exit=0 PASS=['TestScenarioRetryAndConflict'] FAIL=[]
+[P3-stale-round] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioStaleRevision'] PASS=[]
+    scenario_test.go:259: command accepted {1 0 attack 0}
+[P3-stale-round] restored: exit=0 PASS=['TestScenarioStaleRevision'] FAIL=[]
+[P4-epoch-bypass] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioReconnectReadsAuthoritativeTurn'] PASS=[]
+    genre_test.go:82: stale epoch acted <nil>
+[P4-epoch-bypass] restored: exit=0 PASS=['TestScenarioReconnectReadsAuthoritativeTurn'] FAIL=[]
+[P5-nonmember-ok] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioMembership'] PASS=[]
+    scenario_test.go:265: command accepted {1 0 attack 0}
+[P5-nonmember-ok] restored: exit=0 PASS=['TestScenarioMembership'] FAIL=[]
+[P6-no-timeout-penalty] mutated game/components/turn/turn.go: exit=1 FAIL=['TestScenarioTimeoutConsumesOneTurn', 'TestScenarioTurnTimesOutByTheRoomTimer'] PASS=[]
+    genre_test.go:45: {[83969029 83970053] 1 map[] 1 [3 3] 1800000120000 false -1}
+    genre_test.go:154: after the first timeout: {Members:[83969029 83970053] Revision:1 Last:map[] Turn:1 HP:[3 3] Deadline:1800000060000 Finished:false Winner:-1}
+[P6-no-timeout-penalty] restored: exit=0 PASS=['TestScenarioTimeoutConsumesOneTurn', 'TestScenarioTurnTimesOutByTheRoomTimer'] FAIL=[]
+[P7-no-game-over] mutated game/components/turn/turn.go: exit=1 FAIL=['TestScenarioTerminalCannotAttack', 'TestScenarioTurnTimesOutByTheRoomTimer'] PASS=[]
+    genre_test.go:61: {[83969029 83970053] 5 map[83969029:{{3 4 attack 0} {5 1}} 83970053:{{2 3 attack 0} {4 1}}] 1 [1 0] 1800000030000 true 0}
+    genre_test.go:180: 1 turn timers after the game ended, want 0
+[P7-no-game-over] restored: exit=0 PASS=['TestScenarioTerminalCannotAttack', 'TestScenarioTurnTimesOutByTheRoomTimer'] FAIL=[]
+[P8-robot-no-epoch] mutated game/modules/scenarionet/dispatch.go: exit=1 FAIL=['TestScenarioRobotTCPRetryAndReconnect'] PASS=[]
+    network_test.go:57: robot failed: {Scheduled:1 DroppedCapacity:0 DroppedSchedule:0 LaunchFailed:0 PeakOnline:1 Started:1 Online:0 Success:0 Failure:1 Canceled:0}
+[P8-robot-no-epoch] restored: exit=0 PASS=['TestScenarioRobotTCPRetryAndReconnect'] FAIL=[]
+[P9-result-cache] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioCommitRejectionRollsBack'] PASS=[]
+    scenario_test.go:252: retry after the rejected commit did not apply exactly once: {Members:[83969029 83970053] Revision:0 Last:map[] Turn:0 HP:[3 3] Deadline:1800000030000 Finished:false Winner:-1}
+[P9-result-cache] restored: exit=0 PASS=['TestScenarioCommitRejectionRollsBack'] FAIL=[]
+[P10-room-as-entity-id] mutated game/modules/scenarionet/command.go: exit=1 FAIL=['TestScenarioRobotTCPRetryAndReconnect'] PASS=[]
+    network_test.go:57: robot failed: {Scheduled:1 DroppedCapacity:0 DroppedSchedule:0 LaunchFailed:0 PeakOnline:1 Started:1 Online:0 Success:0 Failure:1 Canceled:0}
+[P10-room-as-entity-id] restored: exit=0 PASS=['TestScenarioRobotTCPRetryAndReconnect'] FAIL=[]
+# 合作 Roguelike（<scratchpad>/b1117-r9-1a/tmp/roost-coop-roguelike.961oyM/project；C6 在 REAL 工程 <scratchpad>/b1117-r9-1a/tmp/roost-coop-roguelike.961oyM/project）
+[C1-no-wallet] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioRobotCompleteCoopAndClientViews', 'TestScenarioRewardExactlyOnce'] PASS=[]
+    coop_robot_test.go:66: {1 0 0 0 1 1 0 0 1 0}
+    genre_test.go:38: double paid
+[C1-no-wallet] restored: exit=0 PASS=['TestScenarioRobotCompleteCoopAndClientViews', 'TestScenarioRewardExactlyOnce'] FAIL=[]
+[C2-result-cache] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioRewardRollsBackBothEntities', 'TestScenarioCommitRejectionRollsBack'] PASS=[]
+    genre_test.go:56: reward lost
+    scenario_test.go:245: command accepted {1 0 vote 0}
+[C2-result-cache] restored: exit=0 PASS=['TestScenarioRewardRollsBackBothEntities', 'TestScenarioCommitRejectionRollsBack'] FAIL=[]
+[C3-room-reconnect-keeps-old-conn] mutated game/components/room/room.go: exit=1 FAIL=['TestScenarioSeedSurvivesReload'] PASS=[]
+    genre_test.go:73: room_stale_epoch: room connection generation changed
+[C3-room-reconnect-keeps-old-conn] restored: exit=0 PASS=['TestScenarioSeedSurvivesReload'] FAIL=[]
+[C4-nonmember-ok] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioMembership'] PASS=[]
+    scenario_test.go:265: command accepted {1 0 vote 0}
+[C4-nonmember-ok] restored: exit=0 PASS=['TestScenarioMembership'] FAIL=[]
+[C5-robot-no-epoch] mutated game/modules/scenarionet/dispatch.go: exit=1 FAIL=['TestScenarioRobotCompleteCoopAndClientViews', 'TestScenarioRobotTCPRetryAndReconnect'] PASS=[]
+    coop_robot_test.go:66: {1 0 0 0 1 1 0 0 1 0}
+    network_test.go:57: robot failed: {Scheduled:1 DroppedCapacity:0 DroppedSchedule:0 LaunchFailed:0 PeakOnline:1 Started:1 Online:0 Success:0 Failure:1 Canceled:0}
+[C5-robot-no-epoch] restored: exit=0 PASS=['TestScenarioRobotCompleteCoopAndClientViews', 'TestScenarioRobotTCPRetryAndReconnect'] FAIL=[]
+[C6-replay-needs-online-default] mutated game/handler/scenario.go: exit=0 FAIL=[] PASS=['TestScenarioRetryAndConflict']
+[C6-replay-needs-online-default] restored: exit=0 PASS=['TestScenarioRetryAndConflict'] FAIL=[]
+[C6-replay-needs-online-REAL] mutated game/handler/scenario.go: exit=1 FAIL=['TestCoopRoguelikeRealCrashRecovery'] PASS=[]
+    session_real_runtime_test.go:392: recovered last receipt changed: room_stale_epoch: room connection generation changed {Revision:0 Reward:0} want {Revision:3 Reward:0}
+    session_real_runtime_test.go:356: child output:
+[C6-replay-needs-online-REAL] restored: exit=0 PASS=['TestCoopRoguelikeRealCrashRecovery'] FAIL=[]
+# 社交经营（<scratchpad>/b1117-r9-1a/tmp/roost-social-sim.z9GhLZ/project）
+[S1-not-friend] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioVisitorPermissions', 'TestScenarioHelpChangesDeadlineOnlyOnce', 'TestScenarioRobotTCPRetryAndReconnect'] PASS=[]
+    genre_test.go:12: help invalid or stale game command
+    genre_test.go:37: invalid or stale game command
+[S1-not-friend] restored: exit=0 PASS=['TestScenarioVisitorPermissions', 'TestScenarioHelpChangesDeadlineOnlyOnce', 'TestScenarioRobotTCPRetryAndReconnect'] FAIL=[]
+[S2-no-wallet] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioOfflineHarvestOnce', 'TestScenarioRobotTCPRetryAndReconnect'] PASS=[]
+    genre_test.go:27: offline reward duplicated
+    network_test.go:63: production/help/harvest ownership or reward mismatch
+[S2-no-wallet] restored: exit=0 PASS=['TestScenarioOfflineHarvestOnce', 'TestScenarioRobotTCPRetryAndReconnect'] FAIL=[]
+[S3-result-cache] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioHarvestRollback', 'TestScenarioCommitRejectionRollsBack'] PASS=[]
+    genre_test.go:57: harvest lost
+    scenario_test.go:245: command accepted {1 0 plant 0}
+[S3-result-cache] restored: exit=0 PASS=['TestScenarioHarvestRollback', 'TestScenarioCommitRejectionRollsBack'] FAIL=[]
+[S4-nonfriend-ok] mutated game/handler/scenario.go: exit=1 FAIL=['TestScenarioMembership'] PASS=[]
+    scenario_test.go:265: command accepted {1 0 plant 0}
+[S4-nonfriend-ok] restored: exit=0 PASS=['TestScenarioMembership'] FAIL=[]

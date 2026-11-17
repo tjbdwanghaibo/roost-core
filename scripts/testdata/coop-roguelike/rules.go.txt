@@ -1,6 +1,10 @@
-package rules
+package scenariorules
 
-import "errors"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+)
 
 var ErrRule = errors.New("invalid or stale game command")
 
@@ -19,7 +23,8 @@ type Receipt struct {
 	Result  Result
 }
 
-// 状态整体放在生成 DAO，局内缓存不持有另一个可变副本；失败由正式 DAO undo 回滚。
+// 状态整体放在 room 模块 Room 的 RoomDao.CoopState（严格 JSON），局内缓存不持有另一个可变副本；失败由正式 DAO undo 回滚。
+// 席位、代际、连接与在线归 room；“每人连续命令号 + 最后一条可重放”借鉴 turn（turn 不适合所有人同时投票的回合）。
 type State struct {
 	Members  []int64
 	Revision uint64
@@ -98,6 +103,36 @@ func (s *State) execute(index int, cmd Command, now int64) (int, error) {
 	default:
 		return 0, ErrRule
 	}
+}
+
+func Decode(raw string) (State, error) {
+	var s State
+	d := json.NewDecoder(bytes.NewReader([]byte(raw)))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&s); err != nil {
+		return State{}, err
+	}
+	if len(s.Members) != 2 || s.Last == nil {
+		return State{}, ErrRule
+	}
+	return s, nil
+}
+
+func (s State) Encode() string {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+func (s State) Index(id int64) int {
+	for i, member := range s.Members {
+		if member == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // View 不返回其他玩家的余额、命令回执或服务端随机种子。

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	syncsender "GENRE_MODULE/game/handler/syncsender"
+	roomlogic "GENRE_MODULE/game/modules/room"
 	"GENRE_MODULE/protocol/msgid"
 	"GENRE_MODULE/protocol/pb"
 
@@ -12,7 +13,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
 
-// CoopDispatch 增加有权限检查的权威视图查询，供进入房间、重连与客户端验收使用。
+// CoopDispatch 增加有权限检查的权威视图查询，供进入房间、重连与客户端验收使用；RoomID 是房间唯一号（room.EntityID 换算），
+// 连接标识取自服务端 Session，room 的 View 核对它是不是席位认下的那条。
 func CoopDispatch(engine *nest.NestMgr) gateway.TCPDispatch {
 	commands := Dispatch(engine)
 	views := syncsender.NewCoopViewHandlersSender(engine)
@@ -27,10 +29,12 @@ func CoopDispatch(engine *nest.NestMgr) gateway.TCPDispatch {
 		if err != nil {
 			return nil, err
 		}
-		view, err := views.MultiSync_CoopView(ctx, request.RoomID, session.Principal().PlayerID)
-		response := &pb.CoopViewResponse{Revision: view.Revision, NextSeq: view.NextSeq, Stage: int32(view.Stage), Cleared: view.Cleared, Claimed: view.Claimed, Coins: view.Coins}
-		if err != nil {
-			response.Code = 1
+		response := &pb.CoopViewResponse{Code: 1}
+		room, roomErr := roomlogic.EntityID(request.RoomID)
+		if connection, err := roomlogic.ConnectionKey(session); err == nil && roomErr == nil {
+			if view, err := views.MultiSync_CoopView(ctx, room, session.Principal().PlayerID, connection); err == nil {
+				response = &pb.CoopViewResponse{Revision: view.Revision, NextSeq: view.NextSeq, Stage: int32(view.Stage), Cleared: view.Cleared, Claimed: view.Claimed, Coins: view.Coins}
+			}
 		}
 		payload, err := pb.MarshalCoopViewResponse(response)
 		if err != nil {
