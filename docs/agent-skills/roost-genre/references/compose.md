@@ -48,6 +48,8 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 - 只在一个平台上发行，可以直接用平台的大厅、好友邀请与中继；
 - 合作玩法，对作弊不敏感（朋友之间玩）。
 
+**小房间、房主做主机，但不想绑定某个平台**（多平台、浏览器、自己的账号体系）：roost 有现成的大厅 lobby 与转发 relay（房主的客户端做 host，服务器只转发、不跑玩法），不需要 game 服务，见第 1B 步。它仍然不替你防作弊、不判定局内结果；判断“需要 roost”时写明用的是 1B 这条路。
+
 **典型例子（维护者的建议）**：只在 Steam 上发行、需要联机开房间、人数比较少——建议用 **Steam Lobby（建房、邀请、加入）+ Netcode for GameObjects（Unity 的同步层，由房主当主机）+ Steam 传输层（走 Steam 的 P2P 与中继，不用自己开服务器）**，不需要 roost。用的不是 Unity 时，换成该引擎对应的联机层，思路相同：平台大厅 + 玩家当主机 + 平台中继。通用方案（三层分工、流程、局内同步写法、房主离开、局外数据、与 roost 一起用、交付的方案文档）见 [steam-lobby-ngo.md](steam-lobby-ngo.md)。
 
 **判断结果分三种**，都要告诉用户：
@@ -157,9 +159,11 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 | 决定结果的一切：校验、扣与发、随机、次数与上限、时间与日界、排名、谁能对谁做什么 | 界面、动画、输入；按已同步的状态展示（余额、进度、“今天领过没有”）；把玩家的意图发成请求 |
 | 状态与持久化、跨玩家与跨服务的协作、给客户端看哪些字段 | 收推送后的提示；请求的重发（带同一个请求键）；按错误码给提示 |
 
+**数值放哪**：需求里的数值（奖励、曲线、上限、倍率、掉落、价格、冷却）默认写进配置表 `configs/table`，不写成 Go 常量（第 4F 步）。拆需求时同时列出“哪些表两端共用、哪些字段只给服务端（掉落种子、权重、内部阈值）、哪些表只给客户端（文案、模型、提示）”，写进 DEMO 第 2 节的边界表。
+
 缺省规则（业余模式照它分；专业模式由开发者把控，见第 0B 节）：**影响结果、资产或公平的判断只在服务器做**，客户端的判断只用于提前提示，服务器照样再判一次；客户端不传时间、不传玩家号、不传随机结果。一条需求只有客户端部分（纯展示、本地设置）时，标成“客户端，服务器不涉及”，不为它写服务器代码。
 
-本 skill 只生成服务器：工程、模块、手写功能与场景测试。客户端的部分不生成代码，交付的是对接说明（第 5A 步的“客户端对接”一节）：调用顺序、请求与推送、要解码的同步字段、错误码与该怎么提示。客户端拿生成工程里的 `protocol/proto/protocol.proto` 与 `db/dao_sync.proto` 生成自己的协议代码。
+本 skill 只生成服务器：工程、模块、手写功能与场景测试。客户端的部分不生成代码，交付的是对接说明（第 5A 步的“客户端对接”一节）：调用顺序、请求与推送、要解码的同步字段、错误码与该怎么提示。客户端拿生成工程里的 `protocol/proto/protocol.proto` 与 `db/dao_sync.proto` 生成自己的协议代码（C# 客户端用 `client_export` 导出目录，第 2 步）；配置表经 `client_export.config` 导出给客户端（第 4F 步）。
 
 **再逐条定复用**（规则 2、3）。每条先查第 3 步的模块速查表，再读候选模块的 `README.md`——“能力”一节看它做不做这件事，“能力边界”一节看它做到什么程度，“复用方式”一节看怎么用。然后给每条一个结论：
 
@@ -195,7 +199,7 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 
 ## 1A. 定接入方式：嵌入 TCP，还是独立 Gate
 
-拆完需求、建工程之前，先定玩家怎么连进来。**玩家协议目前只有 TCP**（嵌入在业务服务里，或经独立 Gate 转进来）；HTTP 只用于登录入口（portal）和管理面，不是玩家协议（见第 7 步）。所以这里说的“短连接 / 长连接”指**交互方式**，不是传输协议：
+拆完需求、建工程之前，先定玩家怎么连进来。**玩家协议是 RS v2 帧，走 TCP 或 WebSocket**（嵌入在业务服务里，或经独立 Gate 转进来；WebSocket 给浏览器用，见本节末尾）；HTTP 只用于登录入口（portal）、大厅（lobby）和管理面，不是玩家协议（见第 7 步）。所以这里说的“短连接 / 长连接”指**交互方式**，不是传输协议。房主的客户端做 host、服务器只转发的开房间联机不走这里，见第 1B 步。
 
 - **短连接（按请求交互）**：客户端发一个请求、等一个回复，服务器很少主动推送，玩家不需要长期在线；或者是开房间、一局打完就散的游戏（卡牌、回合制、休闲、房间合作）。
 - **长连接（长期在线、持续推送）**：玩家长期挂在线上，服务器持续推送状态，比如同屏 / 大地图、实时同步、频繁的世界广播（MMO、SLG 大地图、无缝世界）。
@@ -212,7 +216,65 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 - 两种模式都把结论（嵌入 TCP / 独立 Gate、按缺省规则还是开发者决定、理由）写进 `docs/DEMO.zh-CN.md` 第 5 节“服务”，以及这一轮的 `docs/DEMO-HISTORY.zh-CN.md`。
 - 不要用 `project new -services game,gate` 造 Gate：那只会多出一个名叫 gate 的普通业务服务，没有任何 Gate 接线。
 - 独立 Gate 只做过单机真实进程演练，**没有跨机验证**（第 7 步）；多机部署前要自己补验收。
+- **浏览器客户端**：在上面选定的接入上再加 `"$ROOST" add transport websocket`（要求已有 tcp；目标检出没有这条命令时不支持）。命令不改配置文件：在 `player_access.tcp.websocket`（独立 Gate 是 `player_access.gate.websocket`）写 `addr: 0.0.0.0:7080`（部署模板按 7080 发布）与 `allowed_origins`（游戏页面的域名）才开。**白名单为空时所有浏览器页面都被拒绝，同源也拒绝**；TLS（wss）由前置负载均衡终结；七层负载均衡后面所有连接按一个 IP 计数，要调大 `max_connections_per_ip`。契约见 [GATEWAY §6](../../../framework/GATEWAY.md#6-websocket-接入)。结论写进 DEMO 第 5 节。
 - `roost` 是 v1.51.0 之前的版本时没有 `add gate`：独立 Gate 只能照 [modules/login/README](../../../../modules/login/README.md) 的“独立 Gate 部署”一条手写，或者先用嵌入 TCP，在 DEMO 第 9 节写明“上线前改成独立 Gate”。
+
+## 1B. 开房间联机：lobby + relay，房主做 host
+
+**什么时候用**：一局一局的小房间联机（几个人），局内的玩法逻辑可以交给房主的客户端算（合作、派对、朋友之间的对战，对作弊不敏感），又不想绑定某个平台的大厅与中继（多平台、浏览器、自己的账号体系）。roost 提供两个框架服务：**大厅 lobby**（HTTP：建房、列房、加入、离开、改状态）与**转发 relay**（客户端直连，房主做 host，服务器只转发、不解析载荷），不需要 game 服务。方案与维护者的决定见 [FEATURE-2026-11-16-lobby-relay](../../../maintenance/FEATURE-2026-11-16-lobby-relay.md) §6，契约见 [LOBBY](../../../framework/LOBBY.md)、[RELAY](../../../framework/RELAY.md)。main 上 2026-11-17 起才有（未发版）：目标检出的 `"$ROOST" help` 里没有 `add lobby` 时不能走这条路。
+
+| 需求 | 走哪条路 |
+| --- | --- |
+| 只在一个平台发行、人数少、局外没有要保存的东西 | 平台方案（第 0C 步，[steam-lobby-ngo.md](steam-lobby-ngo.md)），不用 roost |
+| 房主做 host、跨平台或浏览器、自己的账号 | **本节** |
+| 局内结果必须由服务器判定、要防作弊、局内状态要落盘、断线要托管 | 不用本节：服务器权威的房间（`room` / `turn` 模块，或 [room-coop-pve.md](room-coop-pve.md)、[party-room.md](party-room.md)），实时对战用帧同步（[moba-lockstep.md](moba-lockstep.md)） |
+| 局内房主做 host，局外有账号、货币、养成 | 两者一起：game 工程（局外，照常第 2～4 步）+ `add lobby` / `add relay`（局内）；局内结果交给服务器的部分照第 0C 步“只有一部分需要”的对接写法，由服务器校验 |
+
+需求要求“服务器判定局内结果、反作弊、relay 崩溃后房间不丢、跨实例接管、断线托管”时，按规则 4 作为冲突提出（KNOWN-LIMITS“大厅 lobby 与转发 relay”）。
+
+**建工程**：
+
+```bash
+# 只要开房间、不要 game 服务：
+"$ROOST" project new "$NAME" -module "$MOD" -out "$DIR" -template lobby --skip-deps   # 只托管 account、lobby、relay
+# 已有 game 工程上加：
+"$ROOST" add lobby           # 没有托管 account 时一并声明；补 account.services、account.games
+"$ROOST" add relay
+"$ROOST" project doctor || true   # lobby-relay:account-services / token-key-env / advertise-addr / account-games
+```
+
+- 生成的配置可以直接 `make dev-run`：lobby 端口 8080+N、relay 7100+N、relay WebSocket 7200+N（N 是端口块）；`lobby.games` 里有一个以工程名命名的游戏（`max_members: 8`），`account.games` 同名；两边的 `token_key_env` 都是 `ROOST_RELAY_TOKEN_KEY`，开发时 `run.sh` 给开发密钥，生产由 Secret / 环境变量注入（至少 16 字节）。改游戏名、人数上限时两处一起改（doctor 的 `account-games` 会查）。
+- **登录入口**：客户端要先拿游戏账号 token（gt1）。有 game 的工程装 `portal`（第 3A 步），客户端用 `POST /portal/game-token {account_ticket, game}`，或登录时带 `game` 一步拿到。**`-template lobby` 的工程装不了登录模块**（login / portal 要求有 game 服务）：account 的协作者是缺省拒绝的桩（doctor `collaborators:account` 报 FAIL），渠道验签与给客户端换 gt1 的入口（调 account 的 `IssueGameToken`）要工程自己写；写不了时按规则 4 告诉用户，或改用 game 工程装 portal。这一条写进报告的“没做的”。
+- 生产：relay 的每个实例要能被客户端直连（`advertise_addr` 不能是回环，每个实例不同），浏览器要用时配 `relay.ws_listen`、`ws_advertise_addr`（`wss://…`）、`ws_allowed_origins`（空表示拒绝所有浏览器页面），lobby 配 `cors_origins`。
+
+**客户端流程**（写进 DEMO 第 7 节）：登录拿账号票据 → `POST /portal/game-token` 拿 gt1 → 房主 `POST /rooms`（`Authorization: Bearer gt1…`，`transport` 选 tcp / ws）得到 `{room, relay_addr, token}` → 连 relay、首帧发令牌、收 Welcome；成员 `GET /rooms?game=&mode=` → `POST /rooms/{id}/join` → 连 relay。房主 `POST /rooms/{id}/state` 改成已开始后新人进不来；开局后掉线的人席位一直留着、再 join 回原座，不回来的要房主踢掉。断线重连由 SDK 先经 lobby join 拿新令牌再连 relay。
+
+**玩法逻辑必须跑在客户端**（维护者 §6 第 5 条）：relay 不解析载荷、服务器不托管房间逻辑，所以本 skill **不为局内玩法写服务器代码**；交付的是工程（lobby、relay、account）、对接说明与房主规则的写法建议。DEMO 第 2 节的边界表里，局内的判定（命中、结算、随机、胜负）都标“房主客户端”，风险写明“房主可以改包作弊，成员之间结果以房主为准”；专业模式由开发者逐条确认。
+
+**两种通道**（帧头区分，载荷格式由游戏自己定）：
+
+- **游戏通道**：游戏操作。成员发的只到房主；房主按目标发给某个成员（槽位）或全体。
+- **房间通道**：聊天、表情、语音这类不需要房主处理的消息。按目标直达（房主也是收件人），单独限额，房主可以禁言；超限丢帧不掉线。语音走 TCP / WebSocket，丢包会卡住后面的包。
+
+**换 host 与快照**：
+
+- 三种触发：房主主动转交（`Transfer`，交接数据随帧带上，最完整）；房主离开（立即换）；房主断线（房主约每 0.6s 要有一帧，SDK 自动补心跳；断线后宽限 5s，期间回来仍是房主，过了按房主声明的候选顺序 `SetSuccessors`、兜底最早进房的人选新房主，新房主回 `HostReady` 才生效）。
+- **快照里只放别人没有的状态**：随机数种子、AI 内部状态、隐藏信息（牌堆、未公开的道具）、最近几步还没广播出去的操作；房主平时广播给成员的状态（位置、血量、比分）成员本来就有，不放。房主推快照（SDK 设了状态回调后每 3s 一次，关键时刻手动推），压缩后不超过 256 KiB，两份之间至少 1s；断线换 host 最多丢“最后一份快照之后”的变化。新房主从 `OnYouAreHost` 拿到交接数据或快照，用它加自己本地的状态继续。
+- 快照与交接数据缺省用原始 deflate 压缩，可以换实现，但**同一房间的客户端必须用同一种**。
+
+**Web 端**：浏览器用 TS SDK 的 `WebHost`（[client/ts/README](../../../../client/ts/README.md)）：房主规则写成纯 TS 模块 `HostRules`（`restore` / `input` / `step` / `snapshot`，不碰网络与计时器），用 `serveRules` / `WorkerRunner` 放进 Worker 跑（不用 Worker 时 `LocalRunner`），`FixedStepLoop` 按经过时间补帧；页面隐藏满 `hiddenHandoffMs`（桌面 5s，手机 0）把房主转交给在线成员；`sessionStorage` 存快照，刷新后宽限期内回来仍是房主。后台标签页靠 Worker 撑住只是缓解，手机后台随时被冻结，冻结后走断线换 host。业务在同一个 `RelayClient` 上注册回调不会影响 `WebHost`。
+
+**SDK 怎么选**（[client/README“开房间 SDK”](../../../../client/README.md#开房间-sdklobby--relay)）：
+
+| 客户端 | SDK | 接入 relay |
+| --- | --- | --- |
+| Unity / 其他 C# | `client/dotnet/Roost.Client.Relay`（netstandard2.1，无第三方依赖，回调在 `Pump` 的线程上） | TCP |
+| 浏览器 | `client/ts`（`@roost/relay-client`，含 `WebHost`） | WebSocket |
+| Go（机器人、压测、无界面房主） | `client/relay` | TCP |
+
+三份可以在同一个房间里混用（同一份帧金样）。C# SDK 没有在 Unity / IL2CPP 里跑过，Web 端只在内置浏览器面板演练过，这两点写进 DEMO 第 9 节与报告。
+
+**验收**：工程 `go build ./... && go vet ./...`、`roost generate --check`、`roost id check`、`project doctor`（`lobby-relay:*` 为 OK；`-template lobby` 的 `collaborators:account` 在工程实现之前是 FAIL，如实报）；`make dev-run` 能起 account、lobby、relay。局内玩法在客户端，没有服务器场景测试可写；报告里写明“lobby + relay 的多进程演练、跨机、容量未验”。
 
 ## 2. 工程
 
@@ -241,7 +303,9 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 
   `-template game` 带 Player 与 World 两个实体，缺省只有 game 一个业务服务、不托管任何框架服务：装的模块用到哪个托管服务（chat / leaderboard 的 rank / mailbox 的 mail / login 与 portal 的 account……），安装器就在那一次安装里声明哪个，所以工程只带用得到的服务；配方同样只带它的模块用到的（casual：account、mail；turn-pvp：account、match、rank）。手写功能要直接调某个托管服务（没有对应模块）时加 `-framework rank,chat`（或 `-framework all` 要全部九个），已有工程见 `roost help services`。玩家模块挂在 `Player` 上，要求这个形状；room 自带 Room Entity、DAO 与 lifecycle；skillbook 是服务级只读目录；alliance 会新增一个独立的联盟服务与三个跨域 Saga。
 
-  客户端是 Unity 或其他 C# 工程时，建完工程在 `roost.yaml` 末尾加一段 `client_export:`（`dir: shared/protocol`、`languages: [csharp]`），再按第 5A 步第 7 项准备 protoc 31.1。之后每次 `roost generate` 都会更新导出目录。
+  客户端是 Unity 或其他 C# 工程时，建完工程在 `roost.yaml` 末尾加一段 `client_export:`（`dir: shared/protocol`、`languages: [csharp]`），再按第 5A 步第 7 项准备 protoc 31.1。要把配置表也导给客户端，在同一段里加 `config:`（第 4F 步）。之后每次 `roost generate` 都会更新导出目录。
+
+  只做开房间联机（房主做 host、不要 game 服务）时用 `-template lobby`，见第 1B 步。
 - **已有工程**：`cd` 进去，先读 `roost.yaml`：`modules` 段是已装的模块（每个模块拥有的文件、DAO 字段、号），`services`、`features`、`ids` 是装配现状。再 `"$ROOST" module list`，带 `*` 的是已装的。不要重装已装的模块；已装模块的文件是业务代码，可能已经被改过，以工程里的为准。
 
 ## 2A. 后续增加与修改需求
@@ -261,6 +325,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 7. **协议或同步字段变了，通知客户端**：
    - 这一轮改了 `protocol/def`、DAO 的 `sync` 字段或错误码时，先 `roost generate`。导出目录会随之更新，`roost project doctor` 的 `client-export:fresh` 应为 OK。
    - 在 `docs/DEMO-HISTORY.zh-CN.md` 本轮那一节写“客户端要重新同步”，列出新增和修改的消息号与错误码（可以直接贴 `roost client sync --dry-run` 的输出），再写上新的 manifest 哈希。
+   - 改了导出给客户端的配置表（`configs/table` 的客户端字段、schema、`client_export.config.tables`）时同样 `roost generate`，`config-export:fresh` 应为 OK；历史里写“客户端要重新同步配置”，贴 `roost client sync --config-code-to … --config-data-to … --dry-run` 报告的表 / 字段 / 行数变化，写上数据版本“旧 → 新”（`roost generate` 打印的 `client config data version`）。只改只给服务端的列，数据版本不变，不用通知客户端。
 
 第 6 步的报告只讲这一轮：新增、修改、删除了什么，影响到哪些旧条目，验收结果（新场景与回归场景分开报数）。
 
@@ -272,7 +337,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 | --- | --- | --- | --- |
 | 进入游戏、建档、首次发放 | `enter` | — | `EnterGame` 加载或创建 Player、首次初始化（实体事件 `event.EnterFirst`）；“先新建再进入”的另一条路；事务外的进入登记点；打开自身视图 |
 | 握手鉴权 | `login` | — | 握手票据交给 account 校验（进服票据、角色会话令牌），开发登录，区服登记工具 |
-| 客户端登录入口、选服 | `portal` | login | 三个 HTTP 端点：登录、区服清单与推荐、换进服票据；挂在托管 account 的进程上 |
+| 客户端登录入口、选服 | `portal` | login | 四个 HTTP 端点：登录、区服清单与推荐、换进服票据，以及开房间类游戏换游戏账号 token 的 `POST /portal/game-token`；挂在托管 account 的进程上 |
 | 服务器时间 | `servertime` | — | 业务时间、当前业务日、下一次每日重置；进入时推送 |
 | 客户端规则下发 | `rules` | enter | 各模块登记的规则快照，进入时统一推送、可补取 |
 | 档案：名字、等级、经验 | `profile` | enter | 改名、发经验、升级事件 `event.ProfileLevelUp`；新角色 1 级 |
@@ -350,6 +415,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 客户端的顺序：`POST /portal/login`（渠道、open_id、凭据 → 账号票据）→ `POST /portal/servers`（清单与推荐的服）→ `POST /portal/enter`（进服票据与地址）→ 用 `enter:<进服票据>` 握手 → 服务器推 `EnterStatus{need_create}` → 需要新建就发 `EnterCreate{name}` → `EnterGame`。推送只是告知，没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。
 
 - 开发时要在托管 account 的服务的开发配置里写 `login.dev_token`（必须以 `dev-` 开头，只写在开发配置里）与 `portal.servers`（服号 → 客户端连得到的地址：有独立 Gate 填 Gate 的地址；没有时填 game 的 `player_access.tcp.addr`，把 `0.0.0.0` 换成客户端连得到的主机）；`-recipe` 与 `-template game-demo` 的工程已经写好，`-template game` 加模块的要自己写（安装输出的 `todo:` 行逐条照做）。区服要登记：`make dev-run` 起完服务后自动登记本机的服，别的环境用模块带的 `cmd/accountctl upsert-server`。
+- 开房间类游戏（第 1B 步）没有区服与角色：客户端登录后调 `POST /portal/game-token {account_ticket, game}`（或登录时带 `game`）拿游戏账号 token，带着它去大厅 lobby；游戏名要在 account 的 `account.games` 里。
 - 新玩家的初始发放写在 enter 的首次初始化里（第 4B 步），与“建成了”的标记同一笔事务；不要写在登录入口或握手里。
 - 不经登录入口、由自己的入口调 account 的 `CreateRole` / `SelectRole` 拿 `session:<player_id>:<token>` 握手的老路仍然可用：这样的会话 `EnterGame` 是“加载或创建”，不要求先新建。
 - 上线前要做而模块不替你做的：渠道验签、入口前面的 TLS 与限流、生产配置里的地址。这些写进第 6 步报告的“没做的”。
@@ -604,6 +670,46 @@ game/handler、controllers → game/view、组件包（要实体的具体类型�
 - **DAO 的 `dbscope` 怎么选**：归某一个服的本地实体（玩家、World、房间、地块）用 `dbscope=sid`（`add dao --entity` 的缺省），数据在 `<库>_<sid>`，换服与合服按 sid 库搬它；预加载要求实体的每个 DAO 都是 `dbscope=sid`（global 库各服共用，分不出“本服的实体”）。各服共享、不归某个服的数据才用 `dbscope=global`：Remote 托管实体（联盟、队伍）、跨服共享的配置性数据。拿不准时按 sid，并在报告里写明这类数据换服 / 合服时怎么搬。
 - 需求要求“开服就载入”而实体的 DAO 必须是 global（例如要跨服共享），二者冲突：不要把 DAO 改成 sid 也不要手写枚举，按规则 4 向用户说明，选其一。
 
+## 4F. 配置表：数值写进 configs/table，两端共用一份
+
+**规则**：生成玩法时，数值（奖励、曲线、上限、倍率、掉落、价格、冷却、概率）**默认写进配置表 `configs/table`，不写成 Go 常量**；只有协议约束（号、协议里的长度上限这类改了就要改客户端代码的）才写成常量。服务端工程是配置的唯一源头：同一份 schema + CSV，`roost generate` 同时产出服务端的 JSON 与 Go 绑定、客户端的 JSON 与 C# 读取代码（`client_export.config`，[命令参考 §2.2](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)、§9.2）。现成样板：`bag` 的道具表（`configs/schema/item.go` + `configs/table/item.csv`，组件里 `generated.ItemByID(id)`）、`shop` 的商品、`task` 的任务目录（`generated.TaskTable()`）。
+
+**写法**：
+
+- `"$ROOST" add table <Name>` 建 schema（`configs/schema/<name>.go` 的 `//roost:table`，单例用 `//roost:object`），CSV 写在 `configs/table/<name>.csv`（第一行列名必须有，标题、类型、规则三行可选，`#` 开头的行是注释）。业务代码读 `generated.<Type>By<Key>(id)`、`generated.<Type>Table()`（当前请求钉住的快照），不自己读文件。
+- 规则写在字段 tag 上：`required`、`unique`、`min`、`enum`、`ref`，服务端每次加载与 reload 都查，客户端 `Load` 时也查同一套。
+- **按端分组**：字段 tag `side:"s"` 只给服务端（掉落种子、权重、内部阈值），`side:"c"` 只给客户端（模型、图标、文案）；整张表只给一端时在标记里写 `side=c` / `side=s`（提示文案表是 `side=c`）。主键不能带 side，`ref` 必须指向同一端的表。只给客户端的字段在服务端结构体里是零值，服务端代码不要读它。
+- **一组散的数值**（开局金币、等级上限、开关）写成竖排键值表 `//roost:object name=<名> layout=kv`：CSV 三列 `key,value,note`，一行一个字段，`note` 进生成代码的注释。
+- 要按非主键查一组行（按场景查怪物）时在字段上写 `index:"true"`，读 `generated.<Type>By<Index>(v)`；只支持内建 string / 整数 / bool 字段。
+- 字段类型用内建类型；具名类型、结构体、`time.Duration` 导不到客户端，改成 parser（客户端拿原文字符串，自己解析）或 `side:"s"`。
+- **场景测试从测试数据读**：照模块安装写的 `roost_config_data_test.go` 那样在测试的 `init` 里装载工程的 `configs/data`，断言里把需求给的数写死（第 4 步第 7 条），不引用表里读出来的值去断言自己。
+
+**导出给客户端**：客户端是 C# / Unity 时在 `roost.yaml` 的 `client_export` 里加：
+
+```yaml
+client_export:
+  # dir / languages：协议导出（第 2 步）；只要配置、不要协议时改写 protocol: false，且不写 dir、languages、csharp
+  config:
+    dir: shared/config        # 缺省；提交进仓库
+    tables: []                # 可选；空表示全部带客户端字段的表
+    csharp:
+      namespace: Game.Config  # 可选，缺省 Roost.Config
+```
+
+`roost generate` 写出 `shared/config/`（`data/<表>.json` 只含客户端字段、C# 读取代码、`manifest.json` 与数据版本号）。客户端仓库用 `roost client sync --from <服务端工程> --config-code-to <C# 目录> --config-data-to <数据目录>` 同步（可与 `--to` 协议同步一起给），C# 里 `var tables = ConfigTables.Load(name => 读文件)`，加载时核对哈希与规则。数据版本号只记录、可查看（`ConfigTables.DataVersion`），登录时不核对。
+
+**需求拆分时**（第 1 步“数值放哪”）：在 DEMO 第 2 节的边界表里列出每张表——两端共用 / 只给服务端 / 只给客户端，以及共用表里只给服务端的字段与理由（例如“掉落权重只给服务端：客户端拿到就能算出掉落”）。专业模式请开发者逐表确认。
+
+**已有工程的迁移**（数值原来写成 Go 常量，或客户端另有一份 CSV）：
+
+1. `"$ROOST" add table <Name>` 建表，把常量的值搬进 `configs/table/<name>.csv`，按上面分好端；
+2. 把代码里的常量换成 `generated.<Type>…` 读取，删掉常量；
+3. 场景测试改成从测试数据读（上面最后一条），重跑以前的场景，一条不能少；
+4. 打开 `client_export.config`，`roost generate`，`project doctor` 的 `config-export:fresh` 为 OK；
+5. 客户端 `roost client sync --config-code-to … --config-data-to …` 同步、改成读 `ConfigTables` 之后，删掉客户端原来的 CSV 与读取代码。
+
+改了已有表的含义（单位、拆分）按第 2A 步的“改持久化状态的含义”同样先问；写进 HISTORY。已有工程升级 roost-core 后重新生成，`configs/generated/gen_table_config.go` 每张横排表会多一行 `reader.Comment = '#'`，这是正常的生成变化。
+
 ## 4C. 日志
 
 规则：**玩家相关的操作要有业务层日志；高频逻辑可以不打；日志只用框架的日志。**
@@ -630,7 +736,8 @@ go test -mod=mod ./...                                            # 其余生成
 - `module verify` 全部 `ok`、退出码 0。它已经包含 `go build`、`go vet`、`roost id check`、`roost generate --check`。
 - 手写功能的场景数自己核对：`-run` 写错或用例被跳过时 `go test` 照样报 `ok`。
 - `project doctor` 在 `-template game` 的新工程上退出 0：缺省不托管任何框架服务，就没有协作者拒绝桩。装模块时声明的托管服务里，chat、account（login）、platform（purchase）的协作者由对应模块接管，mail、rank、match 没有拒绝桩；`-framework` 显式带上、又没有模块接管的 account / chat / platform / session 会各报一项 `collaborators:<服务>` FAIL（生成的拒绝桩，上线前由项目实现）。除这些外不应有 FAIL。
-- 声明了 `client_export` 的工程，`project doctor` 的 `client-export:fresh` 为 OK：导出目录与 `protocol/def`、同步字段、错误码一致。
+- 声明了 `client_export` 的工程，`project doctor` 的 `client-export:fresh` 为 OK：导出目录与 `protocol/def`、同步字段、错误码一致。声明了 `client_export.config` 的，`config-export:fresh` 也为 OK（导出的表与 `configs/table`、schema 一致，打印数据版本）。
+- 托管了 lobby / relay 的工程，doctor 的 `lobby-relay:*` 为 OK（第 1B 步）。
 - 这一档是离线验收：替身提交器，没有 Mongo / NATS / Redis，没有真实客户端。要真起进程见 [SKILL §4](../SKILL.md)。
 
 ## 5A. 工程说明文档
@@ -640,12 +747,12 @@ go test -mod=mod ./...                                            # 其余生成
 `docs/DEMO.zh-CN.md` 的内容从工程里取，不凭记忆写；改了工程就同步改它。固定这几节：
 
 1. **需求对照**：第 6 步那张表（每条需求：服务器部分、客户端部分、结论、模块或样板、状态），加上冲突与待确认的数值。开头写明本次用的模式，以及第 0C 步的判断（需要 / 不需要 / 只有一部分需要、理由、用户的选择）。
-2. **服务器 / 客户端边界**：逐个逻辑点写放在哪一端、谁定的（业余模式是“按缺省规则”，专业模式是“开发者决定”或“开发者确认了建议”）、放在客户端的风险与服务器还做了哪些校验。
+2. **服务器 / 客户端边界**：逐个逻辑点写放在哪一端、谁定的（业余模式是“按缺省规则”，专业模式是“开发者决定”或“开发者确认了建议”）、放在客户端的风险与服务器还做了哪些校验。另附一张**配置表**（第 4F 步）：每张表两端共用 / 只给服务端 / 只给客户端，共用表里只给服务端的字段与理由。开房间联机（第 1B 步）的局内判定标“房主客户端”。
 3. **模块**：装了哪些（含连带装上的），每个一句话说它在本工程里管什么、通过的场景数；装上了哪些联动（`with`）；模块自带而需求没用到的客户端协议。来源：`roost.yaml` 的 `modules` 段、`"$ROOST" module verify` 的输出。
 4. **实体**：每种实体（Player、World、模块自带的 Room / Alliance 等）一节：谁创建、挂在哪个服务上、主 DAO 的顶层字段（字段名、来自哪个模块或手写、`persist` / `sync`）、组件与组件号、持久定时器类型。来源：`db/def/*.go`、`game/entities/`、`roost.yaml` 的 `entities` 与 `ids`。
 5. **服务**：先写玩家接入方式（第 1A 步的结论：嵌入 TCP 还是独立 Gate、谁定的、理由）。再把 `roost.yaml` 的 `services` 段逐个列：业务服务还是托管的框架服务（account、chat 等）、带了哪些 Mod（web、directory、heartbeat……）、对外的端口与入口（玩家 TCP、HTTP 路由）、哪些模块的逻辑跑在它上面、服务之间的 RPC / Saga。开发启动顺序（`make dev-run`）与依赖（Mongo / NATS / Redis / etcd）。
-6. **协议与错误码**：客户端请求、服务器推送各一张表（名字、号、谁处理、要点），错误码表（名字、号、什么时候出现）。来源：`protocol/def/`、`internal/errors/`、`roost.yaml` 的 `ids`。 这些协议与错误码的客户端代码在导出目录 `shared/protocol/`（`roost.yaml` 的 `client_export`）。要写明本轮 `shared/protocol/manifest.json` 的 `sources.protocol_def`、`sources.dao_sync` 两个哈希与 `generator` 版本，客户端据此判断要不要重新同步。
-7. **客户端对接**：客户端代码从导出目录 `shared/protocol/csharp/` 同步（`roost client sync --from <服务端工程> --to <客户端目录>`），不要手写或复制 PB 类型；本轮导出的 manifest 哈希见第 6 节。登录到进入的完整顺序（第 3A 步）；每个功能的调用顺序；要解码的自身视图字段及含义（哪些字段要配合服务器时间判断“今天”）；每个错误码的提示建议；请求键怎么生成、什么时候重发。客户端是 Unity 时，再加一小节“Unity 客户端接入”，内容按下面的要点写：
+6. **协议与错误码**：客户端请求、服务器推送各一张表（名字、号、谁处理、要点），错误码表（名字、号、什么时候出现）。来源：`protocol/def/`、`internal/errors/`、`roost.yaml` 的 `ids`。 这些协议与错误码的客户端代码在导出目录 `shared/protocol/`（`roost.yaml` 的 `client_export`）。要写明本轮 `shared/protocol/manifest.json` 的 `sources.protocol_def`、`sources.dao_sync` 两个哈希与 `generator` 版本，客户端据此判断要不要重新同步。导出了配置表的，再写 `shared/config/manifest.json` 的数据版本（`data_version_short`）与导出的表。
+7. **客户端对接**：客户端代码从导出目录 `shared/protocol/csharp/` 同步（`roost client sync --from <服务端工程> --to <客户端目录>`），不要手写或复制 PB 类型；本轮导出的 manifest 哈希见第 6 节。配置表从 `shared/config/` 同步（`--config-code-to <C# 目录> --config-data-to <数据目录>`），`ConfigTables.Load` 读取，不再保留客户端自己的一份 CSV。开房间联机写第 1B 步的客户端流程与选用的 SDK。登录到进入的完整顺序（第 3A 步）；每个功能的调用顺序；要解码的自身视图字段及含义（哪些字段要配合服务器时间判断“今天”）；每个错误码的提示建议；请求键怎么生成、什么时候重发。客户端是 Unity 时，再加一小节“Unity 客户端接入”，内容按下面的要点写：
    - **两条路线，缺省托管**：
      - 托管：`GameClient` + `RoostClientDriver`。在常驻 GameObject 上挂 `RoostClientDriver`，`Attach(client)` 之后它每帧在主线程 Pump。网络在 C# 里，直接编译导出的协议代码，业务工程不需要原生插件，也不需要 C++ 构建环境。
      - 原生：`RoostNativeDriver` + `NativeGameClient`。只有要原生网络内核，或要与 C++ 客户端行为一致时才用，要按平台打原生包，见 roost-core 的 [client/unity/README](../../../../client/unity/README.md)。
@@ -746,6 +853,7 @@ go test -mod=mod ./...                                            # 其余生成
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。
 - 模块的 README 写的是模块自己的能力与边界；几个模块组合之后的行为（联动没有覆盖的那些）没有人替你验证过，要自己写场景。
 - 独占新服务的模块（alliance）与带 Saga 的模块只在新生成或结构相同的工程上验证过；已有工程的服务名、Mod 组合不同时先 `module plan` 看它要动什么。
-- **玩家接入只有 TCP**：嵌入在业务服务里，或经独立 Gate。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（web Mod）拿不到请求头、不做鉴权、缺省只绑回环地址，只适合管理面、内部调用或放在鉴权代理之后；需求要求玩家走 HTTP 业务协议（REST / WebSocket 等）的，按第 1 步的冲突格式提出。登录入口（portal）的 HTTP 端点只负责登录、选服和换票。
+- **玩家接入是 RS v2 帧，走 TCP 或 WebSocket**：嵌入在业务服务里，或经独立 Gate；WebSocket 只是接入层（第 1A 步末尾）。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（web Mod）拿不到请求头、不做鉴权、缺省只绑回环地址，只适合管理面、内部调用或放在鉴权代理之后；需求要求玩家走 HTTP 业务协议（REST）或 WebSocket 上的别的消息格式的，按第 1 步的冲突格式提出。登录入口（portal）的 HTTP 端点只负责登录、选服、换票与换游戏账号 token，大厅 lobby 的只负责建房与加入。
+- **lobby + relay 只做过进程内集成与本机起服**（第 1B 步）：多进程演练（kill -9、两个 relay 实例）、跨机、容量没有验证；relay 进程崩溃时房间丢失；Web 端只在内置浏览器面板演练过，C# SDK 没有在 Unity 里跑过。
 - **独立 Gate 没有跨机验证**：只做过单机真实进程演练（account、game、Gate 各一个进程，真实依赖），没有跨机、跨机房的验证；多机部署前要自己补。
 - 登录链路的单机真实入口为 `scripts/test-demo-login.sh`：game-demo 原有场景之后，casual + naming 阶段验证双 account、双 game sid、双 Gate、真实命名与购买回执、game / Gate 重启后重连和服务器时间推送。`DEMO_LOGIN_MODULES_ONLY=1` 只跑模块阶段；跨机与其它配方玩法不在这个验收范围内，见[登录线证据](../../../maintenance/evidence/v147-login-20261114.md)。
