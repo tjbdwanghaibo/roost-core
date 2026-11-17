@@ -36,8 +36,9 @@
 | [matchroom](matchroom/README.md) | MatchID 幂等移交到 Room，固定准入名单、掉线保座 | room、Mongo | RoomDao.Matchroom、持久房号映射 | 12 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接；断线订阅（连接关了房间自己把席位标成断线，manager `NewRoomPresence`）；在线状态不落库，重启后全部断线、成员重连恢复；玩法命令的身份围栏 `Room().Authorize`（代际 + 连接 + 在线） | 无（安装时代办玩家 TCP 接入与 manager Mod；鉴权与启用配置仍归工程） | `RoomDao`（只落库；在线标记 `Online` 不落库；成员读 PB 快照） | 34 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
-| [login](login/README.md) | 登录鉴权：玩家 TCP 握手把票据交给 account 校验——进服票据（`enter:<票据>`，account 的 `EnterServer` 按账号与服解析玩家号、没有映射就新建，不带名字）或角色会话令牌（`session:<player_id>:<token>`）；把承载服 / 原服 / 映射创建时间 / 绑定代数 / 换服 / 握手方式 / 新建标记写进会话；会话激活后的告知登记点 `login.OnSessionActive`（有界的后台执行，只是告知；后台执行由 manager `NewLoginNotices` 启停）；区服入口上报（manager `NewLoginPresence`：写了 `login.presence.addr` 就定期把本服地址与在线连接数报给 account 的带过期登记表，portal 的清单从那里取地址）；接管鉴权桩与 account 的 collaborators（开发令牌登录 `login.dev_token`、Redis 玩家号计数器；渠道入口 `login_channels.go` 缺省全拒）；带运维命令 `cmd/accountctl`（`upsert-server` / `show-server` / `list-servers`，`make dev-run` 自动登记本机的服） | 无（要求业务服务 `uses: [account]`；玩家 TCP 接入安装时代办，监听要自己 `roost config enable player-tcp`） | 无 | 37 |
-| [portal](portal/README.md) | 登录入口（manifest）：四个 HTTP 端点代客户端调只在内部总线上的 account——`POST /portal/login` 渠道登录拿账号票据（带 `game` 时一并给游戏账号 token），`/portal/servers` 凭票拿服务清单与区服清单（地址、负载、本账号在各服有没有角色，可按 `service` 筛选）与推荐的服，`/portal/enter` 换握手票据 `enter:<进服票据>` 与承载服的地址，`/portal/game-token` 凭票换某个游戏的游戏账号 token（开房间类游戏的大厅凭它认人）。**入口挂在托管 account 服务的进程上**（清单的 `runtime.framework: account`），game 不因此多出 HTTP 监听；入口不持有任何密钥（票据全部由 account 签发与校验）、不建角不选角，只守“账号只取自 account 校验过的账号票据”；区服目录 `Directory`（缺省是静态配置 `portal.servers` 叠上 account 的带过期区服入口登记表——game 经 login 的 manager 定期上报、停报到期自动消失）与推荐规则在归工程所有的 `portal_rules.go` | login（web Mod 安装时代办，加在托管 account 的服务上） | 无 | 15 |
+| [account_auth](account_auth/README.md) | account 的登录协作者：替换托管 account 生成的拒绝桩 `services/account/collaborators.go`——开发令牌登录 `login.dev_token`、渠道入口 `login_channels.go`（缺省全拒）、Redis 玩家号计数器、名字规则与指标；只写托管 account 的包、不要业务服务，**不带 game 的工程（`-template lobby`）也能装**（2026-11-17 从 login 拆出） | 无（工程要托管 account：有业务服务时安装器声明，没有时 `-template lobby` 自带） | 无 | 6 |
+| [login](login/README.md) | 登录鉴权：玩家 TCP 握手把票据交给 account 校验——进服票据（`enter:<票据>`，account 的 `EnterServer` 按账号与服解析玩家号、没有映射就新建，不带名字）或角色会话令牌（`session:<player_id>:<token>`）；把承载服 / 原服 / 映射创建时间 / 绑定代数 / 换服 / 握手方式 / 新建标记写进会话；会话激活后的告知登记点 `login.OnSessionActive`（有界的后台执行，只是告知；后台执行由 manager `NewLoginNotices` 启停）；区服入口上报（manager `NewLoginPresence`：写了 `login.presence.addr` 就定期把本服地址与在线连接数报给 account 的带过期登记表，portal 的清单从那里取地址）；接管鉴权桩（account 的 collaborators 在依赖的 account_auth 里）；带运维命令 `cmd/accountctl`（`upsert-server` / `show-server` / `list-servers`，`make dev-run` 自动登记本机的服） | account_auth（要求业务服务 `uses: [account]`；玩家 TCP 接入安装时代办，监听要自己 `roost config enable player-tcp`） | 无 | 32 |
+| [portal](portal/README.md) | 登录入口（manifest）：四个 HTTP 端点代客户端调只在内部总线上的 account——`POST /portal/login` 渠道登录拿账号票据（带 `game` 时一并给游戏账号 token），`/portal/servers` 凭票拿服务清单与区服清单（地址、负载、本账号在各服有没有角色，可按 `service` 筛选）与推荐的服，`/portal/enter` 换握手票据 `enter:<进服票据>` 与承载服的地址，`/portal/game-token` 凭票换某个游戏的游戏账号 token（开房间类游戏的大厅凭它认人）。**入口挂在托管 account 服务的进程上**（清单的 `runtime.framework: account`），game 不因此多出 HTTP 监听；入口不持有任何密钥（票据全部由 account 签发与校验）、不建角不选角，只守“账号只取自 account 校验过的账号票据”；区服目录 `Directory`（缺省是静态配置 `portal.servers` 叠上 account 的带过期区服入口登记表——game 经 login 的 manager 定期上报、停报到期自动消失）与推荐规则在归工程所有的 `portal_rules.go`；不 import 任何 game 包，**不带 game 的工程（`-template lobby`）也能装**：那里区服清单为空、`/portal/enter` 答 account 的 `560104`，登录带 `game` 与 `/portal/game-token` 照常给 gt1 | account_auth（web Mod 安装时代办，加在托管 account 的服务上；握手要 login） | 无 | 15 |
 | [servertime](servertime/README.md) | 服务器时间：客户端拿到服务器的业务时间、当前业务日、前后两个业务日、本业务日起点与下一次每日重置的时刻（拉取 `ServertimeSync`，原样带回 `ClientTick`；推送 `ServertimeNow`）；给别的功能调的纯函数 `servertime.At(nowUnixMilli)` / `Now()`，与 `clock.BusinessDay` 同一份日历；`ServertimePushNow` 按能力名取玩家 TCP 传输；对外展示的时区名写在 `game/modules/servertime/servertime_zone.go` | 无（玩家 TCP 接入安装时代办） | 无 | 12 |
 | [rehome](rehome/README.md) | 单个玩家换服（改绑 game sid）：申请协议 `RehomeApply` 与服务端入口 `Move`；account 的发起 / 提交 / 中止，结论按它带回的当前绑定判定；源服从“离开中”的标记起在写闸门拒绝这名玩家新的请求，受理之后断开会话、等在途的请求执行完、复核检查、跑离开钩子，再交出实体（之后拒写），目标服首次进入时到达；可去的服与冷却写在 `game/modules/rehome/rehome_rules.go`；三个登记点（换服前检查、离开时、到达后）；给 saga 准入用的 `rehome.Binding`（这名玩家现在绑定在哪个服、是否正在换服）；受理之后的后台步骤在 manager `NewRehomeBackground` 里执行，停机时取消、按崩溃处理。game-demo 用的就是它 | 无（要求业务服务 `uses: [account]`） | `PlayerDao.Rehome`（只落库） | 50 |
 | [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 14 |
@@ -77,7 +78,8 @@
 | shop + rules / stamina + rules | 统一导出商品目录 / 体力规则，保持快照独立 | 各 2 |
 | profile + enter | 初次建档 1 级；不触发升级奖励，重进/冷加载不重置 | 4 |
 | attribute + enter | 按初始等级建立基础/最终属性，同事务回滚 | 2 |
-| portal + enter | 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手 → 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入，以及入口给的地址与进入时认的是同一个承载服（只有测试 `services/account/portal/portal_enter_test.go`，不加运行时代码） | 2 |
+| portal + login | 入口给的握手票据（`EnterTicketPrefix` + 进服票据）交给 login 真实的认证器核对：入口为了不带 game 也能装而没有 import login，守住两边各写一份的 `enter:` 前缀（只有测试 `services/account/portal/portal_login_test.go`） | 1 |
+| portal + enter（还要 login 在场，`with.enter.requires`） | 整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手 → 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入，以及入口给的地址与进入时认的是同一个承载服（只有测试 `services/account/portal/portal_enter_test.go`，不加运行时代码） | 2 |
 | login + enter | 进入前检查：会话记的承载服不是本服（或没有记）答 `login_elsewhere`，不加载也不创建 Player；用进服票据握手的会话先新建再进入（`EnterGame` 不代建，没建成答 `enter_need_create`）；会话激活之后推 `EnterStatus`，本服不该服务的会话推完断开（`game/modules/login/login_enter.go`） | 6 |
 | enter + profile | 角色名的规则在游戏服：新建请求（`EnterCreate`）的名字按档案模块的名字规则校验，不合规在建档之前被拒；没装 naming 时在新建的那笔事务里写进档案，装了 naming 时经它的唯一命名入口占名（`game/modules/login/enter_profile.go`） | 3 |
 | servertime + enter | 玩家每次进入游戏时把服务器此刻的业务时间推给他（`game/controllers/servertime_enter.go`）；推送不成只记日志，不让登录失败 | 3 |
@@ -91,9 +93,9 @@
 | notice + gm | 运维命令统一登记、操作者 / 备注校验与执行前后审计 | 4 |
 | terrain + monster | 关图清本图怪物；失败保留资源与事实供重试 | 2 |
 
-42 个模块、47 条带验证的联动；场景数与验收见[本轮修复记录](../docs/maintenance/evidence/module-fixes-20261112/README.md)。Scene / Terrain 控制器的启动时序已修复，并通过单机真实依赖与 TCP 接入验收。
+42 个模块、47 条带验证的联动（2026-11-12 那一轮的数；之后另加了模块，2026-11-17 加了 account_auth 与 portal + login 联动，以 `roost module list` 为准）；场景数与验收见[本轮修复记录](../docs/maintenance/evidence/module-fixes-20261112/README.md)。Scene / Terrain 控制器的启动时序已修复，并通过单机真实依赖与 TCP 接入验收。
 
-以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。再装 `portal`（连带 `login`），客户端就能从渠道身份经 HTTP 登录、拿区服清单与推荐、换进服票据，握手后由游戏服告知要不要先新建，新建（带角色名）之后进入游戏；入口在托管 account 的进程上监听。
+以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。再装 `login portal`（连带 `account_auth`），客户端就能从渠道身份经 HTTP 登录、拿区服清单与推荐、换进服票据，握手后由游戏服告知要不要先新建，新建（带角色名）之后进入游戏；入口在托管 account 的进程上监听。不带 game 的开房间工程（`-template lobby`）只装 `portal`（连带 `account_auth`）：客户端经 `/portal/login` 带 `game` 拿游戏账号 token 去大厅。
 
 谁在用这三个登录模块（2026-11-12）：**game-demo 模板**装的是 `login`、`portal`、`servertime`（`codegen/internal/roost/demo.go` 的 `demoModuleSteps`，排在 `enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox`、`skillbook`、`rehome`、`attribute`、`equipment`、`gm`、`purchase`、`team`、`alliance` 之后）。它不带自己的认证器与 account collaborators，只动模块留给工程的地方——渠道入口 `login_channels.go` 换成 demo 渠道、经 `registerCommand` 给 `cmd/accountctl` 多登记四个命令——并覆盖 enter 域的两个端点，让“加载 Player 之前先核对归属、接入驻留表”的规矩在 `EnterGame` 与 `EnterCreate` 上都成立（[demo 的说明](../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入)）。**两个配方（casual、turn-pvp）也已接入** login / portal / servertime；采用模块认证器与先新建再进入的链路，开发配置包含本机登录令牌和区服地址。
 
@@ -205,7 +207,7 @@ services:
 
 只对 manager 登记点在 `game/managers/managers.go` 的工程生效（v1.47.0 起新生成的工程）；业务把 `Managers()` 改成不是 `return []app.IManager{...}` 的写法时安装器拒绝，并说明要自己加哪一行。现有使用者：login（`NewLoginNotices`、`NewLoginPresence`）、rehome（`NewRehomeBackground`）、room（`NewRoomPresence`）、cellworld（`NewCellWorldHost`），以及跑在属主服务里的 activity_world（`NewWorldActivityScan`，activity_world 服务）、activity_alliance（`NewAllianceActivityScan`，alliance 服务）。
 
-模块的玩家侧只安装到一个业务服务，依赖属于同一服务；模块也可声明自己独占的新业务服务（如 alliance）。跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
+模块的玩家侧只安装到一个业务服务，依赖属于同一服务；工程没有运行 Nest 的业务服务（`-template lobby`）时，只有不要业务服务的模块能装（`ModuleSpec.needsBusinessService` 为假：不带实体、状态、协议、manager、saga、新服务、玩家接入，没有 `game/` 下的文件，入口若有必须在托管服务上——account_auth、portal），记录的 `service` 为空，`needs.uses` 的意思变成“工程必须已经托管这个框架服务”；这样的记录不属于任何业务服务，工程后来有了业务服务、装了依赖它的模块也照样成立。模块也可声明自己独占的新业务服务（如 alliance）。跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
 ### 清单
 
@@ -245,6 +247,7 @@ next:                        # 安装后提示：安装器不代办、要工程�
 with:                        # 与别的模块的联动（见下），文件在 with/<另一个模块>/ 下
   enter:
     summary: 一句话说明这组联动做什么
+    requires: []             # 这组联动另外还要装着的模块（三方联动，例如 portal 的 with.enter 要 login）；最后装上的那个装上时写
     verify:                  # 可以不写
       packages: [./game/modules/chat]
       run: ^TestWithChatEnter      # 必须以 ^TestWith<本模块> 开头

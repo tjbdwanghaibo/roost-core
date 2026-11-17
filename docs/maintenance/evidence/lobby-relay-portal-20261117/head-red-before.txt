@@ -1,0 +1,21 @@
+# HEAD 187e4a24（改动之前）上已经是红的两处，原文照抄
+
+## roost module verify login（旧生成器的 -template game + module add login portal 工程）
+FAIL module login: 38 passed (want 37), 0 skipped
+ok  	example.com/login/game/managers	3.434s
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+exit 1
+  原因：1e73fc0d 给 cmd/accountctl 加了 TestLoginAccountctlWritesTheServerService，login 的 verify.pass 还是 37。
+
+## GOWORK=off go test -count=1 -run 'TestModulePortalInstallsOnTheHostedAccountService|TestModuleLoginReplacesTheAuthenticatorAndAccountStubs' ./codegen/internal/roost/（在 HEAD 的 worktree 里）
+--- FAIL: TestModulePortalInstallsOnTheHostedAccountService (4.68s)
+    module_portal_test.go:103: cmd/accountctl/main.go was not rendered for this project:
+--- FAIL: TestModuleLoginReplacesTheAuthenticatorAndAccountStubs (15.99s)
+    module_test.go:1684: verify: module verification failed
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	16.595s
+FAIL
+  原因：前者把 accountctl 里新加的 Go 复合字面量 {{Name: gameService, …}} 当成没渲染的模板占位（strings.Contains(command, "{{")）；后者是上面的 37 / 38。

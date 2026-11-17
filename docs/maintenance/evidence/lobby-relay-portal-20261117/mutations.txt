@@ -1,0 +1,50 @@
+== M1 lobby 工程退回“必须有 Nest 业务服务”（撤掉没有业务服务时的分支）
+   file codegen/internal/roost/module_install.go: 'if requestedService != "" || projectHasNestService(manifest) {' -> 'if true {'
+   go test -run ^TestModulePortalInstallsOnALobbyProjectWithoutGame$ ./codegen/internal/roost/ -> exit 1, RED (as required)
+   | --- FAIL: TestModulePortalInstallsOnALobbyProjectWithoutGame (0.47s)
+   |     module_portal_test.go:184: roost module plan portal --json: roost module add needs a service with the nest mod; run: roost add mod nest -service <service>
+   | FAIL
+   | FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1.083s
+   | FAIL
+== M2 portal 不再登记 /portal/game-token 路由（不带 game 的工程拿不到 gt1 的第二条路）
+   file modules/portal/files/services/account/portal/portal.go.tmpl: '{PathGameToken, portal.handleGameToken},' -> ''
+   go test -run ^TestModulePortalInstallsOnALobbyProjectWithoutGame$ ./codegen/internal/roost/ -> exit 1, RED (as required)
+   | --- FAIL: TestModulePortalInstallsOnALobbyProjectWithoutGame (10.16s)
+   |     module_portal_test.go:212: verify: module verification failed
+   |             portal_test.go:1550: /portal/game-token: 404 404 page not found
+   |             portal_test.go:1601: a game account does not serve: 404 404 page not found
+   | FAIL
+   | FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	10.772s
+== M3 portal 改回依赖 login（不带 game 的工程装不上 portal）
+   file modules/portal/module.yaml: 'requires: [account_auth]' -> 'requires: [login]'
+   go test -run ^TestModulePortalInstallsOnALobbyProjectWithoutGame$ ./codegen/internal/roost/ -> exit 1, RED (as required)
+   | --- FAIL: TestModulePortalInstallsOnALobbyProjectWithoutGame (0.41s)
+   |     module_portal_test.go:184: roost module plan portal --json: module login needs a business service with the nest mod and this project has none (only hosted framework services): roost module add needs a service with the nest mod; run: roost add mod nest -service <service>
+   | FAIL
+   | FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1.007s
+   | FAIL
+== M4 三方联动不看 with.requires（game 工程先装 enter、没有 login 时写出要 login 的 portal+enter 联动）
+   file codegen/internal/roost/module_install.go: 'needed := append([]string{owner, other}, spec.With[other].Requires...)' -> 'needed := []string{owner, other}'
+   go test -run ^TestModulePortalInstallsOnTheHostedAccountService$ ./codegen/internal/roost/ -> exit 1, RED (as required)
+   | --- FAIL: TestModulePortalInstallsOnTheHostedAccountService (4.15s)
+   |     module_portal_test.go:116: installing enter without login wrote the portal+enter glue that needs login:
+   | FAIL
+   | FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	4.766s
+   | FAIL
+== M5 login 不再依赖 account_auth（game 工程装 login 时 account 的协作者不再被替换）
+   file modules/login/module.yaml: 'requires: [account_auth]' -> 'requires: []'
+   go test -run ^TestModuleLoginReplacesTheAuthenticatorAndAccountStubs$ ./codegen/internal/roost/ -> exit 1, RED (as required)
+   | --- FAIL: TestModuleLoginReplacesTheAuthenticatorAndAccountStubs (0.52s)
+   |     module_test.go:1590: plan: [{Name:login Summary:登录鉴权：玩家 TCP 握手把票据交给 account 校验——进服票据（enter:<票据>，account 按账号与服解析玩家号、没有就新建映射）或角色会话令牌（session:<player_id>:<token>），把承载服、原服、角色创建时间、绑定代数、换服、握手方式与新建标记写进会话；会话激活后的告知登记点（握手成功之后让别的功能对这条会话说一句话）；接管生成的鉴权桩（account 的 collaborators——开发令牌登录、Redis 玩家号计数器、渠道入口——在它依赖的 account_auth 模块里）；带运维命令 cmd/accountctl（登记、查看、列出区服） Status:install Requires:[] IDs:map[errcode:map[l
+   | FAIL
+   | FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1.139s
+   | FAIL
+== M6 入口的握手票据前缀与 login 的认证器不一致（game 工程的 portal+login 联动场景）
+   file modules/portal/files/services/account/portal/portal.go.tmpl: 'const EnterTicketPrefix = "enter:"' -> 'const EnterTicketPrefix = "enter-"'
+   go test -run ^TestModulePortalInstallsOnTheHostedAccountService$ ./codegen/internal/roost/ -> exit 1, RED (as required)
+   | --- FAIL: TestModulePortalInstallsOnTheHostedAccountService (30.53s)
+   |     module_portal_test.go:132: verify: module verification failed
+   |             portal_test.go:1426: the handshake ticket "enter-et1.1800001800.1001.ZGV2OmFsaWNl.QbQFD8Z7zA9NBzkSt9RMefEQ8svIwPW75HmlHA3vtdE" is not enter:<ticket>
+   |             portal_test.go:1606: enter server 1000: 200 {"ok":true,"ticket":"enter-et1.1800001800.1000.ZGV2OmFsaWNl.24ehzKA3N8_fgilkDS_h5qGju3FAmfWRQFNUhbfPJn8","server_id":1000,"serving_server_id":1000,"expires_at":1800001800,"addr":"","addr_source":"none"}
+   |             portal_enter_test.go:142: enter server 1001: 200 {"ok":true,"ticket":"enter-et1.1800001800.1001.ZGV2OmFsaWNl.QbQFD8Z7zA9NBzkSt9RMefEQ8svIwPW75HmlHA3vtdE","server_id":1001,"serving_server_id":1001,"expires_at":1800001800,"addr":"127.0.0.1:7001","addr_source":"directory"}
+   |             portal_enter_test.go:215: enter server 1001: 200 {"ok":true,"ticket":"enter-et1.1800001800.1001.ZGV2OmFsaWNl.QbQFD8Z7zA9NBzkSt9RMefEQ8svIwPW75HmlHA3vtdE","server_id":1001,"serving_server_id":1001,"expires_at":1800001800,"addr":"127.0.0.1:7001","addr_source":"directory"}

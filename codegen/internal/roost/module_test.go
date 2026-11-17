@@ -863,12 +863,20 @@ func moduleProject(t *testing.T, name string) (root string, roost func(args ...s
 // frameworks 是一开始就托管的框架服务（-framework；nil 是缺省的一个都不托管）。
 func moduleProjectWith(t *testing.T, name string, mods, frameworks []string) (root string, roost func(args ...string) string, try func(args ...string) (string, error)) {
 	t.Helper()
+	return moduleProjectFrom(t, NewOptions{Name: name, Mods: mods, Template: "game", Frameworks: frameworks})
+}
+
+// moduleProjectFrom 是 moduleProject，工程按 options 生成（Module 与 Out 由这里填；例如 -template lobby）。
+func moduleProjectFrom(t *testing.T, options NewOptions) (root string, roost func(args ...string) string, try func(args ...string) (string, error)) {
+	t.Helper()
 	repo, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
+	name := options.Name
 	root = filepath.Join(t.TempDir(), name)
-	if _, _, err := NewProject(NewOptions{Name: name, Module: "example.com/studio/" + name, Out: root, Mods: mods, Template: "game", Frameworks: frameworks}); err != nil {
+	options.Module, options.Out = "example.com/studio/"+name, root
+	if _, _, err := NewProject(options); err != nil {
 		t.Fatal(err)
 	}
 	modPath := filepath.Join(root, "go.mod")
@@ -1545,7 +1553,8 @@ func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
 	}
 }
 
-// login 模块接管两种生成桩：玩家 TCP 的鉴权桩与 account 的 collaborators。两个都只在没改过时替换，
+// login 模块接管玩家 TCP 的鉴权桩，它依赖的 account_auth 模块接管 account 的 collaborators（2026-11-17 拆出来，
+// 不带 game 的工程也能单独装 account_auth）。装 login 时两个一起装：两个桩都只在没改过时替换，
 // 任何一个被业务改过就拒绝安装、工程不变；鉴权桩还没生成（工程没有玩家 TCP 接入）时由前置命令先生成再替换，
 // plan 照样写明。替换之后 doctor 不再把它们当拒绝桩，config enable player-tcp 放行。
 func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
@@ -1564,10 +1573,14 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 		if err := json.Unmarshal([]byte(roost("module", "plan", "login", "--json")), &plan); err != nil {
 			t.Fatal(err)
 		}
-		if len(plan.Modules) != 1 {
-			t.Fatalf("plan: %+v", plan.Modules)
+		if len(plan.Modules) != 2 || plan.Modules[0].Name != "account_auth" || plan.Modules[1].Name != "login" {
+			t.Fatalf("plan: %+v; want account_auth then login", plan.Modules)
 		}
 		return plan
+	}
+	// replaces 是计划里两个模块各自替换的桩：account_auth 的在前，login 的在后，用 | 隔开。
+	replaces := func(plan ModulePlan) string {
+		return strings.Join(plan.Modules[0].Replaces, ",") + "|" + strings.Join(plan.Modules[1].Replaces, ",")
 	}
 
 	// 全新工程还没有玩家 TCP 接入：鉴权桩不存在，前置命令会生成它。plan 列出两个要替换的桩。
@@ -1578,8 +1591,8 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 	if !contains(plan.Prerequisites, "roost add transport tcp") {
 		t.Fatalf("plan does not add the TCP transport first: %v", plan.Prerequisites)
 	}
-	if got := strings.Join(plan.Modules[0].Replaces, ","); got != authRel+","+collaboratorsRel {
-		t.Fatalf("plan replaces %q, want the authenticator stub (to be generated) and account's collaborators", got)
+	if got := replaces(plan); got != collaboratorsRel+"|"+authRel {
+		t.Fatalf("plan replaces %q, want account's collaborators (account_auth) and the authenticator stub to be generated (login)", got)
 	}
 
 	// 接入已经在、桩已经落地的工程：plan 仍然列出两个。
@@ -1599,7 +1612,7 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 	if !bytes.Contains(collaboratorsStub, []byte(collaboratorUnconfiguredMarker)) {
 		t.Fatalf("the generated account collaborators are not the refusing stub:\n%s", collaboratorsStub)
 	}
-	if got := strings.Join(planned().Modules[0].Replaces, ","); got != authRel+","+collaboratorsRel {
+	if got := replaces(planned()); got != collaboratorsRel+"|"+authRel {
 		t.Fatalf("plan replaces %q on a project that has both stubs", got)
 	}
 
@@ -1608,7 +1621,7 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 	if err := os.Remove(authPath); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(planned().Modules[0].Replaces, ","); got != collaboratorsRel {
+	if got := replaces(planned()); got != collaboratorsRel+"|" {
 		t.Fatalf("plan replaces %q although %s does not exist and no prerequisite creates it", got, authRel)
 	}
 	if err := os.WriteFile(authPath, authStub, 0o644); err != nil {
@@ -1680,7 +1693,8 @@ func TestModuleLoginReplacesTheAuthenticatorAndAccountStubs(t *testing.T) {
 		}
 	}
 	report, err := VerifyModules(context.Background(), root, nil, nil)
-	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 37 {
+	if err != nil || len(report.Modules) != 2 || report.Modules[0].Name != "account_auth" || report.Modules[0].Passed != 6 ||
+		report.Modules[1].Name != "login" || report.Modules[1].Passed != 32 {
 		t.Fatalf("verify: %v\n%+v", err, report)
 	}
 	// 再装一次没有变化：这两个文件现在是模块自己的。
@@ -1803,6 +1817,9 @@ func TestModuleWithValidationNamesWhatIsWrong(t *testing.T) {
 		"same path as own file":   {moduleFixtureYAML + withYAML, map[string]string{"game/modules/x/x.go": "package x\n"}, otherFiles, "both ship game/modules/x/x.go"},
 		"glue in game/modules/":   {moduleFixtureYAML + withYAML, map[string]string{"game/modules/x_other.go": "package x\n"}, otherFiles, "with/other: game/modules/x_other.go sits directly in game/modules/"},
 		"same path as other's":    {moduleFixtureYAML + withYAML, map[string]string{"game/modules/other/other.go": "package other\n"}, otherFiles, "both ship game/modules/other/other.go"},
+		"requires itself":         {moduleFixtureYAML + strings.Replace(withYAML, "    summary: glue", "    requires: [demo]\n    summary: glue", 1), glue, otherFiles, `with.other: requires "demo" must be a third module`},
+		"requires the other":      {moduleFixtureYAML + strings.Replace(withYAML, "    summary: glue", "    requires: [other]\n    summary: glue", 1), glue, otherFiles, `with.other: requires "other" must be a third module`},
+		"requires unknown module": {moduleFixtureYAML + strings.Replace(withYAML, "    summary: glue", "    requires: [ghost]\n    summary: glue", 1), glue, otherFiles, `with.other requires unknown module "ghost"`},
 	} {
 		_, err := loadModuleCatalogFS(build(test.yaml, test.glue, test.otherFiles))
 		if err == nil || !strings.Contains(err.Error(), test.want) {

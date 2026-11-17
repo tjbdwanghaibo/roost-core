@@ -1,0 +1,267 @@
+// Command drillclient 是 -template lobby + roost module add portal 工程的真实进程演练客户端：
+// 两个账号经 portal 的 /portal/login（带 game）拿 gt1 → A 建房、B 加入 → 两人连 relay、游戏与房间通道各收发一帧
+// → A 主动转交给 B、B 回 HostReady、lobby 的房主变成 B → B 踢 A：A 再 join 答 kicked、拿旧令牌连 relay 被拒。
+// 每一步打印 STEP / OK / FAIL；任何一步不符就以非零退出。
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/relay"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+)
+
+var (
+	portalURL = flag.String("portal", "http://127.0.0.1:19380", "account 进程的 web.addr（portal 的四个端点）")
+	lobbyURL  = flag.String("lobby", "http://127.0.0.1:19381", "lobby.listen")
+	game      = flag.String("game", "lrportal", "游戏名（account.games / lobby.games）")
+	devToken  = flag.String("dev-token", "dev-lrportal-drill", "config.account.yaml 的 login.dev_token")
+	run       = flag.String("run", "1", "账号名后缀：同一个环境重跑时换一个，避免撞上一次的被踢名单")
+)
+
+func fail(format string, args ...any) {
+	fmt.Printf("FAIL "+format+"\n", args...)
+	os.Exit(1)
+}
+
+func step(format string, args ...any) { fmt.Printf("STEP "+format+"\n", args...) }
+func ok(format string, args ...any)   { fmt.Printf("OK   "+format+"\n", args...) }
+
+// post 调 portal 的一个端点，返回 HTTP 状态与解码后的 JSON。
+func post(path string, body any) (int, map[string]any) {
+	raw, _ := json.Marshal(body)
+	resp, err := http.Post(*portalURL+path, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		fail("POST %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		fail("POST %s: %d %s", path, resp.StatusCode, data)
+	}
+	return resp.StatusCode, out
+}
+
+// redact 把令牌、票据只留前缀，证据里不出现完整的凭据。
+func redact(v any) string {
+	s, _ := v.(string)
+	if len(s) > 12 {
+		return s[:12] + "…"
+	}
+	return s
+}
+
+func login(openID string) (accountTicket, gt1 string) {
+	status, body := post("/portal/login", map[string]any{"channel": "dev", "open_id": openID, "credential": *devToken, "game": *game})
+	if status != 200 || body["ok"] != true || body["game_token"] == nil {
+		fail("/portal/login %s with game: %d %v", openID, status, body)
+	}
+	ok("/portal/login %s game=%s -> 200 account_ticket=%s game_token=%s game_token_expires_at=%v", openID, *game, redact(body["account_ticket"]), redact(body["game_token"]), body["game_token_expires_at"])
+	return body["account_ticket"].(string), body["game_token"].(string)
+}
+
+type events struct {
+	game, room     chan relay.Frame
+	joined         chan relay.Member
+	youAreHost     chan relay.YouAreHost
+	hostChanged    chan relay.HostEvent
+	youAreMember   chan uint64
+	disconnected   chan relay.Disconnect
+	memberLeftSeen chan relay.Member
+}
+
+func newClient(lobby *relay.Lobby) (*relay.Client, *events) {
+	ev := &events{
+		game: make(chan relay.Frame, 8), room: make(chan relay.Frame, 8), joined: make(chan relay.Member, 8),
+		youAreHost: make(chan relay.YouAreHost, 2), hostChanged: make(chan relay.HostEvent, 4), youAreMember: make(chan uint64, 4),
+		disconnected: make(chan relay.Disconnect, 4), memberLeftSeen: make(chan relay.Member, 8),
+	}
+	client := relay.NewClient(lobby, relay.Options{Game: *game})
+	client.OnGame(func(f relay.Frame) { ev.game <- f })
+	client.OnRoom(func(f relay.Frame) { ev.room <- f })
+	client.OnMemberJoined(func(m relay.Member) { ev.joined <- m })
+	client.OnMemberLeft(func(m relay.Member) { ev.memberLeftSeen <- m })
+	client.OnYouAreHost(func(e relay.YouAreHost) { ev.youAreHost <- e })
+	client.OnHostChanged(func(e relay.HostEvent) { ev.hostChanged <- e })
+	client.OnYouAreMember(func(epoch uint64) { ev.youAreMember <- epoch })
+	client.OnDisconnected(func(d relay.Disconnect) { ev.disconnected <- d })
+	return client, ev
+}
+
+func wait[T any](what string, ch <-chan T) T {
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(10 * time.Second):
+		fail("timed out waiting for %s", what)
+	}
+	var zero T
+	return zero
+}
+
+func main() {
+	flag.Parse()
+	ctx := context.Background()
+	alice, bob := "alice"+*run, "bob"+*run
+
+	step("1. 两个账号经 /portal/login 带 game 拿 gt1；B 另经 /portal/game-token 再换一张")
+	_, gtA := login(alice)
+	ticketB, _ := login(bob)
+	status, body := post("/portal/game-token", map[string]any{"account_ticket": ticketB, "game": *game})
+	if status != 200 || body["game"] != *game || body["game_token"] == nil {
+		fail("/portal/game-token: %d %v", status, body)
+	}
+	gtB := body["game_token"].(string)
+	ok("/portal/game-token %s -> 200 game=%v game_token=%s expires_at=%v", bob, body["game"], redact(gtB), body["expires_at"])
+	step("1b. 不带 game 的工程里与 game 有关的两个端点：区服清单为空，进服带 account 的码拒绝")
+	status, body = post("/portal/servers", map[string]any{"account_ticket": ticketB})
+	if servers, _ := body["servers"].([]any); status != 200 || len(servers) != 0 || body["recommended_server_id"] != float64(0) {
+		fail("/portal/servers: %d %v", status, body)
+	}
+	ok("/portal/servers -> 200 servers=[] recommended_server_id=0 services=%v", body["services"])
+	status, body = post("/portal/enter", map[string]any{"account_ticket": ticketB, "server_id": 1000})
+	if status == 200 {
+		fail("/portal/enter on a project without game servers answered 200: %v", body)
+	}
+	ok("/portal/enter server_id=1000 -> %d %v", status, body)
+
+	step("2. A 建房，B 加入（lobby 的 HTTP，Authorization: Bearer gt1）")
+	lobbyA := relay.NewLobby(*lobbyURL, relay.StaticGameToken(gtA), nil)
+	lobbyB := relay.NewLobby(*lobbyURL, relay.StaticGameToken(gtB), nil)
+	created, err := lobbyA.CreateRoom(ctx, relay.CreateRoomRequest{Game: *game, Mode: "duel"})
+	if err != nil {
+		fail("A create room: %v", err)
+	}
+	ok("A POST /rooms -> room=%s host=%s relay_addr=%s token=%s", created.Room.ID, created.Room.Host, created.RelayAddr, redact(created.Token))
+	clientA, evA := newClient(lobbyA)
+	welcomeA, err := clientA.Connect(ctx, created)
+	if err != nil || !welcomeA.Host {
+		fail("A connect relay: %+v %v", welcomeA, err)
+	}
+	ok("A 连上 relay：slot=%d host=%v", welcomeA.Slot, welcomeA.Host)
+	joined, err := lobbyB.JoinRoom(ctx, created.Room.ID, relay.JoinRoomRequest{Game: *game})
+	if err != nil {
+		fail("B join room: %v", err)
+	}
+	ok("B POST /rooms/%s/join -> members=%d relay_addr=%s", joined.Room.ID, joined.Room.Members, joined.RelayAddr)
+	clientB, evB := newClient(lobbyB)
+	welcomeB, err := clientB.Connect(ctx, joined)
+	if err != nil || welcomeB.Host || welcomeB.HostSlot != welcomeA.Slot {
+		fail("B connect relay: %+v %v", welcomeB, err)
+	}
+	ok("B 连上 relay：slot=%d host=%v host_slot=%d", welcomeB.Slot, welcomeB.Host, welcomeB.HostSlot)
+	m := wait("A sees B joined", evA.joined)
+	ok("A 收到 MemberJoined slot=%d account=%s", m.Slot, m.Account)
+
+	step("3. 游戏通道与房间通道各收发一帧")
+	if err := clientB.SendGame(relay.All, 101, []byte("b-to-host")); err != nil {
+		fail("B send game: %v", err)
+	}
+	f := wait("A game frame", evA.game)
+	if f.Slot != welcomeB.Slot || string(f.Payload) != "b-to-host" || f.MsgID != 101 {
+		fail("A game frame = %+v", f)
+	}
+	ok("游戏通道 B->房主：A 收到 slot=%d msg=%d payload=%q", f.Slot, f.MsgID, f.Payload)
+	if err := clientA.SendGame(welcomeB.Slot, 102, []byte("host-to-b")); err != nil {
+		fail("A send game: %v", err)
+	}
+	f = wait("B game frame", evB.game)
+	if f.Slot != welcomeA.Slot || string(f.Payload) != "host-to-b" {
+		fail("B game frame = %+v", f)
+	}
+	ok("游戏通道 房主->B：B 收到 slot=%d msg=%d payload=%q", f.Slot, f.MsgID, f.Payload)
+	if err := clientA.SendRoom(relay.All, 7, []byte("chat-from-a")); err != nil {
+		fail("A send room: %v", err)
+	}
+	f = wait("B room frame", evB.room)
+	if f.Slot != welcomeA.Slot || string(f.Payload) != "chat-from-a" {
+		fail("B room frame = %+v", f)
+	}
+	ok("房间通道 A->全体：B 收到 slot=%d msg=%d payload=%q", f.Slot, f.MsgID, f.Payload)
+	if err := clientB.SendRoom(welcomeA.Slot, 8, []byte("chat-from-b")); err != nil {
+		fail("B send room: %v", err)
+	}
+	f = wait("A room frame", evA.room)
+	if f.Slot != welcomeB.Slot || string(f.Payload) != "chat-from-b" {
+		fail("A room frame = %+v", f)
+	}
+	ok("房间通道 B->A：A 收到 slot=%d msg=%d payload=%q", f.Slot, f.MsgID, f.Payload)
+
+	step("4. A 主动转交给 B，B 回 HostReady，lobby 的房主变成 B")
+	if err := clientA.Transfer(welcomeB.Slot, []byte("handoff-state")); err != nil {
+		fail("A transfer: %v", err)
+	}
+	yah := wait("B YouAreHost", evB.youAreHost)
+	if yah.Source != wire.RelayStateHandoff || string(yah.State) != "handoff-state" {
+		fail("B YouAreHost = %+v", yah)
+	}
+	ok("B 收到 YouAreHost epoch=%d source=handoff state=%q members=%d", yah.Epoch, yah.State, len(yah.Members))
+	if err := clientB.HostReady(yah.Epoch); err != nil {
+		fail("B HostReady: %v", err)
+	}
+	changedA := wait("A HostChanged", evA.hostChanged)
+	changedB := wait("B HostChanged", evB.hostChanged)
+	if changedA.HostSlot != welcomeB.Slot || changedB.HostSlot != welcomeB.Slot {
+		fail("HostChanged: A %+v, B %+v", changedA, changedB)
+	}
+	ok("A、B 都收到 HostChanged host_slot=%d account=%s epoch=%d；B Role=%+v A Role=%+v", changedB.HostSlot, changedB.Account, changedB.Epoch, clientB.Role(), clientA.Role())
+	var lobbyHost string
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		rooms, err := lobbyB.ListRooms(ctx, *game, "duel", 50)
+		if err != nil {
+			fail("list rooms: %v", err)
+		}
+		for _, room := range rooms {
+			if room.ID == created.Room.ID {
+				lobbyHost = room.Host
+				if room.Host == changedB.Account {
+					ok("lobby GET /rooms：room=%s host=%s host_epoch=%d（原房主 %s）", room.ID, room.Host, room.HostEpoch, created.Room.Host)
+					goto hostDone
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	fail("lobby host is %q, want %q", lobbyHost, changedB.Account)
+hostDone:
+
+	step("5. B（新房主）踢 A：A 再 join 答 kicked，拿旧令牌连 relay 被拒")
+	if err := clientB.Kick(welcomeA.Slot); err != nil {
+		fail("B kick A: %v", err)
+	}
+	d := wait("A disconnected", evA.disconnected)
+	var closed *relay.ClosedError
+	if !errors.As(d.Err, &closed) && d.Reason != wire.RelayReasonKicked {
+		fail("A disconnect = %+v", d)
+	}
+	ok("A 被断开：reason=%s err=%v", d.Reason, d.Err)
+	left := wait("B sees A left", evB.memberLeftSeen)
+	ok("B 收到 MemberLeft slot=%d reason=%s", left.Slot, left.Reason)
+	time.Sleep(500 * time.Millisecond) // relay 经 NATS 报给 lobby 的 member_left{kicked}
+	if _, err := lobbyA.JoinRoom(ctx, created.Room.ID, relay.JoinRoomRequest{Game: *game}); !errors.Is(err, relay.ErrKicked) {
+		fail("A join again: err = %v, want kicked", err)
+	} else {
+		ok("A 再 join -> %v", err)
+	}
+	stale, _ := newClient(lobbyA)
+	if _, err := stale.Connect(ctx, created); err == nil {
+		fail("A connected to relay with the old token after being kicked")
+	} else if errors.As(err, &closed) {
+		ok("A 拿旧令牌连 relay -> 被拒：%v（reason=%s）", err, closed.Reason)
+	} else {
+		ok("A 拿旧令牌连 relay -> 被拒：%v", err)
+	}
+	_ = clientB.Close()
+	fmt.Println("DONE all steps passed")
+}

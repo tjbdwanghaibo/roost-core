@@ -102,7 +102,8 @@ func moduleRuntimeOrder(m Manifest, service string) ([]string, error) {
 			return nil
 		}
 		module, ok := m.Modules[name]
-		if !ok || module.Service != recorded {
+		// 记录的 service 为空的模块装在没有业务服务的工程里（account_auth、portal），不属于任何业务服务，谁都可以依赖它。
+		if !ok || (module.Service != recorded && module.Service != "") {
 			return fmt.Errorf("module %s is not installed for service %s", name, recorded)
 		}
 		if err := validateModuleRuntime(module.Runtime); err != nil {
@@ -188,7 +189,9 @@ func generateModuleServices(root string, m Manifest) error {
 		if module.Runtime == nil {
 			continue
 		}
-		if _, ok := m.Services[module.Service]; !ok || m.isFrameworkService(module.Service) {
+		// 记录的 service 为空：模块装在没有业务服务的工程里，入口只能在托管服务的进程里（runtime.framework）。
+		hostedOnly := module.Service == "" && module.Runtime.Framework != ""
+		if _, ok := m.Services[module.Service]; !hostedOnly && (!ok || m.isFrameworkService(module.Service)) {
 			return fmt.Errorf("module %s is recorded for %q, which is not a declared business service", name, module.Service)
 		}
 		if err := validateModuleRuntime(module.Runtime); err != nil {

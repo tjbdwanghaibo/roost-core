@@ -145,6 +145,10 @@ type ModuleDAOField struct {
 // ModuleWith 是模块与另一个模块的一组联动文件。
 type ModuleWith struct {
 	Summary string `yaml:"summary" json:"summary"`
+	// Requires 是这组联动另外还要装着的模块（除本模块与对方之外）：联动文件同时引用三个模块的包时写它，
+	// 例如 portal 与 enter 的整条链路场景还要 login 的认证器。缺任何一个都不写；最后装上的那一个装上时写。
+	// 记录仍按对方的名字（roost.yaml 的 with.<对方>）。
+	Requires []string `yaml:"requires,omitempty" json:"requires,omitempty"`
 	// Verify 是联动自带场景的验收口径，可以不写。测试名以 TestWith<本模块> 开头，
 	// 与两个模块各自的 -run 都不重叠，所以两边各自的场景数不随对方装没装而变。
 	Verify *ModuleVerify `yaml:"verify" json:"verify,omitempty"`
@@ -251,6 +255,11 @@ func loadModuleCatalogFS(source fs.FS) (map[string]ModuleSpec, error) {
 		for _, other := range spec.withNames() {
 			if _, ok := catalog[other]; !ok {
 				return nil, fmt.Errorf("module %s has with/%s, but there is no module %q", spec.Name, other, other)
+			}
+			for _, also := range spec.With[other].Requires {
+				if _, ok := catalog[also]; !ok {
+					return nil, fmt.Errorf("module %s: with.%s requires unknown module %q", spec.Name, other, also)
+				}
 			}
 			for _, rel := range spec.With[other].Files {
 				if err := claim(rel, fmt.Sprintf("module %s with %s", name, other)); err != nil {
@@ -507,6 +516,11 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 		if other == spec.Name || contains(spec.Conflicts, other) {
 			return fmt.Errorf("with.%s: a module cannot have glue with itself or with a module it conflicts with", other)
 		}
+		for _, also := range with.Requires {
+			if also == spec.Name || also == other || contains(spec.Conflicts, also) {
+				return fmt.Errorf("with.%s: requires %q must be a third module the glue also needs (not this module, %s, or a module it conflicts with)", other, also, other)
+			}
+		}
 		if strings.TrimSpace(with.Summary) == "" {
 			return fmt.Errorf("with.%s: summary is required", other)
 		}
@@ -563,6 +577,29 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 		}
 	}
 	return nil
+}
+
+// needsBusinessService 报告模块要不要一个运行 Nest 的业务服务。不要的模块（account_auth、portal）只写托管框架服务
+// （services/<框架服务>/）、运维命令与工程级文件（错误码），入口若有也在托管服务的进程里启动（runtime.framework）；
+// 它们能装进没有业务服务的工程（-template lobby：只托管 account、lobby、relay）。needs.uses 不算：没有业务服务时
+// 它的意思是“工程必须已经托管这个框架服务”（checkModuleNeeds），有业务服务时照旧声明并加进业务服务的 uses。
+func (spec ModuleSpec) needsBusinessService() bool {
+	if spec.Entity != "" || len(spec.Entities) > 0 || len(spec.State) > 0 || len(spec.DAOs) > 0 || spec.Component != "" ||
+		len(spec.Components) > 0 || spec.SyncPacker != "" || len(spec.TimerTypes) > 0 || len(spec.Protocols) > 0 ||
+		len(spec.Managers) > 0 || len(spec.Sagas) > 0 || len(spec.Services) > 0 || len(spec.Needs.UsesRPCs) > 0 ||
+		spec.Access != (ModuleAccess{}) {
+		return true
+	}
+	// 入口与 needs.mods 落在业务服务上（没有写 runtime.framework）。
+	if (spec.Runtime != nil || len(spec.Needs.Mods) > 0) && (spec.Runtime == nil || spec.Runtime.Framework == "") {
+		return true
+	}
+	for _, rel := range spec.Files {
+		if strings.HasPrefix(rel, "game/") || strings.HasPrefix(rel, "internal/service/") || strings.HasPrefix(rel, "internal/access/") {
+			return true
+		}
+	}
+	return false
 }
 
 // withNames 是有联动文件的另一方模块名，按字典序。

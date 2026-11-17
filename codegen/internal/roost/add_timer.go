@@ -306,15 +306,7 @@ func timerService(m Manifest, requested string) (string, error) {
 
 // nestService 选运行实体 Nest 的业务服务：requested，或工程里唯一一个装了 nest 的业务服务。command / why 只用于报错。
 func nestService(m Manifest, requested, command, why string) (string, error) {
-	var candidates []string
-	for _, name := range sortedServiceNames(m) {
-		if m.isFrameworkService(name) {
-			continue
-		}
-		if resolved, err := resolveMods(effectiveServiceMods(m, name)); err == nil && contains(resolved, "nest") {
-			candidates = append(candidates, name)
-		}
-	}
+	candidates := nestServices(m)
 	if requested = toSnake(requested); requested != "" {
 		if _, ok := m.Services[requested]; !ok {
 			return "", fmt.Errorf("unknown service %q", requested)
@@ -768,3 +760,20 @@ func (component *%[3]sComponent) on%[3]sExample(fire entitytimer.Fire) time.Dura
 }
 `, n.Entity, n.EntityType, n.CompType)
 }
+
+// nestServices 是运行 Nest 的业务服务，按名字排序（托管框架服务不算）。
+func nestServices(m Manifest) []string {
+	var candidates []string
+	for _, name := range sortedServiceNames(m) {
+		if m.isFrameworkService(name) {
+			continue
+		}
+		if resolved, err := resolveMods(effectiveServiceMods(m, name)); err == nil && contains(resolved, "nest") {
+			candidates = append(candidates, name)
+		}
+	}
+	return candidates
+}
+
+// projectHasNestService 报告工程里有没有运行 Nest 的业务服务。
+func projectHasNestService(m Manifest) bool { return len(nestServices(m)) > 0 }

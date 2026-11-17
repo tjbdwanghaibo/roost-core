@@ -1,0 +1,59 @@
+# 变异：每处撤掉一行关键代码，跑指定用例，要求变红；恢复后最后整体再跑一遍要求全绿（另行执行）。
+# 用法：python3 mutate.py <结果文件>
+import subprocess, sys, os
+
+REPO = "/Users/whb/roost/roost-core"
+OUT = sys.argv[1]
+
+MUTATIONS = [
+    ("M1 lobby 工程退回“必须有 Nest 业务服务”（撤掉没有业务服务时的分支）",
+     "codegen/internal/roost/module_install.go",
+     "if requestedService != \"\" || projectHasNestService(manifest) {",
+     "if true {",
+     "TestModulePortalInstallsOnALobbyProjectWithoutGame"),
+    ("M2 portal 不再登记 /portal/game-token 路由（不带 game 的工程拿不到 gt1 的第二条路）",
+     "modules/portal/files/services/account/portal/portal.go.tmpl",
+     "\t\t{PathGameToken, portal.handleGameToken},\n",
+     "",
+     "TestModulePortalInstallsOnALobbyProjectWithoutGame"),
+    ("M3 portal 改回依赖 login（不带 game 的工程装不上 portal）",
+     "modules/portal/module.yaml",
+     "requires: [account_auth]",
+     "requires: [login]",
+     "TestModulePortalInstallsOnALobbyProjectWithoutGame"),
+    ("M4 三方联动不看 with.requires（game 工程先装 enter、没有 login 时写出要 login 的 portal+enter 联动）",
+     "codegen/internal/roost/module_install.go",
+     "needed := append([]string{owner, other}, spec.With[other].Requires...)",
+     "needed := []string{owner, other}",
+     "TestModulePortalInstallsOnTheHostedAccountService"),
+    ("M5 login 不再依赖 account_auth（game 工程装 login 时 account 的协作者不再被替换）",
+     "modules/login/module.yaml",
+     "requires: [account_auth]",
+     "requires: []",
+     "TestModuleLoginReplacesTheAuthenticatorAndAccountStubs"),
+    ("M6 入口的握手票据前缀与 login 的认证器不一致（game 工程的 portal+login 联动场景）",
+     "modules/portal/files/services/account/portal/portal.go.tmpl",
+     "const EnterTicketPrefix = \"enter:\"",
+     "const EnterTicketPrefix = \"enter-\"",
+     "TestModulePortalInstallsOnTheHostedAccountService"),
+]
+
+with open(OUT, "w", encoding="utf-8") as out:
+    for name, rel, old, new, test in MUTATIONS:
+        path = os.path.join(REPO, rel)
+        original = open(path, encoding="utf-8").read()
+        if original.count(old) != 1:
+            out.write("%s: anchor not found exactly once in %s\n" % (name, rel)); out.flush(); continue
+        open(path, "w", encoding="utf-8").write(original.replace(old, new, 1))
+        try:
+            proc = subprocess.run(["go", "test", "-count=1", "-timeout", "0", "-run", "^" + test + "$", "./codegen/internal/roost/"],
+                                  cwd=REPO, env=dict(os.environ, GOWORK="off"), capture_output=True, text=True)
+        finally:
+            open(path, "w", encoding="utf-8").write(original)
+        lines = [l for l in (proc.stdout + proc.stderr).splitlines() if l.startswith("--- ") or "_test.go:" in l or l.startswith("ok") or l.startswith("FAIL")]
+        verdict = "RED (as required)" if proc.returncode != 0 else "STILL GREEN (mutation survived)"
+        out.write("== %s\n   file %s: %r -> %r\n   go test -run ^%s$ ./codegen/internal/roost/ -> exit %d, %s\n" % (name, rel, old.strip(), new.strip(), test, proc.returncode, verdict))
+        for l in lines[:6]:
+            out.write("   | " + l[:400] + "\n")
+        out.flush()
+print("done")

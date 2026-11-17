@@ -9,6 +9,11 @@
 // 客户端走完这三步，拿进服票据去连那个地址（Gate，或直连的 game），握手时出示它；握手的认证器再去问
 // account 这个账号在这个服上是哪一名玩家（登录模块 login）。入口不建角、不选角，也不知道玩家号。
 //
+// 入口只依赖 account 这一侧（account_auth 模块的协作者），不 import 任何 game 包，所以不带 game 的工程
+// （roost project new -template lobby：只有 account、lobby、relay）也能装：/portal/login 带 game 与
+// /portal/game-token 照常给游戏账号 token；那种工程里 account 没有登记任何区服，/portal/servers 的区服清单是空的、
+// 推荐的服是 0，/portal/enter 对任何服号都带着 account 的码（560104 server_invalid）拒绝。
+//
 // 入口是无状态的一层薄壳：HTTP 入参检查、调 account、区服目录（Directory）与推荐规则。它不认证任何人
 // （身份由 account 向渠道确认），不持有任何密钥（票据由 account 签发与校验），也不存任何东西。
 // 它只守一件事：**账号只取自 account 校验过的账号票据**，绝不取自请求。
@@ -26,7 +31,6 @@ import (
 	"slices"
 	"strings"
 
-	gamelogin "{{MODULE}}/game/modules/login"
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -59,6 +63,12 @@ const (
 	// MaxNameBytes 是请求里游戏名、服务名的上限，与 account 的上限一致（svcaccount.MaxGameNameBytes）。
 	MaxNameBytes = 32
 )
+
+// EnterTicketPrefix 是 /portal/enter 回给客户端的握手票据的前缀：握手帧里出示 enter:<account 签的进服票据>。
+// 它是与登录模块（login）的握手认证器之间的约定——认证器按这个前缀认出进服票据（它的 game/modules/login/login.go
+// 里同一个值），两边都装着时由联动场景 TestWithPortalLogin 核对。入口自己定义它而不 import 登录模块，
+// 是为了不带 game 的工程也能装入口。
+const EnterTicketPrefix = "enter:"
 
 // 清单与进服结果里 addr_source 的取值：地址是怎么来的。
 const (
@@ -497,7 +507,7 @@ func (portal *Portal) enter(ctx context.Context, request enterRequest) (enterRes
 		return enterResponse{}, err
 	}
 	response := enterResponse{
-		OK: true, Ticket: gamelogin.EnterTicket(ticket.Ticket),
+		OK: true, Ticket: EnterTicketPrefix + ticket.Ticket,
 		ServerID: ticket.ServerID, ServingServerID: ticket.ServingServerID, ExpiresAt: ticket.ExpiresAtUnix,
 	}
 	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID)

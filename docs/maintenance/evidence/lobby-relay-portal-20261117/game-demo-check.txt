@@ -1,0 +1,14 @@
+tidy 0
+build exit 0
+vet exit 0
+ok   module account_auth: 6 passed (want 6), 0 skipped
+ok   module login: 32 passed (want 32), 0 skipped
+ok   module login+enter: 6 passed (want 6), 0 skipped
+ok   module portal: 15 passed (want 15), 0 skipped
+ok   module portal+enter: 2 passed (want 2), 0 skipped
+ok   module portal+login: 1 passed (want 1), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+verify exit 0

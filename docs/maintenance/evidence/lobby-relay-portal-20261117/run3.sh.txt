@@ -1,0 +1,35 @@
+#!/bin/sh
+# 起 account、lobby、relay 三个真实进程（生成工程的 bin/app，配置是 mkconf.py 改过端口与依赖的那三份），等 /readyz。
+# 用法：run3.sh start|stop
+set -u
+D=$(cd "$(dirname "$0")" && pwd)
+P=$D/lrportal
+cd "$P"
+export ROOST_RELAY_TOKEN_KEY="drill-relay-token-key-0123456789"
+case "$1" in
+start)
+  mkdir -p .drill/log
+  for entry in account:19300 lobby:19301 relay:19302; do
+    svc=${entry%%:*}; port=${entry##*:}
+    nohup bin/app "$svc" --sid 1000 --config ".drill/configs/config.$svc.yaml" > ".drill/log/$svc.out" 2>&1 &
+    echo $! > ".drill/$svc.pid"
+    i=0
+    while [ $i -lt 60 ]; do
+      if curl -fsS -o /dev/null "http://127.0.0.1:$port/readyz" 2>/dev/null; then echo "$svc: ready (pid $(cat .drill/$svc.pid), http://127.0.0.1:$port/readyz)"; break; fi
+      if ! kill -0 "$(cat .drill/$svc.pid)" 2>/dev/null; then echo "$svc exited"; tail -20 ".drill/log/$svc.out"; exit 1; fi
+      i=$((i+1)); sleep 1
+    done
+    [ $i -lt 60 ] || { echo "$svc not ready"; tail -20 ".drill/log/$svc.out"; exit 1; }
+  done
+  ;;
+stop)
+  for svc in relay lobby account; do
+    if [ -f ".drill/$svc.pid" ]; then
+      pid=$(cat ".drill/$svc.pid"); kill "$pid" 2>/dev/null
+      i=0; while kill -0 "$pid" 2>/dev/null && [ $i -lt 40 ]; do i=$((i+1)); sleep 1; done
+      if kill -0 "$pid" 2>/dev/null; then echo "$svc still running, kill -9"; kill -9 "$pid"; else echo "$svc stopped (pid $pid)"; fi
+      rm -f ".drill/$svc.pid"
+    fi
+  done
+  ;;
+esac

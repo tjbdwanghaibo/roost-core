@@ -1,0 +1,28 @@
+STEP 1. 两个账号经 /portal/login 带 game 拿 gt1；B 另经 /portal/game-token 再换一张
+OK   /portal/login alice1 game=lrportal -> 200 account_ticket=at1.17949105… game_token=gt1.17949171… game_token_expires_at=1.79491716e+09
+OK   /portal/login bob1 game=lrportal -> 200 account_ticket=at1.17949105… game_token=gt1.17949171… game_token_expires_at=1.79491716e+09
+OK   /portal/game-token bob1 -> 200 game=lrportal game_token=gt1.17949171… expires_at=1.79491716e+09
+STEP 1b. 不带 game 的工程里与 game 有关的两个端点：区服清单为空，进服带 account 的码拒绝
+OK   /portal/servers -> 200 servers=[] recommended_server_id=0 services=[map[addr: kind:lobby name:lobby] map[addr: kind:relay name:relay]]
+OK   /portal/enter server_id=1000 -> 400 map[code:560104 ok:false reason:account: server is invalid]
+STEP 2. A 建房，B 加入（lobby 的 HTTP，Authorization: Bearer gt1）
+OK   A POST /rooms -> room=4a9d4082312bb25e host=dev:alice1 relay_addr=127.0.0.1:19310 token=rt1.17949099…
+OK   A 连上 relay：slot=1 host=true
+OK   B POST /rooms/4a9d4082312bb25e/join -> members=2 relay_addr=127.0.0.1:19310
+OK   B 连上 relay：slot=2 host=false host_slot=1
+OK   A 收到 MemberJoined slot=2 account=dev:bob1
+STEP 3. 游戏通道与房间通道各收发一帧
+OK   游戏通道 B->房主：A 收到 slot=2 msg=101 payload="b-to-host"
+OK   游戏通道 房主->B：B 收到 slot=1 msg=102 payload="host-to-b"
+OK   房间通道 A->全体：B 收到 slot=1 msg=7 payload="chat-from-a"
+OK   房间通道 B->A：A 收到 slot=2 msg=8 payload="chat-from-b"
+STEP 4. A 主动转交给 B，B 回 HostReady，lobby 的房主变成 B
+OK   B 收到 YouAreHost epoch=1 source=handoff state="handoff-state" members=2
+OK   A、B 都收到 HostChanged host_slot=2 account=dev:bob1 epoch=1；B Role={Slot:2 Host:true Candidate:false HostSlot:2 Epoch:1} A Role={Slot:1 Host:false Candidate:false HostSlot:2 Epoch:1}
+OK   lobby GET /rooms：room=4a9d4082312bb25e host=dev:bob1 host_epoch=1（原房主 dev:alice1）
+STEP 5. B（新房主）踢 A：A 再 join 答 kicked，拿旧令牌连 relay 被拒
+OK   A 被断开：reason=kicked err=relay: closed by relay: kicked
+OK   B 收到 MemberLeft slot=1 reason=kicked
+OK   A 再 join -> lobby: kicked (HTTP 403): lobby: kicked from this room
+OK   A 拿旧令牌连 relay -> 被拒：relay: closed by relay: kicked（reason=kicked）
+DONE all steps passed

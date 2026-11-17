@@ -308,8 +308,12 @@ func checkFrameworkCollaborators(root string, manifest Manifest) []CheckItem {
 			continue
 		}
 		if strings.Contains(string(raw), collaboratorUnconfiguredMarker) {
-			items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusFail,
-				Detail: fmt.Sprintf("%s still has generated fail-closed stubs (%q); the %s service refuses every request until they are implemented; see docs/SERVICES.zh-CN.md", rel, collaboratorUnconfiguredMarker, name)})
+			detail := fmt.Sprintf("%s still has generated fail-closed stubs (%q); the %s service refuses every request until they are implemented; see docs/SERVICES.zh-CN.md", rel, collaboratorUnconfiguredMarker, name)
+			if manifest.Services[name].Framework == "account" && name == "account" {
+				// account 的协作者有现成的模块（只装在托管 account 的进程上，不带 game 的工程也能装）。
+				detail += "; the account_auth module implements them (development login, channel hook, player id counter): roost module add account_auth, or roost module add portal for the HTTP login entry as well"
+			}
+			items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusFail, Detail: detail})
 			continue
 		}
 		items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusOK, Detail: rel + " has no generated fail-closed stubs left"})

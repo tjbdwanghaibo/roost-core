@@ -165,7 +165,11 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 	if plan.Applied {
 		verb = "did"
 	}
-	fmt.Fprintf(stdout, "service: %s\n", plan.Service)
+	if plan.Service == "" {
+		fmt.Fprintln(stdout, "service: none (this project hosts only framework services; the modules live on them)")
+	} else {
+		fmt.Fprintf(stdout, "service: %s\n", plan.Service)
+	}
 	for _, command := range plan.Prerequisites {
 		fmt.Fprintf(stdout, "prerequisite (%s run): %s\n", verb, command)
 	}

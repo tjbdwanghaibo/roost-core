@@ -79,6 +79,21 @@ lobby 不持有 account 的密钥，也不自己验签。
 - `wiring/lobby.AccountTokens` 负责转换结果：`session_invalid`、`identity_denied`、`account_missing`、`game_invalid` 都答 401；其他错误（account 不可达）答 503。
 - `service/lobby.GameTokenValidator` 是 lobby 里的最小接口；单测用替身，也可以由 `lobby.NewMod(validator)` 注入。
 
+### 3.1 客户端怎样拿到 gt1
+
+gt1 由 account 签发（`IssueGameToken`，寿命 `account.games.<游戏>.token_ttl`），account 只在内部总线上，客户端经 **portal 模块**的 HTTP 入口拿（挂在托管 account 的进程上，`web.addr`）：
+
+1. `POST /portal/login {channel, open_id, credential, game}`：渠道登录，带 `game` 时答复里一并有 `game_token`（gt1）与 `game_token_expires_at`；不带 `game` 时只有账号票据，再 `POST /portal/game-token {account_ticket, game}` 换。`game` 必须在 `account.games` 里（`roost add lobby` 写入），否则整个请求答 `560120`。
+2. 之后每个大厅请求带 `Authorization: Bearer <gt1>`；过期了重新登录或凭新的账号票据再换一张。
+
+装法：
+
+- 不带 game 的开房间工程（`roost project new <名> -template lobby`，只托管 account、lobby、relay）：`roost module add portal`。它连同 `account_auth`（account 的登录协作者：开发登录 `login.dev_token`、渠道入口 `login_channels.go`、玩家号计数器）一起装，web Mod 由前置命令加在 account 上（开发端口 8080 + account 的端口块号）。两个模块都不要业务服务；这种工程里没有区服，`/portal/servers` 的区服清单为空、`/portal/enter` 答 account 的 `560104`。开发登录在 `configs/service/config.account.yaml` 写 `login.dev_token: dev-…`，客户端以渠道 `dev`、凭据为这个值登录。
+- 有 game 的工程：`roost module add login portal`（login 管握手，portal 管入口；account_auth 跟着装）。
+- 生成器只出框架骨架，`-template lobby` 不预装这两个模块；没装时 `services/account/collaborators.go` 是拒绝一切的桩，doctor 的 `collaborators:account` 报 FAIL 并给出这条命令。
+
+真实进程演练（`-template lobby` + `roost module add portal`，account / lobby / relay 三个进程，两个账号经 `/portal/login` 带 `game` 拿 gt1 → 建房、加入 → relay 两个通道收发 → 主动转交房主 → 踢人）：`docs/maintenance/evidence/lobby-relay-portal-20261117/`。
+
 ## 4. 房间目录（Redis）
 
 | 键 | 内容 |

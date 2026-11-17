@@ -123,6 +123,9 @@ func planModuleServices(root string, manifest Manifest, target string, specs []M
 // 那时这个服务还不存在。declared 记这次新声明的服务名，跨模块共用（login 声明 account、同一批的 portal 再给它加 web）。
 // 新服务的配置、部署与协作者文件由安装最后一步的 project sync 写出，与 roost.yaml 一起在模块事务里提交或回滚。
 func planModuleFrameworkServices(manifest *Manifest, target string, spec ModuleSpec, declared map[string]bool) error {
+	if target == "" {
+		return nil // 没有业务服务（只托管框架服务的工程）：不声明，checkModuleNeeds 要求工程已经托管它们。
+	}
 	declare := func(name string) error {
 		if _, known := frameworkCatalog[name]; !known {
 			return nil // checkModuleNeeds 报告。

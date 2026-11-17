@@ -2,6 +2,8 @@
 
 `portal` 给工程一个**客户端够得着的登录入口**：四个 HTTP 端点，代客户端去问只在内部总线上的 account 服务（游戏的账号服）。它就是常说的 manifest（清单）那一层：登录拿账号票据 → 凭票拿服务与区服清单与推荐 → 选定一个服换进服票据与该连的地址；开房间类游戏（大厅 + relay，没有区服）另凭票换一张**游戏账号 token**，大厅凭它认人。入口缺省挂在**托管 account 服务的进程**上，不挂在某个 game 服上；业务服务（game）不因此多出任何 HTTP 监听。
 
+入口只依赖 account 这一侧（[account_auth](../account_auth/README.md)：account 的登录协作者），不 import 任何 game 包，所以**不带 game 的开房间工程**（`roost project new <名> -template lobby`：只托管 account、lobby、relay）也能装：`roost module add portal` 一条命令。那种工程里客户端用的是 `/portal/login` 带 `game`（或 `/portal/game-token`）拿游戏账号 token（gt1），再去大厅；account 没有登记任何区服，所以 `/portal/servers` 的区服清单是空的、推荐的服是 0，`/portal/enter` 对任何服号都带着 account 的 `560104`（server_invalid）拒绝。
+
 ## 能力
 
 **客户端协议**：没有 Nest / PB 协议，只有四个 HTTP 端点（`services/account/portal/portal.go`；都是 `POST`、JSON；字段与响应的细节见后面的“端点”一节）。
@@ -55,7 +57,7 @@
 - **地址可以是空的**：零配置时清单与进服结果里 `addr` 为空、`addr_source` 是 `none`，票据照发。
 - **动态地址的新鲜度**：game 每 `login.presence.interval`（缺省 10 秒）报一次，期限是三倍（30 秒）。进程死了、断网了，它的地址最多还会被发出去一个期限；正常停机时立刻撤销。上报者自报服号，account 不核对（总线只在内网，调用方可信）。没写 `login.presence.addr` 的 game 不上报，那个服只有静态地址。
 - **`portal.servers` 不在 App 的配置声明里**：`--print-config` 不打印、`--check-config` 与 `roost config check` 不检查，写错了要等进程启动到入口这一步才报错退出。
-- **前提**：依赖 `login`（握手时把票据交给 account 的认证器；`/portal/enter` 的握手票据由 `game/modules/login` 的 `EnterTicket` 拼）；托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`ListServices`、`ListServerPresence`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`IssueGameToken`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
+- **前提**：依赖 `account_auth`（account 的登录协作者；开发登录、渠道入口、玩家号计数器都在那里），不依赖 `login`：`/portal/enter` 给的握手票据 `enter:<进服票据>` 由入口自己拼（`EnterTicketPrefix`），与 login 的认证器认的前缀是两边各写一份的约定，两个都装着时由联动场景 `TestWithPortalLogin` 核对；握手那一侧要 login（或工程自己的认证器）。托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`ListServices`、`ListServerPresence`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`IssueGameToken`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
 - **已知限制**：[KNOWN-LIMITS“portal 的边界”](../../docs/maintenance/KNOWN-LIMITS.md)，以及同一处的“login 的边界”“game-demo 接入登录链路的边界”（demo 渠道经入口对外、生成依赖没发布的 `wiring/modulehost`）。
 
 ## 复用方式
@@ -64,20 +66,28 @@
 
 ```sh
 roost module plan portal
-roost module add portal enter     # enter 不是依赖；两个都装着时多两条整条链路的场景
+roost module add login portal enter   # 有 game 的工程：握手的认证器（login）、入口、进入游戏；三个都装着时多整条链路的场景
 roost module verify
 ```
 
-装它时 [login](../login/README.md) 跟着装；account 服务没有 web Mod 时安装器先补上（`roost add mod web -service <托管 account 的服务>`，连同 `web.*` 配置段，开发端口是 8080 + 那个服务的端口块号）；工程还没有 account 时（`-template game` 缺省不托管框架服务）安装器声明它，web 直接写进声明，配置生成时就带 `web.*` 段。零配置就能启动、登录、拿清单、换进服票据，只是没有连接地址。要走通整条链路还要做（`roost module plan / add` 的输出里列着，`todo:` 行）：
+不带 game 的开房间工程（`-template lobby`）只装入口：
 
-1. login 的那几步（[login 的“安装之后还要做的”](../login/README.md#复用方式)）：打开玩家 TCP 监听、写开发令牌、登记区服。
+```sh
+roost module add portal   # 连同 account_auth；account 没有 web Mod 时前置命令 roost add mod web -service account 先补上
+# configs/service/config.account.yaml 末尾加 login.dev_token: dev-<随便什么>（开发登录）
+roost project doctor      # collaborators:account 通过，0 FAIL
+```
+
+装它时 [account_auth](../account_auth/README.md) 跟着装（不再带 login：握手的认证器、玩家 TCP 接入、`cmd/accountctl` 要 `roost module add login`）；account 服务没有 web Mod 时安装器先补上（`roost add mod web -service <托管 account 的服务>`，连同 `web.*` 配置段，开发端口是 8080 + 那个服务的端口块号）；工程还没有 account 时（`-template game` 缺省不托管框架服务）安装器声明它，web 直接写进声明，配置生成时就带 `web.*` 段。零配置就能启动、登录、拿清单、换进服票据，只是没有连接地址。要走通整条链路还要做（`roost module plan / add` 的输出里列着，`todo:` 行）：
+
+1. 写开发令牌（account_auth 的 `todo:`）；有 game 时再做 login 的那几步（[login 的“安装之后还要做的”](../login/README.md#复用方式)）：打开玩家 TCP 监听、登记区服。
 2. 给区服配地址：在 game 服务的配置里写 `login.presence.addr`（game 定期上报，见“动态目录”），或在托管 account 的服务的配置里写静态的 `portal.servers`。用 `roost add gate` 改成独立 Gate 的工程，命令已把 `login.presence.addr` 写成 Gate 的地址（Gate 接过原来的客户端端口，已有的 `portal.servers` 不用改）；`roost project doctor` 的 gate:client-address 检查开发配置里这两处都等于 Gate 的 `player_access.gate.advertise_addr`。
 
 **需求比它多一点**
 
 - 区服地址要动态（扩缩容、上报负载）：缺省已经接上——game 配 `login.presence.addr` 就行；负载的刻度、标签要换时改 login 的 `game/managers/login_presence.go`，来源要换（服务发现）时改 `portal_rules.go` 的 `newDirectory`。
 - 导量（按负载、标签、渠道分流）：改 `portal_rules.go` 的 `recommend`，规则数据也放在那个文件里。
-- 登录渠道：不在这里，在 login 模块留给工程的 `services/account/login_channels.go`。
+- 登录渠道：不在这里，在 account_auth 模块留给工程的 `services/account/login_channels.go`。
 - 限流、TLS：放在反向代理上。
 - 清单要缓存或分页：把 manifest 拆成独立服务（见下），在自己的服务里包一层。
 - 不要改的文件：`portal.go`（端点与“账号只取自票据”的检查）、`portal_directory.go`、`portal_config.go`。
@@ -102,14 +112,15 @@ roost module verify
 
 ## 联动
 
-- `portal` + `enter`（`with/enter/services/account/portal/portal_enter_test.go`）：**只有测试，不加运行时代码**。整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（login 的认证器）→ 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入；以及入口给的地址与进入时认的是同一个承载服。
+- `portal` + `login`（`with/login/services/account/portal/portal_login_test.go`）：**只有测试，不加运行时代码**。入口给的握手票据交给 login 真实的认证器：认得出、承载服 / 原服 / 新建标记与 account 一致、不带前缀不认。守的是入口与认证器各写一份的 `enter:` 前缀。
+- `portal` + `enter`，**还要装着 login**（清单 `with.enter.requires: [login]`；三个里最后装上的那一个装上时写）（`with/enter/services/account/portal/portal_enter_test.go`）：**只有测试，不加运行时代码**。整条链路的场景：HTTP 登录 → 清单与推荐 → 进服票据 → 握手（login 的认证器）→ 游戏服告知要不要先新建 → 新建（角色名在游戏服）→ 进入；以及入口给的地址与进入时认的是同一个承载服。
 - 别的模块没有 `with/portal`。握手之后的三步（`EnterStatus` / `EnterCreate` / `EnterGame`）属于 `login` + `enter` 的联动；没装 enter 的工程握手之后走自己的进入流程。
 
 ## 验证范围
 
-- `roost module verify portal`：15 条场景（`services/account/portal`）；与 `enter` 的联动 2 条。
-- 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）与 login 模块的认证器；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
-- 覆盖：从渠道身份走到一条认证过的握手、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt1 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
+- `roost module verify portal`：15 条场景（`services/account/portal`）；与 `login` 的联动 1 条，与 `enter`（还要 login）的联动 2 条。
+- 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）；握手那一侧直接问 account 的 `EnterServer`（认证器做的就是这件事；联动场景里用 login 真实的认证器）；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
+- 覆盖：从渠道身份走到 account 认的进服票据、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt1 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；game-demo 的这一段有可重复的脚本（仓库的 `scripts/test-demo-login.sh`：`make dev-run`、curl 三步、机器人 `-login portal` 新号与老号，最后经独立 Gate 再跑一遍）。已并入别的服的老角色也有脚本（`scripts/test-demo-merge.sh`：合服后原服 1001 的角色走三步，清单标出 `merged_into`、地址给承载服，1001 的进服票据在承载服 1000 上嵌入 TCP 与经独立 Gate 各握手一次，进到原角色、背包延续）。
 - `scripts/test-demo-login.sh` 的 casual + naming 阶段增加两个 account 进程：A 签发账号票据，B 校验并选服、签发进服票据；停掉 A 后 B 独立完成同一角色的重连。两个 game sid 共用正式 Redis Directory，验证建角、重名拒绝与换名；嵌入 TCP 和双 Gate 都走真实入口。
 - 没有验证：动态地址经真实进程（game 上报 → NATS → account → Redis → 入口）、换服中的角色、生产配置、跨机。可重复步骤见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
@@ -337,4 +348,5 @@ portal:
 | `services/account/portal/portal_directory.go` | 区服目录的接口、静态目录、account 登记表的目录（`NewPresenceDirectory`）、`Overlay` |
 | `services/account/portal/portal_config.go` | `portal.servers`、`portal.services` 的声明与启动时的检查 |
 | `internal/errors/portal.go` | 入口自己的业务码 |
-| `services/account/portal/portal_enter_test.go` | 只在装了 enter 时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |
+| `services/account/portal/portal_login_test.go` | 只在装了 login 时有：入口的握手票据交给 login 的认证器核对 |
+| `services/account/portal/portal_enter_test.go` | 只在 enter 与 login 都装着时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |

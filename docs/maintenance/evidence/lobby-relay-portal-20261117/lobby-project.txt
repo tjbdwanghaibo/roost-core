@@ -1,0 +1,70 @@
+# -template lobby 工程：生成、装 portal、离线检查（新生成器；工程在 scratchpad 的 drill/lrportal，replace 指向本仓库）
+$ roost project new lrportal -module example.com/lrportal -out lrportal -template lobby --skip-deps   # 最后两行：
+project ready: <scratch>/drill/lrportal
+next: roost module add portal   # account's login collaborators (module account_auth) and the HTTP login entry: POST /portal/login with game returns the gt1 game account token the lobby takes; doctor's collaborators:account passes after it
+
+$ go mod edit -replace github.com/tjbdwanghaibo/roost-core=<本仓库>; go mod tidy
+
+$ roost project doctor   # 装模块之前：非 OK 行（退出码 1）
+FAIL  collaborators:account services/account/collaborators.go still has generated fail-closed stubs ("is not configured"); the account service refuses every request until they are implemented; see docs/SERVICES.zh-CN.md; the account_auth module implements them (development login, channel hook, player id counter): roost module add account_auth, or roost module add portal for the HTTP login entry as
+
+$ roost module add portal
+service: none (this project hosts only framework services; the modules live on them)
+prerequisite (did run): roost add mod web -service account
+module account_auth: installed
+  file:      services/account/collaborators.go (replaces the untouched generated stub)
+  file:      services/account/login_channels.go
+  file:      services/account/login_dev.go
+  file:      services/account/login_player_id.go
+  file:      services/account/login_test.go
+  todo:      开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录
+  todo:      上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接
+  todo:      客户端的登录入口：roost module add portal（HTTP 登录拿账号票据，带 game 时一并拿游戏账号 token），或者由工程自己的入口代客户端调 account
+module portal: installed
+  runtime:   services/account/portal.Start in the process of the hosted account service (after its Mods start, before service Init; stopped in reverse)
+  id:        errcode portal_request_invalid = 100000
+  file:      internal/errors/portal.go
+  file:      services/account/portal/portal.go
+  file:      services/account/portal/portal_config.go
+  file:      services/account/portal/portal_directory.go
+  file:      services/account/portal/portal_rules.go
+  file:      services/account/portal/portal_test.go
+  todo:      登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter、/portal/game-token；请求与响应见 roost-core 的 modules/portal/README.md
+  todo:      不带 game 的开房间工程（-template lobby）：客户端 POST /portal/login 带 game（或 /portal/game-token）拿 gt1，再以 Authorization: Bearer <gt1> 调大厅；/portal/servers 与 /portal/enter 在这种工程里没有区服可给
+  todo:      区服地址：game 配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate），game 定期报给 account、停报 30 秒后消失；或在 config.account.yaml 写静态的 portal.servers（服号 -> host:port），两者都有时上报的优先。都不写时清单照常列出、没有地址；别的来源改 services/account/portal/portal_rules.go 的 newDirectory
+  todo:      推荐规则（导量）在 services/account/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服
+  todo:      上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr
+next: roost module verify
+
+$ printf "\nlogin:\n  dev_token: dev-lrportal-drill\n" >> configs/service/config.account.yaml
+$ go build ./... -> ok;  go vet ./... -> ok;  roost generate --check -> generated files are up to date
+
+$ roost project doctor   # 装模块之后（退出码 0）
+FAIL 行 0，WARN 行 0，OK 行 45；其中：
+OK    collaborators:account services/account/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:lobby  services/lobby/collaborators.go has no generated fail-closed stubs left
+OK    lobby-relay:account-services config.account lists lobby, relay
+OK    lobby-relay:token-key-env every lobby and relay reads the relay token key from ROOST_RELAY_TOKEN_KEY
+OK    lobby-relay:advertise-addr relay.advertise_addr is not loopback in configs/service/config.relay.prod.example.yaml
+OK    lobby-relay:account-games every lobby.games game is in account.games (configs/service/config.lobby.yaml, configs/service/config.lobby.prod.example.yaml)
+
+$ roost module verify
+ok   module account_auth: 6 passed (want 6), 0 skipped
+ok   module portal: 15 passed (want 15), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+exit 0
+
+# 对照：旧生成器（HEAD 187e4a24）的 -template lobby 工程
+$ roost module add portal
+roost module add needs a service with the nest mod; run: roost add mod nest -service <service>
+exit 1
+$ roost module add login
+roost module add needs a service with the nest mod; run: roost add mod nest -service <service>
+exit 1
+
+# 新生成器在同一种工程上装 login（要业务服务）：拒绝并说明（TestModulePortalInstallsOnALobbyProjectWithoutGame 断言这条）
+module login needs a business service with the nest mod and this project has none (only hosted framework services): roost module add needs a service with the nest mod; run: roost add mod nest -service <service>
+exit 1

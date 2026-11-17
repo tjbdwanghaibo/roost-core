@@ -1,0 +1,240 @@
+# 旧生成器（HEAD 187e4a24，worktree wt-old 构建）与新生成器（HEAD + 本次改动）各生成一遍，diff -r 整个目录
+# 命令见 gen4.sh.txt：plain、-template game、-template game-demo 用 --skip-deps；login = -template game + go mod edit -replace（各指向自己的树）+ roost module add login portal
+
+## plain（旧侧 75 个文件）
+diff -rq: 无输出（逐字节相同）
+
+## game（旧侧 87 个文件）
+diff -rq: 无输出（逐字节相同）
+
+## demo（旧侧 1402 个文件）
+Files old/demo/roost.yaml and new/demo/roost.yaml differ
+Files old/demo/services/account/portal/portal.go and new/demo/services/account/portal/portal.go differ
+Only in new/demo/services/account/portal: portal_login_test.go
+Files old/demo/services/account/portal/portal_test.go and new/demo/services/account/portal/portal_test.go differ
+
+## login（-template game + module add login portal，旧侧 131 个文件，不比 go.mod / go.sum：replace 指向不同的树）
+Files old/login/roost.yaml and new/login/roost.yaml differ
+Files old/login/services/account/portal/portal.go and new/login/services/account/portal/portal.go differ
+Only in new/login/services/account/portal: portal_login_test.go
+Files old/login/services/account/portal/portal_test.go and new/login/services/account/portal/portal_test.go differ
+
+## account 的五个文件逐字节相同（只是归属从 login 换成 account_auth）
+same services/account/collaborators.go
+same services/account/login_channels.go
+same services/account/login_dev.go
+same services/account/login_player_id.go
+same services/account/login_test.go
+
+## demo 的 roost.yaml
+@@ -133,6 +133,15 @@
+                 min: 10000
+                 max: 19999
+ modules:
++    account_auth:
++        digest: d92addebc8dee712
++        service: game
++        files:
++            - services/account/collaborators.go
++            - services/account/login_channels.go
++            - services/account/login_dev.go
++            - services/account/login_player_id.go
++            - services/account/login_test.go
+     alliance:
+         digest: e3a5afd4ebdbcf17
+         service: game
+@@ -476,8 +485,10 @@
+             - protocol/def/leaderboard_me.go
+             - protocol/def/leaderboard_top.go
+     login:
+-        digest: f57cc6ec21535d88
++        digest: 443725484a2a245f
+         service: game
++        requires:
++            - account_auth
+         managers:
+             - NewLoginNotices
+             - NewLoginPresence
+@@ -499,11 +510,6 @@
+             - internal/access/player/tcp/auth.go
+             - internal/access/player/tcp/login_test.go
+             - internal/errors/login.go
+-            - services/account/collaborators.go
+-            - services/account/login_channels.go
+-            - services/account/login_dev.go
+-            - services/account/login_player_id.go
+-            - services/account/login_test.go
+         with:
+             enter:
+                 - game/controllers/login_enter.go
+@@ -637,14 +643,14 @@
+             - game/modules/matchroom/matchroom_test.go
+             - game/view/component_matchroom.go
+     portal:
+-        digest: dd822f91bf56cdd5
++        digest: 749fcc5a25874f78
+         service: game
+         runtime:
+             package: services/account/portal
+             start: Start
+             framework: account
+         requires:
+-            - login
++            - account_auth
+         ids:
+             errcode:
+                 portal_request_invalid: 100091
+@@ -658,6 +664,8 @@
+         with:
+             enter:
+                 - services/account/portal/portal_enter_test.go
++            login:
++                - services/account/portal/portal_login_test.go
+     profile:
+         digest: 231b04bd8a465413
+         service: game
+
+## login 工程的 roost.yaml
+@@ -70,9 +70,20 @@
+                 min: 10000
+                 max: 19999
+ modules:
++    account_auth:
++        digest: d92addebc8dee712
++        service: game
++        files:
++            - services/account/collaborators.go
++            - services/account/login_channels.go
++            - services/account/login_dev.go
++            - services/account/login_player_id.go
++            - services/account/login_test.go
+     login:
+-        digest: f57cc6ec21535d88
++        digest: 443725484a2a245f
+         service: game
++        requires:
++            - account_auth
+         managers:
+             - NewLoginNotices
+             - NewLoginPresence
+@@ -94,20 +105,15 @@
+             - internal/access/player/tcp/auth.go
+             - internal/access/player/tcp/login_test.go
+             - internal/errors/login.go
+-            - services/account/collaborators.go
+-            - services/account/login_channels.go
+-            - services/account/login_dev.go
+-            - services/account/login_player_id.go
+-            - services/account/login_test.go
+     portal:
+-        digest: dd822f91bf56cdd5
++        digest: 749fcc5a25874f78
+         service: game
+         runtime:
+             package: services/account/portal
+             start: Start
+             framework: account
+         requires:
+-            - login
++            - account_auth
+         ids:
+             errcode:
+                 portal_request_invalid: 100001
+@@ -118,3 +124,6 @@
+             - services/account/portal/portal_directory.go
+             - services/account/portal/portal_rules.go
+             - services/account/portal/portal_test.go
++        with:
++            login:
++                - services/account/portal/portal_login_test.go
+
+## services/account/portal/portal.go（login 工程；demo 的同一份只差工程模块路径）
+@@ -9,6 +9,11 @@
+ // 客户端走完这三步，拿进服票据去连那个地址（Gate，或直连的 game），握手时出示它；握手的认证器再去问
+ // account 这个账号在这个服上是哪一名玩家（登录模块 login）。入口不建角、不选角，也不知道玩家号。
+ //
++// 入口只依赖 account 这一侧（account_auth 模块的协作者），不 import 任何 game 包，所以不带 game 的工程
++// （roost project new -template lobby：只有 account、lobby、relay）也能装：/portal/login 带 game 与
++// /portal/game-token 照常给游戏账号 token；那种工程里 account 没有登记任何区服，/portal/servers 的区服清单是空的、
++// 推荐的服是 0，/portal/enter 对任何服号都带着 account 的码（560104 server_invalid）拒绝。
++//
+ // 入口是无状态的一层薄壳：HTTP 入参检查、调 account、区服目录（Directory）与推荐规则。它不认证任何人
+ // （身份由 account 向渠道确认），不持有任何密钥（票据由 account 签发与校验），也不存任何东西。
+ // 它只守一件事：**账号只取自 account 校验过的账号票据**，绝不取自请求。
+@@ -26,7 +31,6 @@
+ 	"slices"
+ 	"strings"
+ 
+-	gamelogin "example.com/login/game/modules/login"
+ 	apperrors "example.com/login/internal/errors"
+ 
+ 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+@@ -59,6 +63,12 @@
+ 	// MaxNameBytes 是请求里游戏名、服务名的上限，与 account 的上限一致（svcaccount.MaxGameNameBytes）。
+ 	MaxNameBytes = 32
+ )
++
++// EnterTicketPrefix 是 /portal/enter 回给客户端的握手票据的前缀：握手帧里出示 enter:<account 签的进服票据>。
++// 它是与登录模块（login）的握手认证器之间的约定——认证器按这个前缀认出进服票据（它的 game/modules/login/login.go
++// 里同一个值），两边都装着时由联动场景 TestWithPortalLogin 核对。入口自己定义它而不 import 登录模块，
++// 是为了不带 game 的工程也能装入口。
++const EnterTicketPrefix = "enter:"
+ 
+ // 清单与进服结果里 addr_source 的取值：地址是怎么来的。
+ const (
+@@ -497,7 +507,7 @@
+ 		return enterResponse{}, err
+ 	}
+ 	response := enterResponse{
+-		OK: true, Ticket: gamelogin.EnterTicket(ticket.Ticket),
++		OK: true, Ticket: EnterTicketPrefix + ticket.Ticket,
+ 		ServerID: ticket.ServerID, ServingServerID: ticket.ServingServerID, ExpiresAt: ticket.ExpiresAtUnix,
+ 	}
+ 	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID)
+
+## module add login portal 的输出（login 工程）
+@@ -2,6 +2,15 @@
+ prerequisite (did run): roost add access player --service game
+ prerequisite (did run): roost add transport tcp
+ framework service account: declared (services.account.framework: account, added to services.game.uses; its config, deployment and collaborators come with the install)
++module account_auth: installed
++  file:      services/account/collaborators.go (replaces the untouched generated stub)
++  file:      services/account/login_channels.go
++  file:      services/account/login_dev.go
++  file:      services/account/login_player_id.go
++  file:      services/account/login_test.go
++  todo:      开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录
++  todo:      上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接
++  todo:      客户端的登录入口：roost module add portal（HTTP 登录拿账号票据，带 game 时一并拿游戏账号 token），或者由工程自己的入口代客户端调 account
+ module login: installed
+   manager:   NewLoginNotices() in game/managers/managers.go (started and stopped by the manager mod)
+   manager:   NewLoginPresence() in game/managers/managers.go (started and stopped by the manager mod)
+@@ -20,17 +29,10 @@
+   file:      internal/access/player/tcp/auth.go (replaces the untouched generated stub)
+   file:      internal/access/player/tcp/login_test.go
+   file:      internal/errors/login.go
+-  file:      services/account/collaborators.go (replaces the untouched generated stub)
+-  file:      services/account/login_channels.go
+-  file:      services/account/login_dev.go
+-  file:      services/account/login_player_id.go
+-  file:      services/account/login_test.go
+   todo:      打开玩家 TCP 监听：roost config enable player-tcp（鉴权已经不是拒绝桩；生产示例配置仍是关的）
+-  todo:      开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录
+   todo:      登记区服：没有状态是 open 的服，新号进不了任何服、入口的清单也是空的。make dev-run 起完全部服务后会自动登记本机的服；别的环境在 account 与它的 Redis 起来之后执行 go run ./cmd/accountctl upsert-server -sid <game 进程的 sid>（list-servers 看已登记的）
+   todo:      客户端的登录入口：没装 portal 模块的话 roost module add portal（HTTP 的登录 / 清单与推荐 / 进服，握手用 enter:<进服票据>），或者由工程自己的入口代客户端调 account
+   todo:      装了 enter 模块时，用进服票据握手的会话要先发 EnterCreate（带角色名）再发 EnterGame；握手之后服务器会推 EnterStatus 告诉客户端要不要新建（只是告知，以两个请求的应答为准）
+-  todo:      上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接
+   todo:      区服入口上报（给 portal 的清单配地址）：在 game 服务配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate；可选 login.presence.interval 缺省 10s、login.presence.tags），game 定期报给 account，停报三个间隔后自动消失；不写不报
+ module portal: installed
+   runtime:   services/account/portal.Start in the process of the hosted account service (after its Mods start, before service Init; stopped in reverse)
+@@ -42,7 +44,10 @@
+   file:      services/account/portal/portal_rules.go
+   file:      services/account/portal/portal_test.go
+   todo:      登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter、/portal/game-token；请求与响应见 roost-core 的 modules/portal/README.md
++  todo:      不带 game 的开房间工程（-template lobby）：客户端 POST /portal/login 带 game（或 /portal/game-token）拿 gt1，再以 Authorization: Bearer <gt1> 调大厅；/portal/servers 与 /portal/enter 在这种工程里没有区服可给
+   todo:      区服地址：game 配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate），game 定期报给 account、停报 30 秒后消失；或在 config.account.yaml 写静态的 portal.servers（服号 -> host:port），两者都有时上报的优先。都不写时清单照常列出、没有地址；别的来源改 services/account/portal/portal_rules.go 的 newDirectory
+   todo:      推荐规则（导量）在 services/account/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服
+   todo:      上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr
++glue portal with login: written (入口给的握手票据（EnterTicketPrefix 加进服票据）交给登录模块真实的认证器核对：认得出、映射与承载服 / 原服与 account 一致、不带前缀不认；入口为了不带 game 也能装而没有 import 登录模块，这里守住两边各写一份的前缀约定；只有测试，不加运行时代码)
++  file:      services/account/portal/portal_login_test.go
+ next: roost module verify

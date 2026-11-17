@@ -109,6 +109,11 @@ func TestHostedModuleRuntimesBelongToTheHostNotTheBusinessService(t *testing.T) 
 	if _, err := moduleRuntimeOrder(m, "account"); err == nil || !strings.Contains(err.Error(), "module login is not installed for service game") {
 		t.Fatalf("a dependency recorded for another business service: %v", err)
 	}
+	// 依赖装在没有业务服务的工程里（记录的 service 为空，例如 -template lobby 上装的 account_auth）：不属于任何业务服务，谁都能依赖。
+	m.Modules["login"] = InstalledModule{}
+	if _, err := moduleRuntimeOrder(m, "account"); err != nil {
+		t.Fatalf("a dependency recorded without a business service: %v", err)
+	}
 }
 
 // bootstrap：托管服务的装配到 owner Mod 为止不变，模块的 Mod 加在它后面；业务服务仍用 New()。

@@ -1,0 +1,53 @@
+package portal
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	gamelogin "{{MODULE}}/game/modules/login"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// 这个文件是 portal 与 login 两个模块的联动：两个都装着时才有。它不往工程里加任何运行时代码，只有场景。
+//
+// 入口回给客户端的握手票据是 EnterTicketPrefix 加上 account 签的进服票据，登录模块的认证器按同一个前缀认出它
+// （game/modules/login/login.go 的 enterTicketPrefix）。入口为了在不带 game 的工程里也能装，没有 import 登录模块，
+// 所以这是两边各写一份的约定：这里用工程里真实的认证器核对两边没有走样——入口给的票据认证器认，握手出来的承载服、
+// 原服与“映射是这一次建的”标记与 account 的回答一致；票据去掉前缀就不认。
+
+// 入口给的握手票据交给登录模块的认证器：第一次握手建出映射（new_role=1、enter_ticket=1），再握一次是同一名玩家、
+// 不再是新建；1001 并入 1000 之后，凭 1001 的票据握手，承载服是 1000、原服是 1001。
+func TestWithPortalLoginAuthenticatorTakesThePortalEnterTicket(t *testing.T) {
+	w := newPortalWorld(t)
+	ctx := context.Background()
+	authenticator := gamelogin.Authenticator{Accounts: w.service}
+	if got, want := EnterTicketPrefix+"et1.x", gamelogin.EnterTicket("et1.x"); got != want {
+		t.Fatalf("the portal writes the handshake ticket as %q, the login module as %q", got, want)
+	}
+	ticket := w.login("alice")
+	first := w.enter(ticket, 1001)
+	principal, err := authenticator.Authenticate(ctx, first.text("ticket"))
+	if err != nil || principal.PlayerID != 100_001 || principal.ServerID != 1001 ||
+		principal.Claims[svcaccount.NewRoleClaim] != "1" || principal.Claims[gamelogin.EnterTicketClaim] != "1" {
+		t.Fatalf("the first handshake with the portal's ticket: %+v, %v; want new player 100001 on 1001 with new_role=1 and enter_ticket=1", principal, err)
+	}
+	again, err := authenticator.Authenticate(ctx, w.enter(ticket, 1001).text("ticket"))
+	if err != nil || again.PlayerID != principal.PlayerID || again.Claims[svcaccount.NewRoleClaim] != "" {
+		t.Fatalf("handshaking again: %+v, %v; want the same player and no new_role", again, err)
+	}
+	if _, err := w.service.MergeServer(ctx, svcaccount.MergeRequest{From: 1001, Into: 1000, Note: "portal with login"}); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := authenticator.Authenticate(ctx, w.enter(ticket, 1001).text("ticket"))
+	if err != nil || merged.PlayerID != principal.PlayerID || merged.ServerID != 1000 || merged.Claims[svcaccount.OriginServerIDClaim] != "1001" {
+		t.Fatalf("the merged role's handshake: %+v, %v; want player %d served by 1000, origin 1001", merged, err, principal.PlayerID)
+	}
+	// 不带前缀的进服票据不是握手票据：认证器拒绝（不是“判断不了”）。
+	bare := first.text("ticket")[len(EnterTicketPrefix):]
+	if _, err := authenticator.Authenticate(ctx, bare); !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("a bare enter ticket was not refused as unauthenticated: %v", err)
+	}
+}

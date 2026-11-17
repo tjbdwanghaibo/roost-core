@@ -582,7 +582,6 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **语音走 TCP / WebSocket**：丢一个包会卡住后面的包；需要时以后加 UDP 通道。
 - **relay 的每个实例要能被客户端直连**（`advertise_addr` 各不相同）：生成的 k8s 模板只给 ClusterIP Service 加端口，对外暴露（每实例 LoadBalancer / NodePort / hostPort）按部署环境配。k8s Secret 的数据键就是环境变量名，改 `token_key_env` 后 Deployment 跟着改，已经 apply 的 Secret 要自己改键名。
 - **account 的配置与工具**：`account.games` / `account.services` 的条目至少要写一个键，空条目（`party: {}`）加载器看不见、会被静默忽略，所以 `token_ttl` 定为必填。`cmd/accountctl` 不读 `account.services`：`upsert-server -service` 的名字只查写法，由运维保证它是配置里的 game 服务（写错时那个服务的区服清单里没有它，用 `show-server` 核对）。
-- **不带 game 的工程里 account 协作者是桩**：`-template lobby` 生成的 `services/account/collaborators.go` 缺省全部拒绝（与任何托管 account 的工程相同），doctor 的 `collaborators:account` 报 FAIL，直到工程自己实现；登录模块（login / portal）要求有 game 服务，装不上。生成器组验收时把登录模块的四个 account 文件拷进来模拟实现（[证据](evidence/lobby-relay-gen-20261117/README.md)）。
 
 #### game-demo 的玩法范围（D20 第 3 期）
 
@@ -919,7 +918,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 设计边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)。
 
-- **多进程演练没有做**：方案 §5 的 lobby + relay 真实进程演练（kill -9 房主客户端与 relay 进程、两个 relay 实例分布、吞吐基线）没有做。已有的是进程内真实 NATS + etcd + Redis 的集成用例（`wiring/relay` 的 `TestRealRelay*`：转发、报告、leave 命令、etcd 广播、换 host、踢人、验权、开局后回座），以及生成器组 `make dev-run` 起 account、lobby、relay 三个进程的冒烟（全部 ready、lobby 拒绝伪造的 gt1、relay 在 etcd 广播 tcp 与 ws 地址，[证据](evidence/lobby-relay-gen-20261117/README.md)）。跨机、容量未验。
+- **多进程演练没有做**：方案 §5 的 lobby + relay 真实进程演练（kill -9 房主客户端与 relay 进程、两个 relay 实例分布、吞吐基线）没有做。已有的是进程内真实 NATS + etcd + Redis 的集成用例（`wiring/relay` 的 `TestRealRelay*`：转发、报告、leave 命令、etcd 广播、换 host、踢人、验权、开局后回座），以及生成器组 `make dev-run` 起 account、lobby、relay 三个进程的冒烟（全部 ready、lobby 拒绝伪造的 gt1、relay 在 etcd 广播 tcp 与 ws 地址，[证据](evidence/lobby-relay-gen-20261117/README.md)），以及 2026-11-17 在 `-template lobby` + `roost module add portal` 工程上三个真实进程（单个 relay）的正常路径演练：经 portal 拿 gt1、建房加入、两个通道收发、主动转交、lobby 房主跟随、踢人后再 join 与旧令牌都被拒（[证据](evidence/lobby-relay-portal-20261117/README.md)）。跨机、容量未验。
 - **account 新用例没在真实 Redis 上跑**：游戏账号 token 与多服务的新用例只跑了内存存储；`ROOST_REVIEW3_BACKEND=redis` 走真实 Redis 的那一遍这一轮没跑（[证据](evidence/lobby-relay-account-20261117/README.md)）。
 - **生产 compose 不发布玩家 TCP 7000，尚未确认**：生成的生产 compose 原本就不给玩家 TCP 7000 写 `ports`（只有 docker README 的 `docker run -p`）；部署组为了“未声明的工程逐字节不变”没有补，声明了 websocket 的工程里 Gate 的 compose 只发布 7080。是有意的（由外部负载均衡发布）还是遗漏，还要查；查清之前不要把 compose 当成可直接对外的模板（[证据](evidence/lobby-relay-deploy-20261117/README.md) 第 3 条）。
 

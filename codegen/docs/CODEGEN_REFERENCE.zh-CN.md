@@ -547,6 +547,10 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 
 第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复到第 2 步之前。重复执行 `add` 没有变化。没有卸载命令。
 
+**没有业务服务的工程**（`roost project new <名> -template lobby`：只托管 account、lobby、relay，2026-11-17 起）：工程里没有运行 Nest 的业务服务时，只有不要业务服务的模块能装（`ModuleSpec.needsBusinessService` 为假：不带实体、状态、组件、协议、manager、saga、新服务、玩家接入，没有 `game/`、`internal/service/`、`internal/access/` 下的文件，入口若有必须写 `runtime.framework`）——目前是 `account_auth`（account 的登录协作者）与 `portal`（HTTP 登录入口）。这时计划的 `service` 为空（`plan` 打印 `service: none`），`needs.uses` 不声明新的托管服务、只要求工程已经托管它，`needs.mods` 照旧由前置命令加在托管服务上（portal 的 `roost add mod web -service account`）；记录的 `service` 为空，这样的记录不属于任何业务服务，工程后来有了业务服务、装了依赖它的模块（login 依赖 account_auth）也照样成立。要业务服务的模块在这种工程里拒绝安装，错误写明原因。
+
+**三方联动**：联动清单可以写 `with.<对方>.requires: [<第三个模块>]`，三个都在场才写、其中最后装上的那个装上时写，记录仍按对方的名字（portal 的 `with.enter` 还要 login 的认证器）。
+
 模块的状态为什么是“主 DAO 下的嵌套结构体”而不是独立 DAO：嵌套结构体的子字段变化已按路径增量同步与落库，默认的自身视图打包照常工作，玩家仍是一份文档；独立 DAO 在同步上要改生成器与客户端。同步与否按顶层字段决定，所以既有客户端可见状态又有服务端账本的模块写两个字段。一个 DAO 最多 64 个顶层字段（脏位与同步掩码是 `uint64`），第 65 个在生成期拒绝；每个模块只占一到两个。
 
 怎么写一个模块、清单字段与模板占位见 [modules/README](../../modules/README.md)；设计与分期见[业务模块方案](../../docs/maintenance/FEATURE-2026-11-10-business-modules.md)。回归：`go test ./codegen/internal/roost -run 'TestModule|TestAppendDaoFields|TestTenModuleStructs'`、`scripts/test-modules-generated.sh`（在发版门禁里）。

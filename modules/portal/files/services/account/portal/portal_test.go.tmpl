@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	gamelogin "{{MODULE}}/game/modules/login"
 	apperrors "{{MODULE}}/internal/errors"
 	accountcollaborators "{{MODULE}}/services/account"
 
@@ -32,9 +31,10 @@ import (
 )
 
 // 登录入口的场景。account 是真实的 svcaccount.Service（内存存储）：票据由它签、由它验，区服清单、角色映射、
-// 封号都是它自己的行为；身份校验是登录模块写进工程的那一个（开发登录：渠道 dev、凭据是 login.dev_token），
-// 握手校验是登录模块的认证器。入口夹在中间，场景证明的是“客户端只经 HTTP 就能从渠道身份走到一条认证过的连接”，
-// 以及入口守住了“账号只取自票据”。请求经真实的路由引擎（httpserver.Engine + webroute.Registrar）进处理器，不开端口。
+// 封号都是它自己的行为；身份校验是 account_auth 模块写进工程的那一个（开发登录：渠道 dev、凭据是 login.dev_token）。
+// 握手那一侧直接问 account 的 EnterServer（登录模块的认证器做的就是这件事；入口不依赖登录模块，两边都装着时
+// 联动场景 TestWithPortalLogin 用真实的认证器再走一遍）。入口夹在中间，场景证明的是“客户端只经 HTTP 就能从
+// 渠道身份走到 account 认的进服票据”，以及入口守住了“账号只取自票据”。请求经真实的路由引擎（httpserver.Engine + webroute.Registrar）进处理器，不开端口。
 // 只有“account 给不出结论”“account 答非所问”用替身。场景名以 TestPortal 开头；需求里的数在这里写死，不引用被测常量。
 
 // 入口自己的业务码。码值是安装时分配的（不是需求里的数），所以取自定义；account 的码是框架固定的，
@@ -239,7 +239,7 @@ func (accounts *portalRecordingAccounts) EnterServer(ctx context.Context, ticket
 	return accounts.Accounts.EnterServer(ctx, ticket)
 }
 
-// portalVerifier 是场景里 account 的身份校验：开发登录走工程里真实的那一个（登录模块写进工程的，绑定到一份
+// portalVerifier 是场景里 account 的身份校验：开发登录走工程里真实的那一个（account_auth 模块写进工程的，绑定到一份
 // 写了 login.dev_token 的 account 配置上）；另有一个只在场景里存在的渠道 "store"，它像真正的平台那样只认
 // 凭据——凭据是 "receipt-of-<用户>"，确认的身份是凭据里的用户，不是请求里随手填的 open_id。
 func portalVerifier(t *testing.T) svcaccount.IdentityVerifier {
@@ -464,14 +464,25 @@ func (w *portalWorld) enter(ticket string, sid int) portalReply {
 	return reply
 }
 
-// handshake 把进服的握手票据交给登录模块的认证器（握手那一侧直接问 account，不经入口）。
+// handshake 做握手那一侧做的事：去掉 enter: 前缀，把进服票据交给 account 的 EnterServer（握手直接问 account，
+// 不经入口）。返回 account 解析出的角色与“映射是不是这一次建的”。
 func (w *portalWorld) handshake(ticket string) (playerID int64, isNew bool) {
 	w.t.Helper()
-	principal, err := gamelogin.Authenticator{Accounts: w.service}.Authenticate(context.Background(), ticket)
+	entry, err := w.serverEntry(ticket)
 	if err != nil {
-		w.t.Fatalf("the handshake ticket from /portal/enter was refused by the authenticator: %v", err)
+		w.t.Fatalf("the handshake ticket from /portal/enter was refused by account: %v", err)
 	}
-	return principal.PlayerID, principal.Claims[svcaccount.NewRoleClaim] == "1"
+	return entry.Role.PlayerID, entry.Created
+}
+
+// serverEntry 把握手票据（enter:<进服票据>）交给 account 的 EnterServer；前缀不对时直接失败。
+func (w *portalWorld) serverEntry(handshake string) (svcaccount.ServerEntry, error) {
+	w.t.Helper()
+	ticket, ok := strings.CutPrefix(handshake, "enter:")
+	if !ok || ticket == "" {
+		w.t.Fatalf("the handshake ticket %q is not enter:<ticket>", handshake)
+	}
+	return w.service.EnterServer(context.Background(), ticket)
 }
 
 func (w *portalWorld) ban(accountID string) {
@@ -485,7 +496,7 @@ func (w *portalWorld) ban(accountID string) {
 }
 
 // 整条链路，只经 HTTP：登录只回账号票据 -> 清单里两个服都没有角色、推荐最新开的服 -> 进服拿到握手票据。
-// 票据交给登录模块的认证器：account 建出账号与玩家号的映射，握手成功。再拿一次清单：那个服上有角色了，推荐的是它。
+// 票据交给 account 的 EnterServer（握手那一侧做的事）：account 建出账号与玩家号的映射，握手成功。再拿一次清单：那个服上有角色了，推荐的是它。
 // 入口自己从头到尾没有建角、没有选角。
 func TestPortalWalksFromAChannelIdentityToAnAuthenticatedHandshake(t *testing.T) {
 	w := newPortalWorld(t)
@@ -526,7 +537,7 @@ func TestPortalWalksFromAChannelIdentityToAnAuthenticatedHandshake(t *testing.T)
 	if _, err := w.service.RoleOnServer(context.Background(), "dev:alice", 1000); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
 		t.Fatalf("/portal/enter created the mapping; that is the handshake's job: %v", err)
 	}
-	// 握手：登录模块的认证器向同一个 account 出示这张票据。
+	// 握手：向同一个 account 出示这张票据（认证器做的就是这件事）。
 	playerID, isNew := w.handshake(entered.text("ticket"))
 	if playerID != 100_001 || !isNew {
 		t.Fatalf("the handshake gave player %d (new %v), want the new player 100001", playerID, isNew)
@@ -1158,9 +1169,9 @@ func TestPortalEnterHandsOutATicketAndTheServingAddress(t *testing.T) {
 	if merged.number("server_id") != 1001 || merged.number("serving_server_id") != 1000 || merged.text("addr") != "203.0.113.7:7000" {
 		t.Fatalf("enter the merged server answered %s; want serving 1000 at 203.0.113.7:7000", merged.raw)
 	}
-	principal, err := gamelogin.Authenticator{Accounts: w.service}.Authenticate(ctx, merged.text("ticket"))
-	if err != nil || principal.PlayerID != playerID || principal.ServerID != 1000 || principal.Claims["origin_server_id"] != "1001" {
-		t.Fatalf("the merged role's handshake: %+v, %v; want player %d served by 1000, origin 1001", principal, err, playerID)
+	entry, err := w.serverEntry(merged.text("ticket"))
+	if err != nil || entry.Role.PlayerID != playerID || entry.Role.ServingServerID != 1000 || entry.Role.ServerID != 1001 {
+		t.Fatalf("the merged role's handshake: %+v, %v; want player %d served by 1000, origin 1001", entry, err, playerID)
 	}
 	// 维护中的服：票据照发、地址为空（目录里没有它）；新号握手被 account 拒绝，什么也没建。
 	w.upsert(1002, svcaccount.ServerMaintenance)
@@ -1168,7 +1179,7 @@ func TestPortalEnterHandsOutATicketAndTheServingAddress(t *testing.T) {
 	if maintenance.text("addr") != "" || maintenance.text("addr_source") != "none" {
 		t.Fatalf("enter a server the directory does not know answered %s", maintenance.raw)
 	}
-	if _, err := (gamelogin.Authenticator{Accounts: w.service}).Authenticate(ctx, maintenance.text("ticket")); err == nil {
+	if _, err := w.serverEntry(maintenance.text("ticket")); err == nil {
 		t.Fatal("a new account's handshake on a server in maintenance was accepted")
 	}
 	if _, err := w.service.RoleOnServer(ctx, "dev:alice", 1002); svcaccount.Code(err) != svcaccount.CodeRoleMissing {

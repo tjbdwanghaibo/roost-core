@@ -1,0 +1,14 @@
+# run3.sh start
+account: ready (pid 60017, http://127.0.0.1:19300/readyz)
+lobby: ready (pid 60062, http://127.0.0.1:19301/readyz)
+relay: ready (pid 60091, http://127.0.0.1:19302/readyz)
+
+# etcd keys under /lrportal/ while running
+/lrportal/relays/relay-1000
+/lrportal/services/lobby/1000
+/lrportal/services/relay/1000
+
+# run3.sh stop
+relay stopped (pid 60091)
+lobby stopped (pid 60062)
+account stopped (pid 60017)

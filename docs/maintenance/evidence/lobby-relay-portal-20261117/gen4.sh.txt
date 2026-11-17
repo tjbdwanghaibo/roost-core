@@ -1,0 +1,12 @@
+#!/bin/sh
+# 用法: gen4.sh <roost 二进制> <core 树> <输出目录>
+set -u
+R=$1; CORE=$2; OUT=$3
+export GOWORK=off
+rm -rf $OUT && mkdir -p $OUT && cd $OUT
+$R project new plain -module example.com/plain -out plain --skip-deps > plain.log 2>&1; echo "plain new exit $?"
+$R project new game -module example.com/game -out game -template game --skip-deps > game.log 2>&1; echo "game new exit $?"
+$R project new demo -module example.com/demo -out demo -template game-demo --skip-deps > demo.log 2>&1; echo "demo new exit $?"
+$R project new login -module example.com/login -out login -template game --skip-deps > login-new.log 2>&1; echo "login new exit $?"
+cd login && go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE && go mod tidy > /dev/null 2>&1; echo "tidy exit $?"
+$R module add login portal > ../login-module-add.log 2>&1; echo "module add login portal exit $?"

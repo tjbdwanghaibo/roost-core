@@ -1,0 +1,16 @@
+name: account_auth
+summary: account 的登录协作者：替换托管 account 服务生成的拒绝桩（services/account/collaborators.go）——开发令牌登录（渠道 dev，凭据是 login.dev_token）、工程自己的渠道入口（login_channels.go，缺省全拒）、Redis 玩家号计数器、名字规则与指标；只在托管 account 的进程里，不碰任何业务服务，所以不带 game 的工程（-template lobby）也能装；login 与 portal 都依赖它
+requires: []
+conflicts: []
+needs:
+  uses: [account]
+replaces:
+  - services/account/collaborators.go
+next:
+  - "开发登录：在 configs/service/config.account.yaml 末尾加 login.dev_token（必须以 dev- 开头，只写在开发配置里）；不加则 account 拒绝每一次登录"
+  - "上线前在 services/account/login_channels.go 接渠道验签；缺省一个渠道都没接"
+  - "客户端的登录入口：roost module add portal（HTTP 登录拿账号票据，带 game 时一并拿游戏账号 token），或者由工程自己的入口代客户端调 account"
+verify:
+  packages: [./services/account]
+  run: ^TestLogin
+  pass: 6

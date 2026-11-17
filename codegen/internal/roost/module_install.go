@@ -140,7 +140,16 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	}
 	service, err := nestService(manifest, requestedService, "roost module add", "modules run their business in Nest transactions")
 	if err != nil {
-		return ModulePlan{}, err
+		// 工程没有任何运行 Nest 的业务服务（-template lobby）：只有不要业务服务的模块能装，Service 为空。
+		if requestedService != "" || projectHasNestService(manifest) {
+			return ModulePlan{}, err
+		}
+		for _, spec := range order {
+			if _, installed := manifest.Modules[spec.Name]; !installed && spec.needsBusinessService() {
+				return ModulePlan{}, fmt.Errorf("module %s needs a business service with the nest mod and this project has none (only hosted framework services): %w", spec.Name, err)
+			}
+		}
+		service = ""
 	}
 	before := manifest
 	manifest, err = planModuleServices(root, manifest, service, order)
@@ -169,7 +178,8 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 			IDs: map[string]map[string]int64{}, State: []string{}, Files: spec.ownedFiles(), Verify: spec.Verify, spec: spec,
 		}
 		if installed, ok := manifest.Modules[spec.Name]; ok {
-			if installed.Service != service {
+			// 装在没有业务服务的工程里的模块（记录的 service 为空）不属于任何业务服务，工程后来有了业务服务也照样算已装。
+			if installed.Service != service && installed.Service != "" {
 				return ModulePlan{}, fmt.Errorf("module %s belongs to service %s, not %s", spec.Name, installed.Service, service)
 			}
 			item.Runtime = installed.Runtime
@@ -318,7 +328,8 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 
 // planModuleGlue 算出这次要写的联动文件。一对模块的联动在第二个装上的那一次写：两个都在场
 // （已装或这次装）、其中至少一个是这次装的、并且这一对还没有接过。两个都早已装好的不补——
-// 已装的源码归工程所有，可能已经改过，安装器不回头往里加东西。
+// 已装的源码归工程所有，可能已经改过，安装器不回头往里加东西。联动另外要求的模块（with.<对方>.requires）
+// 同样要在场，并且算进“这次装的”：三个里最后装上的那一个装上时写。
 func planModuleGlue(root string, manifest Manifest, catalog map[string]ModuleSpec, service string, items []ModulePlanItem) ([]ModuleGlueItem, error) {
 	present := map[string]bool{}
 	installing := map[string]bool{}
@@ -339,7 +350,13 @@ func planModuleGlue(root string, manifest Manifest, catalog map[string]ModuleSpe
 			continue
 		}
 		for _, other := range spec.withNames() {
-			if !present[other] || !(installing[owner] || installing[other]) {
+			needed := append([]string{owner, other}, spec.With[other].Requires...)
+			allPresent, anyInstalling := true, false
+			for _, name := range needed {
+				allPresent = allPresent && present[name]
+				anyInstalling = anyInstalling || installing[name]
+			}
+			if !allPresent || !anyInstalling {
 				continue
 			}
 			if _, done := manifest.Modules[owner].With[other]; done {
@@ -392,6 +409,13 @@ func checkModuleNeeds(manifest Manifest, service string, spec ModuleSpec) error 
 		}
 	}
 	for _, used := range spec.Needs.Uses {
+		if service == "" {
+			// 没有业务服务可以接 ClientMod：模块要的是工程已经托管这个框架服务（它的协作者文件在 services/<名字>/）。
+			if _, err := frameworkHostService(manifest, used); err != nil {
+				problems = append(problems, fmt.Sprintf("the module needs the %s framework service and this project has no business service to declare it for: %v", used, err))
+			}
+			continue
+		}
 		if !contains(manifest.Services[service].Uses, used) {
 			problems = append(problems, fmt.Sprintf("service %s does not use the %s framework service: declare services.%s.framework: %s and add %s to services.%s.uses in roost.yaml, then roost project sync (roost help services)", service, used, used, used, used, service))
 		}
