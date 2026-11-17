@@ -84,3 +84,7 @@
 - “portal 的边界”一条里“account 没有改密码路径，凭证变更由渠道 / 账号中心经总线调 `RevokeGameTokens`。”改为：“account 没有改密码路径；渠道验证器在 `Verified.CredentialVersion` 返回凭证版本时，改密之后的下一次登录自动吊销（2026-11-18），要当场吊销由渠道 / 账号中心经总线调 `RevokeGameTokens`。凭证版本只比较相等，渠道必须只在凭证真变时改它。”
 - 交接 C6 第 1 点可以结掉；第 2、3 点维护者未改，按现状保留。
 - 新增一条遗留（尚未确认）：“`service/account` 在 Redis Cluster 上有 10 条建角 / 名字 / slot 用例报 `CROSSSLOT`（基线 `616c5a90` 同样失败，2026-11-18 在私有 3 主 3 从集群上观察到），`redis-cluster-suites.sh` 跑到这个包会红；是夹具前缀没带 hash tag 还是产品代码问题尚未确认。证据 `docs/maintenance/evidence/c6-credential-version-20261118/cluster-preexisting-failures-on-base.txt`。”
+
+## 协调者补记：Cluster 上 10 条 `CROSSSLOT` 已查清并修掉（2026-11-18）
+
+在私有 3 主 Cluster 上复现：10 条失败都经 `create_role_test.go` 的 `createRoleService` 夹具（`pending_contract_test.go` 的几条也用它），夹具在 Cluster 上直接用 `redistest.Prefix(...)` 当前缀、不带 hash tag，角色 / 名字 / 槽位 / 在途换服索引同一个脚本写的键落到不同 slot。产品侧 `wiring/account` 的 Mod 本来就用 `ValidateClusterKeyPrefix` 要求 Cluster 前缀带 hash tag，所以是夹具问题，不是产品缺陷；R2 加在途换服索引时只改了 `pending_contract_test.go` 的夹具。修法：`createRoleService` 在 `ROOST_REVIEW_CLUSTER` 下同样给前缀加 `{}`。修前 `cluster-fixture-before.txt`（CROSSSLOT 与连带断言），修后整包 `-race` 在 Cluster 上 ok（`cluster-fixture-after.txt`），单机 Redis 上 `service/account`、`wiring/account` 仍 ok。

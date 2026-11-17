@@ -526,7 +526,14 @@ func createRoleService(t *testing.T, mutate ...func(*Config)) (*Service, *clock,
 		return newService(t, mutate...)
 	}
 	client := newAccountTestRedis(t, addr)
-	stores, err := NewRedisStores(client, redistest.Prefix(t, addr, "account-review3"), time.Minute)
+	prefix := redistest.Prefix(t, addr, "account-review3")
+	if os.Getenv("ROOST_REVIEW_CLUSTER") != "" {
+		// 角色、名字、槽位与在途换服索引会在同一个脚本里写：Cluster 上前缀要带 hash tag，与 wiring/account 的
+		// ValidateClusterKeyPrefix 要求相同（pending_contract_test.go 同一写法）。
+		prefix = "{" + prefix + "}"
+		redistest.Cleanup(t, addr, prefix)
+	}
+	stores, err := NewRedisStores(client, prefix, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

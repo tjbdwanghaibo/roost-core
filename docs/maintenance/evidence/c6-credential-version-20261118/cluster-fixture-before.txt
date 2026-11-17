@@ -1,0 +1,27 @@
+--- FAIL: TestBeforeWriteFailuresRemainRetryable (0.02s)
+        create_role_test.go:513: before-write failure should permit clean retry: CROSSSLOT Keys in request don't hash to the same slot
+        create_role_test.go:513: before-write failure should permit clean retry: CROSSSLOT Keys in request don't hash to the same slot
+        create_role_test.go:513: before-write failure should permit clean retry: CROSSSLOT Keys in request don't hash to the same slot
+--- FAIL: TestNameCommitLostReplyCannotBurnName (0.01s)
+    create_role_test.go:577: committed name burned: name={Key:hero Raw:Hero Owner:test:name-lost@1/FOMC5XBBRSHHHXOBIGGKFUIVIF State:reserved Token:95364dcdaa23474443151871e786286f ExpiresAtUnix:1794945026 ReservedAtUnix:1794944995 Committed
+--- FAIL: TestRoleCreateLostReplyCannotLeaveDuplicateNames (0.01s)
+    create_role_test.go:609: CROSSSLOT Keys in request don't hash to the same slot
+--- FAIL: TestInitialSlotUnknownCannotPermanentlyBlockCreate (0.01s)
+    create_role_test.go:650: empty permanent slot blocks recovered client: slot={AccountID:test:slot-first ServerID:1 PlayerID:0 Creation:{ID:NPGWFFGAZIE5MQRKVUZMMXFEA2 PlayerID:1000001 Name:Hero CreatedAtUnix:1700000000 Claim:{Key:hero Own
+--- FAIL: TestProfileOutputCannotMutateRoleWithoutCAS (0.02s)
+        create_role_test.go:664: CROSSSLOT Keys in request don't hash to the same slot
+        create_role_test.go:664: CROSSSLOT Keys in request don't hash to the same slot
+        create_role_test.go:664: CROSSSLOT Keys in request don't hash to the same slot
+--- FAIL: TestPendingRoleRecoversAcrossServiceRestart (0.01s)
+    create_role_test.go:712: pending role selected: account: role not found: player 0
+--- FAIL: TestConcurrentCreationRetriesShareOneDurablePlan (0.01s)
+    create_role_test.go:761: retry forked plan: role={CreationID: PlayerID:0 AccountID: ServerID:0 ServingServerID:0 Name: Profile:[] CreatedAtUnix:0 LastLoginAtUnix:0 LastLogoutAtUnix:0 BindEpoch:0 TransferSeq:0 Transfer:<nil> LastTransfer
+--- FAIL: TestNameCommittedElsewhereReleasesThePendingSlot (2.03s)
+    pending_contract_test.go:344: winner could not take the lapsed name: CROSSSLOT Keys in request don't hash to the same slot
+--- FAIL: TestNameReservedElsewhereKeepsThePendingSlot (1.99s)
+    pending_contract_test.go:391: admitted plan was released under a mere reservation: {AccountID:store:rr06-loser ServerID:1 PlayerID:0 Creation:{ID:FCHXKDIUT5F2Q4UEGFJIY6RGGY PlayerID:1000001 Name:Hero CreatedAtUnix:1700000000 Claim:{Key:
+--- FAIL: TestResolvePendingCreationFreesTheSlotAndRecordsTheNote (1.99s)
+    pending_contract_test.go:416: returned plan is not the abandoned one: {ID:YQCJKDNPOOARGBSNTDMY2M3BHS PlayerID:1000001 Name:Hero CreatedAtUnix:1700000000 Claim:{Key:hero Owner:store:rr06-loser@1/YQCJKDNPOOARGBSNTDMY2M3BHS Token:e6b7cc85c
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	25.607s
+FAIL

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：account 契约用例在 Redis Cluster 上的 10 条 `CROSSSLOT`**（2026-11-18，C6 B 实施时发现）：`createRoleService` 夹具在 Cluster 上前缀没带 hash tag（产品侧 Mod 本来就要求带），R2 只改了另一个夹具；改成同一写法后整包在 Cluster 上通过。[证据](docs/maintenance/evidence/c6-credential-version-20261118/README.md)
+- **改密码自动吊销游戏账号 token（交接 C6 第 1 点，维护者 2026-11-18 选 B；账号记录多一个字段，未上线不兼容）**：`svcaccount.Verified` 多 `CredentialVersion`（不透明字符串，至多 128 字节，空 = 渠道不提供，行为不变），账号记录多 `CredentialVersion`。`Login` 在写账号记录的同一次比较后写入里比较：存过且不同就把 `GameTokenGeneration` 加一（与 `RevokeGameTokens` 同一个计数），此前签发的 gt2 全部失效、之后签发的可用；第一次见到只记录，相同或空不动；被封的账号登录照样被拒，但版本变化照样落库。并发登录不会多加或丢加（同一个新版本只加一次，两个不同新版本加两次）。account_auth 模板的开发登录支持 `<dev_token>#<密码版本>` 演示，`verifyChannel` 注释写明接法；场景 6 → 7（只对新安装的模块）。手动的 `RevokeGameTokens` / `accountctl revoke-game-tokens` 仍在，用于当场吊销。证据 `docs/maintenance/evidence/c6-credential-version-20261118/`。 [证据](docs/maintenance/evidence/c6-credential-version-20261118/README.md)
 - **生成物要求的最低 core 提到 v1.54.0**（2026-11-18）：生成的 bootstrap 把模块配置声明交给 `wiring/modulehost`（R5），声明了 websocket 的工程读 `trusted_proxies`，开房间工程装配 `wiring/lobby` / `wiring/relay`，都要 v1.54.0；framework-compat 的 minimum 一栏随之改为 v1.54.0。
 
 ## [v1.54.0] - 2026-11-18
