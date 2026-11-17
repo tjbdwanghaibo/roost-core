@@ -1,0 +1,263 @@
+package relay
+
+import (
+	"bufio"
+	"errors"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/service/relay/token"
+)
+
+// conn 是一条客户端连接。
+//
+// 读 goroutine（Server.serveConn）独占 reader、account 之后的读循环与三个限额桶；slot 由 room 在锁内写入，
+// 写入发生在读循环开始之前，之后不再改变（顶号是换一条新的 conn）。
+// 写 goroutine（writeLoop）是唯一写 socket 的地方：发送队列由 mu 保护，计数包含已取走、正在写的那一批，
+// 所以上限就是这条连接最多驻留的帧数与字节数；放不下时断开这一条连接，放帧的一方（房间、别的连接）从不等待。
+type conn struct {
+	server  *Server
+	netConn net.Conn
+	reader  *bufio.Reader
+	account string
+	slot    uint32
+
+	frames, roomFrames, roomBytes bucket
+
+	mu           sync.Mutex
+	queue        [][]byte
+	queuedFrames int
+	queuedBytes  int
+	closing      bool
+	reason       wire.RelayReason // 第一次 finish 的原因，离房通知与报告用它
+	wake         chan struct{}
+	writerDone   chan struct{}
+}
+
+func newConn(s *Server, netConn net.Conn) *conn {
+	cfg := s.config
+	return &conn{server: s, netConn: netConn, reader: bufio.NewReader(netConn),
+		frames: newBucket(cfg.FramesPerSecond), roomFrames: newBucket(cfg.RoomFramesPerSecond), roomBytes: newBucket(cfg.RoomBytesPerSecond),
+		wake: make(chan struct{}, 1), writerDone: make(chan struct{})}
+}
+
+// readToken 读第一帧：message_id=0、flags=0 的令牌帧，载荷是 lobby 签的 rt1 令牌，按本实例名与共用密钥验签。
+func (c *conn) readToken() (token.Claims, wire.RelayReason) {
+	cfg := c.server.config
+	_ = c.netConn.SetReadDeadline(time.Now().Add(cfg.AuthTimeout))
+	p, err := wire.ReadRelay(c.reader, token.MaxBytes)
+	if err != nil {
+		return token.Claims{}, readFailure(err)
+	}
+	if p.RelayChannel() != wire.RelayNone || p.MsgID != 0 {
+		return token.Claims{}, wire.RelayReasonProtocol
+	}
+	claims, err := token.Verify(cfg.TokenKey, string(p.Payload), cfg.Instance, c.server.now())
+	if err != nil {
+		return token.Claims{}, wire.RelayReasonTokenRejected
+	}
+	c.account = claims.Account
+	return claims, wire.RelayReasonNone
+}
+
+// readLoop 逐帧读、扣限额、按通道交给房间，返回连接结束的原因。
+func (c *conn) readLoop(r *room) wire.RelayReason {
+	cfg := c.server.config
+	for {
+		_ = c.netConn.SetReadDeadline(time.Now().Add(cfg.IdleTimeout))
+		p, err := wire.ReadRelay(c.reader, cfg.MaxPayloadBytes)
+		if err != nil {
+			return readFailure(err)
+		}
+		now := time.Now()
+		if !c.frames.take(now, 1) {
+			return wire.RelayReasonRateLimited
+		}
+		switch p.RelayChannel() {
+		case wire.RelayGame:
+			r.forwardGame(c, p)
+		case wire.RelayRoom:
+			// 房间通道超出自己的限额只丢这一帧，不断开：语音的突发不能把游戏连接拖下线。
+			if c.roomFrames.ready(now, 1) && c.roomBytes.ready(now, len(p.Payload)) {
+				c.roomFrames.tokens--
+				c.roomBytes.tokens -= float64(len(p.Payload))
+				r.forwardRoom(c, p)
+			}
+		case wire.RelayControl:
+			if reason := c.control(r, p); reason != wire.RelayReasonNone {
+				return reason
+			}
+		default: // 第二个令牌帧
+			return wire.RelayReasonProtocol
+		}
+	}
+}
+
+// control 处理客户端发来的控制帧。踢人、禁言只认当前房主（room 里核对）；不认识的操作码丢弃，留给以后的协议扩展。
+func (c *conn) control(r *room, p *wire.Packet) wire.RelayReason {
+	switch p.MsgID {
+	case wire.RelayOpPing:
+		if len(p.Payload) > wire.RelayMaxPingBytes {
+			return wire.RelayReasonProtocol
+		}
+		c.enqueueControl(wire.RelayOpPong, 0, p.Payload)
+	case wire.RelayOpKick:
+		r.kick(c, p.Seq)
+	case wire.RelayOpMute:
+		if len(p.Payload) != 1 || p.Payload[0] > 1 {
+			return wire.RelayReasonProtocol
+		}
+		r.mute(c, p.Seq, p.Payload[0] == 1)
+	}
+	return wire.RelayReasonNone
+}
+
+// enqueueControl 往发送队列放一个 relay 生成的控制帧。
+func (c *conn) enqueueControl(op, slot uint32, payload []byte) {
+	data, err := wire.EncodeRelay([]*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: op, Seq: slot, Payload: payload}}, max(len(payload), 1))
+	if err == nil {
+		c.enqueue(data)
+	}
+}
+
+// enqueue 把一帧编码好的字节放进发送队列，不阻塞。队列（含正在写的一批）放不下时，按慢连接断开这一条：
+// 立即关 socket，不再给它写任何东西。data 可能与别的收件人共用，只读。
+func (c *conn) enqueue(data []byte) {
+	cfg := c.server.config
+	c.mu.Lock()
+	if c.closing {
+		c.mu.Unlock()
+		return
+	}
+	if c.queuedFrames+1 > cfg.SendQueueFrames || c.queuedBytes+len(data) > cfg.SendQueueBytes {
+		c.closing, c.reason = true, wire.RelayReasonSlowConsumer
+		c.mu.Unlock()
+		_ = c.netConn.Close()
+		c.signal()
+		return
+	}
+	c.queue = append(c.queue, data)
+	c.queuedFrames++
+	c.queuedBytes += len(data)
+	c.mu.Unlock()
+	c.signal()
+}
+
+// finish 结束这条连接（只有第一次生效）。notify 为 true 时先把 RelayOpClosed{reason} 排在队尾，写 goroutine 把队列写完后
+// 关 socket；为 false 时立即关 socket。
+func (c *conn) finish(reason wire.RelayReason, notify bool) {
+	c.mu.Lock()
+	if c.closing {
+		c.mu.Unlock()
+		return
+	}
+	c.closing, c.reason = true, reason
+	if notify {
+		data, err := wire.EncodeRelay([]*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpClosed, Payload: []byte{byte(reason)}}}, 1)
+		if err == nil {
+			c.queue = append(c.queue, data)
+			c.queuedFrames++
+			c.queuedBytes += len(data)
+		}
+	}
+	c.mu.Unlock()
+	if !notify {
+		_ = c.netConn.Close()
+	}
+	c.signal()
+}
+
+// closeReason 是连接结束的原因；连接还没 finish 过时按断开算。
+func (c *conn) closeReason() wire.RelayReason {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reason == wire.RelayReasonNone {
+		return wire.RelayReasonDisconnected
+	}
+	return c.reason
+}
+
+func (c *conn) signal() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// writeLoop 是唯一写 socket 的 goroutine：每次取走整个队列一次写出（writev），写完再扣计数；
+// 写出错或超过 WriteTimeout 就关连接。连接 finish 之后把剩下的队列写完再关 socket。
+func (c *conn) writeLoop() {
+	defer close(c.writerDone)
+	defer c.netConn.Close()
+	cfg := c.server.config
+	for {
+		c.mu.Lock()
+		batch, closing := c.queue, c.closing
+		c.queue = nil
+		c.mu.Unlock()
+		if len(batch) == 0 {
+			if closing {
+				return
+			}
+			<-c.wake
+			continue
+		}
+		size := 0
+		for _, data := range batch {
+			size += len(data)
+		}
+		_ = c.netConn.SetWriteDeadline(time.Now().Add(cfg.WriteTimeout))
+		buffers := net.Buffers(batch)
+		_, err := buffers.WriteTo(c.netConn)
+		c.mu.Lock()
+		c.queuedFrames -= len(batch)
+		c.queuedBytes -= size
+		c.mu.Unlock()
+		if err != nil {
+			c.finish(wire.RelayReasonDisconnected, false)
+			return
+		}
+	}
+}
+
+// readFailure 把读错误换成原因码：帧太大、帧头非法、空闲超时，其余算断开。
+func readFailure(err error) wire.RelayReason {
+	var timeout net.Error
+	switch {
+	case errors.Is(err, wire.ErrPacketTooBig):
+		return wire.RelayReasonFrameTooBig
+	case errors.Is(err, wire.ErrInvalidPacket):
+		return wire.RelayReasonProtocol
+	case errors.As(err, &timeout) && timeout.Timeout():
+		return wire.RelayReasonIdleTimeout
+	}
+	return wire.RelayReasonDisconnected
+}
+
+// bucket 是令牌桶：每秒补 rate 个，最多存 rate 个（突发量等于一秒的额度）。只由连接的读 goroutine 使用。
+type bucket struct {
+	rate, tokens float64
+	last         time.Time
+}
+
+func newBucket(rate int) bucket { return bucket{rate: float64(rate), tokens: float64(rate)} }
+
+// ready 补足到 now 之后，看够不够 n 个（不扣）。
+func (b *bucket) ready(now time.Time, n int) bool {
+	if !b.last.IsZero() {
+		b.tokens = min(b.rate, b.tokens+now.Sub(b.last).Seconds()*b.rate)
+	}
+	b.last = now
+	return b.tokens >= float64(n)
+}
+
+// take 够 n 个就扣掉并返回 true。
+func (b *bucket) take(now time.Time, n int) bool {
+	if !b.ready(now, n) {
+		return false
+	}
+	b.tokens -= float64(n)
+	return true
+}
