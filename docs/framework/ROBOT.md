@@ -49,6 +49,7 @@ go run ./cmd/loadtest -executor arrival-rate -rate 10 -max-concurrent 100 -durat
 - 每个消息 ID 的 p50/p95/p99 包含所有完成结果，从进入 Call 到响应解码和业务校验结束；不是服务器排队耗时或 Sync 端到端延迟。固定指数桶给上界，邻桶约 9%，上限裁到真实 max；max 保留实际值。最多 256 个常规消息系列，更多 ID 汇总到 overflow；最多保留 32 条最慢样本，仅含消息 ID、结果和耗时，不存身份、票据或载荷。
 - `request_ok_per_second` = ok 总数 / 整次运行秒数，包含登录、重连和其他场景等待；不是仅采样活跃阶段的峰值 TPS，也不是资产成功写入 TPS。
 - `traffic.socket_read_bytes/socket_written_bytes` 在 TCP socket 实际读写返回时累计，包含 RS 包头、握手、迟到应答和部分写入；不含 TCP/IP 头及重传。`measured_connections` 表示接入计数的连接数。默认 TCP 和 player-tcp 已测量，WS、直接使用 KCP 或自定义传输未接此计数，不能把 0 当成没有流量。
+- `steps` 是逐步计时，用来看整场景耗时花在哪一步。YAML 场景的每个顶层步骤自动计时（根不是 sequence 时整棵树算一步），名字是两位序号加子树摘要，如 `08 retry(wait 250ms,mailbox_list)`，报告按名字排序即场景顺序；代码搭的场景用 `scenario.Step(name, node)` 自己命名。每步给 `samples/ok/failed`、`mean_ms/p50_ms/p95_ms/max_ms`（含失败样本，桶精度同上）、`wait_mean_ms`（场景 `wait` 节点睡掉的时间；动作内部的等待如 `wait_push` 的超时不算在内，只在步骤耗时里）、`retry_attempts_avg/max`（步骤内 Retry 实际执行子节点的次数，一次成功为 1，没有 Retry 为 0）。嵌套 Step 各记一份，内层的 wait / retry 同时计入外层。最多 256 个步骤名，更多的汇总到 `(overflow)`。步骤耗时 = 请求往返 + 场景等待 + 机器人本地处理，不是服务端排队时间。
 - 返回的历史报告深拷贝可变字段；调用方整理表格不会改写保留证据。拒绝、取消和超时不混入成功吞吐。
 
 服务端 CPU/内存/磁盘/网络需由部署侧监控单独采集；目前内置资源采样仍只覆盖 Robot 进程。`SyncProbe` 提供 Full/Delta/Remove 的端到端统计与最慢 32 个样本；服务端队列仍须由场景读取 Nest Stats，不由请求 RT 替代。

@@ -19,7 +19,7 @@ DEMO_ROBOT_COUNT=100 DEMO_ROBOT_MODE=burst \
 
 输出包含：
 
-- `robot.json`、`robot.log`、`loadtest-args.json`：原始正式 runner 快照和进程输出，分消息请求结果也在 JSON 内；`test.log` 明确 `TestDemoRobotCapacity` 恰好 1 个 PASS、零 SKIP。
+- `robot.json`、`robot.log`、`loadtest-args.json`：原始正式 runner 快照和进程输出，分消息请求结果（`requests`）与逐步计时（`steps`，见 [Robot 报告解释](../../../docs/framework/ROBOT.md#按运行的请求与流量)）也在 JSON 内，`summary.json` 的 `steps_by_mean_ms` 把各步骤按平均耗时从大到小排好；`test.log` 明确 `TestDemoRobotCapacity` 恰好 1 个 PASS、零 SKIP。
 - `summary.json`、`diagnostic-matches.json`：来自正式 JSON 的成功/失败/取消人数、run 级最终错误及其分类、整场景分位数、原门槛结果，以及带源文件/行号的 Saga still/unknown/waiting 与 `nest: sync timeout` 日志匹配。正式 RunSnapshot 没有逐 Robot 错误明细；不能由日志出现次数补造事务失败数。
 - `logs/`、`dependency-logs/`、`etcd.log`、`game-metrics-{before,after}.txt`：服务日志、私有依赖日志与游戏指标；`environment.txt`、`host-{before,after}.txt`：源码版本/工作树、Go、实际 CPU/内存/swap/load；`project-source.tgz`：本轮生成源码与配置。
 - `mirror-up.log`、`generate.log`、`dev-run.log`、`services.txt`、`cleanup.log`：环境与启动/收尾证据。

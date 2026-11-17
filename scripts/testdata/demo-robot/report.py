@@ -59,6 +59,8 @@ summary = {
     "stats": report.get("stats"),
     "quantiles_ms": report.get("quantiles_ms"),
     "thresholds": report.get("thresholds"),
+    # 逐步计时（RunSnapshot.steps）：整场景时间花在哪一步；按平均耗时从大到小排，方便直接看。
+    "steps_by_mean_ms": sorted(report.get("steps") or [], key=lambda s: s.get("mean_ms", 0), reverse=True),
     "logged_occurrences": counts,
     "startup_saga_replay": replay,
     "log_files_scanned": [str(p.relative_to(out)) for p in sources if p.exists()],
