@@ -1,0 +1,27 @@
+package room
+
+import (
+	"example.com/tower-defense-practice/game/event"
+	tower "example.com/tower-defense-practice/game/modules/towerdefense"
+	apperrors "example.com/tower-defense-practice/internal/errors"
+)
+
+// OnTowerJoining 是 room 模块入房拦截事件的塔防监听（宿主给名单开局，借鉴 matchroom 的固定名单）：
+// 塔防房（RoomDao.TowerState 非空）只放成局名单里的玩家入座；普通房放行（room 模块自己的场景用的就是普通房）。
+// 在 Join 的事务里、占座之前执行；只读，返回错误即拒绝入房、什么都不写。
+//
+//roost:listen
+func (e *Room) OnTowerJoining(ev event.RoomJoining) error {
+	raw := e.Dao().GetTowerState()
+	if raw == "" {
+		return nil
+	}
+	s, err := tower.Decode(raw)
+	if err != nil {
+		return err
+	}
+	if s.Index(ev.PlayerID) < 0 {
+		return apperrors.ErrRoomNotMember
+	}
+	return nil
+}

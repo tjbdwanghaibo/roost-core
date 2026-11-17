@@ -1,15 +1,14 @@
 package towerdefense
 
 // 共享金币、地格、路线与命令回执同一事务。失败局部副本丢弃，不能先扣费再异步计算路径。
-func (s *State) Apply(id int64, c Command, now int64) (Receipt, bool, error) {
+// 调用方（Room 上的 handler）先经 room 核对 c.Epoch 是这名成员的当前代际、请求来自席位认下的连接；
+// connected 是 room 报告的在线状态：断线的席位只能重放已有回执，不能下新命令。
+func (s *State) Apply(id int64, c Command, connected bool, now int64) (Receipt, bool, error) {
 	i := s.Index(id)
-	if i < 0 || c.Seq == 0 {
+	if i < 0 || c.Seq == 0 || c.Epoch == 0 {
 		return Receipt{}, false, ErrRule
 	}
 	p := &s.Seats[i]
-	if c.Epoch != p.Epoch {
-		return Receipt{}, false, ErrRule
-	}
 	if c.Seq <= uint64(len(p.Receipts)) {
 		r := p.Receipts[c.Seq-1]
 		if r.Command != c {
@@ -17,7 +16,7 @@ func (s *State) Apply(id int64, c Command, now int64) (Receipt, bool, error) {
 		}
 		return r, false, nil
 	}
-	if c.Seq != uint64(len(p.Receipts)+1) || len(p.Receipts) >= LedgerLimit || s.Phase != "prep" || p.Ready || !p.Connected || c.Round != s.Round || now < s.LastAt || now >= s.Deadline {
+	if c.Seq != uint64(len(p.Receipts)+1) || len(p.Receipts) >= LedgerLimit || s.Phase != "prep" || p.Ready || !connected || c.Round != s.Round || now < s.LastAt || now >= s.Deadline {
 		return Receipt{}, false, ErrRule
 	}
 	switch c.Kind {
@@ -73,32 +72,6 @@ func (s *State) Apply(id int64, c Command, now int64) (Receipt, bool, error) {
 	r := Receipt{c, s.Gold, s.Round, s.Phase}
 	p.Receipts = append(p.Receipts, r)
 	return r, true, s.Validate()
-}
-func (s *State) Connect(id int64, ticket uint64, connected bool) error {
-	i := s.Index(id)
-	if i < 0 || ticket == 0 {
-		return ErrRule
-	}
-	p := &s.Seats[i]
-	if connected {
-		if ticket < p.Epoch {
-			return ErrRule
-		}
-		if ticket == p.Epoch {
-			if !p.Connected {
-				return ErrRule
-			}
-			return nil
-		}
-		p.Epoch = ticket
-		p.Connected = true
-	} else {
-		if ticket != p.Epoch {
-			return ErrRule
-		}
-		p.Connected = false
-	}
-	return nil
 }
 func (s *State) startWave(now int64) {
 	s.Phase = "battle"

@@ -147,6 +147,7 @@ genre_start=$SECONDS
 if ! printf '%s\n' "${genre_scripts[@]}" | env -u ROOST_SLG_REAL -u ROOST_MMORPG_REAL -u ROOST_MOBA_REAL -u ROOST_MOBA_ROUTING \
     -u ROOST_CARD_RPG_REAL -u ROOST_TOWER_DEFENSE_REAL -u ROOST_SURVIVAL_EXTRACTION_REAL -u ROOST_MERGE_CASUAL_REAL \
     -u ROOST_IDLE_SIM_REAL -u ROOST_AUTO_CHESS_REAL -u ROOST_PARTY_ROOM_REAL \
+    -u ROOST_TURN_PVP_REAL -u ROOST_COOP_ROGUELIKE_REAL -u ROOST_SOCIAL_SIM_REAL \
     xargs -P "${ROOST_PRETAG_GENRE_JOBS:-4}" -I{} bash -c '
       name="$(basename "$1" .sh)"; start=$SECONDS
       if "./$1" >"$2/$name.log" 2>&1; then

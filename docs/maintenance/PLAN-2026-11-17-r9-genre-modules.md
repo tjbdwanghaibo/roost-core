@@ -1,6 +1,6 @@
 # R9 方案：13 类玩法改成“装模块 + 只写模块没覆盖的部分”（2026-11-17）
 
-状态：**实施中**。维护者 2026-11-17 答复第 7 节 Q1～Q8 **都按推荐**，并同意每类玩法脚本加跑 `module verify`；R3 与 CellWorld 进模块也要做（先后见第 8 节）。实施时各 agent 在主检出 main 上按文件分工、用 pathspec 提交（与 v1.52.0 整理轮相同），不另开 worktree。基线 main v1.52.0（`f6699655`，最低 core 提升 `d1a6ab2a`）。来源：维护者 2026-11-14 的 D21 A（[决定原文](evidence/known-limits-remaining-20261114/decisions.md)），交接 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14) 的 R9，[KNOWN-LIMITS](KNOWN-LIMITS.md)“模块化顺序（N1）”。组合规则以 [compose.md](../agent-skills/roost-genre/references/compose.md) 为准（四条规则：遵循核心思路、能复用就装、不能就借鉴最近的模块、需求与限制冲突必须提出）。
+状态：**实施中**。维护者 2026-11-17 答复第 7 节 Q1～Q8 **都按推荐**，并同意每类玩法脚本加跑 `module verify`；R3 与 CellWorld 进模块也要做（先后见第 8 节）。实施时各 agent 在主检出 main 上按文件分工、用 pathspec 提交（与 v1.52.0 整理轮相同），不另开 worktree。**批 0 已完成**（2026-11-17：公共 `genre-common/modules.sh`、pretag 补 `env -u`、塔防试点；定型写法见[第 9 节](#9-批-0-定型的写法批-1--批-2-照做)，证据 [r9-batch0-20261117](evidence/r9-batch0-20261117/README.md)）。基线 main v1.52.0（`f6699655`，最低 core 提升 `d1a6ab2a`）。来源：维护者 2026-11-14 的 D21 A（[决定原文](evidence/known-limits-remaining-20261114/decisions.md)），交接 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14) 的 R9，[KNOWN-LIMITS](KNOWN-LIMITS.md)“模块化顺序（N1）”。组合规则以 [compose.md](../agent-skills/roost-genre/references/compose.md) 为准（四条规则：遵循核心思路、能复用就装、不能就借鉴最近的模块、需求与限制冲突必须提出）。
 
 读者：维护者（第 7 节要答的问题）与后续实施 agent（第 3～5 节照做）。
 
@@ -206,7 +206,7 @@ genre-common 只服务 11～13 类（回合 PvP、合作、经营）。
 
 ## 5. 实施分批
 
-**全体规则**：每个 agent 一个独立 worktree 与分支（同一检出里已有别的 agent，不在主检出里改），完成后由协调者 rebase 合进 main。下列文件**只由批 0 或协调者改**：`CHANGELOG.md`、`docs/maintenance/KNOWN-LIMITS.md`、`docs/agent-skills/roost-genre/references/compose.md`、`modules/**`、`scripts/test-modules-generated.sh`、`scripts/testdata/robot-common/**`、`scripts/pretag.sh`、`scripts/test-genres-generated.py`。各 agent 把要写进 CHANGELOG / KNOWN-LIMITS 的话写在交接说明里。不嵌套子 agent；跑全量前看 `df`；跑完清理测试进程与私有环境；同一时刻至多两个 agent 跑 REAL（共用 `~/.roost-it`）。
+**全体规则**：在主检出 main 上按下表分工、`git commit -- <paths>` 提交，不开 worktree（维护者 2026-11-17 定；原写的“每个 agent 一个独立 worktree 与分支”作废）。下列文件**只由批 0 或协调者改**：`CHANGELOG.md`、`docs/maintenance/KNOWN-LIMITS.md`、`docs/agent-skills/roost-genre/references/compose.md`、`modules/**`、`scripts/test-modules-generated.sh`、`scripts/testdata/robot-common/**`、`scripts/pretag.sh`、`scripts/test-genres-generated.py`。各 agent 把要写进 CHANGELOG / KNOWN-LIMITS 的话写在交接说明里。不嵌套子 agent；跑全量前看 `df`；跑完清理测试进程与私有环境；同一时刻至多两个 agent 跑 REAL（共用 `~/.roost-it`）。
 
 **每个 agent 的验收**（缺一不算完）：
 
@@ -269,3 +269,72 @@ genre-common 只服务 11～13 类（回合 PvP、合作、经营）。
 - **R5（模块清单声明配置，D19 B）**：独立。先做的一方不受影响，后做的 rebase；R5 先合时，stamina 等的规则来自配置，合成的体力语义（Q1）照新的配置方式写。
 - **R7 的 room 部分（断线订阅与重启后在线状态，D24，2026-11-15 已实施）**：房间类玩法直接用它的现行行为；正在改 room 的 agent 合入后以 README 为准。
 - **R2（换服 / account）**：与 R9 无文件重叠。
+
+## 9. 批 0 定型的写法（批 1 / 批 2 照做）
+
+塔防试点（2026-11-17）落地后的写法。样板文件：[`test-tower-defense-generated.sh`](../../scripts/test-tower-defense-generated.sh)、[`testdata/tower-defense/`](../../scripts/testdata/tower-defense/)、[`genre-common/modules.sh`](../../scripts/testdata/genre-common/modules.sh)；手册改法见 [TOWER-DEFENSE-INTEGRATION §3.1、§3.5](../framework/TOWER-DEFENSE-INTEGRATION.md#35-模块化之后场景语义的变化r92026-11-17)。
+
+### 9.1 模块清单写进脚本
+
+- 清单是脚本里的一个数组，紧跟 `project new` + `go mod edit -replace` 之后装：
+
+  ```bash
+  genre_modules=(room wallet enter)
+  modules_sh="$repo_root/scripts/testdata/genre-common/modules.sh"
+  bash "$modules_sh" add "$review_root/roost" "${genre_modules[@]}" >> "$review_root/generate.log" 2>&1
+  ```
+
+  `modules.sh add` = `roost module add <清单>` + 用 `module list --json` 核对清单里的每个都已登记（依赖由安装器连带装）。清单只写玩法直接用的模块，依赖不必列（turn 会带上 room）。
+- 原来脚本里由模块代办的步骤要删掉：`add dao Player --entity Player`（game 模板已有）、给 Player 插 `Gold` / `Coins` / `Initialized`、`add entity <房间>` / `add dao <房间>`、把房间实体改 World 锁档（room 的 `Room` 已是 World）。`add access player` / `add transport tcp` / `self_sync` 由 `module plan` 代办，手写的这几步挪到 `module add` 之后只补模块没做的（派对房间的 `sync_groups`）。
+- 模块装完再 `add timer --entity Room`（房间玩法自己的期限）、往模块的主 DAO 追加玩法字段、拷手写夹具，最后装公共 Robot、`roost generate`。顺序固定：**装模块 → add timer → 追加字段 → 拷夹具 → Robot → generate**。
+- `module verify` 放在原有的 build / vet / `id check` / `generate --check` 之后、REAL 段之前：
+
+  ```bash
+  bash "$modules_sh" verify "$review_root/roost" "$repo_root" "$review_root/module-verify.json" "${genre_modules[@]}" | tee "$review_root/module-verify.txt"
+  ```
+
+  它跑 `roost module verify --json`，逐个核对：每个已装模块（以及装上的联动 `<a>+<b>`）通过数 == 本检出 `modules/<a>/module.yaml` 的 `verify.pass`（联动取 `with.<b>.verify.pass`）、0 skip，build / vet / id check / generate --check 全过，清单里的模块都在结果里。结果文件名必须是 `module-verify.json`：`test-genres-generated.py` 看到它就在自定义 module 名下用同一脚本再核一遍（报告字段 `custom_module_verify`）；没迁的玩法没有这个文件，矩阵行为不变。不要把模块场景写进 `*.log`（矩阵会把 `*.log` 里的 `--- PASS` 当成玩法场景再跑）。
+- genre-common 三类（批 1A）由 `run.sh` 调同一个 `modules.sh`，清单按玩法给（`run.sh` 的参数或玩法目录里的一个小文件，1A 定）。
+
+### 9.2 房间类玩法并入 room 的 Room（Q3 A）
+
+- **状态**：玩法事实追加到 room 模块的 `db/def/room.go` 的 `RoomDao` 末尾，字段名带玩法前缀（`TowerState string store:"tower_state"`、`TowerWakeTimer int64 store:"tower_wake_timer"`，`dao:"nosync"`）。玩法 JSON 里**删掉**与 room 重复的东西：席位的 `Epoch`、`Connected`，以及夹具自己的 `Connect(ticket)`。保留玩法自己的每席事实（准备、领奖、回执）与名单顺序（`Seats[i].PlayerID`）。
+- **handler 参数**：手写一个锁接口，嵌 room 的 Holder 与 Room 的定时器：
+
+  ```go
+  type ITowerRoomEntity interface {
+  	entity.IThreadSafeEntity
+  	Dao() *db.RoomDao
+  	view.RoomHolder
+  	TimerComp() *roomentity.TimerComponent
+  }
+  ```
+
+- **开局**：开房与名单同一笔事务——玩法的 Init handler 在 Room 上调 `m.Room().Open(<容量>)` 再写玩法状态；同号重试只核对名单；已有人入座的普通房拒绝改造。生产里成局服务先经生成的 lifecycle `GetOrCreate`（与 `room.Open` 相同）再发 Init。之后玩家经 room 的 `RoomJoin` 入座。
+- **名单准入**：在 Room 实体上写 `event.RoomJoining` 监听（`game/entities/room/<玩法>.go`，`//roost:listen`），玩法房只放名单里的人、返回 `apperrors.ErrRoomNotMember`；**玩法状态为空的普通房放行**，否则 room 自带的 33 条场景会挂。
+- **身份围栏**：每条玩法命令、回执查询都带 `connection`（接入层从服务端 Session 取：`roomlogic.ConnectionKey(session)`），handler 先 `m.Room().Member(playerID, epoch)`，再核对 `seat.GetConnection() == connection`（否则 `ErrRoomStaleEpoch`）；新命令再要求 `m.Room().Connected(playerID)`，已有回执的重放不要求在线（重启后全员断线时重试仍得原回执）。视图用 `m.Room().View(playerID, connection)` 做成员检查并拿本人代际，各席 `Connected` 取 `m.Room().Connected`。
+- **定时器**：`roost add timer --entity Room`，用夹具的 `timer_handlers.go.txt` 覆盖生成的示例，类型号常量带玩法名（`TimerTowerPhase = 1`）。
+- **注册**：room 与 Room 定时器的 handler 是按引擎实例注册的（`RegisterRoomJoinNestHandlersOn` 等，`service=game`）；离线 fixture 在 `engine.Start()` 前逐个 `register(engine)`；玩法自己的 handler 参数是手写接口，仍是全局 `Register<文件>NestHandlers()`。
+- **夹具里的连接**：fixture 给每席一个固定连接串（`tower-conn-<i>`），入座 `Sync_RoomJoin(room, id, conn)`；断线用 `Sync_RoomDisconnect(room, id, epoch)`（生产由断线订阅自动调），换连接用 `Sync_RoomReconnect(room, id, 旧代际, 新连接)`。Robot 只有 Play 一条消息：在 dispatch 里加 `Kind "reconnect"` 转 `RoomReconnect`，每条新 TCP 连接先接管席位（代际 = `EpochSeed + 1`，用 `robotRead` 在实体锁内读 seed）；接管之后 fixture 的连接已旧，读状态改用 `robotDecode(... GetTowerState ...)`，跑完再 `RoomReconnect` 交还 fixture 的连接。
+- **REAL**：多出的 `RoomJoin` 每条是一条 strict 记录，未投影 WAL 计数相应增加（塔防 19 → 23）；冷加载后断言席位与代际都在、`Connected` 全为 false；重放用原连接串与原代际。
+
+### 9.3 场景断言改读模块状态
+
+- 金币：`p.Dao().GetGold()` → `p.Dao().GetWallet().GetCoins()`；领奖 handler 里“领过没有”留在玩法状态（`Claimed`），金币调 `p.Wallet().Add(n)`（不留回执；wallet README：长期“只发一次”由调用方的事实保证）。只防短期重发、没有自己事实的地方才用 `Apply(业务键, n)`。奖励为 0 时不调（`Add(0)` 是 `wallet_invalid`）。
+- 建档：删夹具的 `TowerPlayerInit` / `Initialized`，fixture 用 enter 的 `Sync_EnterInit(ctx, id)`（全局 `RegisterEnterInitNestHandlers()`），handler 查 `p.Enter().Built()`。初始发放写在 `game/modules/login/enter_first.go` 的 `firstEnter` 或 `event.EnterFirst` 监听。
+- 断线 / 重连：断言改成 room 的返回值（`RoomDisconnect` 的 `changed`、`RoomReconnect` 的新 `Epoch`、视图里 room 的 `Connected`），旧代际迟到的断线是 `changed=false`、不是错误。
+- 每改一条场景，在玩法手册加一行“旧断言 → 新断言”（TD §3.5 的表格式），场景名与条数不变。
+- **变异**：每条改过断言的场景至少一个变异，在保留的生成工程里改 handler / 监听、跑对应场景看红、恢复看绿，日志摘要放证据目录。塔防用了五个：去掉连接核对、去掉 `Claimed`、去掉 `Wallet().Add`、名单监听放行所有人、`Member` 换成只查席位不查代际（[mutation.txt](evidence/r9-batch0-20261117/mutation.txt)）。
+
+### 9.4 每个 agent 交付时自查
+
+- 缺省档：`bash scripts/test-<玩法>-generated.sh`，玩法条数不变、0 SKIP，末尾打印 `module verify: <名> n/n skipped=0`。
+- 矩阵：`python3 scripts/test-genres-generated.py --out <新目录> --genres <玩法>`，`status passed` 且有 `custom_module_verify`。
+- REAL：`source ~/.roost-it/roost-dataengine-it/env.sh` 后 `ROOST_<玩法>_REAL=1 …`，第 1 节列的用例全过、0 SKIP。
+- 手册与 skill reference 的命令块真跑一遍（接 SKILL.md §3.2 前置、自定 module 名）。
+- `GOWORK=off go test -count=1 -run 'Link|Anchor|Doc' .`。
+
+### 9.5 试点发现的模块缺口（按 Q1 只记录，不在 R9 改模块）
+
+- **room 没有“代际 + 连接 + 在线”一并核对的公开入口**：turn 的组件私有 `authorize` 与塔防的 `towerMember` 写的是同一段（`Member` + `GetConnection() == connection` + `Connected`）。批 1 的撤离、自走棋、合作、回合 PvP 都要这一段，符合 Q1“两类以上都要、简单工程不必多做事”的 B 条件：建议给 room 组件加 `Authorize(playerID, epoch, connection) (*db.RoomSeat, error)`，turn 改调它。R9 内先各自手写同一段，等维护者定。
+

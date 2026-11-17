@@ -1,0 +1,23 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_TOWER_DEFENSE_REAL=1 bash scripts/test-tower-defense-generated.sh（2026-11-17）
+# exit 0
+--- PASS: TestTowerDefenseRouteAlwaysConnectsEntranceAndBase (0.00s)
+--- PASS: TestTowerDefenseBattleDeterminismAndOneStepOfflineCatchup (0.00s)
+--- PASS: TestTowerDefenseStrictBoundsAndFrozenConfiguration (0.00s)
+--- PASS: TestTowerDefenseCatalogReloadOnlyAffectsNewRooms (0.01s)
+ok  	example.com/tower-defense-practice/game/modules/towerdefense	1.490s
+--- PASS: TestTowerDefenseRobotBusiness (0.11s)
+--- PASS: TestTowerDefenseConcurrentCellReservationAndRetry (0.01s)
+--- PASS: TestTowerDefenseBlockingRouteAndForeignSaleRollback (0.02s)
+--- PASS: TestTowerDefenseReadyDisconnectAndOldConnection (0.02s)
+--- PASS: TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer (0.01s)
+--- PASS: TestTowerDefenseCooperativeVictoryAndAtomicRewards (0.09s)
+--- PASS: TestTowerDefenseDefeatNoRewardAndViewCopy (0.06s)
+ok  	example.com/tower-defense-practice/game/handler	1.940s
+IDs are valid
+generated files are up to date
+module verify: enter 29/29 skipped=0
+module verify: room 33/33 skipped=0
+module verify: wallet 17/17 skipped=0
+tower_defense_recovery_test.go:500: SIGKILL: 23 unprojected strict records; four-player active wave restored on the room module's Room (seats kept, online state cleared), driver loop delivered one overdue step after cold load and 17 deliveries in total to finish three waves, third process retried all commands and team rewards
+--- PASS: TestTowerDefenseRealCrashRecovery (11.32s)
+ok  	example.com/tower-defense-practice/game/handler	12.965s

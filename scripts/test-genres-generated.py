@@ -62,6 +62,13 @@ def main():
                 command(["go", "vet", "-mod=mod", "./..."], project, env, log)
                 command([str(work / "roost"), "id", "check"], project, env, log)
                 command([str(work / "roost"), "generate", "--check"], project, env, log)
+                # 装了业务模块的玩法（R9：脚本经 genre-common/modules.sh verify 留下 module-verify.json）在自定义 module 名下
+                # 把模块自带的场景再跑一遍，条数仍按本检出 modules/<名>/module.yaml 的 verify.pass 核对。
+                if (work / "module-verify.json").exists():
+                    command(["bash", str(ROOT / "scripts/testdata/genre-common/modules.sh"), "verify", str(work / "roost"), str(ROOT),
+                             str(work / "custom-module-verify.json")], project, env, log)
+                    verified = json.loads((work / "custom-module-verify.json").read_text())
+                    result["custom_module_verify"] = {item["name"]: item["passed"] for item in verified["modules"]}
                 result["robot_pb_registry"] = (project / "loadtest/protocol/registry_gen.go").exists()
                 result["genre_network_acceptance"] = "pending"
                 names = []

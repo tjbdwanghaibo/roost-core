@@ -1,0 +1,17 @@
+# skill reference room-coop-pve.md §3.1 命令块（接 SKILL.md §3.2 前置，自定 module example.com/acme/mytd），2026-11-17，exit 0
+--- PASS: TestTowerDefenseRouteAlwaysConnectsEntranceAndBase (0.00s)
+--- PASS: TestTowerDefenseBattleDeterminismAndOneStepOfflineCatchup (0.00s)
+--- PASS: TestTowerDefenseStrictBoundsAndFrozenConfiguration (0.00s)
+--- PASS: TestTowerDefenseCatalogReloadOnlyAffectsNewRooms (0.00s)
+ok  	example.com/acme/mytd/game/modules/towerdefense	1.499s
+--- PASS: TestTowerDefenseRobotBusiness (0.10s)
+--- PASS: TestTowerDefenseConcurrentCellReservationAndRetry (0.01s)
+--- PASS: TestTowerDefenseBlockingRouteAndForeignSaleRollback (0.02s)
+--- PASS: TestTowerDefenseReadyDisconnectAndOldConnection (0.02s)
+--- PASS: TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer (0.01s)
+--- PASS: TestTowerDefenseCooperativeVictoryAndAtomicRewards (0.08s)
+--- PASS: TestTowerDefenseDefeatNoRewardAndViewCopy (0.06s)
+ok  	example.com/acme/mytd/game/handler	1.927s
+module verify: enter 29/29 skipped=0
+module verify: room 33/33 skipped=0
+module verify: wallet 17/17 skipped=0

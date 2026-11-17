@@ -2,60 +2,85 @@ package handler
 
 import (
 	db "example.com/tower-defense-practice/db"
-	matchentity "example.com/tower-defense-practice/game/entities/tower_room"
+	roomentity "example.com/tower-defense-practice/game/entities/room"
 	tower "example.com/tower-defense-practice/game/modules/towerdefense"
+	"example.com/tower-defense-practice/game/view"
+	apperrors "example.com/tower-defense-practice/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"time"
 )
 
+// ITowerRoomEntity 是塔防挂在 room 模块的 Room 实体上的 handler 参数（Q3：TowerRoom 并入 Room）：
+// Room() 是 room 模块的席位、代际与连接；RoomDao 末尾的 TowerState / TowerWakeTimer 是塔防自己的字段；
+// TimerComp() 是 Room 上的实体定时器（roost add timer --entity Room，波次期限一个类型）。
 type ITowerRoomEntity interface {
 	entity.IThreadSafeEntity
-	Dao() *db.TowerRoomDao
-	TimerComp() *matchentity.TimerComponent
+	Dao() *db.RoomDao
+	view.RoomHolder
+	TimerComp() *roomentity.TimerComponent
 }
+
+// ITowerPlayerEntity 只用到 wallet（金币）与 enter（建档做过没有）两个模块组件。
 type ITowerPlayerEntity interface {
 	entity.IThreadSafeEntity
-	Dao() *db.PlayerDao
+	Wallet() view.Wallet
+	Enter() view.Enter
 }
 
-// 创建内存实体不代表已持久化；玩家建档必须经过一次正式事务。
+// 开房与成局名单是同一笔事务：房间一开就带着名单，event.RoomJoining 的监听（game/entities/room/tower.go）
+// 只放名单里的玩家入座。名单、配置来自服务端，开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的分发包装
+// 从 fctx 填，调用方不传）。相同 Room 不允许改名单或重置波次；已有人入座的普通房不能改造成塔防房。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTowerPlayerInit(p ITowerPlayerEntity) error { p.Dao().SetInitialized(true); return nil }
-
-// 成局名单、配置来自服务端，开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间，调用方不传）。相同 Room ID 不允许改名单或重置波次。
-//
-//roost:nest rollback=undo durability=strict
-func handlerTowerInit(m ITowerRoomEntity, ids [tower.Seats]int64, r tower.Rules, nowUnixMilli int64) (tower.View, error) {
-	if m.Dao().GetState() != "" {
-		s, e := tower.Decode(m.Dao().GetState())
+func handlerTowerInit(m ITowerRoomEntity, ids [tower.Seats]int64, r tower.Rules, nowUnixMilli int64) error {
+	if raw := m.Dao().GetTowerState(); raw != "" {
+		s, e := tower.Decode(raw)
 		if e != nil {
-			return tower.View{}, e
+			return e
 		}
 		for i, id := range ids {
 			if s.Seats[i].PlayerID != id {
-				return tower.View{}, tower.ErrRule
+				return tower.ErrRule
 			}
 		}
-		return s.View(ids[0])
+		return nil
+	}
+	if m.Dao().SeatsLen() != 0 {
+		return tower.ErrRule
+	}
+	if e := m.Room().Open(tower.Seats); e != nil {
+		return e
 	}
 	s, e := tower.New(ids, r, nowUnixMilli)
 	if e != nil {
-		return tower.View{}, e
+		return e
 	}
-	if e = saveTower(m, s); e != nil {
-		return tower.View{}, e
+	return saveTower(m, s)
+}
+
+// towerMember 是塔防命令的身份围栏，全部交给 room：epoch 必须是这名成员当前的席位代际，请求必须来自席位认下的
+// 那条连接（connection 由接入层从服务端 Session 取，room.ConnectionKey）。旧代际、旧连接一律 room_stale_epoch。
+func towerMember(m ITowerRoomEntity, playerID int64, epoch uint64, connection string) error {
+	seat, e := m.Room().Member(playerID, epoch)
+	if e != nil {
+		return e
 	}
-	return s.View(ids[0])
+	if seat.GetConnection() != connection {
+		return apperrors.ErrRoomStaleEpoch
+	}
+	return nil
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerTowerCommand(m ITowerRoomEntity, playerID int64, c tower.Command, nowUnixMilli int64) (tower.Receipt, error) {
-	s, e := tower.Decode(m.Dao().GetState())
+func handlerTowerCommand(m ITowerRoomEntity, playerID int64, connection string, c tower.Command, nowUnixMilli int64) (tower.Receipt, error) {
+	if e := towerMember(m, playerID, c.Epoch, connection); e != nil {
+		return tower.Receipt{}, e
+	}
+	s, e := tower.Decode(m.Dao().GetTowerState())
 	if e != nil {
 		return tower.Receipt{}, e
 	}
-	r, changed, e := s.Apply(playerID, c, nowUnixMilli)
+	r, changed, e := s.Apply(playerID, c, m.Room().Connected(playerID), nowUnixMilli)
 	if e != nil {
 		return r, e
 	}
@@ -65,54 +90,52 @@ func handlerTowerCommand(m ITowerRoomEntity, playerID int64, c tower.Command, no
 	return r, e
 }
 
+// 成员用自己当前的连接读视图（room 的 View 做成员与连接检查）；Self.Epoch 是 room 席位的当前代际，
+// 各席位的 Connected 是 room 的在线状态。
+//
 //roost:nest rollback=undo durability=strict
-func handlerTowerView(m ITowerRoomEntity, playerID int64) (tower.View, error) {
-	s, e := tower.Decode(m.Dao().GetState())
+func handlerTowerView(m ITowerRoomEntity, playerID int64, connection string) (tower.View, error) {
+	snapshot, e := m.Room().View(playerID, connection)
 	if e != nil {
 		return tower.View{}, e
 	}
-	return s.View(playerID)
-}
-
-//roost:nest rollback=undo durability=strict
-func handlerTowerConnect(m ITowerRoomEntity, playerID int64, ticket uint64, connected bool) error {
-	s, e := tower.Decode(m.Dao().GetState())
+	s, e := tower.Decode(m.Dao().GetTowerState())
 	if e != nil {
-		return e
+		return tower.View{}, e
 	}
-	if e = s.Connect(playerID, ticket, connected); e != nil {
-		return e
-	}
-	m.Dao().SetState(s.Encode())
-	return nil
+	return s.View(playerID, snapshot.Epoch, m.Room().Connected)
 }
 
-// 当前鉴权连接可查旧 Epoch 回执，但不能把旧命令换成新 Seq 重做。
+// 当前代际、当前连接可以查旧代际的回执，但不能把旧命令换成新 Seq 重做。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTowerReceipt(m ITowerRoomEntity, playerID int64, epoch, seq uint64) (tower.Receipt, error) {
-	s, e := tower.Decode(m.Dao().GetState())
+func handlerTowerReceipt(m ITowerRoomEntity, playerID int64, connection string, epoch, seq uint64) (tower.Receipt, error) {
+	if e := towerMember(m, playerID, epoch, connection); e != nil {
+		return tower.Receipt{}, e
+	}
+	s, e := tower.Decode(m.Dao().GetTowerState())
 	if e != nil {
 		return tower.Receipt{}, e
 	}
 	i := s.Index(playerID)
-	if i < 0 || s.Seats[i].Epoch != epoch || seq == 0 || seq > uint64(len(s.Seats[i].Receipts)) {
+	if i < 0 || seq == 0 || seq > uint64(len(s.Seats[i].Receipts)) {
 		return tower.Receipt{}, tower.ErrRule
 	}
 	return s.Seats[i].Receipts[seq-1], nil
 }
 
 // Player 静态归属；本地同 database 示例用 MultiSync。跨 sid 应另接 Remote/Saga，不伪装成本地事务。
-// Room 的 Claimed 与 Player 金币在同一个 strict 事务内；奖励仅由服务端团队终态推导。
+// “领过没有”是长期事实，记在 Room 的 Claimed；金币经 wallet 的 Add（不留回执：只发一次由 Claimed 保证，
+// wallet README 的写法），两者在同一个 strict 事务内。奖励仅由服务端团队终态推导；建档看 enter 的 Built。
 //
 //roost:nest rollback=undo durability=strict
 func handlerTowerClaim(p ITowerPlayerEntity, m ITowerRoomEntity) (int64, error) {
-	s, e := tower.Decode(m.Dao().GetState())
+	s, e := tower.Decode(m.Dao().GetTowerState())
 	if e != nil {
 		return 0, e
 	}
 	i := s.Index(p.ID())
-	if i < 0 || s.Phase != "done" || !p.Dao().GetInitialized() {
+	if i < 0 || s.Phase != "done" || !p.Enter().Built() {
 		return 0, tower.ErrRule
 	}
 	reward := int64(0)
@@ -122,26 +145,27 @@ func handlerTowerClaim(p ITowerPlayerEntity, m ITowerRoomEntity) (int64, error) 
 	if s.Seats[i].Claimed {
 		return reward, nil
 	}
-	if p.Dao().GetGold() > 1000000-reward {
-		return 0, tower.ErrRule
+	if reward > 0 {
+		if _, e = p.Wallet().Add(reward); e != nil {
+			return 0, e
+		}
 	}
-	p.Dao().SetGold(p.Dao().GetGold() + reward)
 	s.Seats[i].Claimed = true
-	m.Dao().SetState(s.Encode())
+	m.Dao().SetTowerState(s.Encode())
 	return reward, nil
 }
 func saveTower(m ITowerRoomEntity, s tower.State) error {
-	if id := m.Dao().GetWakeTimer(); id != 0 {
+	if id := m.Dao().GetTowerWakeTimer(); id != 0 {
 		m.TimerComp().RemoveTimer(id)
 	}
-	m.Dao().SetWakeTimer(0)
-	m.Dao().SetState(s.Encode())
+	m.Dao().SetTowerWakeTimer(0)
+	m.Dao().SetTowerState(s.Encode())
 	if s.Deadline > 0 {
-		id := m.TimerComp().NewTimerAt(time.UnixMilli(s.Deadline), matchentity.TimerPhase, s.Deadline, 0, nil)
+		id := m.TimerComp().NewTimerAt(time.UnixMilli(s.Deadline), roomentity.TimerTowerPhase, s.Deadline, 0, nil)
 		if id == 0 {
 			return tower.ErrRule
 		}
-		m.Dao().SetWakeTimer(id)
+		m.Dao().SetTowerWakeTimer(id)
 	}
 	return nil
 }

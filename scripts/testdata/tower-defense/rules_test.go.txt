@@ -42,7 +42,7 @@ func TestTowerDefenseRouteAlwaysConnectsEntranceAndBase(t *testing.T) {
 func TestTowerDefenseBattleDeterminismAndOneStepOfflineCatchup(t *testing.T) {
 	s := testState(t)
 	for i, cell := range []int{1, 6, 11, 16} {
-		if _, _, e := s.Apply(int64(i+1), Command{Seq: 1, Epoch: 1, Round: 1, Kind: "build", A: cell}, s.LastAt); e != nil {
+		if _, _, e := s.Apply(int64(i+1), Command{Seq: 1, Epoch: 1, Round: 1, Kind: "build", A: cell}, true, s.LastAt); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -110,11 +110,11 @@ func TestTowerDefenseStrictBoundsAndFrozenConfiguration(t *testing.T) {
 	for n := 0; n < LedgerLimit; n++ {
 		s.Seats[0].Receipts = append(s.Seats[0].Receipts, Receipt{Command: Command{Seq: uint64(n + 1), Epoch: 1, Round: 1, Kind: "ready"}, Round: 1})
 	}
-	if _, _, e := s.Apply(1, Command{Seq: 129, Epoch: 1, Round: 1, Kind: "ready"}, s.LastAt); e == nil {
+	if _, _, e := s.Apply(1, Command{Seq: 129, Epoch: 1, Round: 1, Kind: "ready"}, true, s.LastAt); e == nil {
 		t.Fatal("ledger overflow")
 	}
 	r := s.Seats[0].Receipts[0]
-	if got, changed, e := s.Apply(1, r.Command, s.LastAt); e != nil || changed || got != r {
+	if got, changed, e := s.Apply(1, r.Command, true, s.LastAt); e != nil || changed || got != r {
 		t.Fatal("old identity evicted")
 	}
 }

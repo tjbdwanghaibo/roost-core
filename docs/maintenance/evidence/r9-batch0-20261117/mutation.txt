@@ -1,0 +1,58 @@
+# 变异证明：在保留的生成工程（td1/project）里改 handler / 监听，跑对应场景，再恢复。命令：
+#   go test -mod=mod -race -count=1 -timeout 3m -run '<场景>' ./game/handler
+
+## A-no-connection-fence
+--- FAIL: TestTowerDefenseReadyDisconnectAndOldConnection (0.02s)
+tower_defense_test.go:307: old connection used the new epoch <nil>
+FAIL
+FAIL	example.com/tower-defense-practice/game/handler	0.771s
+FAIL
+
+## B-no-claimed-fact
+--- FAIL: TestTowerDefenseRobotBusiness (0.10s)
+robot_network_test.go:128: team payout duplicated or missing
+--- FAIL: TestTowerDefenseCooperativeVictoryAndAtomicRewards (0.09s)
+tower_defense_test.go:399: duplicate reward
+FAIL
+FAIL	example.com/tower-defense-practice/game/handler	0.820s
+FAIL
+
+## B2-no-wallet-add
+--- FAIL: TestTowerDefenseRobotBusiness (0.10s)
+robot_network_test.go:128: team payout duplicated or missing
+--- FAIL: TestTowerDefenseCooperativeVictoryAndAtomicRewards (0.09s)
+tower_defense_test.go:399: duplicate reward
+FAIL
+FAIL	example.com/tower-defense-practice/game/handler	0.823s
+FAIL
+
+## C-roster-open
+--- FAIL: TestTowerDefenseDefeatNoRewardAndViewCopy (0.02s)
+tower_defense_test.go:416: outsider joined the roster room room_full: room is full
+FAIL
+FAIL	example.com/tower-defense-practice/game/handler	0.667s
+FAIL
+
+## D-no-epoch-fence
+--- FAIL: TestTowerDefenseRobotBusiness (0.02s)
+robot_network_test.go:90: robot: {Scheduled:1 DroppedCapacity:0 DroppedSchedule:0 LaunchFailed:0 PeakOnline:1 Started:1 Online:0 Success:0 Failure:1 Canceled:0}
+--- FAIL: TestTowerDefenseReadyDisconnectAndOldConnection (0.02s)
+tower_defense_test.go:302: accepted invalid command
+FAIL
+FAIL	example.com/tower-defense-practice/game/handler	0.685s
+FAIL
+
+## Z-restored（全部恢复：diff 与原文件一致，-skip Real）
+--- PASS: TestTowerDefenseRobotBusiness (0.11s)
+--- PASS: TestTowerDefenseConcurrentCellReservationAndRetry (0.01s)
+--- PASS: TestTowerDefenseBlockingRouteAndForeignSaleRollback (0.02s)
+--- PASS: TestTowerDefenseReadyDisconnectAndOldConnection (0.02s)
+--- PASS: TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer (0.01s)
+--- PASS: TestTowerDefenseCooperativeVictoryAndAtomicRewards (0.09s)
+--- PASS: TestTowerDefenseDefeatNoRewardAndViewCopy (0.06s)
+ok  	example.com/tower-defense-practice/game/handler	1.734s
+--- PASS: TestTowerDefenseRouteAlwaysConnectsEntranceAndBase (0.00s)
+--- PASS: TestTowerDefenseBattleDeterminismAndOneStepOfflineCatchup (0.00s)
+--- PASS: TestTowerDefenseStrictBoundsAndFrozenConfiguration (0.00s)
+--- PASS: TestTowerDefenseCatalogReloadOnlyAffectsNewRooms (0.00s)
+ok  	example.com/tower-defense-practice/game/modules/towerdefense	1.590s

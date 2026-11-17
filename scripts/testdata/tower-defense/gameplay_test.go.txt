@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	playerentity "example.com/tower-defense-practice/game/entities/player"
-	matchentity "example.com/tower-defense-practice/game/entities/tower_room"
+	matchentity "example.com/tower-defense-practice/game/entities/room"
 	sender "example.com/tower-defense-practice/game/handler/syncsender"
 	tower "example.com/tower-defense-practice/game/modules/towerdefense"
+	apperrors "example.com/tower-defense-practice/internal/errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -49,11 +50,14 @@ func (towerCommitter) Commit(context.Context, dataengine.CommitRecord) error { r
 
 const towerNow int64 = 1800000000000
 
+// match 是 room 模块的 Room 实体（塔防状态是 RoomDao 末尾的 TowerState / TowerWakeTimer）；conns 是每个席位当前
+// 认下的连接标识（生产里来自服务端 Session，room.ConnectionKey），命令、视图与回执都带它。
 type towerFixture struct {
 	engine  *nest.NestMgr
-	match   *matchentity.TowerRoom
+	match   *matchentity.Room
 	players [tower.Seats]*playerentity.Player
 	ids     [tower.Seats]int64
+	conns   [tower.Seats]string
 	clock   atomic.Int64
 	rules   tower.Rules
 }
@@ -80,7 +84,7 @@ func newTowerFixture(t *testing.T) *towerFixture {
 	playerentity.RegisterEntity()
 	matchentity.RegisterEntity()
 	RegisterTowerDefenseNestHandlers()
-	RegisterTickTowerRoomTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	f := &towerFixture{rules: loadTowerRules(t, tower.DemoRules())}
 	f.clock.Store(towerNow)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
@@ -105,8 +109,14 @@ func newTowerFixture(t *testing.T) *towerFixture {
 		f.players[i] = build(int64(1000+i), playerentity.EntityKindPlayer).(*playerentity.Player)
 		f.ids[i] = f.players[i].ID()
 	}
-	f.match = build(2000, matchentity.EntityKindTowerRoom).(*matchentity.TowerRoom)
+	f.match = build(2000, matchentity.EntityKindRoom).(*matchentity.Room)
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(towerCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 128}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	// room 模块与 Room 定时器的 handler 归属 game 服务，按引擎实例注册（与进程装配同一入口）。
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomJoinNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterTickRoomTimerGenNestHandlersOn} {
+		if e := register(f.engine); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if e := f.engine.Start(); e != nil {
 		t.Fatal(e)
 	}
@@ -118,11 +128,16 @@ func newTowerFixture(t *testing.T) *towerFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerInit(context.Background(), f.match.ID(), f.ids, f.rules); e != nil {
+	// 开房 + 名单一笔事务；之后各席位经 room 的 RoomJoin 入座（名单监听放行），建档走 enter 的 EnterInit。
+	if e := sender.NewTowerDefenseSender(f.engine).Sync_TowerInit(context.Background(), f.match.ID(), f.ids, f.rules); e != nil {
 		t.Fatal(e)
 	}
-	for _, id := range f.ids {
-		if e := sender.NewTowerDefenseSender(f.engine).Sync_TowerPlayerInit(context.Background(), id); e != nil {
+	for i, id := range f.ids {
+		f.conns[i] = fmt.Sprintf("tower-conn-%d", i)
+		if _, e := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.match.ID(), id, f.conns[i]); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := sender.NewEnterInitSender(f.engine).Sync_EnterInit(context.Background(), id); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -130,7 +145,7 @@ func newTowerFixture(t *testing.T) *towerFixture {
 }
 func (f *towerFixture) state(t *testing.T) tower.State {
 	t.Helper()
-	s, e := tower.Decode(f.match.Dao().GetState())
+	s, e := tower.Decode(f.match.Dao().GetTowerState())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -138,7 +153,7 @@ func (f *towerFixture) state(t *testing.T) tower.State {
 }
 func (f *towerFixture) view(t *testing.T, i int) tower.View {
 	t.Helper()
-	v, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerView(context.Background(), f.match.ID(), f.ids[i])
+	v, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerView(context.Background(), f.match.ID(), f.ids[i], f.conns[i])
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -149,7 +164,7 @@ func (f *towerFixture) command(t *testing.T, i int, kind string, a, b int) tower
 	return tower.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: kind, A: a, B: b}
 }
 func (f *towerFixture) send(i int, c tower.Command) (tower.Receipt, error) {
-	return sender.NewTowerDefenseSender(f.engine).Sync_TowerCommand(context.Background(), f.match.ID(), f.ids[i], c)
+	return sender.NewTowerDefenseSender(f.engine).Sync_TowerCommand(context.Background(), f.match.ID(), f.ids[i], f.conns[i], c)
 }
 func (f *towerFixture) do(t *testing.T, i int, kind string, a, b int) tower.Receipt {
 	t.Helper()
@@ -161,12 +176,12 @@ func (f *towerFixture) do(t *testing.T, i int, kind string, a, b int) tower.Rece
 }
 func (f *towerFixture) refuse(t *testing.T, i int, c tower.Command) {
 	t.Helper()
-	before := f.match.Dao().GetState()
-	timer := f.match.Dao().GetWakeTimer()
+	before := f.match.Dao().GetTowerState()
+	timer := f.match.Dao().GetTowerWakeTimer()
 	if _, e := f.send(i, c); e == nil {
 		t.Fatal("accepted invalid command")
 	}
-	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+	if before != f.match.Dao().GetTowerState() || timer != f.match.Dao().GetTowerWakeTimer() {
 		t.Fatal("rejected command changed state or timer")
 	}
 }
@@ -255,6 +270,9 @@ func TestTowerDefenseBlockingRouteAndForeignSaleRollback(t *testing.T) {
 		t.Fatal("refund duplicated")
 	}
 }
+
+// 断线与旧连接走 room 模块：断线是 room 的在线标记（生产里由断线订阅在连接关闭时调 RoomDisconnect），
+// 换连接是带上次代际的 RoomReconnect（CAS 拿新代际）；塔防命令按 room 的代际与连接围栏拒绝旧身份。
 func TestTowerDefenseReadyDisconnectAndOldConnection(t *testing.T) {
 	f := newTowerFixture(t)
 	s := sender.NewTowerDefenseSender(f.engine)
@@ -262,19 +280,31 @@ func TestTowerDefenseReadyDisconnectAndOldConnection(t *testing.T) {
 	f.do(t, 0, "build", 1, 0)
 	r := f.do(t, 0, "ready", 0, 0)
 	f.refuse(t, 0, f.command(t, 0, "sell", 1, 1))
-	if e := s.Sync_TowerConnect(ctx, f.match.ID(), f.ids[1], 1, false); e != nil {
-		t.Fatal(e)
+	if changed, e := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(ctx, f.match.ID(), f.ids[1], f.view(t, 1).Self.Epoch); e != nil || !changed {
+		t.Fatal("disconnect", changed, e)
+	}
+	if f.view(t, 0).Players[1].Connected {
+		t.Fatal("offline seat still shown online")
 	}
 	f.refuse(t, 1, f.command(t, 1, "build", 6, 0))
-	if e := s.Sync_TowerConnect(ctx, f.match.ID(), f.ids[0], 2, true); e != nil {
-		t.Fatal(e)
+	oldEpoch, oldConn := f.view(t, 0).Self.Epoch, f.conns[0]
+	snapshot, e := sender.NewRoomReconnectSender(f.engine).Sync_RoomReconnect(ctx, f.match.ID(), f.ids[0], oldEpoch, "tower-conn-0-new")
+	if e != nil || snapshot.Epoch <= oldEpoch {
+		t.Fatal("reconnect", snapshot.Epoch, e)
 	}
-	if e := s.Sync_TowerConnect(ctx, f.match.ID(), f.ids[0], 1, false); e == nil {
-		t.Fatal("old disconnect kicked new connection")
+	f.conns[0] = "tower-conn-0-new"
+	if changed, e := sender.NewRoomDisconnectSender(f.engine).Sync_RoomDisconnect(ctx, f.match.ID(), f.ids[0], oldEpoch); e != nil || changed {
+		t.Fatal("old disconnect kicked new connection", changed, e)
+	}
+	if !f.view(t, 0).Players[0].Connected {
+		t.Fatal("new connection lost its seat")
 	}
 	f.refuse(t, 0, r.Command)
-	if got, e := s.Sync_TowerReceipt(ctx, f.match.ID(), f.ids[0], 2, r.Command.Seq); e != nil || got != r {
+	if got, e := s.Sync_TowerReceipt(ctx, f.match.ID(), f.ids[0], f.conns[0], snapshot.Epoch, r.Command.Seq); e != nil || got != r {
 		t.Fatal("lost receipt", e)
+	}
+	if _, e := s.Sync_TowerReceipt(ctx, f.match.ID(), f.ids[0], oldConn, snapshot.Epoch, r.Command.Seq); !errors.Is(e, apperrors.ErrRoomStaleEpoch) {
+		t.Fatal("old connection used the new epoch", e)
 	}
 	f.clock.Store(f.view(t, 0).Deadline)
 	f.refuse(t, 2, f.command(t, 2, "ready", 0, 0))
@@ -290,14 +320,14 @@ func TestTowerDefenseReadyDisconnectAndOldConnection(t *testing.T) {
 }
 func TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer(t *testing.T) {
 	f := newTowerFixture(t)
-	before := f.match.Dao().GetState()
-	timer := f.match.Dao().GetWakeTimer()
+	before := f.match.Dao().GetTowerState()
+	timer := f.match.Dao().GetTowerWakeTimer()
 	c := f.command(t, 0, "build", 1, 0)
 	refused := errors.New("after tower construction")
 	name := nest.NewHandlerName("tower_undo_build")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
-		_, e := handlerTowerCommand(es[0].(ITowerRoomEntity), f.ids[0], c, fctx.NowMilli())
+		_, e := handlerTowerCommand(es[0].(ITowerRoomEntity), f.ids[0], f.conns[0], c, fctx.NowMilli())
 		if e != nil {
 			return nil, e
 		}
@@ -306,7 +336,7 @@ func TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer(t *testing.T) {
 	if _, e := f.engine.Request(context.Background(), name, f.match.ID(), nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
-	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+	if before != f.match.Dao().GetTowerState() || timer != f.match.Dao().GetTowerWakeTimer() {
 		t.Fatal("partial build rollback")
 	}
 	if _, e := f.send(0, c); e != nil {
@@ -334,7 +364,7 @@ func TestTowerDefenseCooperativeVictoryAndAtomicRewards(t *testing.T) {
 	if v.Result != "won" || v.Killed != 9 || v.Leaked != 0 || v.BaseHP != 12 {
 		t.Fatalf("unexpected combat outcome %+v", v)
 	}
-	before := f.match.Dao().GetState()
+	before := f.match.Dao().GetTowerState()
 	refused := errors.New("after team reward")
 	name := nest.NewHandlerName("tower_undo_claim")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
@@ -347,7 +377,7 @@ func TestTowerDefenseCooperativeVictoryAndAtomicRewards(t *testing.T) {
 	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
-	if f.match.Dao().GetState() != before || f.players[0].Dao().GetGold() != 0 {
+	if f.match.Dao().GetTowerState() != before || f.players[0].Dao().GetWallet().GetCoins() != 0 {
 		t.Fatal("partial reward rollback")
 	}
 	var wg sync.WaitGroup
@@ -365,7 +395,7 @@ func TestTowerDefenseCooperativeVictoryAndAtomicRewards(t *testing.T) {
 	}
 	wg.Wait()
 	for _, p := range f.players {
-		if p.Dao().GetGold() != 70 {
+		if p.Dao().GetWallet().GetCoins() != 70 {
 			t.Fatal("duplicate reward")
 		}
 	}
@@ -378,8 +408,12 @@ func TestTowerDefenseDefeatNoRewardAndViewCopy(t *testing.T) {
 	if f.view(t, 0).Path[0] != 0 {
 		t.Fatal("view aliases route")
 	}
-	if _, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerView(context.Background(), f.match.ID(), 999); e == nil {
+	if _, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerView(context.Background(), f.match.ID(), 999, "outsider"); e == nil {
 		t.Fatal("outsider read")
+	}
+	// 名单之外的人不能经 room 的 RoomJoin 入座：塔防的 RoomJoining 监听在占座（和满员检查）之前拒绝。
+	if _, e := sender.NewRoomJoinSender(f.engine).Sync_RoomJoin(context.Background(), f.match.ID(), 999, "outsider"); !errors.Is(e, apperrors.ErrRoomNotMember) {
+		t.Fatal("outsider joined the roster room", e)
 	}
 	for range 100 {
 		if f.view(t, 0).Phase == "done" {

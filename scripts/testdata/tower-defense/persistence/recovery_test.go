@@ -6,9 +6,10 @@ import (
 	"errors"
 	db "example.com/tower-defense-practice/db"
 	playerentity "example.com/tower-defense-practice/game/entities/player"
-	runentity "example.com/tower-defense-practice/game/entities/tower_room"
+	runentity "example.com/tower-defense-practice/game/entities/room"
 	sender "example.com/tower-defense-practice/game/handler/syncsender"
 	tower "example.com/tower-defense-practice/game/modules/towerdefense"
+	"fmt"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -43,6 +44,7 @@ type towerRuntime struct {
 	database  string
 	runID     int64
 	ids       [tower.Seats]int64
+	conns     [tower.Seats]string
 	clock     atomic.Int64
 }
 
@@ -67,7 +69,7 @@ func openTowerRuntime(t *testing.T, manual bool, now int64) *towerRuntime {
 	playerentity.RegisterEntity()
 	runentity.RegisterEntity()
 	RegisterTowerDefenseNestHandlers()
-	RegisterTickTowerRoomTimerGenNestHandlers()
+	RegisterEnterInitNestHandlers()
 	h := &towerRuntime{database: database}
 	h.clock.Store(now)
 	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
@@ -119,13 +121,19 @@ func openTowerRuntime(t *testing.T, manual bool, now int64) *towerRuntime {
 		t.Fatal(err)
 	}
 	h.scheduler = nest.NewEngine(append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access))...)
+	// room 模块与 Room 定时器的 handler 归属 game 服务，按引擎实例注册（与进程装配同一入口）。
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomJoinNestHandlersOn, RegisterTickRoomTimerGenNestHandlersOn} {
+		if err := register(h.scheduler); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := h.scheduler.Start(); err != nil {
 		t.Fatal(err)
 	}
 	if err := runentity.TimerDriver.Bind(h.scheduler, func(id int64) entity.IThreadSafeEntity { return h.access.Manager().Get(id) }); err != nil {
 		t.Fatal(err)
 	}
-	h.runID, err = entity.BuildEntityID(82001, runentity.EntityKindTowerRoom)
+	h.runID, err = entity.BuildEntityID(82001, runentity.EntityKindRoom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +142,8 @@ func openTowerRuntime(t *testing.T, manual bool, now int64) *towerRuntime {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// 连接标识落在 room 的席位上（持久），新进程里同一个标识照样认得出是这名成员的那条连接。
+		h.conns[i] = fmt.Sprintf("tower-real-conn-%d", i)
 	}
 	t.Cleanup(func() { h.close(t) })
 	return h
@@ -153,7 +163,7 @@ func (h *towerRuntime) close(t *testing.T) {
 	}
 }
 
-// towerTimerCounter 读 TowerRoom 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
+// towerTimerCounter 读 Room 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
 func towerTimerCounter(name string) int64 {
 	var total int64
 	for _, m := range metrics.Snapshot() {
@@ -171,14 +181,14 @@ type towerBarrier struct {
 	Unprojected uint64
 }
 
-func towerRuntimeState(t *testing.T, h *towerRuntime) (*runentity.TowerRoom, tower.State) {
+func towerRuntimeState(t *testing.T, h *towerRuntime) (*runentity.Room, tower.State) {
 	t.Helper()
 	v, e := h.access.Get(context.Background(), h.runID, entity.EntityCategoryWorld)
 	if e != nil {
 		t.Fatal(e)
 	}
-	m := v.(*runentity.TowerRoom)
-	s, e := tower.Decode(m.Dao().GetState())
+	m := v.(*runentity.Room)
+	s, e := tower.Decode(m.Dao().GetTowerState())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -187,13 +197,13 @@ func towerRuntimeState(t *testing.T, h *towerRuntime) (*runentity.TowerRoom, tow
 func towerFacts(t *testing.T, h *towerRuntime) towerBarrier {
 	t.Helper()
 	m, s := towerRuntimeState(t, h)
-	b := towerBarrier{State: s.Encode(), Timer: m.Dao().GetWakeTimer()}
+	b := towerBarrier{State: s.Encode(), Timer: m.Dao().GetTowerWakeTimer()}
 	for i, id := range h.ids {
 		v, e := h.access.Get(context.Background(), id, entity.EntityCategoryOther)
 		if e != nil {
 			t.Fatal(e)
 		}
-		b.Gold[i] = v.(*playerentity.Player).Dao().GetGold()
+		b.Gold[i] = v.(*playerentity.Player).Dao().GetWallet().GetCoins()
 	}
 	return b
 }
@@ -219,14 +229,14 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		for _, id := range append(h.ids[:], h.runID) {
 			kind := playerentity.EntityKindPlayer
 			if id == h.runID {
-				kind = runentity.EntityKindTowerRoom
+				kind = runentity.EntityKindRoom
 			}
 			if _, e := h.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind}); e != nil {
 				t.Fatal(e)
 			}
 		}
 		for _, id := range h.ids {
-			if e := s.Sync_TowerPlayerInit(ctx, id); e != nil {
+			if _, e := sender.NewEnterInitSender(h.scheduler).Sync_EnterInit(ctx, id); e != nil {
 				t.Fatal(e)
 			}
 		}
@@ -246,16 +256,20 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Sync_TowerInit(ctx, h.runID, h.ids, rules); e != nil {
+		if e = s.Sync_TowerInit(ctx, h.runID, h.ids, rules); e != nil {
 			t.Fatal(e)
 		}
 		for i, id := range h.ids {
+			seat, e := sender.NewRoomJoinSender(h.scheduler).Sync_RoomJoin(ctx, h.runID, id, h.conns[i])
+			if e != nil {
+				t.Fatal(i, "join", e)
+			}
 			for j, kind := range []string{"build", "ready"} {
 				a, b := 0, 0
 				if kind == "build" {
 					a = []int{1, 6, 11, 16}[i]
 				}
-				if _, e = s.Sync_TowerCommand(ctx, h.runID, id, tower.Command{Seq: uint64(j + 1), Epoch: 1, Round: 1, Kind: kind, A: a, B: b}); e != nil {
+				if _, e = s.Sync_TowerCommand(ctx, h.runID, id, h.conns[i], tower.Command{Seq: uint64(j + 1), Epoch: seat.Epoch, Round: 1, Kind: kind, A: a, B: b}); e != nil {
 					t.Fatal(i, kind, e)
 				}
 			}
@@ -266,13 +280,17 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		if n := runentity.TimerDriver.DeliverDue(ctx); n != 1 {
 			t.Fatal("first wave step not delivered", n)
 		}
-		waitTower(t, func() bool { v, e := s.Sync_TowerView(ctx, h.runID, h.ids[0]); return e == nil && v.Tick == 1 })
+		waitTower(t, func() bool {
+			v, e := s.Sync_TowerView(ctx, h.runID, h.ids[0], h.conns[0])
+			return e == nil && v.Tick == 1
+		})
 		m, state = towerRuntimeState(t, h)
 		stats := h.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 19 || state.Phase != "battle" || state.Tick != 1 || m.Dao().GetWakeTimer() == 0 {
-			t.Fatal("not at unprojected active wave boundary")
+		// 5 个实体创建 + 4 次建档（enter）+ 开房与名单 + 4 次入座（room）+ 8 条命令 + 第一波第一步 = 23 条未投影的 strict 记录。
+		if stats.Projected != 0 || stats.WALUnacked != 23 || state.Phase != "battle" || state.Tick != 1 || m.Dao().GetTowerWakeTimer() == 0 {
+			t.Fatal("not at unprojected active wave boundary", stats.WALUnacked)
 		}
-		b := towerBarrier{State: state.Encode(), Timer: m.Dao().GetWakeTimer(), Unprojected: stats.WALUnacked}
+		b := towerBarrier{State: state.Encode(), Timer: m.Dao().GetTowerWakeTimer(), Unprojected: stats.WALUnacked}
 		writeTowerBarrier(t, root, "ready.json", b)
 		select {}
 	}
@@ -293,7 +311,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		_, state := towerRuntimeState(t, h)
 		for i, id := range h.ids {
 			for _, r := range state.Seats[i].Receipts {
-				got, e := s.Sync_TowerCommand(ctx, h.runID, id, r.Command)
+				got, e := s.Sync_TowerCommand(ctx, h.runID, id, h.conns[i], r.Command)
 				if e != nil || got != r {
 					t.Fatal("command replay changed", e)
 				}
@@ -371,13 +389,20 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 	}
 	h := openTowerRuntime(t, false, towerNow+3600000)
 	m, state := towerRuntimeState(t, h)
-	if state.Encode() != barrier.State || m.Dao().GetWakeTimer() != barrier.Timer {
+	if state.Encode() != barrier.State || m.Dao().GetTowerWakeTimer() != barrier.Timer {
 		t.Fatal("lost towers, path, enemies, receipts or timer")
+	}
+	// room 的在线状态不落库：新进程里全部席位是断线（成员 RoomReconnect 才重新上线）；席位、代际与连接标识落库，
+	// 所以下面同一连接、同一代际的命令重放仍得到原回执，断线不妨碍已有防御按定时器推进。
+	for _, id := range h.ids {
+		if seat, ok := m.Dao().GetSeats(id); !ok || seat.GetEpoch() == 0 || m.Room().Connected(id) {
+			t.Fatal("room seats lost or stale online state survived the crash", id)
+		}
 	}
 	s := sender.NewTowerDefenseSender(h.scheduler)
 	for i, id := range h.ids {
 		for _, r := range state.Seats[i].Receipts {
-			got, e := s.Sync_TowerCommand(ctx, h.runID, id, r.Command)
+			got, e := s.Sync_TowerCommand(ctx, h.runID, id, h.conns[i], r.Command)
 			if e != nil || got != r {
 				t.Fatal("retry changed purchase or phase", e)
 			}
@@ -394,7 +419,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	view := func() tower.View {
-		v, e := s.Sync_TowerView(ctx, h.runID, h.ids[0])
+		v, e := s.Sync_TowerView(ctx, h.runID, h.ids[0], h.conns[0])
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -472,5 +497,5 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; four-player active wave restored, driver loop delivered one overdue step after cold load and %d deliveries in total to finish three waves, third process retried all commands and team rewards", barrier.Unprojected, delivered)
+	t.Logf("SIGKILL: %d unprojected strict records; four-player active wave restored on the room module's Room (seats kept, online state cleared), driver loop delivered one overdue step after cold load and %d deliveries in total to finish three waves, third process retried all commands and team rewards", barrier.Unprojected, delivered)
 }

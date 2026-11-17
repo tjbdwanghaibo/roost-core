@@ -1,10 +1,10 @@
 # 房间合作 PvE：塔防 / 生存撤离 / 自走棋
 
-三条纵切同形：一局一个房间实体（World 锁档）+ Player；房间实体挂一个持久定时器推进阶段 / 波次 / 期限；入场、领奖、兑付是 Player + 房间的多实体事务。手册：
+三条纵切同形：一局一个房间实体（World 锁档）+ Player；房间实体挂一个持久定时器推进阶段 / 波次 / 期限；入场、领奖、兑付是 Player + 房间的多实体事务。R9（2026-11-17）起按“装模块 + 只写模块没覆盖的部分”改造：**塔防已改**（房间并入 room 模块的 `Room`，金币 wallet、建档 enter），生存撤离与自走棋排在批 1（改完之前仍按下面的统一命令块）。手册：
 
 | 变体 | 手册（下称 TD / SE / AC §N） | 房间实体 |
 | --- | --- | --- |
-| 合作塔防 | `docs/framework/TOWER-DEFENSE-INTEGRATION.md` | TowerRoom |
+| 合作塔防 | `docs/framework/TOWER-DEFENSE-INTEGRATION.md` | room 模块的 `Room`（塔防状态是 `RoomDao` 末尾的 `TowerState` / `TowerWakeTimer`） |
 | 合作生存撤离 | `docs/framework/SURVIVAL-EXTRACTION-INTEGRATION.md` | SurvivalRaid |
 | 自走棋（八人） | `docs/framework/AUTO-CHESS-INTEGRATION.md` | ChessMatch |
 
@@ -24,7 +24,9 @@
 
 | 业务 | 模块 | 出处 |
 | --- | --- | --- |
-| 房间权威状态（地图、波次、卡池、物资账） | 房间实体 DAO（`State` 业务 JSON + `WakeTimer`），`EntityCategoryWorld` | TD / SE / AC §2、§3.1 |
+| 房间权威状态（地图、波次、卡池、物资账） | 房间实体 DAO（`State` 业务 JSON + `WakeTimer`），`EntityCategoryWorld`；塔防是 room 模块 `RoomDao` 上追加的 `TowerState` / `TowerWakeTimer` | TD / SE / AC §2、§3.1 |
+| 席位、代际与连接、在线（塔防） | **room 模块**：`RoomJoin` / `RoomReconnect` / 断线订阅；名单准入是 Room 上的 `event.RoomJoining` 监听；命令先过 `Room().Member(玩家, 代际)` + 连接核对 | TD §2、§5、§7 |
+| 玩家金币、建档（塔防） | **wallet**（领奖 `Wallet().Add`，“领过没有”记在房间的 `Claimed`）、**enter**（`EnterInit`，领奖查 `Enter().Built()`） | TD §2、§7 |
 | 阶段 / 波次 / 撤离读条期限 | `roost add timer --entity <Room>`，一个节点取最早期限，每次推进替换 | TD §6、SE §6、AC §5 |
 | 入场扣费、团队 / 排名领奖、兑付 | Player + 房间多实体 Sender，`rollback=undo durability=strict` | TD §7、SE §5、AC §6 |
 | 配置冻结 | `configdata.MustRegisterObject`，开局按值捕获 `Rules` 写进房间 | TD §4、SE §4、AC §4 |
@@ -32,20 +34,20 @@
 
 ## 3. 生成最小 demo
 
-接在 SKILL.md §3.2 公共前置命令之后。先按变体设下面 6 个变量（对应 `scripts/test-<变体>-generated.sh`），再执行统一命令块。
+接在 SKILL.md §3.2 公共前置命令之后。**塔防**见 §3.1（装模块）；生存撤离与自走棋先按变体设下面 6 个变量（对应 `scripts/test-<变体>-generated.sh`），再执行统一命令块。
 
-| 变量 | 塔防 | 生存撤离 | 自走棋 |
-| --- | --- | --- | --- |
-| `E`（实体） | `TowerRoom` | `SurvivalRaid` | `ChessMatch` |
-| `E_FILE`（snake） | `tower_room` | `survival_raid` | `chess_match` |
-| `PKG`（业务包目录） | `towerdefense` | `survival` | `autochess` |
-| `FIX`（夹具目录） | `tower-defense` | `survival-extraction` | `auto-chess` |
-| `H`（handler 文件名） | `tower_defense` | `survival_extraction` | `auto_chess` |
-| `TP`（测试前缀） | `TestTowerDefense` | `TestSurvivalExtraction` | `TestAutoChess` |
-| 期望 PASS 数（含 1 条业务 Robot） | 11 | 13 | 13 |
+| 变量 | 生存撤离 | 自走棋 |
+| --- | --- | --- |
+| `E`（实体） | `SurvivalRaid` | `ChessMatch` |
+| `E_FILE`（snake） | `survival_raid` | `chess_match` |
+| `PKG`（业务包目录） | `survival` | `autochess` |
+| `FIX`（夹具目录） | `survival-extraction` | `auto-chess` |
+| `H`（handler 文件名） | `survival_extraction` | `auto_chess` |
+| `TP`（测试前缀） | `TestSurvivalExtraction` | `TestAutoChess` |
+| 期望 PASS 数（含 1 条业务 Robot） | 13 | 13 |
 
 ```bash
-E=TowerRoom E_FILE=tower_room PKG=towerdefense FIX=tower-defense H=tower_defense TP=TestTowerDefense   # 换变体改这一行
+E=SurvivalRaid E_FILE=survival_raid PKG=survival FIX=survival-extraction H=survival_extraction TP=TestSurvivalExtraction   # 换变体改这一行
 "$ROOST" add dao Player --entity Player
 "$ROOST" add entity "$E"
 "$ROOST" add dao "$E" --entity "$E"
@@ -66,13 +68,38 @@ python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" "$FIX"  
 go test -mod=mod -race -count=1 -timeout 2m -v -run "^$TP" "./game/$PKG" ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望：`--- PASS: $TP` 条数等于上表、0 skip；然后按 SKILL.md §3.4 收尾。三个变体的 Player 与房间 DAO 字段相同（`Gold` / `Initialized`、`State` / `WakeTimer`）。
+期望：`--- PASS: $TP` 条数等于上表、0 skip；然后按 SKILL.md §3.4 收尾。这两个变体的 Player 与房间 DAO 字段相同（`Gold` / `Initialized`、`State` / `WakeTimer`）。
+
+### 3.1 塔防（装模块，R9 起）
+
+模块清单 `room wallet enter`（Q6 只装 enter，不装 login / portal）；不再 `add entity TowerRoom`，不给 Player 加 `Gold` / `Initialized`，不改锁档（room 的 `Room` 已是 World）。对应 `scripts/test-tower-defense-generated.sh`：
+
+```bash
+F="$CORE/scripts/testdata/tower-defense"
+bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" room wallet enter   # = roost module add + 核对已登记
+"$ROOST" add timer --entity Room                                                    # 波次期限：Room 上的实体定时器
+dao_add Room db/def/room.go "TowerState string tower_state" "TowerWakeTimer int64 tower_wake_timer"
+mkdir -p game/modules/towerdefense
+for n in rules state match rules_test; do cp "$F/$n.go.txt" "game/modules/towerdefense/$n.go"; done
+cp "$F/timer_handlers.go.txt" game/entities/room/timer_handlers.go   # 覆盖 add timer 的示例
+cp "$F/room_roster.go.txt"    game/entities/room/tower.go            # RoomJoining 名单监听
+cp "$F/handlers.go.txt"       game/handler/tower_defense.go
+cp "$F/gameplay_test.go.txt"  game/handler/tower_defense_test.go
+fix_mod tower-defense-practice game/modules/towerdefense/*.go game/entities/room/{timer_handlers,tower}.go game/handler/tower_defense*.go
+gofmt -w db/def/room.go game/modules/towerdefense/*.go game/entities/room/*.go game/handler/tower_defense*.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" tower-defense
+"$ROOST" generate
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestTowerDefense' ./game/modules/towerdefense ./game/handler 2>&1 | tee "$WORK/test.log"
+bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" room wallet enter
+```
+
+期望：`TestTowerDefense` 11 条 PASS、0 skip；`modules.sh verify` 打印 `room 33/33`、`wallet 17/17`、`enter 29/29`（每个模块通过数 == 检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip，并带 build / vet / `id check` / `generate --check`）。
 
 ## 4. demo 的最小玩法范围
 
 | 变体 | 夹具里的玩法（数值是样例） | 场景要点 |
 | --- | --- | --- |
-| 塔防（11 = 4 规则 + 6 Nest + 1 Robot） | 5×5 地图与阻路 BFS、共享金币建 / 升 / 卖塔、准备与托管、三波战斗、基地胜负、团队奖励 | 并发抢格、阻路回滚、旧连接被拒、undo 恢复金币 / 路线 / 定时器、团队奖励原子（TD §3.4） |
+| 塔防（11 = 4 规则 + 6 Nest + 1 Robot；另有模块自带 room 33 / wallet 17 / enter 29） | 5×5 地图与阻路 BFS、共享金币建 / 升 / 卖塔、准备与托管、三波战斗、基地胜负、团队奖励（手写）；席位 / 重连（room）、金币（wallet）、建档（enter） | 并发抢格、阻路回滚、room 断线与旧代际 / 旧连接被拒、名单外入座被拒、undo 恢复金币 / 路线 / 定时器、团队奖励经 wallet 原子（TD §3.4；旧断言 → 新断言见 TD §3.5） |
 | 生存撤离（13 = 4 + 8 + 1 Robot） | 付费入场、共享采集、制作预扣、环境伤害、死亡掉落、撤离读条、永久兑付 | 入场原子幂等、资源点竞争、并发拾取、物资守恒、过期不能重进（SE §3.4） |
 | 自走棋（13 = 12 + 1 Robot） | 八席共享卡池与商店、经济与升级、合星、准备 / 战斗阶段、确定性战斗、淘汰排名、断线接管、按排名领奖 | 卡池守恒、并发买卡、准备竞争只冻结一场、期限后输入被拒、账本满保留原回执（AC §3.4） |
 
@@ -81,7 +108,7 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run "^$TP" "./game/$PKG" ./game/
 | 类别 | 内容 | 出处 |
 | --- | --- | --- |
 | 框架能做 | 一局一锁的多人命令串行、期限与状态同事务、离线 / 重启后补触发一次、多实体领奖不重复、配置原子发布与按值冻结 | TD / SE / AC §11（AC §10）“证明” |
-| 框架不能做 | 离线追帧（加载后只触发一次，不会一次打完整局，补算由业务决定）；寻路 / 阻路、怪物 AI、战斗模拟、卡池随机；接管票与会话票的分配（要可信入口持久分配） | TD §6、AC §5、SE §6 |
+| 框架不能做 | 离线追帧（加载后只触发一次，不会一次打完整局，补算由业务决定）；寻路 / 阻路、怪物 AI、战斗模拟、卡池随机；接管票与会话票的分配（要可信入口持久分配；塔防改用 room 的席位代际 + 服务端连接标识） | TD §6、AC §5、SE §6 |
 | 时序边界 | 最早期限已到、Tick 还没提交时新命令一律被拒，等定时器提交后重发原命令；掉线席位不阻塞阶段推进 | TD §8、SE §6、AC §5 |
 | 容量 / 验证边界 | 四台 / 八个真实网络客户端、多进程与容量均未测；生存撤离“恢复路径上的探险结束处理”未覆盖；自走棋跨 sid 发奖未测 | KNOWN-LIMITS“游戏接入验收”三行 |
 | 一致性边界 | 每席命令序号单调、同序号同内容返回原回执；账本 128 条（塔防 / 生存撤离每席）满了拒绝新命令、不淘汰旧回执，正式服要归档 / 分片 | TD §5、SE §5、AC §6 |
@@ -90,7 +117,9 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run "^$TP" "./game/$PKG" ./game/
 ## 6. 常见坑
 
 - 每张卡 / 每个塔一个实体：买卡变成跨实体事务，锁序和死锁要自己处理；推荐一局一锁（AC §8）。
-- 房间实体忘了改 World 锁档：领奖同时锁 Player 与房间时锁序不固定（TD §8）。
+- 房间实体忘了改 World 锁档：领奖同时锁 Player 与房间时锁序不固定（TD §8；塔防用 room 的 `Room`，已是 World）。
+- 塔防的名单监听对普通房（`TowerState` 为空）要放行：room 模块自带的 33 条场景用的就是普通房，`module verify` 会失败（TD §8）。
+- 塔防的连接标识从客户端 PB 里取或用玩家号代替：旧连接就能操作新席位；必须 `room.ConnectionKey(session)`（TD §8）。
 - 锁接口名不含 `Entity`：`generate` 报 `found no entity parameter`（TD / SE / AC §8～§9）。
 - 先扣款再异步算路线：建塔要在局部副本上算完 BFS，入口到基地不可达就整体拒绝（TD §5）。
 - 把实体持久创建与业务初始化混为一谈：启用 DataEngine 后普通持久实体事务外 `Create` 会补 strict 提交，Nest 内随事务提交；无 DataEngine 的离线夹具只建内存。初始资源与首次入场仍需自己的事务和幂等事实，Remote 例外见 guide/03-dataengine（SE §9）。
@@ -99,6 +128,7 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run "^$TP" "./game/$PKG" ./game/
 ## 7. 验证
 
 - 一档：§3 命令 + SKILL.md §3.4。2026-10-31 在 v1.33.0 检出、自定 module 实测：塔防 10 / 生存撤离 12 / 自走棋 12 条全部 PASS，build / vet / `id check` / `generate --check` 通过。2026-10-31 在 v1.33.2 检出（`e4ec6260`）按本节统一命令块换变体行复测：10 / 12 / 12 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 collaborators FAIL。
+- 一档（塔防，R9 后）：2026-11-17 在 main 检出跑 `scripts/test-tower-defense-generated.sh`：11 条 PASS、0 SKIP，`module verify` room 33 / wallet 17 / enter 29；`test-genres-generated.py --genres tower-defense` 自定 module 名 passed（[R9 批 0 证据](../../../maintenance/evidence/r9-batch0-20261117/README.md)）。
 - 二档：`ROOST_TOWER_DEFENSE_REAL=1` / `ROOST_SURVIVAL_EXTRACTION_REAL=1` / `ROOST_AUTO_CHESS_REAL=1`（隔离 Mongo 副本集）：子进程在 strict 已确认、WAL 未投影时被 SIGKILL，新进程冷加载、驱动投递循环补触发一次、续局领奖，第三个进程核对并重试（各手册“真实 WAL / Mongo 崩溃恢复”节）。
 - 缺省模式不证明：无 WAL / Mongo；定时器经 `DeliverDue` 投递、实体一直在内存，没有经过加载后补触发与投递循环计时；多名“玩家”是同进程并发调用。
 

@@ -1,4 +1,4 @@
-package tower_room
+package room
 
 import (
 	tower "example.com/tower-defense-practice/game/modules/towerdefense"
@@ -6,15 +6,18 @@ import (
 	"time"
 )
 
-const TimerPhase int32 = 1
+// TimerTowerPhase 是塔防波次期限（准备期结束 / 战斗下一步）在 Room 实体定时器上的类型号。
+// 类型号随节点存进 RoomDao，发布后不要改号；同一个 Room 以后装 turn 时它的 TurnDeadline 另占一个号（turn README：
+// 已有定时器时复用这个组件）。
+const TimerTowerPhase int32 = 1
 
 func (c *TimerComponent) registerTimerHandlers(h *entitytimer.Handlers) {
-	h.Register(TimerPhase, func(f entitytimer.Fire) time.Duration {
+	h.Register(TimerTowerPhase, func(f entitytimer.Fire) time.Duration {
 		d := c.owner.Dao()
-		if d.GetWakeTimer() != f.ID {
+		if d.GetTowerWakeTimer() != f.ID {
 			return 0
 		}
-		s, e := tower.Decode(d.GetState())
+		s, e := tower.Decode(d.GetTowerState())
 		if e != nil {
 			panic(e)
 		}
@@ -24,14 +27,14 @@ func (c *TimerComponent) registerTimerHandlers(h *entitytimer.Handlers) {
 		if e = s.Advance(f.Now.UnixMilli()); e != nil {
 			panic(e)
 		}
-		d.SetState(s.Encode())
-		d.SetWakeTimer(0)
+		d.SetTowerState(s.Encode())
+		d.SetTowerWakeTimer(0)
 		if s.Deadline > 0 {
-			id := c.NewTimerAt(time.UnixMilli(s.Deadline), TimerPhase, s.Deadline, 0, nil)
+			id := c.NewTimerAt(time.UnixMilli(s.Deadline), TimerTowerPhase, s.Deadline, 0, nil)
 			if id == 0 {
 				panic(tower.ErrRule)
 			}
-			d.SetWakeTimer(id)
+			d.SetTowerWakeTimer(id)
 		}
 		return 0
 	})
