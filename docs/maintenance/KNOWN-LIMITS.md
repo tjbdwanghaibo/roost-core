@@ -373,7 +373,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/websocket`），契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，方案 [FEATURE-2026-11-16-lobby-relay §4.7.1](FEATURE-2026-11-16-lobby-relay.md)，[证据](evidence/lobby-relay-ws-20261117/README.md)。
 
 - **Origin 白名单为空时同源页面也拒绝**：不带 `Origin` 的请求（原生客户端、工具）总是放行；带 `Origin` 的必须匹配 `allowed_origins`（relay 是 `ws_allowed_origins`）。白名单为空时拒绝所有带 Origin 的请求，**同源页面也拒绝**（选择理由：失败即关闭；游戏页面通常与接入地址不同域，前置负载均衡还可能改写 Host，按 Host 判同源靠不住）。要让浏览器连上来，必须写白名单。
-- **七层负载均衡后面所有连接按同一个 IP 计数**：连接的对端地址是负载均衡的地址，`max_connections_per_ip` 把经它来的全部 WebSocket 连接算作一个 IP；进程不读 `X-Forwarded-For`。部署时按负载均衡的数量调大这个上限。
+- **七层负载均衡后要配可信代理才按客户端计数**（2026-11-17，交接 C3）：不写 `websocket.trusted_proxies` 时连接的对端是负载均衡，`max_connections_per_ip` 把经它来的全部 WebSocket 连接算作一个 IP；写上负载均衡自己的地址后按 `X-Forwarded-For` 从右往左第一个不可信的地址计数（规则见 GATEWAY §6“部署注意”）。只认 `X-Forwarded-For`（`Forwarded`、`X-Real-IP` 不读），每一项都可信时退回对端地址（不取最左项），四层负载均衡的 PROXY protocol 不支持，玩家 TCP 监听不读任何转发信息。relay 没有按 IP 的连接限额，保护靠令牌、每连接帧率与房间人数上限。没有经真实七层负载均衡与浏览器演练（尚未确认，[证据](evidence/c3-trusted-proxies-20261117/README.md)）。
 - **TLS 由前置负载均衡终结**（wss）：进程里不配证书。
 - **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。
 - **单条消息上限有 1 字节余量**：库按流读，越过上限后的下一次读才失败，超出部分最多先读出 1 个字节，之后连接以 1009 关闭。上限之内的帧照常处理。

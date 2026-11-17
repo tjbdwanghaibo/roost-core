@@ -31,6 +31,9 @@ func integrationTestPackages(t *testing.T) (redisOnly, fullEnv, cluster []string
 	t.Helper()
 	kinds := map[string]map[string]bool{}
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -197,6 +200,9 @@ func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {
 	}
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if hiddenDir(path, entry) {
+				return filepath.SkipDir
+			}
 			if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
 				return walkErr
 			}
@@ -377,6 +383,9 @@ func packagesReadingEnv(t *testing.T, name string, integrationOnly, byPrefix boo
 	t.Helper()
 	found := map[string]map[string]bool{}
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -637,6 +646,9 @@ func discoverGeneratedRealDependencyTests(t *testing.T, envSuites []string) []ge
 	testdataDirs := map[string]bool{}
 	var found []generatedRealDependencyTest
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -872,6 +884,9 @@ func TestPhysicsServiceRunnerCoversNativeIntegration(t *testing.T) {
 	count := 0
 	for _, root := range []string{"service", "wiring"} {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if hiddenDir(path, entry) {
+				return filepath.SkipDir
+			}
 			if walkErr != nil {
 				return walkErr
 			}

@@ -94,6 +94,9 @@ func TestCombatComponentHeartbeatStaysInTheAdapters(t *testing.T) {
 // Nested modules are separate consumers, not part of Core's dependency layer.
 func TestCoreDependencyBoundary(t *testing.T) {
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -180,6 +183,9 @@ var driverPackages = []string{
 // (ARCHITECTURE_V3_SINGLE_MODULE_PLAN P1).
 func TestCoreContractsDoNotLinkDrivers(t *testing.T) {
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -530,6 +536,9 @@ func crossPillarViolation(from, to string) (reason string, allowed int) {
 func TestCorePillarDependencyDirection(t *testing.T) {
 	used := make([]bool, len(allowedCrossPillarImports))
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}

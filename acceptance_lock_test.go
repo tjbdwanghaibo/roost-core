@@ -18,6 +18,9 @@ import (
 func TestGlobalEnvironmentOperationsHoldTheAcceptanceLock(t *testing.T) {
 	testFunc := regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if err != nil {
 			return err
 		}

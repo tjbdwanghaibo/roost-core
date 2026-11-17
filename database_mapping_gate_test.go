@@ -27,6 +27,9 @@ func TestNoMongoDatabaseOpenedWithALogicalDAOName(t *testing.T) {
 	var violations []string
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if hiddenDir(path, entry) {
+				return filepath.SkipDir
+			}
 			if err != nil {
 				return err
 			}

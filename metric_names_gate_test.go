@@ -153,6 +153,9 @@ func collectMetricInventory(t *testing.T) *metricInventory {
 	var files []goFile
 	var templates []string
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}

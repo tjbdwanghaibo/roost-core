@@ -106,6 +106,9 @@ func discoverExampleMains(t *testing.T) []string {
 	t.Helper()
 	set := map[string]bool{}
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if hiddenDir(path, entry) {
+			return filepath.SkipDir
+		}
 		if err != nil {
 			return err
 		}
