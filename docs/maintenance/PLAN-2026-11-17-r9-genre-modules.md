@@ -1,6 +1,6 @@
 # R9 方案：13 类玩法改成“装模块 + 只写模块没覆盖的部分”（2026-11-17）
 
-状态：**方案，未实施**。基线 main v1.52.0（`f6699655`，最低 core 提升 `d1a6ab2a`）。来源：维护者 2026-11-14 的 D21 A（[决定原文](evidence/known-limits-remaining-20261114/decisions.md)），交接 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14) 的 R9，[KNOWN-LIMITS](KNOWN-LIMITS.md)“模块化顺序（N1）”。组合规则以 [compose.md](../agent-skills/roost-genre/references/compose.md) 为准（四条规则：遵循核心思路、能复用就装、不能就借鉴最近的模块、需求与限制冲突必须提出）。
+状态：**实施中**。维护者 2026-11-17 答复第 7 节 Q1～Q8 **都按推荐**，并同意每类玩法脚本加跑 `module verify`；R3 与 CellWorld 进模块也要做（先后见第 8 节）。实施时各 agent 在主检出 main 上按文件分工、用 pathspec 提交（与 v1.52.0 整理轮相同），不另开 worktree。基线 main v1.52.0（`f6699655`，最低 core 提升 `d1a6ab2a`）。来源：维护者 2026-11-14 的 D21 A（[决定原文](evidence/known-limits-remaining-20261114/decisions.md)），交接 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14) 的 R9，[KNOWN-LIMITS](KNOWN-LIMITS.md)“模块化顺序（N1）”。组合规则以 [compose.md](../agent-skills/roost-genre/references/compose.md) 为准（四条规则：遵循核心思路、能复用就装、不能就借鉴最近的模块、需求与限制冲突必须提出）。
 
 读者：维护者（第 7 节要答的问题）与后续实施 agent（第 3～5 节照做）。
 
