@@ -17,3 +17,4 @@ M16 kicked 也重连: RED -> ✖ kick semantics: an old token refused with Close
 M10 解压用压缩流: RED -> ✖ dist-test/test/compress.test.js
 M11 sessionStorage 不存快照: RED -> ✖ refresh within host_grace: the same account is still host, members get HostResumed, state comes back from sessionStorage | ✖ refresh: sessionStorage keeps the snapshot; reconnecting within the grace as host restores it and continues the seq
 M15 解压不设上限: RED -> ✖ decompression stops at the limit
+M17 WebHost 改回占业务的 onXxx 槽位（修前的接法）: RED -> ✖ the app's own client callbacks do not displace WebHost (YouAreHost starts the rules, snapshots are still stored) | ✖ transfer between WebHost pages that also register client callbacks: the new host's rules keep stepping, snapshots go out, a refresh within host_grace resumes

@@ -33,6 +33,9 @@
   <div id="status">未连接</div>
   <div>角色 <span id="role">-</span>，槽位 <span id="slot">-</span>，房主槽位 <span id="hostSlot">-</span>，epoch <span id="epoch">-</span>，快照 seq <span id="seq">-</span></div>
   <div>在线成员（房主才知道）：<span id="members">-</span></div>
+  <div>规则循环 <span id="running">-</span>，最近一次接手 <span id="takeover">-</span>，最近一次快照 <span id="lastSnapshot">-</span></div>
+  <div>页面可见性 <span id="visibility">-</span>
+    <button id="hide">模拟隐藏</button> <button id="show">模拟回到前台</button>（调试：覆盖 visibilityState 并派发 visibilitychange）</div>
   <button id="click">点一下 (+1)</button>
   <button id="snapshot">立即推快照</button>
   转交给槽位 <input id="target" style="width:4em"> <button id="transfer">转交</button>
@@ -42,7 +45,7 @@
 <fieldset>
   <legend>房主广播的状态</legend>
   <table id="counts"><tr><th>槽位</th><th>次数</th></tr></table>
-  <div>tick <span id="tick">-</span>，规则状态来源 <span id="from">-</span></div>
+  <div>tick <span id="tick">-</span>（<span id="tickAge">-</span>），规则状态来源 <span id="from">-</span>，广播者槽位 <span id="sender">-</span></div>
 </fieldset>
 <div id="log"></div>
 <script type="module" src="./demo.js"></script>

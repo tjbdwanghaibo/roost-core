@@ -73,6 +73,8 @@ serveRules(new MyRules(), { stepMs: 50 });
 - **补帧**：`FixedStepLoop` 按 `performance.now()` 的实际经过时间推进固定步长，一次最多补 `maxCatchUpSteps` 步（缺省 1 秒的步数），多出的时间丢掉不追。
 - **页面隐藏**：房主页面隐藏满 `hiddenHandoffMs`（缺省 5s，手机推荐 0）还没回来，就把房主连同规则当前状态 `transfer` 给候选里第一个在线的成员（没声明候选时取在线成员里槽位最小的）；没有可转交的成员就留在原地。回到前台不自动抢回。
 - **刷新页面**：每推一份快照就把房间、账号、seq 与压缩后的快照存进 `sessionStorage`（`HostSessionStore`）。刷新后 `resume()` 用存档里的房间向 lobby join、连 relay：在 `host_grace` 内回来仍是房主，规则从存档恢复、seq 接着存档；宽限期过了以成员身份回来，存档作废。relay 不回传快照（方案 §4.7.4）。
+- **回调槽位**：`RelayClient` 的每个 `onXxx` 只有一个槽位（与 Go、C# 相同），后注册的顶掉先注册的。`WebHost` 不占这些槽位，走 SDK 的内部监听（在业务回调之前调用），所以业务可以在 `webHost.client` 上照常注册任何回调。
+- `handOff(target?)`：不给目标时按上面的规则选，给了就转交给它（必须在线），交接数据是规则当前的状态。
 - 浏览器 API（`document`、`sessionStorage`、计时器、时钟、Worker）都可以注入，测试用假的。
 
 ## 测试
@@ -101,4 +103,4 @@ node demo/serve.mjs            # 起对端（真实 relay + lobby），发静态
 # 浏览器开 http://127.0.0.1:8787/demo/ ，开两三个标签页
 ```
 
-第一个页面“建房”，其余页面填房间号“加入”；“点一下”的计数由房主页 Worker 里的规则（`demo/rules.js`）维护并广播。可以看：手动“转交”、把房主页切到后台 5s（让出给候选）、刷新房主页（5s 内回来仍是房主，计数从 sessionStorage 恢复）、关掉房主页（5s 后成员当上新房主，计数从 relay 存的快照恢复）。
+第一个页面“建房”，其余页面填房间号“加入”；“点一下”的计数由房主页 Worker 里的规则（`demo/rules.js`）维护并广播。页面上显示规则循环在不在跑、最近一次接手（epoch、来源、快照 seq）、最近一次快照、tick 与它多久前更新、广播者槽位。可以看：手动“转交”、把房主页切到后台 5s（让出给候选；后台页仍报 visible 的环境用“模拟隐藏”按钮）、刷新房主页（5s 内回来仍是房主，计数从 sessionStorage 恢复）、关掉房主页（5s 后成员当上新房主，计数从 relay 存的快照恢复）。

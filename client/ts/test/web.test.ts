@@ -385,3 +385,32 @@ test("a new host started by YouAreHost gets the decompressed snapshot and the SD
   assert.equal(p.host.client.snapshotSeq, 1n << 32n, "max(4, epoch 1 << 32)");
   p.host.close();
 });
+
+test("the app's own client callbacks do not displace WebHost (YouAreHost starts the rules, snapshots are still stored)", async () => {
+  const storage = new FakeStorage();
+  const p = page({ storage, welcome: { slot: 2, host: false, hostSlot: 1 } });
+  const seen: string[] = [];
+  const c = p.host.client; // 像演示页一样，业务在 client 上注册自己的回调
+  c.onGame(() => seen.push("game"));
+  c.onYouAreHost(() => void seen.push("you are host"));
+  c.onYouAreMember(() => seen.push("you are member"));
+  c.onHostChanged(() => seen.push("host changed"));
+  c.onSnapshotSent(() => seen.push("snapshot"));
+  c.onDisconnected(() => seen.push("disconnected"));
+  c.onReconnected(() => seen.push("reconnected"));
+  await p.host.join("r1");
+  const fake = p.sockets[0];
+  fake.push({ channel: RelayChannel.Game, slot: 1, msgId: 2, flags: 0, payload: text("from-host") });
+  assert.deepEqual(p.frames.map((f) => str(f.payload)), ["from-host"], "member frames still reach onFrame");
+  const { encodeYouAreHost, encodeHostChanged, StateSource } = await import("../src/index.js");
+  const handoff = await p.host.client["compressor"].compress(text("handed"));
+  fake.push(control(RelayOp.YouAreHost, 2, encodeYouAreHost({ epoch: 1n, source: StateSource.Handoff, snapshotSeq: 3n, snapshotAgeMs: 0, members: [], state: handoff })));
+  await fake.waitFor("host ready", () => fake.controls(RelayOp.HostReady).length === 1);
+  assert.ok(p.runner.running, "rules started although the app registered onYouAreHost");
+  assert.deepEqual(p.rules.restored, ["handed"]);
+  fake.push(control(RelayOp.HostChanged, 2, encodeHostChanged(1n, "a1")));
+  assert.equal(await p.host.client.pushSnapshot(), (1n << 32n) + 1n);
+  assert.equal(new HostSessionStore(storage).load("a1")?.seq, (1n << 32n) + 1n, "snapshot stored although the app registered onSnapshotSent");
+  assert.deepEqual(seen, ["game", "you are host", "host changed", "snapshot"], "the app's callbacks run too");
+  p.host.close();
+});

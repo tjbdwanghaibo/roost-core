@@ -133,6 +133,23 @@ export interface Disconnect {
   reconnecting: boolean;
 }
 
+/**
+ * SDK 自带辅助（web.ts 的 WebHost）用的内部监听，不从 index 导出。每个 onXxx 只有一个业务回调槽位（与 Go、C# 相同），
+ * 辅助要是也用这些槽位，业务再注册一次就把辅助顶掉了（2026-11-17 演示页上转交后新房主规则不跑就是这么来的）。
+ * 内部监听在业务回调之前调用，互不覆盖。
+ */
+export const internalHooks = Symbol("roost.relay.internalHooks");
+
+export interface InternalHooks {
+  game?: (frame: RelayFrame) => void;
+  youAreHost?: (takeover: HostTakeover) => void | Promise<void>;
+  youAreMember?: (epoch: bigint) => void;
+  hostChanged?: (change: HostChange) => void;
+  snapshotSent?: (sent: SentSnapshot) => void;
+  reconnected?: (welcome: Welcome) => void;
+  disconnected?: (disconnect: Disconnect) => void;
+}
+
 /** pushSnapshot 离上一份不到 snapshotMinIntervalMs，这一份没有发出。 */
 export class SnapshotTooSoonError extends Error {
   constructor() {
@@ -247,6 +264,7 @@ const builtinControl: Record<number, (client: RelayClient, frame: RelayFrame, se
     const epoch = decodeEpoch(frame.payload);
     client["epochValue"] = epoch;
     client["becomeMember"]();
+    client["hooks"].youAreMember?.(epoch);
     client["handlers"].youAreMember?.(epoch);
     return RelayReason.None;
   },
@@ -346,6 +364,7 @@ export class RelayClient {
   private readonly online = new Map<number, string>();
   private snapshotTimer: ReturnType<typeof setInterval> | undefined;
   private readonly compressor: Compressor;
+  private hooks: InternalHooks = {};
   private rttMs = 0;
   private finished: Promise<void> = Promise.resolve();
   private finish: () => void = () => {};
@@ -453,6 +472,11 @@ export class RelayClient {
   onControl(op: number, fn: ((frame: RelayFrame) => void) | undefined): void {
     if (fn) this.handlers.control.set(op, fn);
     else this.handlers.control.delete(op);
+  }
+
+  /** 内部监听（WebHost 用）：在业务回调之前调用，业务注册 onXxx 不会顶掉它们。 */
+  [internalHooks](hooks: InternalHooks): void {
+    this.hooks = hooks;
   }
 
   /** 当前连接的身份；没有连接时是最后一次连接的身份。 */
@@ -594,6 +618,7 @@ export class RelayClient {
     if (!this.sendBig(RelayOp.Snapshot, 0, encodeSnapshot(seq, compressed))) return undefined;
     this.seq = seq;
     this.lastSnapshotAt = t;
+    this.hooks.snapshotSent?.({ seq, data: compressed });
     this.handlers.snapshotSent?.({ seq, data: compressed });
     return seq;
   }
@@ -709,6 +734,7 @@ export class RelayClient {
       }
       if (!stillCandidate()) return;
       try {
+        await this.hooks.youAreHost?.(takeover);
         await this.handlers.youAreHost?.(takeover);
       } catch {
         return; // 游戏接不了手：不回 HostReady，relay 超时后换下一个候选
@@ -730,6 +756,7 @@ export class RelayClient {
       this.role = { ...this.role, hostSlot: change.slot };
       if (this.stage !== "member") this.becomeMember();
     }
+    this.hooks.hostChanged?.(change);
     this.handlers.hostChanged?.(change);
   }
 
@@ -811,6 +838,7 @@ export class RelayClient {
     try {
       switch (frame.channel) {
         case RelayChannel.Game:
+          this.hooks.game?.(frame);
           this.handlers.game?.(frame);
           return;
         case RelayChannel.Room:
@@ -841,12 +869,12 @@ export class RelayClient {
     if (this.current === session) this.current = undefined;
     this.syncSnapshotTimer();
     if (this.closed) {
-      this.handlers.disconnected?.({ reason: RelayReason.None, error: new RelayClientClosedError(), reconnecting: false });
+      this.emitDisconnect({ reason: RelayReason.None, error: new RelayClientClosedError(), reconnecting: false });
       this.stop();
       return;
     }
     const retry = this.opts.reconnect.maxAttempts > 0 && retryableReason(reason);
-    this.handlers.disconnected?.({ reason, error, reconnecting: retry });
+    this.emitDisconnect({ reason, error, reconnecting: retry });
     if (!retry) {
       this.stop();
       return;
@@ -857,9 +885,9 @@ export class RelayClient {
     } catch (failure) {
       const err = failure as Error;
       if (this.closed) {
-        this.handlers.disconnected?.({ reason: RelayReason.None, error: new RelayClientClosedError(), reconnecting: false });
+        this.emitDisconnect({ reason: RelayReason.None, error: new RelayClientClosedError(), reconnecting: false });
       } else {
-        this.handlers.disconnected?.({
+        this.emitDisconnect({
           reason: err instanceof RelayClosedError ? err.reason : RelayReason.Disconnected,
           error: err,
           reconnecting: false,
@@ -870,12 +898,18 @@ export class RelayClient {
     }
     if (this.closed) {
       next.abort(RelayReason.None);
-      this.handlers.disconnected?.({ reason: RelayReason.None, error: new RelayClientClosedError(), reconnecting: false });
+      this.emitDisconnect({ reason: RelayReason.None, error: new RelayClientClosedError(), reconnecting: false });
       this.stop();
       return;
     }
     this.attach(next);
+    this.hooks.reconnected?.(next.welcome);
     this.handlers.reconnected?.(next.welcome);
+  }
+
+  private emitDisconnect(disconnect: Disconnect): void {
+    this.hooks.disconnected?.(disconnect);
+    this.handlers.disconnected?.(disconnect);
   }
 
   private stop(): void {

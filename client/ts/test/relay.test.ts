@@ -33,6 +33,7 @@ import { GAME, startPeer, type Peer } from "./peer.js";
 
 let peer: Peer;
 const players: Player[] = [];
+const webHosts: WebHost[] = [];
 
 before(async () => {
   peer = await startPeer();
@@ -41,6 +42,7 @@ before(async () => {
 
 after(async () => {
   for (const player of players) player.client.close();
+  for (const webHost of webHosts) webHost.close();
   await peer?.close();
 });
 
@@ -545,6 +547,91 @@ test("reconnect against lobby admission: down is retried with backoff until it r
     await peer.admission("ok");
   }
   for (const p of [host, ...others]) p.client.close();
+});
+
+/** 每一步 tick 加 1 并广播 tick（msgId 2）；状态就是 tick。 */
+class TickRules implements HostRules {
+  tick = 0;
+  restored: (number | null)[] = [];
+  restore(state: Uint8Array | null): void {
+    this.tick = state ? Number(new TextDecoder().decode(state)) : 0;
+    this.restored.push(state ? this.tick : null);
+  }
+  input(): void {}
+  step(): HostOutput[] {
+    this.tick++;
+    return [{ target: ALL, msgId: 2, payload: text(String(this.tick)) }];
+  }
+  snapshot(): Uint8Array {
+    return text(String(this.tick));
+  }
+}
+
+/** 一个 WebHost 页面，像 demo 一样在 webHost.client 上也注册了业务自己的回调（日志）。 */
+async function webPage(account: string, storage: MapStorage) {
+  const rules = new TickRules();
+  const sockets: WebSocket[] = [];
+  const webHost = new WebHost({
+    lobby: new LobbyClient(peer.lobbyUrl, await peer.gameToken(account)),
+    account,
+    runner: new LocalRunner(rules, { stepMs: 50 }),
+    relay: {
+      game: GAME,
+      snapshotIntervalMs: 1200,
+      webSocket: (url) => {
+        const ws = new WebSocket(url);
+        sockets.push(ws);
+        return ws as unknown as WebSocketLike;
+      },
+    },
+    storage,
+    document: undefined,
+  });
+  webHosts.push(webHost);
+  const ticks: number[] = [];
+  webHost.onFrame((f) => ticks.push(Number(new TextDecoder().decode(f.payload))));
+  const log: string[] = [];
+  const c = webHost.client;
+  c.onYouAreHost((t) => void log.push(`you are host ${t.source}`));
+  c.onYouAreMember((e) => void log.push(`you are member ${e}`));
+  c.onHostChanged((h) => void log.push(`host changed ${h.slot}`));
+  c.onSnapshotSent((s) => void log.push(`snapshot ${s.seq}`));
+  c.onDisconnected((d) => void log.push(`disconnected ${d.reason}`));
+  c.onReconnected(() => void log.push("reconnected"));
+  return { rules, sockets, webHost, ticks, log };
+}
+
+test("transfer between WebHost pages that also register client callbacks: the new host's rules keep stepping, snapshots go out, a refresh within host_grace resumes", async () => {
+  const storageA = new MapStorage();
+  const storageB = new MapStorage();
+  const a = await webPage("ts-wh-a", storageA);
+  const b = await webPage("ts-wh-b", storageB);
+  await a.webHost.create({ game: GAME, mode: "ts-wh" });
+  const w = await b.webHost.join(a.webHost.room);
+  assert.equal(w.slot, 2);
+  await until("B sees A's ticks", () => b.ticks.length > 5);
+
+  assert.equal(await a.webHost.handOff(), 2, "A hands off to the only online member");
+  await until("B is host", () => b.webHost.client.hostRole === "host");
+  assert.ok(b.log.includes(`you are host ${StateSource.Handoff}`), "the app's own onYouAreHost still runs");
+  const atTakeover = b.ticks.length;
+  await until("B's rules keep stepping after the takeover", () => b.ticks.length > atTakeover + 10);
+  assert.ok(b.rules.restored.at(-1)! > 0, "B's rules started from the handoff state");
+  await until("A renders B's broadcasts", () => a.ticks.at(-1)! > b.rules.restored.at(-1)!);
+  await until("B pushes snapshots on the interval", () => b.log.some((l) => l.startsWith("snapshot")));
+  assert.ok(storageB.items.size > 0, "B stored its snapshot in sessionStorage");
+
+  // B 刷新：宽限期内回来仍是房主，规则从 sessionStorage 恢复
+  b.sockets.at(-1)!.terminate();
+  b.webHost.close();
+  const b2 = await webPage("ts-wh-b", storageB);
+  const back = await b2.webHost.resume();
+  assert.deepEqual(back, { slot: 2, host: true, hostSlot: 2 });
+  assert.ok(b2.rules.restored[0]! > 0, "refreshed B restored the stored tick");
+  const atResume = b2.ticks.length;
+  await until("refreshed B steps again", () => b2.ticks.length > atResume + 5);
+  b2.webHost.close();
+  a.webHost.close();
 });
 
 function sleep(ms: number): Promise<void> {

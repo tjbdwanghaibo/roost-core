@@ -10,7 +10,7 @@
 //
 // 浏览器 API（document、sessionStorage、Worker、计时器、时钟）都可以注入，node 下测试用假的。
 
-import { RelayClient, type RelayClientOptions } from "./client.js";
+import { RelayClient, internalHooks, type RelayClientOptions } from "./client.js";
 import { ALL, RelayChannel, RelayReason, type RelayFrame, type Welcome } from "./codec.js";
 import { MAX_STATE_BYTES, defaultCompressor, type Compressor } from "./compress.js";
 import type { CreateRoomRequest, LobbyClient } from "./lobby.js";
@@ -528,12 +528,11 @@ export class WebHost {
 
   /**
    * 让出房主：给候选里第一个在线的成员（没声明候选时取在线成员里槽位最小的，与 relay 的兜底规则相同），
-   * 交接数据是规则当前的状态。没有可转交的成员时返回 undefined。
+   * 交接数据是规则当前的状态。target 给了就转交给它（必须在线）。没有可转交的成员时返回 undefined。
    */
-  async handOff(): Promise<number | undefined> {
+  async handOff(target: number | undefined = this.pickSuccessor()): Promise<number | undefined> {
     if (this.client.hostRole !== "host") return undefined;
-    const target = this.pickSuccessor();
-    if (target === undefined) return undefined;
+    if (target === undefined || !this.client.onlineMembers.has(target)) return undefined;
     const handoff = await this.runner.snapshot();
     if (this.client.hostRole !== "host" || !this.client.onlineMembers.has(target)) return undefined;
     return (await this.client.transfer(target, handoff)) ? target : undefined;
@@ -607,12 +606,12 @@ export class WebHost {
     });
   }
 
+  /**
+   * 接到 RelayClient 的内部监听上（不占业务的 onXxx 槽位）：业务在 webHost.client 上照样可以注册任何回调，
+   * 不会把这里顶掉。
+   */
   private wire(): void {
     const client = this.client;
-    client.onGame((frame) => {
-      if (client.hostRole === "host") this.runner.input(frame.slot, frame.msgId, frame.payload);
-      else this.frameHandler?.(frame);
-    });
     this.runner.onStep = (frames) => {
       client.pulse(); // Worker 的消息不受主线程计时器限流：顺带让房主的心跳按时发
       if (client.hostRole !== "host") return;
@@ -622,27 +621,33 @@ export class WebHost {
         if (out.target !== self) client.sendGame(out.target, out.msgId, out.payload, out.flags ?? 0);
       }
     };
-    client.onYouAreHost((takeover) => {
-      this.runner.start(takeover.state);
-      this.saveIdentity();
-      if (this.doc?.visibilityState === "hidden") this.visibilityChanged();
-    });
-    client.onYouAreMember(() => this.runner.stop());
-    client.onHostChanged((change) => {
-      if (!change.self) {
+    client[internalHooks]({
+      game: (frame) => {
+        if (client.hostRole === "host") this.runner.input(frame.slot, frame.msgId, frame.payload);
+        else this.frameHandler?.(frame);
+      },
+      youAreHost: (takeover) => {
+        this.runner.start(takeover.state);
+        this.saveIdentity();
+        if (this.doc?.visibilityState === "hidden") this.visibilityChanged();
+      },
+      youAreMember: () => this.runner.stop(),
+      hostChanged: (change) => {
+        if (!change.self) {
+          this.runner.stop();
+          this.store?.clear();
+        }
+      },
+      snapshotSent: (sent) => {
+        this.store?.save({ room: this.roomId, game: this.options.relay.game, account: this.options.account, seq: sent.seq, state: sent.data, savedAt: Date.now() });
+      },
+      reconnected: (welcome) => void this.entered(welcome),
+      disconnected: (d) => {
+        if (d.reconnecting) return;
         this.runner.stop();
-        this.store?.clear();
-      }
-    });
-    client.onSnapshotSent((sent) => {
-      this.store?.save({ room: this.roomId, game: this.options.relay.game, account: this.options.account, seq: sent.seq, state: sent.data, savedAt: Date.now() });
-    });
-    client.onReconnected((welcome) => void this.entered(welcome));
-    client.onDisconnected((d) => {
-      if (d.reconnecting) return;
-      this.runner.stop();
-      // 刷新页面时 SDK 不会走到这里（页面直接没了）；走到这里说明这一局对本页面结束了
-      if (d.reason !== RelayReason.None) this.store?.clear();
+        // 刷新页面时 SDK 不会走到这里（页面直接没了）；走到这里说明这一局对本页面结束了
+        if (d.reason !== RelayReason.None) this.store?.clear();
+      },
     });
   }
 

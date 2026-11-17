@@ -38,6 +38,7 @@
 ✔ kick: the lobby answers 403 kicked and an unused old token is refused; a left member's old token is lobby_rejected
 ✔ after the start: a dropped member auto-reconnects to its seat; the host kicks an offline seat and the lobby bars it
 ✔ reconnect against lobby admission: down is retried with backoff until it recovers, reject stops
+✔ transfer between WebHost pages that also register client callbacks: the new host's rules keep stepping, snapshots go out, a refresh within host_grace resumes
 ✔ catch-up: steps follow elapsed time and stop at the catch-up cap
 ✔ LocalRunner restores, steps on its timer by elapsed time, and hands outputs to onStep
 ✔ WorkerRunner drives rules served in a worker over a real MessageChannel (structured clone)
@@ -47,11 +48,12 @@
 ✔ the host's own rules output reaches the page; members' frames go to the rules; outputs go out over relay
 ✔ refresh: sessionStorage keeps the snapshot; reconnecting within the grace as host restores it and continues the seq
 ✔ a new host started by YouAreHost gets the decompressed snapshot and the SDK answers HostReady
-ℹ tests 49
+✔ the app's own client callbacks do not displace WebHost (YouAreHost starts the rules, snapshots are still stored)
+ℹ tests 51
 ℹ suites 0
-ℹ pass 49
+ℹ pass 51
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 22229.35725
+ℹ duration_ms 24014.774583

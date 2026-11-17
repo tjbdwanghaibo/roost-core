@@ -13,7 +13,7 @@ TS SDK（`client/ts`）接上换 host，加 Web 端房主辅助（方案 FEATURE
 
 ## 测试（`npm-test.txt`）
 
-`cd client/ts && source ~/.roost-it/roost-dataengine-it/env.sh && npm test`：49 个用例全过，对端是 `go test -c ./client/relay`（sdkhost 组 ed1392b2 的 peer，含 relay 修复 dd78962f），Redis 房间目录。
+`cd client/ts && source ~/.roost-it/roost-dataengine-it/env.sh && npm test`：51 个用例全过，对端是 `go test -c ./client/relay`（sdkhost 组 ed1392b2 的 peer，含 relay 修复 dd78962f），Redis 房间目录。
 
 | 文件 | 覆盖 |
 |---|---|
@@ -25,7 +25,30 @@ TS SDK（`client/ts`）接上换 host，加 Web 端房主辅助（方案 FEATURE
 
 ## 变异（`mutations.txt`）
 
-16 处，每处撤一行（或让一个条件失效），受影响的用例全部变红，恢复后全绿：seq 不接 YouAreHost / 不取 epoch<<32 下限、房主心跳用成员间隔、收帧上限不放大、lobby_unavailable 不重试、kicked 也重连、补帧不设上限、回到前台不取消让出、刷新后不从存档恢复、存档不存快照、候选不看在线、不回 HostReady、不限快照最小间隔、当上房主不重置间隔、解压不设上限、解压用压缩流。M2（心跳）同时让真实 relay 的“空闲房主 5s 内不被换掉”变红；M7、M11 同时让真实 relay 的刷新用例变红。
+17 处（含修复的 M17），每处撤一行（或让一个条件失效），受影响的用例全部变红，恢复后全绿：seq 不接 YouAreHost / 不取 epoch<<32 下限、房主心跳用成员间隔、收帧上限不放大、lobby_unavailable 不重试、kicked 也重连、补帧不设上限、回到前台不取消让出、刷新后不从存档恢复、存档不存快照、候选不看在线、不回 HostReady、不限快照最小间隔、当上房主不重置间隔、解压不设上限、解压用压缩流。M2（心跳）同时让真实 relay 的“空闲房主 5s 内不被换掉”变红；M7、M11 同时让真实 relay 的刷新用例变红。
+
+## 修复：主动转交后新房主的规则不跑（协调者在演示页复现）
+
+- **现象**：A 建房、B 加入，A 转交给槽位 2。B 已经是 host、epoch 1，但 tick 停在转交那一刻，之后没有快照，sessionStorage 里也没有存档，刷新后回不来。走快照来源（宽限期后 A 接手）这条路时一切正常。
+- **根因**：`RelayClient` 的每个 `onXxx` 只有一个槽位，`WebHost` 原来在 `src/web.ts` 的 `wire()` 里也用 `client.onYouAreHost` / `onYouAreMember` / `onHostChanged` / `onSnapshotSent` / `onGame` / `onReconnected` / `onDisconnected` 注册自己的处理。演示页 `demo.js` 随后在同一个 `webHost.client` 上注册日志回调，把 WebHost 的处理全部顶掉了：
+  - B 收到 YouAreHost 时规则没有 `start`；`autoHostReady` 照样回了 HostReady，所以 B 显示为 host。
+  - 定时快照的 `take` 看到规则没在跑就不推。
+  - 存档本来挂在 `onSnapshotSent` 上，也被顶掉了。
+- **为什么快照来源那条路看起来正常**：A 转交后收到 YouAreMember，但它停规则的处理同样被顶掉，A 的规则一直在跑；A 再次接手时规则本来就在跑。A 的存档同样没写。这条路只是看起来正常。
+- **修法**：
+  - `RelayClient` 加一组内部监听：`[internalHooks]`，键是一个不从 index 导出的 Symbol。内部监听在业务回调之前调用。
+  - `WebHost` 改走内部监听，不再占业务的 `onXxx` 槽位。业务在 `webHost.client` 上注册什么回调都不影响 WebHost。
+  - 演示页的转交按钮改用 `webHost.handOff(slot)`。这里没有 bug，只是统一走 WebHost。
+- **先红**：新用例 `relay.test.ts` 的 “transfer between WebHost pages that also register client callbacks …”。用真实 relay，两页都像演示页一样在 client 上注册日志回调。修前的失败原文：`AssertionError [ERR_ASSERTION]: timed out waiting for B's rules keep stepping after the takeover`。修后通过，并且断言了以下几点：
+  - B 的规则从交接数据开始继续 step；
+  - A 看到 B 的广播；
+  - B 定时推快照，并且存进了 sessionStorage；
+  - B 刷新后在宽限期内回来仍是房主，规则从存档恢复后继续 step。
+  - `web.test.ts` 另加一条假 relay 的同类用例。
+- **变异 M17**：把 WebHost 改回占业务槽位的旧接法，上面两条用例都变红。
+- **演示页**：
+  - 显示规则循环在不在跑、最近一次接手（epoch、来源、快照 seq、年龄）、最近一次快照、tick 多久前更新、广播者槽位；
+  - 加了“模拟隐藏 / 模拟回到前台”两个调试按钮：覆盖 `document.visibilityState`，再派发 `visibilitychange`。
 
 ## 没验证的
 

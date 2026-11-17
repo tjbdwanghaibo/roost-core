@@ -13,6 +13,7 @@ const accountKey = "roost.demo.account";
 $("account").value = sessionStorage.getItem(accountKey) ?? `web-${Math.random().toString(36).slice(2, 7)}`;
 
 let webHost;
+let lastTickAt = 0;
 
 async function open() {
   if (webHost) return webHost;
@@ -36,18 +37,28 @@ async function open() {
     const state = JSON.parse(new TextDecoder().decode(f.payload));
     $("tick").textContent = state.tick;
     $("from").textContent = state.restoredFrom;
+    $("sender").textContent = f.slot;
+    lastTickAt = performance.now();
     $("counts").innerHTML = "<tr><th>槽位</th><th>次数</th></tr>" + Object.entries(state.counts).map(([s, n]) => `<tr><td>${s}</td><td>${n}</td></tr>`).join("");
   });
   webHost.onHiddenHandoff((target) => log(target === undefined ? "页面隐藏：没有可转交的成员，留在原地" : `页面隐藏：已转交给槽位 ${target}`));
   c.onMemberJoined((m) => log(`成员上线 槽位 ${m.slot} ${m.account}`));
   c.onMemberLeft((m) => log(`成员下线 槽位 ${m.slot} ${m.account}（${RelayReason[m.reason]}）`));
-  c.onYouAreHost((t) => log(`YouAreHost epoch ${t.epoch}，状态来源 ${["无", "交接数据", "快照"][t.source]}，快照 seq ${t.snapshotSeq}，年龄 ${t.snapshotAgeMs}ms`));
+  // 这些都是业务自己的回调（日志）：WebHost 走 SDK 的内部监听，这里注册不会把它顶掉
+  c.onYouAreHost((t) => {
+    const text = `epoch ${t.epoch}，来源 ${["无", "交接数据", "快照"][t.source]}，快照 seq ${t.snapshotSeq}，年龄 ${t.snapshotAgeMs}ms`;
+    $("takeover").textContent = text;
+    log(`YouAreHost ${text}`);
+  });
   c.onYouAreMember((e) => log(`YouAreMember epoch ${e}`));
   c.onHostChanging((e) => log(`HostChanging epoch ${e}`));
   c.onHostChanged((h) => log(`HostChanged epoch ${h.epoch}：新房主槽位 ${h.slot} ${h.account}${h.self ? "（自己）" : ""}`));
   c.onHostResumed((r) => log(`HostResumed epoch ${r.epoch}：房主 ${r.slot} 回来了`));
   c.onRejected((r) => log(`Rejected 操作码 ${r.op} 原因 ${r.code} seq ${r.seq}`));
-  c.onSnapshotSent((s) => log(`快照 seq ${s.seq}，${s.data.length} 字节（压缩后）`));
+  c.onSnapshotSent((s) => {
+    $("lastSnapshot").textContent = `seq ${s.seq}，${new Date().toLocaleTimeString()}`;
+    log(`快照 seq ${s.seq}，${s.data.length} 字节（压缩后）`);
+  });
   c.onDisconnected((d) => log(`断开：${RelayReason[d.reason]}${d.reconnecting ? "，重连中" : ""}`));
   c.onReconnected((w) => log(`重连成功：槽位 ${w.slot}${w.host ? "（房主）" : ""}`));
   setInterval(render, 250);
@@ -65,7 +76,20 @@ function render() {
   $("seq").textContent = c.snapshotSeq;
   $("members").textContent = [...c.onlineMembers].map(([s, a]) => `${s}:${a}`).join(", ") || "-";
   if (webHost.room) $("room").value = webHost.room;
+  $("running").textContent = webHost["runner"].running ? "在跑" : "停着";
+  $("tickAge").textContent = lastTickAt ? `${((performance.now() - lastTickAt) / 1000).toFixed(1)}s 前更新` : "-";
+  $("visibility").textContent = document.visibilityState;
 }
+
+// 调试：有的浏览器面板里后台标签页仍报 visible，用按钮覆盖 visibilityState 并派发事件，走“隐藏满 5s 让出房主”这条路
+function simulateVisibility(state) {
+  if (state === undefined) delete document.visibilityState;
+  else Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  document.dispatchEvent(new Event("visibilitychange"));
+  log(`模拟可见性：${document.visibilityState}`);
+}
+$("hide").onclick = () => simulateVisibility("hidden");
+$("show").onclick = () => simulateVisibility(undefined);
 
 const guard = (fn) => async () => {
   try {
@@ -90,7 +114,7 @@ $("list").onclick = guard(async () => {
 });
 $("click").onclick = () => webHost?.input(MSG_CLICK, new Uint8Array(0));
 $("snapshot").onclick = guard(async () => log(`手动快照 seq ${await webHost.client.pushSnapshot()}`));
-$("transfer").onclick = guard(async () => log(`转交：${await webHost.client.transfer(Number($("target").value), await webHost["runner"].snapshot())}`));
+$("transfer").onclick = guard(async () => log(`转交给槽位：${await webHost.handOff(Number($("target").value))}`));
 $("handoff").onclick = guard(async () => log(`让出：${await webHost.handOff()}`));
 $("leave").onclick = guard(async () => {
   await webHost.leave();
