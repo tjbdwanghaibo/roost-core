@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -102,7 +103,7 @@ func ParseSpec(raw []byte) ([]Scenario, error) {
 			return nil, fmt.Errorf("robot scenario: duplicate spec scenario %q", name)
 		}
 		seen[name] = true
-		node, err := buildNode(entry.Node, "$."+name)
+		node, err := buildTimedRoot(entry.Node, "$."+name)
 		if err != nil {
 			return nil, err
 		}
@@ -123,6 +124,72 @@ func RegisterSpec(r *Registry, raw []byte) error {
 		}
 	}
 	return nil
+}
+
+// buildTimedRoot 建出场景的根，并给每个顶层步骤套上 Step 计时：根是 sequence 时每个元素一步，
+// 否则整棵树算一步。步骤名是两位序号加子树摘要（如 "08 retry(wait 250ms,mailbox_list)"），
+// 不用在 YAML 里起名；序号让同样内容的两步分得开，也让报告按名字排序就是场景顺序。
+func buildTimedRoot(spec *NodeSpec, path string) (Node, error) {
+	root, err := buildNode(spec, path)
+	if err != nil {
+		return nil, err
+	}
+	if spec.Sequence == nil {
+		return Step("01 "+describeNode(spec), root), nil
+	}
+	// 根已通过校验；这里按同样的规则再建一次各元素，好在外面各套一层 Step。
+	steps := make([]Node, 0, len(spec.Sequence))
+	for i, item := range spec.Sequence {
+		node, err := buildNode(item, fmt.Sprintf("%s.sequence[%d]", path, i))
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, Step(fmt.Sprintf("%02d %s", i+1, describeNode(item)), node))
+	}
+	return Sequence(steps...), nil
+}
+
+// describeNode 给子树一个简短摘要：动作名、"wait 时长"，组合节点用 kind(子节点…) 包起来。
+func describeNode(spec *NodeSpec) string {
+	if spec == nil {
+		return ""
+	}
+	list := func(items []*NodeSpec, sep string) string {
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			parts = append(parts, describeNode(item))
+		}
+		return strings.Join(parts, sep)
+	}
+	switch {
+	case spec.Action != "":
+		return spec.Action
+	case spec.Wait != "":
+		return "wait " + spec.Wait
+	case spec.Sequence != nil:
+		return list(spec.Sequence, ",")
+	case spec.Selector != nil:
+		return "selector(" + list(spec.Selector, "|") + ")"
+	case spec.Parallel != nil:
+		return "parallel(" + list(spec.Parallel, "&") + ")"
+	case spec.BestEffort != nil:
+		return "best_effort(" + describeNode(spec.BestEffort) + ")"
+	case spec.Loop != nil:
+		return fmt.Sprintf("loop %d(%s)", spec.Loop.Times, describeNode(spec.Loop.Node))
+	case spec.Retry != nil:
+		return "retry(" + describeNode(spec.Retry.Node) + ")"
+	case spec.Timeout != nil:
+		return "timeout " + spec.Timeout.Duration + "(" + describeNode(spec.Timeout.Node) + ")"
+	case spec.Random != nil:
+		parts := make([]string, 0, len(spec.Random))
+		for _, item := range spec.Random {
+			if item != nil {
+				parts = append(parts, describeNode(item.Node))
+			}
+		}
+		return "random(" + strings.Join(parts, "|") + ")"
+	}
+	return ""
 }
 
 func buildNode(spec *NodeSpec, path string) (Node, error) {

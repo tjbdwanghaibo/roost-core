@@ -193,8 +193,10 @@ type RunConfig struct {
 }
 
 type RunSnapshot struct {
-	Sync               *robot.SyncReport        `json:"sync,omitempty"`
-	Messages           *session.Report          `json:"requests,omitempty"`
+	Sync     *robot.SyncReport `json:"sync,omitempty"`
+	Messages *session.Report   `json:"requests,omitempty"`
+	// Steps 是具名场景步骤的耗时汇总（名字、样本数、分位数、Retry 次数、Wait 时间），用来看整场景时间花在哪一步。
+	Steps              []session.StepReport     `json:"steps,omitempty"`
 	Traffic            *transport.TrafficReport `json:"traffic,omitempty"`
 	RequestOKPerSecond float64                  `json:"request_ok_per_second"`
 	Config             RunConfig                `json:"config"`
@@ -738,12 +740,17 @@ func (r *runRecord) snapshot() RunSnapshot {
 		}
 	}
 
+	var steps []session.StepReport
+	if provider, ok := r.runner.(interface{ StepReport() []session.StepReport }); ok {
+		steps = provider.StepReport()
+	}
+
 	stats := StatsSnapshot{}
 	if r.runner != nil {
 		stats = statsSnapshot(r.runner.Stats())
 	}
 	return RunSnapshot{
-		Sync: syncReport, Messages: messages, Traffic: traffic, RequestOKPerSecond: throughput,
+		Sync: syncReport, Messages: messages, Steps: steps, Traffic: traffic, RequestOKPerSecond: throughput,
 		Config: RunConfig{
 			Executor:        r.Config.Run.Executor,
 			Rate:            r.Config.Run.Rate,
@@ -817,6 +824,7 @@ func (s RunSnapshot) clone() RunSnapshot {
 	s.Config.Stages = slices.Clone(s.Config.Stages)
 	s.Thresholds = slices.Clone(s.Thresholds)
 	s.QuantilesMS = maps.Clone(s.QuantilesMS)
+	s.Steps = slices.Clone(s.Steps)
 	if s.Sync != nil {
 		v := *s.Sync
 		v.Events = slices.Clone(v.Events)

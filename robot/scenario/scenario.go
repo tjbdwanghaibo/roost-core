@@ -17,9 +17,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
 )
 
 // Scenario is a named behavior tree.
@@ -129,6 +131,8 @@ func Action(name string, param any) Node {
 // Wait sleeps for d, honoring ctx.
 func Wait(d time.Duration) Node {
 	return NodeFunc(func(ctx context.Context, _ *robot.Context) error {
+		start := time.Now()
+		defer func() { noteWait(ctx, time.Since(start)) }()
 		timer := time.NewTimer(d)
 		defer timer.Stop()
 		select {
@@ -265,6 +269,7 @@ func Retry(times int, node Node) Node {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			noteRetryAttempt(ctx)
 			if err := node.Run(ctx, rb); err != nil {
 				last = err
 				continue
@@ -288,6 +293,58 @@ func Timeout(d time.Duration, node Node) Node {
 		defer cancel()
 		return node.Run(timeoutCtx, rb)
 	})
+}
+
+// Step 给一段子树命名并计时：每跑一次，把耗时、成败、子树里 Retry 实际执行的次数和 Wait 睡掉的时间
+// 记进机器人的 Recorder（本次运行的报告，见 session.StepReport）。机器人没有 Recorder 时照常执行、不计时。
+// 嵌套的 Step 各自记一份，内层的 Retry / Wait 同时算进每一层外层。
+// YAML 场景由 ParseSpec 自动给每个顶层步骤套上 Step，代码搭的场景按需自己套。
+func Step(name string, node Node) Node {
+	return NodeFunc(func(ctx context.Context, rb *robot.Context) error {
+		if node == nil {
+			return nil
+		}
+		if rb == nil || rb.Recorder == nil {
+			return node.Run(ctx, rb)
+		}
+		frame := &stepFrame{parent: stepFrameOf(ctx)}
+		start := time.Now()
+		err := node.Run(context.WithValue(ctx, stepFrameKey{}, frame), rb)
+		rb.Recorder.FinishStep(name, session.StepSample{
+			Elapsed:       time.Since(start),
+			Waited:        time.Duration(frame.waited.Load()),
+			RetryAttempts: frame.retryAttempts.Load(),
+			OK:            err == nil,
+		})
+		return err
+	})
+}
+
+// stepFrame 是一次 Step 执行期间的计数；Parallel 分支会并发写，所以用原子量。
+type stepFrame struct {
+	parent        *stepFrame
+	waited        atomic.Int64
+	retryAttempts atomic.Int64
+}
+
+type stepFrameKey struct{}
+
+func stepFrameOf(ctx context.Context) *stepFrame {
+	frame, _ := ctx.Value(stepFrameKey{}).(*stepFrame)
+	return frame
+}
+
+// noteWait / noteRetryAttempt 把 Wait 时间与 Retry 次数记到所在的每一层 Step；不在 Step 里时什么都不做。
+func noteWait(ctx context.Context, d time.Duration) {
+	for frame := stepFrameOf(ctx); frame != nil; frame = frame.parent {
+		frame.waited.Add(int64(d))
+	}
+}
+
+func noteRetryAttempt(ctx context.Context) {
+	for frame := stepFrameOf(ctx); frame != nil; frame = frame.parent {
+		frame.retryAttempts.Add(1)
+	}
 }
 
 type WeightedNode struct {

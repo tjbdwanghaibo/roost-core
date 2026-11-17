@@ -79,6 +79,22 @@ func newRunner(t *testing.T, cfg runner.Config, endpoint string, extraScenario s
 	return r
 }
 
+// Runner 把每个机器人的具名步骤汇进本次运行的报告：每人一次，样本数等于人数。
+func TestRunnerReportsNamedStepsOfEveryRobot(t *testing.T) {
+	endpoint := startEcho(t)
+	r := newRunner(t, runner.Config{Count: 4, Scenario: "stepped"}, endpoint, scenario.New("stepped", scenario.Sequence(
+		scenario.Step("01 connect", scenario.Action(action.NameConnect, nil)),
+		scenario.Step("02 ping", scenario.Retry(3, scenario.Action("ping_call", map[string]any{"nonce": 1}))),
+	)))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	steps := r.StepReport()
+	if len(steps) != 2 || steps[0].Name != "01 connect" || steps[0].Samples != 4 || steps[1].Samples != 4 || steps[1].OK != 4 || steps[1].RetryAttemptsAvg != 1 {
+		t.Fatalf("steps = %+v", steps)
+	}
+}
+
 func TestPoolExecutorRunsEveryRobotOnce(t *testing.T) {
 	endpoint := startEcho(t)
 	r := newRunner(t, runner.Config{Count: 8, Scenario: "ping", Ramp: runner.Ramp{Step: 4, Interval: time.Millisecond}}, endpoint, nil)

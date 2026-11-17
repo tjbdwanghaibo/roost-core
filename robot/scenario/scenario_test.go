@@ -10,6 +10,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
 )
 
 func newRecordingContext(log *[]string, fail map[string]error) *robot.Context {
@@ -192,6 +193,112 @@ func TestSpecRefusesEachBrokenDocumentByMessage(t *testing.T) {
 			_, err := scenario.ParseSpec([]byte(tc.spec))
 			expectText(t, err, tc.text)
 		})
+	}
+}
+
+const timedSpec = `
+scenarios:
+  - name: timed
+    node:
+      sequence:
+        - action: connect
+        - retry:
+            times: 5
+            node:
+              sequence:
+                - wait: 5ms
+                - action: flaky
+        - selector:
+            - action: bad
+            - wait: 1ms
+        - action: bad
+        - action: never
+  - name: single
+    node:
+      action: connect
+`
+
+// YAML 场景的每个顶层步骤自动计时：名字带序号与子树里的动作，Retry 次数与 Wait 时间计入所在步骤；
+// 失败的那一步也记一个失败样本，之后没跑的步骤不出现。根不是 sequence 时整棵树算一步。
+func TestSpecTimesEachTopLevelStep(t *testing.T) {
+	scenarios, err := scenario.ParseSpec([]byte(timedSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log []string
+	rb := newRecordingContext(&log, map[string]error{"bad": errors.New("always bad")})
+	base := rb.RunAction
+	flakyLeft := 2
+	rb.RunAction = func(ctx context.Context, rb *robot.Context, name string, param any) error {
+		if name == "flaky" && flakyLeft > 0 {
+			flakyLeft--
+			return errors.New("not yet")
+		}
+		return base(ctx, rb, name, param)
+	}
+	recorder := &session.Recorder{}
+	rb.Recorder = recorder
+	if err := scenarios[0].Run(context.Background(), rb); err == nil || !strings.Contains(err.Error(), "always bad") {
+		t.Fatalf("timed run = %v", err)
+	}
+	steps := recorder.StepSnapshot()
+	names := make([]string, 0, len(steps))
+	for _, s := range steps {
+		names = append(names, s.Name)
+	}
+	if strings.Join(names, ";") != "01 connect;02 retry(wait 5ms,flaky);03 selector(bad|wait 1ms);04 bad" {
+		t.Fatalf("step names = %q", names)
+	}
+	if s := steps[0]; s.Samples != 1 || s.OK != 1 || s.RetryAttemptsMax != 0 || s.WaitMeanMS != 0 {
+		t.Fatalf("connect step = %+v", s)
+	}
+	if s := steps[1]; s.Samples != 1 || s.OK != 1 || s.RetryAttemptsMax != 3 || s.WaitMeanMS < 15 || s.MaxMS < s.WaitMeanMS {
+		t.Fatalf("retry step = %+v", s)
+	}
+	if s := steps[2]; s.OK != 1 || s.WaitMeanMS < 1 {
+		t.Fatalf("selector step = %+v", s)
+	}
+	if s := steps[3]; s.Samples != 1 || s.Failed != 1 || s.OK != 0 {
+		t.Fatalf("failed step = %+v", s)
+	}
+
+	single := &session.Recorder{}
+	rb.Recorder = single
+	if err := scenarios[1].Run(context.Background(), rb); err != nil {
+		t.Fatal(err)
+	}
+	if steps := single.StepSnapshot(); len(steps) != 1 || steps[0].Name != "01 connect" || steps[0].OK != 1 {
+		t.Fatalf("single-node scenario steps = %+v", steps)
+	}
+}
+
+// 代码搭的场景用 Step 命名；嵌套的 Step 各自计时，内层的 Wait 与 Retry 也算进外层。
+// 没有 Recorder 的机器人照常执行、不计时。
+func TestNestedStepsAccumulateIntoEveryEnclosingStep(t *testing.T) {
+	var log []string
+	rb := newRecordingContext(&log, nil)
+	recorder := &session.Recorder{}
+	rb.Recorder = recorder
+	tree := scenario.Step("outer", scenario.Sequence(
+		scenario.Wait(2*time.Millisecond),
+		scenario.Step("inner", scenario.Retry(2, scenario.Wait(3*time.Millisecond))),
+	))
+	if err := tree.Run(context.Background(), rb); err != nil {
+		t.Fatal(err)
+	}
+	steps := recorder.StepSnapshot()
+	if len(steps) != 2 || steps[0].Name != "inner" || steps[1].Name != "outer" {
+		t.Fatalf("steps = %+v", steps)
+	}
+	if inner := steps[0]; inner.RetryAttemptsMax != 1 || inner.WaitMeanMS < 3 || inner.WaitMeanMS >= 5 {
+		t.Fatalf("inner = %+v", inner)
+	}
+	if outer := steps[1]; outer.RetryAttemptsMax != 1 || outer.WaitMeanMS < 5 || outer.MaxMS < outer.WaitMeanMS {
+		t.Fatalf("outer = %+v", outer)
+	}
+	rb.Recorder = nil
+	if err := tree.Run(context.Background(), rb); err != nil {
+		t.Fatal(err)
 	}
 }
 

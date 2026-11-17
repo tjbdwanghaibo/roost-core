@@ -611,6 +611,9 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 func (r *Runner) MessageReport() session.Report          { return r.recorder.Snapshot() }
 func (r *Runner) TrafficReport() transport.TrafficReport { return r.traffic.Snapshot() }
 
+// StepReport 返回本次运行各具名场景步骤（scenario.Step；YAML 场景的每个顶层步骤）的耗时汇总。
+func (r *Runner) StepReport() []session.StepReport { return r.recorder.StepSnapshot() }
+
 // WithSyncProbe 将场景观测器绑定到本次运行；不要跨 Runner 复用，场景为每个连接分配唯一代际。
 func WithSyncProbe(probe *robot.SyncProbe) Option { return func(r *Runner) { r.syncProbe = probe } }
 func (r *Runner) SyncReport() *robot.SyncReport {
