@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+- **13 类玩法改成模块组合（R9，维护者 D21 A；Q1～Q8 按推荐；只影响仓库的玩法脚本与夹具）**：每类玩法改为“装模块 + 只写模块没覆盖的部分”。场景名与条数不变，只有 SLG 多了一条回归（7 → 8）；REAL 全绿。各类“旧断言 → 新断言”写在各自手册，方案见 `docs/maintenance/PLAN-2026-11-17-r9-genre-modules.md`。
+  - **各类装的模块**：
+
+    | 玩法 | 模块 | 说明 |
+    | --- | --- | --- |
+    | 塔防 | `room wallet enter` | |
+    | 回合 PvP | `turn wallet` | GameRoom 并入 room 的 Room，期限改用 turn 的 `TurnDeadline`，纵切与 `-recipe turn-pvp` 同一模型，每次命中 1 金币 |
+    | 合作 Roguelike | `room wallet` | |
+    | 社交经营 | `friends wallet` | 不再有房间，访客资格是主人的好友名单 |
+    | 放置 | `enter wallet bag checkin` | 宝石是 bag 道具，每日奖励走 checkin |
+    | 合成 | `enter wallet stamina` | 体力跟 stamina 的缺省规则 |
+    | 卡牌 | `enter wallet bag stamina gacha task` | 抽卡调 `Gacha().Draw`，改扣金币；首胜是 task 任务 |
+    | 撤离 | `room wallet bag enter` | 药剂按件入包 |
+    | 自走棋 | `room wallet enter` | |
+    | 派对 | `wallet enter` | PartyRoom 留手写 |
+    | MMORPG | `wallet bag task` | 队伍 / 场景 / 怪物 / 战斗 / 副本留手写 |
+    | SLG | `wallet` | |
+    | MOBA | `wallet` | |
+
+  - **房间类玩法（塔防、回合 PvP、合作、撤离、自走棋）**：
+    - 玩法状态追加在 `RoomDao` 末尾，带玩法前缀；名单准入是 `RoomJoining` 监听。
+    - 新命令先过 `Room().Authorize`。
+    - 重启后要先 `RoomReconnect` 接管席位；旧代际的命令被拒，改按当前代际查回执。
+    - 公共 PB 加 `Epoch`；`RoomID` 改为唯一号，由接入层换成 Entity ID。
+    - 合作的 `cmd/robot` 新增必填参数 `-epoch` / `-peer-epoch`。
+    - 删除 `loadtest.Smoke`。
+  - **SLG 原服奖励**：保留 Player 上的永久到账回执 `SLGReceipts`，入账用 `Wallet().Add`。维护者收尾时定的，没有用 wallet 的 `Apply`：它的去重窗口只有 128 次，窗口外重投会重复发。新增回归 `TestSLGAllianceRewardOnceBeyondWalletWindow`。
+  - **脚本**：
+    - 新增 `scripts/testdata/genre-common/modules.sh`：装模块，并核对 `module verify` 的条数等于 `module.yaml` 的 `verify.pass`、0 skip。各玩法脚本都加跑它。
+    - `test-genres-generated.py` 在自定义 module 名下再核对一次 `module verify`。
+  - **修复**：
+    - `scripts/pretag.sh` 清 REAL 开关时漏了 `ROOST_TURN_PVP_REAL`、`ROOST_COOP_ROGUELIKE_REAL`、`ROOST_SOCIAL_SIM_REAL`。外层 shell 带着这几个变量跑 pretag，会去连真实存储。
+    - `slg.md` §3.1 的 perl 替换会写出两个 `dbscope`，生成器报错。
+    - 派对房间的 REAL 用例漏删 `dbscope=sid` 的 `<库>_0`。
 - **前后端公共协议目录 `client_export`（维护者 2026-11-17，需求与决定见 `docs/maintenance/FEATURE-2026-11-17-client-export.md`；不默认开启）**：`roost.yaml` 新增可选的 `client_export`（`dir` 缺省 `shared/protocol`、`languages: [csharp]`、可选 `csharp.namespace` / `csharp.protoc`）。声明后 `roost generate` 在全部生成器之后整份写出导出目录：`proto/protocol.proto`、`proto/dao_sync.proto` 的副本，protoc 生成的 `csharp/Protocol.cs` / `DaoSync.cs`，Go 生成的 `csharp/DaoSyncApply.cs`、`MessageIds.cs`（与 `-csharp` 同一个生成函数）、`ErrorCodes.cs`（新增：`errcode.Define` 的 PascalCase 常量与按码查名字 / 说明），以及 `manifest.json`（core / 生成器 / protoc / Google.Protobuf 版本，`protocol/def` 与同步字段的哈希，每个导出文件的哈希，消息号与错误码清单）；同样的输入输出逐字节相同。导出 C# 时要求 protoc 与 C# SDK 锁定的 Google.Protobuf 同版本（3.31.1 对应 protoc 31.1，版本由 csproj 推出、测试核对两处一致），按 `client_export.csharp.protoc`、`ROOST_PROTOC`、PATH 的顺序查找，版本不对或找不到时在运行任何生成器之前报错并写明需要的版本；生成器不下载 protoc。命名空间缺省 `Roost.Protocol` / `Roost.Dao.Sync` / `Roost.Generated`（消息号与错误码），配了 namespace 时协议、消息号、错误码在 `<namespace>`、DAO 同步在 `<namespace>.DaoSync`。`roost generate --check` 覆盖导出目录；`roost project doctor` 新增 `client-export:fresh`（不跑 protoc，核对文件哈希、`protocol/def` 与同步字段的哈希和错误码）。新命令 `roost client sync --from <服务端工程> --to <客户端目录> [--dry-run]`：核对服务端导出目录后把 `csharp/` 拷进客户端目录并另存 manifest，报告新增、变化、删除的消息号与错误码，不生成 Unity `.meta`。Unity 缺省接入改为托管路线（`GameClient` + `RoostClientDriver`，直接编译导出的 `csharp/`），原生 `RoostNativeDriver` 为可选路线（`client/README.md`、`client/unity/README.md`）。没有声明 `client_export` 的工程生成结果不变。说明见 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md` §2.1；验收证据 `docs/maintenance/evidence/client-export-20261117/`。
 - **地形 DAO 按地图归属选库，换服时建筑与全服邮件的归属（维护者 2026-11-14 D11 = Q17 A + N3 A，R3；只对新生成的工程）**：生成器的 `//roost:dao` 新增 `dbscope=boot`——库范围由进程起服时选，缺省按服分库，起服装配在本进程第一次读写之前调用生成的 `db.Set<Dao>DbScope(dataengine.DatabaseGlobal)` 改成共用；`DbScope()` 与提交记录的文档键都读它，DataEngine 不变。game-demo 的地形块（`terrain_chunks`）、建筑（`buildings`）、玩家编辑账本（`terrain_editors`）改为 `dbscope=boot`，`terrainmap.Open` 按新增的 `Region.Shared` 选：普通场景的图归本服（`<库>_<sid>`，与 terrain 模块的 `terrain_chunk` / `terrain_building` 一致），分区场景跨服共享的图各服共用（不变）。**行为变化**：普通场景里两个服各开同一张图互不相干（修前写同一份块文档，真实 Mongo 上投影版本冲突致命）；玩家换服只交出 Player，地形账本与建筑留在原服的库里（原来账本随玩家交出，`playerEvictor.playerScoped` 删除），新服的账本与建筑上限按那张图算。mailbox 新增联动 `with/rehome`（`game/controllers/mailbox_rehome.go`）：离开钩子按记着的画像（旧服范围）合并一次全服邮件，到新服由 `with/enter` 按新范围拉，合并不成中止换服；mailbox 的联动场景 +2（`mailbox+rehome` 2 条），`codegen/internal/roost/module_gm_test.go` 与 `scripts/test-modules-generated.sh` 的计数随之改。升级：未上线、不迁移；普通场景的旧地形文档在共享库里，新进程读不到，清空 `terrain_chunks` / `buildings` / `terrain_editors` 或重新生成。合服时普通场景的同一张图按 sidmerge 规则报冲突，见 KNOWN-LIMITS“地形的库范围按地图归属”。证据 `docs/maintenance/evidence/r3-terrain-scope-20261117/README.md`。
 - **room 补公开的身份围栏 `Room().Authorize`（R9 §9.5，维护者 Q1 B；只对新安装的 room / turn）**：同一 Room 上的玩法命令要一并核对“代际 + 连接 + 在线”，原来 turn 组件私有的 `authorize` 与塔防夹具的 `towerMember` 各写一份，批 1 的撤离、自走棋、合作、回合 PvP 也都要。room 组件（与 `view.Room`）新增 `Authorize(playerID, epoch, connection) (*db.RoomSeat, error)`：先 `Member`（房间未开 / 已关、不在座照原样报 `room_unopened` / `room_closed` / `room_not_member`），再要求连接是席位认下的那条且现在在线，否则 `room_stale_epoch`；只读。没有新增错误码。turn 的 `Start` / `End` / `CheckEnd` / `View` 改调它，删掉私有 `authorize`，行为不变。塔防夹具的 `towerMember` 分两支：新命令经 `Authorize`；已有回执的重放与查回执不要求在线（重启后全员断线时原连接、原代际的重试仍得原回执），仍是 `Member` + 连接核对。room 场景 33 → 34（`TestRoomAuthorizeChecksGenerationConnectionAndPresence`），turn 25 不变；`module.yaml`、room / 模块总表 README、`codegen/internal/roost/module_{entity,timer,matchroom,matchmaking}_test.go`、`scripts/test-modules-generated.sh`、塔防手册与 genre 塔防参考的计数随之改。已有工程：重新安装 room / turn，或手工把 `game/components/room/room.go`、`game/view/component_room.go`、`game/components/turn/turn.go` 换成新版。证据 `docs/maintenance/evidence/room-authorize-20261117/README.md`。
