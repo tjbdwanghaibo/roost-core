@@ -156,7 +156,8 @@ type dropCommands struct{}
 func (dropCommands) Publish(string, []byte) error { return nil }
 
 // 被踢记在 lobby（方案 §4.4、§6 第 11 条）：房主踢人 → relay 报 member_left{kicked} → lobby 记进被踢名单，join 被拒；
-// relay 重启（本地的被踢记录没了）后，被踢的人拿着没过期的旧令牌仍然进不来，拒绝来自 lobby 的验权。
+// relay 重启（本地的被踢记录没了）后，被踢的人拿着没过期的旧令牌仍然进不来：重启即丢房，房间不能在新进程上重建
+// （房主建房被 lobby 拒绝），成员的旧令牌对应的房间不存在。
 func TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection(t *testing.T) {
 	ctx := context.Background()
 	key := []byte(testKey)
@@ -228,7 +229,8 @@ func TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection(t *testing.T) {
 	}
 
 	// relay 进程没了又起来（kill -9 后重启：lobby 收不到 room.closed，房间记录还在）：房间与本地的被踢记录都没了。
-	// 房主用 join 重新拿令牌回来建房，被踢的人拿旧令牌（还没过期）被 lobby 拒绝。
+	// 重启即丢房（维护者 2026-11-17 选 A）：房主用 join 重新拿令牌回来也不能在新进程上重建这个房间（lobby 验权答
+	// room_not_found，relay 关成 lobby_rejected）；被踢的人拿旧令牌（还没过期）连进来，新进程上没有这个房间（room_not_found）。
 	bridge.crash.Store(true)
 	stop, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -245,7 +247,6 @@ func TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host = dialWithToken(t, addr, rejoined.Token)
-	host.expectControl(t, wire.RelayOpWelcome, nil)
-	dialWithToken(t, addr, joined.Token).expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonLobbyRejected)})
+	dialWithToken(t, addr, rejoined.Token).expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonLobbyRejected)})
+	dialWithToken(t, addr, joined.Token).expectControl(t, wire.RelayOpClosed, []byte{byte(wire.RelayReasonRoomNotFound)})
 }

@@ -62,7 +62,7 @@
   - 房间还没被 relay 报告过（房主从没连上）时，房主一离开就关房。
   - 不在房间里的人调 leave 是空操作。
   - **在途报告不撤销离开**：离开的人记进房间记录的 `leaving` 名单，直到 relay 报他的 `room.member_left`（任何原因）或他重新 join。在这之前，relay 在他离开前发出、晚到 lobby 的在线名单不会把他补回目录，也不会把留在目录里的房主重新记成连上过；新的报告里他仍在线，lobby 再发一次 `leave` 命令（2026-11-17，[证据](../maintenance/evidence/lobby-leave-stale-report-20261117/README.md)）。
-- **被踢**：房主在 relay 上踢人后，relay 报 `room.member_left`、原因 `kicked`；lobby 把账号记进房间记录的被踢名单 `kicked`、让出它的席位。名单随房间记录一起过期。之后这个账号 join 答 `kicked`，relay 的验权也拒绝它（§5.2），手里没过期的令牌也用不了。lobby 的名单是权威；relay 本地也记一份，房间存续期间有效，同一个 relay 上被踢的人再连直接收到 `Closed{kicked}`，relay 重启后由 lobby 的名单挡住（`Closed{lobby_rejected}`）（方案 §4.4、§6 第 11 条）。
+- **被踢**：房主在 relay 上踢人后，relay 报 `room.member_left`、原因 `kicked`；lobby 把账号记进房间记录的被踢名单 `kicked`、让出它的席位。名单随房间记录一起过期。之后这个账号 join 答 `kicked`，relay 的验权也拒绝它（§5.2），手里没过期的令牌也用不了。lobby 的名单是权威；relay 本地也记一份，房间存续期间有效，同一个 relay 上被踢的人再连直接收到 `Closed{kicked}`，relay 重启后房间本身就没了（重启即丢房，§5.2 验权），旧令牌连进来是 `Closed{room_not_found}`（方案 §4.4、§6 第 11 条）。
 - **令牌角色**：按 Redis 里的当前房主填，房主拿 `host`，其他人拿 `member`。lobby 与 relay 短暂不一致时以 relay 为准：房间建好以后，relay 不信令牌里的角色（方案 §4.6.5）。
 
 ### 2.2 CORS
@@ -178,6 +178,7 @@ lobby 读房间记录（只读，不写），按顺序核对，答复 `{"ok":tru
 | `wrong_relay` | 房间不分在发请求的 relay 实例上 |
 | `kicked` | 账号在被踢名单里 |
 | `not_host` | `create` 为 true（relay 上还没有这个房间），账号却不是记录里的房主 |
+| `room_not_found` | `create` 为 true，但房间已经被 relay 报告过（`relay_seq > 0`）：relay 在 `room_ttl` 内重启过，房间随旧进程丢了，**不在新进程上重建**（重启即丢房，维护者 2026-11-17）。目录随后在 `room_ttl` 内消失 |
 | `not_member` | 账号不占席位：没 join，或已离开、席位已按 §2.1 让出 |
 | `unavailable` | lobby 读 Redis 出错；relay 按 lobby 不可用处理 |
 | `bad_request` | 请求解不开或缺字段 |

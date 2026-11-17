@@ -224,7 +224,7 @@ const (
 )
 
 // VerifyRelayConnection 按房间目录核对四件事：房间还在、分在这个 relay 上、账号没被踢、账号占着席位；建房时
-// 账号还必须是目录里的房主。只读，不写目录。
+// 账号还必须是目录里的房主，且房间还没被 relay 报告过（报告过说明 relay 重启过，不重建）。只读，不写目录。
 func (s *Service) VerifyRelayConnection(ctx context.Context, req RelayVerifyRequest) RelayVerifyReply {
 	if req.Room == "" || req.Account == "" || req.Relay == "" {
 		return RelayVerifyReply{Reason: VerifyBadRequest}
@@ -243,6 +243,10 @@ func (s *Service) VerifyRelayConnection(ctx context.Context, req RelayVerifyRequ
 		return RelayVerifyReply{Reason: VerifyKicked}
 	case req.Create && req.Account != room.Host:
 		return RelayVerifyReply{Reason: VerifyNotHost}
+	case req.Create && room.RelaySeq > 0:
+		// relay 已经报告过这个房间，却又要建房：relay 在 room_ttl 内重启过，房间随旧进程丢了。不许在新进程上重建
+		// 同一个房间号（维护者 2026-11-17 选 A），房间按“relay 崩溃时房间丢失”处理，目录在 room_ttl 内消失。
+		return RelayVerifyReply{Reason: VerifyRoomNotFound}
 	}
 	room.pruneReservations(now)
 	if room.memberIndex(req.Account) < 0 {

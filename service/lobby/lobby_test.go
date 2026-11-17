@@ -618,6 +618,31 @@ func TestRelayVerification(t *testing.T) {
 	})
 }
 
+// relay 重启即丢房（维护者 2026-11-17 选 A，多进程演练 3b）：房间被 relay 报告过之后，任何连接都不能再用它建房。
+// relay 在 room_ttl 内重启时，新进程上没有这个房间，房主拿着没过期的令牌重连会请求建房：以前验权放行，同一房间号在
+// 新进程上重建，比房主早到的成员收到 room_not_found、报告 seq 从 1 重数。现在答 room_not_found，房间按“relay 崩溃时
+// 房间丢失”处理，目录在 room_ttl 内消失。还没被报告过的房间（房主还没连上）照常建房。
+func TestARoomTheRelayHasReportedCannotBeCreatedAgain(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+		relay := h.room(t, id).Relay.Instance
+		verify := func(create bool) RelayVerifyReply {
+			return h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id, Account: "acc-host", Relay: relay, Create: create})
+		}
+		if got := verify(true); !got.OK {
+			t.Fatalf("host creating a room no relay has reported: %+v", got)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: relay, Seq: 1, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := verify(true); got != (RelayVerifyReply{Reason: VerifyRoomNotFound}) {
+			t.Fatalf("host re-creating a reported room (relay restarted): %+v, want room_not_found", got)
+		}
+		if got := verify(false); !got.OK {
+			t.Fatalf("host reconnecting to the live room: %+v", got)
+		}
+	})
+}
+
 func decodeReply(t *testing.T, data []byte) RelayVerifyReply {
 	t.Helper()
 	var reply RelayVerifyReply

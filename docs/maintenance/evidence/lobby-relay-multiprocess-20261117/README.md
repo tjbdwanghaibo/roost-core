@@ -178,3 +178,7 @@ ARGS_c="-leave-after 8s" ARGS_A="-leave-after 16s" players.sh h4   # Client.Leav
 > - **relay 在 room_ttl 内重启会重建房间，待维护者定**（2026-11-17 演练）：房主重连在新进程上重建同一房间号；比房主早到的成员收到 `Closed{room_not_found}`、SDK 不再重连；新进程的报告 seq 从 1 重数，lobby 在追上旧 seq 之前不改在线名单（演练里 52 秒），epoch 从 0 重来时 lobby 可能不认之后的换房主（尚未确认）。选项 A（推荐，验权只在 relay 从没报告过时放行建房，重启即丢房）/ B（报告带进程代号，lobby 重置 seq / epoch）/ C（只写文档），见证据 `evidence/lobby-relay-multiprocess-20261117/README.md`“要维护者定”。
 
 LOBBY.md §7 已补两条限制：单个 lobby 实例一秒内连续建房也会都分到同一个 relay；relay 没了之后 etcd 键要等租约到期（约 10s）才消失，这段时间新房间仍可能分给它。
+
+## 协调者补充：3b 按选项 A 实施（维护者 2026-11-17）
+
+`service/lobby` 的 `VerifyRelayConnection` 在 `create` 且 `room.RelaySeq > 0` 时答 `room_not_found`。新用例 `TestARoomTheRelayHasReportedCannotBeCreatedAgain` 修前红（`{OK:true}`，want room_not_found），修后内存、Redis 都绿；变异（条件恒假）红。`wiring/relay` 的 `TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection` 原来断言重启后房主能重建，按新契约改成房主建房收到 `Closed{lobby_rejected}`、被踢者旧令牌 `Closed{room_not_found}`。`service/lobby`、`wiring/lobby`、`service/relay`、`wiring/relay`（含 `-tags integration`）、`client/relay` 加 -race 通过。没有在真实多进程上重演 3b（尚未确认）。
