@@ -75,7 +75,7 @@
 DEMO_ROBOT_MIRROR_OFFSET=20000 DEMO_ROBOT_COUNT=100 DEMO_ROBOT_MODE=burst bash scripts/perf/demo-robot.sh
 ```
 
-每轮用新目录和全新私有依赖，源码为分支提交 `8fdd3082`。
+每轮用新目录和全新私有依赖，源码为合入 main 后的 `8b94870a`（各轮 environment.txt 记的是同内容的分支提交号）。
 
 - **机器不空闲**：同时有另一个 agent 在编译 C# / Go；swap 用了约 7.8 GiB（共 9 GiB）。
 - **只看分布，不当容量数字**：下表的整场景分位数受机器负载影响，结论只看时间落在哪些步骤。
