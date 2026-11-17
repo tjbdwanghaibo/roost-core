@@ -367,3 +367,21 @@ func TestAccountAuthenticatorAcceptsAnEnterTicket(t *testing.T) {
 		t.Fatalf("second handshake principal = %+v, want the same player on a new session (first %+v)", again, first)
 	}
 }
+
+// 服务名是单实例锁键 <key_prefix>:<服务名>:<sid> 的一段：带冒号 / 空白、或两端同名，接线拒绝；缺省是 gate / game。
+func TestGateServiceNamesDefaultAndValidate(t *testing.T) {
+	gate, game, err := DefaultOptions().serviceNames()
+	if err != nil || gate != "gate" || game != "game" {
+		t.Fatalf("default service names = %q/%q err=%v", gate, game, err)
+	}
+	for _, names := range [][2]string{{"edge", "edge"}, {"a:b", "game"}, {"gate", "wor ld"}} {
+		options := DefaultOptions()
+		options.GateService, options.GameService = names[0], names[1]
+		if _, _, err := options.serviceNames(); err == nil {
+			t.Fatalf("service names %q/%q accepted", names[0], names[1])
+		}
+		if err := NewGateMod(options).Provide(app.NewRegistry(viper.New())); err == nil {
+			t.Fatalf("Gate wired with service names %q/%q", names[0], names[1])
+		}
+	}
+}

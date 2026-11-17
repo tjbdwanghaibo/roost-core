@@ -196,8 +196,18 @@ func renderGateIngressNew(m Manifest) string {
 	} else {
 		b.WriteString(" // 工程的 internal/access/player/tcp 没有 NewAuthenticator：不设认证器，Game Ingress 用 account 校验票据（wiring/gate.AccountAuthenticator）。\n")
 	}
-	b.WriteString(" options.RegisterDiscovery = true\n options.Ready = func() bool { return true }\n return &options\n}\n")
+	b.WriteString(" options.RegisterDiscovery = true\n options.Ready = func() bool { return true }\n")
+	b.WriteString(renderGateServiceNames(m))
+	b.WriteString(" return &options\n}\n")
 	return b.String()
+}
+
+// renderGateServiceNames 是两端接线里的实际服务名（gatewiring.Options.GateService / GameService）：App 按服务名持
+// 单实例锁 <key_prefix>:<服务名>:<sid>，发现候选也按它登记与查找；协议角色 gate / game 只在 NATS 主题里。
+// Gate 服务（NewGateMod）与玩家服务（gateIngressOptions）写同一对名字（RV-20261116-02）。
+func renderGateServiceNames(m Manifest) string {
+	return fmt.Sprintf(" // 实际服务名：单实例身份核对与发现都按它们（协议角色 gate / game 只在 NATS 主题里），两端接线写同一对。\n options.GateService = %q\n options.GameService = %q\n",
+		playerGateService(m), m.Access["player"].Service)
 }
 
 // gateEtcdConstructor 是 Gate 服务的 etcd Mod：Gate 自己登记候选（GateMod 的 RegisterDiscovery）。
@@ -233,7 +243,7 @@ var playerTCPGateEdits = []struct{ anchor, replace string }{
 }
 
 // renderPlayerTCPGateMod 是 server_gen.go 里的 Gate Mod 与两份配置声明（由生成器的声明渲染）。
-func renderPlayerTCPGateMod() string {
+func renderPlayerTCPGateMod(m Manifest) string {
 	var b strings.Builder
 	b.WriteString("// ingressGateConfig 是 access.player.gate 声明时 IngressMod 额外读的键（生成器的声明渲染而来）。\n")
 	b.WriteString("type ingressGateConfig ")
@@ -241,7 +251,7 @@ func renderPlayerTCPGateMod() string {
 	b.WriteString("\n\n// gateConfig 是独立 Gate（NewGateMod）读的键（生成器的声明渲染而来）。\n")
 	b.WriteString("type gateConfig ")
 	writeGoStructType(&b, reflect.TypeOf(playerGateDeclaration{}), "")
-	b.WriteString(`
+	b.WriteString(strings.Replace(`
 
 // NewGateMod 是 roost.yaml 的 access.player.gate 声明的独立 Gate 进程（roost add gate）的玩家接入：在
 // player_access.gate.addr 上接玩家 TCP，握手票据交给 account 校验（wiring/gate 缺省的 AccountAuthenticator：
@@ -258,7 +268,7 @@ func gateOptions() gatewiring.Options {
  options.TCP.Enabled = true
  // Gate 没有业务准入条件：App 的失锁 fail-stop 由 wiring/gate 合进准入判断。
  options.Ready = func() bool { return true }
- return options
+@@GATE_SERVICE_NAMES@@ return options
 }
 func (*GateMod) Name() app.ModName { return gatewiring.GateName }
 func (mod *GateMod) DependsOn() []app.ModName { return mod.inner.DependsOn() }
@@ -284,18 +294,18 @@ func (*GateMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(gateConfig
 var _ app.Mod = (*GateMod)(nil)
 var _ app.ModStopperWithContext = (*GateMod)(nil)
 var _ app.ModStopBudgetProvider = (*GateMod)(nil)
-`)
+`, "@@GATE_SERVICE_NAMES@@", renderGateServiceNames(m), 1))
 	return b.String()
 }
 
-func withPlayerTCPGate(source string) string {
+func withPlayerTCPGate(source string, m Manifest) string {
 	for _, edit := range playerTCPGateEdits {
 		if strings.Count(source, edit.anchor) != 1 {
 			panic(fmt.Sprintf("roost: gate edit anchor not found exactly once in server_gen.go: %q", edit.anchor))
 		}
 		source = strings.Replace(source, edit.anchor, edit.replace, 1)
 	}
-	return strings.Replace(source, "@@GATE_MOD@@", renderPlayerTCPGateMod(), 1)
+	return strings.Replace(source, "@@GATE_MOD@@", renderPlayerTCPGateMod(m), 1)
 }
 
 // ---- roost add gate ----

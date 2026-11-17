@@ -1,0 +1,21 @@
+OK    gate:ingress         players connect to edge; game runs Game Ingress
+OK    gate:player-tcp      game does not listen for players
+OK    gate:namespace       gtd607db3.access
+OK    gate:etcd-singleton  etcd and singleton on edge and game
+OK    gate:client-address  clients connect to 127.0.0.1:38500
+[drill 08:22:07] acct ready (pid 86836, ops 127.0.0.1:40601)
+[drill 08:22:08] game1000 ready (pid 86906, ops 127.0.0.1:40600)
+[drill 08:22:09] gate1000 ready (pid 86923, ops 127.0.0.1:40602)
+[drill 08:22:09] client port 127.0.0.1:38500 is the Gate's (pid 86923); game pid 86906 does not listen on it
+{"event":"servers","sid":1000,"addr":"127.0.0.1:38500"}
+{"event":"enter_ticket","addr":"127.0.0.1:38500","serving":1000}
+panic: EOF
+
+goroutine 1 [running]:
+main.must[...](...)
+	<scratchpad>/tmp/roost-gate-drill.hTmQK3/gtd607db3/cmd/gatelogin/main.go:21
+main.main()
+	<scratchpad>/tmp/roost-gate-drill.hTmQK3/gtd607db3/cmd/gatelogin/main.go:101 +0xe24
+[drill 08:22:11] stopped acct
+[drill 08:22:12] stopped game1000
+[drill 08:22:13] stopped gate1000

@@ -1,0 +1,30 @@
+=== RUN   TestRealGateHandshakeUsesActualServiceNames
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_game
+2026/11/17 08:15:12 INFO player tcp listener started addr=127.0.0.1:59382 max_connections=10000
+    names_real_test.go:165: actual services=gate/game singleton checks=[gate:11=true game:22=true game:22=true gate:11=true] discover=[game]
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_game
+2026/11/17 08:15:12 INFO player tcp listener started addr=127.0.0.1:59386 max_connections=10000
+    names_real_test.go:152: discovery candidates must be registered under the actual service names edge/game: map[game:1 gate:1]
+    names_real_test.go:165: actual services=edge/game singleton checks=[gate:11=false] discover=[]
+    names_real_test.go:167: handshake under service names edge/game: ACK=<nil> err=EOF
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_world
+2026/11/17 08:15:12 INFO player tcp listener started addr=127.0.0.1:59390 max_connections=10000
+    names_real_test.go:152: discovery candidates must be registered under the actual service names gate/world: map[game:1 gate:1]
+    names_real_test.go:165: actual services=gate/world singleton checks=[gate:11=true game:22=false] discover=[game]
+    names_real_test.go:167: handshake under service names gate/world: ACK=<nil> err=EOF
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_world
+2026/11/17 08:15:12 INFO player tcp listener started addr=127.0.0.1:59394 max_connections=10000
+    names_real_test.go:152: discovery candidates must be registered under the actual service names edge/world: map[game:1 gate:1]
+    names_real_test.go:165: actual services=edge/world singleton checks=[gate:11=false] discover=[]
+    names_real_test.go:167: handshake under service names edge/world: ACK=<nil> err=EOF
+--- FAIL: TestRealGateHandshakeUsesActualServiceNames (0.05s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_game (0.01s)
+    --- FAIL: TestRealGateHandshakeUsesActualServiceNames/edge_game (0.01s)
+    --- FAIL: TestRealGateHandshakeUsesActualServiceNames/gate_world (0.01s)
+    --- FAIL: TestRealGateHandshakeUsesActualServiceNames/edge_world (0.01s)
+=== RUN   TestGateRefusesAServiceNameThatIsNotItsSingletonLock
+    names_real_test.go:224: a Gate whose singleton lock is edge:11 started as service gate
+--- FAIL: TestGateRefusesAServiceNameThatIsNotItsSingletonLock (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/gate	0.576s
+FAIL

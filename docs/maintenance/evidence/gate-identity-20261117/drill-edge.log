@@ -1,0 +1,23 @@
+OK    gate:ingress         players connect to edge; game runs Game Ingress
+OK    gate:player-tcp      game does not listen for players
+OK    gate:namespace       gtda0182e.access
+OK    gate:etcd-singleton  etcd and singleton on edge and game
+OK    gate:client-address  clients connect to 127.0.0.1:38500
+[drill 08:20:41] acct ready (pid 84781, ops 127.0.0.1:40601)
+[drill 08:20:42] game1000 ready (pid 84792, ops 127.0.0.1:40600)
+[drill 08:20:43] gate1000 ready (pid 84810, ops 127.0.0.1:40602)
+[drill 08:20:43] client port 127.0.0.1:38500 is the Gate's (pid 84810); game pid 84792 does not listen on it
+{"event":"servers","sid":1000,"addr":"127.0.0.1:38500"}
+{"event":"enter_ticket","addr":"127.0.0.1:38500","serving":1000}
+{"event":"handshake","via":"gate"}
+{"event":"enter_status","need_create":true}
+{"event":"enter_create","code":0}
+{"event":"enter_game","first":true,"frames":3}
+PASS: portal gave the Gate address; enter: ticket handshake through the Gate; EnterStatus, EnterCreate and EnterGame through Game Ingress
+[drill 08:20:44] acct: 0 ERROR log lines
+[drill 08:20:44] game1000: 0 ERROR log lines
+[drill 08:20:44] gate1000: 0 ERROR log lines
+[drill 08:20:44] PASS gate drill
+[drill 08:20:45] stopped acct
+[drill 08:20:46] stopped game1000
+[drill 08:20:47] stopped gate1000

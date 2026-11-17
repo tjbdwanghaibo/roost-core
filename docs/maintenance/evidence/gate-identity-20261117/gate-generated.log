@@ -1,0 +1,37 @@
+created/updated: roost.yaml
+created/updated: configs/service/config.game.yaml
+created/updated: configs/service/config.game.prod.example.yaml
+created/updated: deploy/k8s/base/secret.game.example.yaml
+created/updated: configs/service/config.gate.yaml
+created/updated: configs/service/config.gate.prod.example.yaml
+created/updated: internal/service/gate/service.go
+created/updated: internal/bootstrap/generated.go
+created/updated: internal/access/player/tcp/server_gen.go
+created/updated: deploy/dev/run.sh
+created/updated: deploy/k8s/base/gate.yaml
+created/updated: deploy/k8s/base/game.yaml
+Gate gate: players connect to it (player_access.gate.addr, 0.0.0.0:7000 in development); game now runs Game Ingress with its embedded TCP off
+  run:   bin/app gate --sid <gate sid> --config configs/service/config.gate.yaml (make dev-run starts it with the other services)
+  check: roost project doctor (gate:ingress, gate:player-tcp, gate:namespace, gate:etcd-singleton, gate:client-address)
+  production: set player_access.gate.advertise_addr in config.gate.prod.example.yaml and config.game.prod.example.yaml to the address clients reach the Gate at
+  guide: https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/GATEWAY.md
+generated files are up to date
+created/updated: roost.yaml
+created/updated: configs/service/config.game.yaml
+created/updated: configs/service/config.game.prod.example.yaml
+created/updated: deploy/k8s/base/secret.game.example.yaml
+created/updated: configs/service/config.edge.yaml
+created/updated: configs/service/config.edge.prod.example.yaml
+created/updated: internal/service/edge/service.go
+created/updated: internal/bootstrap/generated.go
+created/updated: internal/access/player/tcp/server_gen.go
+created/updated: deploy/dev/run.sh
+created/updated: deploy/k8s/base/edge.yaml
+created/updated: deploy/k8s/base/game.yaml
+Gate edge: players connect to it (player_access.gate.addr, 0.0.0.0:7000 in development); game now runs Game Ingress with its embedded TCP off
+  run:   bin/app edge --sid <gate sid> --config configs/service/config.edge.yaml (make dev-run starts it with the other services)
+  check: roost project doctor (gate:ingress, gate:player-tcp, gate:namespace, gate:etcd-singleton, gate:client-address)
+  production: set player_access.gate.advertise_addr in config.edge.prod.example.yaml and config.game.prod.example.yaml to the address clients reach the Gate at
+  guide: https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/GATEWAY.md
+generated files are up to date
+gate generated project (gate and edge): add gate, actual service names in the wiring, build, vet, doctor (gate:*), generate --check and an idempotent repeat passed

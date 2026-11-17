@@ -1,0 +1,23 @@
+=== RUN   TestRealGateHandshakeUsesActualServiceNames
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_game
+    names_real_test.go:166: actual services=gate/game singleton checks=[gate:11=true game:22=true game:22=true gate:11=true] discover=[game]
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_game
+    names_real_test.go:166: actual services=edge/game singleton checks=[edge:11=true game:22=true game:22=true edge:11=true] discover=[game]
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_world
+    names_real_test.go:166: actual services=gate/world singleton checks=[gate:11=true world:22=true world:22=true gate:11=true] discover=[world]
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_world
+    names_real_test.go:166: actual services=edge/world singleton checks=[edge:11=true world:22=true world:22=true edge:11=true] discover=[world]
+--- PASS: TestRealGateHandshakeUsesActualServiceNames (0.05s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_game (0.02s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_game (0.01s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_world (0.01s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/edge_world (0.01s)
+=== RUN   TestGateRefusesAServiceNameThatIsNotItsSingletonLock
+--- PASS: TestGateRefusesAServiceNameThatIsNotItsSingletonLock (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	4.764s
+# 全包（unit + integration 标签）
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	3.092s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	1.261s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/selfsync	0.830s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom	1.121s

@@ -1,0 +1,16 @@
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/gate_game
+    gate_test.go:302: gateIngressOptions does not carry the actual service names gate/game:
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/edge_game
+    gate_test.go:302: gateIngressOptions does not carry the actual service names edge/game:
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/gate_world
+    gate_test.go:302: gateIngressOptions does not carry the actual service names gate/world:
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/edge_world
+    gate_test.go:302: gateIngressOptions does not carry the actual service names edge/world:
+--- FAIL: TestGeneratedGateWiringCarriesActualServiceNames (0.00s)
+=== RUN   TestAddGateWithACustomNameWiresItsServiceName
+    gate_test.go:334: internal/bootstrap/generated.go does not wire the actual service names edge/game:
+--- FAIL: TestAddGateWithACustomNameWiresItsServiceName (5.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	5.622s
+FAIL

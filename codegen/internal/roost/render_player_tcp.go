@@ -132,7 +132,7 @@ func renderPlayerTCPServer(manifest Manifest) string {
 		source = withPlayerTCPSelfSync(source)
 	}
 	if playerGateService(manifest) != "" {
-		source = withPlayerTCPGate(source)
+		source = withPlayerTCPGate(source, manifest)
 	}
 	return source
 }

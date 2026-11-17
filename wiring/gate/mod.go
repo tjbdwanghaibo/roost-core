@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +41,11 @@ type Options struct {
 	// Principal（含 Claims）的副本。没有返回值，不能拒绝绑定（gateway.GameDependencies.OnActivated）。
 	OnActivated func(gateway.Binding, uint64, gateway.Principal)
 	DependsOn   []app.ModName
+	// GateService / GameService 是 Gate 进程与它所接的玩家服务进程的实际服务名（app.RegisterServer 的名字）。
+	// App 按实际服务名持单实例锁 <key_prefix>:<服务名>:<sid>，发现候选也按它登记与查找；协议角色 gate / game
+	// 只出现在 NATS 主题与收件箱里，与服务名无关。Gate 与 Game Ingress 两端必须写同一对名字；空串取 "gate" / "game"。
+	GateService string
+	GameService string
 }
 
 func DefaultOptions() Options {
@@ -48,23 +55,54 @@ func DefaultOptions() Options {
 	return Options{Config: config, TCP: tcp}
 }
 
+// serviceNames 返回两端的实际服务名（缺省 gate / game）。
+func (options Options) serviceNames() (gate, game string, err error) {
+	gate, game = strings.TrimSpace(options.GateService), strings.TrimSpace(options.GameService)
+	if gate == "" {
+		gate = "gate"
+	}
+	if game == "" {
+		game = "game"
+	}
+	for _, name := range []string{gate, game} {
+		if strings.ContainsAny(name, ": \t\r\n") {
+			return "", "", fmt.Errorf("gate wiring: service name %q must not contain ':' or spaces (it is a segment of the singleton lock key)", name)
+		}
+	}
+	if gate == game {
+		return "", "", fmt.Errorf("gate wiring: GateService and GameService are both %q; the Gate and the player service are separate services", gate)
+	}
+	return gate, game, nil
+}
+
 type connections struct {
-	identity   gateway.ProcessIdentity
-	client     fnats.RawClient
-	checker    app.SingletonIdentityChecker
-	ready      func() bool
-	auth       gateway.Authenticator
-	discovery  etcd.IDiscovery
-	registered bool
+	identity gateway.ProcessIdentity
+	// gateService / gameService 是协议角色 gate / game 对应的实际服务名：单实例身份核对与发现都用它们。
+	gateService, gameService string
+	client                   fnats.RawClient
+	checker                  app.SingletonIdentityChecker
+	ready                    func() bool
+	auth                     gateway.Authenticator
+	discovery                etcd.IDiscovery
+	registered               bool
 }
 
 func connect(registry *app.Registry, options Options, role string) (connections, error) {
 	var result connections
+	var err error
+	if result.gateService, result.gameService, err = options.serviceNames(); err != nil {
+		return result, err
+	}
 	identity, ok := app.Lookup[app.SingletonIncarnation](registry, app.ModSingletonIncarnation)
 	if !ok {
 		return result, errors.New("gate wiring: singleton must be enabled")
 	}
 	result.identity = gateway.ProcessIdentity{ServerID: identity.Sid, Incarnation: identity.Token}
+	// 本端的锁键 <key_prefix>:<服务名>:<sid> 必须就是 Options 写的服务名：对端按这个名字核对本端身份，
+	// 名字不符时启动后的每次握手 / 绑定都会被拒，所以在这里拒绝启动（Key 为空只出现在不经 App 的测试接线里）。
+	if own := result.service(role); identity.Key != "" && !strings.HasSuffix(identity.Key, ":"+own+":"+strconv.Itoa(int(identity.Sid))) {
+		return result, fmt.Errorf("gate wiring: this process holds singleton lock %q but is wired as %s service %q; set Options.GateService / GameService to the actual service names", identity.Key, role, own)
+	}
 	if options.RegisterDiscovery {
 		result.discovery, ok = app.Lookup[etcd.IDiscovery](registry, mods.ModEtcdDiscov)
 		if !ok {
@@ -113,8 +151,21 @@ func connect(registry *app.Registry, options Options, role string) (connections,
 	}
 	return result, nil
 }
+
+// matches 把 gateway 按协议角色发起的身份核对换成实际服务名（App 的锁键用服务名），incarnation 照常核对。
 func (deps connections) matches(ctx context.Context, role string, identity gateway.ProcessIdentity) (bool, error) {
-	return deps.checker.Matches(ctx, role, identity.ServerID, identity.Incarnation)
+	return deps.checker.Matches(ctx, deps.service(role), identity.ServerID, identity.Incarnation)
+}
+
+// service 是协议角色对应的实际服务名；gate / game 以外的角色（system 广播发起方）原样当服务名。
+func (deps connections) service(role string) string {
+	switch role {
+	case "gate":
+		return deps.gateService
+	case "game":
+		return deps.gameService
+	}
+	return role
 }
 func dependencies(options Options) []app.ModName {
 	names := append([]app.ModName{mods.ModNats}, options.DependsOn...)
@@ -158,7 +209,7 @@ func (mod *GateMod) Provide(registry *app.Registry) error {
 		if deps.discovery == nil {
 			return errors.New("gate wiring: fixed-SID resolver missing")
 		}
-		mod.options.ResolveGame = FixedGameResolver(deps.discovery, "game")
+		mod.options.ResolveGame = FixedGameResolver(deps.discovery, deps.gameService)
 	}
 	mod.connections = deps
 	runtime, err := gateway.NewGate(mod.options.Config, deps.identity, gateway.GateDependencies{Client: deps.client, QueueFactory: AsyncQueueFactory, Ready: deps.ready, ResolveGame: mod.options.ResolveGame, Matches: deps.matches})
@@ -186,7 +237,7 @@ func (mod *GateMod) Start() error {
 	if err := mod.server.Start(); err != nil {
 		return err
 	}
-	return mod.connections.register("gate", mod.options.AdvertiseAddr, mod.StopBudget())
+	return mod.connections.register(mod.connections.gateService, mod.options.AdvertiseAddr, mod.StopBudget())
 }
 func (mod *GateMod) StopBudget() time.Duration { return mod.options.TCP.ShutdownTimeout }
 func (mod *GateMod) Stop() {
@@ -274,7 +325,7 @@ func (mod *GameIngressMod) Start() error {
 	if err := mod.runtime.Start(); err != nil {
 		return err
 	}
-	return mod.connections.register("game", mod.options.AdvertiseAddr, mod.StopBudget())
+	return mod.connections.register(mod.connections.gameService, mod.options.AdvertiseAddr, mod.StopBudget())
 }
 func (mod *GameIngressMod) StopBudget() time.Duration {
 	return max(10*time.Second, mod.options.Config.RequestTimeout+mod.options.Config.Outbound.MaxAge)

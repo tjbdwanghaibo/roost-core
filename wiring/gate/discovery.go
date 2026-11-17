@@ -12,8 +12,8 @@ import (
 const IncarnationMetadata = "access.incarnation"
 const IngressReadyMetadata = "access.ingress_ready"
 
-// FixedGameResolver 从已有发现结果选固定 SID。多个不同代次不猜测接管，
-// 返回的候选仍由 gateway 的 singleton checker 核对权威身份。
+// FixedGameResolver 从已有发现结果选固定 SID。serviceType 是玩家服务的实际服务名（Options.GameService），
+// 不是协议角色。多个不同代次不猜测接管，返回的候选仍由 gateway 的 singleton checker 核对权威身份。
 func FixedGameResolver(discovery etcd.IDiscovery, serviceType string) func(context.Context, int32) (gateway.ProcessIdentity, error) {
 	return func(ctx context.Context, sid int32) (gateway.ProcessIdentity, error) {
 		if discovery == nil || serviceType == "" || sid <= 0 {
@@ -44,7 +44,8 @@ func FixedGameResolver(discovery etcd.IDiscovery, serviceType string) func(conte
 	}
 }
 
-// GateCandidates 用于广播的候选快照；广播结果逐 Gate 区分拒绝和未知。
+// GateCandidates 用于广播的候选快照；serviceType 是 Gate 的实际服务名（Options.GateService）。
+// 广播结果逐 Gate 区分拒绝和未知。
 func GateCandidates(discovery etcd.IDiscovery, serviceType string) func(context.Context) ([]gateway.ProcessIdentity, error) {
 	return func(ctx context.Context) ([]gateway.ProcessIdentity, error) {
 		if discovery == nil || serviceType == "" {
@@ -70,7 +71,8 @@ func GateCandidates(discovery etcd.IDiscovery, serviceType string) func(context.
 
 // register 在监听和角色订阅已建立后发布候选，不取代每次 Bind 的 singleton/Ready 检查。
 // 发现登记是接线生命周期：注册循环仍由原 IDiscovery 唯一实现。
-func (deps *connections) register(role, address string, timeout time.Duration) error {
+// service 是本端的实际服务名（Options.GateService / GameService），与 App 持锁、对端查找用的名字相同。
+func (deps *connections) register(service, address string, timeout time.Duration) error {
 	if deps.discovery == nil {
 		return nil
 	}
@@ -79,7 +81,7 @@ func (deps *connections) register(role, address string, timeout time.Duration) e
 	if err := deps.client.FlushContext(ctx); err != nil {
 		return err
 	}
-	info := &etcd.ServiceInfo{ServiceType: role, Sid: deps.identity.ServerID, Addr: address, Metadata: map[string]string{IncarnationMetadata: deps.identity.Incarnation, IngressReadyMetadata: "true"}}
+	info := &etcd.ServiceInfo{ServiceType: service, Sid: deps.identity.ServerID, Addr: address, Metadata: map[string]string{IncarnationMetadata: deps.identity.Incarnation, IngressReadyMetadata: "true"}}
 	if err := deps.discovery.Register(ctx, info); err != nil {
 		return err
 	}

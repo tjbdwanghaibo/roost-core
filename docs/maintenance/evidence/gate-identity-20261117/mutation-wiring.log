@@ -1,0 +1,21 @@
+# 变异 1：wiring/gate/mod.go 的 matches 撤掉角色→服务名映射（deps.service(role) 改回 role）
+=== RUN   TestRealGateHandshakeUsesActualServiceNames
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_game
+    names_real_test.go:166: actual services=gate/game singleton checks=[gate:11=true game:22=true game:22=true gate:11=true] discover=[game]
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_game
+    names_real_test.go:166: actual services=edge/game singleton checks=[gate:11=false] discover=[]
+    names_real_test.go:168: handshake under service names edge/game: ACK=<nil> err=EOF
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/gate_world
+    names_real_test.go:166: actual services=gate/world singleton checks=[gate:11=true game:22=false] discover=[world]
+    names_real_test.go:168: handshake under service names gate/world: ACK=<nil> err=EOF
+=== RUN   TestRealGateHandshakeUsesActualServiceNames/edge_world
+    names_real_test.go:166: actual services=edge/world singleton checks=[gate:11=false] discover=[]
+    names_real_test.go:168: handshake under service names edge/world: ACK=<nil> err=EOF
+--- FAIL: TestRealGateHandshakeUsesActualServiceNames (0.05s)
+    --- PASS: TestRealGateHandshakeUsesActualServiceNames/gate_game (0.01s)
+    --- FAIL: TestRealGateHandshakeUsesActualServiceNames/edge_game (0.01s)
+    --- FAIL: TestRealGateHandshakeUsesActualServiceNames/gate_world (0.01s)
+    --- FAIL: TestRealGateHandshakeUsesActualServiceNames/edge_world (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/gate	0.572s
+FAIL

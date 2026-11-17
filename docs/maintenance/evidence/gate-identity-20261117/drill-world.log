@@ -1,0 +1,24 @@
+grep: configs/service/config.game.yaml: No such file or directory
+OK    gate:ingress         players connect to gate; world runs Game Ingress
+OK    gate:player-tcp      world does not listen for players
+OK    gate:namespace       gtda3debc.access
+OK    gate:etcd-singleton  etcd and singleton on gate and world
+OK    gate:client-address  clients connect to 127.0.0.1:38500
+[drill 08:23:29] acct ready (pid 89229, ops 127.0.0.1:40601)
+[drill 08:23:31] game1000 ready (pid 89241, ops 127.0.0.1:40600)
+[drill 08:23:32] gate1000 ready (pid 89261, ops 127.0.0.1:40602)
+[drill 08:23:32] client port 127.0.0.1:38500 is the Gate's (pid 89261); game pid 89241 does not listen on it
+{"event":"servers","sid":1000,"addr":"127.0.0.1:38500"}
+{"event":"enter_ticket","addr":"127.0.0.1:38500","serving":1000}
+{"event":"handshake","via":"gate"}
+{"event":"enter_status","need_create":true}
+{"event":"enter_create","code":0}
+{"event":"enter_game","first":true,"frames":4}
+PASS: portal gave the Gate address; enter: ticket handshake through the Gate; EnterStatus, EnterCreate and EnterGame through Game Ingress
+[drill 08:23:33] acct: 0 ERROR log lines
+[drill 08:23:33] game1000: 0 ERROR log lines
+[drill 08:23:33] gate1000: 0 ERROR log lines
+[drill 08:23:33] PASS gate drill
+[drill 08:23:34] stopped acct
+[drill 08:23:35] stopped game1000
+[drill 08:23:36] stopped gate1000

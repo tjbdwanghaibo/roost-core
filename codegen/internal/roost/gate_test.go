@@ -269,3 +269,69 @@ func TestDoctorPlayerGateChecks(t *testing.T) {
 		t.Fatalf("a project without a Gate got gate checks: %+v", items)
 	}
 }
+
+// gateManifestNamed 是 gateManifest 换成给定的 Gate 服务名与玩家服务名（roost add gate edge / 自定义玩家服务）。
+func gateManifestNamed(gate, player string) Manifest {
+	m := gateManifest()
+	if player != "game" {
+		m.Services[player] = m.Services["game"]
+		delete(m.Services, "game")
+		m.Modules = map[string]InstalledModule{"login": {Service: player}}
+	}
+	if gate != "gate" {
+		m.Services[gate] = m.Services["gate"]
+		delete(m.Services, "gate")
+	}
+	m.Access = map[string]AccessSpec{"player": {Service: player, Transports: []string{"tcp"}, Gate: gate}}
+	return m
+}
+
+// RV-20261116-02：两端生成的接线都要带上实际服务名（App 按服务名持单实例锁、发现按服务名登记与查找），
+// 不能让 wiring/gate 退回协议角色名 gate / game。Gate 服务的 NewGateMod（server_gen.go 的 gateOptions）与玩家服务的
+// gateIngressOptions（bootstrap）写同一对名字；缺省名字照样显式写出。
+func TestGeneratedGateWiringCarriesActualServiceNames(t *testing.T) {
+	for _, names := range []struct{ gate, player string }{{"gate", "game"}, {"edge", "game"}, {"gate", "world"}, {"edge", "world"}} {
+		t.Run(names.gate+"_"+names.player, func(t *testing.T) {
+			m := gateManifestNamed(names.gate, names.player)
+			if err := m.validatePlayerGate(); err != nil {
+				t.Fatalf("manifest: %v", err)
+			}
+			want := "options.GateService = \"" + names.gate + "\"\n options.GameService = \"" + names.player + "\"\n"
+			ingress := renderGateIngressNew(m)
+			if !strings.Contains(ingress, want) {
+				t.Fatalf("gateIngressOptions does not carry the actual service names %s/%s:\n%s", names.gate, names.player, ingress)
+			}
+			server := renderPlayerTCPServer(m)
+			start := strings.Index(server, "func gateOptions() gatewiring.Options {")
+			if start < 0 {
+				t.Fatal("server_gen.go has no gateOptions")
+			}
+			body := server[start:]
+			body = body[:strings.Index(body, "\n}\n")]
+			if !strings.Contains(body, want) {
+				t.Fatalf("the generated Gate's gateOptions does not carry the actual service names %s/%s:\n%s", names.gate, names.player, body)
+			}
+		})
+	}
+}
+
+// roost add gate edge 走正式 CLI：生成的两端接线写的是 edge / game，不是协议角色名。
+func TestAddGateWithACustomNameWiresItsServiceName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project and installs modules")
+	}
+	t.Parallel()
+	root, roost, _ := moduleProject(t, "edged")
+	roost("module", "add", "login", "enter", "portal")
+	roost("add", "gate", "edge")
+	want := "options.GateService = \"edge\"\n\toptions.GameService = \"game\"\n"
+	for _, rel := range []string{"internal/bootstrap/generated.go", "internal/access/player/tcp/server_gen.go"} {
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("%s does not wire the actual service names edge/game:\n%s", rel, body)
+		}
+	}
+}

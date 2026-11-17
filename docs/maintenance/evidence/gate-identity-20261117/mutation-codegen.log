@@ -1,0 +1,21 @@
+# 变异 2：codegen/internal/roost/gate.go 生成的 Gate 端 gateOptions 不写实际服务名（@@GATE_SERVICE_NAMES@@ 换成空串），玩家服务端照写
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/gate_game
+    gate_test.go:312: the generated Gate's gateOptions does not carry the actual service names gate/game:
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/edge_game
+    gate_test.go:312: the generated Gate's gateOptions does not carry the actual service names edge/game:
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/gate_world
+    gate_test.go:312: the generated Gate's gateOptions does not carry the actual service names gate/world:
+=== RUN   TestGeneratedGateWiringCarriesActualServiceNames/edge_world
+    gate_test.go:312: the generated Gate's gateOptions does not carry the actual service names edge/world:
+--- FAIL: TestGeneratedGateWiringCarriesActualServiceNames (0.00s)
+    --- FAIL: TestGeneratedGateWiringCarriesActualServiceNames/gate_game (0.00s)
+    --- FAIL: TestGeneratedGateWiringCarriesActualServiceNames/edge_game (0.00s)
+    --- FAIL: TestGeneratedGateWiringCarriesActualServiceNames/gate_world (0.00s)
+    --- FAIL: TestGeneratedGateWiringCarriesActualServiceNames/edge_world (0.00s)
+=== RUN   TestAddGateWithACustomNameWiresItsServiceName
+    gate_test.go:334: internal/access/player/tcp/server_gen.go does not wire the actual service names edge/game:
+--- FAIL: TestAddGateWithACustomNameWiresItsServiceName (4.83s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	5.436s
+FAIL
