@@ -1,0 +1,30 @@
+M1 snapshot position written on every witness: RED
+    --- FAIL: TestCellworldBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack (0.00s)
+    state_test.go:114: a witness wrote the stored position: scene 12345 x 2900
+M2 saved position used under another scene: RED
+    --- FAIL: TestCellworldReloadedBaseEntersAtItsSavedPosition (0.00s)
+    state_test.go:138: a position saved under another scene was used: {Recovery:{Revision:0 Effects:[] Cooldowns:[]} Actor:0 InWorld:false Cell:0 Epoch:0 X:1200 Y:1450 HP:70 SnapVer:{Epoch:0 Seq:0} IntentSeq:0 VX:0 VY:0 Atta
+M3 dedup list never replaced: RED
+    --- FAIL: TestCellworldActorStateRoundTripsThroughTheSceneActorDAO (0.00s)
+    state_test.go:55: kind 1 read back
+    --- FAIL: TestCellworldActorStateRollsBackWithTheTransaction (0.00s)
+    state_test.go:95: not restored
+M4 death receipt capacity not enforced: RED
+    --- FAIL: TestCellworldDeathReceiptsRefuseANewTargetWhenFull (0.00s)
+    state_test.go:157: a third target was recorded past the limit of 2
+M5 Uninstall takes down another node: RED
+    --- FAIL: TestCellworldSceneActorNeedsTheInstalledNode (0.00s)
+    state_test.go:224: Uninstall of another node took this one down
+M6 fraction X not written: RED
+    --- FAIL: TestCellworldActorStateRoundTripsThroughTheSceneActorDAO (0.00s)
+    state_test.go:55: kind 1 read back
+    --- FAIL: TestCellworldActorStateRollsBackWithTheTransaction (0.00s)
+    state_test.go:95: not restored
+M7 scene actor accepted without CellMode: RED
+    --- FAIL: TestCellworldSceneActorNeedsTheInstalledNode (0.00s)
+    state_test.go:200: a scene actor was created without CellMode
+M8 base beat refuses on an ordinary process: RED
+    --- FAIL: TestCellworldSceneActorNeedsTheInstalledNode (0.00s)
+    state_test.go:190: base beat without a Node = <nil>, cellworldhost: this process runs no partitioned scene; want nothing
+M9 recovery read shares the stored list: RED
+restored: PASS

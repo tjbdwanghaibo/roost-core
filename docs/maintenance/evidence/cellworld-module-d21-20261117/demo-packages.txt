@@ -1,0 +1,21 @@
+ok  	example.com/cwdemo/game/entities/alliance	1.543s
+ok  	example.com/cwdemo/game/entities/alliance_member	1.998s
+ok  	example.com/cwdemo/game/entities/monster	2.458s
+ok  	example.com/cwdemo/game/entities/player	1.783s
+ok  	example.com/cwdemo/game/entities/team	2.538s
+ok  	example.com/cwdemo/game/entities/terrain_cell_editor	2.052s
+ok  	example.com/cwdemo/game/entities/terrain_chunk	3.852s
+ok  	example.com/cwdemo/game/entities/terrain_editor	4.029s
+ok  	example.com/cwdemo/game/entities/world	3.082s
+ok  	example.com/cwdemo/game/modules/cellworldhost	4.437s
+ok  	example.com/cwdemo/game/managers	5.512s
+ok  	example.com/cwdemo/game/components/terrainledger	5.176s
+ok  	example.com/cwdemo/internal/service/game	95.402s
+--- FAIL: TestDungeonClearSubmitsTheSeasonCountAsASnapshot (0.00s)
+    player_finish_dungeon_test.go:322: first clear: submitted to board total:global:0:1, want clears:global:0:1
+FAIL
+FAIL	example.com/cwdemo/game/controllers	8.422s
+ok  	example.com/cwdemo/game/settings	2.799s
+ok  	example.com/cwdemo/cmd/loadtest	3.891s
+FAIL
+exit 1

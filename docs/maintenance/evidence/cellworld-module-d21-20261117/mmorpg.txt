@@ -1,0 +1,25 @@
+--- PASS: TestMMORPGPartyDisbandRejectsTheOldParty (0.01s)
+--- PASS: TestMMORPGTradeBothConfirmAndReplay (0.01s)
+--- PASS: TestMMORPGTradeCancelAndExpiryRefundEscrow (0.01s)
+--- PASS: TestMMORPGTradeConfirmRacesWithCancel (0.01s)
+--- PASS: TestMMORPGCombatCooldownReplayLootAndQuest (0.01s)
+--- PASS: TestMMORPGCombatRefusesOtherScenesAndLivingBossCompletion (0.00s)
+--- PASS: TestMMORPGBuffRefreshAndDeadline (0.01s)
+--- PASS: TestMMORPGBuffFailureRollsBackAndOfflineExpiry (0.01s)
+--- PASS: TestMMORPGDeathAndDelayedRevive (0.01s)
+--- PASS: TestMMORPGPartyReplay (0.01s)
+--- PASS: TestMMORPGTradeConcurrentReplay (0.01s)
+--- PASS: TestMMORPGTradeRollback (0.01s)
+--- PASS: TestMMORPGTransferRollbackReplayAndStaleRequest (0.01s)
+--- PASS: TestMMORPGRobotBusiness (0.01s)
+module verify: bag 20/20 skipped=0
+module verify: task 29/29 skipped=0
+module verify: task+bag 3/3 skipped=0
+module verify: task+wallet 6/6 skipped=0
+module verify: wallet 17/17 skipped=0
+exit 0
+
+== test-mmorpg-scenes.sh
+--- PASS: TestMMORPGTwoScenesTCPTransferRetryAndReconnect (0.02s)
+ok  	example.com/mmo-world/internal/service/game	1.785s
+exit 0

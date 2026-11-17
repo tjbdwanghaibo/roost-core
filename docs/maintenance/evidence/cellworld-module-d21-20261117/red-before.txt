@@ -1,0 +1,8 @@
+# example.com/mv1/game/entities/scene_actor [example.com/mv1/game/modules/cellworldhost.test]
+game/entities/scene_actor/entity.go:46:36: undefined: cellworldhost.IsCellMode
+game/entities/scene_actor/entity.go:49:26: undefined: cellworldhost.Heartbeat
+game/entities/scene_actor/entity.go:54:28: undefined: cellworldhost.RegisterActorBeat
+game/entities/scene_actor/entity.go:71:23: undefined: cellworldhost.ReadActor
+game/entities/scene_actor/entity.go:74:76: undefined: cellworldhost.WriteActor
+FAIL	example.com/mv1/game/modules/cellworldhost [build failed]
+FAIL

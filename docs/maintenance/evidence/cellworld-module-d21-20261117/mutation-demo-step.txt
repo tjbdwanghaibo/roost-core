@@ -1,0 +1,6 @@
+--- FAIL: TestDemoStepsLeaveModuleComponentsToTheModules (0.01s)
+    demo_test.go:143: cellworld is not installed in its own step before the other modules
+    demo_test.go:148: the modules are installed as "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime cellworld room turn matchroom matchmaking", want "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime room turn matchroom matchmaking": the order decides every allocated id, so a newly adopted module goes at the end
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.567s
+FAIL

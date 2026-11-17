@@ -1,0 +1,15 @@
+--- PASS: TestDemoEmbedCoversEveryFile (0.01s)
+--- PASS: TestDemoTemplateStepsAndShippedFilesAgree (0.03s)
+--- PASS: TestDemoStepsLeaveModuleComponentsToTheModules (0.01s)
+--- PASS: TestDemoViewInterfacesListTheComponentMethods (0.00s)
+--- PASS: TestDemoViewNamesDoNotCollideWithItsModules (0.01s)
+--- PASS: TestDemoEntityPackagesHoldOnlyComponentWiring (0.01s)
+--- PASS: TestDemoLeavesMailToTheMailboxModule (0.01s)
+--- PASS: TestDemoTemplateKeepsTheGameTemplateAndItsFeatures (0.00s)
+--- PASS: TestDemoAllianceModuleIntegration (63.84s)
+--- PASS: TestDemoTeamModuleIntegration (31.87s)
+--- PASS: TestDemoTemplateGeneratesABuildableWritePath (7.61s)
+--- PASS: TestDemoActorConsumesOneBodyAndPreservesMovementTransactions (43.20s)
+--- PASS: TestDemoTemplateFollowsTheGameServiceName (56.62s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	153.094s
+exit 0
