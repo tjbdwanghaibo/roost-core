@@ -1,0 +1,4 @@
+id,name
+# 场景表：注释行在读取时忽略
+1,forest
+2,cave

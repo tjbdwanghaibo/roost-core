@@ -38,8 +38,8 @@
 | `//roost:protocol` | 协议接口 | `group`、`handler`；`controller` / `domain` 是 handler 的替代拼写，推荐只写 `handler` |
 | `//roost:msg` | 协议接口方法 | `id`、`name`、`tags`、`handler`（也识别 `controller` / `domain`） |
 | `//roost:view` | 协议 struct；覆盖协议分组 | `group` |
-| `//roost:table` | 配置表 schema struct | `name`、`file`、`json`、`key` |
-| `//roost:object` | 单例配置 schema struct | `name`、`file`、`json` |
+| `//roost:table` | 配置表 schema struct | `name`、`file`、`json`、`key`、`side` |
+| `//roost:object` | 单例配置 schema struct | `name`、`file`、`json`、`side`、`layout` |
 | `//roost:attribute` | 属性 profile struct | `index`、`max` |
 | `//roost:web` | HTTP handler | 必需 `method`、`path`、`body`；可选 `headers`、`compress`、`errors`、`status` |
 | `//roost:rpc` | 服务接口 / 接口方法 | 接口：`service_type`、`capability`；方法：`affinity`、`route` / `route=<param>`（发往实体的 owner，键是 `int64` 完整 Entity ID，缺省参数名 `target`；见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md)）。`shard=` 已移除 |
@@ -306,6 +306,10 @@ type PingResponse struct { ServerTime int64 `pb:"1"` }
 | 配置字段 | `required:"true" unique:"true"` | 键须存在且非 null、唯一值；required 不等于禁止数值 0 |
 | 配置字段 | `min:"1" enum:"a\|b\|c" ref:"monster"` | 下限、枚举、引用目标表主键 |
 | 配置字段 | `parser:"json"` | 当前实现只按是否非空选择 JSON 解析，不按 tag 内容寻找自定义 Go 函数；推荐统一写 json |
+| 配置表 / 单例 struct | `side=c` / `side=s` | 整表只给客户端（服务端不登记）/ 只给服务端（不导出），见[参考 §9.2](CODEGEN_REFERENCE.zh-CN.md#92-按端分组竖排键值表index-与注释行) |
+| 单例配置 struct | `layout=kv` | 竖排键值 CSV：`key,value,note`，一行一个字段 |
+| 配置字段 | `side:"c"` / `side:"s"` | 只给客户端（服务端结构体里保留、值为零值）/ 只给服务端；主键不能带 |
+| 配置字段 | `index:"true"` / `index:"<名字>"` | 非唯一二级索引，生成 `<Type>By<Index>(v)`；只用于 table 的 string / 整数 / bool 字段 |
 | 属性 profile | `//roost:attribute index=1 max=64` | 属性编号起点、最大字段数 |
 | 属性字段 | `attr:"hp"` / `attr:"-"` | 属性名 / 排除字段；省略名称用 snake_case |
 

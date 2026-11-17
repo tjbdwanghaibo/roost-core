@@ -1,0 +1,6 @@
+id,scene_id,level,drop_seed,model,tags
+编号,场景,等级,掉落种子,模型,标签
+# 怪物按场景索引，同一场景可以有多只
+10,1,3,777,slime.prefab,"[""a""]"
+11,2,5,888,bat.prefab,"[""b""]"
+12,1,4,999,orc.prefab,"[""c""]"

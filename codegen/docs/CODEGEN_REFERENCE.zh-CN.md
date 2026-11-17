@@ -964,6 +964,45 @@ JSON 键以显式 `json` 标签为准，省略标签时沿用 Go 字段名（与
 
 **只读 v2 manifest**：`_manifest.json` 存在时版本必须是 2。v1（v1.17.2 及更早生成的工程，`tables` 恒空、没有归属记录）不再读取，转换与 `roost generate` 的 config-data 判断都报 `table manifest … is version 1, which is no longer read`；其它版本报 `unsupported table manifest version N`。一次性清理：删掉 v1 的 `_manifest.json`，同时删掉目录里由旧生成器写出、meta 已不存在的 JSON，手写 JSON 保留，再运行一次生成——新 manifest 只登记本轮输出，留下的未登记文件按手写数据永久保留。
 
+### 9.2 按端分组、竖排键值表、index 与注释行
+
+配置表导出给客户端的 tablegen 部分（维护者 2026-11-17，[需求与决定](../../docs/maintenance/FEATURE-2026-11-17-client-config-export.md) 决定 1、2、5、6）。不用这些写法的工程，生成结果与以前逐字节相同。
+
+```go
+//roost:table name=monster key=ID
+type Monster struct {
+    ID       int32  `csv:"id" json:"id" required:"true"`
+    SceneID  int32  `csv:"scene_id" json:"scene_id" ref:"scene" index:"true"` // 二级索引
+    DropSeed int64  `csv:"drop_seed" json:"drop_seed" side:"s"`                 // 只给服务端
+    Model    string `csv:"model" json:"model" side:"c"`                         // 只给客户端
+}
+
+//roost:table name=tip side=c   // 整张表只给客户端，服务端不登记
+type Tip struct { ID int32 `csv:"id" json:"id"` }
+
+//roost:object name=balance layout=kv   // 竖排键值：key,value,note
+type Balance struct {
+    MaxLevel int32 `csv:"max_level" json:"max_level" required:"true" min:"1"`
+}
+```
+
+**按端分组**：字段 tag `side:"c"` 只给客户端、`side:"s"` 只给服务端，不写两端都要；整张表（`//roost:table` 或 `//roost:object`）在标记里写 `side=c` / `side=s`。规则沿用 cfggen 的 group，每次生成都对两端各核对一次（不管有没有开客户端导出）：
+
+- 主键不能带 side（它在两端都标识一行），否则报 `key field ID is side:"c", but the key identifies a row on both sides`；
+- `ref` 指向的表必须也在这一端，否则报 `ref target "scene" is not on the server side`（或 client side）；
+- 一张表的字段在某一端全被排除时报错，提示改成整表的 `side=`；
+- 字段的 side 与整表的 side 相反（字段哪一端都不导出）时报错；side 只能是 `c` / `s`。
+
+服务端产物（`configs/data/*.json`、`_manifest.json`、`configs/generated` 的 Go 绑定）只含服务端投影：`side=c` 的表不转换、不登记、不进 manifest（以前登记过的按 §9.1 退役），只给客户端的字段不进 JSON、不进规则；有排除时生成打印 `tablegen: server side omitted N tables / M fields (client only)`。**schema 结构体不另生成一份**：只给客户端的字段在服务端仍是结构体的字段，值是零值；生成的 `<Type>Cfg` 别名注释里列出这些字段。CSV 里只给客户端的列照常写，服务端转换与生成的 `Convert<Type>CSV` 都跳过它（表头的大小写核对仍覆盖它）；CSV 模板（`-csv-template`）含两端的全部列和 `side=c` 的表，规则行写出 `side=c` / `index=<名字>`。
+
+**竖排键值表**：`//roost:object layout=kv`（只用于 object）。CSV 第一条非空记录是表头 `key,value,note`（note 列可省），之后一行一个字段：`key` 是字段的 csv 名，`value` 按字段类型解析，`note` 是说明，写进生成的 `<Type>Cfg` 注释（只写服务端字段的；为此 `roost generate` 的 config-go 步骤带 `-csv configs/table`，kv 表的 CSV 还没有时不写 note）。生成的 JSON 与普通 object 相同（单个对象），规则照常检查。报错写明文件、行与 key：未知 key（只差大小写时提示正确拼写）、重复 key（`balance.csv:4: duplicate key "max_level" (first at line 2)`）、必填字段没有对应行（`required key "max_level" is missing`，按两端的全部字段核对）。另一端字段的行是合法的 key，只是不进本端 JSON。生成的 `Convert<Type>CSV` 读同样的格式，行号与 key 写进错误。CSV 模板是竖排的（每个字段一行，note 预填 title）。
+
+**index**：`//roost:table` 的字段 tag `index:"true"`（索引名取 Go 字段名）或 `index:"<名字>"`，`index:"false"` 等于不写；语义与 cfggen 的 index 相同，**不唯一**。服务端生成 `<Type>By<Index>(v)`（`index:"true"` 时是 `<Type>By<字段名>`，如 `MonsterBySceneID(v int32) []MonsterCfg`），与 `<Type>By<Key>` 一样读当前请求钉住的快照，返回全部匹配行（文件顺序），没有时为空；索引登记在 `TableDef.Indexes`，键是值的字符串（整数十进制、bool 为 true / false）。只能建在 string、整数、bool 字段上；浮点、指针、具名类型、带 `parser` 的字段、主键（已有 `By<Key>`）、object 上都拒绝；同表索引名不能重复，访问器不能与主键访问器同名。只给客户端的字段上的 index 只进导出模型。
+
+**注释行**：CSV 里以 `#` 开头的行是注释，生成步骤（横排、竖排）读取时忽略；`#` 必须是行首第一个字符，值本身要以 `#` 开头时写成带引号的单元格（`"#red"`）。表头格式不变：列名一行必须有，标题、类型、规则三行可选。转换报错的 `row=` 是文件里的行号（注释行也计数）。layout=kv 表生成的 `Convert<Type>CSV` 同样忽略 `#` 行；**横排表生成的 `Convert<Type>CSV` 不识别注释**——给它的 CSV 不要带 `#` 行（改它会让每个已有工程的 `gen_table_config.go` 每张表多一行，暂未改，待维护者定）。
+
+**导出模型**：`tablegen.ClientExport(metaDir, csvDir)` 返回客户端投影（`side=s` 的表与 `side:"s"` 的字段都不在）：每张表的名字、种类（table / object / kv）、字段（Go 名、JSON 名、csv 名、类型、主键、title、kv 的 note、index、parser——带 parser 的字段在 JSON 里是 CSV 原文字符串）、索引、规则（与服务端 loader 同一份翻译）、只含客户端字段的 JSON（普通表 `{"rows":[...]}`，object / kv 单个对象）、数据哈希（CRLF 统一成 LF 后的 sha256）、schema 哈希、行数，以及 `DataVersion`（各表数据哈希按表名排序拼接后再取 sha256；`ShortDataVersion()` 取前 12 位）。只改只给服务端的字段，导出与数据版本都不变；同样的输入，模型逐字节相同。导出目录、manifest、C# 与同步由 `client_export.config` 负责（另见该方案第 4 节）。
+
 ## 10. attribute
 
 ```bash

@@ -1,0 +1,7 @@
+# 竖排键值：一行一个字段
+key,value,note
+max_level,60,玩家等级上限
+start_gold,100,新角色的金币
+server_tick,50,只给服务端
+# 下面这行只给客户端
+shop_banner,summer_sale,商店顶部横幅

@@ -40,6 +40,8 @@ type TableKind string
 const (
 	KindTable  TableKind = "table"
 	KindObject TableKind = "object"
+	// KindKV 只出现在导出模型里：layout=kv 的 object（Meta.Kind 仍是 object）。
+	KindKV TableKind = "kv"
 )
 
 type Meta struct {
@@ -52,7 +54,27 @@ type Meta struct {
 	Package    string
 	ImportPath string
 	Alias      string
-	Fields     []Field
+	// Side 是整张表所属的端（标记 side=）：空表示两端都要，"c" 只给客户端（服务端不登记），
+	// "s" 只给服务端（不导出给客户端）。
+	Side string
+	// Layout 是 CSV 写法：空是横排（一行一条），"kv" 是竖排键值（只用于 object，见 kv.go）。
+	Layout string
+	// Fields 是本端看到的字段。按端投影（projectSide）之后只剩本端字段；投影前与 AllFields 相同。
+	Fields []Field
+	// AllFields 是 schema 结构体的全部字段，也就是 CSV 表头可以出现的全部列。投影不改它：表头核对、
+	// 标题 / 类型 / 规则行的识别都按它做，所以另一端的列出现在 CSV 里不会被当成拼错或数据。
+	// 为 nil 时等于 Fields（单测直接构造的 Meta）。
+	AllFields []Field
+	// Omitted 是投影时被排除的本表字段的 Go 名（另一端专用），只用于生成代码的注释。
+	Omitted []string
+}
+
+// sheetFields 是 CSV 表头可以出现的全部字段（见 AllFields）。
+func (m Meta) sheetFields() []Field {
+	if m.AllFields != nil {
+		return m.AllFields
+	}
+	return m.Fields
 }
 
 type Field struct {
@@ -68,6 +90,13 @@ type Field struct {
 	// Enum lists the allowed values (tag enum:"a|b|c").
 	Enum   []string
 	Parser string
+	// Side 是字段所属的端（tag side:"c" / side:"s"），空表示两端都要。
+	Side string
+	// Index 是二级索引名（tag index:"true" 取 Go 字段名，index:"<名字>" 取该名字），空表示没有索引。
+	// 语义与 cfggen 的 index 相同：非唯一，查询返回全部匹配行（文件顺序）。
+	Index string
+	// Note 是 layout=kv 表里这个字段那一行的 note 列，生成 Go 时写进注释；其它表为空。
+	Note string
 }
 
 // DefaultMetaDir is where a business project keeps its table meta files;
@@ -109,18 +138,38 @@ func Run(args []string, stdout io.Writer) error {
 		}
 	}
 
+	// 两端的投影规则（主键不能排除、ref 同端、字段不能全被排除）与 index 声明每次都核对，
+	// 不管这次产出哪一样；服务端产物只用服务端投影。
+	if err := validateMetas(metas); err != nil {
+		return err
+	}
+	server, omitted, err := projectSide(metas, sideServer)
+	if err != nil {
+		return err
+	}
+	if omitted.tables+omitted.fields > 0 {
+		_, _ = fmt.Fprintf(stdout, "tablegen: server side omitted %d tables / %d fields (client only)\n", omitted.tables, omitted.fields)
+	}
+
+	// 模板给策划填，含两端的全部列与 side=c 的表。
 	if *csvTemplateDir != "" {
 		if err := writeCSVTemplates(metas, *csvTemplateDir, *force, stdout); err != nil {
 			return err
 		}
 	}
 	if *csvDir != "" && *jsonDir != "" {
-		if err := convertCSVToJSON(metas, *csvDir, *jsonDir, *force, stdout); err != nil {
+		if err := convertCSVToJSON(server, *csvDir, *jsonDir, *force, stdout); err != nil {
 			return err
 		}
 	}
 	if *jsonDir != "" && *check {
-		if err := checkJSONFiles(metas, *jsonDir); err != nil {
+		if err := checkJSONFiles(server, *jsonDir); err != nil {
+			return err
+		}
+	}
+	// -out 同时给了 -csv 时，layout=kv 表的 note 列写进生成代码的注释。
+	if *outDir != "" && *csvDir != "" {
+		if err := attachKVNotes(server, *csvDir); err != nil {
 			return err
 		}
 	}
@@ -135,7 +184,7 @@ func Run(args []string, stdout io.Writer) error {
 				return fmt.Errorf("detect output package: %w", err)
 			}
 		}
-		if err := generateGo(metas, *outDir, *outPkg, *force, stdout); err != nil {
+		if err := generateGo(server, *outDir, *outPkg, *force, stdout); err != nil {
 			return err
 		}
 	}
@@ -254,6 +303,14 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 				TypeName:   typeSpec.Name.Name,
 				Package:    file.Name.Name,
 				ImportPath: importPath,
+				Side:       opts["side"],
+				Layout:     opts["layout"],
+			}
+			if !validSide(meta.Side) {
+				return nil, fmt.Errorf("%s: %s %s: side=%q must be c (client only) or s (server only)", path, meta.Kind, meta.TypeName, meta.Side)
+			}
+			if meta.Layout != "" && meta.Layout != layoutKV {
+				return nil, fmt.Errorf("%s: object %s: layout=%q is unknown (the only layout is kv)", path, meta.TypeName, meta.Layout)
 			}
 			for _, field := range st.Fields.List {
 				if len(field.Names) == 0 {
@@ -279,6 +336,17 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 				if jsonName == "" {
 					jsonName = name
 				}
+				side := tag.Get("side")
+				if !validSide(side) {
+					return nil, fmt.Errorf("%s: %s field %s: side:%q must be c (client only) or s (server only)", path, meta.TypeName, name, side)
+				}
+				if side != "" && meta.Side != "" && side != meta.Side {
+					return nil, fmt.Errorf("%s: %s field %s: side:%q on a side=%s %s is exported nowhere", path, meta.TypeName, name, side, meta.Side, meta.Kind)
+				}
+				index, err := indexName(name, tag.Get("index"))
+				if err != nil {
+					return nil, fmt.Errorf("%s: %s: %w", path, meta.TypeName, err)
+				}
 				meta.Fields = append(meta.Fields, Field{
 					Name:     name,
 					Type:     types.ExprString(field.Type),
@@ -291,8 +359,11 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 					Ref:      tag.Get("ref"),
 					Enum:     splitEnum(tag.Get("enum")),
 					Parser:   tag.Get("parser"),
+					Side:     side,
+					Index:    index,
 				})
 			}
+			meta.AllFields = meta.Fields
 			if meta.Kind == KindTable && meta.Key == "" && len(meta.Fields) > 0 {
 				meta.Key = meta.Fields[0].Name
 			}
@@ -336,6 +407,9 @@ func writeCSVTemplates(metas []Meta, dir string, force bool, stdout io.Writer) e
 			fieldValues(meta.Fields, func(f Field) string { return f.Type }),
 			fieldValues(meta.Fields, fieldRule),
 		}
+		if meta.Layout == layoutKV {
+			rows = kvTemplateRows(meta)
+		}
 		for _, row := range rows {
 			if err := w.Write(row); err != nil {
 				return err
@@ -376,20 +450,9 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, s
 		if _, duplicate := manifest.Tables[meta.JSON]; duplicate {
 			return fmt.Errorf("duplicate table JSON filename %q", meta.JSON)
 		}
-		rows, err := readCSVRecords(filepath.Join(csvDir, meta.File), meta)
+		payload, _, err := readPayload(csvDir, meta)
 		if err != nil {
 			return err
-		}
-		var payload any = rows
-		if meta.Kind == KindObject {
-			if len(rows) > 1 {
-				return fmt.Errorf("%s: object %s requires at most one data row, got %d", meta.File, meta.TypeName, len(rows))
-			}
-			if len(rows) > 0 {
-				payload = rows[0]
-			} else {
-				payload = map[string]any{}
-			}
 		}
 		raw, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
@@ -594,15 +657,64 @@ func splitEnum(tag string) []string {
 	return strings.Split(tag, "|")
 }
 
-func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
+// readPayload 读一张表的 CSV，返回写进 JSON 的载荷（表是行的列表，object / kv 是单个对象）
+// 与行数（object / kv 记 1）。只含 meta.Fields（本端字段）。服务端转换与客户端导出共用它。
+func readPayload(csvDir string, meta Meta) (any, int, error) {
+	path := filepath.Join(csvDir, meta.File)
+	if meta.Layout == layoutKV {
+		object, err := readKVObject(path, meta)
+		if err != nil {
+			return nil, 0, err
+		}
+		return object.values, 1, nil
+	}
+	rows, err := readCSVRecords(path, meta)
+	if err != nil {
+		return nil, 0, err
+	}
+	if meta.Kind != KindObject {
+		return rows, len(rows), nil
+	}
+	if len(rows) > 1 {
+		return nil, 0, fmt.Errorf("%s: object %s requires at most one data row, got %d", meta.File, meta.TypeName, len(rows))
+	}
+	if len(rows) > 0 {
+		return rows[0], 1, nil
+	}
+	return map[string]any{}, 1, nil
+}
+
+// readCSVFile 读一个 CSV 文件，返回全部记录与每条记录在文件里的行号（1 起）。以 # 开头的行
+// 是注释（encoding/csv 的 Comment：# 必须是行首第一个字符，前面不能有空白；要以 # 开头的值
+// 加引号），读取时忽略，所以行号与记录下标不再一一对应，报错一律用这里的行号。
+func readCSVFile(path string, fieldsPerRecord int) ([][]string, []int, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer file.Close()
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
-	records, err := reader.ReadAll()
+	reader.Comment = '#'
+	reader.FieldsPerRecord = fieldsPerRecord
+	var records [][]string
+	var lines []int
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			return records, lines, nil
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		line, _ := reader.FieldPos(0)
+		records = append(records, record)
+		lines = append(lines, line)
+	}
+}
+
+func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
+	records, lines, err := readCSVFile(path, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -610,12 +722,15 @@ func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
 		return nil, nil
 	}
 	header := records[0]
+	sheet := meta.sheetFields()
 	// Column names are case-sensitive, like the JSON keys they become: a
 	// header that differs from a field's csv name only in case would
-	// otherwise be skipped as an unknown column and its values lost.
-	if column, want, found := rules.MisspelledKey(header, fieldValues(meta.Fields, func(f Field) string { return f.CSV })); found {
+	// otherwise be skipped as an unknown column and its values lost. The
+	// check covers the other side's columns too (AllFields).
+	if column, want, found := rules.MisspelledKey(header, fieldValues(sheet, func(f Field) string { return f.CSV })); found {
 		return nil, fmt.Errorf("%s: header %q must be spelled %q (column names are case-sensitive)", filepath.Base(path), column, want)
 	}
+	// 只读本端字段的列；另一端的列与未声明的列一样跳过。
 	fieldByCSV := make(map[string]Field, len(meta.Fields))
 	for _, field := range meta.Fields {
 		fieldByCSV[field.CSV] = field
@@ -639,7 +754,7 @@ func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
 			}
 			parsed, err := parseCell(value, field)
 			if err != nil {
-				return nil, fmt.Errorf("%s row=%d col=%s field=%s value=%q: %w", filepath.Base(path), rowIndex+1, name, field.Name, value, err)
+				return nil, fmt.Errorf("%s row=%d col=%s field=%s value=%q: %w", filepath.Base(path), lines[rowIndex], name, field.Name, value, err)
 			}
 			row[field.JSON] = parsed
 		}
@@ -662,14 +777,15 @@ func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
 }
 
 func csvDataStart(records [][]string, meta Meta) int {
+	sheet := meta.sheetFields()
 	start := 1
-	if start < len(records) && sameRow(records[start], fieldValues(meta.Fields, func(f Field) string { return f.Title })) {
+	if start < len(records) && sameRow(records[start], fieldValues(sheet, func(f Field) string { return f.Title })) {
 		start++
 	}
-	if start < len(records) && sameRow(records[start], fieldValues(meta.Fields, func(f Field) string { return f.Type })) {
+	if start < len(records) && sameRow(records[start], fieldValues(sheet, func(f Field) string { return f.Type })) {
 		start++
 	}
-	if start < len(records) && sameRow(records[start], fieldValues(meta.Fields, fieldRule)) {
+	if start < len(records) && sameRow(records[start], fieldValues(sheet, fieldRule)) {
 		start++
 	}
 	return start
@@ -740,15 +856,23 @@ func generateGo(metas []Meta, outDir string, pkg string, force bool, stdout io.W
 	}
 	var buf bytes.Buffer
 	tmpl := template.Must(template.New("go").Funcs(template.FuncMap{
-		"rules":      func(meta Meta) []string { return ruleLiterals(metaRules(meta)) },
-		"upper":      firstUpper,
-		"quote":      strconv.Quote,
-		"keyType":    keyType,
-		"keyField":   keyField,
-		"lower":      firstLower,
-		"needsJSON":  needsJSON,
-		"parseExpr":  parseExpr,
-		"fieldRules": fieldRule,
+		"rules":         func(meta Meta) []string { return ruleLiterals(metaRules(meta)) },
+		"upper":         firstUpper,
+		"quote":         strconv.Quote,
+		"keyType":       keyType,
+		"keyField":      keyField,
+		"lower":         firstLower,
+		"needsJSON":     needsJSON,
+		"parseExpr":     parseExpr,
+		"fieldRules":    fieldRule,
+		"cfgDoc":        cfgDoc,
+		"indexed":       indexedFields,
+		"indexKey":      indexKeyExpr,
+		"indexAccessor": indexAccessor,
+		"sheet":         func(meta Meta) []Field { return meta.sheetFields() },
+		"hasKV":         hasKV,
+		"omittedCSV":    omittedCSV,
+		"requiredCSV":   requiredCSV,
 	}).Parse(goTemplate))
 	if err := tmpl.Execute(&buf, map[string]any{
 		"Package": pkg,
@@ -795,12 +919,21 @@ var (
 )
 
 func RegisterGeneratedConfigData(r *configdata.Registry) error {
-{{- range .Metas}}
+{{- range $m := .Metas}}
 {{- if eq .Kind "table"}}
 	if err := configdata.RegisterTable(r, configdata.TableDef[{{keyType .}}, {{.Alias}}.{{.TypeName}}]{
 		Name: configdata.Name({{quote .Name}}),
 		File: {{quote .JSON}},
 		Key: func(v {{.Alias}}.{{.TypeName}}) {{keyType .}} { return v.{{keyField .}} },
+{{- with indexed .}}
+		// Secondary indexes (tag index): not unique, a lookup returns every
+		// matching row in file order.
+		Indexes: []configdata.IndexDef[{{$m.Alias}}.{{$m.TypeName}}]{
+{{- range .}}
+			{Name: {{quote .Index}}, Key: func(v {{$m.Alias}}.{{$m.TypeName}}) string { return {{indexKey . (print "v." .Name)}} }},
+{{- end}}
+		},
+{{- end}}
 {{- with rules .}}
 		// The schema tags' rules: configdata enforces them on every load and
 		// reload (an edited JSON file included); generate checks the same ones.
@@ -842,8 +975,8 @@ func RegisterConfigData() error {
 	return RegisterGeneratedConfigData(configdata.DefaultRegistry())
 }
 
-{{range .Metas}}
-type {{.TypeName}}Cfg = {{.Alias}}.{{.TypeName}}
+{{range $m := .Metas}}
+{{cfgDoc .}}type {{.TypeName}}Cfg = {{.Alias}}.{{.TypeName}}
 
 {{if eq .Kind "table"}}
 func {{.TypeName}}TableFrom(snap *configdata.Snapshot) (*configdata.Table[{{keyType .}}, {{.Alias}}.{{.TypeName}}], bool) {
@@ -861,13 +994,20 @@ func {{.TypeName}}Table() *configdata.Table[{{keyType .}}, {{.Alias}}.{{.TypeNam
 func {{.TypeName}}By{{keyField .}}(id {{keyType .}}) ({{.Alias}}.{{.TypeName}}, bool) {
 	return {{.TypeName}}Table().Get(id)
 }
-{{else}}
+{{range indexed .}}
+// {{indexAccessor $m .}} returns the {{$m.Name}} rows whose {{.Name}} equals v, in
+// file order (index {{quote .Index}}; not unique, so several rows may match).
+// Like {{$m.TypeName}}Table it reads the snapshot pinned to the current request.
+func {{indexAccessor $m .}}(v {{.Type}}) []{{$m.Alias}}.{{$m.TypeName}} {
+	return {{$m.TypeName}}Table().GetByIndex({{quote .Index}}, {{indexKey . "v"}})
+}
+{{end}}{{else}}
 func {{.TypeName}}ConfigFrom(snap *configdata.Snapshot) ({{.Alias}}.{{.TypeName}}, bool) {
 	return configdata.ObjectFrom[{{.Alias}}.{{.TypeName}}](snap, configdata.Name({{quote .Name}}))
 }
 {{end}}
 
-func Convert{{.TypeName}}CSV(r io.Reader) ({{if eq .Kind "table"}}[]{{.Alias}}.{{.TypeName}}{{else}}{{.Alias}}.{{.TypeName}}{{end}}, error) {
+{{if eq .Layout "kv"}}{{template "kvConverter" .}}{{else}}func Convert{{.TypeName}}CSV(r io.Reader) ({{if eq .Kind "table"}}[]{{.Alias}}.{{.TypeName}}{{else}}{{.Alias}}.{{.TypeName}}{{end}}, error) {
 	reader := csv.NewReader(r)
 	reader.TrimLeadingSpace = true
 	records, err := reader.ReadAll()
@@ -900,7 +1040,7 @@ func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}
 		return nil, nil
 	}
 	header := records[0]
-	if err := tablegenCheckHeader(header{{range .Fields}}, {{quote .CSV}}{{end}}); err != nil {
+	if err := tablegenCheckHeader(header{{range sheet .}}, {{quote .CSV}}{{end}}); err != nil {
 		return nil, err
 	}
 	col := make(map[string]int, len(header))
@@ -908,10 +1048,10 @@ func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}
 		col[name] = i
 	}
 	start := 1
-	if len(records) > start && len(records[start]) > 0 && records[start][0] == {{quote (index .Fields 0).Title}} {
+	if len(records) > start && len(records[start]) > 0 && records[start][0] == {{quote (index (sheet .) 0).Title}} {
 		start++
 	}
-	if len(records) > start && len(records[start]) > 0 && records[start][0] == {{quote (index .Fields 0).Type}} {
+	if len(records) > start && len(records[start]) > 0 && records[start][0] == {{quote (index (sheet .) 0).Type}} {
 		start++
 	}
 	if len(records) > start && len(records[start]) > 0 && strings.Contains(records[start][0], "required") {
@@ -940,7 +1080,7 @@ func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}
 	}
 	return out, nil
 }
-{{end}}
+{{end}}{{end}}
 
 // tablegenCheckHeader rejects a column whose name differs from a field's csv
 // name only in case: column names are case-sensitive, like the JSON keys
@@ -995,7 +1135,95 @@ func tablegenParseJSON[T any](raw string) (T, error) {
 	}
 	return v, nil
 }
-`
+{{- if hasKV .Metas}}
+
+// tablegenCheckKVHeader requires the header key,value,note of a layout=kv
+// sheet (note may be left out); no further non-empty column follows it.
+func tablegenCheckKVHeader(record []string) error {
+	want := []string{"key", "value", "note"}
+	for i, cell := range record {
+		cell = strings.TrimSpace(cell)
+		if (i < len(want) && cell == want[i]) || (i >= 2 && cell == "") {
+			continue
+		}
+		return fmt.Errorf("a layout=kv sheet starts with the header key,value,note, got %q", strings.Join(record, ","))
+	}
+	if len(record) < 2 {
+		return fmt.Errorf("a layout=kv sheet starts with the header key,value,note, got %q", strings.Join(record, ","))
+	}
+	return nil
+}
+{{- end}}
+{{define "kvConverter"}}// Convert{{.TypeName}}CSV reads the layout=kv sheet of {{.Name}}: a header
+// key,value,note, then one row per field (key is the field's csv name). Lines
+// starting with # are comments. An unknown or repeated key, or a missing
+// required key, is an error naming the line and the key.
+{{- with .Omitted}}
+// Client-only fields (side:"c") are accepted as keys and stay zero here.
+{{- end}}
+func Convert{{.TypeName}}CSV(r io.Reader) ({{.Alias}}.{{.TypeName}}, error) {
+	var item {{.Alias}}.{{.TypeName}}
+	reader := csv.NewReader(r)
+	reader.TrimLeadingSpace = true
+	reader.Comment = '#'
+	reader.FieldsPerRecord = -1
+	seen := make(map[string]int)
+	header := false
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return {{.Alias}}.{{.TypeName}}{}, err
+		}
+		line, _ := reader.FieldPos(0)
+		if tablegenEmptyRecord(record) {
+			continue
+		}
+		if !header {
+			if err := tablegenCheckKVHeader(record); err != nil {
+				return {{.Alias}}.{{.TypeName}}{}, fmt.Errorf("line=%d: %w", line, err)
+			}
+			header = true
+			continue
+		}
+		key := strings.TrimSpace(record[0])
+		raw := ""
+		if len(record) > 1 {
+			raw = strings.TrimSpace(record[1])
+		}
+		if first, dup := seen[key]; dup {
+			return {{.Alias}}.{{.TypeName}}{}, fmt.Errorf("line=%d key=%q: duplicate key (first at line %d)", line, key, first)
+		}
+		seen[key] = line
+		switch key {
+{{- range .Fields}}
+		case {{quote .CSV}}:
+			if raw != "" {
+				v, err := {{parseExpr . "raw"}}
+				if err != nil {
+					return {{$.Alias}}.{{$.TypeName}}{}, fmt.Errorf("line=%d key=%q field={{.Name}} value=%q: %w", line, key, raw, err)
+				}
+				item.{{.Name}} = v
+			}
+{{- end}}
+{{- with omittedCSV .}}
+		case {{.}}:
+			// client-only: stays zero on the server
+{{- end}}
+		default:
+			return {{.Alias}}.{{.TypeName}}{}, fmt.Errorf("line=%d key=%q: unknown key", line, key)
+		}
+	}
+{{- range requiredCSV .}}
+	if _, ok := seen[{{quote .}}]; !ok {
+		return {{$.Alias}}.{{$.TypeName}}{}, fmt.Errorf("key %q is required but missing", {{quote .}})
+	}
+{{- end}}
+	return item, nil
+}
+{{end}}`
 
 func parseExpr(field Field, raw string) string {
 	t := strings.TrimPrefix(field.Type, "*")
@@ -1172,6 +1400,12 @@ func fieldRule(field Field) string {
 	}
 	if field.Parser != "" {
 		parts = append(parts, "parser="+field.Parser)
+	}
+	if field.Index != "" {
+		parts = append(parts, "index="+field.Index)
+	}
+	if field.Side != "" {
+		parts = append(parts, "side="+field.Side)
 	}
 	return strings.Join(parts, ";")
 }

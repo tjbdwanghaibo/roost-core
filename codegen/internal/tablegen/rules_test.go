@@ -213,3 +213,28 @@ func TestOneTagDrivesTheGenerationCheckAndTheGeneratedLoader(t *testing.T) {
 		}
 	}
 }
+
+// # 开头的行是注释：表头之前、标题行之间、数据行之间都可以写，读取时忽略；报错的行号是文件里的
+// 行号（注释行也算）。要以 # 开头的值写成带引号的单元格。
+func TestReadCSVRecordsSkipsCommentLines(t *testing.T) {
+	meta := monsterMeta()
+	rows, err := readCSVRecords(writeCSV(t, "# 怪物表\nid,name,level,code\n编号,名字,等级,代号\n# 第一只\n1,slime,3,a\n#2,orc,4,b\n3,imp,2,c\n"), meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0]["name"] != "slime" || rows[1]["name"] != "imp" {
+		t.Fatalf("rows = %#v, want slime and imp only", rows)
+	}
+	tags := Meta{Kind: KindTable, Name: "tag", Key: "Code", Fields: []Field{{Name: "Code", Type: "string", CSV: "code", JSON: "code"}}}
+	rows, err = readCSVRecords(writeCSV(t, "code\n\"#red\"\n#blue\n"), tags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0]["code"] != "#red" {
+		t.Fatalf("rows = %#v, want only the quoted #red", rows)
+	}
+	_, err = readCSVRecords(writeCSV(t, "id,name,level,code\n# 注释\n1,slime,abc,a\n"), meta)
+	if err == nil || !strings.Contains(err.Error(), "row=3 col=level") {
+		t.Fatalf("err = %v, want the file line (3) named", err)
+	}
+}

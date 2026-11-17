@@ -47,8 +47,9 @@ var (
 	Protocol  = Spec{Kind: "protocol", Keys: []string{"group", "handler", "controller", "domain"}}
 	Msg       = Spec{Kind: "msg", Keys: []string{"id", "name", "tags", "handler", "controller", "domain"}}
 	View      = Spec{Kind: "view", Keys: []string{"group"}}
-	Table     = Spec{Kind: "table", Keys: []string{"name", "file", "json", "key"}}
-	Object    = Spec{Kind: "object", Keys: []string{"name", "file", "json"}}
+	// side= 是表所属的端（c 只给客户端、s 只给服务端，缺省两端都要）；layout=kv 是竖排键值写法（只用于 object）。
+	Table  = Spec{Kind: "table", Keys: []string{"name", "file", "json", "key", "side"}}
+	Object = Spec{Kind: "object", Keys: []string{"name", "file", "json", "side", "layout"}}
 	// RPC covers both places the marker goes: service_type / capability on
 	// the interface, affinity / route / reliable on a method. route is both a
 	// flag (the key is the parameter named target) and a key (route=<param>).

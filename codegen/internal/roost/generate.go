@@ -160,8 +160,9 @@ func generatorsFor(m Manifest, force bool) []generator {
 			}
 			return tablegen.Run([]string{"-meta", under(root, tablegen.DefaultMetaDir), "-csv", under(root, "configs/table"), "-json", under(root, "configs/data"), "-force"}, w)
 		}},
-		{Feature: "config", Name: "config-go", Prefixes: []string{"configs/schema/"}, Run: func(root string, w io.Writer) error {
-			return tablegen.Run([]string{"-meta", under(root, tablegen.DefaultMetaDir), "-out", under(root, "configs/generated"), "-force"}, w)
+		// -csv 只用于把 layout=kv 表的 note 列写进生成代码的注释（没有 kv 表时不读 CSV），所以 configs/table 也算它的输入。
+		{Feature: "config", Name: "config-go", Prefixes: []string{"configs/schema/", "configs/table/"}, Run: func(root string, w io.Writer) error {
+			return tablegen.Run([]string{"-meta", under(root, tablegen.DefaultMetaDir), "-csv", under(root, "configs/table"), "-out", under(root, "configs/generated"), "-force"}, w)
 		}},
 		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(root string, w io.Writer) error {
 			return webroute.Run(forceArg([]string{"-dir", under(root, "service")}, force), w)
