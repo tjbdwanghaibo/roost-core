@@ -261,8 +261,9 @@ type RelaySeat struct {
 //	成员数 × { [槽位 4B][在线 1B：1 在线 / 0 离线][账号长度 2B][账号 UTF-8] }
 //	[状态字节：剩下的全部]
 //
-// 来源为 RelayStateSnapshot 时 SnapshotSeq / SnapshotAgeMillis 是那份快照的 seq 与 relay 收到它到现在的毫秒数
-// （新房主据此知道快照落后了多少）；其余来源这两项为 0。整数都是大端。
+// SnapshotSeq 是 relay 存着的最新快照的 seq（没有快照时为 0），不管来源是什么都带上：快照 seq 在房间内跨房主递增，
+// 新房主从它往上接。来源为 RelayStateSnapshot 时 SnapshotAgeMillis 是 relay 收到那份快照到现在的毫秒数（新房主据此
+// 知道快照落后了多少），其余来源为 0。整数都是大端。
 type RelayYouAreHost struct {
 	Epoch             uint64
 	Source            RelayStateSource

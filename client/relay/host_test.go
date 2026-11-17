@@ -68,7 +68,7 @@ func TestTransferHandsTheHandoffToTheNewHost(t *testing.T) {
 	mustRole(t, host, relay.Role{Slot: 1, Epoch: 1})
 	offer := recv(t, b.youAreHost, "you are host")
 	if offer.Epoch != 1 || offer.Source != relay.StateHandoff || string(offer.State) != string(handoff) || offer.StateErr != nil ||
-		offer.SnapshotSeq != 0 || len(offer.Members) != 3 ||
+		offer.SnapshotSeq != 1 || len(offer.Members) != 3 || // relay 带上旧房主存下的快照 seq，新房主从它往上接
 		offer.Members[0] != (relay.Seat{Slot: 1, Account: "xfer-host", Online: true}) || offer.Members[2] != (relay.Seat{Slot: 3, Account: "xfer-m3", Online: true}) {
 		t.Fatalf("offer %+v", offer)
 	}

@@ -337,12 +337,17 @@ func (r *room) pickCandidateLocked() *conn {
 func (r *room) offerLocked(c *conn, now time.Time) {
 	r.candidate = c
 	offer := wire.RelayYouAreHost{Epoch: r.epoch, Members: r.seatsLocked()}
+	// 快照 seq 在房间内跨房主递增：不管这一轮交出的是交接数据还是快照，都带上 relay 存着的最新 seq，
+	// 新房主从它往上接，否则主动转交后新房主的第一份快照会被当成 stale_seq 拒收。
+	if r.snapshot.held {
+		offer.SnapshotSeq = r.snapshot.seq
+	}
 	switch {
 	case r.hasHandoff:
 		offer.Source, offer.State = wire.RelayStateHandoff, r.handoff
 	case r.snapshot.held:
 		age := now.Sub(r.snapshot.at).Milliseconds()
-		offer.Source, offer.State, offer.SnapshotSeq = wire.RelayStateSnapshot, r.snapshot.data, r.snapshot.seq
+		offer.Source, offer.State = wire.RelayStateSnapshot, r.snapshot.data
 		offer.SnapshotAgeMillis = uint32(min(max(age, 0), math.MaxUint32))
 	}
 	c.enqueueControl(wire.RelayOpYouAreHost, c.slot, wire.EncodeRelayYouAreHost(offer))

@@ -61,7 +61,7 @@
   - 房主离开：目录里的房主不变，由 relay 走换 host（方案 §4.6.1）；新房主经 `room.host_changed` 报告回来。lobby 同时清掉他的 `connected`，换完 host 后他不再是房主，席位按没开局的规则让出（已开始的房间也不给主动离开的人留座）。
   - 房间还没被 relay 报告过（房主从没连上）时，房主一离开就关房。
   - 不在房间里的人调 leave 是空操作。
-- **被踢**：房主在 relay 上踢人后，relay 报 `room.member_left`、原因 `kicked`；lobby 把账号记进房间记录的被踢名单 `kicked`、让出它的席位。名单随房间记录一起过期。之后这个账号 join 答 `kicked`，relay 的验权也拒绝它（§5.2），手里没过期的令牌也用不了。lobby 的名单是权威，relay 本地的记录只挡报告到达之前的那一小段时间（方案 §4.4、§6 第 11 条）。
+- **被踢**：房主在 relay 上踢人后，relay 报 `room.member_left`、原因 `kicked`；lobby 把账号记进房间记录的被踢名单 `kicked`、让出它的席位。名单随房间记录一起过期。之后这个账号 join 答 `kicked`，relay 的验权也拒绝它（§5.2），手里没过期的令牌也用不了。lobby 的名单是权威；relay 本地也记一份，房间存续期间有效，同一个 relay 上被踢的人再连直接收到 `Closed{kicked}`，relay 重启后由 lobby 的名单挡住（`Closed{lobby_rejected}`）（方案 §4.4、§6 第 11 条）。
 - **令牌角色**：按 Redis 里的当前房主填，房主拿 `host`，其他人拿 `member`。lobby 与 relay 短暂不一致时以 relay 为准：房间建好以后，relay 不信令牌里的角色（方案 §4.6.5）。
 
 ### 2.2 CORS

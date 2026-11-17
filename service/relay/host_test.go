@@ -151,6 +151,25 @@ func TestTransferHandsTheRoomToTheTarget(t *testing.T) {
 }
 
 // 转交的目标不在线、是自己、发送者不是房主：拒收，房间不变。
+// 主动转交前房主推过快照：you_are_host 的来源是交接数据，但 SnapshotSeq 仍是 relay 存着的最新 seq；
+// 新房主从它往上接，不大于它的快照被拒（stale_seq），更大的收下。
+func TestTransferCarriesTheStoredSnapshotSeq(t *testing.T) {
+	h := newHarness(t, false, nil)
+	host, _, b := h.room3("room-transfer-seq")
+
+	host.snapshot(7, []byte("snap-7"))
+	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 3, []byte("handoff"))
+	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
+	offer := b.expectYouAreHost(1)
+	if offer.Source != wire.RelayStateHandoff || string(offer.State) != "handoff" || offer.SnapshotSeq != 7 {
+		t.Fatalf("offer %+v", offer)
+	}
+	b.ready(1)
+	b.expectHostChanged(1, 3, "acc-b")
+	b.snapshot(7, []byte("stale"))
+	b.expectRejected(wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectStaleSeq, Seq: 7})
+}
+
 func TestTransferRejections(t *testing.T) {
 	h := newHarness(t, false, nil)
 	host, a, _ := h.room3("room-transfer-bad")
