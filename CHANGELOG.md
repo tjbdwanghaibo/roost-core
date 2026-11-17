@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+- **`roost module verify` 两项行为修正**（维护者 2026-11-17，R9 §9.5；只对新安装的模块）：
+  - **模块场景先装工程的配置表**：`roost module add` 会在每个放了模块测试文件（包括联动测试文件）的包里写一份公共夹具 `roost_config_data_test.go`。
+    - 夹具的 `init` 按 game 进程正式启动的方式装载工程的 `configs/data`。
+    - 包里已有这个文件就不动；写出后归工程所有。
+    - 修复前，工程在 `EnterFirst` 监听里发道具表里的 bag 道具时，enter 的 29 条场景有 13 条答 `bag_item_invalid`。
+    - 卡牌、放置夹具里的绕法已删掉。
+  - **只统计模块自带文件里的用例**：
+    - 用例名从 `roost.yaml` 记下的模块文件里读出（联动读 `with.<b>`），与清单的 `run` 取交集，拼成精确的 `-run`。
+    - 工程里同前缀的测试不再被运行或计数。
+    - 回合 PvP 去掉了构建标签 `turnreal`。
+  - 各模块条数不变。
+  - 已有工程不会补写夹具，要手抄一份。
 - **roost-genre compose**（2026-11-17）：
   - **Unity 接入**（第 5A 步第 7 项）改为缺省走托管路线（`GameClient` + `RoostClientDriver`）；只有需要原生网络内核，或要与 C++ 客户端行为一致时，才走原生路线。
   - **协议代码**改为从 `client_export` 导出目录取，客户端用 `roost client sync` 同步，不再手跑 protoc。

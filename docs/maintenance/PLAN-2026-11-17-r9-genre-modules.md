@@ -336,6 +336,8 @@ genre-common 只服务 11～13 类（回合 PvP、合作、经营）。
 
 ### 9.5 试点发现的模块缺口（按 Q1 只记录，不在 R9 改模块）
 
+**收尾时维护者的决定（2026-11-17）**：enter 的场景不装工程配置表、`module verify` 按前缀计数两条**已修**（`36ae54c2`，证据 [module-verify-20261117](evidence/module-verify-20261117/README.md)）；SLG 恢复永久到账回执（`34147a1e`）；其余语义变化按现状接受（KNOWN-LIMITS 一“13 类玩法是模块组合”）。
+
 - **room 没有“代际 + 连接 + 在线”一并核对的公开入口**：**已补，1b38c2b8**（维护者 Q1 B）。room 组件与 `view.Room` 新增 `Authorize(playerID, epoch, connection) (*db.RoomSeat, error)`（先 `Member`，再要求连接是席位认下的那条且在线，否则 `room_stale_epoch`），turn 删掉私有 `authorize` 改调它；塔防 `towerMember` 的新命令经它，已有回执的重放与查回执仍是 `Member` + 连接核对（不要求在线）。批 1 的玩法新命令直接用 `m.Room().Authorize`，有“重放不要求在线”的照塔防分两支。[证据](evidence/room-authorize-20261117/README.md)。
 
 - **（1C 卡牌）enter 的 `module verify` 不装工程配置表，EnterFirst 监听里发 bag 道具会让 enter 的 13 条场景答 `bag_item_invalid`**（Q2 B 把次要货币做成 bag 道具后，建档就要发；放置的 Gems 也可能碰到，可能满足 B 条件）：卡牌在 bag 的规则入口 `items.go` 里认下 2001 / 2002 绕过，只记录、不改模块；另：gacha 只扣 wallet 金币（README“不做付费”），卡牌抽卡因此从扣钻石改为扣金币，钻石只剩初始与首胜任务奖励——“gacha 换扣的货币”与 Q2 A（wallet 多币种）是同一件事。[证据](evidence/r9-1c-20261117/README.md)。
