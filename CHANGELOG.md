@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.54.0**（2026-11-18）：生成的 bootstrap 把模块配置声明交给 `wiring/modulehost`（R5），声明了 websocket 的工程读 `trusted_proxies`，开房间工程装配 `wiring/lobby` / `wiring/relay`，都要 v1.54.0；framework-compat 的 minimum 一栏随之改为 v1.54.0。
+
 ## [v1.54.0] - 2026-11-18
 
 - **性能：v1.54.0 发版前的压缩测量**（2026-11-18，维护者“性能测量先压缩”）：新增 `BenchmarkSnapshotCompression`（`client/relay`，三种载荷 × 1～256KiB）。deflate 把房间状态 JSON 压到约 0.20、二进制约 0.33，256KiB 一次 0.8～1.3 ms，每次压缩固定约 1 MB 分配。M-2 移动每拍 12 次分配、约 940 B。机器人同秒起跑：100 人 100 / 100（p95 24.8s 超门槛），200 人 80 / 200（AddExp sync timeout 108 次）。非空闲机，爬坡与 M-1、M-3～M-11 没跑。[证据](docs/maintenance/evidence/perf-compressed-20261118/README.md)
