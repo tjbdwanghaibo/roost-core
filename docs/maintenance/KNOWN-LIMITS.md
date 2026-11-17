@@ -381,7 +381,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 ### 生成器、配置与模块
 
-- **模块配置（D19 B，2026-11-17）**：模块清单 `config:` 指向模块包里带 `config` tag 的结构体，安装器写进宿主服务的配置段，进程启动时装载一次（`wiring/modulehost` 的 `ConfigOf` / `Value[T]`）。① `roost config check --keys-only` 不认模块声明的键：模块键的错值由编译出的进程 `--check-config` 报，`roost config check` 退出 3（与业务服务自己声明的键相同）。② 装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s。③ 清单指向 Go 结构体，不能只写 YAML 声明键。④ 仍是代码的规则：leaderboard 的榜范围（Scope）与按日历换周期、stamina 随玩家变化的规则、dungeon 的 `LedgerPruneGraceSeconds`；portal 的 `portal.servers` 只声明，入口仍在 Start 里自己读。⑤ mailbox 宽限下限 2m（启动时允许比高水位慢 1 分钟，留余量）。[证据](evidence/r5-module-config-d19-20261117/README.md)
+- **模块配置（D19 B，2026-11-17）**：模块清单 `config:` 指向模块包里带 `config` tag 的结构体，安装器写进宿主服务的配置段，进程启动时装载一次（`wiring/modulehost` 的 `ConfigOf` / `Value[T]`）。① `roost config check --keys-only` 不认模块声明的键：模块键的错值由编译出的进程 `--check-config` 报，`roost config check` 退出 3（与业务服务自己声明的键相同）。② 装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s。③ 清单指向 Go 结构体，不能只写 YAML 声明键。④ 仍是代码的规则：leaderboard 的榜范围（Scope）与按日历换周期、stamina 随玩家变化的规则、dungeon 的 `LedgerPruneGraceSeconds`；portal 的 `portal.servers` 只声明，入口仍在 Start 里自己读。⑤ mailbox 宽限下限 2m（启动时允许比高水位慢 1 分钟，留余量）。 ⑥ 模块的场景测试与 `roost module verify` 在模块声明的缺省配置上跑（`modulehost.Value` 未装载时返回缺省），不读工程 yaml：工程只改配置不改代码时，模块自带的“钉住缺省值”的用例照样通过，也不会提醒配置与之不同；工程自己要钉配置值时，在用例里装载配置段（见 demo 的 `leaderboard_board_test.go`）。生成 demo 的包测试只由 CI 的生成工程测试覆盖，codegen 的 `TestDemo*` 只生成、编译、vet。[证据](evidence/r5-module-config-d19-20261117/README.md)
 <a id="生成器配置与工具"></a>
 #### 生成器、配置与工具
 
