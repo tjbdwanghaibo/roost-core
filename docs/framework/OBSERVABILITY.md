@@ -635,6 +635,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `player_tcp_write_error_total` | 写 socket 失败次数（写协程、读循环直写、Gate `WritePacket`）：写超时、半帧、reset，以及关闭连接时被打断的那次写；连接已关闭后被拒的写不计 |
 | `player_tcp_write_deadline_total{deadline}` | 上一项里因写期限到期而关闭连接的次数，按到期的期限分（2026-11-14 起）：`write_timeout` 是连接自己的写期限（缺省 5s；嵌入 TCP 的写协程只用它），`send_budget` 是调用方更早的期限——独立 Gate 的 `WritePacket` 传入的单帧发送预算（缺省不超过 `outbound.send_timeout` 250ms），写了部分字节后到期。一个字节都没写出就被调用方期限切断的写不关连接、不计。关闭原因的错误文本同样写明是哪一个期限 |
 | `player_tcp_websocket_rejected_total{reason}` | WebSocket 接入（`player_access.*.websocket`）拒绝升级的次数：`origin` 是带 Origin 但不在 `allowed_origins` 白名单里（白名单为空时拒绝所有带 Origin 的请求），`upgrade` 是其余升级失败（路径不对、不是 WebSocket 握手等）。不计入 `player_tcp_connection_rejected_total`（2026-11-17 起） |
+| `player_tcp_websocket_forwarded_fallback_total{reason}` | WebSocket 连接的直连对端是可信代理（`websocket.trusted_proxies`），却从 `X-Forwarded-For` 取不出客户端地址、退回按代理地址计数的次数（2026-11-17 起）：`missing` 头缺失或为空，`invalid` 剥到的某一项不是 IP 地址，`all_trusted` 每一项都在可信列表里。持续增长多半是负载均衡没加这个头，或列表把客户端网段也写进去了；见 [GATEWAY §6“部署注意”](GATEWAY.md#6-websocket-接入) |
 
 一个停读连接因溢出被关闭时，`overflow_total`、`push_closed_total`、`write_error_total` 三项通常各至少加一；写协程因 `write_timeout` 关闭的连接只保证 `write_error_total` 加一。见 [GATEWAY §4](GATEWAY.md#嵌入-tcp-的出站)。
 

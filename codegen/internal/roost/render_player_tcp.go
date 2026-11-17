@@ -141,14 +141,19 @@ func renderPlayerTCPServer(manifest Manifest) string {
 }
 
 // playerTCPWebSocketEdits 是 access.player.transports 含 websocket 时对 server_gen.go 的增量：configFromViper 把
-// player_access.tcp.websocket 透传进 gateway.TCPConfig.WebSocket（嵌入 TCP 与 Game Ingress 共用 configFromViper）。
+// player_access.tcp.websocket 透传进 gateway.TCPConfig.WebSocket（嵌入 TCP 与 Game Ingress 共用 configFromViper），
+// tcpConfig 多一个 ValidateConfig，启动前与 --check-config 按运行时同一条规则检查这一段（renderPlayerWebSocketValidate）。
 var playerTCPWebSocketEdits = []struct{ anchor, replace string }{
 	{
 		anchor: "\t\tOutboundResidentBytes: tcp.OutboundResidentBytes,\n\t}\n",
 		replace: "\t\tOutboundResidentBytes: tcp.OutboundResidentBytes,\n" +
 			"\t\t// access.player.transports 含 websocket：同一套会话另开 WebSocket 监听（addr 为空不开）。\n" +
-			"\t\tWebSocket: gateway.WebSocketConfig{Addr: tcp.WebSocket.Addr, Path: tcp.WebSocket.Path, AllowedOrigins: tcp.WebSocket.AllowedOrigins},\n" +
+			"\t\tWebSocket: " + renderPlayerWebSocketConfig("tcp.WebSocket") + ",\n" +
 			"\t}\n",
+	},
+	{
+		anchor:  "func defaultConfig() gateway.TCPConfig { return gateway.DefaultTCPConfig() }\n",
+		replace: renderPlayerWebSocketValidate("tcpConfig", "TCP.WebSocket", "player_access.tcp.websocket.") + "\nfunc defaultConfig() gateway.TCPConfig { return gateway.DefaultTCPConfig() }\n",
 	},
 }
 

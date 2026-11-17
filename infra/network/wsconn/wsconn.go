@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -53,9 +54,124 @@ type Config struct {
 	// Rejected 在一个升级请求被拒时调用（Origin 不允许时 err 包裹 ErrOriginRejected；不是合法的 WebSocket 升级）；
 	// nil 时不通知。回调在请求的处理协程里执行，要快、不能阻塞（计数、记日志）。
 	Rejected func(request *http.Request, err error)
+	// TrustedProxies 是可信的前置代理（七层负载均衡）的地址，每项是 CIDR（10.0.0.0/8）或单个地址（10.0.0.5）。
+	// 维护者 2026-11-17 定（交接 C3 选项 A）：
+	//   - 为空（缺省）：完全不看请求头，Conn.RemoteAddr 是 TCP 对端。否则任何客户端都能自己带一个头冒充别的地址；
+	//   - 直连对端不在列表里：不看请求头，用对端地址；
+	//   - 直连对端在列表里：X-Forwarded-For 的各项从右往左看，跳过在列表里的，第一个不在列表里的就是客户端地址
+	//     （最左边是客户端自己能填的，不能取）；取不出时退回对端地址并经 ForwardedFallback 报告；
+	//   - 只认 X-Forwarded-For，Forwarded（RFC 7239）与 X-Real-IP 不看。
+	// 全零前缀（0.0.0.0/0、::/0）等于相信任何人自己填的头，Validate 拒绝；IPv4 映射的 IPv6 前缀也拒绝（写成 IPv4）。
+	TrustedProxies []string
+	// ForwardedFallback 在直连对端是可信代理、却从 X-Forwarded-For 取不出客户端地址、退回对端地址时调用，reason 是
+	// FallbackMissing / FallbackInvalid / FallbackAllTrusted 之一（低基数，可直接做指标标签）；nil 时不通知。
+	// 回调在请求的处理协程里执行，要快、不能阻塞。
+	ForwardedFallback func(request *http.Request, reason string)
 }
 
-// Validate 检查配置；AllowedOrigins 的写法错误按项列出。
+// ForwardedFallback 的原因。
+const (
+	// FallbackMissing：没有 X-Forwarded-For，或它只有空白。
+	FallbackMissing = "missing"
+	// FallbackInvalid：从右往左剥到的某一项不是 IP 地址（空项、"unknown"、主机名等）。
+	FallbackInvalid = "invalid"
+	// FallbackAllTrusted：每一项都在可信列表里，没有不可信的客户端地址可取。
+	FallbackAllTrusted = "all_trusted"
+)
+
+// forwardedForHeader 是唯一读的转发头（Config.TrustedProxies）。
+const forwardedForHeader = "X-Forwarded-For"
+
+// ValidateTrustedProxies 检查可信代理列表的每一项（写法见 Config.TrustedProxies），错误按项列出。
+func ValidateTrustedProxies(entries []string) error {
+	_, err := parseTrustedProxies(entries)
+	return err
+}
+
+// parseTrustedProxies 把列表解析成前缀；单个地址按全长前缀（/32、/128）。
+func parseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	var problems []error
+	for _, entry := range entries {
+		if strings.TrimSpace(entry) == "" || strings.ContainsAny(entry, " \t\r\n") {
+			problems = append(problems, fmt.Errorf("wsconn: trusted proxy %q is empty or contains space", entry))
+			continue
+		}
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil && !strings.Contains(entry, "/") {
+			var addr netip.Addr
+			if addr, err = netip.ParseAddr(entry); err == nil {
+				prefix = netip.PrefixFrom(addr, addr.BitLen())
+			}
+		}
+		switch {
+		case err != nil:
+			problems = append(problems, fmt.Errorf("wsconn: trusted proxy %q is not a CIDR or an IP address: %w", entry, err))
+		case prefix.Bits() == 0:
+			problems = append(problems, fmt.Errorf("wsconn: trusted proxy %q trusts every address, so any client could forge X-Forwarded-For; list the load balancers' own addresses", entry))
+		case prefix.Addr().Is4In6():
+			problems = append(problems, fmt.Errorf("wsconn: trusted proxy %q is an IPv4-mapped IPv6 prefix; write it as IPv4", entry))
+		default:
+			prefixes = append(prefixes, prefix.Masked())
+		}
+	}
+	return prefixes, errors.Join(problems...)
+}
+
+// forwardedClient 按 Config.TrustedProxies 的规则决定一个升级请求的客户端地址。client 无效（!IsValid）表示用 TCP
+// 对端地址；fallback 非空表示对端是可信代理、却取不出客户端地址（Config.ForwardedFallback 的原因）。
+func forwardedClient(request *http.Request, trusted []netip.Prefix) (client netip.Addr, fallback string) {
+	if len(trusted) == 0 {
+		return netip.Addr{}, "" // 规则 1：没配可信代理，请求头一律不看
+	}
+	peer, err := netip.ParseAddrPort(request.RemoteAddr)
+	if err != nil || !isTrusted(peer.Addr().Unmap(), trusted) {
+		return netip.Addr{}, "" // 规则 2：对端不可信（或不是 IP 对端），不看请求头
+	}
+	var hops []string
+	for _, value := range request.Header.Values(forwardedForHeader) {
+		hops = append(hops, strings.Split(value, ",")...)
+	}
+	if strings.TrimSpace(strings.Join(hops, "")) == "" {
+		return netip.Addr{}, FallbackMissing
+	}
+	// 规则 3：从右往左剥掉可信代理自己追加的项，第一个不可信的就是客户端。多行头按出现顺序拼接（RFC 7230 §3.2.2）。
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, ok := parseHop(strings.TrimSpace(hops[i]))
+		if !ok {
+			return netip.Addr{}, FallbackInvalid
+		}
+		if !isTrusted(hop, trusted) {
+			return hop, ""
+		}
+	}
+	return netip.Addr{}, FallbackAllTrusted
+}
+
+// parseHop 解析 X-Forwarded-For 的一项：IP 地址，或带端口的 ip:port / [ipv6]:port（个别代理会带端口）。IPv4 映射的
+// IPv6 地址还原成 IPv4，与 TCP 对端的写法一致，按 IP 计数时同一个客户端只有一个键。
+func parseHop(value string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		addrPort, portErr := netip.ParseAddrPort(value)
+		if portErr != nil {
+			return netip.Addr{}, false
+		}
+		addr = addrPort.Addr()
+	}
+	return addr.Unmap().WithZone(""), true
+}
+
+func isTrusted(addr netip.Addr, trusted []netip.Prefix) bool {
+	for _, prefix := range trusted {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate 检查配置；AllowedOrigins、TrustedProxies 的写法错误按项列出。
 func (config Config) Validate() error {
 	var problems []error
 	if config.MaxMessageBytes <= 0 {
@@ -64,7 +180,7 @@ func (config Config) Validate() error {
 	if config.HandshakeTimeout <= 0 {
 		problems = append(problems, fmt.Errorf("wsconn: handshake timeout %v must be positive", config.HandshakeTimeout))
 	}
-	problems = append(problems, ValidatePath(config.Path), ValidateOrigins(config.AllowedOrigins))
+	problems = append(problems, ValidatePath(config.Path), ValidateOrigins(config.AllowedOrigins), ValidateTrustedProxies(config.TrustedProxies))
 	return errors.Join(problems...)
 }
 
@@ -119,8 +235,9 @@ var ErrOriginRejected = errors.New("wsconn: origin not allowed")
 // Listener 是一个 net.Listener：Accept 交出经 HTTP 升级、包成 *Conn 的 WebSocket 连接。它本身也是
 // http.Handler（ServeHTTP 做升级）。升级成功的连接在 ServeHTTP 里等调用方 Accept，最多等 HandshakeTimeout。
 type Listener struct {
-	config Config
-	addr   net.Addr
+	config  Config
+	addr    net.Addr
+	trusted []netip.Prefix // config.TrustedProxies 解析后的前缀
 	// accepted 不带缓冲：ServeHTTP 交出连接的那一刻，调用方的 Accept 正在取，连接的所有权随之转给调用方。
 	accepted chan *Conn
 	done     chan struct{}
@@ -143,10 +260,11 @@ func NewListener(config Config, addr net.Addr) (*Listener, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	trusted, _ := parseTrustedProxies(config.TrustedProxies) // Validate 已检查
 	if addr == nil {
 		addr = websocketAddr{}
 	}
-	return &Listener{config: config, addr: addr, accepted: make(chan *Conn), done: make(chan struct{})}, nil
+	return &Listener{config: config, addr: addr, trusted: trusted, accepted: make(chan *Conn), done: make(chan struct{})}, nil
 }
 
 // Listen 在 address 上起一个只接受 WebSocket 升级的 HTTP 服务（路径 config.Path，精确匹配）。
@@ -188,7 +306,8 @@ func Listen(address string, config Config) (*Listener, error) {
 	return listener, nil
 }
 
-// ServeHTTP 检查 Origin、完成升级，把连接交给 Accept。被拒的请求得到 HTTP 错误应答（403 / 426 等），不会出现在 Accept 里。
+// ServeHTTP 检查 Origin、按可信代理规则定出客户端地址、完成升级，把连接交给 Accept。被拒的请求得到 HTTP 错误应答
+// （403 / 426 等），不会出现在 Accept 里。
 func (listener *Listener) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	listener.mu.Lock()
 	if listener.closed {
@@ -212,6 +331,13 @@ func (listener *Listener) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	conn := newConn(socket, listener.config.MaxMessageBytes)
+	client, fallback := forwardedClient(request, listener.trusted)
+	if client.IsValid() {
+		// 客户端端口不在 X-Forwarded-For 里，写 0；按 IP 计数与日志只用主机部分。
+		conn.client = net.TCPAddrFromAddrPort(netip.AddrPortFrom(client, 0))
+	} else if fallback != "" && listener.config.ForwardedFallback != nil {
+		listener.config.ForwardedFallback(request, fallback)
+	}
 	timer := time.NewTimer(listener.config.HandshakeTimeout)
 	defer timer.Stop()
 	select {
@@ -280,10 +406,14 @@ func (websocketAddr) String() string  { return "websocket" }
 //     期限在读写开始之前就已过去时什么也不做，连接仍可用，错误不包裹 net.ErrClosed。
 //   - Close 立即关闭底层 socket（websocket.Conn.CloseNow），打断阻塞中的读写，不做 WebSocket 关闭握手、不等对端：
 //     与关闭 TCP socket 一样，浏览器看到 1006。会话的慢连接断开与停机依赖这一点。
-//   - RemoteAddr 是 TCP 对端地址；前置七层负载均衡时是负载均衡的地址。
+//   - RemoteAddr 是客户端地址：直连对端是 Config.TrustedProxies 里的代理时，是从 X-Forwarded-For 取出的地址
+//     （端口为 0）；否则（没配可信代理、对端不可信、取不出时退回）是 TCP 对端地址。PeerAddr 总是 TCP 对端地址，
+//     日志里两者一起写，经负载均衡时能看出是哪个代理转来的。
 type Conn struct {
 	net.Conn // websocket.NetConn
 	socket   *websocket.Conn
+	// client 是 RemoteAddr 报告的转发客户端地址；nil 表示用 TCP 对端地址。升级时写一次，之后只读。
+	client net.Addr
 
 	readDeadline  atomic.Int64 // UnixNano；0 表示没有期限
 	writeDeadline atomic.Int64
@@ -298,6 +428,17 @@ func newConn(socket *websocket.Conn, maxMessageBytes int64) *Conn {
 	socket.SetReadLimit(maxMessageBytes)
 	return &Conn{Conn: stream, socket: socket}
 }
+
+// RemoteAddr 是客户端地址（见类型注释）。
+func (conn *Conn) RemoteAddr() net.Addr {
+	if conn.client != nil {
+		return conn.client
+	}
+	return conn.Conn.RemoteAddr()
+}
+
+// PeerAddr 是 TCP 对端地址：前置七层负载均衡时是负载均衡的地址。
+func (conn *Conn) PeerAddr() net.Addr { return conn.Conn.RemoteAddr() }
 
 func (conn *Conn) Read(buffer []byte) (int, error) {
 	n, err := conn.Conn.Read(buffer)

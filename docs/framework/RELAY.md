@@ -230,6 +230,8 @@ relay:
 
 WebSocket 单条消息上限取客户端可能发来的最大一帧（`service/relay.Config.MaxFrameBytes`，见第 4 节），升级请求的期限取 `auth_timeout`。TLS（wss）由前置负载均衡终结。
 
+relay **没有按 IP 的连接限额**，也不读 `X-Forwarded-For`：WebSocket 监听不开放 `wsconn.Config.TrustedProxies`（维护者 2026-11-17：这一轮不加按 IP 限额），连接的对端地址就是 TCP 对端，经七层负载均衡时是负载均衡的地址。保护靠 lobby 签发的令牌（`auth_timeout` 内不出示合法令牌就断开）、每连接帧率（`frames_per_second`）与房间人数上限。Gate 的可信代理规则见 [GATEWAY §6“部署注意”](GATEWAY.md#6-websocket-接入)。
+
 ## 7. 本期限制与后续
 
 - 语音走 TCP / WebSocket，丢一个包会卡住后面的包；需要时以后加 UDP 通道。

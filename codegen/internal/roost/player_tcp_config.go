@@ -83,6 +83,27 @@ type playerWebSocketDeclaration struct {
 	Addr           string `config:"addr" help:"WebSocket 监听地址 host:port；空串不开。浏览器经它连接，每条二进制消息装一个 RS v2 帧，握手、票据、限额与 TCP 相同；TLS 由前置负载均衡终结（wss）"`
 	Path           string `config:"path" help:"接受 WebSocket 升级的 HTTP 路径（精确匹配）；不写取 /ws"`
 	AllowedOrigins string `config:"allowed_origins" help:"允许的浏览器页面来源，逗号分隔（game.example.com、https://*.cdn.example.com）；为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行"`
+	TrustedProxies string `config:"trusted_proxies" help:"可信的前置七层负载均衡，逗号分隔的 CIDR 或单个地址（10.0.0.0/8, 192.168.1.10）；为空时不读 X-Forwarded-For，max_connections_per_ip 按 TCP 对端（负载均衡）计数。列出后，对端在列表里的连接按 X-Forwarded-For 从右往左第一个不可信的地址计数与鉴权；取不出时退回对端地址。0.0.0.0/0、::/0 被拒（等于让任何客户端伪造地址）"`
+}
+
+// renderPlayerWebSocketConfig 是把生成的配置声明里 websocket 段（selector，如 tcp.WebSocket）透传成
+// gateway.WebSocketConfig 的表达式：Mod 读配置与 ValidateConfig 用同一份。
+func renderPlayerWebSocketConfig(selector string) string {
+	return fmt.Sprintf("gateway.WebSocketConfig{Addr: %[1]s.Addr, Path: %[1]s.Path, AllowedOrigins: %[1]s.AllowedOrigins, TrustedProxies: %[1]s.TrustedProxies}", selector)
+}
+
+// renderPlayerWebSocketValidate 是声明了 websocket 时生成的配置类型（typeName）的 ValidateConfig：按启动时的同一条规则
+// （gateway.WebSocketConfig.Validate，规则本身在 wsconn）检查 websocket 段。App 在任何 Mod Init 之前、进程的
+// --check-config、roost config check 与 doctor 的 config-check 都经声明的 Decode 调它，所以 trusted_proxies 写成
+// 0.0.0.0/0 这类值在启动前就被拒，并点名本段的键。生成器自己不 import 运行时（dependency_boundary_test），只能这样把规则交给进程。
+func renderPlayerWebSocketValidate(typeName, selector, section string) string {
+	return fmt.Sprintf(`
+// ValidateConfig 按启动时的同一条规则检查 websocket 段（gateway.WebSocketConfig.Validate）：App 启动前、--check-config、
+// roost config check 与 doctor 的 config-check 都经它拒绝写错的值（例如 trusted_proxies 写成 0.0.0.0/0）。
+func (c *%s) ValidateConfig(bool) error {
+	return %s.Validate(%q)
+}
+`, typeName, renderPlayerWebSocketConfig("c."+selector), section)
 }
 
 // renderPlayerWebSocketGuide 是声明了 websocket 传输时接在 docs/PLAYER_ACCESS_TCP.zh-CN.md 后面的一节。
@@ -94,9 +115,9 @@ func renderPlayerWebSocketGuide(m Manifest) string {
 
 本工程声明了 websocket 传输（roost.yaml 的 access.player.transports）：浏览器经 WebSocket 连同一套玩家会话，每条二进制消息装一个 RS v2 帧，握手、票据、连接代号、路由、出站预算与 TCP 完全相同（roost-core 的 docs/framework/GATEWAY.md §6）。
 
-- 配置在 %[1]s.{addr,path,allowed_origins}。生成器不写这些键：%[2]s 写上地址才开，path 不写取 /ws；allowed_origins 是逗号分隔的允许来源，为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行。
+- 配置在 %[1]s.{addr,path,allowed_origins,trusted_proxies}。生成器不写这些键：%[2]s 写上地址才开，path 不写取 /ws；allowed_origins 是逗号分隔的允许来源，为空时拒绝所有带 Origin 头的浏览器请求（含同源），不带 Origin 的原生客户端总是放行。
 - 部署模板按约定的 %[3]d 发布这个端口（k8s 的 player-ws 容器与 Service 端口、生产 compose 的 ports、docker 示例的 -p）：开 WebSocket 时写 %[2]s: 0.0.0.0:%[3]d，换端口时同步改部署模板、负载均衡与防火墙。
-- TLS（wss）由前置负载均衡终结；七层负载均衡后 max_connections_per_ip 按负载均衡的地址计数，要调大。
+- TLS（wss）由前置负载均衡终结。七层负载均衡后连接的对端是负载均衡：%[1]s.trusted_proxies 写上负载均衡自己的地址（逗号分隔的 CIDR 或单个地址，如 10.0.0.0/8），max_connections_per_ip 与鉴权拿到的地址就是 X-Forwarded-For 从右往左第一个不在列表里的地址；不写时不读这个头，全部 WebSocket 连接按负载均衡一个地址计数，要把上限调大。只认 X-Forwarded-For（Forwarded、X-Real-IP 不读），负载均衡要追加而不是原样转发客户端带来的这个头。0.0.0.0/0、::/0 启动与 roost config check / doctor 都拒绝：那等于让任何客户端伪造地址。对端可信却取不出地址的连接按负载均衡的地址计数，计 player_tcp_websocket_forwarded_fallback_total{reason}。
 - 同一台机器上一起运行的服务，%[2]s 参与 doctor 的端口冲突检查（config-across-services）；没写地址时不参与。
 - 没有声明 websocket 的工程写了 websocket 的键，roost config check 与 doctor 报失败：没有任何进程读它们。
 `, section, key, playerWebSocketPort)

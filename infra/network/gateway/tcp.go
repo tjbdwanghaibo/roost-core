@@ -226,6 +226,7 @@ func (server *TCPServer) webSocketConfig() wsconn.Config {
 	return wsconn.Config{
 		Path:             server.config.WebSocket.path(),
 		AllowedOrigins:   server.config.WebSocket.Origins(),
+		TrustedProxies:   server.config.WebSocket.Proxies(),
 		MaxMessageBytes:  int64(server.config.MaxPayloadBytes) + headerSize,
 		HandshakeTimeout: server.config.HandshakeTimeout,
 		Rejected: func(_ *http.Request, err error) {
@@ -234,6 +235,12 @@ func (server *TCPServer) webSocketConfig() wsconn.Config {
 				reason = "origin"
 			}
 			metrics.IncCounter("player_tcp_websocket_rejected_total", map[string]string{"reason": reason}, 1)
+		},
+		// 对端是可信代理却取不出客户端地址：这条连接按代理的地址计数（更严）。持续增长多半是负载均衡没加 X-Forwarded-For。
+		ForwardedFallback: func(request *http.Request, reason string) {
+			metrics.IncCounter("player_tcp_websocket_forwarded_fallback_total", map[string]string{"reason": reason}, 1)
+			slog.Debug("player websocket: trusted proxy sent no usable X-Forwarded-For; counting the connection on the proxy's address",
+				"peer", request.RemoteAddr, "reason", reason)
 		},
 	}
 }
@@ -330,11 +337,15 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 				_ = connection.Close()
 				return
 			}
+			// 按 IP 计数的键是客户端地址：WebSocket 连接经可信代理时是 X-Forwarded-For 取出的地址（wsconn.Conn.RemoteAddr）。
 			host := remoteHost(connection.RemoteAddr())
 			if server.ipConnections[host] >= server.config.MaxConnectionsPerIP {
 				server.mu.Unlock()
 				<-server.connectionSlots
 				metrics.IncCounter("player_tcp_connection_rejected_total", map[string]string{"reason": "per_ip"}, 1)
+				// 客户端地址与 TCP 对端地址一起写：经负载均衡时看得出是哪个代理转来的哪个客户端。
+				slog.Debug("player tcp connection rejected: per-IP connection limit reached",
+					"client", host, "peer", peerAddr(connection), "limit", server.config.MaxConnectionsPerIP)
 				_ = connection.Close()
 				continue
 			}
@@ -846,6 +857,19 @@ func (server *TCPServer) closeSessions(playerID int64, reason error) int {
 		}
 	}
 	return closed
+}
+
+// peerAddr 是连接的 TCP 对端地址（日志用）：WebSocket 连接（wsconn.Conn）的 RemoteAddr 可能是转发的客户端地址，
+// 对端另由 PeerAddr 给出；其余连接两者相同。
+func peerAddr(connection net.Conn) string {
+	address := connection.RemoteAddr()
+	if forwarded, ok := connection.(interface{ PeerAddr() net.Addr }); ok {
+		address = forwarded.PeerAddr()
+	}
+	if address == nil {
+		return "unknown"
+	}
+	return address.String()
 }
 
 func remoteHost(address net.Addr) string {

@@ -123,7 +123,8 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 - `wsconn.Listen(address, Config) (*Listener, error)`：自己起一个 HTTP 服务，只在 `Config.Path` 上接受升级（精确匹配，别的路径 404）。
 - `wsconn.NewListener(Config, addr) (*Listener, error)`：不监听端口，`*Listener` 本身是 `http.Handler`，挂到调用方已有的 HTTP 服务上（路径由调用方的路由决定）。
 - `*Listener` 是 `net.Listener`：`Accept` 交出升级好的 `*wsconn.Conn`（`net.Conn`，内部是 `websocket.NetConn(ctx, conn, websocket.MessageBinary)`）；`Close` 之后 `Accept` 返回包裹 `net.ErrClosed` 的错误，新的升级请求得到 503，已交出的连接由调用方关闭。升级好却在 `HandshakeTimeout` 内没人 `Accept` 的连接被关闭。
-- `Config`：`Path`、`AllowedOrigins`、`MaxMessageBytes`（单条消息上限，必须为正）、`HandshakeTimeout`（升级请求的读写期限与等 `Accept` 的期限）、`Rejected`（升级被拒的回调，计数用）。
+- `Config`：`Path`、`AllowedOrigins`、`MaxMessageBytes`（单条消息上限，必须为正）、`HandshakeTimeout`（升级请求的读写期限与等 `Accept` 的期限）、`Rejected`（升级被拒的回调，计数用）、`TrustedProxies` 与 `ForwardedFallback`（七层负载均衡后的客户端地址，见下面“部署注意”）。
+- `(*Conn).RemoteAddr()` 是客户端地址：直连对端是可信代理时是从 `X-Forwarded-For` 取出的地址（端口为 0），否则是 TCP 对端；`(*Conn).PeerAddr()` 总是 TCP 对端。
 - `(*Conn).WriteMessage(parts ...[]byte)`：各段拼成恰好一条二进制消息（多段时复制进一块缓冲，NetConn 没有分段写一条消息的入口）。
 
 **接进 TCPServer**：`TCPConfig.WebSocket.Addr` 非空时，`TCPServer.Start` 另开 `wsconn.Listen`，升级好的连接进**同一个** `acceptLoop`——连接上限、按 IP 上限、握手槽、`serveConnection`、会话登记、`Stop` 的排空都不分来源。唯一按连接类型分支的地方是写一帧（`writeFrameBytes`）：TCP 用 writev，WebSocket 连接用 `WriteMessage` 把帧头与载荷写成一条消息（`net.Buffers` 在非 TCP 连接上逐段 `Write`，会拆成两条）。`TCPServer.WebSocketAddr()`、`wiring/gate.GateMod.WebSocketAddr()` 报告实际地址。
@@ -138,16 +139,26 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 
 **Origin**：不带 `Origin` 头的请求（原生客户端、工具）总是放行，身份仍由首帧票据认证。带 `Origin` 的请求必须匹配 `allowed_origins` 的一项，否则 403（`player_tcp_websocket_rejected_total{reason="origin"}`；其他不合法的升级计 `reason="upgrade"`）。**白名单为空时拒绝所有带 Origin 的请求，同源页面也不例外**（选择理由：失败即关闭；游戏页面通常与接入地址不同域，前置负载均衡还可能改写 Host，按 Host 判同源靠不住；不开白名单就不会有浏览器连上来）。每项按 `path.Match` 不分大小写匹配：不含 `://` 时匹配 Origin 的 `host[:port]`（`game.example.com`、`*.example.com`、`localhost:*`），含 `://` 时连 scheme 一起匹配（`https://*.cdn.example.com`）；`*` 放行任何来源，只用于开发。
 
-**配置**：`TCPConfig.WebSocket{Addr, Path, AllowedOrigins}`，`Addr` 为空不开；`Path` 缺省 `/ws`；`AllowedOrigins` 是逗号分隔的字符串（`TCPConfig` 要保持可比较，生成工程的测试用 `!=` 比较整份配置）。`ValidateTCPConfig` 只在 `Addr` 非空时按键检查 `websocket.addr / path / allowed_origins`。TLS 由前置负载均衡终结（wss），这一期不在进程里配证书。
+**配置**：`TCPConfig.WebSocket{Addr, Path, AllowedOrigins, TrustedProxies}`，`Addr` 为空不开；`Path` 缺省 `/ws`；`AllowedOrigins`、`TrustedProxies` 是逗号分隔的字符串（`TCPConfig` 要保持可比较，生成工程的测试用 `!=` 比较整份配置）。`ValidateTCPConfig` 经 `WebSocketConfig.Validate(section)` 按键检查：`websocket.addr / path / allowed_origins` 只在 `Addr` 非空时检查，`trusted_proxies` 写了就检查（相信所有人的列表不该等到打开监听那天才发现）。TLS 由前置负载均衡终结（wss），这一期不在进程里配证书。
 
-- 生成工程：`roost add transport websocket`（要求已有 tcp）在 roost.yaml 的 `access.player.transports` 加上 `websocket`，生成的嵌入 TCP Mod 多读 `player_access.tcp.websocket.{addr,path,allowed_origins}`、独立 Gate 多读 `player_access.gate.websocket.{addr,path,allowed_origins}`，原样透传进 `TCPConfig.WebSocket`；Game Ingress 不监听。命令不改配置文件：写上 `addr` 才开。不声明 websocket 的工程生成结果与之前逐字节相同（[证据](../maintenance/evidence/lobby-relay-ws-20261117/README.md)）。
+- 生成工程：`roost add transport websocket`（要求已有 tcp）在 roost.yaml 的 `access.player.transports` 加上 `websocket`，生成的嵌入 TCP Mod 多读 `player_access.tcp.websocket.{addr,path,allowed_origins,trusted_proxies}`、独立 Gate 多读 `player_access.gate.websocket.{addr,path,allowed_origins,trusted_proxies}`，原样透传进 `TCPConfig.WebSocket`；Game Ingress 不监听。生成的配置类型（`tcpConfig`、`gateConfig`）带 `ValidateConfig`，调 `WebSocketConfig.Validate`：App 启动前、进程的 `--check-config`、`roost config check` 与 doctor 的 `config-check` 都按运行时同一条规则拒绝写错的值并点名本段的键（规则只在 `wsconn` 一处；生成器不 import 运行时，见根包 `dependency_boundary_test.go`，所以经生成的进程检查）。命令不改配置文件：写上 `addr` 才开。不声明 websocket 的工程生成结果与之前逐字节相同（[证据](../maintenance/evidence/lobby-relay-ws-20261117/README.md)）。
   - 部署模板（2026-11-17，[证据](../maintenance/evidence/lobby-relay-deploy-20261117/README.md)）按约定的 7080 发布玩家 WebSocket 端口：Gate（声明了 Gate 时）或嵌入 TCP 所在服务的 k8s 容器与 Service 端口 `player-ws`、NetworkPolicy 只放行带 `player-access` 标签的命名空间、生产 compose 的 `ports`、docker 示例的 `-p`。生成器仍不写 `addr`：开 WebSocket 时写 `0.0.0.0:7080`，换端口时同步改部署模板。
   - doctor：`websocket.addr` 带 `listen` 标签（嵌入 TCP 跟着 `player_access.tcp.enabled`，Gate 总是），参与同一台机器上的端口冲突检查（`config-across-services`）；没写地址（空串）的监听键不参与。没有声明 websocket 的工程写了 `player_access.{tcp,gate}.websocket.*`，`roost config check` 与 doctor 的 `config-schema` 报失败并给出 `roost add transport websocket`。生成工程的 `docs/ROOST_YAML.zh-CN.md` 与 `docs/PLAYER_ACCESS_TCP.zh-CN.md`（“WebSocket 接入”一节）只在声明了 websocket 时写这些。
 - 手工接线：`wiring/gate.Options.TCP.WebSocket`。
 
-**部署注意**：前置七层负载均衡时，连接的对端地址是负载均衡的地址，`max_connections_per_ip` 按它计数（全部 WebSocket 连接算一个 IP），要按负载均衡的数量调大；进程不读 `X-Forwarded-For`。生成的部署模板按 7080 发布 WebSocket 端口（见上），负载均衡与 TLS 终结按自己的环境配置。
+**部署注意：七层负载均衡后的客户端地址**（维护者 2026-11-17 定，交接 C3 选项 A；[证据](../maintenance/evidence/c3-trusted-proxies-20261117/README.md)）。前置七层负载均衡时连接的 TCP 对端是负载均衡。`websocket.trusted_proxies`（`TCPConfig.WebSocket.TrustedProxies` → `wsconn.Config.TrustedProxies`）列出负载均衡自己的地址（逗号分隔的 CIDR 或单个地址），握手时按下面的规则定出客户端地址，`Conn.RemoteAddr()` 返回它，`max_connections_per_ip` 的计数、鉴权器收到的 `net.Addr` 都用它：
 
-**回归**（[tcp_transport_test.go](../../infra/network/gateway/tcp_transport_test.go)、[wsconn_test.go](../../infra/network/wsconn/wsconn_test.go)）：TCP 握手与收发的关键用例改成表驱动，同一组在 TCP 与 WebSocket 上各跑一遍——鉴权首包与连接代号信封（`TestTCPAuthEnvelopeCarries…`）、请求 / 应答与分发预算（`TestADispatchThatOutlivesItsBudget…`、`TestAuthenticatedClockProbe`）、服务器推送与慢连接被出站预算断开（`TestAConnectionThatCannotTakeAPushIsClosed…`、`TestAStalledConnectionDoesNotHoldPushes…`）、一帧拆成多条消息 / 多帧合在一条消息（`TestFramesSplitAcrossWritesOrMergedIntoOneAreRead`）、空闲超时（`TestHeartbeatKeepsAuthenticatedPushConnectionAlive`）；另有 Origin 被拒、超大消息被拒、一帧一条消息、会话 Close 打断阻塞写、调用方期限在写到一半时到期即断开。浏览器端到端验证放到 Web 端演练里一起做，本节只在 Go 客户端（coder/websocket 的 `Dial`）上验证。
+1. 列表为空（缺省）：**完全不看请求头**，按 TCP 对端计数——经七层负载均衡时全部 WebSocket 连接算负载均衡一个 IP，要把上限按负载均衡的数量调大。否则任何客户端都能自己带一个头冒充别的地址、绕过限额。
+2. 直连对端不在列表里：不看请求头，用对端地址。
+3. 直连对端在列表里：`X-Forwarded-For` 的各项（多行按出现顺序拼接）**从右往左**看，跳过在列表里的，第一个不在列表里的就是客户端地址。最左边一项是客户端自己能填的，不能取；负载均衡要追加而不是原样转发客户端带来的头。各项可以带端口（个别代理会带），IPv4 映射的 IPv6 地址还原成 IPv4。
+4. 对端可信但头缺失 / 为空（`missing`）、剥到的某一项不是地址（`invalid`）、或每一项都可信（`all_trusted`）：退回对端地址（这些连接仍按负载均衡的地址计数，方向上更严），计 `player_tcp_websocket_forwarded_fallback_total{reason}`，Debug 日志带对端地址。
+5. 只认 `X-Forwarded-For`；`Forwarded`（RFC 7239）与 `X-Real-IP` 不读。四层负载均衡的 PROXY protocol 不做。
+
+安全上守住三点：不配可信代理时请求头一律忽略；列表写成全零前缀（`0.0.0.0/0`、`::/0`）等于让所有人伪造地址，`ValidateTCPConfig` / `wsconn.Config.Validate` 拒绝，生成工程的启动前检查、`roost config check` 与 doctor `config-check` 也拒绝；IPv4 映射的 IPv6 前缀（如 `::ffff:0:0/96` 即全部 IPv4）同样拒绝，要写成 IPv4。按 IP 上限拒绝的连接在 Debug 日志里同时写客户端地址与 TCP 对端（`client`、`peer`），指标仍是 `player_tcp_connection_rejected_total{reason="per_ip"}`。
+
+只有 WebSocket 接入读这个头：玩家 TCP 监听仍按 TCP 对端计数（四层负载均衡后同样是负载均衡的地址）。relay 的 WebSocket 不开放这一项、**没有按 IP 的连接限额**，保护靠令牌、每连接帧率与房间人数上限（[RELAY §4](RELAY.md#4-限额与缺省值)）。生成的部署模板按 7080 发布 WebSocket 端口（见上），负载均衡与 TLS 终结按自己的环境配置。
+
+**回归**（[tcp_transport_test.go](../../infra/network/gateway/tcp_transport_test.go)、[wsconn_test.go](../../infra/network/wsconn/wsconn_test.go)）：TCP 握手与收发的关键用例改成表驱动，同一组在 TCP 与 WebSocket 上各跑一遍——鉴权首包与连接代号信封（`TestTCPAuthEnvelopeCarries…`）、请求 / 应答与分发预算（`TestADispatchThatOutlivesItsBudget…`、`TestAuthenticatedClockProbe`）、服务器推送与慢连接被出站预算断开（`TestAConnectionThatCannotTakeAPushIsClosed…`、`TestAStalledConnectionDoesNotHoldPushes…`）、一帧拆成多条消息 / 多帧合在一条消息（`TestFramesSplitAcrossWritesOrMergedIntoOneAreRead`）、空闲超时（`TestHeartbeatKeepsAuthenticatedPushConnectionAlive`）；另有 Origin 被拒、超大消息被拒、一帧一条消息、会话 Close 打断阻塞写、调用方期限在写到一半时到期即断开。可信代理：`TestATrustedProxyForwardsTheClientAddress`、`TestATrustedIPv6ProxyForwardsTheClientAddress`、`TestTheHeaderIsIgnoredUnlessThePeerIsATrustedProxy`、`TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer`、`TestTrustedProxiesAreValidated`（wsconn），`TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy`（同一可信代理后两个客户端地址、上限 1）、`TestWebSocketConfigIsValidatedAndTheListenerStopsWithTheServer`（gateway），`TestGeneratedProjectRefusesTrustedProxiesThatTrustEveryone`（生成工程 doctor / config check，codegen）。浏览器端到端验证放到 Web 端演练里一起做，本节只在 Go 客户端（coder/websocket 的 `Dial`）上验证。
 
 ## 生成工程与标准 C# 客户端联合链路
 

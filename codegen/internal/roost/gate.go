@@ -266,6 +266,9 @@ func renderPlayerTCPGateMod(m Manifest) string {
 	b.WriteString("\n\n// gateConfig 是独立 Gate（NewGateMod）读的键（生成器的声明渲染而来）。\n")
 	b.WriteString("type gateConfig ")
 	writeGoStructType(&b, playerGateDeclarationType(m), "")
+	if playerWebSocketEnabled(m) {
+		b.WriteString("\n" + renderPlayerWebSocketValidate("gateConfig", "Gate.WebSocket", "player_access.gate.websocket."))
+	}
 	b.WriteString(strings.Replace(`
 
 // NewGateMod 是 roost.yaml 的 access.player.gate 声明的独立 Gate 进程（roost add gate）的玩家接入：在
@@ -313,7 +316,7 @@ var _ app.ModStopBudgetProvider = (*GateMod)(nil)
 	webSocket := ""
 	if playerWebSocketEnabled(m) {
 		webSocket = " // access.player.transports 含 websocket：Gate 同一套会话另开 WebSocket 监听（addr 为空不开）。\n" +
-			" options.TCP.WebSocket=gateway.WebSocketConfig{Addr:settings.Gate.WebSocket.Addr,Path:settings.Gate.WebSocket.Path,AllowedOrigins:settings.Gate.WebSocket.AllowedOrigins}\n"
+			" options.TCP.WebSocket=" + renderPlayerWebSocketConfig("settings.Gate.WebSocket") + "\n"
 	}
 	return strings.Replace(b.String(), "@@GATE_WEBSOCKET@@", webSocket, 1)
 }

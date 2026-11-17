@@ -360,3 +360,184 @@ func TestAnUpgradeNobodyAcceptsIsClosedAndOtherPathsAre404(t *testing.T) {
 		t.Fatalf("another path got %v: %v, want 404", response, err)
 	}
 }
+
+// acceptWith 起一个按 config 接入的 Listen 监听，从 127.0.0.1 带 header 拨一条连接，返回服务端一侧的 *Conn。
+func acceptWith(t *testing.T, config Config, header http.Header) *Conn {
+	t.Helper()
+	listener, err := Listen("127.0.0.1:0", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if conn, err := listener.Accept(); err == nil {
+			accepted <- conn
+		}
+	}()
+	dial(t, "ws://"+listener.Addr().String()+"/ws", 0, header)
+	select {
+	case conn := <-accepted:
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn.(*Conn)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the upgraded connection never reached Accept")
+		return nil
+	}
+}
+
+func hostOf(t *testing.T, address net.Addr) string {
+	t.Helper()
+	host, _, err := net.SplitHostPort(address.String())
+	if err != nil {
+		t.Fatalf("address %q: %v", address, err)
+	}
+	return host
+}
+
+func forwardedFor(values ...string) http.Header {
+	header := http.Header{}
+	for _, value := range values {
+		header.Add("X-Forwarded-For", value)
+	}
+	return header
+}
+
+// 可信代理（七层负载均衡，GATEWAY.md §6）：直连对端在 TrustedProxies 里时，RemoteAddr 是 X-Forwarded-For 从右往左
+// 剥掉可信项之后的第一个不可信地址；PeerAddr 仍是 TCP 对端。客户端自己在最左边填的地址不被采用。
+func TestATrustedProxyForwardsTheClientAddress(t *testing.T) {
+	config := testConfig()
+	config.TrustedProxies = []string{"127.0.0.0/8", "10.0.0.0/8"}
+	for _, tc := range []struct {
+		name   string
+		header http.Header
+		want   string
+	}{
+		{"one hop", forwardedFor("1.2.3.4"), "1.2.3.4"},
+		{"through a second trusted proxy", forwardedFor("1.1.1.1, 10.0.0.5"), "1.1.1.1"},
+		{"a forged leftmost entry", forwardedFor("9.9.9.9, 1.1.1.1, 10.0.0.5"), "1.1.1.1"},
+		{"the header on two lines", forwardedFor("9.9.9.9", "1.1.1.1,10.0.0.5"), "1.1.1.1"},
+		{"IPv6", forwardedFor("2001:db8::1"), "2001:db8::1"},
+		{"IPv4-mapped IPv6", forwardedFor("::ffff:1.2.3.4"), "1.2.3.4"},
+		{"with a port", forwardedFor("1.2.3.4:5555"), "1.2.3.4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := acceptWith(t, config, tc.header)
+			if got := hostOf(t, conn.RemoteAddr()); got != tc.want {
+				t.Errorf("RemoteAddr host = %s, want %s", got, tc.want)
+			}
+			if got := hostOf(t, conn.PeerAddr()); got != "127.0.0.1" {
+				t.Errorf("PeerAddr host = %s, want the TCP peer 127.0.0.1", got)
+			}
+		})
+	}
+}
+
+// IPv6 对端：可信代理写成单个 IPv6 地址，判断与 IPv4 走同一段代码。
+func TestATrustedIPv6ProxyForwardsTheClientAddress(t *testing.T) {
+	config := testConfig()
+	config.TrustedProxies = []string{"::1"}
+	listener, err := Listen("[::1]:0", config)
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if conn, err := listener.Accept(); err == nil {
+			accepted <- conn
+		}
+	}()
+	dial(t, "ws://"+listener.Addr().String()+"/ws", 0, forwardedFor("1.2.3.4"))
+	select {
+	case conn := <-accepted:
+		t.Cleanup(func() { _ = conn.Close() })
+		if got := hostOf(t, conn.RemoteAddr()); got != "1.2.3.4" {
+			t.Errorf("RemoteAddr host = %s, want 1.2.3.4", got)
+		}
+		if got := hostOf(t, conn.(*Conn).PeerAddr()); got != "::1" {
+			t.Errorf("PeerAddr host = %s, want ::1", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the upgraded connection never reached Accept")
+	}
+}
+
+// 不看请求头的两种情况：列表为空（缺省），或直连对端不在列表里。客户端自己带的 X-Forwarded-For 不改变 RemoteAddr。
+func TestTheHeaderIsIgnoredUnlessThePeerIsATrustedProxy(t *testing.T) {
+	for name, trusted := range map[string][]string{"no trusted proxy": nil, "an untrusted peer": {"10.0.0.0/8"}} {
+		t.Run(name, func(t *testing.T) {
+			fallbacks := make(chan string, 4)
+			config := testConfig()
+			config.TrustedProxies = trusted
+			config.ForwardedFallback = func(_ *http.Request, reason string) { fallbacks <- reason }
+			conn := acceptWith(t, config, forwardedFor("1.2.3.4"))
+			if got := hostOf(t, conn.RemoteAddr()); got != "127.0.0.1" {
+				t.Errorf("RemoteAddr host = %s, want the TCP peer 127.0.0.1", got)
+			}
+			if len(fallbacks) != 0 {
+				t.Errorf("ForwardedFallback called for a peer that is not a trusted proxy: %q", <-fallbacks)
+			}
+		})
+	}
+}
+
+// 对端可信、却从请求头取不出客户端地址：退回 TCP 对端地址（这条连接仍按代理的地址计数，方向上更严），
+// 并经 ForwardedFallback 报告原因，调用方据此计指标。
+func TestATrustedPeerWithoutAUsableHeaderFallsBackToThePeer(t *testing.T) {
+	config := testConfig()
+	config.TrustedProxies = []string{"127.0.0.0/8", "10.0.0.0/8"}
+	for _, tc := range []struct {
+		name   string
+		header http.Header
+		reason string
+	}{
+		{"no header", nil, FallbackMissing},
+		{"an empty header", forwardedFor(""), FallbackMissing},
+		{"not an address", forwardedFor("unknown"), FallbackInvalid},
+		{"a bad entry before the trusted hops", forwardedFor("1.1.1.1, garbage, 10.0.0.5"), FallbackInvalid},
+		{"an empty entry", forwardedFor("1.1.1.1, , 10.0.0.5"), FallbackInvalid},
+		{"only trusted addresses", forwardedFor("10.0.0.7, 10.0.0.5"), FallbackAllTrusted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reasons := make(chan string, 4)
+			config.ForwardedFallback = func(_ *http.Request, reason string) { reasons <- reason }
+			conn := acceptWith(t, config, tc.header)
+			if got := hostOf(t, conn.RemoteAddr()); got != "127.0.0.1" {
+				t.Errorf("RemoteAddr host = %s, want the TCP peer 127.0.0.1", got)
+			}
+			select {
+			case reason := <-reasons:
+				if reason != tc.reason {
+					t.Errorf("fallback reason = %q, want %q", reason, tc.reason)
+				}
+			default:
+				t.Error("ForwardedFallback was not called")
+			}
+			if extra := len(reasons); extra != 0 {
+				t.Errorf("ForwardedFallback called %d more times", extra)
+			}
+		})
+	}
+}
+
+// 可信代理的写法：CIDR 或单个地址。全零前缀等于相信任何人自己填的头，被拒绝；IPv4 映射的 IPv6 前缀
+// （::ffff:0:0/96 即全部 IPv4）也拒绝，要写成 IPv4。
+func TestTrustedProxiesAreValidated(t *testing.T) {
+	if err := ValidateTrustedProxies([]string{"10.0.0.0/8", "10.1.2.3", "2001:db8::/32", "::1"}); err != nil {
+		t.Fatalf("valid entries refused: %v", err)
+	}
+	for _, entry := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "::ffff:10.0.0.0/104", "10.0.0.0/33", "garbage", "", " 10.0.0.0/8"} {
+		if err := ValidateTrustedProxies([]string{entry}); err == nil {
+			t.Errorf("trusted proxy %q was accepted", entry)
+		}
+	}
+	config := testConfig()
+	config.TrustedProxies = []string{"0.0.0.0/0"}
+	if _, err := Listen("127.0.0.1:0", config); err == nil {
+		t.Fatal("Listen accepted a trusted proxy list that trusts everyone")
+	}
+	if _, err := NewListener(config, nil); err == nil {
+		t.Fatal("NewListener accepted a trusted proxy list that trusts everyone")
+	}
+}

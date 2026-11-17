@@ -63,17 +63,29 @@ type WebSocketConfig struct {
 	// 为空时拒绝所有带 Origin 头的请求（含同源页面），不带 Origin 的原生客户端总是放行。每一项的写法见
 	// wsconn.Config.AllowedOrigins。用字符串而不是切片：TCPConfig 要保持可比较（生成的测试用 != 比较整份配置）。
 	AllowedOrigins string
+	// TrustedProxies 是可信的前置代理（七层负载均衡），逗号分隔的 CIDR 或单个地址（如 "10.0.0.0/8, 192.168.1.10"）。
+	// 为空（缺省）时不看请求头，按 IP 的连接上限按 TCP 对端计数——经七层负载均衡时全部连接算负载均衡一个 IP。
+	// 列出负载均衡后，直连对端在列表里的连接按 X-Forwarded-For 从右往左第一个不可信的地址计数与鉴权（取不出时退回对端
+	// 地址，计 player_tcp_websocket_forwarded_fallback_total）。规则与写法见 wsconn.Config.TrustedProxies；全零前缀被拒。
+	// 同样用字符串保持 TCPConfig 可比较。
+	TrustedProxies string
 }
 
+// Proxies 是 TrustedProxies 拆开、去掉空白与空项后的列表。
+func (config WebSocketConfig) Proxies() []string { return splitList(config.TrustedProxies) }
+
 // Origins 是 AllowedOrigins 拆开、去掉空白与空项后的列表。
-func (config WebSocketConfig) Origins() []string {
-	var origins []string
-	for _, origin := range strings.Split(config.AllowedOrigins, ",") {
-		if origin = strings.TrimSpace(origin); origin != "" {
-			origins = append(origins, origin)
+func (config WebSocketConfig) Origins() []string { return splitList(config.AllowedOrigins) }
+
+// splitList 拆开逗号分隔的配置值，去掉空白与空项。
+func splitList(value string) []string {
+	var items []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			items = append(items, item)
 		}
 	}
-	return origins
+	return items
 }
 
 // defaultWebSocketPath 是 WebSocketConfig.Path 为空时的路径。
@@ -197,12 +209,29 @@ func ValidateTCPConfig(result TCPConfig) error {
 		} else if result.WebSocket.Addr == result.Addr && port != "0" {
 			refuse("%swebsocket.addr = %q is the same as %saddr; the two listeners need their own ports", key, result.WebSocket.Addr, key)
 		}
-		if err := wsconn.ValidatePath(result.WebSocket.path()); err != nil {
-			refuse("%swebsocket.path: %w", key, err)
+	}
+	if err := result.WebSocket.Validate(key + "websocket."); err != nil {
+		problems = append(problems, err)
+	}
+	return errors.Join(problems...)
+}
+
+// Validate 检查 WebSocket 段自己的写法，section 是段的键前缀（如 "player_access.tcp.websocket."）。Addr 为空（不开）时
+// path 与 allowed_origins 不检查；trusted_proxies 写了就检查：一个相信所有人的列表不该等到打开监听那天才被发现。
+// 与 TCP 地址相关的规则（同端口）在 ValidateTCPConfig。生成的配置声明在 ValidateConfig 里调它，所以进程的
+// --check-config、roost config check 与 doctor 的 config-check 在启动前按同一条规则拒绝（规则本身只在 wsconn 一处）。
+func (config WebSocketConfig) Validate(section string) error {
+	var problems []error
+	if config.Addr != "" {
+		if err := wsconn.ValidatePath(config.path()); err != nil {
+			problems = append(problems, fmt.Errorf("player tcp: %spath: %w", section, err))
 		}
-		if err := wsconn.ValidateOrigins(result.WebSocket.Origins()); err != nil {
-			refuse("%swebsocket.allowed_origins: %w", key, err)
+		if err := wsconn.ValidateOrigins(config.Origins()); err != nil {
+			problems = append(problems, fmt.Errorf("player tcp: %sallowed_origins: %w", section, err))
 		}
+	}
+	if err := wsconn.ValidateTrustedProxies(config.Proxies()); err != nil {
+		problems = append(problems, fmt.Errorf("player tcp: %strusted_proxies: %w", section, err))
 	}
 	return errors.Join(problems...)
 }

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,6 +273,86 @@ func TestWebSocketOriginIsCheckedAgainstTheAllowList(t *testing.T) {
 	waitReleased(t, open, 0)
 }
 
+// connectWebSocketThrough 从 127.0.0.1 带 header（X-Forwarded-For）拨 WebSocket 并认证；返回认证的结果。
+// 按 IP 上限被拒的连接升级成功后在 acceptLoop 被关闭，认证读不到 ack。
+func connectWebSocketThrough(t *testing.T, server *TCPServer, header http.Header, token string) error {
+	t.Helper()
+	socket, _, err := dialWebSocket(t, server, 0, header)
+	if err != nil {
+		return err
+	}
+	t.Cleanup(func() { _ = socket.CloseNow() })
+	connection := websocket.NetConn(context.Background(), socket, websocket.MessageBinary)
+	client := &tcpSession{connection: connection, writeTimeout: time.Second}
+	if err := client.writeFrame(context.Background(), 0, 0, 1, []byte(token)); err != nil {
+		return err
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ack, release, err := server.readFrame(connection)
+	if err != nil {
+		return err
+	}
+	release()
+	if ack.messageID != 0 || ack.sequence != 1 {
+		return fmt.Errorf("unexpected ack %+v", ack)
+	}
+	return nil
+}
+
+// 七层负载均衡后的按 IP 上限（GATEWAY.md §6“部署注意”）：websocket.trusted_proxies 列出负载均衡时，同一个代理后面
+// 不同的客户端地址各算各的，同一个客户端地址的第二条连接被拒；对端可信却没带 X-Forwarded-For 的连接退回按代理的地址
+// 计数（更严），并计 player_tcp_websocket_forwarded_fallback_total；不配可信代理时请求头不起作用。
+func TestWebSocketPerIPLimitCountsTheForwardedClientBehindATrustedProxy(t *testing.T) {
+	perIP := func() int64 { return labeledCounter("player_tcp_connection_rejected_total", "reason", "per_ip") }
+	fallback := func() int64 {
+		return labeledCounter("player_tcp_websocket_forwarded_fallback_total", "reason", wsconn.FallbackMissing)
+	}
+	noop := func(*tcpTestContext, string) (string, error) { return "", nil }
+	limitOne := func(trusted string) func(*TCPConfig) {
+		return func(c *TCPConfig) { c.MaxConnectionsPerIP, c.WebSocket.TrustedProxies = 1, trusted }
+	}
+	through := func(client string) http.Header { return http.Header{"X-Forwarded-For": {client + ", 127.0.0.1"}} }
+
+	behindProxy := dispatchServer(t, "1s", noop, withWebSocket, limitOne("127.0.0.1/32"))
+	for _, client := range []string{"1.1.1.1", "2.2.2.2"} {
+		if err := connectWebSocketThrough(t, behindProxy, through(client), "client-"+client); err != nil {
+			t.Fatalf("client %s behind the trusted proxy, limit 1 per IP: %v", client, err)
+		}
+	}
+	before := perIP()
+	if err := connectWebSocketThrough(t, behindProxy, through("1.1.1.1"), "client-1.1.1.1-again"); err == nil {
+		t.Fatal("a second connection of client 1.1.1.1 was accepted over the per-IP limit of 1")
+	}
+	if got := perIP() - before; got != 1 {
+		t.Errorf("per-IP rejections counted = %d, want 1", got)
+	}
+	waitReleased(t, behindProxy, 2)
+
+	// 对端可信、请求头缺失：两条都按代理的地址计数，第二条被拒；两次退回都计指标。
+	noHeader := dispatchServer(t, "1s", noop, withWebSocket, limitOne("127.0.0.1/32"))
+	beforeFallback := fallback()
+	if err := connectWebSocketThrough(t, noHeader, nil, "first"); err != nil {
+		t.Fatalf("first connection without X-Forwarded-For: %v", err)
+	}
+	if err := connectWebSocketThrough(t, noHeader, nil, "second"); err == nil {
+		t.Fatal("a second connection without X-Forwarded-For was not counted on the proxy's address")
+	}
+	if got := fallback() - beforeFallback; got != 2 {
+		t.Errorf("forwarded fallbacks counted = %d, want 2", got)
+	}
+	waitReleased(t, noHeader, 1)
+
+	// 不配可信代理：请求头不起作用，不同的 X-Forwarded-For 仍是同一个对端地址。
+	untrusted := dispatchServer(t, "1s", noop, withWebSocket, limitOne(""))
+	if err := connectWebSocketThrough(t, untrusted, through("1.1.1.1"), "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := connectWebSocketThrough(t, untrusted, through("2.2.2.2"), "second"); err == nil {
+		t.Fatal("without trusted proxies a client-supplied X-Forwarded-For escaped the per-IP limit")
+	}
+	waitReleased(t, untrusted, 1)
+}
+
 // 单条消息的上限是一个最大帧（max_payload_bytes + 帧头）：恰好一个最大帧的消息照常处理；超出的消息在读过上限时
 // 让连接以 1009 关闭。库按流读消息、不预先知道消息长度，所以上限之内已经读完的帧照常处理，越过上限的部分不会交给帧读取。
 func TestWebSocketMessageLargerThanOneFrameIsRefused(t *testing.T) {
@@ -345,16 +427,29 @@ func TestWebSocketMessageLargerThanOneFrameIsRefused(t *testing.T) {
 func TestWebSocketConfigIsValidatedAndTheListenerStopsWithTheServer(t *testing.T) {
 	config := DefaultTCPConfig()
 	config.Addr = "127.0.0.1:7000"
-	config.WebSocket = WebSocketConfig{Addr: "127.0.0.1:7000", Path: "ws", AllowedOrigins: "ok.example.com, ["}
+	config.WebSocket = WebSocketConfig{Addr: "127.0.0.1:7000", Path: "ws", AllowedOrigins: "ok.example.com, [", TrustedProxies: "10.0.0.0/8, 0.0.0.0/0"}
 	err := ValidateTCPConfig(config)
-	for _, want := range []string{"websocket.addr", "websocket.path", "websocket.allowed_origins"} {
+	for _, want := range []string{"websocket.addr", "websocket.path", "websocket.allowed_origins", "websocket.trusted_proxies"} {
 		if err == nil || !bytes.Contains([]byte(err.Error()), []byte(want)) {
 			t.Errorf("validation error %v does not name %s", err, want)
 		}
 	}
-	config.WebSocket = WebSocketConfig{} // 没配地址：不开，其余字段不检查
+	// 可信代理写成全零前缀等于相信任何人自己填的头：单独写错这一项也被拒。
+	config.WebSocket = WebSocketConfig{Addr: "127.0.0.1:7001", TrustedProxies: "::/0"}
+	if err := ValidateTCPConfig(config); err == nil || !strings.Contains(err.Error(), "websocket.trusted_proxies") {
+		t.Errorf("trusted_proxies ::/0: %v, want a refusal naming websocket.trusted_proxies", err)
+	}
+	config.WebSocket = WebSocketConfig{Path: "ws", AllowedOrigins: "["} // 没配地址：不开，路径与来源不检查
 	if err := ValidateTCPConfig(config); err != nil {
 		t.Fatalf("no websocket address: %v", err)
+	}
+	// trusted_proxies 写了就检查，监听没开也一样；生成的配置声明经 WebSocketConfig.Validate 在 --check-config 里同样拒绝。
+	config.WebSocket = WebSocketConfig{TrustedProxies: "0.0.0.0/0"}
+	if err := ValidateTCPConfig(config); err == nil || !strings.Contains(err.Error(), "player_access.tcp.websocket.trusted_proxies") {
+		t.Errorf("trusted_proxies 0.0.0.0/0 without a websocket address: %v, want a refusal", err)
+	}
+	if err := config.WebSocket.Validate("player_access.gate.websocket."); err == nil || !strings.Contains(err.Error(), "player_access.gate.websocket.trusted_proxies") {
+		t.Errorf("WebSocketConfig.Validate names the section it is given: %v", err)
 	}
 
 	server := dispatchServer(t, "1s", func(*tcpTestContext, string) (string, error) { return "", nil }, withWebSocket)

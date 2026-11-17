@@ -1,10 +1,13 @@
 package roost
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
@@ -25,9 +28,12 @@ func TestPlayerWebSocketTransportPassesItsKeysThrough(t *testing.T) {
 	}
 	server := renderPlayerTCPServer(webSocket)
 	for _, want := range []string{
-		"\t\tWebSocket: gateway.WebSocketConfig{Addr: tcp.WebSocket.Addr, Path: tcp.WebSocket.Path, AllowedOrigins: tcp.WebSocket.AllowedOrigins},\n",
-		" options.TCP.WebSocket=gateway.WebSocketConfig{Addr:settings.Gate.WebSocket.Addr,Path:settings.Gate.WebSocket.Path,AllowedOrigins:settings.Gate.WebSocket.AllowedOrigins}\n",
+		"\t\tWebSocket: gateway.WebSocketConfig{Addr: tcp.WebSocket.Addr, Path: tcp.WebSocket.Path, AllowedOrigins: tcp.WebSocket.AllowedOrigins, TrustedProxies: tcp.WebSocket.TrustedProxies},\n",
+		" options.TCP.WebSocket=gateway.WebSocketConfig{Addr: settings.Gate.WebSocket.Addr, Path: settings.Gate.WebSocket.Path, AllowedOrigins: settings.Gate.WebSocket.AllowedOrigins, TrustedProxies: settings.Gate.WebSocket.TrustedProxies}\n",
 		"`config:\"websocket\"`",
+		// 启动前与 --check-config 按运行时同一条规则检查 websocket 段（trusted_proxies 的全零前缀等）。
+		"func (c *tcpConfig) ValidateConfig(bool) error {\n\treturn gateway.WebSocketConfig{Addr: c.TCP.WebSocket.Addr, Path: c.TCP.WebSocket.Path, AllowedOrigins: c.TCP.WebSocket.AllowedOrigins, TrustedProxies: c.TCP.WebSocket.TrustedProxies}.Validate(\"player_access.tcp.websocket.\")\n}\n",
+		"func (c *gateConfig) ValidateConfig(bool) error {\n\treturn gateway.WebSocketConfig{Addr: c.Gate.WebSocket.Addr, Path: c.Gate.WebSocket.Path, AllowedOrigins: c.Gate.WebSocket.AllowedOrigins, TrustedProxies: c.Gate.WebSocket.TrustedProxies}.Validate(\"player_access.gate.websocket.\")\n}\n",
 	} {
 		if !strings.Contains(server, want) {
 			t.Fatalf("server_gen.go with the websocket transport does not contain %q", want)
@@ -46,7 +52,7 @@ func TestPlayerWebSocketTransportPassesItsKeysThrough(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{"addr", "path", "allowed_origins"} {
+		for _, key := range []string{"addr", "path", "allowed_origins", "trusted_proxies"} {
 			if _, ok := with.Lookup(prefix + key); !ok {
 				t.Errorf("%s with the websocket transport does not declare %s%s", service, prefix, key)
 			}
@@ -55,8 +61,11 @@ func TestPlayerWebSocketTransportPassesItsKeysThrough(t *testing.T) {
 			}
 		}
 		// 不声明缺省值：gateway.DefaultTCPConfig 的 WebSocket 是零值（空路径取 /ws），声明的缺省要与它逐字段相同。
-		if key, _ := with.Lookup(prefix + "path"); key.Default != "" {
-			t.Errorf("%spath default = %q, want none (gateway.DefaultTCPConfig leaves it empty)", prefix, key.Default)
+		// 也不是 starter 键：生成器不写 websocket 段，写上 addr 才开。
+		for _, name := range []string{"path", "trusted_proxies"} {
+			if key, _ := with.Lookup(prefix + name); key.Default != "" || key.Starter {
+				t.Errorf("%s%s default = %q, starter = %v; want no default and not written by the generator", prefix, name, key.Default, key.Starter)
+			}
 		}
 	}
 	if _, ok := allFrameworkConfigSchema().Lookup("player_access.gate.websocket.addr"); !ok {
@@ -124,6 +133,10 @@ func TestPlayerWebSocketPortIsDeployed(t *testing.T) {
 		}
 		if guide := renderPlayerWebSocketGuide(tc.m); !strings.Contains(guide, playerWebSocketAddrKey(tc.m)+": 0.0.0.0:"+port) {
 			t.Errorf("%s: the WebSocket guide does not name %s:\n%s", tc.name, playerWebSocketAddrKey(tc.m), guide)
+		}
+		// 七层负载均衡后取真实 IP 的配置（GATEWAY.md §6“部署注意”）写进生成工程的接入说明。
+		if guide, key := renderPlayerWebSocketGuide(tc.m), strings.TrimSuffix(playerWebSocketAddrKey(tc.m), "addr")+"trusted_proxies"; !strings.Contains(guide, key+" 写上负载均衡自己的地址") || !strings.Contains(guide, "0.0.0.0/0、::/0") {
+			t.Errorf("%s: the WebSocket guide does not explain %s:\n%s", tc.name, key, guide)
 		}
 	}
 	plain := gateManifestNamed("gate", "game")
@@ -233,5 +246,91 @@ func TestWebSocketKeysWithoutTheTransportAreRefused(t *testing.T) {
 	}
 	if item.Status != StatusFail || !strings.Contains(item.Detail, filepath.ToSlash(rel)+": config: player_access.tcp.websocket.addr is a WebSocket key") || !strings.Contains(item.Detail, "roost add transport websocket") {
 		t.Errorf("doctor config-schema:lobby = %s %s; want FAIL naming the WebSocket key and the command", item.Status, item.Detail)
+	}
+}
+
+// 七层负载均衡后取真实 IP（GATEWAY.md §6“部署注意”）：可信代理列表写成 0.0.0.0/0 等于让任何客户端伪造地址。生成工程
+// （独立 Gate + websocket）编译出的进程按运行时同一条规则检查：doctor 的 config-check 与 roost config check 在启动前
+// 拒绝 Gate 的 player_access.gate.websocket.trusted_proxies 与玩家服务的 player_access.tcp.websocket.trusted_proxies，
+// 并点名键；写成负载均衡自己的网段时通过。规则只在 wsconn 一处，生成器不 import 运行时，经生成的 ValidateConfig 交给进程。
+func TestGeneratedProjectRefusesTrustedProxiesThatTrustEveryone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project, installs modules and compiles it")
+	}
+	t.Parallel()
+	root, roost, _ := moduleProject(t, "wsproxy")
+	roost("module", "add", "login", "enter", "portal")
+	roost("add", "transport", "websocket")
+	roost("add", "gate")
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	process, cleanup := newProjectProcess(ctx, root)
+	defer cleanup()
+	checkItems := func() map[string]CheckItem {
+		items := map[string]CheckItem{}
+		for _, item := range checkConfigRules(root, m, process) {
+			items[item.Name] = item
+		}
+		return items
+	}
+	for name, item := range checkItems() {
+		if item.Status != StatusOK {
+			t.Fatalf("fresh project %s: %s %s", name, item.Status, item.Detail)
+		}
+	}
+	// setTrustedProxies 写 player_access.<section>.websocket.trusted_proxies（第一次在段名下插入 websocket 子段，之后改值）。
+	setTrustedProxies := func(service, section, value string) {
+		t.Helper()
+		path := filepath.Join(root, "configs", "service", "config."+service+".yaml")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		const written = "\n    websocket:\n      trusted_proxies: "
+		if i := strings.Index(text, written); i >= 0 {
+			start := i + len(written)
+			text = text[:start] + value + text[start+strings.Index(text[start:], "\n"):]
+		} else {
+			const anchor = "\nplayer_access:\n"
+			at := strings.Index(text, anchor)
+			if at < 0 {
+				t.Fatalf("config.%s.yaml has no player_access section:\n%s", service, text)
+			}
+			sectionAt := strings.Index(text[at+len(anchor):], "  "+section+":\n")
+			if sectionAt < 0 {
+				t.Fatalf("config.%s.yaml has no player_access.%s section:\n%s", service, section, text)
+			}
+			insert := at + len(anchor) + sectionAt + len("  "+section+":\n")
+			text = text[:insert] + "    websocket:\n      trusted_proxies: " + value + "\n" + text[insert:]
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setTrustedProxies("gate", "gate", "10.0.0.0/8, 0.0.0.0/0")
+	setTrustedProxies("game", "tcp", "::/0")
+	items := checkItems()
+	for service, key := range map[string]string{"gate": "player_access.gate.websocket.trusted_proxies", "game": "player_access.tcp.websocket.trusted_proxies"} {
+		item := items["config-check:"+service]
+		if item.Status != StatusFail || !strings.Contains(item.Detail, key) || !strings.Contains(item.Detail, "trusts every address") {
+			t.Errorf("config-check:%s with a trusted proxy list that trusts everyone = %s %q; want a FAIL naming %s", service, item.Status, item.Detail, key)
+		}
+	}
+	var out strings.Builder
+	if err := Run([]string{"config", "check", "--service", "gate", "--root", root}, &out, &out); err == nil || !strings.Contains(out.String(), "player_access.gate.websocket.trusted_proxies") {
+		t.Errorf("roost config check --service gate: %v\n%s\nwant a refusal naming player_access.gate.websocket.trusted_proxies", err, out.String())
+	}
+
+	setTrustedProxies("gate", "gate", "10.0.0.0/8, 192.168.1.10")
+	setTrustedProxies("game", "tcp", "10.0.0.0/8")
+	for name, item := range checkItems() {
+		if item.Status != StatusOK {
+			t.Errorf("load balancer networks as trusted proxies: %s = %s %s, want OK", name, item.Status, item.Detail)
+		}
 	}
 }
