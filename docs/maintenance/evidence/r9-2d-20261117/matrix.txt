@@ -1,0 +1,10 @@
+# python3 scripts/test-genres-generated.py --out <scratchpad>/b1117-r9-2cd/matrix-moba --genres moba（2026-11-17）
+Running moba: /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/b1117-r9-2cd/matrix-moba/moba
+moba: passed
+genre: moba
+status: passed
+module: example.com/acceptance/moba
+passed_tests: 28
+custom_module_passed_tests: 28
+skipped_tests: 0
+custom_module_verify: {'wallet': 17}

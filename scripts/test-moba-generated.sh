@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# MOBA 业务接入纵切：正式生成器、Player / MatchResult / BattleRound / BattleDirectory DAO、多实体 Sender
-# 与 Nest，加框架 Lockstep（Match / Sequencer / FrameAssembler）、真实 loopback KCP 与 service/match 领域存储。
-# 业务规则只在 scripts/testdata/moba：单路双英雄入门与 5v5 三路参考模拟、持久对局、宿主与原服奖励 handler，
-# 不是框架默认玩法。
+# MOBA 业务接入纵切：正式生成器 + 业务模块（R9）+ 只手写模块没覆盖的部分。
+# 模块：wallet（玩家金币：结算与原服奖励的胜者 +10 走 Wallet().Add）。
+# 手写：Player 的 Wins / Losses 与原服奖励账本 MobaRewards、MatchResult / BattleRound / BattleDirectory DAO、多实体 Sender
+# 与 Nest，加框架 Lockstep（Match / Sequencer / FrameAssembler；D5：不迁 Stepper）、真实 loopback KCP 与 service/match
+# 领域存储（CommitAcross 跨分区成局，matchmaking 模块只做本 sid）。业务规则只在 scripts/testdata/moba：单路双英雄入门与
+# 5v5 三路参考模拟、持久对局、宿主与原服奖励 handler，不是框架默认玩法。
 # 缺省不连接外部存储：提交器是替身。ROOST_MOBA_REAL=1（并提供隔离 Mongo 副本集
 # ROOST_DATAENGINE_IT_MONGO_URI）时追加：两个独立进程正常停机后冷加载的结算重放，以及活动对局未投影时
 # SIGKILL 子进程后的 WAL 恢复续赛，以及 SIGKILL 后冷加载、经已提交检查点快照恢复窗口外客户端的演练（两者都用
@@ -39,8 +41,13 @@ go build -o "$review_root/roost" ./codegen/cmd/roost
 "$review_root/roost" project new moba-practice -module example.com/moba-practice \
   -out "$project_root" -template game --skip-deps > "$review_root/generate.log" 2>&1
 cd "$project_root"
+# 先指向本检出：module add 与后面 generate 里的 go mod tidy 不去解析可能尚未发布的最低 core 版本，生成物也按本检出编译。
+go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 export ROOST_MOBA_DB="roost_moba_it_${PPID}_$$"
-"$review_root/roost" add dao Player --entity Player >> "$review_root/generate.log" 2>&1
+# 模块清单写在脚本里（Q8：不建配方）；Player 实体与主 DAO 来自 game 模板，wallet 把余额与回执窗口装在 PlayerDao 上。
+genre_modules=(wallet)
+modules_sh="$repo_root/scripts/testdata/genre-common/modules.sh"
+bash "$modules_sh" add "$review_root/roost" "${genre_modules[@]}" >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add entity MatchResult >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add dao MatchResult --entity MatchResult >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add entity BattleRound >> "$review_root/generate.log" 2>&1
@@ -48,12 +55,13 @@ export ROOST_MOBA_DB="roost_moba_it_${PPID}_$$"
 "$review_root/roost" add entity BattleDirectory >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add dao BattleDirectory --entity BattleDirectory >> "$review_root/generate.log" 2>&1
 # DAO 定义与实体注解是业务文件；只修改它们，生成组件、访问器与 Sender 由 CLI 生成。
+# 字段追加在各 DAO 末尾（PlayerDao 在 wallet 的 Wallet / WalletLedger 之后）；金币在 wallet 里，不再手写 Gold。
 python3 - "$project_root" <<'DEFS'
 from pathlib import Path
 import sys, os
 root=Path(sys.argv[1])
 for name, fields in {
- 'player': [('Gold','int64'),('Wins','int64'),('Losses','int64'),('MobaRewards','string')],
+ 'player': [('Wins','int64'),('Losses','int64'),('MobaRewards','string')],
  'battle_directory': [('Payload','string')],
  'battle_round': [('Payload','string')],
  'match_result': [('MatchKey','string'),('Digest','string'),('WinnerID','int64'),('LoserID','int64'),('Status','int64')],
@@ -61,7 +69,9 @@ for name, fields in {
  p=root/'db/def'/f'{name}.go'
  typename=''.join(part.title() for part in name.split('_'))+'Dao'
  marker='type '+typename+' struct {'
- text=p.read_text().replace(marker, marker+'\n'+''.join(f'{field} {typ} `store:"{field.lower()}" dao:"nosync"`\n' for field, typ in fields))
+ text=p.read_text()
+ end=text.index('\n}', text.index(marker))
+ text=text[:end]+'\n'+''.join(f'\t{field} {typ} `store:"{field.lower()}" dao:"nosync"`\n' for field, typ in fields)+text[end:]
  assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
  p.write_text(text)
 # 结算记录、对局与比赛目录被多名玩家共同引用，是世界对象，锁序低于 Player。
@@ -83,7 +93,6 @@ cp "$repo_root/scripts/testdata/moba/round_handlers_test.go.txt" game/handler/mo
 cp "$repo_root/scripts/testdata/moba/settlement.go.txt" game/handler/moba_settlement.go
 cp "$repo_root/scripts/testdata/moba/settlement_test.go.txt" game/handler/moba_settlement_test.go
 gofmt -w loadtest/*.go db/def/*.go game/modules/moba/*.go game/handler/moba_*.go
-go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/modules/moba ./game/handler | tee "$review_root/test.log"
 # 28 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
@@ -96,6 +105,8 @@ go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+# 已装模块自带的场景照跑：每个模块通过数 == 本检出 modules/<名>/module.yaml 的 verify.pass、0 skip（结果 module-verify.json）。
+bash "$modules_sh" verify "$review_root/roost" "$repo_root" "$review_root/module-verify.json" "${genre_modules[@]}" | tee "$review_root/module-verify.txt"
 # 真实依赖用例缺省模式也复制进工程并 vet（只编译不运行）：生成器签名变了，发版门禁里就能看到这些夹具编译失败。
 cp "$repo_root/scripts/testdata/moba/persistence/persistence_test.go" game/handler/moba_persistence_test.go
 gofmt -w game/handler/moba_persistence_test.go

@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""MOBA（R9 2D）变异：在保留的生成工程里改一处模块调用，跑对应场景看红，恢复再跑看绿。
+用法：mutate_moba.py <工程> [real]（real 需先 source env.sh；每次运行用新库与新 WAL）。"""
+import os, subprocess, sys
+from pathlib import Path
+proj = Path(sys.argv[1])
+real = len(sys.argv) > 2 and sys.argv[2] == "real"
+env = dict(os.environ, GOWORK="off")
+SETTLE_ADD = "\t\tif _, err := winner.Wallet().Add(10); err != nil {\n\t\t\treturn err\n\t\t}\n"
+AWARD_ADD = "\t\t\tif _, err := player.Wallet().Add(10); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n"
+cases = [
+    ("N1 结算胜者不入 wallet（删 winner.Wallet().Add(10)）", "game/handler/moba_settlement.go", SETTLE_ADD, "",
+     [("./game/handler", "^TestMOBA(SettlementConcurrentReplayAndIdentity|ServerReferenceSettlesTheFinishedRound)$", {})]),
+    ("N2 无胜者也发金币（Add 挪到 !aborted 之外）", "game/handler/moba_settlement.go",
+     "\tif !aborted {\n", "\tif _, err := winner.Wallet().Add(10); err != nil {\n\t\treturn err\n\t}\n\tif !aborted {\n",
+     [("./game/handler", "^TestMOBANoWinnerSettlementNeverPays$", {})]),
+    ("N3 wallet 余额的 undo 不还原（生成工程里的 WalletState.SetCoins）", "db/gen_wallet_state_nested.go",
+     "\t\t\ts.coins = old\n", "\t\t\t_ = old\n",
+     [("./game/handler", "^TestMOBASettlementRollbackAndRetry$", {})]),
+    ("N4 原服奖励胜者不入 wallet（删 player.Wallet().Add(10)）", "game/handler/moba_round.go", AWARD_ADD, "",
+     [("./game/handler", "^TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity$", {})]),
+    ("N5 战绩查询不读 wallet（Profile.Gold 写 0）", "game/handler/moba_settlement.go",
+     "Gold: player.Wallet().Balance()", "Gold: 0",
+     [("./game/handler", "^TestMOBAKCPRobotMatchSettlementAndClientResult$", {})]),
+]
+if real:
+    cases = [
+        ("N6（REAL）结算胜者不入 wallet", "game/handler/moba_settlement.go", SETTLE_ADD, "",
+         [("./game/handler", "^TestMOBARealSettlementAcrossProcesses$", {"ROOST_MOBA_PHASE": "write"}),
+          ("./game/handler", "^TestMOBARealSettlementAcrossProcesses$", {"ROOST_MOBA_PHASE": "recover"})]),
+        ("N7（REAL + ROUTING）原服奖励胜者不入 wallet", "game/handler/moba_round.go", AWARD_ADD, "",
+         [("./game/handler", "^TestMOBARealCrossSIDHostRouting$", {})]),
+    ]
+runs = 0
+def run(steps):
+    global runs
+    runs += 1
+    e = dict(env)
+    if real:
+        e["ROOST_MOBA_DB"] = f"roost_moba_it_mut_{os.getpid()}_{runs}"
+        e["ROOST_MOBA_WAL"] = f"{os.environ['ROOST_MOBA_WAL_ROOT']}/{runs}"
+    code, out = 0, []
+    for pkg, pattern, extra in steps:
+        r = subprocess.run(["go", "test", "-mod=mod", "-v", "-count=1", "-timeout", "4m", "-run", pattern, pkg], cwd=proj, env={**e, **extra}, capture_output=True, text=True)
+        out += [l for l in (r.stdout + r.stderr).splitlines() if l.startswith(("--- ", "ok", "FAIL")) or "_test.go:" in l][:10]
+        if r.returncode:
+            code = r.returncode
+            break
+    return code, out
+for name, rel, old, new, steps in cases:
+    path = proj / rel
+    orig = path.read_text()
+    assert orig.count(old) == 1, (name, rel)
+    path.write_text(orig.replace(old, new))
+    try:
+        code, lines = run(steps)
+        print(f"== {name}\n   mutated: exit={code} ({'RED' if code else 'GREEN?!'})")
+        for l in lines: print("     " + l.strip()[:300])
+    finally:
+        path.write_text(orig)
+    code, lines = run(steps)
+    print(f"   restored: exit={code} ({'GREEN' if code == 0 else 'RED?!'})")
+    for l in lines: print("     " + l.strip()[:300])

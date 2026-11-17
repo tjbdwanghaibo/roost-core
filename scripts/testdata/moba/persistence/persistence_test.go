@@ -171,7 +171,7 @@ func assertSettled(ctx context.Context, t *testing.T, access *entity.ManagerAcce
 		t.Fatal(err)
 	}
 	w, l, d := winner.(*player.Player).Dao(), loser.(*player.Player).Dao(), result.(*resultentity.MatchResult).Dao()
-	if w.GetGold() != 10 || w.GetWins() != 1 || l.GetLosses() != 1 || d.GetStatus() != 1 || d.GetMatchKey() != "persisted-moba-match" || d.GetDigest() != digest || d.GetWinnerID() != a || d.GetLoserID() != b {
-		t.Fatalf("settlement not recovered exactly once: winner gold=%d wins=%d, loser losses=%d, result status=%d key=%q", w.GetGold(), w.GetWins(), l.GetLosses(), d.GetStatus(), d.GetMatchKey())
+	if w.GetWallet().GetCoins() != 10 || w.GetWins() != 1 || l.GetLosses() != 1 || d.GetStatus() != 1 || d.GetMatchKey() != "persisted-moba-match" || d.GetDigest() != digest || d.GetWinnerID() != a || d.GetLoserID() != b {
+		t.Fatalf("settlement not recovered exactly once: winner gold=%d wins=%d, loser losses=%d, result status=%d key=%q", w.GetWallet().GetCoins(), w.GetWins(), l.GetLosses(), d.GetStatus(), d.GetMatchKey())
 	}
 }

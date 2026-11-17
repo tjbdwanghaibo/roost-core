@@ -1,0 +1,36 @@
+# bash scripts/test-moba-generated.sh（ROOST_GENRE_OUTPUT=<scratchpad>/b1117-r9-2cd/moba1，2026-11-17，main 17952d07 + 本批未提交改动）
+# exit 0
+--- PASS: TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup (0.16s)
+--- PASS: TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect (0.38s)
+--- PASS: TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot (0.96s)
+--- PASS: TestMOBAFivePlayerTeamsDraftAndMatchIdentity (0.00s)
+--- PASS: TestMOBAArenaTargetingThreeLanesEconomyAndRespawn (0.00s)
+--- PASS: TestMOBAArenaReplayVersionSeedAndFogBoundary (0.04s)
+--- PASS: TestMOBAArenaSurrenderAndTimeLimit (0.00s)
+--- PASS: TestMOBAMatchmakingAdmissionCancellationAndCommit (0.00s)
+--- PASS: TestMOBAInputIdentityReplayAndWindow (0.00s)
+--- PASS: TestMOBADeterministicDuelHealsLostBroadcasts (0.00s)
+--- PASS: TestMOBACatchupAndSpectatorCannotControlHeroes (0.00s)
+--- PASS: TestMOBAHistoryExpiryAndDesyncAreExplicit (0.00s)
+--- PASS: TestMOBALaneTowersBaseAndServerResult (0.00s)
+--- PASS: TestMOBASkillCooldownShopAndCheckpoint (0.00s)
+ok  	example.com/moba-practice/game/modules/moba	3.039s
+--- PASS: TestMOBAKCPRobotMatchSettlementAndClientResult (0.02s)
+--- PASS: TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom (0.03s)
+--- PASS: TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID (0.02s)
+--- PASS: TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity (0.04s)
+--- PASS: TestMOBARoundUndoRollsBackFrameAndCheckpoint (0.01s)
+--- PASS: TestMOBARoomMailboxBoundAndDrain (0.01s)
+--- PASS: TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound (0.01s)
+--- PASS: TestMOBADurableReplayAndDelayedObserverBeyond64Frames (0.17s)
+--- PASS: TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts (0.08s)
+--- PASS: TestMOBARoomCatchupNeverSendsUncommittedFrames (0.20s)
+--- PASS: TestMOBASettlementConcurrentReplayAndIdentity (0.00s)
+--- PASS: TestMOBASettlementRollbackAndRetry (0.00s)
+--- PASS: TestMOBANoWinnerSettlementNeverPays (0.00s)
+--- PASS: TestMOBAServerReferenceSettlesTheFinishedRound (0.00s)
+ok  	example.com/moba-practice/game/handler	2.173s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+# TestMOBA PASS 数：28，SKIP：0

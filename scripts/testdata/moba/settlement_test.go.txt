@@ -101,7 +101,7 @@ func TestMOBASettlementConcurrentReplayAndIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.players[0].Dao().GetGold() != 10 || f.players[0].Dao().GetWins() != 1 || f.players[1].Dao().GetLosses() != 1 {
+	if f.players[0].Dao().GetWallet().GetCoins() != 10 || f.players[0].Dao().GetWins() != 1 || f.players[1].Dao().GetLosses() != 1 {
 		t.Fatal("one result paid / counted more than once")
 	}
 	if err := s.MultiSync_MOBASettle(ctx, r, b, a, "ranked-match-1", digest, false); err == nil {
@@ -128,7 +128,7 @@ func TestMOBASettlementRollbackAndRetry(t *testing.T) {
 	if _, err := f.engine.RequestMulti(ctx, name, []int64{f.result.ID(), f.players[0].ID(), f.players[1].ID()}, nil); !errors.Is(err, failed) {
 		t.Fatal(err)
 	}
-	if f.result.Dao().GetStatus() != 0 || f.players[0].Dao().GetGold() != 0 || f.players[0].Dao().GetWins() != 0 || f.players[1].Dao().GetLosses() != 0 {
+	if f.result.Dao().GetStatus() != 0 || f.players[0].Dao().GetWallet().GetCoins() != 0 || f.players[0].Dao().GetWins() != 0 || f.players[1].Dao().GetLosses() != 0 {
 		t.Fatal("partial settlement survived rejection")
 	}
 	if err := sender.NewMobaSettlementSender(f.engine).MultiSync_MOBASettle(ctx, f.result.ID(), f.players[0].ID(), f.players[1].ID(), "match", strings.Repeat("a", 64), false); err != nil {
@@ -144,7 +144,7 @@ func TestMOBANoWinnerSettlementNeverPays(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.result.Dao().GetStatus() != 2 || f.players[0].Dao().GetGold() != 0 || f.players[0].Dao().GetWins() != 0 || f.players[1].Dao().GetLosses() != 0 {
+	if f.result.Dao().GetStatus() != 2 || f.players[0].Dao().GetWallet().GetCoins() != 0 || f.players[0].Dao().GetWins() != 0 || f.players[1].Dao().GetLosses() != 0 {
 		t.Fatal("cancelled / unresumable match paid win rewards")
 	}
 }
@@ -213,7 +213,7 @@ func TestMOBAServerReferenceSettlesTheFinishedRound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if f.result.Dao().GetDigest() != digest || f.players[0].Dao().GetWins() != 1 || f.players[0].Dao().GetGold() != 10 {
+	if f.result.Dao().GetDigest() != digest || f.players[0].Dao().GetWins() != 1 || f.players[0].Dao().GetWallet().GetCoins() != 10 {
 		t.Fatal("reference result did not pay exactly once")
 	}
 }

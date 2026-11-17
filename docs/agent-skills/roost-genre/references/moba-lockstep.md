@@ -2,7 +2,7 @@
 
 手册：`docs/framework/MOBA-INTEGRATION.md`（下称 MOBA §N）。路径相对 roost-core 根目录，以检出或 module cache 中的 `docs/` 为准。
 
-> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键；v1.35.0 起 KCP 网络用例改用公共 `robot.LockstepBot`，要多复制 Robot 场景与结果协议）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+> 本篇命令按当前检出的脚本写（R9 起先 `roost module add wallet` 再只写模块没覆盖的部分；v1.40.0 起 DAO 字段写 `store` 键；v1.35.0 起 KCP 网络用例改用公共 `robot.LockstepBot`，要多复制 Robot 场景与结果协议）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
 
 ## 1. 适用与不适用
 
@@ -16,24 +16,25 @@
 
 | 业务 | 模块 | 出处 |
 | --- | --- | --- |
-| 排队、成局、跨分区成局 | `service/match`（Enqueue / Commit / CommitAcross） | MOBA §2、§5.1 |
-| 席位、输入排序、切帧、追帧 | `framework/sync/lockstep`：`Match`、`Sequencer`；客户端 `FrameAssembler` | MOBA §2；guide/04-sync.md §6 |
+| 排队、成局、跨分区成局 | `service/match`（Enqueue / Commit / CommitAcross），手写（matchmaking 模块只做本 sid、同人数整队，不跨分区） | MOBA §2、§5.1 |
+| 席位、输入排序、切帧、追帧 | `framework/sync/lockstep`：`Match`、`Sequencer`；客户端 `FrameAssembler`（D5：夹具与 Lockstep 房间不迁 `Stepper`，不装 room / turn） | MOBA §2；guide/04-sync.md §6 |
 | 窗口外恢复 | `MatchConfig.Recovery` + `SnapshotProvider`（服务器参考模拟的检查点） | MOBA §6；guide/04-sync.md §6 |
-| 结算、战绩、奖励 | Player / MatchResult DAO + 多实体 Sender + Nest | MOBA §2、§5.4 |
+| 局外金币 | **装** wallet 模块：结算与原服奖励的胜者 `Wallet().Add(10)`（不留回执，判重靠 MatchResult 终态 / `MobaRewards`） | MOBA §4.6、§5.4、§5.8 |
+| 结算、战绩、原服奖励回执 | Player（`Wins` / `Losses` / `MobaRewards`，手写）/ MatchResult DAO + 多实体 Sender + Nest | MOBA §2、§5.4 |
 | 持久对局、比赛目录 | BattleRound / BattleDirectory 实体（World 锁档），先提交再广播 | MOBA §5.5、§5.6 |
 | 传输 | 嵌入 TCP `lockstep.TCPSender`；KCP 只生成装配（`-features nettransport-kcp`） | MOBA §6；`roost help replication` |
 
 ## 3. 生成最小 demo
 
-接在 SKILL.md §3.2 公共前置命令之后。对应 `scripts/test-moba-generated.sh` 的缺省模式（双英雄入门 + 5v5 夹具一起拷，测试互相依赖，不拆）。
+接在 SKILL.md §3.2 公共前置命令之后。对应 `scripts/test-moba-generated.sh` 的缺省模式（双英雄入门 + 5v5 夹具一起拷，测试互相依赖，不拆）。模块清单只有 `wallet`（R9）；不再 `add dao Player`（game 模板已有），不给 Player 加 `Gold`。
 
 ```bash
-"$ROOST" add dao Player --entity Player
+bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet   # = roost module add + 核对已登记
 for e in MatchResult BattleRound BattleDirectory; do
   "$ROOST" add entity "$e"
   "$ROOST" add dao "$e" --entity "$e"
 done
-dao_add Player db/def/player.go "Gold int64 gold" "Wins int64 wins" "Losses int64 losses" "MobaRewards string mobarewards"
+dao_add Player db/def/player.go "Wins int64 wins" "Losses int64 losses" "MobaRewards string mobarewards"
 dao_add BattleDirectory db/def/battle_directory.go "Payload string payload"
 dao_add BattleRound db/def/battle_round.go "Payload string payload"
 dao_add MatchResult db/def/match_result.go "MatchKey string matchkey" "Digest string digest" \
@@ -56,9 +57,10 @@ fix_mod moba-practice game/modules/moba/*.go game/handler/moba_*.go loadtest/bat
 gofmt -w loadtest/*.go db/def/*.go game/modules/moba/*.go game/handler/moba_*.go
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/modules/moba ./game/handler 2>&1 | tee "$WORK/test.log"
+bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" wallet
 ```
 
-期望：`--- PASS: TestMOBA` 恰好 **28** 条、0 skip（含 4 条真实 loopback KCP，其中 `TestMOBAKCPRobotMatchSettlementAndClientResult` 用公共 LockstepBot 打完整局、经可信 Nest 幂等结算并向客户端发 PB 资产结果）；然后按 SKILL.md §3.4 收尾。store 键沿用脚本的“字段名小写”写法。服务端初始化 / 结算 / 奖励接口不开放为玩家 PB；固定会话凭据只供验收。
+期望：`--- PASS: TestMOBA` 恰好 **28** 条、0 skip（含 4 条真实 loopback KCP，其中 `TestMOBAKCPRobotMatchSettlementAndClientResult` 用公共 LockstepBot 打完整局、经可信 Nest 幂等结算并向客户端发 PB 资产结果）；`modules.sh verify` 打印 `wallet 17/17`（== 检出 `modules/wallet/module.yaml` 的 `verify.pass`、0 skip，并带 build / vet / `id check` / `generate --check`）；然后按 SKILL.md §3.4 收尾。store 键沿用脚本的“字段名小写”写法。服务端初始化 / 结算 / 奖励接口不开放为玩家 PB；固定会话凭据只供验收。
 
 可选：需要 KCP / UDP 装配函数时，新建工程加 `-features protocol,config,entity,nest,dao,errcode,nettransport-kcp`（生成 `internal/transport/generated.go`；监听、握手鉴权、Session 绑定仍手写，`roost help replication`）。本 skill 未把它和上面的夹具组合实测。
 
@@ -85,6 +87,7 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/modules/m
 ## 6. 常见坑（MOBA §7）
 
 - 每帧把局内状态写 DAO：持久的应是结算事实或输入日志。
+- 局外奖励改用 wallet 的 `Apply(业务键)` 代替自己的回执：wallet 回执窗口只有最近 128 次，原服重投可能晚于它；有永久事实（MatchResult 终态、`MobaRewards`）时用 `Add`（MOBA §4.6）。
 - 客户端上报胜负 / hash 一致就发奖。
 - 放宽匹配对两个分区各 `Commit` 一半：失败留半局，用一次 `CommitAcross`。
 - 以为 `Tick` 报错就是没切帧：只有 `ErrMatchClosed` 不切帧，其他错误帧已在历史里。
@@ -94,7 +97,8 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/modules/m
 
 ## 7. 验证
 
-- 一档：§3 的 28 条 PASS + SKILL.md §3.4。2026-10-31 在 v1.33.0 检出、自定 module `example.com/mymoba` 实测通过（约 11s，构建缓存热）。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：28 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 collaborators FAIL。
+- 一档（R9 起）：§3 的 28 条 PASS + `module verify` 的 wallet 17/17 + SKILL.md §3.4；场景名与条数不变，金币断言改读 wallet（旧断言 → 新断言见 MOBA §4.6）。2026-11-17 在 main（R9 批 2）按 SKILL.md §3.2（自定 module 名）+ 本篇 §3 命令块实跑，见 MOBA §4.6 的证据链接。以下为 R9 之前的记录（金币是手写 `Gold`）。
+- 2026-10-31 在 v1.33.0 检出、自定 module `example.com/mymoba` 实测通过（约 11s，构建缓存热）。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：28 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 collaborators FAIL。
 - 框架自带网络门禁（在 roost-core 根目录）：`GOWORK=off go test -race -count=1 ./framework/sync/lockstep ./framework/sync/nettransport`（MOBA §12）。
 - 二档：`ROOST_MOBA_REAL=1`（隔离 Mongo 副本集）追加两进程结算恢复、活动对局 SIGKILL 续赛、SIGKILL 后窗口外快照恢复；再加 `ROOST_MOBA_ROUTING=1`（+ NATS）追加五进程宿主交接与奖励重投，以及三进程旧宿主快照在途时交接、新宿主恢复（MOBA §9、§11）。原快照用例另输出 100 次 strict Sender 的 p50 / p99 诊断，功能验收负载未隔离，不作为容量证据。
 - 不证明：对客户端广播与真实鉴权的端到端链路、权威 HA、tick 预算、5v5 目标负载与跨机（KNOWN-LIMITS“游戏接入验收”MOBA 行）。

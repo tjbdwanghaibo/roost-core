@@ -272,10 +272,10 @@ func TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity(t *testing.T) {
 			t.Fatal("award missing ack")
 		}
 		if i >= 5 {
-			if d.GetGold() != 10 || d.GetWins() != 1 || d.GetLosses() != 0 {
+			if d.GetWallet().GetCoins() != 10 || d.GetWins() != 1 || d.GetLosses() != 0 {
 				t.Fatal("winner duplicate / missing assets")
 			}
-		} else if d.GetGold() != 0 || d.GetWins() != 0 || d.GetLosses() != 1 {
+		} else if d.GetWallet().GetCoins() != 0 || d.GetWins() != 0 || d.GetLosses() != 1 {
 			t.Fatal("loser facts incorrect")
 		}
 	}

@@ -2,7 +2,7 @@
 
 本文面向准备用 core 开发 MOBA 等对局类游戏的服务端工程师，分两部分：**第一部分“学习”**沿一场对局讲输入由谁准入、怎样按帧排序、客户端怎样补缺帧、谁判胜负、怎样不重复结算，给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明每个入口证明什么、不证明什么。登录、资产、持久化和服务接入的共同接法见 [SLG](SLG-INTEGRATION.md) 与 [MMORPG](MMORPG-INTEGRATION.md) 手册，本篇重点是 Lockstep 对局、匹配和结算。
 
-业务玩法不放进公共框架，生成器也不生成这些业务文件：下面的夹具只在 [scripts/testdata/moba](../../scripts/testdata/moba/)，分两层——**单路双英雄入门**讲 Lockstep 输入、追帧与同进程多实体结算；**5v5 三路**在此之上加准备 / ban-pick、比赛目录与持久对局、提交后广播、battle host 代际与交接、Player 原服奖励回执。英雄、兵线、塔、基地、技能、装备、野区、投降规则、伤害、帧数与账本上限都是样例，正式游戏自行定义；完整的参考应用仍是 [game-demo](../../demo/README.md)。它不是现成的 5v5 产品，没有预设目标帧率、玩家规模、延迟预算或部署拓扑。
+业务玩法不放进公共框架，生成器也不生成这些业务文件：下面的夹具只在 [scripts/testdata/moba](../../scripts/testdata/moba/)，分两层——**单路双英雄入门**讲 Lockstep 输入、追帧与同进程多实体结算；**5v5 三路**在此之上加准备 / ban-pick、比赛目录与持久对局、提交后广播、battle host 代际与交接、Player 原服奖励回执。英雄、兵线、塔、基地、技能、装备、野区、投降规则、伤害、帧数与账本上限都是样例，正式游戏自行定义。工程按“装模块 + 只写模块没覆盖的部分”组织（R9，2026-11-17）：局外金币归 `wallet` 模块（结算与原服奖励的胜者 +10 走 `Wallet().Add`）；战绩 `Wins` / `Losses`、原服奖励账本 `MobaRewards`、Lockstep 对局（D5：夹具与 Lockstep 房间不迁 `Stepper`）、参考模拟、宿主与恢复、对局目录、结算记录与 `service/match` 跨分区成局（matchmaking 模块只做本 sid）都仍手写，这一类模块化后改动最小（§4.6）；完整的参考应用仍是 [game-demo](../../demo/README.md)。它不是现成的 5v5 产品，没有预设目标帧率、玩家规模、延迟预算或部署拓扑。
 
 ## 第一部分：学习
 
@@ -61,9 +61,9 @@ ROOST_MOBA_KEEP=1 bash scripts/test-moba-generated.sh   # 保留生成工程以�
 脚本打印临时目录，生成工程在其中的 `project/`。它的步骤就是一个新工程的接入方式（`roost` 是脚本从当前仓库编出的 CLI）：
 
 1. `roost project new moba-practice -module example.com/moba-practice -template game --skip-deps`，然后 `go mod edit -replace github.com/tjbdwanghaibo/roost-core=<本仓库路径>` 让依赖指向本地仓库（脚本随后以 `-mod=mod` 运行，自己动手时执行一次 `GOWORK=off go mod tidy`）；
-2. `roost add dao Player --entity Player`、`roost add entity MatchResult`、`roost add dao MatchResult --entity MatchResult`；5v5 再加 `roost add entity BattleRound`、`roost add dao BattleRound --entity BattleRound`、`roost add entity BattleDirectory`、`roost add dao BattleDirectory --entity BattleDirectory`；
-3. 业务只改这几处：在 `db/def/player.go`（`Gold` / `Wins` / `Losses`，5v5 的奖励回执 `MobaRewards`）、`db/def/match_result.go`（`MatchKey` / `Digest` / `WinnerID` / `LoserID` / `Status`）、`db/def/battle_round.go` 与 `db/def/battle_directory.go`（各一个 `Payload`）填 DAO 字段，骨架的逻辑库 `db=main` 不改（真实依赖模式的唯一物理库由测试夹具的库映射给出）；把 `game/entities/{match_result,battle_round,battle_directory}/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些记录被多名玩家共同引用，锁序低于 Player）；放入局内模拟与房间包 `game/modules/moba/`、结算 handler `game/handler/moba_settlement.go` 与 5v5 handler `game/handler/moba_round.go`；
-4. `roost generate` 生成组件、访问器和 `MobaSettlementSender` / `MobaRoundSender`。
+2. 装模块：`roost module add wallet`（脚本经公用的 [`genre-common/modules.sh`](../../scripts/testdata/genre-common/modules.sh) `add`；Player 实体与主 DAO 来自 game 模板，wallet 把 `Wallet` / `WalletLedger` 装在 `PlayerDao` 上，不再 `add dao Player`），再 `roost add entity MatchResult`、`roost add dao MatchResult --entity MatchResult`；5v5 再加 `roost add entity BattleRound`、`roost add dao BattleRound --entity BattleRound`、`roost add entity BattleDirectory`、`roost add dao BattleDirectory --entity BattleDirectory`；
+3. 业务只改这几处：在 `db/def/player.go`（`PlayerDao` 末尾追加 `Wins` / `Losses`，5v5 的奖励回执 `MobaRewards`；金币是 wallet 的 `Wallet`，不再加 `Gold`）、`db/def/match_result.go`（`MatchKey` / `Digest` / `WinnerID` / `LoserID` / `Status`）、`db/def/battle_round.go` 与 `db/def/battle_directory.go`（各一个 `Payload`）填 DAO 字段，骨架的逻辑库 `db=main` 不改（真实依赖模式的唯一物理库由测试夹具的库映射给出）；把 `game/entities/{match_result,battle_round,battle_directory}/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些记录被多名玩家共同引用，锁序低于 Player）；放入局内模拟与房间包 `game/modules/moba/`、结算 handler `game/handler/moba_settlement.go` 与 5v5 handler `game/handler/moba_round.go`；
+4. `roost generate` 生成组件、访问器和 `MobaSettlementSender` / `MobaRoundSender`；之后脚本跑 `modules.sh verify`（wallet 自带的 17 条场景 == `modules/wallet/module.yaml` 的 `verify.pass`、0 skip）。
 
 #### 4.2 阅读顺序
 
@@ -145,7 +145,7 @@ func settle(ctx context.Context, client nest.Client, reference *moba.State, resu
 }
 ```
 
-`Match` 不加锁：网络回调把命令投进有界房间队列，由所有者 goroutine 依次调用 `onCommand` / `tick`；不要让网络回调与 Nest handler 并发访问同一个 Match，也不要持玩家锁等待对局循环。`settle` 是同步 Nest 请求，不能在 handler 内调用（框架返回 `ErrSyncInHandler`）。获胜奖励 10 金币与局内金币无关，正式经济、排位积分和赛季要业务建模。
+`Match` 不加锁：网络回调把命令投进有界房间队列，由所有者 goroutine 依次调用 `onCommand` / `tick`；不要让网络回调与 Nest handler 并发访问同一个 Match，也不要持玩家锁等待对局循环。`settle` 是同步 Nest 请求，不能在 handler 内调用（框架返回 `ErrSyncInHandler`）。获胜奖励 10 金币（wallet 余额，`Wallet().Add(10)`）与局内金币无关，正式经济、排位积分和赛季要业务建模。
 
 #### 4.4 二十八个场景各学什么
 
@@ -249,6 +249,20 @@ func deliverAward(ctx context.Context, origin nest.Client, seat int, award moba.
 
 三个 Sender 调用都是同步 Nest 请求，不能在 handler 内调用；`Actor.Call` 也不能在 Nest handler 或实体锁内等待（房间提交时要回到权威的 Nest）。`ackSeat` 对应权威上的 `Change{Op: "ack", HostSID, Epoch, Seat, Digest}`，要带当前 HostSID / Epoch。Round 只在一个权威进程加载，所有宿主经 RPC 调它，**不要在多个进程各自打开同一个 Round ID 的本地 WAL**。
 
+#### 4.6 模块化之后场景语义的变化（R9，2026-11-17）
+
+只换了局外金币（`Player.Gold` → wallet）。场景名与条数（缺省 28、REAL 3 + ROUTING 2）不变，判定的数值不变，旧断言 → 新断言：
+
+| 场景 | 旧断言 | 新断言 |
+| --- | --- | --- |
+| `SettlementConcurrentReplayAndIdentity`、`ServerReferenceSettlesTheFinishedRound` | 胜者 `Player.Gold == 10` | 胜者 wallet 的 `Wallet.Coins == 10`（结算里 `Wallet().Add(10)`，判重仍是 MatchResult 终态） |
+| `SettlementRollbackAndRetry`、`NoWinnerSettlementNeverPays` | 拒绝回滚 / 无胜者后 `Gold == 0` | `Wallet.Coins == 0`（wallet 余额随整笔 undo 回滚；无胜者不调 wallet） |
+| `FiveVFiveAwardPartialDeliveryReplayAndIdentity` | 胜方 `Gold` 10、负方 0 | 胜方 `Wallet.Coins` 10、负方 0（`MOBAAward` 里 `Wallet().Add(10)`，判重仍是 `MobaRewards` 永久回执） |
+| `KCPRobotMatchSettlementAndClientResult` | 客户端收到的 PB `Gold` 来自 `Player.Gold` | 来自 `MOBAProfile` 读的 `Wallet().Balance()`（断言的数值不变） |
+| `TestMOBARealSettlementAcrossProcesses`（REAL）、`TestMOBARealCrossSIDHostRouting`（ROUTING） | 冷加载 / 原服重投后 `Gold` 10 | 冷加载 / 原服重投后 `Wallet.Coins` 10 |
+
+原夹具的金币上限（`Gold > 1000000-10` 拒绝）换成 wallet 的溢出检查；战绩上限（`Wins` / `Losses` 100 万）与 `MobaRewards` 64 局上限不变。变异证明（结算 / 原服奖励不入 wallet、无胜者也发、wallet 余额 undo 不还原、战绩查询不读 wallet，对应场景变红，恢复后变绿；其中两条在真实 Mongo / NATS 上）记在 [R9 2D 证据](../maintenance/evidence/r9-2d-20261117/README.md)。
+
 ### 5. 一场对局怎样连接这些模块
 
 ```mermaid
@@ -342,7 +356,7 @@ func settled(formed svcmatch.Match, err error) (svcmatch.Match, bool, error) {
 
 #### 5.4 结算
 
-`handlerMOBASettle`（`rollback=undo durability=strict`）把本场身份 / 摘要 / 终态与双方奖励 / 战绩一起提交：MatchResult 已有终态时，完全相同的重放直接成功，换胜者、比赛 ID 或摘要都被拒；无胜者终态保留但不发获胜奖励。结算 EntityID 要在开局时分配并随本场路由保存，重试与恢复都路由到同一个 ID。调用方式见 §4.3。
+`handlerMOBASettle`（`rollback=undo durability=strict`）把本场身份 / 摘要 / 终态与双方奖励（胜者 `Wallet().Add(10)`，不留 wallet 回执，“这一场发过没有”由 MatchResult 的 `Status` 保证；原夹具的 100 万金币上限换成 wallet 的溢出检查）/ 战绩一起提交：MatchResult 已有终态时，完全相同的重放直接成功，换胜者、比赛 ID 或摘要都被拒；无胜者终态保留但不发获胜奖励。结算 EntityID 要在开局时分配并随本场路由保存，重试与恢复都路由到同一个 ID。调用方式见 §4.3。
 
 下面四节是 5v5 夹具在双英雄之上的接法：
 
@@ -392,7 +406,7 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 
 #### 5.8 原服奖励：逐人回执
 
-5v5 以 Round ID 为结算身份。权威终态生成每名成员的 `Award`；Player 原服**回查权威终态**取得 Award、核对是本服成员后调用 `Sync_MOBAAward`，在 Player 事务里同时写资产、战绩和回执，然后向权威确认这个 seat。同一回执重放返回成功但不再计奖，同一局换胜者、摘要或玩家被拒。原服可能在到账后、确认前崩溃，恢复后用同一 Award 重投，所以跨服奖励逐人完成，**不承诺十名玩家同时到账**；要有业务调度者扫描未确认的 seat 继续投递（夹具由测试驱动投递，没有常驻调度服务）。每名 Player 样例最多 64 场回执，满了拒绝新奖、保留旧证据。局内金币与局外奖励分开。
+5v5 以 Round ID 为结算身份。权威终态生成每名成员的 `Award`；Player 原服**回查权威终态**取得 Award、核对是本服成员后调用 `Sync_MOBAAward`，在 Player 事务里同时写资产（wallet 的 `Add`，不用 `Apply`：wallet 回执窗口只有最近 128 次，“这一局发过没有”由 `MobaRewards` 永久回执保证）、战绩和回执，然后向权威确认这个 seat。同一回执重放返回成功但不再计奖，同一局换胜者、摘要或玩家被拒。原服可能在到账后、确认前崩溃，恢复后用同一 Award 重投，所以跨服奖励逐人完成，**不承诺十名玩家同时到账**；要有业务调度者扫描未确认的 seat 继续投递（夹具由测试驱动投递，没有常驻调度服务）。每名 Player 样例最多 64 场回执，满了拒绝新奖、保留旧证据。局内金币与局外奖励分开。
 
 ### 6. 网络、恢复和反作弊边界
 
@@ -445,7 +459,7 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 bash scripts/test-moba-generated.sh
 ```
 
-按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 28 条顶层 race 场景（§4.4 全部列出）且无 skip，随后对消费者 build / vet，执行 `roost id check` 与 `roost generate --check`。成功删除临时工程；失败或 `ROOST_MOBA_KEEP=1` 时保留。
+按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 28 条顶层 race 场景（§4.4 全部列出）且无 skip，随后对消费者 build / vet，执行 `roost id check` 与 `roost generate --check`，再跑 `roost module verify`（经 `modules.sh verify`，末尾打印 `module verify: wallet 17/17 skipped=0`）。成功删除临时工程；失败或 `ROOST_MOBA_KEEP=1` 时保留。
 
 其中 `TestMOBAKCPRobotMatchSettlementAndClientResult`（[network_test.go.txt](../../scripts/testdata/moba/network_test.go.txt)，Robot 场景由 `robot.go.txt` 装到 `loadtest/battle.go`）用公共 `robot.LockstepBot` 经 KCP 输入、广播与可靠追帧打到基地摧毁，核对模拟摘要，经可信 Nest 幂等结算后向客户端发送 PB 资产结果。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 

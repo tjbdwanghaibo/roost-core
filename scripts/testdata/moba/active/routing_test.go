@@ -248,7 +248,7 @@ func runMOBARoutingChild(t *testing.T, role string) {
 				}
 				d := v.(*player.Player).Dao()
 				receipts := strings.Count(d.GetMobaRewards(), "\"RoundID\"")
-				out = append(out, playerFacts{m.PlayerID, d.GetGold(), d.GetWins(), d.GetLosses(), receipts})
+				out = append(out, playerFacts{m.PlayerID, d.GetWallet().GetCoins(), d.GetWins(), d.GetLosses(), receipts})
 			}
 			return out, nil
 		}); err != nil {

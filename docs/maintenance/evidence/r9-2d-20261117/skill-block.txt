@@ -1,0 +1,7 @@
+# SKILL.md §3.2 公共前置（CORE=本检出，NAME=mymoba，MOD=example.com/mymoba）+ references/moba-lockstep.md §3 命令块，原样从 Markdown 抽出拼成脚本执行（2026-11-17）
+# exit=0；TestMOBA PASS 28、SKIP 0
+ok  	example.com/mymoba/game/modules/moba	3.213s
+ok  	example.com/mymoba/game/handler	2.263s
+module verify: wallet 17/17 skipped=0
+# SKILL.md §3.4 收尾：go build / go vet ./... 通过；roost id check -> IDs are valid；roost generate --check -> up to date；project doctor FAIL 行 0
+# 手册 §4.3、§4.5、§5.1 三段 Go 示例（mobaflow / mobaround / mobamatch）放进 moba-real/project/internal/：go build + go vet 通过（检查后删除）

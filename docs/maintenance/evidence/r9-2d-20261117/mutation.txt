@@ -1,0 +1,78 @@
+# 变异（在保留的生成工程 b1117-r9-2cd/moba-real/project 里改一处、跑对应场景看红、恢复看绿；N6 / N7 在真实 Mongo（+ NATS）上，每次新库与新 WAL）
+# 脚本：mutate.py.txt；命令：python3 mutate.py <工程>（N1～N5）；source env.sh 后 ROOST_MOBA_WAL_ROOT=<目录> python3 mutate.py <工程> real（N6、N7）
+== N1 结算胜者不入 wallet（删 winner.Wallet().Add(10)）
+   mutated: exit=1 (RED)
+     moba_settlement_test.go:105: one result paid / counted more than once
+     --- FAIL: TestMOBASettlementConcurrentReplayAndIdentity (0.00s)
+     moba_settlement_test.go:217: reference result did not pay exactly once
+     --- FAIL: TestMOBAServerReferenceSettlesTheFinishedRound (0.00s)
+     FAIL
+     FAIL	example.com/moba-practice/game/handler	0.576s
+     FAIL
+   restored: exit=0 (GREEN)
+     --- PASS: TestMOBASettlementConcurrentReplayAndIdentity (0.00s)
+     --- PASS: TestMOBAServerReferenceSettlesTheFinishedRound (0.00s)
+     ok  	example.com/moba-practice/game/handler	0.558s
+== N2 无胜者也发金币（Add 挪到 !aborted 之外）
+   mutated: exit=1 (RED)
+     moba_settlement_test.go:148: cancelled / unresumable match paid win rewards
+     --- FAIL: TestMOBANoWinnerSettlementNeverPays (0.00s)
+     FAIL
+     FAIL	example.com/moba-practice/game/handler	0.563s
+     FAIL
+   restored: exit=0 (GREEN)
+     --- PASS: TestMOBANoWinnerSettlementNeverPays (0.00s)
+     ok  	example.com/moba-practice/game/handler	0.325s
+== N3 wallet 余额的 undo 不还原（生成工程里的 WalletState.SetCoins）
+   mutated: exit=1 (RED)
+     moba_settlement_test.go:132: partial settlement survived rejection
+     --- FAIL: TestMOBASettlementRollbackAndRetry (0.00s)
+     FAIL
+     FAIL	example.com/moba-practice/game/handler	0.566s
+     FAIL
+   restored: exit=0 (GREEN)
+     --- PASS: TestMOBASettlementRollbackAndRetry (0.00s)
+     ok  	example.com/moba-practice/game/handler	0.361s
+== N4 原服奖励胜者不入 wallet（删 player.Wallet().Add(10)）
+   mutated: exit=1 (RED)
+     moba_round_test.go:276: winner duplicate / missing assets
+     --- FAIL: TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity (0.01s)
+     FAIL
+     FAIL	example.com/moba-practice/game/handler	0.610s
+     FAIL
+   restored: exit=0 (GREEN)
+     --- PASS: TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity (0.01s)
+     ok  	example.com/moba-practice/game/handler	1.330s
+== N5 战绩查询不读 wallet（Profile.Gold 写 0）
+   mutated: exit=1 (RED)
+     moba_network_test.go:256: duplicate or wrong settlement: &{Winner:1 Digest:7dbfc851a97706c25ab9a99da14caf59e3a53523d70cfefab77dae83c5f50007 Gold:0 Wins:1 Losses:0}
+     --- FAIL: TestMOBAKCPRobotMatchSettlementAndClientResult (0.01s)
+     FAIL
+     FAIL	example.com/moba-practice/game/handler	0.601s
+     FAIL
+   restored: exit=0 (GREEN)
+     --- PASS: TestMOBAKCPRobotMatchSettlementAndClientResult (0.01s)
+     ok  	example.com/moba-practice/game/handler	0.369s
+== N6（REAL）结算胜者不入 wallet
+   mutated: exit=1 (RED)
+     moba_persistence_test.go:137: settlement not recovered exactly once: winner gold=0 wins=1, loser losses=1, result status=1 key="persisted-moba-match"
+     --- FAIL: TestMOBARealSettlementAcrossProcesses (0.68s)
+     FAIL
+     FAIL	example.com/moba-practice/game/handler	1.043s
+     FAIL
+   restored: exit=0 (GREEN)
+     --- PASS: TestMOBARealSettlementAcrossProcesses (0.52s)
+     ok  	example.com/moba-practice/game/handler	0.851s
+     --- PASS: TestMOBARealSettlementAcrossProcesses (0.17s)
+     ok  	example.com/moba-practice/game/handler	0.550s
+== N7（REAL + ROUTING）原服奖励胜者不入 wallet
+   mutated: exit=1 (RED)
+     moba_routing_test.go:428: winner paid incorrectly {40966149 0 1 0 1}
+     --- FAIL: TestMOBARealCrossSIDHostRouting (1.76s)
+     FAIL
+     FAIL	example.com/moba-practice/game/handler	2.095s
+     FAIL
+   restored: exit=0 (GREEN)
+     moba_routing_test.go:470: NATS 5-process drill: 10 members, host 2000 -> 2001, epoch 1 -> 2, 2 rewards before origin crash; 10 receipts exactly once, all acknowledged
+     --- PASS: TestMOBARealCrossSIDHostRouting (1.94s)
+     ok  	example.com/moba-practice/game/handler	2.270s

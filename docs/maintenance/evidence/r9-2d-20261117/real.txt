@@ -1,0 +1,15 @@
+# source ~/.roost-it/roost-dataengine-it/env.sh；ROOST_MOBA_REAL=1 ROOST_MOBA_ROUTING=1 bash scripts/test-moba-generated.sh（2026-11-17）
+# exit 0（缺省 28 条与 module verify 同上，下面只列 REAL / ROUTING 段）
+module verify: wallet 17/17 skipped=0
+--- PASS: TestMOBARealSettlementAcrossProcesses (0.56s)
+--- PASS: TestMOBARealSettlementAcrossProcesses (0.15s)
+--- PASS: TestMOBARealActiveRoundCrashRecovery (1.33s)
+--- PASS: TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL (2.29s)
+--- PASS: TestMOBARealSnapshotDuringHostHandoff (5.18s)
+--- PASS: TestMOBARealCrossSIDHostRouting (6.79s)
+moba_crash_test.go:225: SIGKILL recovery: WAL backlog=45, frame 20 -> 40, epoch 1 -> 2, 10 original Player sids retained
+moba_snapshot_test.go:117: strict WAL Sender latency diagnostic: n=100 p50_us=10933 p99_us=14442 max_us=15364 (100 sequential frame commits; functional run, not capacity evidence)
+moba_snapshot_test.go:319: SIGKILL snapshot recovery: 125 unprojected strict records (25 after setup + 100 frames); cold load epoch 1 -> 2; seats 1 (from frame 1) and 7 (from frame 21) restored from committed checkpoint 100 via one fetch (2886 bytes), continued to head 112 with 16 page frames; metric deltas map[bytes:2886 failed:0 frames:112 pages:16 snapshot:2 unservable:0]
+moba_process_snapshot_test.go:175: 3-process NATS snapshot handoff: 125 unprojected strict records recovered, old host snapshot in flight at handoff, epoch 1 -> 2, checkpoint 102, head 114, reliable page frames 8; zero uncommitted packets
+moba_routing_test.go:470: NATS 5-process drill: 10 members, host 2000 -> 2001, epoch 1 -> 2, 2 rewards before origin crash; 10 receipts exactly once, all acknowledged
+# SKIP 行数：0

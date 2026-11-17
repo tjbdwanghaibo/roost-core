@@ -50,6 +50,8 @@ func handlerMOBARound(round IMobaRoundEntity, c moba.Change) (moba.Round, error)
 
 // MOBA 跨 sid 奖励采用终态驱动的逐玩家投递：各 Player 原服提交自己的永久回执，全部确认后权威局结束投递。
 // 一次返回未知时重用原 Award；不承诺跨十名玩家瞬时原子。样例账本最多 64 局且从不静默淘汰，满则拒绝新奖，需业务归档设计。
+// 金币走 wallet 的 Add（R9）：不用 Apply——wallet 的回执窗口只有最近 128 次，“这一局发过没有”由本账本 MobaRewards 永久保证，
+// 与金币同一笔事务；余额溢出由 wallet 拒绝，整笔回滚。
 // 仅由受信任服务在回查权威终态后调用，不开放给客户端；SID 在原服入口校验。
 //
 //roost:nest rollback=undo durability=strict
@@ -85,10 +87,12 @@ func handlerMOBAAward(player IMobaPlayerEntity, award moba.Award) error {
 	d := player.Dao()
 	if !award.Draw {
 		if award.Won {
-			if d.GetGold() > 1000000-10 || d.GetWins() >= 1000000 {
+			if d.GetWins() >= 1000000 {
 				return moba.ErrRule
 			}
-			d.SetGold(d.GetGold() + 10)
+			if _, err := player.Wallet().Add(10); err != nil {
+				return err
+			}
 			d.SetWins(d.GetWins() + 1)
 		} else {
 			if d.GetLosses() >= 1000000 {
