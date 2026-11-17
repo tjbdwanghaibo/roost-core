@@ -1028,7 +1028,7 @@ var realProcessDependencyEntries = []struct {
 	{
 		script:      "scripts/test-demo-rehome.sh",
 		environment: "mirror-local 私有 Mongo 副本集 / Redis / NATS，自起 etcd；DEMO_REHOME_OUT=/abs/path bash scripts/test-demo-rehome.sh",
-		scope:       "account + game 1000/1001 六个阶段 SIGKILL，TCP 重登、钱包去重、背包、源档和 checkpoint 阻塞；committed→删源库窗口按 Q4 单列，不进 pretag",
+		scope:       "account + game 1000/1001 六个阶段 SIGKILL，重启后不登录：在途四点由恢复循环续做（D8）、committed 点起服核对删源档（D7），之后 TCP 重登、钱包去重、背包、源档和 checkpoint 阻塞；不进 pretag",
 		fixtures: []string{
 			"scripts/testdata/demo-drill/rehome.go.txt",
 			"scripts/testdata/demo-drill/rehome-instrument.py",

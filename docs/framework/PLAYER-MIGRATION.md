@@ -4,9 +4,9 @@
 
 ## 1. 先说清“迁移”的对象
 
-静态绑定下，玩家建角时由 account 绑定到一个 game sid（`Role.ServerID`，[service/account/types.go](../../service/account/types.go)），之后只有单个玩家换服（[§7](#7-单个玩家换服account-一侧)）会改它；同一 sid 同一时刻只有一个进程（App 单实例锁），game 进程只为绑定在自己 sid 上的玩家服务（demo 的 [playerowner.go](../../demo/internal/service/game/playerowner.go.tmpl)）。这保证当前绑定下的玩家请求入口只有一个承载进程；rehome committed 后旧源档/预加载副本的定时写仍有 Q4 窗口，不能据此宣称旧副本全部隔离。
+静态绑定下，玩家建角时由 account 绑定到一个 game sid（`Role.ServerID`，[service/account/types.go](../../service/account/types.go)），之后只有单个玩家换服（[§7](#7-单个玩家换服account-一侧)）会改它；同一 sid 同一时刻只有一个进程（App 单实例锁），game 进程只为绑定在自己 sid 上的玩家服务（demo 的 [playerowner.go](../../demo/internal/service/game/playerowner.go.tmpl)）。这保证当前绑定下的玩家请求入口只有一个承载进程；rehome 提交之后、删源档之前崩溃留下的旧源档由源服重启时的起服核对认出并删掉（§7，D7 A），目标服已先写过他时保留给运维。
 
-所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。把单个玩家改绑到另一个 sid 是另一件事，见 [§7 单个玩家换服（account 一侧）](#7-单个玩家换服account-一侧)：account 已有改绑的接口与换服状态，游戏侧已由 rehome 模块提供源服停写、交出实体、sid 库搬档与到达，并完成本机真实进程验收（§7）；仍须使用完整流程，不能只凭 account 接口改绑，committed 源档清理 Q4 未关；把整个服并入另一个服用别名合服（[§6](#6-合服把服-a-并入服-b)），角色仍绑定原服，由承载服的进程服务。
+所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。把单个玩家改绑到另一个 sid 是另一件事，见 [§7 单个玩家换服（account 一侧）](#7-单个玩家换服account-一侧)：account 已有改绑的接口与换服状态，游戏侧已由 rehome 模块提供源服停写、交出实体、sid 库搬档与到达，并完成本机真实进程验收（§7）；仍须使用完整流程，不能只凭 account 接口改绑；把整个服并入另一个服用别名合服（[§6](#6-合服把服-a-并入服-b)），角色仍绑定原服，由承载服的进程服务。
 
 数据只以已落库（Mongo）为准：WAL 只保证本机落库，新机器用空的 WAL 目录启动，不搬运旧机器的 WAL 热状态（[guide/03-dataengine §6](guide/03-dataengine.md#6-维护与升级)）。整个流程的正确性取决于一点：**旧进程的 WAL 在新进程启动前已全部投影并确认**。
 
@@ -148,7 +148,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 **本机真实进程已验**：`scripts/test-demo-rehome.sh` 使用嵌入式玩家 TCP，启动 account、两个 game（1000 / 1001）、alliance 等正式协作者，覆盖六个 SIGKILL 点各两轮及 checkpoint 负对照，核对 account / 玩家入口唯一归属、计数 / 资产与 WAL 恢复。该档不包含独立 Gate。
 
-**committed 窗口（Q4）仍保留**：源档删除未执行时崩溃会保留旧副本。源服用 account 当前会话再次进入时被归属检查拒绝（P1 观测为 `player_elsewhere`，owner sid 1001），不保证触发 Resume 或源档清理。旧内存 / 定时器写尚未全部隔离，需要人工恢复；Q4 不因脚本退出 0 关闭。见[换服证据](../maintenance/evidence/rehome-20261114/README.md)。
+**源服重启之后不等登录**（D7 A / D8 A，2026-11-17）：rehome 的恢复循环（`game/modules/rehome/rehome_recover.go`，由 rehome manager 在 Background 里起）做两件事——起服核对本服库里的玩家：account 把他绑在别的服的（提交之后、删源档之前崩溃留下的旧档）不加载，按已迁走落定（立屏障、补搬确认、按版本删本服的；目标服已有别的版本时保留并记 Error）；之后定期按 account 的在途索引（`ListRoleTransfers`）把本服发起、还没做完的换服接着做，过了期限的提交被拒绝、按没换成收尾。真实进程演练的六个 SIGKILL 点重启后都不登录，等 account 绑定与 Mongo 给出结果，见[D7 / D8 证据](../maintenance/evidence/r2-rehome-d7-d8-20261117/README.md)；2026-11-14 那轮（committed 点保留旧源档、前四点经登录续做）见[换服证据](../maintenance/evidence/rehome-20261114/README.md)。
 
 ### 7.1 模型
 
@@ -169,7 +169,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 ### 7.2 接口
 
-四个接口都在 `Accounts` 上（经总线可调）：发起与提交的是源服的 game 进程，冷准入时任何 game 进程都要读绑定。返回值都是 `RoleBinding{PlayerID, ServerID, ServingServerID, BindEpoch, TransferSeq, Transfer, LastTransfer}`；`ErrTransferStale`（560118）与 `ErrTransferInProgress`（560119）两种拒绝同时带回当前的绑定。
+四个接口都在 `Accounts` 上（经总线可调）：发起与提交的是源服的 game 进程，冷准入时任何 game 进程都要读绑定。另有两个只读的批量接口给源服重启后的恢复用：`ListRoleTransfers(fromServerID)`（在途的换服，按期限从早到晚，`fromServerID` 为 0 时不按发起服过滤，至多 `MaxListedTransfers` 条；角色存储没有在途索引时答 `ErrNoTransferIndex`）与 `RoleBindingsAway(serverID, playerIDs)`（这些玩家里此刻不由 `serverID` 承载的，一次至多 `MaxBindingBatch` 个；不存在、建角没发布的不返回）。返回值都是 `RoleBinding{PlayerID, ServerID, ServingServerID, BindEpoch, TransferSeq, Transfer, LastTransfer}`；`ErrTransferStale`（560118）与 `ErrTransferInProgress`（560119）两种拒绝同时带回当前的绑定。
 
 | 接口 | 做什么 | 拒绝 | 写入顺序与中途停下 |
 | --- | --- | --- | --- |
@@ -180,7 +180,8 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 补充：
 
-- **期限**（`TTLSeconds`，0 取 10 分钟）只写进 `Transfer.DeadlineUnix`：一期 account 不自动中止（它不知道源服卸载到了哪一步），也不拒绝迟到的提交（中途停下一律向前恢复）。过期的换服由运维或游戏侧模块中止。
+- **期限**（`TTLSeconds`，0 取 10 分钟，写进 `Transfer.DeadlineUnix`，系统时间；`now >= DeadlineUnix` 为过期，D8 A）：期限之内中途停下的由源服向前恢复（rehome 的恢复循环按 `ListRoleTransfers` 续做，或玩家登录源服时续做）；到了期限就不能再提交——迟到的 `CommitRoleTransfer` 答 `ErrTransferStale` 并当场把这一次记为已中止（`LastTransfer.Note` 以 `expired:` 开头），没有人来提交的由 account 进程每 30 秒一次的清扫（`SweepExpiredTransfers`，一次至多 100 个）中止。中止对源服安全：角色一直绑在源服，源服还在做的那一次拿到 stale 与“仍在本服”的绑定，按中止收尾（删目标库副本、撤屏障）。清扫与迟到提交的中止都只在“仍在途且已过期”时落地（同一次 CAS 里再看一遍），与并发的提交先落者生效。
+- **在途索引**：角色记录上 `Transfer` 非空的玩家，按期限排序，与角色记录同一次原子写维护（Redis 上是角色存储自带的有序集合 `<key_prefix>:transfers`，与值一个脚本；进程内是 `MemoryRoles`）。Redis Cluster 上脚本要求同一个 slot，所以 account 的 `key_prefix` 必须带 hash tag（如 `{acct}`），没有时 Mod 初始化报错。
 - **中止一个没发起成功的 ID**（当前没有换服在途时）也被接受并记为已中止、`TransferSeq` 加 1，于是一个迟到的 Begin 不能再把它做起来。调用方在 Begin 结果未知时用它得到确定的结论；这个结论不会过期——之后再有多少次发起与中止（它们会把 `LastTransfer` 换成别的 ID），那个 Begin 带的都是旧序号。
 - **过期的请求**：`ErrTransferStale` 说的是“你手里的绑定或换服 ID 不是当前的”。发起方读绑定、发 Begin 之间有别的发起或中止落地时也会得到它（序号变了），重读绑定再发起即可；两个发起方同时发起，一个受理，另一个得到 `ErrTransferInProgress`。
 - **收尾谁来补**：结果已定而 slot 没收尾（`LastTransfer.Settled` 为 false）时，重发的 Commit / Abort、这个角色的下一次 `SelectRole`、下一次 `BeginRoleTransfer` 读到就补完。补完之前，另一头的名额仍按已占用回答（提交后的旧服、中止后的目标服：`CreateRole` 得到 `ErrRoleLimit`）。迟到的收尾只删绑定代数更旧的 slot，不会删掉角色后来换回来的那一个。
@@ -204,6 +205,8 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 go run ./cmd/accountctl show-role -player 1000001
 # 人工发起（按读到的承载服、绑定代数与换服尝试序号发起；不给 -id 时自动生成，结果里给出）
 go run ./cmd/accountctl transfer-role begin -player 1000001 -to 1001 -note "工单 4711"
+# 在途的换服与期限（-from 只看某个服发起的），JSON 列表，没有时是 []
+go run ./cmd/accountctl transfer-role list -from 1000
 # 人工提交 / 中止一次在途的换服
 go run ./cmd/accountctl transfer-role commit -player 1000001 -id <ID> -note "1000 已退出，wal-drained 通过"
 go run ./cmd/accountctl transfer-role abort  -player 1000001 -id <ID> -note "源服排空超时"
@@ -220,7 +223,8 @@ go run ./cmd/accountctl transfer-role abort  -player 1000001 -id <ID> -note "源
 
 | 现象 | 处理 |
 | --- | --- |
-| `show-role` 显示 `Transfer` 在途、早已过了 `DeadlineUnix` | 源服还活着：让它自己向前恢复或中止。源服已经没了：确认上面的前提 2 之后 `commit`，否则 `abort` |
+| `transfer-role list` 里有早已过了 `DeadlineUnix` 的条目 | account 的清扫应当已经中止它（每 30 秒一次）：看 account 进程是不是在跑、日志里有没有清扫失败。期限之后的 `commit` 一律被拒绝并记为中止，要换服就重新发起 |
+| `transfer-role list` 里期限未到、源服已经没了 | 源服重启后它的恢复循环会接着做；源服不再起来时，确认上面的前提 2 之后 `commit`，否则 `abort`（或等期限到了由清扫中止） |
 | `commit` 答 `ErrServerClosed` / `ErrServerInvalid` | 目标服在换服期间被并入别服或删除：`abort`，换一个目标重新发起 |
 | `commit` / `abort` 中途报错 | 原样重跑同一条命令（同一个 `-id`），已经做过的步骤不会重做 |
 | `abort` 答已提交（`ErrTransferStale`，同时打印绑定） | 这次换服已经提交，角色在目标服；要回去就再换一次 |
@@ -229,9 +233,8 @@ go run ./cmd/accountctl transfer-role abort  -player 1000001 -id <ID> -note "源
 
 ### 7.5 边界
 
-- 游戏侧 rehome 已完成本节开头的本机真实验收；跨机、物理卷迁移与 Q4 旧源副本清理仍未验/未定。
-- 一期不涉及**已并入另一服的服**：角色的绑定服已并入别服、或目标服已并入别服，发起都被拒绝；提交时目标服已并入别服也被拒绝。承载着别的服（别人并入它）的服是普通的源与目标。`MergeServer` 不检查有没有在途的换服指向被合并的服（没有在途换服的索引）。
-- 没有在途换服的列举与过期清扫；期限只记录。
+- 游戏侧 rehome 已完成本节开头的本机真实验收；跨机、物理卷迁移仍未验。提交后源服崩溃留下的旧源档由起服核对清理；目标服在源服重启之前已经写过他（版本不同）时源档保留、记 Error，由运维对账。
+- 一期不涉及**已并入另一服的服**：角色的绑定服已并入别服、或目标服已并入别服，发起都被拒绝；提交时目标服已并入别服也被拒绝。承载着别的服（别人并入它）的服是普通的源与目标。`MergeServer` 不检查有没有在途的换服指向被合并的服（索引有了，但合服时怎么处理在途换服没有定：现在靠提交时的拒绝与期限中止兜底）。
 - 换服 ID 仍由调用方保证不复用，但“已中止的换服不被重放复活”不再依赖它：过期的 Begin 由 `TransferSeq` 挡住。account 按 ID 只认在途的那一次与最近了结的那一次——调用方拿一个早已了结的 ID、带着**当前**的代数与序号重新发起，会被当作一次新的换服受理；重发一个早已被别的了结覆盖掉的 ID 的 Abort（当前没有换服在途时），会被当作“中止一个没发起过的 ID”再记一次（即使它当年是提交的）。
 - account 只负责绑定，不负责搬玩家 DAO。只调 account 改绑而不执行游戏侧搬档，目标物理库里可能没有玩家数据；rehome 在 v1.47.0 的完整流程中负责 dbscope=sid 文档复制与条件删除，可去的服仍由业务规则限定。
 - 独立 Gate 的会话 claims 已由激活通知交给 Game（`GameDependencies.OnActivated`，login 联动）；claims 只是认证时的快照，恢复/准入仍核对 account 当前绑定，不能拿快照作持续写授权。

@@ -308,7 +308,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.entity_handoff.held` | Gauge | 本进程当前保持着交出屏障（尚未 `Release`）的实体数。屏障只在内存里，进程重启归零；换了服的玩家不回来就一直计着，随换服次数增长是预期的 |
 | `dataengine.entity_copy.total{result}` | Counter | 搬档（`Runtime.CopyHandedOffEntity`，rehome 换服把交出实体的 `dbscope=sid` 文档复制到目标服的库）：`ok` / `conflict`（目标库已有别的版本、没有覆盖，留给运维）/ `not_handed_off` / `failed` |
 | `dataengine.entity_copy_drop.total` | Counter | `Runtime.DropEntityCopy` 按版本条件删掉的文档份数（提交后删源库、中止时删目标副本） |
-| `dataengine.local_preload_total{kind,result}` | Counter | 本地实体起服预加载（`Runtime.PreloadLocalEntities`，`preload=startup`）每个实体的结果：`ok` / `deleted`（墓碑）/ `missing`（枚举后已不在）/ `error`（加载失败，留给按需加载，同时记 ERROR 日志） |
+| `dataengine.local_preload_total{kind,result}` | Counter | 本地实体起服预加载（`Runtime.PreloadLocalEntities`，`preload=startup`）每个实体的结果：`ok` / `deleted`（墓碑）/ `missing`（枚举后已不在）/ `error`（加载失败，留给按需加载，同时记 ERROR 日志）/ `skipped`（准入检查否决、不加载，如 rehome 认出的已迁走玩家的旧档） |
 | `dataengine.resident_reload_total{kind,reason,result}` | Counter | 框架把实体重新载入内存（`lifetime=resident`）：`reason` 为 `refresh`（运维 `entity.unload force=true`，`Runtime.RefreshEntity`）/ `handoff_release`（常驻实体的交出被解除）；`result` 为 `ok` / `error`（同时记 ERROR，实体在下一次访问时冷加载） |
 | `entity.resident_unload_refused_total{kind}` | Counter | 只从内存卸载 `lifetime=resident` 实体的调用被拒绝的次数（`entity.ErrEntityResident`，同时 WARN）：业务的空闲卸载、`ManagerAccess.Unload`、不带 force 的运维卸载 |
 | `dataengine.startup_drain_retry_total` | Counter | 启动排空（WAL 未投影记录写进 Mongo）失败后在启动期限（`dataengine.startup_timeout`）内的退避重试次数，同时 WARN。被 kill -9 的进程留下的投影事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收（服务端每半个参数扫一次，最晚 1.5 倍参数），重启时偶发是正常的；期限到了仍失败则启动失败，按 WARN 里的错误查（设计 T-A，[SAGA.md](SAGA.md)「进程被强杀时遗留的 Mongo 事务」） |

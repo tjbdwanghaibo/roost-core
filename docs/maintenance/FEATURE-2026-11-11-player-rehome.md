@@ -42,7 +42,7 @@
 | 停在哪 | 恢复 |
 | --- | --- |
 | 0 之后、1 之前 | 下次进入源服时对账：account 没有这个 ID → 清 `Pending` |
-| 1 之后、2 完成前 | 源服对该玩家的任何准入读到“换服中”→ 拒绝或退回；**向前恢复**：下次触达时重做第 2 步再 Commit；过期的由运维 Abort |
+| 1 之后、2 完成前 | 源服对该玩家的任何准入读到“换服中”→ 拒绝或退回；**向前恢复**：源服重启后的恢复循环按 account 的在途索引重做第 2 步再 Commit（玩家先登录源服时由登录触发，二者只做一次）；过了期限的提交被 account 拒绝并记为中止，无人提交的由 account 的清扫中止（D8 A，2026-11-17） |
 | 2 之后、3 结果未知 | 重发 Commit（按 ID 幂等）；Abort 返回“已提交”时按已提交处理 |
 | 3 之后、4 之前 | 到达是惰性的：目标服首次触达时做 |
 | 第 2 步内部失败（钩子否决、排空超时） | Abort → 撤屏障与标记 |
@@ -84,7 +84,7 @@ Begin 的拒绝：角色不存在或未就绪；`FromSID` 不是当前承载服�
 - 人工提交另有 `Admin.CommitRoleTransferWithNote`（不上总线），备注必填。
 - “错的 from”答 `ErrTransferStale`；两种拒绝（`ErrTransferStale` 560118、`ErrTransferInProgress` 560119）都带回当前 `RoleBinding`，经总线调用时 `errors.Is` 成立。
 - “涉及已合服的服”按“绑定服或目标服的 `MergedInto` 非 0 才拒绝”实现，承载着别的服的服照常可用。
-- 换服 claim 的值是 `"<目标 sid>:<换服 ID>"`（`TransferClaimValue` / `ParseTransferClaim`）。期限只记录、不执行。
+- 换服 claim 的值是 `"<目标 sid>:<换服 ID>"`（`TransferClaimValue` / `ParseTransferClaim`）。期限一期只记录；2026-11-17 起执行（D8 A，见下面“三期部分实施”）。
 - §8 第一条已查清：换过服的 slot 在名字目录里的 owner 仍是旧键，没有影响（`decideCreation` 对已发布的 slot 与换服占位都不读名字，有用例钉住）。
 
 换服中 `SelectRole` / `ValidateSession` 照常返回并带 `Transfer`（握手失败客户端拿不到原因，拒绝留给登录端点）。两个认证器写新 claim。`accountctl` 加 `show-role`、`transfer-role begin|commit|abort`。
@@ -141,7 +141,7 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 | --- | --- | --- |
 | 一 | account 接口与 accountctl；`HandOffEntity`；模块 `rehome` 最小形态、enter 的进入前检查、`with/enter`；demo 的 `admitBound` 与 `PlayerOwners` 接上并改写用例；文档 | **已实现**，只有离线验证 |
 | 二 | demo 全量联动：队伍与匹配（换服前必须不在队里 / 自动取消排队）、副本与战斗中拒绝、场景（离开时离场景、到达回出生点）、联盟 `HomeSID` 惰性修正、全服邮件范围、名下建筑的规则；其余联动（mailbox、chat、leaderboard）；真实依赖演练（两个 game sid + account + saga，每个阶段后 kill -9） | 未开始 |
-| 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 未开始 |
+| 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 索引、列举、按期限了结与源服重启后的恢复**已实现**（2026-11-17，D7 A / D8 A）；其余未开始 |
 
 ### 一期后半的实施结果（2026-11-11）
 
@@ -154,9 +154,18 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 - 多一个错误码 `rehome_cooldown`；费用没有实现；缺省冷却 7 天。
 - enter 多了进入骨架 `gameenter.Enter`（检查 → 加载 → 钩子）：game-demo 覆盖了 enter 的端点文件，放在端点包里的测试到 demo 里会失败，骨架放进不被覆盖的 `game/enter` 才测得到“被拒绝的进入什么都没碰”。
 - game-demo：`PlayerOwners.Serve` 的签名没有改、不直接解析 claims（claims 只在模块的 `Admit` 一处解释，登录在 `Serve` 之前跑它，`Serve` 在锁内复核迁出表）；`AdmitBound` 按当前绑定回答；demo 自己的换服前检查拦公会、队伍、分区场景三样。
-- **没有用主线新加的服务级接线点**：rehome 目前没有必须在服务启动时做的事（迁出表用到时才建、驱动器每次用到时才取依赖、向前恢复由登录触发）。account 有了“在途换服”的索引（三期）之后值得用它在启动时续做、停机时收尾。
+- ~~没有用主线新加的服务级接线点~~：2026-11-17 起 rehome manager 在 Background 里起恢复循环（见下面“三期部分实施”），驱动器在 Provide 阶段发布为 `game.rehome.driver` 与 Player 的预加载准入检查。
 
 维护者 2026-11-11 对验证节奏的要求：完整测试不必每次修改都跑，最后统一跑一次。
+
+### 三期部分实施（2026-11-17，维护者 2026-11-14 的 D7 A / D8 A）
+
+现行契约在 [PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md) 与 [modules/rehome/README](../../modules/rehome/README.md)“一次换服的顺序”第 5 条；证据 [r2-rehome-d7-d8-20261117](evidence/r2-rehome-d7-d8-20261117/README.md)。
+
+- **account（D8）**：角色存储带在途换服的索引（Redis 上与角色记录同一个脚本维护的有序集合，按期限排序；Cluster 上 `key_prefix` 须带 hash tag）。`ListRoleTransfers(from)` / `RoleBindingsAway(sid, ids)` 两个只读接口上总线；期限（`now >= DeadlineUnix`）之后的提交答 `ErrTransferStale` 并记为中止；account 进程每 30 秒清扫一次过期的在途换服。`accountctl transfer-role list [-from SID]`。
+- **DataEngine**：本地起服预加载的准入检查（`PreloadAdmitter`，被否决的不加载、计 `skipped`，检查出错起服失败）与只列不加载的 `ListLocalEntityIDs`。
+- **rehome（D7 + D8）**：恢复循环 `RunRecovery`（rehome manager 在 Background 里起）。起服核对本服库里的玩家——Player 预加载时经准入检查，不预加载时列一遍本服库——account 绑在别处的不加载，按已迁走落定（补搬确认、按版本删本服的；目标服已有别的版本时保留、记 Error）；之后每 30 秒把本服发起、迁出表里没有的在途换服交给 `Resume`。
+- **与 D7 字面的出入**：D7 说“起服预加载时核对”，但 game-demo 与模块缺省工程的 Player 不预加载（按需加载），所以另加了“不预加载时列一遍本服库”的起服核对；代价是起服后一次 `_id` 列举加每 500 人一次 account 调用，在 Background 里跑、不挡起服，做完之前有业务路径加载了旧档的玩家时，旧档可能被定时逻辑写（只写源库），落定时交出屏障把它卸载。
 
 ### 审查之后的修正（2026-11-11，RV-20261111-BM-04 / BM-05）
 
