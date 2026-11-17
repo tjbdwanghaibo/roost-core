@@ -136,6 +136,6 @@ ROOST_RELAYPEER_BIN=/tmp/relaypeer node client/dotnet/unity-webgl-smoke/serve.mj
 替换“开房间 SDK”下“Go 与 C# 只连 TCP，TS 只连 WebSocket”一条为：
 
 - **Go 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket。**
-- **Unity WebGL 上 C# 开房间 SDK 跑不起来**（2026-11-17 在 6000.7.0b7 WebGL 构建里实测，[证据](evidence/c1-csharp-websocket-20261117/README.md)）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行都不运行，SDK 的读循环、心跳、连接超时、重连与 `LobbyClient` 依赖它们。浏览器 WebSocket 桥接（`client/dotnet/unity-webgl-smoke` 的 jslib + `BrowserRelayTransport`）实测可用。要支持需改 SDK 调度（由 `Pump` 驱动），待维护者定（遗留）。
-- （遗留，尚未确认）**relay 的 WebSocket 连接偶发被 relay 自己关掉**：写循环每批写前设 `WriteTimeout` 期限、写完不清，coder/websocket 的 `NetConn` 在期限到期时若正有一次写，就关闭整条连接；成员 10s 心跳的 Pong 正好落在上一次写期限的到期点上。Unity 编辑器冒烟 13 次里 5 次成员在 20.5s / 40.5s 断开（relay 读到 `use of closed network connection`）。没有确定性复现；修法候选是写完清期限；Gate 的 WebSocket 会话是否同样受影响待查（[证据](evidence/c1-csharp-websocket-20261117/README.md)）。
+- **Unity WebGL 上 C# 开房间 SDK 跑不起来**（2026-11-17 在 6000.7.0b7 WebGL 构建里实测，证据：本文件）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行都不运行，SDK 的读循环、心跳、连接超时、重连与 `LobbyClient` 依赖它们。浏览器 WebSocket 桥接（`client/dotnet/unity-webgl-smoke` 的 jslib + `BrowserRelayTransport`）实测可用。要支持需改 SDK 调度（由 `Pump` 驱动），待维护者定（遗留）。
+- （遗留，尚未确认）**relay 的 WebSocket 连接偶发被 relay 自己关掉**：写循环每批写前设 `WriteTimeout` 期限、写完不清，coder/websocket 的 `NetConn` 在期限到期时若正有一次写，就关闭整条连接；成员 10s 心跳的 Pong 正好落在上一次写期限的到期点上。Unity 编辑器冒烟 13 次里 5 次成员在 20.5s / 40.5s 断开（relay 读到 `use of closed network connection`）。没有确定性复现；修法候选是写完清期限；Gate 的 WebSocket 会话是否同样受影响待查（证据：本文件）。
 - （观察，尚未确认是否算缺陷）房间里最后一个人 `LeaveAsync` / `Leave` 时 lobby 答 `room_not_found`：SDK 先在 relay 上发 Leave，relay 关房后再经 lobby 离开。Go 与 C# 同样的顺序。

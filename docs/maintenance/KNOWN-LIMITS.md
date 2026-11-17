@@ -375,7 +375,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **Origin 白名单为空时同源页面也拒绝**：不带 `Origin` 的请求（原生客户端、工具）总是放行；带 `Origin` 的必须匹配 `allowed_origins`（relay 是 `ws_allowed_origins`）。白名单为空时拒绝所有带 Origin 的请求，**同源页面也拒绝**（选择理由：失败即关闭；游戏页面通常与接入地址不同域，前置负载均衡还可能改写 Host，按 Host 判同源靠不住）。要让浏览器连上来，必须写白名单。
 - **七层负载均衡后要配可信代理才按客户端计数**（2026-11-17，交接 C3）：不写 `websocket.trusted_proxies` 时连接的对端是负载均衡，`max_connections_per_ip` 把经它来的全部 WebSocket 连接算作一个 IP；写上负载均衡自己的地址后按 `X-Forwarded-For` 从右往左第一个不可信的地址计数（规则见 GATEWAY §6“部署注意”）。只认 `X-Forwarded-For`（`Forwarded`、`X-Real-IP` 不读），每一项都可信时退回对端地址（不取最左项），四层负载均衡的 PROXY protocol 不支持，玩家 TCP 监听不读任何转发信息。relay 没有按 IP 的连接限额，保护靠令牌、每连接帧率与房间人数上限。没有经真实七层负载均衡与浏览器演练（尚未确认，[证据](evidence/c3-trusted-proxies-20261117/README.md)）。
 - **TLS 由前置负载均衡终结**（wss）：进程里不配证书。
-- **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。
+- **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。 只有读写进行中到期才关闭；上一次读写留下的期限不作用于之后的读写（2026-11-17 修复 relay 成员在心跳整 10s 点被断开，[证据](evidence/ws-write-deadline-20261117/README.md)）。一次读写恰在期限处结束时，库的到期回调仍可能关掉紧接着的那次读写，等同于那次超时。修复后的 relay 在 Unity 编辑器 C# SDK 上没有复跑（尚未确认）。
 - **单条消息上限有 1 字节余量**：库按流读，越过上限后的下一次读才失败，超出部分最多先读出 1 个字节，之后连接以 1009 关闭。上限之内的帧照常处理。
 - **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 在同一段 `ports` 里发布玩家 TCP 7000 与 7080（2026-11-17 起，之前漏了 7000）。生产 compose 的 ops 发布在宿主机 `127.0.0.1:<9100+端口块>`（2026-11-17 起，只对本机，见 CHANGELOG）。
 
@@ -739,7 +739,9 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 
 Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（未发版），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
 
-- **Go 与 C# 只连 TCP，TS 只连 WebSocket**：C# 的 `Roost.Client.Relay` 与 `Roost.Client` 是两个包，没有 WebSocket。
+- **Go 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**：C# 的 `Roost.Client`（连 Gate）没有 WebSocket。
+- **Unity WebGL 上 C# 开房间 SDK 跑不起来（SDK 调度怎么改待维护者定）**：2026-11-17 在 Unity 6000.7.0b7 WebGL 构建里实测，WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行都不运行，SDK 的读循环、心跳、连接超时、重连与 `LobbyClient` 依赖它们。浏览器 WebSocket 桥接（`client/dotnet/unity-webgl-smoke` 的 jslib + `BrowserRelayTransport`）实测可用。候选：由 `Pump` 驱动调度（推荐）等，见[证据](evidence/c1-csharp-websocket-20261117/README.md)。
+- **高层离开分不出“房间早就不在”与“正常离开”**：Go `Leave` / C# `LeaveAsync` / TS `leave()` 把 lobby 的 `room_not_found` 当成离开成功（2026-11-17），要区分就直接调 lobby 客户端的 leave；是否另给返回标志尚未确认。
 - **Web 房主在后台标签页靠 Worker 撑住只是缓解**：浏览器不保证 Worker 计时器不被限流，手机后台页随时被冻结，冻结后走 relay 的断线换 host。
 - **内置浏览器面板测不了真实后台**：Claude 桌面应用内置浏览器面板里，后台标签页的 `document.visibilityState` 始终是 `visible`，所以在那里“切到后台”只能用演示页的“模拟隐藏”按钮触发；后台限流对 Worker 计时器的影响没有实测。
 - **relay 选人不看前台状态**（交接 C2 选项 3 不做）：前台上报（`Presence = 85` / `MemberPresence = 70`，2026-11-17）只经房主声明的 `Successors` 生效，包括 TS `WebHost` 的自动声明。房主还没收到上报、或来不及声明就掉线时，兜底仍是槽位最小的在线成员。成员可以谎报前台状态，后果只是影响候选顺序。
