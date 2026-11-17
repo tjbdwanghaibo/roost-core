@@ -1,0 +1,5 @@
+--- FAIL: TestDungeonClearSubmitsTheSeasonCountAsASnapshot (0.00s)
+    player_finish_dungeon_test.go:322: first clear: submitted to board total:global:0:1, want clears:global:0:1
+FAIL
+FAIL	example.com/dclears/game/controllers	0.615s
+FAIL

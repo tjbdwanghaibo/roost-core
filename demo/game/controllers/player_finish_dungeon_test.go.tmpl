@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -40,7 +41,8 @@ import (
 // rank 的 UpdateAdd 只记每个玩家最近 8 个请求 ID，是去重环而不是账本；端点在奖励重放（Claimed=false）
 // 时也要提交，才能补上“奖励已提交、排行没提交就崩溃”的那一分。两者叠加时，一局在领奖窗口内、却被
 // 后来 8 局挤出去重环之后重放，会再加一分。所以榜取的是领奖事务里通关数的快照（UpdateMax、不带请求号），
-// 经 leaderboard 模块的 SubmitSeason 提交（game/modules/leaderboard；哪张榜、哪个赛季是 demo 的 leaderboard_board.go）。
+// 经 leaderboard 模块的 SubmitSeason 提交（game/modules/leaderboard；哪张榜、哪个赛季是 demo 写进 game 服务配置
+// leaderboard: 段的数，leaderboard_board.go 说明为什么）。
 // 这里经正式 Controller、生成 Sender、Nest、Player / World handler 走一遍，session 返回固定的成功终态：
 // 一条用真实 Redis 上的 rank RedisStore 看榜上的数，一条用记录式替身看端点交给 rank 的每一次提交（无外部依赖）。
 
@@ -106,8 +108,29 @@ type finishDungeonHarness struct {
 	ctx        *playeraccess.Context
 }
 
+// useDemoLeaderboardConfig 按进程启动时的读法读 game 服务开发配置的 leaderboard: 段，在本用例里换上它，结束时换回。
+//
+// 榜名、赛季、分数范围是 leaderboard 模块的配置（leaderboard_config.go）：真实进程由 bootstrap 里只带配置的
+// modulehost Mod 在 Init 时装载一次（UseConfig），demo 在配置里把榜换成 clears。单测不经 bootstrap，不装载就读到
+// 模块声明的缺省值（全服 total 榜），测的就不是 demo 的端点了。
+func useDemoLeaderboardConfig(t *testing.T) {
+	t.Helper()
+	cfg, _, err := app.LoadConfigFile(filepath.Join("..", "..", "configs", "service", "config.{{GAME_SERVICE}}.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config gameleaderboard.Config
+	if err := app.LoadConfig(cfg, &config); err != nil {
+		t.Fatalf("the dev config's leaderboard: section: %v", err)
+	}
+	previous := gameleaderboard.CurrentConfig()
+	gameleaderboard.UseConfig(config)
+	t.Cleanup(func() { gameleaderboard.UseConfig(previous) })
+}
+
 func newFinishDungeonHarness(t *testing.T, board svcrank.Rank) *finishDungeonHarness {
 	t.Helper()
+	useDemoLeaderboardConfig(t)
 	playerentity.RegisterEntity()
 	worldentity.RegisterEntity()
 	gamehandler.RegisterClaimDungeonNestHandlers()

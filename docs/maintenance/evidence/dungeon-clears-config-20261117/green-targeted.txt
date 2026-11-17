@@ -1,0 +1,8 @@
+=== RUN   TestDungeonClearsBoardCountsEachRunOnceRealRedis
+--- PASS: TestDungeonClearsBoardCountsEachRunOnceRealRedis (0.04s)
+=== RUN   TestDungeonClearSubmitsTheSeasonCountAsASnapshot
+--- PASS: TestDungeonClearSubmitsTheSeasonCountAsASnapshot (0.04s)
+=== RUN   TestAReplayContributesNothingToTheActivity
+--- PASS: TestAReplayContributesNothingToTheActivity (0.02s)
+PASS
+ok  	example.com/dclears/game/controllers	1.844s

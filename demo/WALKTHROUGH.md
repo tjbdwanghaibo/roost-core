@@ -620,7 +620,9 @@ demo 在模块之上接的线：
   赛季，不做终身累计）。端点只取一次赛季号，领奖事务按它计数、`SubmitSeason` 按它提交，所以第 N 季的通关数只会进第 N 季的榜。
 - 回归（`game/controllers/player_finish_dungeon_test.go`）：`TestDungeonClearSubmitsTheSeasonCountAsASnapshot`（无外部依赖，看端点交给
   rank 的每一次提交：快照、`UpdateMax`、不带 requestID、重放照交、失败不影响结算、0 不交）与
-  `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（真实 Redis 上看榜上的数，要 `ROOST_REVIEW_REDIS`）。
+  `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（真实 Redis 上看榜上的数，要 `ROOST_REVIEW_REDIS`）。两条都先按进程启动时的读法装载
+  game 服务开发配置的 `leaderboard:` 段（单测不经 bootstrap，不装载就是模块声明的缺省 `total` 榜），所以断言里的 `clears` 钉住的是
+  demo 写进配置的榜真的到了端点。
 - **活动贡献与排行相反：只在首次付款时贡献**（`result.Claimed`）。排行提交的是事务里通关数的快照，重放重交无害；活动贡献是往
   “调用时刻的时钟所在的窗口”（300 秒一个）里加分，协调器只按（窗口, 玩家, `clear:<run id>`）去重。同一局在 4 小时领奖窗口内
   跨过窗口边界后重放，落进新窗口、键不同，会再记一分（一局最多可进 48 个窗口，影响按名次发的活动邮件）。所以驱动贡献的是

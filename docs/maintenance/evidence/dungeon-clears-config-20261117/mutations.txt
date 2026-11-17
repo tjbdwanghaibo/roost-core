@@ -1,0 +1,16 @@
+# 变异（在生成的 game-demo 里改生成后的文件，跑完原样换回）
+# 命令：GOWORK=off GOFLAGS=-mod=mod go test -count=1 -run 'TestDungeonClearSubmitsTheSeasonCountAsASnapshot' ./game/controllers/
+
+## M1：newFinishDungeonHarness 里撤掉 useDemoLeaderboardConfig(t)（本次修复的关键行）
+--- FAIL: TestDungeonClearSubmitsTheSeasonCountAsASnapshot (0.00s)
+    player_finish_dungeon_test.go:345: first clear: submitted to board total:global:0:1, want clears:global:0:1
+FAIL
+FAIL	example.com/dclears/game/controllers	0.589s
+
+## M2：configs/service/config.game.yaml 的 leaderboard.board_id 从 clears 改回 total（demo 的配置步骤失效时）
+--- FAIL: TestDungeonClearSubmitsTheSeasonCountAsASnapshot (0.00s)
+    player_finish_dungeon_test.go:345: first clear: submitted to board total:global:0:1, want clears:global:0:1
+FAIL
+FAIL	example.com/dclears/game/controllers	0.608s
+
+两处换回后同一命令 ok（见 green-targeted.txt）。

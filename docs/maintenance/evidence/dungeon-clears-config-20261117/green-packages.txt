@@ -1,0 +1,7 @@
+ok  	example.com/dclears/game/controllers	11.055s
+ok  	example.com/dclears/game/modules/leaderboard	1.956s
+ok  	example.com/dclears/game/modules/mailbox	2.421s
+ok  	example.com/dclears/game/handler	8.361s
+ok  	example.com/dclears/game/handler/sender	3.152s
+ok  	example.com/dclears/game/entities/player	2.273s
+ok  	example.com/dclears/services/account/portal	2.687s
