@@ -1,0 +1,7 @@
+# GOWORK=off go test -count=1 -run 'Link|Anchor|Doc' .
+# 1) 本组提交 aa6a3a28 之后，在该提交的干净克隆（git clone --shared，无他人未提交改动）里跑：
+ok  	github.com/tjbdwanghaibo/roost-core	1.632s
+# 2) 同一时刻在主检出里跑：失败，两处断链都来自别组（2A 聚会房）尚未提交的工作区改动，指向尚未入库的 r9-2a 证据目录，与本组无关：
+--- FAIL: TestTrackedMarkdownRelativeLinksResolve
+    docs/agent-skills/roost-genre/references/party-room.md:147: ../../../maintenance/evidence/r9-2a-20261117/README.md
+    docs/framework/PARTY-ROOM-INTEGRATION.md:195: ../maintenance/evidence/r9-2a-20261117/README.md

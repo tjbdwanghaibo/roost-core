@@ -2,6 +2,8 @@
 
 方案：[PLAN-2026-11-17-r9-genre-modules](../../PLAN-2026-11-17-r9-genre-modules.md) §3.1～3.3、§4、§9。手册：[SESSION-GENRES](../../../framework/SESSION-GENRES.md)（“模块接走了什么，手写了什么”“模块化之后场景语义的变化”两节）；skill reference：[session-genres.md](../../../agent-skills/roost-genre/references/session-genres.md)。
 
+提交：`aa6a3a28`（本证据补记另一提交）。
+
 ## 改法
 
 | 玩法 | `genre_modules`（脚本里的数组） | 并入 / 去掉 | 手写（夹具） |
@@ -35,7 +37,7 @@ genre-common（§4 的去向，按方案落地）：
    - `ROOST_SOCIAL_SIM_REAL=1`：`TestSocialSimRealCrashRecovery`（growing 6 条、harvested 7 条）PASS。
    见 `real-*.txt`。
 4. **变异**：见下节与 `mutation.txt`，每条改过断言的场景至少一个，全部先红后绿。
-5. 主检出 `git status` 只剩本组提交外别人的改动；`GOWORK=off go test -count=1 -run 'Link|Anchor|Doc' .` 通过（`doc-tests.txt`）。
+5. 提交 `aa6a3a28` 后主检出 `git status` 只剩别组的改动（本组文件无残留）；`GOWORK=off go test -count=1 -run 'Link|Anchor|Doc' .` 在该提交的干净克隆里通过；主检出里同一命令被别组（2A）未提交的两处断链拖红，与本组无关（`doc-tests.txt`）。
 6. 手册与 skill reference 已同步（模块清单、手写部分与样板、旧断言 → 新断言、条数）；SESSION-GENRES 的三条命令块（自定 module 名 myduel / mycoop / myfarm）与两条 REAL 命令块真跑通过（`final-doc-runs.txt`）。
 
 ## 场景数
