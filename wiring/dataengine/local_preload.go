@@ -1,10 +1,12 @@
 package dataengine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/spf13/viper"
@@ -40,12 +42,30 @@ type LocalPreloadMod struct {
 	Report LocalPreloadReport
 }
 
+// PreloadAdmitter 是一个 kind 的预加载准入检查（engine.LocalPreloadAdmit）：枚举到的一页 ID 先问它，只加载它返回的那些，
+// 其余计入 Skipped；它出错时预加载失败、起服失败。按 PreloadAdmitCapability(kind) 发布到 Registry，**在 Provide 阶段发布**
+// （预加载在 Start 里跑，Start 时查一次）。没有发布的 kind 全部加载。
+//
+// 用途：本服库里的档不一定还归本服（换服提交之后、删源库之前崩溃留下的旧档，D7）；知道“归谁”的一方（rehome 模块
+// 按 account 的绑定）登记检查，框架在加载之前问。
+type PreloadAdmitter interface {
+	AdmitPreload(ctx context.Context, kind entity.EntityKind, ids []int64) ([]int64, error)
+}
+
+// PreloadAdmitCapability 是 kind 的预加载准入检查在 Registry 里的能力名。
+func PreloadAdmitCapability(kind entity.EntityKind) app.ModName {
+	return app.ModName("dataengine.preload.admit." + strconv.Itoa(int(kind)))
+}
+
 // NewLocalPreloadMod 返回预加载 kinds 的 Mod（生成的 registry.LocalPreloadKinds(service)）。kinds 为空时 Start 什么也不做。
 func NewLocalPreloadMod(kinds ...entity.EntityKind) *LocalPreloadMod {
 	return &LocalPreloadMod{kinds: slices.Clone(kinds)}
 }
 
 func (m *LocalPreloadMod) Name() app.ModName { return mods.ModDataEnginePreload }
+
+// Kinds 是这个 Mod 起服预加载的 kind（构造时给出）。别的部件据此判断某个 kind 起服时是否经过预加载（及其准入检查）。
+func (m *LocalPreloadMod) Kinds() []entity.EntityKind { return slices.Clone(m.kinds) }
 
 func (m *LocalPreloadMod) DependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine, mods.ModNest}
@@ -96,11 +116,11 @@ func (m *LocalPreloadMod) Start() error {
 	if !ok || dataEngine == nil || dataEngine.Runtime() == nil {
 		return fmt.Errorf("dataengine preload mod: required capability %q not found or not started", mods.ModDataEngine)
 	}
-	report, err := dataEngine.Runtime().PreloadLocalEntities(fctx.BaseContext(), m.kinds, m.limits)
+	report, err := dataEngine.Runtime().PreloadLocalEntitiesAdmitting(fctx.BaseContext(), m.kinds, m.limits, m.admitters())
 	m.Report = report
 	for _, kind := range report.Kinds {
 		slog.Info("dataengine preload mod: preloaded a kind", "kind", kind.Kind, "order", kind.Order, "listed", kind.Listed,
-			"loaded", kind.Loaded, "deleted", kind.Deleted, "missing", kind.Missing, "failed", kind.Failed)
+			"loaded", kind.Loaded, "deleted", kind.Deleted, "missing", kind.Missing, "failed", kind.Failed, "skipped", kind.Skipped)
 	}
 	if err != nil {
 		return fmt.Errorf("dataengine preload mod: %w", err)
@@ -108,6 +128,26 @@ func (m *LocalPreloadMod) Start() error {
 	slog.Info("dataengine preload mod: preloaded local entities", "kinds", m.kinds, "listed", report.Listed, "loaded", report.Loaded,
 		"deleted", report.Deleted, "missing", report.Missing, "failed", report.Failed)
 	return nil
+}
+
+// admitters 按 kind 取发布了的准入检查（PreloadAdmitCapability），一个都没有时返回 nil（全部加载）。
+func (m *LocalPreloadMod) admitters() engine.LocalPreloadAdmit {
+	found := map[entity.EntityKind]PreloadAdmitter{}
+	for _, kind := range m.kinds {
+		if admitter, ok := app.Lookup[PreloadAdmitter](m.registry, PreloadAdmitCapability(kind)); ok && admitter != nil {
+			found[kind] = admitter
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	return func(ctx context.Context, kind entity.EntityKind, ids []int64) ([]int64, error) {
+		admitter := found[kind]
+		if admitter == nil {
+			return ids, nil
+		}
+		return admitter.AdmitPreload(ctx, kind, ids)
+	}
 }
 
 func (m *LocalPreloadMod) Stop() {}

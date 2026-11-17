@@ -1,6 +1,7 @@
 package dataengine
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -58,5 +59,47 @@ func TestLocalPreloadModReadsItsBudget(t *testing.T) {
 	bad.Set("dataengine.preload.max_entities", 0)
 	if err := mod.Init(bad); err == nil || !strings.Contains(err.Error(), "dataengine.preload.max_entities") {
 		t.Fatalf("max_entities 0 = %v, want an error naming the key", err)
+	}
+}
+
+type preloadAdmitterFunc func(ctx context.Context, kind entity.EntityKind, ids []int64) ([]int64, error)
+
+func (f preloadAdmitterFunc) AdmitPreload(ctx context.Context, kind entity.EntityKind, ids []int64) ([]int64, error) {
+	return f(ctx, kind, ids)
+}
+
+// 准入检查按 kind 从 Registry 取（PreloadAdmitCapability）：登记了的 kind 问它，没登记的全部加载；一个都没登记时不包一层。
+func TestLocalPreloadModAsksTheAdmitterRegisteredForAKind(t *testing.T) {
+	guarded, open := entity.EntityKind(216), entity.EntityKind(217)
+	mod := NewLocalPreloadMod(guarded, open)
+	if !slices.Equal(mod.Kinds(), []entity.EntityKind{guarded, open}) {
+		t.Fatalf("Kinds() = %v", mod.Kinds())
+	}
+	registry := app.NewRegistry(viper.New())
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if mod.admitters() != nil {
+		t.Fatal("no admitter is registered, yet the preload is wrapped")
+	}
+	var asked []entity.EntityKind
+	if err := registry.Register(PreloadAdmitCapability(guarded), PreloadAdmitter(preloadAdmitterFunc(func(_ context.Context, kind entity.EntityKind, ids []int64) ([]int64, error) {
+		asked = append(asked, kind)
+		return ids[:1], nil
+	}))); err != nil {
+		t.Fatal(err)
+	}
+	admit := mod.admitters()
+	if admit == nil {
+		t.Fatal("the registered admitter is not used")
+	}
+	if got, err := admit(context.Background(), guarded, []int64{1, 2}); err != nil || !slices.Equal(got, []int64{1}) {
+		t.Fatalf("guarded kind admitted %v, %v; want what its admitter answered", got, err)
+	}
+	if got, err := admit(context.Background(), open, []int64{1, 2}); err != nil || !slices.Equal(got, []int64{1, 2}) {
+		t.Fatalf("a kind without an admitter admitted %v, %v; want all", got, err)
+	}
+	if !slices.Equal(asked, []entity.EntityKind{guarded}) {
+		t.Fatalf("the admitter was asked about %v, want only the guarded kind", asked)
 	}
 }

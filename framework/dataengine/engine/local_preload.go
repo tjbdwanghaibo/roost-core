@@ -78,6 +78,9 @@ type LocalPreloadCounts struct {
 	Missing int
 	// Failed 是加载失败、留给按需加载的实体数。
 	Failed int
+	// Skipped 是被准入检查（LocalPreloadAdmit）拒绝、没有加载的实体数：例如换服提交之后、删源库之前崩溃留下的
+	// 旧档（account 已把那名玩家绑到别的服，D7）。它们不进内存、不跑定时逻辑，留给登记检查的那一方处理。
+	Skipped int
 }
 
 func (counts *LocalPreloadCounts) add(other LocalPreloadCounts) {
@@ -86,6 +89,7 @@ func (counts *LocalPreloadCounts) add(other LocalPreloadCounts) {
 	counts.Deleted += other.Deleted
 	counts.Missing += other.Missing
 	counts.Failed += other.Failed
+	counts.Skipped += other.Skipped
 }
 
 // LocalPreloadKindReport 是一个 kind 的预加载结果。
@@ -211,9 +215,24 @@ func (store *MongoStore) ListEntityIDs(ctx context.Context, key coredata.Documen
 	return ids, next, nil
 }
 
+// LocalPreloadAdmit 是预加载的准入检查：枚举到一页 ID（同一个 kind，按 _id 升序）之后、加载之前调用，返回其中**可以加载**
+// 的那些（ids 的子集）；不在返回里的不加载，计入 Skipped。返回错误时预加载失败、起服失败（与枚举失败相同：判断不了
+// 就不加载，进程管理拉起重试）。它在预加载的 goroutine 上调用，可以等待（问别的服务），不能在 Nest 业务 worker 上做。
+//
+// 用途：本服库里的档不一定还归本服——换服（rehome 模块）在 account 改绑之后、删掉源库那份之前崩溃，源库留着旧档；
+// 不检查就把它载进内存，它的定时逻辑会写这份过期的档（D7，维护者 2026-11-14）。检查交给知道“归谁”的一方（模块按
+// account 的绑定回答），框架只负责在加载之前问、按回答跳过。
+type LocalPreloadAdmit func(ctx context.Context, kind entity.EntityKind, ids []int64) (admitted []int64, err error)
+
 // PreloadLocalEntities 是本地实体的起服预加载（见本文件开头）：按批次把 kinds 在本服库里的全部未删除实体经实体运行时
 // 加载进内存。kinds 不满足规则、枚举失败或超出 limits 时返回错误（报告里是已完成的部分），单个实体失败只计入报告。
 func (runtime *Runtime) PreloadLocalEntities(ctx context.Context, kinds []entity.EntityKind, limits LocalPreloadLimits) (LocalPreloadReport, error) {
+	return runtime.PreloadLocalEntitiesAdmitting(ctx, kinds, limits, nil)
+}
+
+// PreloadLocalEntitiesAdmitting 是带准入检查的 PreloadLocalEntities：每页 ID 先经 admit（nil 表示全部加载），被拒绝的
+// 不加载、计入 Skipped；admit 出错时预加载失败。
+func (runtime *Runtime) PreloadLocalEntitiesAdmitting(ctx context.Context, kinds []entity.EntityKind, limits LocalPreloadLimits, admit LocalPreloadAdmit) (LocalPreloadReport, error) {
 	var report LocalPreloadReport
 	if len(kinds) == 0 {
 		return report, nil
@@ -239,7 +258,7 @@ func (runtime *Runtime) PreloadLocalEntities(ctx context.Context, kinds []entity
 		}
 		return err
 	}
-	return preloadLocalTargets(ctx, runtime.Store, load, targets, limits)
+	return preloadLocalTargets(ctx, runtime.Store, load, targets, limits, admit)
 }
 
 // entityIDLister 是预加载需要的存储能力（MongoStore.ListEntityIDs），测试替换它。
@@ -249,7 +268,7 @@ type entityIDLister interface {
 
 // preloadLocalTargets 按 order 分批执行：同一批的 kind 依次枚举、加载并发（共用一个上限），批末等全部加载结束。
 // limits.Timeout 限整次执行（经 ctx 取消在途的查询与加载），limits.MaxEntities 限全部批次合计枚举到的实体数。
-func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, targets []localPreloadTarget, limits LocalPreloadLimits) (LocalPreloadReport, error) {
+func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, targets []localPreloadTarget, limits LocalPreloadLimits, admit LocalPreloadAdmit) (LocalPreloadReport, error) {
 	var report LocalPreloadReport
 	if ctx == nil {
 		ctx = context.Background()
@@ -269,7 +288,7 @@ func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(c
 		if limits.MaxEntities > 0 {
 			remaining = limits.MaxEntities - report.Listed
 		}
-		counts, err := preloadLocalBatch(ctx, lister, load, batch, remaining)
+		counts, err := preloadLocalBatch(ctx, lister, load, batch, remaining, admit)
 		for i, target := range batch {
 			report.Kinds = append(report.Kinds, LocalPreloadKindReport{Kind: target.kind, Order: target.order, LocalPreloadCounts: counts[i]})
 			report.add(counts[i])
@@ -292,7 +311,8 @@ func preloadLocalTargets(ctx context.Context, lister entityIDLister, load func(c
 
 // preloadLocalBatch 加载一批 kind；返回每个 kind 的计数（与 batch 同序）。remaining 是这一批还能枚举的实体数（负数不限），
 // 超过时不再加载、返回 ErrLocalPreloadBudget。枚举失败或超出预算时等已发出的加载结束再返回错误。
-func preloadLocalBatch(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, batch []localPreloadTarget, remaining int) ([]LocalPreloadCounts, error) {
+// admit 非 nil 时每页 ID 先经它，被拒绝的计入 Listed 与 Skipped、不占预算、不加载。
+func preloadLocalBatch(ctx context.Context, lister entityIDLister, load func(context.Context, int64) error, batch []localPreloadTarget, remaining int, admit LocalPreloadAdmit) ([]LocalPreloadCounts, error) {
 	counts := make([]LocalPreloadCounts, len(batch))
 	var (
 		mu  sync.Mutex
@@ -312,7 +332,17 @@ func preloadLocalBatch(ctx context.Context, lister entityIDLister, load func(con
 				wg.Wait()
 				return counts, fmt.Errorf("dataengine preload: enumerate kind %d in %s/%s: %w", target.kind, target.key.Database, target.key.Resource, err)
 			}
+			admitted, err := admitPage(ctx, admit, target.kind, ids)
+			if err != nil {
+				wg.Wait()
+				return counts, fmt.Errorf("dataengine preload: admit kind %d in %s/%s: %w", target.kind, target.key.Database, target.key.Resource, err)
+			}
 			for _, id := range ids {
+				if !admitted[id] {
+					record(index, func(c *LocalPreloadCounts) { c.Listed++; c.Skipped++ })
+					metrics.IncCounter(metricLocalPreload, metrics.Labels{"kind": kindLabel, "result": "skipped"}, 1)
+					continue
+				}
 				if remaining == 0 {
 					wg.Wait()
 					return counts, fmt.Errorf("%w: kind %d in %s/%s takes the preload past its limit of entities (dataengine.preload.max_entities); "+
@@ -358,4 +388,59 @@ func preloadLocalBatch(ctx context.Context, lister entityIDLister, load func(con
 	}
 	wg.Wait()
 	return counts, nil
+}
+
+// admitPage 问准入检查这一页里哪些可以加载；没有检查时全部可以。返回的集合只含 ids 里的 ID（检查多给的不算）。
+func admitPage(ctx context.Context, admit LocalPreloadAdmit, kind entity.EntityKind, ids []int64) (map[int64]bool, error) {
+	admitted := make(map[int64]bool, len(ids))
+	if admit == nil {
+		for _, id := range ids {
+			admitted[id] = true
+		}
+		return admitted, nil
+	}
+	if len(ids) == 0 {
+		return admitted, nil
+	}
+	ok, err := admit(ctx, kind, slices.Clone(ids))
+	if err != nil {
+		return nil, err
+	}
+	listed := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		listed[id] = true
+	}
+	for _, id := range ok {
+		if listed[id] {
+			admitted[id] = true
+		}
+	}
+	return admitted, nil
+}
+
+// ListLocalEntityIDs 按 _id 升序列出本服库里 kind 的主 DAO（builder 的第一个 DAO）集合中 _id 大于 after 的未删除文档，
+// 至多 limit 个；next 是这一页最后一个 _id，页不满时为 0。给“起服时核对本服库里的实体”而不加载它们的调用方用
+// （rehome 模块在 Player 不预加载时核对旧档，D7）。kind 要是本地（没有 Remote 策略）、持久、主 DAO 是 dbscope=sid，
+// 否则返回 ErrLocalPreloadKind。只读 _id；要 I/O，只能在业务池之外调用。
+func (runtime *Runtime) ListLocalEntityIDs(ctx context.Context, kind entity.EntityKind, after int64, limit int) (ids []int64, next int64, err error) {
+	if runtime == nil || runtime.Store == nil {
+		return nil, 0, errors.New("dataengine: runtime is not configured")
+	}
+	builder := entity.GetEntityBuilderParam(kind)
+	switch {
+	case builder == nil:
+		return nil, 0, fmt.Errorf("%w: kind %d has no registered entity builder", ErrLocalPreloadKind, kind)
+	case entity.GetEntityKindRemotePolicy(kind) != entity.RemotePolicyNone:
+		return nil, 0, fmt.Errorf("%w: kind %d is a Remote kind", ErrLocalPreloadKind, kind)
+	case builder.NoPersist || len(builder.DaoBuilders) == 0:
+		return nil, 0, fmt.Errorf("%w: kind %d is not persistent", ErrLocalPreloadKind, kind)
+	}
+	dao := builder.DaoBuilders[0]()
+	if dao == nil {
+		return nil, 0, fmt.Errorf("%w: kind %d dao[0] builder returned nil", ErrLocalPreloadKind, kind)
+	}
+	if scope := coredata.ResolveDatabaseScope(dao); scope != coredata.DatabaseServer {
+		return nil, 0, fmt.Errorf("%w: kind %d main DAO (collection %q) is dbscope=global; only a dbscope=sid DAO lists this server's entities", ErrLocalPreloadKind, kind, dao.CollName())
+	}
+	return runtime.Store.ListEntityIDs(ctx, coredata.DocumentKey{Database: dao.DbName(), Scope: coredata.DatabaseServer, Resource: dao.CollName()}, after, limit)
 }

@@ -535,6 +535,17 @@ func (mod *Mod) DropEntityCopy(ctx context.Context, copied EntityCopy, sid int32
 	return runtime.DropEntityCopy(ctx, copied, sid)
 }
 
+// ListLocalEntityIDs 按 _id 升序列出本服库里 kind 的未删除实体（主 DAO，dbscope=sid），不加载它们
+// （engine.Runtime.ListLocalEntityIDs）：起服时要核对本服库里的实体、又不预加载那个 kind 的部件用（rehome 模块，D7）。
+// 会等待，只能在 io 池或独立 goroutine 调用。
+func (mod *Mod) ListLocalEntityIDs(ctx context.Context, kind entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
+	runtime := mod.Runtime()
+	if runtime == nil {
+		return nil, 0, errors.New("dataengine mod: not provided")
+	}
+	return runtime.ListLocalEntityIDs(ctx, kind, after, limit)
+}
+
 func (mod *Mod) Repository() *engine.EntityRepository {
 	runtime := mod.Runtime()
 	if runtime == nil {

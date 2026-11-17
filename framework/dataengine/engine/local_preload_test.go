@@ -206,6 +206,79 @@ func TestPreloadLocalEntitiesRunsBatchesInLoadPriorityOrder(t *testing.T) {
 	}
 }
 
+// 准入检查（D7）：本服库里的档不一定还归本服。检查拒绝的不加载（不进内存、不跑定时逻辑）、计入 Skipped，其余照常；
+// 检查出错时预加载失败、起服失败——判断不了就不加载，不能当作“都可以”。
+func TestPreloadLocalEntitiesSkipsWhatTheAdmitterRefuses(t *testing.T) {
+	client := mongotest.NewClient()
+	server := newPreloadServer(t, client, 3)
+	ids := seedPreload(t, client, 3, preloadFirstKind, "preload_first", 500, 6, nil)
+	elsewhere := map[int64]bool{ids[1]: true, ids[4]: true}
+	var asked []int64
+	admit := func(_ context.Context, kind entity.EntityKind, page []int64) ([]int64, error) {
+		if kind != preloadFirstKind {
+			t.Errorf("admit asked about kind %d", kind)
+		}
+		asked = append(asked, page...)
+		var ok []int64
+		for _, id := range page {
+			if !elsewhere[id] {
+				ok = append(ok, id)
+			}
+		}
+		return append(ok, 999), nil // 多给一个不在这一页的：不算数
+	}
+	report, err := server.runtime.PreloadLocalEntitiesAdmitting(context.Background(), []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{}, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Listed != 6 || report.Loaded != 4 || report.Skipped != 2 || len(asked) != 6 {
+		t.Fatalf("report = %+v (asked %v), want 6 listed, 4 loaded, 2 skipped", report, asked)
+	}
+	for _, id := range ids {
+		if loaded := server.manager.Get(id) != nil; loaded == elsewhere[id] {
+			t.Fatalf("entity %d loaded=%v; an entity the admitter refused must stay out of memory, the others must be in", id, loaded)
+		}
+	}
+
+	broken := errors.New("account is unreachable")
+	other := newPreloadServer(t, client, 3)
+	_, err = other.runtime.PreloadLocalEntitiesAdmitting(context.Background(), []entity.EntityKind{preloadFirstKind}, LocalPreloadLimits{},
+		func(context.Context, entity.EntityKind, []int64) ([]int64, error) { return nil, broken })
+	if !errors.Is(err, broken) {
+		t.Fatalf("preload with a failing admitter = %v, want its error", err)
+	}
+	for _, id := range ids {
+		if other.manager.Get(id) != nil {
+			t.Fatalf("entity %d was loaded although the admitter could not answer", id)
+		}
+	}
+}
+
+// ListLocalEntityIDs 列出本服库里的实体而不加载它们（给不预加载、但起服要核对的调用方）：分页、跳过墓碑，只看本服的库。
+func TestListLocalEntityIDsListsThisServersEntitiesWithoutLoadingThem(t *testing.T) {
+	client := mongotest.NewClient()
+	server := newPreloadServer(t, client, 3)
+	ids := seedPreload(t, client, 3, preloadFirstKind, "preload_first", 600, 3, nil)
+	seedPreload(t, client, 3, preloadFirstKind, "preload_first", 700, 1, bson.M{"_deleted": true})
+	seedPreload(t, client, 4, preloadFirstKind, "preload_first", 800, 2, nil)
+	page, next, err := server.runtime.ListLocalEntityIDs(context.Background(), preloadFirstKind, 0, 2)
+	if err != nil || len(page) != 2 || page[0] != ids[0] || page[1] != ids[1] || next != ids[1] {
+		t.Fatalf("first page = %v next %d, %v; want the first two of %v", page, next, err, ids)
+	}
+	page, next, err = server.runtime.ListLocalEntityIDs(context.Background(), preloadFirstKind, next, 2)
+	if err != nil || len(page) != 1 || page[0] != ids[2] || next != 0 {
+		t.Fatalf("second page = %v next %d, %v; want the last one and no next page", page, next, err)
+	}
+	for _, id := range ids {
+		if server.manager.Get(id) != nil {
+			t.Fatalf("listing loaded entity %d", id)
+		}
+	}
+	if _, _, err := server.runtime.ListLocalEntityIDs(context.Background(), entity.EntityKind(239), 0, 2); !errors.Is(err, ErrLocalPreloadKind) {
+		t.Fatalf("listing an unregistered kind = %v, want ErrLocalPreloadKind", err)
+	}
+}
+
 // 一个坏文档（存储 schema 与运行时不一致）不挡启动：它计入 Failed、留给按需加载，其余照常加载；删过档的计入 Deleted。
 func TestPreloadLocalEntitiesSkipsABadDocument(t *testing.T) {
 	client := mongotest.NewClient()
@@ -246,7 +319,7 @@ func TestPreloadLocalEntitiesFailsWhenEnumerationFails(t *testing.T) {
 		return []int64{1}, 0, nil
 	})
 	loads := 0
-	report, err := preloadLocalTargets(context.Background(), lister, func(context.Context, int64) error { loads++; return nil }, targets, LocalPreloadLimits{})
+	report, err := preloadLocalTargets(context.Background(), lister, func(context.Context, int64) error { loads++; return nil }, targets, LocalPreloadLimits{}, nil)
 	if !errors.Is(err, broken) {
 		t.Fatalf("preload with a failing enumeration = %v, want the enumeration error", err)
 	}
@@ -277,7 +350,7 @@ func TestPreloadLocalEntitiesGivesUpOnAStuckStoreAtItsTimeout(t *testing.T) {
 		}
 		done := make(chan error, 1)
 		go func() {
-			_, err := preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{Timeout: 100 * time.Millisecond})
+			_, err := preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{Timeout: 100 * time.Millisecond}, nil)
 			done <- err
 		}()
 		select {
@@ -303,12 +376,12 @@ func TestPreloadLocalEntitiesStopsAtItsEntityLimit(t *testing.T) {
 	})
 	var loads atomic.Int64
 	load := func(context.Context, int64) error { loads.Add(1); return nil }
-	report, err := preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{MaxEntities: 6})
+	report, err := preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{MaxEntities: 6}, nil)
 	if err != nil || report.Loaded != 6 {
 		t.Fatalf("exactly at the limit: report %+v, err %v; want 6 loaded and no error", report, err)
 	}
 	loads.Store(0)
-	report, err = preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{MaxEntities: 5})
+	report, err = preloadLocalTargets(context.Background(), lister, load, targets, LocalPreloadLimits{MaxEntities: 5}, nil)
 	if !errors.Is(err, ErrLocalPreloadBudget) || !strings.Contains(err.Error(), "dataengine.preload.max_entities") {
 		t.Fatalf("one over the limit: err %v, want ErrLocalPreloadBudget naming dataengine.preload.max_entities", err)
 	}
