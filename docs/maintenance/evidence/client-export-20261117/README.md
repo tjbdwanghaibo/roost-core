@@ -2,7 +2,7 @@
 
 需求与维护者决定：[FEATURE-2026-11-17-client-export.md](../../FEATURE-2026-11-17-client-export.md)。现行说明：[codegen 参考 §2.1](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#21-前后端公共协议目录client_export)、[客户端手册](../../../../client/README.md#前后端公共协议目录client_export)、[Unity 手册](../../../../client/unity/README.md#两条接入路线)。
 
-这是功能实施，不是缺陷修复：没有“修前红”，每个新行为有回归用例，另做 8 个变异证明用例能抓到。
+实施提交：`102ef332`（基于 `002ceca6`）。这是功能实施，不是缺陷修复：没有“修前红”，每个新行为有回归用例，另做 8 个变异证明用例能抓到。
 
 ## 设计
 
