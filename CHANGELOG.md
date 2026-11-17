@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+- **roost-genre compose**（2026-11-17）：
+  - **Unity 接入**（第 5A 步第 7 项）改为缺省走托管路线（`GameClient` + `RoostClientDriver`）；只有需要原生网络内核，或要与 C++ 客户端行为一致时，才走原生路线。
+  - **协议代码**改为从 `client_export` 导出目录取，客户端用 `roost client sync` 同步，不再手跑 protoc。
+  - **新工程**（第 2 步）：客户端是 Unity 或其他 C# 工程时，在 `roost.yaml` 里声明 `client_export`。
+  - **验收**（第 5 步）：加查 `client-export:fresh`。
+  - **改需求**（第 2A 步）：新增第 7 步，协议或同步字段变了，在 HISTORY 里写“客户端要重新同步”，并列出变化的消息号与错误码。
+  - **DEMO 第 6、7 节**：写明导出目录与 manifest 哈希。
+  - **第 1 步**：说明 13 类玩法夹具本身就是模块组合样板。
 - **13 类玩法改成模块组合（R9，维护者 D21 A；Q1～Q8 按推荐；只影响仓库的玩法脚本与夹具）**：每类玩法改为“装模块 + 只写模块没覆盖的部分”。场景名与条数不变，只有 SLG 多了一条回归（7 → 8）；REAL 全绿。各类“旧断言 → 新断言”写在各自手册，方案见 `docs/maintenance/PLAN-2026-11-17-r9-genre-modules.md`。
   - **各类装的模块**：
 

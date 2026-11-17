@@ -171,7 +171,7 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 | 手写 | 没有接近的模块，框架有对应的能力 | 第 4 步手写；先读[能力清单](../../../framework/CAPABILITIES.md)“文档”列里的契约，再挑一个结构上最像的模块当样板 |
 | 做不了 | 只有设计 / 原型 / 不支持 | 告诉用户，给出处；不做 |
 
-能力清单末尾的“需求条目 → 能力”速查表、各分组表的“怎么接入”与“状态”列用来判断后两类；有玩法夹具或 game-demo 的参考时照参考的做法，夹具与 demo 不能直接装进别的工程。
+能力清单末尾的“需求条目 → 能力”速查表、各分组表的“怎么接入”与“状态”列用来判断后两类；有玩法夹具或 game-demo 的参考时照参考的做法，夹具与 demo 不能直接装进别的工程。 13 类玩法的夹具（R9，2026-11-17 起）本身就是模块组合：各玩法脚本 `scripts/test-<玩法>-generated.sh` 的 `genre_modules` 列出装了哪些模块，夹具只写模块没覆盖的部分，选模块时可以照着看；各类装了什么、哪些留手写见 KNOWN-LIMITS 一“13 类玩法是模块组合”。
 
 不要因为“模块多带了点东西”就改成手写：模块自带的客户端协议用不上时告诉用户它存在，由用户决定去留。也不要因为“差一点”就复制模块的代码另改一份：差的那点应当落在它留给工程的文件、它发布的实体事件或登记点上，落不上再考虑借鉴。**新玩法要和已装模块联动时先找现成的事件**：看各模块 `game/event/<模块>.go`（README 的“实体事件”一节），在自己的组件（或 Player）上写 `//roost:listen` 方法；不要改发布方的文件，也不要为联动另写一张登记表。
 
@@ -240,6 +240,8 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
   `-recipe casual` 或 `-recipe turn-pvp` 可直接创建已组合工程（自动采用 game 底座），两者都已带登录链路（login、portal、servertime）与开发配置：casual 是首次发放、签到、任务、体力、商店、背包、邮件；turn-pvp 是档案、本服匹配（matchmaking → matchroom）、房间与回合，组队用 team。模块名单与验收见[配方](../../../../modules/README.md#从配方创建工程)。需求覆盖配方的全部模块时才从配方起步，再按第 1 步的结论往上加；模块不能卸载，配方多出来的模块装了就去不掉，这时改用 `-template game` 加 `module add`。
 
   `-template game` 带 Player 与 World 两个实体，缺省只有 game 一个业务服务、不托管任何框架服务：装的模块用到哪个托管服务（chat / leaderboard 的 rank / mailbox 的 mail / login 与 portal 的 account……），安装器就在那一次安装里声明哪个，所以工程只带用得到的服务；配方同样只带它的模块用到的（casual：account、mail；turn-pvp：account、match、rank）。手写功能要直接调某个托管服务（没有对应模块）时加 `-framework rank,chat`（或 `-framework all` 要全部九个），已有工程见 `roost help services`。玩家模块挂在 `Player` 上，要求这个形状；room 自带 Room Entity、DAO 与 lifecycle；skillbook 是服务级只读目录；alliance 会新增一个独立的联盟服务与三个跨域 Saga。
+
+  客户端是 Unity 或其他 C# 工程时，建完工程在 `roost.yaml` 末尾加一段 `client_export:`（`dir: shared/protocol`、`languages: [csharp]`），再按第 5A 步第 7 项准备 protoc 31.1。之后每次 `roost generate` 都会更新导出目录。
 - **已有工程**：`cd` 进去，先读 `roost.yaml`：`modules` 段是已装的模块（每个模块拥有的文件、DAO 字段、号），`services`、`features`、`ids` 是装配现状。再 `"$ROOST" module list`，带 `*` 的是已装的。不要重装已装的模块；已装模块的文件是业务代码，可能已经被改过，以工程里的为准。
 
 ## 2A. 后续增加与修改需求
@@ -256,6 +258,9 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
    - 已装模块的文件是业务代码，可能被上一轮改过：改之前读工程里现在的版本，不按模块原样覆盖。
 5. **改完照第 5 步验收，并重跑以前所有的场景**：已装模块的 `module verify`，加上以前每轮手写的场景（文档“手写的功能”一节有清单）。以前的场景因为这一轮的需求而变红时，先判断是旧需求被这一轮改了（照用户的决定改测试，写进历史），还是这一轮改坏了（修代码）；不能为了变绿去删旧场景。
 6. **更新记忆**：把 `docs/DEMO.zh-CN.md` 改成改完之后的当前状态；在 `docs/DEMO-HISTORY.zh-CN.md` 末尾追加一节（格式见第 5A 步）。历史只追加，不改以前的记录；以前的记录写错了，追加一条更正。
+7. **协议或同步字段变了，通知客户端**：
+   - 这一轮改了 `protocol/def`、DAO 的 `sync` 字段或错误码时，先 `roost generate`。导出目录会随之更新，`roost project doctor` 的 `client-export:fresh` 应为 OK。
+   - 在 `docs/DEMO-HISTORY.zh-CN.md` 本轮那一节写“客户端要重新同步”，列出新增和修改的消息号与错误码（可以直接贴 `roost client sync --dry-run` 的输出），再写上新的 manifest 哈希。
 
 第 6 步的报告只讲这一轮：新增、修改、删除了什么，影响到哪些旧条目，验收结果（新场景与回归场景分开报数）。
 
@@ -625,6 +630,7 @@ go test -mod=mod ./...                                            # 其余生成
 - `module verify` 全部 `ok`、退出码 0。它已经包含 `go build`、`go vet`、`roost id check`、`roost generate --check`。
 - 手写功能的场景数自己核对：`-run` 写错或用例被跳过时 `go test` 照样报 `ok`。
 - `project doctor` 在 `-template game` 的新工程上退出 0：缺省不托管任何框架服务，就没有协作者拒绝桩。装模块时声明的托管服务里，chat、account（login）、platform（purchase）的协作者由对应模块接管，mail、rank、match 没有拒绝桩；`-framework` 显式带上、又没有模块接管的 account / chat / platform / session 会各报一项 `collaborators:<服务>` FAIL（生成的拒绝桩，上线前由项目实现）。除这些外不应有 FAIL。
+- 声明了 `client_export` 的工程，`project doctor` 的 `client-export:fresh` 为 OK：导出目录与 `protocol/def`、同步字段、错误码一致。
 - 这一档是离线验收：替身提交器，没有 Mongo / NATS / Redis，没有真实客户端。要真起进程见 [SKILL §4](../SKILL.md)。
 
 ## 5A. 工程说明文档
@@ -638,11 +644,25 @@ go test -mod=mod ./...                                            # 其余生成
 3. **模块**：装了哪些（含连带装上的），每个一句话说它在本工程里管什么、通过的场景数；装上了哪些联动（`with`）；模块自带而需求没用到的客户端协议。来源：`roost.yaml` 的 `modules` 段、`"$ROOST" module verify` 的输出。
 4. **实体**：每种实体（Player、World、模块自带的 Room / Alliance 等）一节：谁创建、挂在哪个服务上、主 DAO 的顶层字段（字段名、来自哪个模块或手写、`persist` / `sync`）、组件与组件号、持久定时器类型。来源：`db/def/*.go`、`game/entities/`、`roost.yaml` 的 `entities` 与 `ids`。
 5. **服务**：先写玩家接入方式（第 1A 步的结论：嵌入 TCP 还是独立 Gate、谁定的、理由）。再把 `roost.yaml` 的 `services` 段逐个列：业务服务还是托管的框架服务（account、chat 等）、带了哪些 Mod（web、directory、heartbeat……）、对外的端口与入口（玩家 TCP、HTTP 路由）、哪些模块的逻辑跑在它上面、服务之间的 RPC / Saga。开发启动顺序（`make dev-run`）与依赖（Mongo / NATS / Redis / etcd）。
-6. **协议与错误码**：客户端请求、服务器推送各一张表（名字、号、谁处理、要点），错误码表（名字、号、什么时候出现）。来源：`protocol/def/`、`internal/errors/`、`roost.yaml` 的 `ids`。
-7. **客户端对接**：登录到进入的完整顺序（第 3A 步）；每个功能的调用顺序；要解码的自身视图字段及含义（哪些字段要配合服务器时间判断“今天”）；每个错误码的提示建议；请求键怎么生成、什么时候重发。客户端是 Unity 时，再加一小节“Unity 客户端接入”，内容按下面的要点写：
-   - **SDK 怎么拿到**：roost-core 的 `client/unity` 不能直接导入，要在与工程同版本的 roost-core 检出里执行 `python3 scripts/client/build-unity.py --target <macos|windows|linux|android|ios> --output <新目录> --protoc <protoc 路径>`（要 CMake、C++17 编译器、.NET SDK、protoc），再在 Unity Package Manager 里用 **Add package from disk** 选输出的 `com.roost.client/package.json`。Unity 项目选 .NET Standard 2.1；Google.Protobuf 由游戏工程自己引入并锁版本。
-   - **怎么生成客户端代码**：业务协议 `protoc -I ./protocol/proto --csharp_out=<客户端目录> ./protocol/proto/protocol.proto`；消息号 `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@<版本> -def ./protocol/def -csharp <客户端目录>/MessageIds.cs`；自身视图（Entity Sync）用 `roost generate` 产出的 `db/dao_sync.proto` 与 `db/dao_sync_apply.cs`（前者同样用 protoc 生成 C#，后者原样拷进客户端）。
-   - **最小接线**：常驻 GameObject 上挂 `RoostNativeDriver`；先异步完成登录入口取票（portal 的三个 HTTP 端点，第 3A 步）和 DNS；建 `NativeGameClient`，注册业务 PB 的回复 / 推送 parser 与自身视图的 codec；可选 `NativeReconnect`；`driver.Attach(game, reconnect)` 后 `game.Connect(地址, 票据)`。地址是第 1A 步定下的入口：嵌入 TCP 时连 game，独立 Gate 时连 Gate。
+6. **协议与错误码**：客户端请求、服务器推送各一张表（名字、号、谁处理、要点），错误码表（名字、号、什么时候出现）。来源：`protocol/def/`、`internal/errors/`、`roost.yaml` 的 `ids`。 这些协议与错误码的客户端代码在导出目录 `shared/protocol/`（`roost.yaml` 的 `client_export`）。要写明本轮 `shared/protocol/manifest.json` 的 `sources.protocol_def`、`sources.dao_sync` 两个哈希与 `generator` 版本，客户端据此判断要不要重新同步。
+7. **客户端对接**：客户端代码从导出目录 `shared/protocol/csharp/` 同步（`roost client sync --from <服务端工程> --to <客户端目录>`），不要手写或复制 PB 类型；本轮导出的 manifest 哈希见第 6 节。登录到进入的完整顺序（第 3A 步）；每个功能的调用顺序；要解码的自身视图字段及含义（哪些字段要配合服务器时间判断“今天”）；每个错误码的提示建议；请求键怎么生成、什么时候重发。客户端是 Unity 时，再加一小节“Unity 客户端接入”，内容按下面的要点写：
+   - **两条路线，缺省托管**：
+     - 托管：`GameClient` + `RoostClientDriver`。在常驻 GameObject 上挂 `RoostClientDriver`，`Attach(client)` 之后它每帧在主线程 Pump。网络在 C# 里，直接编译导出的协议代码，业务工程不需要原生插件，也不需要 C++ 构建环境。
+     - 原生：`RoostNativeDriver` + `NativeGameClient`。只有要原生网络内核，或要与 C++ 客户端行为一致时才用，要按平台打原生包，见 roost-core 的 [client/unity/README](../../../../client/unity/README.md)。
+     - 同一条连接只能选一条路线。
+   - **协议代码从导出目录来**：
+     - 在工程 `roost.yaml` 里声明 `client_export`（`dir: shared/protocol`、`languages: [csharp]`）。`roost generate` 会把 `Protocol.cs`、`DaoSync.cs`、`DaoSyncApply.cs`、`MessageIds.cs`、`ErrorCodes.cs` 与 `manifest.json` 写进 `shared/protocol/`，这个目录要提交。
+     - 生成要用 protoc 31.1，与 SDK 锁定的 Google.Protobuf 3.31.1 同版本。用 `ROOST_PROTOC` 或 `client_export.csharp.protoc` 指过去；版本不对时 generate 会报错。
+     - 客户端仓库用 `roost client sync --from <服务端工程> --to <Unity 目录>` 同步，它会报告新增和变化的消息号、错误码。不要再手跑 protoc 或 `-csharp`。
+   - **SDK**：引用 `Roost.Client`、`Roost.Client.Codecs` 与 Google.Protobuf 3.31.1（游戏工程自己锁版本）。Unity 项目选 .NET Standard 2.1。
+   - **最小接线（托管）**：
+     1. 先异步完成登录入口取票（第 3A 步）。
+     2. `new GameClient(new ConnectionOptions{Host, Port})`。
+     3. 注册业务 PB 的回复与推送：`client.Request(MessageIds.RequestX, MessageIds.ResponseX, req, Reply.Parser, …)`、`client.Subscribe(MessageIds.PushY, Push.Parser, …)`。
+     4. 注册自身视图：`client.Entities.RegisterDao("player", SyncPlayerDao.Parser, (patch, previous) => patch.Apply(previous))`。
+     5. `driver.Attach(client)`，再 `await client.Connection.ConnectAsync(取票)`。
+
+     连接地址是第 1A 步定下的入口：嵌入 TCP 时连 game，独立 Gate 时连 Gate。错误码用 `ErrorCodes.Name(code)` / `ErrorCodes.Message(code)` 查。
    - **边界**：重连不自动重发业务请求（超时可能已经执行，按请求键幂等重发）；回到前台要重新取票登录；完整说明见 roost-core 的 [client/unity/README](../../../../client/unity/README.md) 与 [client/README](../../../../client/README.md)。包里的 Native Session 示例用的是 SDK 的回环夹具，不是账号服务示例。
 8. **手写的功能**：文件清单、样板模块与借鉴点、业务假设（数值、日界、上限）、日志打在哪。
 9. **验收与上线前缺口**：第 5 步的实际结果、离线验收的范围，上线前要补的（渠道验签、TLS、限流、生产地址、托管服务的 collaborators）。
