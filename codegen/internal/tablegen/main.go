@@ -67,6 +67,9 @@ type Meta struct {
 	AllFields []Field
 	// Omitted 是投影时被排除的本表字段的 Go 名（另一端专用），只用于生成代码的注释。
 	Omitted []string
+	// named 是 schema 包（本表所在目录）里声明的类型名 → 底层内建标量的规范名（底层不是内建标量的为 ""），
+	// 见 named.go。生成服务端 Go 时据此给这些类型名加上导入别名。
+	named map[string]string
 }
 
 // sheetFields 是 CSV 表头可以出现的全部字段（见 AllFields）。
@@ -78,8 +81,12 @@ func (m Meta) sheetFields() []Field {
 }
 
 type Field struct {
-	Name     string
-	Type     string
+	Name string
+	// Type 是 schema 里写的 Go 类型表达式（CSV 模板的类型行、服务端生成的 Go 用它）。
+	Type string
+	// Resolved 是把 schema 包里底层是内建标量的具名类型换成底层类型后的表达式（Rank → int32，
+	// []Rank → []int32），没有具名类型时与 Type 相同。CSV 转换、index、客户端导出都看它（named.go）。
+	Resolved string
 	CSV      string
 	JSON     string
 	Title    string
@@ -97,6 +104,14 @@ type Field struct {
 	Index string
 	// Note 是 layout=kv 表里这个字段那一行的 note 列，生成 Go 时写进注释；其它表为空。
 	Note string
+}
+
+// resolvedType 是 Resolved；直接构造、没有填 Resolved 的 Field（单测）取 Type。
+func (f Field) resolvedType() string {
+	if f.Resolved != "" {
+		return f.Resolved
+	}
+	return f.Type
 }
 
 // DefaultMetaDir is where a business project keeps its table meta files;
@@ -273,6 +288,10 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 	if err != nil {
 		return nil, err
 	}
+	named, err := packageTypes(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
 	importPath := filepath.ToSlash(filepath.Join(module, rel))
 	var metas []Meta
 	for _, decl := range file.Decls {
@@ -305,6 +324,7 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 				ImportPath: importPath,
 				Side:       opts["side"],
 				Layout:     opts["layout"],
+				named:      named,
 			}
 			if !validSide(meta.Side) {
 				return nil, fmt.Errorf("%s: %s %s: side=%q must be c (client only) or s (server only)", path, meta.Kind, meta.TypeName, meta.Side)
@@ -350,6 +370,7 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 				meta.Fields = append(meta.Fields, Field{
 					Name:     name,
 					Type:     types.ExprString(field.Type),
+					Resolved: resolveType(field.Type, named),
 					CSV:      csvName,
 					JSON:     jsonName,
 					Title:    tag.Get("title"),
@@ -798,12 +819,12 @@ func parseCell(value string, field Field) (any, error) {
 			// exactly as it would for an edited JSON file.
 			return nil, nil
 		}
-		return zeroValue(field.Type), nil
+		return zeroValue(field.resolvedType()), nil
 	}
 	if field.Parser != "" {
 		return value, nil
 	}
-	switch strings.TrimPrefix(field.Type, "*") {
+	switch strings.TrimPrefix(field.resolvedType(), "*") {
 	case "string":
 		return value, nil
 	case "bool":
@@ -868,6 +889,7 @@ func generateGo(metas []Meta, outDir string, pkg string, force bool, stdout io.W
 		"cfgDoc":        cfgDoc,
 		"indexed":       indexedFields,
 		"indexKey":      indexKeyExpr,
+		"goType":        qualifiedType,
 		"indexAccessor": indexAccessor,
 		"sheet":         func(meta Meta) []Field { return meta.sheetFields() },
 		"hasKV":         hasKV,
@@ -998,7 +1020,7 @@ func {{.TypeName}}By{{keyField .}}(id {{keyType .}}) ({{.Alias}}.{{.TypeName}}, 
 // {{indexAccessor $m .}} returns the {{$m.Name}} rows whose {{.Name}} equals v, in
 // file order (index {{quote .Index}}; not unique, so several rows may match).
 // Like {{$m.TypeName}}Table it reads the snapshot pinned to the current request.
-func {{indexAccessor $m .}}(v {{.Type}}) []{{$m.Alias}}.{{$m.TypeName}} {
+func {{indexAccessor $m .}}(v {{goType $m .Type}}) []{{$m.Alias}}.{{$m.TypeName}} {
 	return {{$m.TypeName}}Table().GetByIndex({{quote .Index}}, {{indexKey . "v"}})
 }
 {{end}}{{else}}
@@ -1008,15 +1030,12 @@ func {{.TypeName}}ConfigFrom(snap *configdata.Snapshot) ({{.Alias}}.{{.TypeName}
 {{end}}
 
 {{if eq .Layout "kv"}}{{template "kvConverter" .}}{{else}}func Convert{{.TypeName}}CSV(r io.Reader) ({{if eq .Kind "table"}}[]{{.Alias}}.{{.TypeName}}{{else}}{{.Alias}}.{{.TypeName}}{{end}}, error) {
-	reader := csv.NewReader(r)
-	reader.TrimLeadingSpace = true
-	reader.Comment = '#'
-	records, err := reader.ReadAll()
+	records, lines, err := tablegenReadCSV(r)
 	if err != nil {
 		var zero {{if eq .Kind "table"}}[]{{.Alias}}.{{.TypeName}}{{else}}{{.Alias}}.{{.TypeName}}{{end}}
 		return zero, err
 	}
-	rows, err := convert{{.TypeName}}Records(records)
+	rows, err := convert{{.TypeName}}Records(records, lines)
 	if err != nil {
 		var zero {{if eq .Kind "table"}}[]{{.Alias}}.{{.TypeName}}{{else}}{{.Alias}}.{{.TypeName}}{{end}}
 		return zero, err
@@ -1036,7 +1055,7 @@ func {{.TypeName}}ConfigFrom(snap *configdata.Snapshot) ({{.Alias}}.{{.TypeName}
 {{end}}
 }
 
-func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}, error) {
+func convert{{.TypeName}}Records(records [][]string, lines []int) ([]{{.Alias}}.{{.TypeName}}, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
@@ -1069,9 +1088,9 @@ func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}
 		if idx, ok := col[{{quote .CSV}}]; ok && idx < len(record) {
 			raw := strings.TrimSpace(record[idx])
 			if raw != "" {
-				v, err := {{parseExpr . "raw"}}
+				v, err := {{parseExpr $m . "raw"}}
 				if err != nil {
-					return nil, fmt.Errorf("row=%d field={{.Name}} value=%q: %w", rowIndex+1, raw, err)
+					return nil, fmt.Errorf("row=%d field={{.Name}} value=%q: %w", lines[rowIndex], raw, err)
 				}
 				item.{{.Name}} = v
 			}
@@ -1082,6 +1101,29 @@ func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}
 	return out, nil
 }
 {{end}}{{end}}
+
+// tablegenReadCSV reads a whole sheet. Lines starting with # are comments
+// and skipped, so each record comes back with the file line it starts on
+// (a quoted cell may span lines; errors name the record's first line).
+func tablegenReadCSV(r io.Reader) ([][]string, []int, error) {
+	reader := csv.NewReader(r)
+	reader.TrimLeadingSpace = true
+	reader.Comment = '#'
+	var records [][]string
+	var lines []int
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			return records, lines, nil
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		line, _ := reader.FieldPos(0)
+		records = append(records, record)
+		lines = append(lines, line)
+	}
+}
 
 // tablegenCheckHeader rejects a column whose name differs from a field's csv
 // name only in case: column names are case-sensitive, like the JSON keys
@@ -1114,18 +1156,23 @@ func tablegenEmptyRecord(record []string) bool {
 	return true
 }
 
-func tablegenParseInt[T ~int | ~int8 | ~int16 | ~int32](raw string) (T, error) {
+func tablegenParseInt[T ~int | ~int8 | ~int16 | ~int32 | ~int64](raw string) (T, error) {
 	v, err := strconv.ParseInt(raw, 10, 64)
 	return T(v), err
 }
 
-func tablegenParseUint[T ~uint | ~uint8 | ~uint16 | ~uint32](raw string) (T, error) {
+func tablegenParseUint[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](raw string) (T, error) {
 	v, err := strconv.ParseUint(raw, 10, 64)
 	return T(v), err
 }
 
-func tablegenParseFloat[T ~float32](raw string) (T, error) {
+func tablegenParseFloat[T ~float32 | ~float64](raw string) (T, error) {
 	v, err := strconv.ParseFloat(raw, 64)
+	return T(v), err
+}
+
+func tablegenParseBool[T ~bool](raw string) (T, error) {
+	v, err := strconv.ParseBool(raw)
 	return T(v), err
 }
 
@@ -1202,7 +1249,7 @@ func Convert{{.TypeName}}CSV(r io.Reader) ({{.Alias}}.{{.TypeName}}, error) {
 {{- range .Fields}}
 		case {{quote .CSV}}:
 			if raw != "" {
-				v, err := {{parseExpr . "raw"}}
+				v, err := {{parseExpr $ . "raw"}}
 				if err != nil {
 					return {{$.Alias}}.{{$.TypeName}}{}, fmt.Errorf("line=%d key=%q field={{.Name}} value=%q: %w", line, key, raw, err)
 				}
@@ -1226,10 +1273,27 @@ func Convert{{.TypeName}}CSV(r io.Reader) ({{.Alias}}.{{.TypeName}}, error) {
 }
 {{end}}`
 
-func parseExpr(field Field, raw string) string {
-	t := strings.TrimPrefix(field.Type, "*")
+// parseExpr 是生成的 Convert<Type>CSV 里把单元格原文 raw 解析成字段值的表达式（值, error）。
+// schema 包里的具名标量按底层类型解析，再转换成具名类型本身（tablegenParseInt[meta0.Rank]）。
+func parseExpr(meta Meta, field Field, raw string) string {
+	goType := qualifiedType(meta, field.Type)
 	if field.Parser != "" {
-		return fmt.Sprintf("tablegenParseJSON[%s](%s)", field.Type, raw)
+		return fmt.Sprintf("tablegenParseJSON[%s](%s)", goType, raw)
+	}
+	t := strings.TrimPrefix(field.resolvedType(), "*")
+	if named := strings.TrimPrefix(goType, "*"); named != t {
+		switch t {
+		case "string":
+			return named + "(" + raw + "), error(nil)"
+		case "bool":
+			return "tablegenParseBool[" + named + "](" + raw + ")"
+		case "int", "int8", "int16", "int32", "int64":
+			return "tablegenParseInt[" + named + "](" + raw + ")"
+		case "uint", "uint8", "uint16", "uint32", "uint64":
+			return "tablegenParseUint[" + named + "](" + raw + ")"
+		case "float32", "float64":
+			return "tablegenParseFloat[" + named + "](" + raw + ")"
+		}
 	}
 	switch t {
 	case "string":
@@ -1263,7 +1327,7 @@ func parseExpr(field Field, raw string) string {
 	case "time.Duration":
 		return "time.ParseDuration(" + raw + ")"
 	default:
-		return fmt.Sprintf("tablegenParseJSON[%s](%s)", field.Type, raw)
+		return fmt.Sprintf("tablegenParseJSON[%s](%s)", goType, raw)
 	}
 }
 
@@ -1290,8 +1354,10 @@ func resolveRefs(metas []Meta) error {
 			if !ok {
 				return fmt.Errorf("table %s field %s: ref target %q is not a table in this schema", meta.Name, field.Name, field.Ref)
 			}
-			if fieldType := strings.TrimPrefix(field.Type, "*"); fieldType != keyType(target) {
-				return fmt.Errorf("table %s field %s: ref type %s does not match %s key type %s", meta.Name, field.Name, field.Type, target.Name, keyType(target))
+			// schema 包里声明的类型名带上各自的导入路径再比较：同一个包里的同名类型相同，不同包里的同名类型不同。
+			fieldType := strings.TrimPrefix(qualifyType(meta, field.Type, meta.ImportPath), "*")
+			if targetKey := keyFieldInfo(target); fieldType != qualifyType(target, targetKey.Type, target.ImportPath) {
+				return fmt.Errorf("table %s field %s: ref type %s does not match %s key type %s", meta.Name, field.Name, field.Type, target.Name, keyFieldInfo(target).Type)
 			}
 		}
 	}
@@ -1328,12 +1394,13 @@ func ruleLiterals(declared []rules.Rule) []string {
 	return out
 }
 
+// keyType 是生成的服务端 Go 里主键的类型（schema 包的具名类型带导入别名）。
 func keyType(meta Meta) string {
 	field := keyFieldInfo(meta)
 	if field.Type == "" {
 		return "int64"
 	}
-	return field.Type
+	return qualifiedType(meta, field.Type)
 }
 
 func keyField(meta Meta) string {

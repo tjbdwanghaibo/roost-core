@@ -24,7 +24,10 @@ func TestIndexDeclarationsAreRejected(t *testing.T) {
 		{"on an object", "//roost:object\ntype M struct { S int32 `index:\"true\"` }\n", "index only applies to //roost:table rows"},
 		{"on the key", "//roost:table key=ID\ntype M struct { ID int32 `index:\"true\"`; S int32 }\n", "the key already has MByID"},
 		{"float field", "//roost:table\ntype M struct { ID int32; Rate float64 `index:\"true\"` }\n", "index needs a string, integer or bool field, got float64"},
-		{"named type", "//roost:table\ntype M struct { ID int32; Kind Kind `index:\"true\"` }\ntype Kind int32\n", "got Kind"},
+		// 具名类型按底层类型看（交接 C5 (a)）：底层是浮点的照样拒绝；别的包里的、底层不是内建标量的，报错说明原因。
+		{"named float", "//roost:table\ntype M struct { ID int32; Rate Rate `index:\"true\"` }\ntype Rate float64\n", "got Rate (float64)"},
+		{"named type from another package", "//roost:table\ntype M struct { ID int32; D time.Duration `index:\"true\"` }\n", "time.Duration is defined in another package"},
+		{"named struct", "//roost:table\ntype M struct { ID int32; R Reward `index:\"true\"` }\ntype Reward struct { ID int32 }\n", "Reward is a named type whose underlying type is not a built-in scalar"},
 		{"parser field", "//roost:table\ntype M struct { ID int32; S string `index:\"true\" parser:\"json\"` }\n", "with parser:json"},
 		{"duplicate name", "//roost:table\ntype M struct { ID int32; A int32 `index:\"X\"`; B int32 `index:\"X\"` }\n", `index "X" is declared on both A and B`},
 		{"collides with the key accessor", "//roost:table key=ID\ntype M struct { ID int32; Code int32 `index:\"ID\"` }\n", "collides with the key accessor"},

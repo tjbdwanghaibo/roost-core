@@ -134,7 +134,8 @@ func indexName(field, tag string) (string, error) {
 }
 
 // indexTypes 是可以建索引的字段类型：索引键是值的十进制 / 原文字符串（configdata.IndexDef）。
-// 浮点、指针、复合与具名类型不支持（生成器不知道具名类型的底层类型）。
+// 按字段的底层类型（Field.Resolved）查：schema 包里底层是这些类型的具名类型可以建索引；浮点、指针、
+// 复合类型、别的包里的具名类型、底层不是内建标量的具名类型不支持（named.go）。
 var indexTypes = map[string]bool{
 	"string": true, "bool": true,
 	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
@@ -159,8 +160,12 @@ func validateIndexes(meta Meta) error {
 		if field.Name == keyFieldInfo(meta).Name {
 			return fmt.Errorf("table %s field %s: the key already has %s; index is for non-key fields", meta.Name, field.Name, keyAccessor)
 		}
-		if field.Parser != "" || !indexTypes[field.Type] {
-			return fmt.Errorf("table %s field %s: index needs a string, integer or bool field, got %s", meta.Name, field.Name, fieldTypeLabel(field))
+		if field.Parser != "" || !indexTypes[field.resolvedType()] {
+			err := fmt.Errorf("table %s field %s: index needs a string, integer or bool field, got %s", meta.Name, field.Name, fieldTypeLabel(field))
+			if reason := NamedTypeReason(field.resolvedType()); field.Parser == "" && reason != "" {
+				err = fmt.Errorf("%w: %s", err, reason)
+			}
+			return err
 		}
 		if prev, dup := seen[field.Index]; dup {
 			return fmt.Errorf("table %s: index %q is declared on both %s and %s", meta.Name, field.Index, prev, field.Name)
@@ -173,9 +178,13 @@ func validateIndexes(meta Meta) error {
 	return nil
 }
 
+// fieldTypeLabel 是报错里的字段类型：schema 里的写法，具名标量后面括上底层类型（Rate (float64)）。
 func fieldTypeLabel(field Field) string {
 	if field.Parser != "" {
 		return field.Type + " with parser:" + field.Parser
+	}
+	if resolved := field.resolvedType(); resolved != field.Type {
+		return field.Type + " (" + resolved + ")"
 	}
 	return field.Type
 }
@@ -197,14 +206,20 @@ func indexedFields(meta Meta) []Field {
 }
 
 // indexKeyExpr 是生成代码里把字段值 v 变成索引键字符串的表达式，与 configdata 自动表
-// （cfggen）的索引键一致：整数取十进制，bool 取 true / false，字符串原样。
+// （cfggen）的索引键一致：整数取十进制，bool 取 true / false，字符串原样。按底层类型选写法，
+// 具名类型先转换成底层类型（string(v)、bool(v)），所以具名与内建类型的同一个值键相同。
 func indexKeyExpr(field Field, v string) string {
+	resolved := field.resolvedType()
 	switch {
-	case field.Type == "string":
+	case resolved == "string" && field.Type == "string":
 		return v
-	case field.Type == "bool":
+	case resolved == "string":
+		return "string(" + v + ")"
+	case resolved == "bool" && field.Type == "bool":
 		return "strconv.FormatBool(" + v + ")"
-	case strings.HasPrefix(field.Type, "uint"):
+	case resolved == "bool":
+		return "strconv.FormatBool(bool(" + v + "))"
+	case strings.HasPrefix(resolved, "uint"):
 		return "strconv.FormatUint(uint64(" + v + "), 10)"
 	default:
 		return "strconv.FormatInt(int64(" + v + "), 10)"

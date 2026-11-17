@@ -87,9 +87,10 @@ var csScalars = map[string]csType{
 	"float64": scalarCS("double", "ReadFloat64", "float"),
 }
 
-// csharpType 把 schema 里的 Go 类型表达式换成 C# 类型。支持内建标量、指向标量的指针、切片（[]byte 除外）与
+// csharpType 把导出模型里的 Go 类型表达式换成 C# 类型。支持内建标量、指向标量的指针、切片（[]byte 除外）与
 // map[string]T，可以嵌套；带解析器（parser）的字段一律是 string（客户端拿到 CSV 原文，自己解析）。
-// 别的类型（具名类型、结构体、time.Duration 等）生成器不知道它的 JSON 形状，报错。
+// schema 包里底层是内建标量的具名类型已由 tablegen 换成底层类型（ExportField.Type），生成底层类型、不生成 enum；
+// 剩下的具名类型（别的包里的、底层不是内建标量的）与 time.Duration 等，生成器不知道它的 JSON 形状，报错并说明原因。
 func csharpType(goType string, parser bool) (csType, error) {
 	if parser {
 		return csScalars["string"], nil
@@ -136,7 +137,11 @@ func csharpTypeOf(goType string) (csType, error) {
 	case strings.HasPrefix(goType, "map["):
 		return csType{}, fmt.Errorf("type %s: only map[string]T is supported (JSON object keys are strings)", goType)
 	}
-	return csType{}, fmt.Errorf("type %s is not supported in the client export (built-in scalars, pointers to them, slices and map[string]T are); give the field parser:\"...\" so the client gets the raw string, or side:\"s\"", goType)
+	reason := ""
+	if why := tablegen.NamedTypeReason(goType); why != "" {
+		reason = ": " + why
+	}
+	return csType{}, fmt.Errorf("type %s is not supported in the client export (built-in scalars, pointers to them, slices and map[string]T are)%s; give the field parser:\"...\" so the client gets the raw string, or side:\"s\"", goType, reason)
 }
 
 // canonicalCS 生成标量值的规范字符串（与 ConfigJson.Canonical 对 JSON 值的结果一致），用于主键点名与 ref 查找。

@@ -19,10 +19,13 @@ import (
 
 // client_export.config（配置表导出给客户端，维护者 2026-11-17，docs/maintenance/FEATURE-2026-11-17-client-config-export.md）
 // 的回归用例。夹具：两张普通表（monster 带只给服务端的 drop_seed、只给客户端的 model、scene_id 上的 index、数组与字典字段、
-// parser 字段）、一张竖排键值表（balance）、一张 side=c 的表（tip）。C# 的编译与运行见 TestClientConfigCSharpRuntime
+// parser 字段、具名类型 Rank 上的 index）、一张竖排键值表（balance）、一张 side=c 的表（tip）。C# 的编译与运行见 TestClientConfigCSharpRuntime
 // （本机有 dotnet 时随 go test 运行，没有时 SKIP；设 ROOST_REQUIRE_DOTNET=1 时缺 dotnet 直接失败）。
 
 const configExportTestSchema = `package schema
+
+// Rank 是底层为内建标量的具名类型：导出与 index 按底层类型（int32）处理（交接 C5 (a)）。
+type Rank int32
 
 //roost:table name=scene key=ID
 type Scene struct {
@@ -41,6 +44,7 @@ type Monster struct {
 	Tags     string           ` + "`csv:\"tags\" json:\"tags\" title:\"标签\" parser:\"json\"`" + `
 	Rewards  []int64          ` + "`csv:\"rewards\" json:\"rewards\" title:\"奖励\"`" + `
 	Weights  map[string]int32 ` + "`csv:\"weights\" json:\"weights\" title:\"权重\"`" + `
+	Rank     Rank             ` + "`csv:\"rank\" json:\"rank\" title:\"档位\" index:\"true\"`" + `
 }
 
 //roost:object name=balance layout=kv
@@ -60,10 +64,10 @@ type Tip struct {
 
 var configExportTestTables = map[string]string{
 	"scene.csv": "id,name,kind\n# 场景表\n1,forest,field\n2,cave,dungeon\n",
-	"monster.csv": "id,scene_id,level,drop_seed,model,tags,rewards,weights\n编号,场景,等级,掉落种子,模型,标签,奖励,权重\n# 同一场景可以有多只\n" +
-		"10,1,3,777,slime.prefab,\"[\"\"a\"\"]\",\"[1,2]\",\"{\"\"a\"\":1}\"\n" +
-		"11,2,5,888,bat.prefab,\"[\"\"b\"\"]\",,\n" +
-		"12,1,4,999,orc.prefab,\"[\"\"c\"\"]\",[3],\"{\"\"b\"\":2,\"\"a\"\":3}\"\n",
+	"monster.csv": "id,scene_id,level,drop_seed,model,tags,rewards,weights,rank\n编号,场景,等级,掉落种子,模型,标签,奖励,权重,档位\n# 同一场景可以有多只\n" +
+		"10,1,3,777,slime.prefab,\"[\"\"a\"\"]\",\"[1,2]\",\"{\"\"a\"\":1}\",2\n" +
+		"11,2,5,888,bat.prefab,\"[\"\"b\"\"]\",,,1\n" +
+		"12,1,4,999,orc.prefab,\"[\"\"c\"\"]\",[3],\"{\"\"b\"\":2,\"\"a\"\":3}\",2\n",
 	"balance.csv": "key,value,note\nmax_level,60,玩家等级上限\nstart_gold,100,新角色的金币\nserver_tick,50,只给服务端\n# 只给客户端\nshop_banner,summer_sale,商店顶部横幅 <夏季>\n",
 	"tip.csv":     "id,text\n1,hello\n2,\"多行\n提示\"\n",
 }
@@ -331,7 +335,7 @@ func TestGenerateClientConfigExport(t *testing.T) {
 			t.Errorf("%s differs from the model data", got.File)
 		}
 	}
-	if monster := manifest.Tables[1]; monster.Key != "id" || monster.Kind != "table" || monster.Rows != 3 || len(monster.Fields) != 7 || monster.Fields[4].Parser != "json" {
+	if monster := manifest.Tables[1]; monster.Key != "id" || monster.Kind != "table" || monster.Rows != 3 || len(monster.Fields) != 8 || monster.Fields[4].Parser != "json" || monster.Fields[7] != (clientConfigField{Name: "rank", Type: "int32"}) {
 		t.Fatalf("manifest monster = %+v", monster)
 	}
 	if len(manifest.Files) != len(files)-1 {
@@ -348,7 +352,7 @@ func TestGenerateClientConfigExport(t *testing.T) {
 	}
 	for _, want := range []string{
 		"public sealed class Monster", "public int scene_id;", "public long[] rewards;", "Dictionary<string, int> weights;",
-		"public sealed class MonsterTable", "BySceneID(int value)", "/// <summary>商店顶部横幅 &lt;夏季&gt;</summary>",
+		"public sealed class MonsterTable", "BySceneID(int value)", "public int rank;", "ByRank(int value)", "/// <summary>商店顶部横幅 &lt;夏季&gt;</summary>",
 		"/// <summary>标签（parser json：CSV 原文字符串，由游戏自己解析）</summary>",
 	} {
 		if !strings.Contains(strings.Join([]string{files["csharp/ConfigTables.Monster.cs"], files["csharp/ConfigTables.Balance.cs"]}, "\n"), want) {
@@ -673,7 +677,9 @@ func TestConfigCSharpTypes(t *testing.T) {
 		t.Errorf("nested reader = %s", got)
 	}
 	for goType, want := range map[string]string{
-		"time.Duration": "not supported", "Reward": "not supported", "[]byte": "base64", "map[int32]string": "only map[string]T", "*[]int32": "only pointers",
+		"time.Duration": "time.Duration is defined in another package", "Reward": "not supported", "[]byte": "base64", "map[int32]string": "only map[string]T", "*[]int32": "only pointers",
+		// 具名类型（交接 C5 (a)）：schema 包里底层是内建标量的已由 tablegen 换成底层类型；剩下的报错说明原因。
+		"[]Reward": "Reward is a named type whose underlying type is not a built-in scalar", "map[string]foo.Kind": "foo.Kind is defined in another package",
 	} {
 		if _, err := csharpType(goType, false); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("csharpType(%s) = %v, want %q", goType, err, want)
@@ -813,6 +819,22 @@ func TestClientConfigCSharpRuntime(t *testing.T) {
 	}
 	writeProjectFile(t, filepath.Join(work, "data", "types"), "extra.json", string(types.Data))
 
+	// 数字的规范写法（交接 C5 (b)）：运行部分直接编进控制台程序（Canon.Config，internal 的 ConfigJson.Canonical 可以调用），
+	// 对 framework/configdata/rules 的共用样例表逐条比较。
+	canonical := sharedCanonicalNumbers(t)
+	canonSources, err := renderConfigCSharp([]tablegen.ExportTable{types}, "Canon.Config", "v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range canonSources {
+		writeProjectFile(t, filepath.Join(work, "canon"), name, string(raw))
+	}
+	var canonInputs strings.Builder
+	for _, sample := range canonical {
+		canonInputs.WriteString(sample.JSON + "\n")
+	}
+	writeProjectFile(t, work, "canon.txt", canonInputs.String())
+
 	writeProjectFile(t, work, "lib/Lib.csproj", `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
@@ -835,6 +857,7 @@ func TestClientConfigCSharpRuntime(t *testing.T) {
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../lib/Lib.csproj" />
+    <Compile Include="../canon/**/*.cs" />
   </ItemGroup>
 </Project>
 `)
@@ -852,7 +875,7 @@ func TestClientConfigCSharpRuntime(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("dotnet build: %v\n%s", err, output)
 	}
-	run := exec.CommandContext(ctx, dotnet, filepath.Join(work, "out", "App.dll"), filepath.Join(work, "data"))
+	run := exec.CommandContext(ctx, dotnet, filepath.Join(work, "out", "App.dll"), filepath.Join(work, "data"), filepath.Join(work, "canon.txt"))
 	run.Env = env
 	output, err := run.CombinedOutput()
 	if err != nil {
@@ -860,6 +883,12 @@ func TestClientConfigCSharpRuntime(t *testing.T) {
 	}
 	got := string(output)
 	t.Logf("harness output:\n%s", got)
+
+	// 具名类型上的 index：同一份 schema 与 CSV，服务端生成的 Go 与导出的 C# 按同一个键查到同一组行。
+	server := serverRankLookups(t, root)
+	if server != "RANK rank=1 -> 11; rank=2 -> 10,12; rank=3 -> " || !strings.Contains(got, server+"\n") {
+		t.Errorf("rank index: server Go = %q; the C# harness must print the same line:\n%s", server, got)
+	}
 
 	// 读回全部数据：每张表每行每个字段，与导出的 JSON 逐个比。
 	for _, table := range model.Tables {
@@ -897,9 +926,111 @@ func TestClientConfigCSharpRuntime(t *testing.T) {
 			t.Errorf("harness output lacks %q", line)
 		}
 	}
+	for _, sample := range canonical {
+		if line := "CANON " + sample.JSON + " -> " + sample.Canonical; !strings.Contains(got, line+"\n") {
+			t.Errorf("C# canonical form differs from the shared table: want %q", line)
+		}
+	}
 	if strings.Contains(got, "UNEXPECTED") {
 		t.Errorf("harness reported an unexpected result")
 	}
+}
+
+// serverRankLookups 用 tablegen 把工程的 configs/schema 与 configs/table 生成服务端 JSON 与 Go 绑定（go.mod 指向本仓库），
+// 编译运行后按 Rank 查 monster，输出格式与 C# 控制台程序的 RankLookups 相同。
+func serverRankLookups(t *testing.T, root string) string {
+	t.Helper()
+	work := t.TempDir()
+	core, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, work, "go.mod", fmt.Sprintf("module example.com/bothends\ngo 1.27.0\nrequire github.com/tjbdwanghaibo/roost-core v0.0.0\nreplace github.com/tjbdwanghaibo/roost-core => %s\n", core))
+	for name, body := range snapshotDir(t, filepath.Join(root, "configs", "schema")) {
+		if strings.HasSuffix(name, ".go") {
+			writeProjectFile(t, filepath.Join(work, "schema"), name, body)
+		}
+	}
+	for name, body := range snapshotDir(t, filepath.Join(root, "configs", "table")) {
+		writeProjectFile(t, filepath.Join(work, "table"), name, body)
+	}
+	schema, table := filepath.Join(work, "schema"), filepath.Join(work, "table")
+	if err := tablegen.Run([]string{"-meta", schema, "-csv", table, "-json", filepath.Join(work, "data"), "-force"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := tablegen.Run([]string{"-meta", schema, "-out", filepath.Join(work, "generated"), "-pkg", "generated", "-force"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, work, "main.go", `package main
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"example.com/bothends/generated"
+	"example.com/bothends/schema"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+)
+
+func main() {
+	r := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(r); err != nil {
+		panic(err)
+	}
+	store := configdata.NewStore(r, "data")
+	configdata.SetDefaultStore(store)
+	if _, err := store.Load(context.Background()); err != nil {
+		panic(err)
+	}
+	var parts []string
+	for _, rank := range []int32{1, 2, 3} {
+		var ids []string
+		for _, row := range generated.MonsterByRank(schema.Rank(rank)) {
+			ids = append(ids, fmt.Sprint(row.ID))
+		}
+		parts = append(parts, fmt.Sprintf("rank=%d -> %s", rank, strings.Join(ids, ",")))
+	}
+	fmt.Println("RANK " + strings.Join(parts, "; "))
+}
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", "-mod=mod", ".")
+	cmd.Dir = work
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("server Go over the same schema and CSV: %v\n%s%s", err, output, stderr.String())
+	}
+	return strings.TrimSuffix(string(output), "\n")
+}
+
+// canonicalNumber 是共用样例表的一条：JSON 数字原文 → 规范字符串。
+type canonicalNumber struct {
+	JSON      string `json:"json"`
+	Canonical string `json:"canonical"`
+}
+
+// sharedCanonicalNumbers 读 framework/configdata/rules/testdata/canonical_numbers.json（Go 的 rules.Canonical 用同一份表测）。
+func sharedCanonicalNumbers(t *testing.T) []canonicalNumber {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "framework", "configdata", "rules", "testdata", "canonical_numbers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Cases []canonicalNumber `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Cases) == 0 {
+		t.Fatal("the shared canonical number table is empty")
+	}
+	return table.Cases
 }
 
 func dotnetMajor(t *testing.T, dotnet string) string {
@@ -1044,6 +1175,17 @@ static class Program
         }
     }
 
+    // RankLookups 与 Go 端（serverRankLookups）打印同一格式：具名类型 Rank 上的 index，两端按同一个键查到同一组行。
+    static string RankLookups(Func<int, IEnumerable<int>> byRank)
+    {
+        var parts = new List<string>();
+        foreach (int rank in new[] { 1, 2, 3 })
+        {
+            parts.Add("rank=" + rank + " -> " + string.Join(",", byRank(rank)));
+        }
+        return "RANK " + string.Join("; ", parts);
+    }
+
     static int Main(string[] args)
     {
         dataRoot = args[0];
@@ -1057,6 +1199,7 @@ static class Program
         Line("GET monster 10 " + slime.model + " tags=" + slime.tags);
         Line("INDEX scene_id=1 -> " + string.Join(",", tables.Monster.BySceneID(1).Select(m => m.id)) +
              "; scene_id=3 -> " + (tables.Monster.BySceneID(3).Count == 0 ? "(none)" : "?"));
+        Line(RankLookups(rank => tables.Monster.ByRank(rank).Select(m => m.id)));
         Good.Config.Monster missing;
         if (tables.Monster.TryGet(99, out missing)) Line("UNEXPECTED TryGet 99");
         try { tables.Monster.Get(99); Line("UNEXPECTED Get 99"); }
@@ -1112,6 +1255,14 @@ static class Program
         Expect("kvrequired", () => Bad.Kvrequired.ConfigTables.Load(Reader("kvrequired")));
         Expect("type", () => Bad.Type.ConfigTables.Load(Reader("type")));
         Expect("overflow", () => Bad.Overflow.ConfigTables.Load(Reader("overflow")));
+
+        foreach (string input in File.ReadAllLines(args[1]))
+        {
+            if (input.Length > 0)
+            {
+                Line("CANON " + input + " -> " + Canon.Config.ConfigJson.Canonical(Canon.Config.ConfigJsonParser.Parse(input, "canon")));
+            }
+        }
         return 0;
     }
 }

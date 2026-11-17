@@ -67,8 +67,10 @@ type ExportField struct {
 	Name string // Go 字段名
 	JSON string // JSON 键（schema 里的 json 名原样）
 	CSV  string // CSV 列名 / kv 的 key
-	Type string // Go 类型表达式，如 int32、[]string、map[string]int64
-	Key  bool   // 是表的主键
+	// Type 是按底层类型展开后的 Go 类型表达式（Field.Resolved），如 int32、[]string、map[string]int64：
+	// schema 包里的具名标量（type Rank int32）在这里是底层类型，客户端按它生成 C#。
+	Type string
+	Key  bool // 是表的主键
 	// Title 是 title tag；Note 是 kv 表里这一行的 note 列（其它表为空）。
 	Title string
 	Note  string
@@ -83,7 +85,7 @@ type ExportIndex struct {
 	Name  string // 索引名（index:"true" 时是 Go 字段名）
 	Field string // Go 字段名
 	JSON  string // 该字段的 JSON 名
-	Type  string
+	Type  string // 底层类型，同 ExportField.Type
 }
 
 // ClientExport 读 metaDir 下的 schema 与 csvDir 下的 CSV，返回客户端投影的导出模型。声明错误
@@ -166,11 +168,11 @@ func exportTable(csvDir string, meta Meta) (ExportTable, error) {
 	}
 	for _, field := range meta.Fields {
 		table.Fields = append(table.Fields, ExportField{
-			Name: field.Name, JSON: field.JSON, CSV: field.CSV, Type: field.Type, Key: field.Name == key,
+			Name: field.Name, JSON: field.JSON, CSV: field.CSV, Type: field.resolvedType(), Key: field.Name == key,
 			Title: field.Title, Note: notes[field.CSV], Index: field.Index, Parser: field.Parser,
 		})
 		if field.Index != "" {
-			table.Indexes = append(table.Indexes, ExportIndex{Name: field.Index, Field: field.Name, JSON: field.JSON, Type: field.Type})
+			table.Indexes = append(table.Indexes, ExportIndex{Name: field.Index, Field: field.Name, JSON: field.JSON, Type: field.resolvedType()})
 		}
 	}
 	payload, rows, err := readPayload(csvDir, meta)

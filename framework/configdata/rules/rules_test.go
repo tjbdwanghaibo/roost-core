@@ -3,6 +3,8 @@ package rules
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -175,5 +177,31 @@ func TestLookupIsExact(t *testing.T) {
 	}
 	if value, ok := Lookup(map[string]json.RawMessage{"Level": json.RawMessage(`1`)}, "level"); ok {
 		t.Fatalf("Lookup(level) found %s under Level", value)
+	}
+}
+
+// 数字的规范写法有一份两端共用的样例表（交接 C5 (b)）：testdata/canonical_numbers.json 也由导出给客户端的
+// C# 运行时逐条比较（codegen/internal/roost 的 TestClientConfigCSharpRuntime），改规则要两端一起改。
+func TestCanonicalNumbersMatchTheSharedTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "canonical_numbers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Cases []struct {
+			JSON      string `json:"json"`
+			Canonical string `json:"canonical"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Cases) < 30 {
+		t.Fatalf("the shared table has %d cases; it should cover integers, decimals, huge, tiny and negative zero", len(table.Cases))
+	}
+	for _, testCase := range table.Cases {
+		if got := Canonical(json.RawMessage(testCase.JSON)); got != testCase.Canonical {
+			t.Errorf("Canonical(%s) = %q, want %q", testCase.JSON, got, testCase.Canonical)
+		}
 	}
 }

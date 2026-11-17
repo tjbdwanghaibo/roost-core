@@ -153,7 +153,7 @@ type clientConfigTable struct {
 
 type clientConfigField struct {
 	Name string `json:"name"` // JSON 键
-	Type string `json:"type"` // schema 里的 Go 类型表达式
+	Type string `json:"type"` // Go 类型表达式，schema 包里的具名标量写成底层类型（tablegen.ExportField.Type）
 	// Parser 非空表示字段用自定义解析器：客户端拿到的是 CSV 原文字符串。
 	Parser string `json:"parser,omitempty"`
 }

@@ -194,9 +194,9 @@ client_export:
 
 C#（netstandard2.1 纯 C#，Unity IL2CPP 裁剪安全，不需要 `link.xml`）：
 
-- **类型对应**：`string`、`bool`、`int8/16/32/64`、`int`（`long`）、`uint8/16/32/64`、`uint`（`ulong`）、`float32/64`；指向这些标量的指针是可空类型（`*string` 为可为 null 的 `string`）；切片是数组（`[]byte` 除外：encoding/json 把它写成 base64），`map[string]T` 是 `Dictionary<string, T>`，可以嵌套。带 `parser` 的字段一律是 `string`：**客户端拿到的是 CSV 原文字符串，由游戏自己解析**。别的类型（具名类型、结构体、`time.Duration`）生成时报错，写明表与字段，提示改成 parser 或 `side:"s"`。缺省或 null 读成零值（字符串为 `""`、数组与字典为空，可空类型为 null）。
+- **类型对应**：`string`、`bool`、`int8/16/32/64`、`int`（`long`）、`uint8/16/32/64`、`uint`（`ulong`）、`float32/64`；指向这些标量的指针是可空类型（`*string` 为可为 null 的 `string`）；切片是数组（`[]byte` 除外：encoding/json 把它写成 base64），`map[string]T` 是 `Dictionary<string, T>`，可以嵌套。带 `parser` 的字段一律是 `string`：**客户端拿到的是 CSV 原文字符串，由游戏自己解析**。**具名类型**（维护者 2026-11-17，交接 C5 (a)）：schema 包里声明、底层是内建标量的具名类型按底层类型导出——`type Rank int32` 的字段在 C# 里是 `int`（不生成 `enum`），`[]Rank` 是 `int[]`，`manifest.json` 与导出模型里的字段类型也写底层类型；规则见 [§9.2 具名类型](#92-按端分组竖排键值表index-与注释行)。别的类型生成时报错，写明表与字段和原因，提示改成 parser 或 `side:"s"`：别的包里的具名类型（`time.Duration`、`foo.Kind`：生成器只读 schema 包自己的声明，看不到底层类型）、底层不是内建标量的具名类型（结构体等）、`[]byte`、键不是 string 的 map。缺省或 null 读成零值（字符串为 `""`、数组与字典为空，可空类型为 null）。
 - **读取**：`var tables = ConfigTables.Load(name => ...)`，`readText` 收到数据文件名（如 `"monster.json"`，`DataFiles()` 列出全部），读文件的方式（Resources、Addressables、StreamingAssets）由调用方决定。返回一个实例，由调用方持有；生成代码没有静态的可变状态，两次 `Load` 得到两个互不相干的实例。
-- **加载时核对**：先核对每个数据文件的哈希与生成时内置的清单一致（CRLF 统一成 LF 再算 sha256），不一致抛出 `ConfigLoadException`，消息以 `table <表名>: hash:` 开头；再按服务端声明的规则检查 `required`、`unique`、`min`、`enum`（与 `framework/configdata/rules` 同一套语义）和 `ref`（全部表读完后查；零值表示没有引用，`required` 时零值也要查），违反时写明表、行、主键和字段，例如 `table monster row 2 (key 11) field scene_id: ref: references missing scene key 9`。类型不对、整数越界同样报出位置。
+- **加载时核对**：先核对每个数据文件的哈希与生成时内置的清单一致（CRLF 统一成 LF 再算 sha256），不一致抛出 `ConfigLoadException`，消息以 `table <表名>: hash:` 开头；再按服务端声明的规则检查 `required`、`unique`、`min`、`enum`（与 `framework/configdata/rules` 同一套语义；unique 与 enum 按值的规范字符串比较，数字的规范写法与服务端 `rules.Canonical` 逐条一致——规则写在 `rules.Canonical` 的注释里，两端共用样例表 `framework/configdata/rules/testdata/canonical_numbers.json`，例如 `1e21` 两端都是 `1e+21`、`1234567.5` 是 `1.2345675e+06`）和 `ref`（全部表读完后查；零值表示没有引用，`required` 时零值也要查），违反时写明表、行、主键和字段，例如 `table monster row 2 (key 11) field scene_id: ref: references missing scene key 9`。类型不对、整数越界同样报出位置。
 - **只给客户端的数据，没有运行时版本核对**：`ConfigTables.DataVersion` 与 `manifest.json` 的 `data_version` 相同，客户端可以显示或上报；登录时不核对，SDK 不比较，热更也不提示过期（决定 4）。
 
 检查与同步：
@@ -1013,7 +1013,7 @@ JSON 键以显式 `json` 标签为准，省略标签时沿用 Go 字段名（与
 
 ### 9.2 按端分组、竖排键值表、index 与注释行
 
-配置表导出给客户端的 tablegen 部分（维护者 2026-11-17，[需求与决定](../../docs/maintenance/FEATURE-2026-11-17-client-config-export.md) 决定 1、2、5、6）。不用这些写法的工程，生成结果与以前相比只多一处：横排表生成的 `Convert<Type>CSV` 每张表多一行 `reader.Comment = '#'`（跳过 `#` 注释行），其余逐字节相同。
+配置表导出给客户端的 tablegen 部分（维护者 2026-11-17，[需求与决定](../../docs/maintenance/FEATURE-2026-11-17-client-config-export.md) 决定 1、2、5、6）。不用这些写法的工程，重新生成后 `gen_table_config.go` 只有 CSV 转换部分变化：横排表的 `Convert<Type>CSV` 改用共用的 `tablegenReadCSV`（跳过 `#` 注释行，记下每条记录在文件里的行号），解析辅助函数的类型约束加宽、多一个 `tablegenParseBool`（为具名类型）；注册、加载与访问器逐字节相同。
 
 ```go
 //roost:table name=monster key=ID
@@ -1044,11 +1044,13 @@ type Balance struct {
 
 **竖排键值表**：`//roost:object layout=kv`（只用于 object）。CSV 第一条非空记录是表头 `key,value,note`（note 列可省），之后一行一个字段：`key` 是字段的 csv 名，`value` 按字段类型解析，`note` 是说明，写进生成的 `<Type>Cfg` 注释（只写服务端字段的；为此 `roost generate` 的 config-go 步骤带 `-csv configs/table`，kv 表的 CSV 还没有时不写 note）。生成的 JSON 与普通 object 相同（单个对象），规则照常检查。报错写明文件、行与 key：未知 key（只差大小写时提示正确拼写）、重复 key（`balance.csv:4: duplicate key "max_level" (first at line 2)`）、必填字段没有对应行（`required key "max_level" is missing`，按两端的全部字段核对）。另一端字段的行是合法的 key，只是不进本端 JSON。生成的 `Convert<Type>CSV` 读同样的格式，行号与 key 写进错误。CSV 模板是竖排的（每个字段一行，note 预填 title）。
 
-**index**：`//roost:table` 的字段 tag `index:"true"`（索引名取 Go 字段名）或 `index:"<名字>"`，`index:"false"` 等于不写；语义与 cfggen 的 index 相同，**不唯一**。服务端生成 `<Type>By<Index>(v)`（`index:"true"` 时是 `<Type>By<字段名>`，如 `MonsterBySceneID(v int32) []MonsterCfg`），与 `<Type>By<Key>` 一样读当前请求钉住的快照，返回全部匹配行（文件顺序），没有时为空；索引登记在 `TableDef.Indexes`，键是值的字符串（整数十进制、bool 为 true / false）。只能建在 string、整数、bool 字段上；浮点、指针、具名类型、带 `parser` 的字段、主键（已有 `By<Key>`）、object 上都拒绝；同表索引名不能重复，访问器不能与主键访问器同名。只给客户端的字段上的 index 只进导出模型。
+**index**：`//roost:table` 的字段 tag `index:"true"`（索引名取 Go 字段名）或 `index:"<名字>"`，`index:"false"` 等于不写；语义与 cfggen 的 index 相同，**不唯一**。服务端生成 `<Type>By<Index>(v)`（`index:"true"` 时是 `<Type>By<字段名>`，如 `MonsterBySceneID(v int32) []MonsterCfg`），与 `<Type>By<Key>` 一样读当前请求钉住的快照，返回全部匹配行（文件顺序），没有时为空；索引登记在 `TableDef.Indexes`，键是值的字符串（整数十进制、bool 为 true / false）。只能建在 string、整数、bool 字段上（按底层类型看，schema 包里的 `type Rank int32` 也可以，访问器参数是具名类型本身：`HeroByRank(v Rank)`，生成代码里写成 `meta0.Rank`）；浮点（含底层是浮点的具名类型，报 `got Rate (float64)`）、指针、别的包里的具名类型、底层不是内建标量的具名类型（报错说明原因）、带 `parser` 的字段、主键（已有 `By<Key>`）、object 上都拒绝；同表索引名不能重复，访问器不能与主键访问器同名。只给客户端的字段上的 index 只进导出模型。
 
-**注释行**：CSV 里以 `#` 开头的行是注释，生成步骤（横排、竖排）读取时忽略；`#` 必须是行首第一个字符，值本身要以 `#` 开头时写成带引号的单元格（`"#red"`）。表头格式不变：列名一行必须有，标题、类型、规则三行可选。转换报错的 `row=` 是文件里的行号（注释行也计数）。生成的 `Convert<Type>CSV`（横排与 layout=kv）同样忽略 `#` 行（2026-11-17 协调者定：横排表的转换多了一行 `reader.Comment = '#'`，已有工程重新生成后 `gen_table_config.go` 每张表多这一行）；横排转换报错的 `row=` 是去掉注释行后的记录序号（含表头，1 起），不是文件行号。
+**注释行**：CSV 里以 `#` 开头的行是注释，生成步骤（横排、竖排）读取时忽略；`#` 必须是行首第一个字符，值本身要以 `#` 开头时写成带引号的单元格（`"#red"`）。表头格式不变：列名一行必须有，标题、类型、规则三行可选。转换报错的 `row=` 是文件里的行号（注释行也计数）。生成的 `Convert<Type>CSV`（横排与 layout=kv）同样忽略 `#` 行，报错同样是文件行号（交接 C5 (c)，2026-11-17）：横排转换用 `tablegenReadCSV` 逐条读记录、以 `encoding/csv` 的 `FieldPos` 记下每条记录开始的行，`row=` 是这一行；带引号的单元格跨多行时报记录开始的那一行，不是出错单元格所在的行。
 
-**导出模型**：`tablegen.ClientExport(metaDir, csvDir)` 返回客户端投影（`side=s` 的表与 `side:"s"` 的字段都不在）：每张表的名字、种类（table / object / kv）、字段（Go 名、JSON 名、csv 名、类型、主键、title、kv 的 note、index、parser——带 parser 的字段在 JSON 里是 CSV 原文字符串）、索引、规则（与服务端 loader 同一份翻译）、只含客户端字段的 JSON（普通表 `{"rows":[...]}`，object / kv 单个对象）、数据哈希（CRLF 统一成 LF 后的 sha256）、schema 哈希、行数，以及 `DataVersion`（表按表名排序，每张表写成 `表名 + "\x00" + 数据哈希 + "\n"` 拼接后再取 sha256，表改名版本号也变；`ShortDataVersion()` 取前 12 位；`tablegen.DataVersion(tables)` 是同一个算法）。只改只给服务端的字段，导出与数据版本都不变；同样的输入，模型逐字节相同。导出目录、manifest、C# 与同步由 `client_export.config` 负责，见 [§2.2](#22-配置表导出给客户端client_exportconfig)。
+**具名类型**（维护者 2026-11-17，交接 C5 (a) 选项 1）：生成器读 schema 时顺带收集同一目录（同一个 Go 包）里全部非测试 `.go` 文件的类型声明。底层是内建标量（string、bool、各种整数、float32/64）的具名类型——`type Rank int32`、具名类型的具名类型 `type Tier Rank`、别名 `type Power = int64`——按底层类型处理：CSV 转 JSON（`type Element string` 的 `42` 写成字符串 `"42"`）、index 的可用性与键、客户端导出（C# 生成底层类型，不生成 `enum`）都看底层类型；`[]Rank`、`map[string]Rank` 逐层展开。服务端生成的 Go 照常用具名类型本身：主键、`<Type>By<Index>` 的参数、`Convert<Type>CSV` 的解析都写成带导入别名的 `meta0.Rank`（以前生成代码里是没有包名的 `Rank`，生成的 Go 无法编译）；`ref` 字段的类型必须与目标主键是同一个类型（同包同名）。别的包里的具名类型与底层不是内建标量的具名类型不按底层处理，在 index 与客户端导出时报错并说明原因；服务端 JSON 转换对它们照旧按 JSON 原文解析。
+
+**导出模型**：`tablegen.ClientExport(metaDir, csvDir)` 返回客户端投影（`side=s` 的表与 `side:"s"` 的字段都不在）：每张表的名字、种类（table / object / kv）、字段（Go 名、JSON 名、csv 名、类型（schema 包里的具名标量写成底层类型）、主键、title、kv 的 note、index、parser——带 parser 的字段在 JSON 里是 CSV 原文字符串）、索引、规则（与服务端 loader 同一份翻译）、只含客户端字段的 JSON（普通表 `{"rows":[...]}`，object / kv 单个对象）、数据哈希（CRLF 统一成 LF 后的 sha256）、schema 哈希、行数，以及 `DataVersion`（表按表名排序，每张表写成 `表名 + "\x00" + 数据哈希 + "\n"` 拼接后再取 sha256，表改名版本号也变；`ShortDataVersion()` 取前 12 位；`tablegen.DataVersion(tables)` 是同一个算法）。只改只给服务端的字段，导出与数据版本都不变；同样的输入，模型逐字节相同。导出目录、manifest、C# 与同步由 `client_export.config` 负责，见 [§2.2](#22-配置表导出给客户端client_exportconfig)。
 
 ## 10. attribute
 

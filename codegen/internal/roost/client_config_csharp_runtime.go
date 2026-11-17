@@ -538,7 +538,7 @@ namespace @NAMESPACE@
             }
         }
 
-        /// <summary>值的规范形式：字符串取原文，数字取规范十进制（1、1.0、1e0 相同），bool 取 true / false，其余取紧凑 JSON。</summary>
+        /// <summary>值的规范形式：字符串取原文，数字取规范十进制（1、1.0、1e0 相同，规则见 TryCanonicalNumber），bool 取 true / false，其余取紧凑 JSON。</summary>
         internal static string Canonical(ConfigJsonNode value)
         {
             string scalar;
@@ -562,31 +562,40 @@ namespace @NAMESPACE@
                     scalar = value.Bool ? "true" : "false";
                     return true;
                 case ConfigJsonKind.Number:
-                    scalar = CanonicalNumber(value.Text);
-                    return true;
+                    return TryCanonicalNumber(value.Text, out scalar);
             }
             scalar = null;
             return false;
         }
 
-        static string CanonicalNumber(string text)
+        /// <summary>
+        /// 数字的规范写法，与服务端 framework/configdata/rules.Canonical 逐条一致（两端共用样例表 testdata/canonical_numbers.json）：
+        /// int64 / uint64 范围内的整数原文写成十进制整数（-0 为 0）；其余按 double 解析，见 CanonicalFloat。
+        /// 超出 double 范围的数（如 1e400）不是标量：返回 false，Canonical 写出原文（与 Go 的 strconv.ParseFloat 报范围错误一致）。
+        /// </summary>
+        static bool TryCanonicalNumber(string text, out string canonical)
         {
             long signed;
             if (long.TryParse(text, global::System.Globalization.NumberStyles.AllowLeadingSign, global::System.Globalization.CultureInfo.InvariantCulture, out signed))
             {
-                return signed.ToString(global::System.Globalization.CultureInfo.InvariantCulture);
+                canonical = signed.ToString(global::System.Globalization.CultureInfo.InvariantCulture);
+                return true;
             }
             ulong unsigned;
             if (ulong.TryParse(text, global::System.Globalization.NumberStyles.None, global::System.Globalization.CultureInfo.InvariantCulture, out unsigned))
             {
-                return unsigned.ToString(global::System.Globalization.CultureInfo.InvariantCulture);
+                canonical = unsigned.ToString(global::System.Globalization.CultureInfo.InvariantCulture);
+                return true;
             }
             double number;
-            if (!double.TryParse(text, global::System.Globalization.NumberStyles.Float, global::System.Globalization.CultureInfo.InvariantCulture, out number))
+            if (!double.TryParse(text, global::System.Globalization.NumberStyles.Float, global::System.Globalization.CultureInfo.InvariantCulture, out number)
+                || double.IsInfinity(number) || double.IsNaN(number))
             {
-                return text;
+                canonical = null;
+                return false;
             }
-            return CanonicalFloat(number);
+            canonical = CanonicalFloat(number);
+            return true;
         }
 
         internal static string CanonicalInt(long value)
@@ -599,13 +608,88 @@ namespace @NAMESPACE@
             return value.ToString(global::System.Globalization.CultureInfo.InvariantCulture);
         }
 
+        /// <summary>
+        /// double 的规范写法，与 Go 的 rules.Canonical 相同：值是整数且绝对值小于 2^53 时写成十进制整数（-0 为 0）；
+        /// 否则同 Go 的 strconv.FormatFloat(v, 'g', -1, 64)——取能读回同一个 double 的最短十进制位数，十进制指数
+        /// （d.ddd×10^exp 的 exp）在 [-4, 6) 内写成定点小数，否则写成 d.ddde±XX（小写 e，指数至少两位）。
+        /// </summary>
         internal static string CanonicalFloat(double value)
         {
             if (value == global::System.Math.Truncate(value) && global::System.Math.Abs(value) < 9007199254740992.0)
             {
                 return ((long)value).ToString(global::System.Globalization.CultureInfo.InvariantCulture);
             }
-            return value.ToString("R", global::System.Globalization.CultureInfo.InvariantCulture);
+            // "R" 给出最短往返的十进制位数（.NET Core 3.0 起）；只取它的数字与指数，写法按上面的规则重排。
+            string shortest = value.ToString("R", global::System.Globalization.CultureInfo.InvariantCulture);
+            bool negative = shortest[0] == '-';
+            if (negative)
+            {
+                shortest = shortest.Substring(1);
+            }
+            int exponent = 0;
+            int e = shortest.IndexOfAny(new[] { 'E', 'e' });
+            if (e >= 0)
+            {
+                exponent = int.Parse(shortest.Substring(e + 1), global::System.Globalization.NumberStyles.AllowLeadingSign, global::System.Globalization.CultureInfo.InvariantCulture);
+                shortest = shortest.Substring(0, e);
+            }
+            // digits 是去掉小数点、首尾 0 的有效数字；point 是小数点在 digits 里的位置（值 = 0.digits × 10^point）。
+            int dot = shortest.IndexOf('.');
+            string digits = dot < 0 ? shortest : shortest.Substring(0, dot) + shortest.Substring(dot + 1);
+            int point = (dot < 0 ? shortest.Length : dot) + exponent;
+            int lead = 0;
+            while (lead < digits.Length - 1 && digits[lead] == '0')
+            {
+                lead++;
+            }
+            digits = digits.Substring(lead).TrimEnd('0');
+            point -= lead;
+            if (digits.Length == 0)
+            {
+                digits = "0";
+            }
+            var b = new global::System.Text.StringBuilder();
+            if (negative)
+            {
+                b.Append('-');
+            }
+            int exp = point - 1;
+            if (exp < -4 || exp >= 6)
+            {
+                b.Append(digits[0]);
+                if (digits.Length > 1)
+                {
+                    b.Append('.').Append(digits, 1, digits.Length - 1);
+                }
+                b.Append('e').Append(exp < 0 ? '-' : '+');
+                int magnitude = exp < 0 ? -exp : exp;
+                if (magnitude < 10)
+                {
+                    b.Append('0');
+                }
+                b.Append(magnitude.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
+                return b.ToString();
+            }
+            if (point > 0)
+            {
+                for (int i = 0; i < point; i++)
+                {
+                    b.Append(i < digits.Length ? digits[i] : '0');
+                }
+            }
+            else
+            {
+                b.Append('0');
+            }
+            if (digits.Length > point)
+            {
+                b.Append('.');
+                for (int i = point; i < digits.Length; i++)
+                {
+                    b.Append(i < 0 ? '0' : digits[i]);
+                }
+            }
+            return b.ToString();
         }
 
         static void Compact(ConfigJsonNode value, global::System.Text.StringBuilder b)

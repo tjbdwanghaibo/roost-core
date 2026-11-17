@@ -279,8 +279,22 @@ func Lookup(row map[string]json.RawMessage, field string) (json.RawMessage, bool
 	return value, ok
 }
 
-// Canonical 是一个 JSON 值用于比较与报错的规范形式：字符串取原文，数字取规范
-// 十进制（1、1.0、1e0 相同），其余取紧凑 JSON。
+// Canonical 是一个 JSON 值用于比较与报错的规范形式：字符串取原文，bool 取 true / false，
+// 数字取规范十进制（1、1.0、1e0 相同），其余取紧凑 JSON。unique 与 enum 都按它比较。
+//
+// 数字的规范写法（交接 C5 (b)，维护者 2026-11-17 定为明确规则；导出给客户端的 C# 运行时
+// ConfigJson.Canonical 与这里逐条一致，两端共用样例表 testdata/canonical_numbers.json）：
+//
+//  1. 原文是 int64 范围内的十进制整数：写成十进制整数（-0 写成 0）；否则是 uint64 范围内的
+//     十进制整数：写成十进制整数。
+//  2. 否则按 float64 解析（最近舍入，下溢为 0）。超出 float64 范围（strconv 报范围错误，如 1e400）
+//     时不是标量：enum 不匹配任何值，Canonical 取紧凑 JSON（即原文）。
+//  3. 解析出的值是整数且绝对值小于 2^53：写成十进制整数（-0 写成 0）。
+//  4. 否则写成 strconv.FormatFloat(f, 'g', -1, 64)：能读回同一个 float64 的最短十进制位数；十进制
+//     指数（d.ddd×10^exp 的 exp）在 [-4, 6) 内写成定点小数，否则写成 d.ddde±XX（小写 e，指数至少
+//     两位），如 0.0001、1e-05、123456.5、1.2345675e+06、1e+21。
+//
+// 规范字符串只用于比较与报错，不进入任何数据哈希或数据版本（数据哈希按数据文件的字节算）。
 func Canonical(value json.RawMessage) string {
 	if text, ok := scalar(value); ok {
 		return text
