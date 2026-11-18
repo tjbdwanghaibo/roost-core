@@ -72,8 +72,8 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 
 | 玩法 | reference | 支撑度 | 场景数（全部 PASS 才算过） |
 | --- | --- | --- | --- |
-| SLG / 大地图策略（建造、行军、抢地、联盟） | [references/slg.md](references/slg.md) | 高 | `TestSLG` 8 + 联盟 2（脚本形态）；只做建造、行军、抢地的精简形态 `TestSLG` 7 |
-| MOBA / 竞技对战（帧同步） | [references/moba-lockstep.md](references/moba-lockstep.md) | 高 | `TestMOBA` 28 |
+| SLG / 大地图策略（建造、行军、抢地、联盟） | [references/slg.md](references/slg.md) | 高 | `TestSLG` 9 + 联盟 2（脚本形态）；只做建造、行军、抢地的精简形态 `TestSLG` 7 |
+| MOBA / 竞技对战（帧同步） | [references/moba-lockstep.md](references/moba-lockstep.md) | 高 | `TestMOBA` 29 |
 | MMORPG（组队、交易、战斗、Buff、切图） | [references/mmorpg.md](references/mmorpg.md) | 高 | `TestMMORPG` 14；game-demo 多地图 TCP 1 |
 | 卡牌 / 回合制 RPG（抽卡、养成、回合 PvE） | [references/card-turn-based.md](references/card-turn-based.md) | 高 | `TestCardRPG` 17 |
 | 房间合作 PvE：塔防 / 生存撤离 / 自走棋 | [references/room-coop-pve.md](references/room-coop-pve.md) | 高 | 11 / 13 / 13 |

@@ -1,0 +1,20 @@
+# 两步投递改 pipelined 之前（夹具标记仍是 //roost:nest rollback=undo，即缺省 async；新用例与支持 pipelined 的替身已就位）
+# 基线 c7bb703d，2026-11-18，macOS arm64，go1.27.3，GOWORK=off
+
+## scripts/test-moba-generated.sh（缺省档）
+=== RUN   TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable
+    moba_round_test.go:446: award replied while its WAL record (durability=async) was not durable: ackSeat would confirm a reward that power loss can erase
+--- FAIL: TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable (0.03s)
+FAIL
+FAIL	example.com/moba-practice/game/handler	3.668s
+FAIL
+PASS=28 FAIL=1 exit=1
+
+## scripts/test-slg-generated.sh（缺省档）
+=== RUN   TestSLGAllianceCreditRepliesOnlyAfterItsRecordIsDurable
+    alliance_rewards_test.go:200: credit replied while its WAL record (durability=async) was not durable: the obligation would be marked delivered for a credit that power loss can erase
+--- FAIL: TestSLGAllianceCreditRepliesOnlyAfterItsRecordIsDurable (0.00s)
+FAIL
+FAIL	example.com/slg-practice/game/handler	0.942s
+FAIL
+PASS=8 FAIL=1 exit=1

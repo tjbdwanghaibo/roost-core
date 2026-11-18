@@ -50,14 +50,14 @@ bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$
 
 ## 3. 期望场景数
 
-`--- PASS: TestMOBA` 恰好 **28** 条、0 SKIP；`modules.sh verify` 打印 `wallet 17/17`。
+`--- PASS: TestMOBA` 恰好 **29** 条、0 SKIP；`modules.sh verify` 打印 `wallet 17/17`。
 
 | 层 | 场景 |
 | --- | --- |
 | 双英雄单路入门（12） | 结算并发重放 / 身份冲突 / 拒绝回滚 / 无胜者；会话身份、输入窗口与重放、冗余去重、断线追帧、旁观、历史过期、`NoMajority`；match 排队 / 取消 / 过期 / 并发 Commit 幂等；一条真实 KCP 丢包追帧 |
-| 5v5 三路（16） | 十人成局与准备；日志重算拒绝被改快照 / 规则版本 / 种子；十个 KCP 客户端追帧与超窗快照恢复；先提交后广播、提交未知停房间、`resume` / `handoff` 代际隔离、目录并发只分配一局、奖励部分投递重放 |
+| 5v5 三路（17） | 十人成局与准备；日志重算拒绝被改快照 / 规则版本 / 种子；十个 KCP 客户端追帧与超窗快照恢复；先提交后广播、提交未知停房间、`resume` / `handoff` 代际隔离、目录并发只分配一局、奖励部分投递重放、到账回复在记录持久之后（`MOBAAward` 是 pipelined） |
 
-28 条里有 4 条真实 loopback KCP，其中 `TestMOBAKCPRobotMatchSettlementAndClientResult` 用公共 LockstepBot 打完整局、经可信 Nest 幂等结算并向客户端发 PB 结果。
+29 条里有 4 条真实 loopback KCP，其中 `TestMOBAKCPRobotMatchSettlementAndClientResult` 用公共 LockstepBot 打完整局、经可信 Nest 幂等结算并向客户端发 PB 结果。
 
 ## 4. 限制
 

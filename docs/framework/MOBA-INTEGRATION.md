@@ -164,7 +164,7 @@ func settle(ctx context.Context, client nest.Client, reference *moba.State, resu
 | 无胜者终态（`TestMOBANoWinnerSettlementNeverPays`） | 对局取消 | 终态保留（`Status=2`），重放不变，不发获胜奖励 |
 | 完整服务器结果链（`TestMOBAServerReferenceSettlesTheFinishedRound`） | 排队成局 → 会话输入 → Match → 参考胜负 → 结算 | 结算用成局的 Match ID 作本场身份，重复结算只付一次 |
 
-以上十二条是双英雄入门，下面十六条是 5v5 三路：
+以上十二条是双英雄入门，下面十七条是 5v5 三路：
 
 | 场景 | 业务建模 | 学到的框架契约 |
 | --- | --- | --- |
@@ -178,6 +178,7 @@ func settle(ctx context.Context, client nest.Client, reference *moba.State, resu
 | 提交后广播、结果未知停房间（`TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom`） | 权威提交成功后回复丢失 | 广播只在权威提交后发出；提交结果未知时房间停止、不发这一帧、之后的 Tick 被拒；`resume` 后旧会话与已提交帧的输入被拒，`replay` 从帧 1 补齐，帧号接着走 |
 | 交接隔离旧宿主（`TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID`） | 2000 → 2001 交接 | 旧宿主下一次提交在权威实体锁内被拒、不广播；过期的交接请求被拒；错 sid 不能绑定；同一已提交帧重放不重复追加，改过内容的同号帧被拒；成员与 sid 不变 |
 | 原服奖励部分投递（`TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity`） | 先发三人，再整队重发两遍并确认 | 资产与回执只计一次；换胜者、发给别的 Player 都被拒 |
+| 到账回复在记录持久之后（`TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable`） | 提交器替身按 WAL 语义建模：async 只写进页缓存、pipelined 等用例 fsync 才完成票据；到账回复后才 ackSeat | `MOBAAward` 声明 `durability=pipelined`：持久之前不回复，ackSeat 时到账记录已持久；退回 async 时报 `award replied while its WAL record (durability=async) was not durable` |
 | 帧与快照一起回滚（`TestMOBARoundUndoRollsBackFrameAndCheckpoint`） | handler 写完帧后返回错误 | Nest undo 把整个 Round 载荷还原，随后同一帧可重新提交 |
 | 有界邮箱与排空（`TestMOBARoomMailboxBoundAndDrain`） | 一次提交卡住时涌入 40 个请求 | 超过 32 条立即 `ErrBusy`；`Stop` 等不到在途提交时返回 ctx 错误而不释放房间；排空后排队请求全部拒绝 |
 | 比赛目录只分配一局（`TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound`） | 8 个并发开局回调各带候选 ID | 只登记一个 Round ID，其余拿回同一个；同一比赛换绑定、同一 Round 用于另一场、Player ID 冒充 Round 都被拒 |
@@ -237,7 +238,8 @@ func tick(ctx context.Context, actor *moba.Actor, epoch uint64) (moba.RoomReply,
 }
 
 // deliverAward 在 Player 原服执行。award 必须来自回查权威终态（Round.Awards），不取客户端带来的值。
-// 先在本服 Player 的事务里同时写资产与回执，再向权威确认 seat；两步之间崩溃时用同一个 award 重投，
+// 先在本服 Player 的事务里同时写资产与回执，再向权威确认 seat；MOBAAward 是 durability=pipelined，回复时这笔到账已经
+// fsync，确认之后不会因整机掉电丢到账。两步之间崩溃时用同一个 award 重投，
 // 回执保证只计一次。十名玩家逐人完成，不是一次跨服原子提交。
 func deliverAward(ctx context.Context, origin nest.Client, seat int, award moba.Award, ackSeat func(ctx context.Context, seat int, digest string) error) error {
 	if err := syncsender.NewMobaRoundSender(origin).Sync_MOBAAward(ctx, award.Member.PlayerID, award); err != nil {
@@ -406,7 +408,7 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 
 #### 5.8 原服奖励：逐人回执
 
-5v5 以 Round ID 为结算身份。权威终态生成每名成员的 `Award`；Player 原服**回查权威终态**取得 Award、核对是本服成员后调用 `Sync_MOBAAward`，在 Player 事务里同时写资产（wallet 的 `Add`，不用 `Apply`：wallet 回执窗口只有最近 128 次，“这一局发过没有”由 `MobaRewards` 永久回执保证）、战绩和回执，然后向权威确认这个 seat。同一回执重放返回成功但不再计奖，同一局换胜者、摘要或玩家被拒。原服可能在到账后、确认前崩溃，恢复后用同一 Award 重投，所以跨服奖励逐人完成，**不承诺十名玩家同时到账**；`MOBAAward` 是缺省 async，回复时记录已写进 WAL 文件但不一定 fsync：进程崩溃不丢，**整机掉电丢掉已回复的到账而 seat 已向权威确认时，这名玩家的奖励丢失**，重投扫描看不到它（这一步依赖“回复前已落盘”，见 [证据](../maintenance/evidence/testdata-async-20261118/README.md)）；要有业务调度者扫描未确认的 seat 继续投递（夹具由测试驱动投递，没有常驻调度服务）。每名 Player 样例最多 64 场回执，满了拒绝新奖、保留旧证据。局内金币与局外奖励分开。
+5v5 以 Round ID 为结算身份。权威终态生成每名成员的 `Award`；Player 原服**回查权威终态**取得 Award、核对是本服成员后调用 `Sync_MOBAAward`，在 Player 事务里同时写资产（wallet 的 `Add`，不用 `Apply`：wallet 回执窗口只有最近 128 次，“这一局发过没有”由 `MobaRewards` 永久回执保证）、战绩和回执，然后向权威确认这个 seat。同一回执重放返回成功但不再计奖，同一局换胜者、摘要或玩家被拒。原服可能在到账后、确认前崩溃，恢复后用同一 Award 重投，所以跨服奖励逐人完成，**不承诺十名玩家同时到账**；`MOBAAward` 已用 `durability=pipelined`，确认在落盘之后：到账记录入队后先放 Player 锁，fsync 之后才回复，所以向权威确认 seat 时这笔到账已经持久，整机掉电也不会出现“seat 已确认、到账却丢了”（维护者 2026-11-18 定 B，见 [证据](../maintenance/evidence/testdata-async-20261118/README.md#8-两步投递改-pipelined2026-11-18)；回复多等一次组提交 fsync）。要求提交器支持 pipelined（`Enqueue` / `DurableLSN`，正式 DataEngine 的 Projector 支持），工程写了非空 `nest.pipelined.allowlist` 时把它列进去（生成工程缺省 `allowlist: []` 即全部允许）；要有业务调度者扫描未确认的 seat 继续投递（夹具由测试驱动投递，没有常驻调度服务）。每名 Player 样例最多 64 场回执，满了拒绝新奖、保留旧证据。局内金币与局外奖励分开。
 
 ### 6. 网络、恢复和反作弊边界
 
@@ -459,12 +461,12 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 bash scripts/test-moba-generated.sh
 ```
 
-按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 28 条顶层 race 场景（§4.4 全部列出）且无 skip，随后对消费者 build / vet，执行 `roost id check` 与 `roost generate --check`，再跑 `roost module verify`（经 `modules.sh verify`，末尾打印 `module verify: wallet 17/17 skipped=0`）。成功删除临时工程；失败或 `ROOST_MOBA_KEEP=1` 时保留。
+按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 29 条顶层 race 场景（§4.4 全部列出）且无 skip，随后对消费者 build / vet，执行 `roost id check` 与 `roost generate --check`，再跑 `roost module verify`（经 `modules.sh verify`，末尾打印 `module verify: wallet 17/17 skipped=0`）。成功删除临时工程；失败或 `ROOST_MOBA_KEEP=1` 时保留。
 
 其中 `TestMOBAKCPRobotMatchSettlementAndClientResult`（[network_test.go.txt](../../scripts/testdata/moba/network_test.go.txt)，Robot 场景由 `robot.go.txt` 装到 `loadtest/battle.go`）用公共 `robot.LockstepBot` 经 KCP 输入、广播与可靠追帧打到基地摧毁，核对模拟摘要，经可信 Nest 幂等结算后向客户端发送 PB 资产结果。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 - **证明（双英雄 12 条）**：生成的 DAO / Entity / 多实体 Sender 与 Nest 在结算并发重放、身份冲突、拒绝回滚、无胜者终态下的事务行为；框架 `Match` / `Sequencer` / `FrameAssembler` 在会话身份、输入重放与窗口、冗余去重、断线追帧、旁观者、历史过期、`NoMajority` 下的行为；`service/match` 内存存储的排队、取消、过期与并发 Commit 幂等；一条真实 loopback KCP 链路上的丢包、追帧与三方摘要收敛。
-- **证明（5v5 16 条）**：十人成局与准备状态机；三路规则、日志重算拒绝被改的快照 / 规则版本 / 种子；十个 KCP 客户端在一次可靠追帧（缺口第 3～8 帧，Match 缺省历史窗口）后与服务器参考同摘要（`TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup`）；十个 KCP 客户端中两人（各属一队）在第 40 帧后断线、超过 4 个历史窗口（窗口 64 帧）后换新会话重连，照常从缺的第一帧请求追帧，Match 以服务器参考模拟的 Arena 检查点（`ArenaCheckpoints`，每 16 帧发布，实现 `SnapshotProvider`）为快照来源、`Recovery` 零值即 auto，两人共用一次取快照、各自 `RestoreArena` 并核对状态 hash、从检查点帧 +1 续帧到头部，局末十人与服务器参考同摘要（`TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect`；去掉快照来源时同一请求报 `catch-up range trimmed from history: from 41, history starts at 232`）；生成的 BattleRound / BattleDirectory / Player Sender 与 Nest 在提交后广播、提交结果未知停房间、`resume` / `handoff` 代际隔离、帧与快照 undo、目录并发只分配一局、奖励部分投递重放、回执账本满后拒绝上的行为；Room 的有界邮箱与排空；超过 64 帧后从持久日志分页补齐（in-process，到第 100 帧）；持久对局 `Room` 接快照恢复：十个 KCP 客户端经 `HostEndpoint` 接 Room，两人断线超过 4 个窗口后经提交后才发布的 Arena 检查点恢复、续帧到头部，局末十人与权威同摘要，可靠通道上每个包在发送时都不超过已提交帧（`TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot`）；追帧请求后下一帧提交卡住、再以结果未知结束时，可靠通道只发到已提交帧，房间停止后任何通道都没出现那一帧，`resume` 重建的房间经快照恢复到同摘要（`TestMOBARoomCatchupNeverSendsUncommittedFrames`）。去掉已提交门时两条分别报 `session 202 was sent frame 298 on the reliable lane while 297 was committed` 与 `catch-up page carried frames [25 26 27 28 29 30 31], want 25..30`。
+- **证明（5v5 17 条）**：十人成局与准备状态机；三路规则、日志重算拒绝被改的快照 / 规则版本 / 种子；十个 KCP 客户端在一次可靠追帧（缺口第 3～8 帧，Match 缺省历史窗口）后与服务器参考同摘要（`TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup`）；十个 KCP 客户端中两人（各属一队）在第 40 帧后断线、超过 4 个历史窗口（窗口 64 帧）后换新会话重连，照常从缺的第一帧请求追帧，Match 以服务器参考模拟的 Arena 检查点（`ArenaCheckpoints`，每 16 帧发布，实现 `SnapshotProvider`）为快照来源、`Recovery` 零值即 auto，两人共用一次取快照、各自 `RestoreArena` 并核对状态 hash、从检查点帧 +1 续帧到头部，局末十人与服务器参考同摘要（`TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect`；去掉快照来源时同一请求报 `catch-up range trimmed from history: from 41, history starts at 232`）；生成的 BattleRound / BattleDirectory / Player Sender 与 Nest 在提交后广播、提交结果未知停房间、`resume` / `handoff` 代际隔离、帧与快照 undo、目录并发只分配一局、奖励部分投递重放、到账回复在记录持久之后（pipelined；替身按 WAL 语义建模，退回 async 时变红）、回执账本满后拒绝上的行为；Room 的有界邮箱与排空；超过 64 帧后从持久日志分页补齐（in-process，到第 100 帧）；持久对局 `Room` 接快照恢复：十个 KCP 客户端经 `HostEndpoint` 接 Room，两人断线超过 4 个窗口后经提交后才发布的 Arena 检查点恢复、续帧到头部，局末十人与权威同摘要，可靠通道上每个包在发送时都不超过已提交帧（`TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot`）；追帧请求后下一帧提交卡住、再以结果未知结束时，可靠通道只发到已提交帧，房间停止后任何通道都没出现那一帧，`resume` 重建的房间经快照恢复到同摘要（`TestMOBARoomCatchupNeverSendsUncommittedFrames`）。去掉已提交门时两条分别报 `session 202 was sent frame 298 on the reliable lane while 297 was committed` 与 `catch-up page carried frames [25 26 27 28 29 30 31], want 25..30`。
 - **不证明**：提交器是替身，不含文件 WAL 与 Mongo；除四条 KCP 场景外，网络由记录器代替，宿主与权威在同一进程直接调用 Sender、不经 RPC；匹配不经服务 RPC、Redis 存储与认证；KCP 会话是固定测试绑定，不是真实账号鉴权；没有经 handler 跑满 600 帧，也不测每帧提交的耗时；单进程，不含跨机网络与目标负载。这两条 Room 快照恢复场景用替身权威（KCP 场景是进程内 `Round.Update`、不经 Nest；Nest 场景用记录器代替网络）；真实 WAL / Mongo 下 SIGKILL 后的快照恢复见 §11 的 `TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL`，独立进程与交接并发场景另见 §11 的 `TestMOBARealSnapshotDuringHostHandoff`；已提交门要求宿主提交落后切帧不超过 `RedundancyDepth - 1` 帧，否则恢复中的会话一直经可靠通道逐页跟随、不切回实时广播（Room 每 Tick 同步提交，只落后一帧）；Arena 快照只有几 KB、一块传完，限速链路上的大快照见 [限速链路演练](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)。
 
 ### 11. 真实 WAL / Mongo / NATS 进程演练
@@ -512,4 +514,4 @@ GOWORK=off go test -race -count=1 ./framework/sync/lockstep ./framework/sync/net
 
 ### 13. 验收范围小结
 
-已提供：业务纵切（28 条，缺省替身提交器，含双英雄与十客户端四条真实 loopback KCP，其中两条是断线超过历史窗口后经服务器参考检查点快照恢复——一条直接驱动 Match，一条经持久对局 Room 与已提交门）；真实 WAL / Mongo 两进程结算停机恢复；活动对局已回复（写进 WAL 文件）的帧在进程 SIGKILL 后从未投影 WAL 恢复并续赛，以及 SIGKILL 冷加载后窗口外的客户端经已提交检查点快照恢复；同机五进程真实 NATS 的宿主交接与原服奖励崩溃重投；框架 Lockstep / KCP / TCP 网络门禁。框架没有默认实现、夹具也只做了教学版的：ban/pick 与准备政策、队伍与 MMR、正式英雄 / 装备与技能 Host、战争迷雾的信息隐藏、长局分段日志 / 归档、常驻奖励调度、权威进程 HA。真实客户端引擎、公网网关接线、5v5 目标负载与 tick 预算、跨机故障与长稳尚未验收。不以本文清单的长度代替验收。
+已提供：业务纵切（29 条，缺省替身提交器，含双英雄与十客户端四条真实 loopback KCP，其中两条是断线超过历史窗口后经服务器参考检查点快照恢复——一条直接驱动 Match，一条经持久对局 Room 与已提交门）；真实 WAL / Mongo 两进程结算停机恢复；活动对局已回复（写进 WAL 文件）的帧在进程 SIGKILL 后从未投影 WAL 恢复并续赛，以及 SIGKILL 冷加载后窗口外的客户端经已提交检查点快照恢复；同机五进程真实 NATS 的宿主交接与原服奖励崩溃重投；框架 Lockstep / KCP / TCP 网络门禁。框架没有默认实现、夹具也只做了教学版的：ban/pick 与准备政策、队伍与 MMR、正式英雄 / 装备与技能 Host、战争迷雾的信息隐藏、长局分段日志 / 归档、常驻奖励调度、权威进程 HA。真实客户端引擎、公网网关接线、5v5 目标负载与 tick 预算、跨机故障与长稳尚未验收。不以本文清单的长度代替验收。

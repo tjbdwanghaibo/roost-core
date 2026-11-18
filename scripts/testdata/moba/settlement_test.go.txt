@@ -16,6 +16,7 @@ import (
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -40,9 +41,28 @@ func (g mobaGetter) GetMany(ctx context.Context, ids []int64, cats []entity.Enti
 }
 
 // 替身只替换提交器；不宣称这些用例验证 WAL fsync 或 Mongo，真实持久化有独立框架验收入口。
-type mobaCommitter struct{}
+// MOBAAward 声明 durability=pipelined，所以替身也接 Enqueue / DurableLSN（否则 Nest 报 ErrPipelinedCommitterRequired）：
+// 入队即视为已持久，票据立即完成。“回复在持久之后”由 TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable 的 mobaFsyncWAL 单独验收。
+type mobaCommitter struct{ durable atomic.Uint64 }
 
-func (mobaCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+func (*mobaCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+func (c *mobaCommitter) Enqueue(context.Context, dataengine.CommitRecord) (nest.CommitTicket, error) {
+	return mobaDurableTicket(c.durable.Add(1)), nil
+}
+
+func (c *mobaCommitter) DurableLSN() uint64 { return c.durable.Load() }
+
+// mobaDurableTicket 是入队即持久的票据。
+type mobaDurableTicket uint64
+
+func (t mobaDurableTicket) LSN() uint64 { return uint64(t) }
+func (mobaDurableTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (mobaDurableTicket) Err() error { return nil }
 
 type mobaFixture struct {
 	engine  *nest.NestMgr
@@ -73,7 +93,7 @@ func newMOBAFixture(t *testing.T) *mobaFixture {
 	}
 	f.result = built.(*resultentity.MatchResult)
 	g[id] = built
-	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(mobaCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(&mobaCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}

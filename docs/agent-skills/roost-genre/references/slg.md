@@ -84,7 +84,7 @@ bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$
 | 形态 | 期望 |
 | --- | --- |
 | 2.1 精简 | `--- PASS: TestSLG` 恰好 7 条（6 条业务 + `TestSLGRobotBusiness`）、0 SKIP；`modules.sh verify` 打印 `wallet 17/17` |
-| 2.2 脚本形态 | `test.log` 里 `TestSLG` 恰好 8 条（2.1 的 7 条 + `TestSLGAllianceRewardOnceBeyondWalletWindow`）；`alliance.log` 里 `grep -c '^--- PASS: TestAlliance'` = 2；`wallet 17/17` |
+| 2.2 脚本形态 | `test.log` 里 `TestSLG` 恰好 9 条（2.1 的 7 条 + `TestSLGAllianceRewardOnceBeyondWalletWindow` + `TestSLGAllianceCreditRepliesOnlyAfterItsRecordIsDurable`）；`alliance.log` 里 `grep -c '^--- PASS: TestAlliance'` = 2；`wallet 17/17` |
 
 6 条业务场景：建造 → 行军 → 抵达；重放、取消与退款；独立研究队列；建造事务失败整体回滚；离线资源产出（加载后只补触发一次）；两名玩家抢同一地块只有一人获胜。其余联盟用例（`TestSLGAlliance*` 四条）要真实 Mongo / Redis / NATS，缺省只编译与 vet。
 

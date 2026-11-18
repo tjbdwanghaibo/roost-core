@@ -3,9 +3,14 @@ package handler
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	sender "example.com/slg-practice/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/service/activity"
 )
 
@@ -42,5 +47,156 @@ func TestSLGAllianceRewardOnceBeyondWalletWindow(t *testing.T) {
 	}
 	if _, err := s.Sync_AllianceCredit(ctx, f.subject.ID(), 1000, key, 11); err == nil || f.subject.Dao().GetWallet().GetCoins() != 189 {
 		t.Fatalf("changed amount accepted: coins=%d err=%v", f.subject.Dao().GetWallet().GetCoins(), err)
+	}
+}
+
+// slgFsyncWAL 按 WAL 的持久语义模拟提交器：strict 记录在 Commit 里即 fsync；async 记录 Commit 时只写进“页缓存”，
+// 替身不跑组提交 ticker，所以用例里一直不持久；pipelined 记录 Enqueue 后挂起，用例调 fsync 才持久并完成票据。
+// fsync 按前缀生效（与真实 WAL 一样，持久水位之前的记录全部持久）。auto 时每次写入后立即 fsync，供夹具准备数据。
+type slgFsyncWAL struct {
+	mu      sync.Mutex
+	auto    bool
+	records []dataengine.CommitRecord
+	durable int // 已持久的前缀长度，即 DurableLSN
+	pending []*slgPendingTicket
+	waiting chan struct{} // 每张挂起的票据发一个信号：Nest 正在等这条记录持久
+}
+
+type slgPendingTicket struct {
+	lsn  uint64
+	done chan struct{}
+}
+
+func (t *slgPendingTicket) LSN() uint64           { return t.lsn }
+func (t *slgPendingTicket) Done() <-chan struct{} { return t.done }
+func (t *slgPendingTicket) Err() error            { return nil }
+
+func newSLGFsyncWAL() *slgFsyncWAL {
+	return &slgFsyncWAL{auto: true, waiting: make(chan struct{}, 16)}
+}
+
+func (w *slgFsyncWAL) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.records = append(w.records, record)
+	if w.auto || record.Durability == dataengine.DurabilityStrict {
+		w.fsyncLocked()
+	}
+	return nil
+}
+
+func (w *slgFsyncWAL) Enqueue(_ context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.records = append(w.records, record)
+	ticket := &slgPendingTicket{lsn: uint64(len(w.records)), done: make(chan struct{})}
+	w.pending = append(w.pending, ticket)
+	if w.auto {
+		w.fsyncLocked()
+		return ticket, nil
+	}
+	select {
+	case w.waiting <- struct{}{}:
+	default: // 持锁调用不能阻塞；用例一次只等一张票据，缓冲足够
+	}
+	return ticket, nil
+}
+
+func (w *slgFsyncWAL) DurableLSN() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return uint64(w.durable)
+}
+
+func (w *slgFsyncWAL) fsyncLocked() {
+	w.durable = len(w.records)
+	for _, ticket := range w.pending {
+		close(ticket.done)
+	}
+	w.pending = nil
+}
+
+func (w *slgFsyncWAL) fsync() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.fsyncLocked()
+}
+
+// setAuto 切换自动 fsync；切回自动时先落定挂起的票据。
+func (w *slgFsyncWAL) setAuto(auto bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.auto = auto
+	if auto {
+		w.fsyncLocked()
+	}
+}
+
+// lastDurable 报告最近一条 handler 名含 name 的记录是否已持久，以及它的声明 durability。
+func (w *slgFsyncWAL) lastDurable(name string) (durable bool, durability dataengine.Durability, found bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := len(w.records) - 1; i >= 0; i-- {
+		if strings.Contains(w.records[i].Handler, name) {
+			return i < w.durable, w.records[i].Durability, true
+		}
+	}
+	return false, 0, false
+}
+
+// deliverPending 在到账（AllianceCredit）回复之后就在原服义务账本标完成，标完成之后不再重投；整机掉电丢掉已回复的
+// 到账时奖励就丢了。所以到账必须在它的 WAL 记录持久之后才回复（维护者 2026-11-18 定 B：durability=pipelined）。
+// 替身只在用例 fsync 时持久；用例在“标完成”那一刻核对到账记录已持久，并核对持久之前没有回复。退回 async 时变红。
+func TestSLGAllianceCreditRepliesOnlyAfterItsRecordIsDurable(t *testing.T) {
+	wal := newSLGFsyncWAL()
+	f := newSLGFixtureWith(t, wal)
+	RegisterAllianceRewardsNestHandlers()
+	ctx := context.Background()
+	s := sender.NewAllianceRewardsSender(f.engine)
+	if _, err := s.Sync_AllianceHomeInit(ctx, f.subject.ID(), 1000); err != nil {
+		t.Fatal(err)
+	}
+	key := activity.Key{GroupID: "alliance", ActivityID: "season-1-window-durable", Phase: activity.PhaseSettle}
+	wal.setAuto(false)
+	t.Cleanup(func() { wal.setAuto(true) }) // 先于引擎关闭执行：失败时也落定挂起的票据
+	type reply struct {
+		coins      int64
+		err        error
+		durable    bool
+		durability dataengine.Durability
+		found      bool
+	}
+	replied := make(chan reply, 1)
+	go func() {
+		coins, err := s.Sync_AllianceCredit(ctx, f.subject.ID(), 1000, key, 10)
+		// 这里就是 deliverPending 标完成的位置：记下此刻到账记录是否已持久。
+		durable, durability, found := wal.lastDurable("AllianceCredit")
+		replied <- reply{coins, err, durable, durability, found}
+	}()
+	var got reply
+	select {
+	case <-wal.waiting:
+		// Nest 在等到账记录持久：持久之前不得回复。
+		select {
+		case got = <-replied:
+			t.Fatalf("credit replied before its record was durable: %+v", got)
+		case <-time.After(100 * time.Millisecond):
+		}
+		wal.fsync()
+		select {
+		case got = <-replied:
+		case <-time.After(10 * time.Second):
+			t.Fatal("credit did not reply after its record became durable")
+		}
+	case got = <-replied:
+		// 回复没有等任何持久票据（async 只写进页缓存；strict 在 Commit 里已持久）。
+	case <-time.After(10 * time.Second):
+		t.Fatal("credit neither replied nor waited for durability")
+	}
+	if got.err != nil || !got.found || got.coins != 60 {
+		t.Fatalf("credit coins=%d err=%v recorded=%v", got.coins, got.err, got.found)
+	}
+	if !got.durable {
+		t.Fatalf("credit replied while its WAL record (durability=%v) was not durable: the obligation would be marked delivered for a credit that power loss can erase", got.durability)
 	}
 }

@@ -1,0 +1,32 @@
+# 变异：在改为 pipelined 后的生成工程里把标记改成指定级别，roost generate，单跑新用例，再改回 pipelined
+# 2026-11-18，macOS arm64，go1.27.3，GOWORK=off
+
+## moba-async
+marker: 61://roost:nest rollback=undo durability=async
+    moba_round_test.go:446: award replied while its WAL record (durability=async) was not durable: ackSeat would confirm a reward that power loss can erase
+--- FAIL: TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable (0.02s)
+FAIL
+FAIL	example.com/moba-practice/game/handler	0.671s
+FAIL
+go test exit=1
+
+## moba-strict
+marker: 61://roost:nest rollback=undo durability=strict
+--- PASS: TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable (0.02s)
+ok  	example.com/moba-practice/game/handler	2.145s
+go test exit=0
+
+## slg-async
+marker: 44://roost:nest rollback=undo durability=async
+    alliance_rewards_test.go:200: credit replied while its WAL record (durability=async) was not durable: the obligation would be marked delivered for a credit that power loss can erase
+--- FAIL: TestSLGAllianceCreditRepliesOnlyAfterItsRecordIsDurable (0.01s)
+FAIL
+FAIL	example.com/slg-practice/game/handler	0.600s
+FAIL
+go test exit=1
+
+## slg-strict
+marker: 44://roost:nest rollback=undo durability=strict
+--- PASS: TestSLGAllianceCreditRepliesOnlyAfterItsRecordIsDurable (0.01s)
+ok  	example.com/slg-practice/game/handler	1.975s
+go test exit=0

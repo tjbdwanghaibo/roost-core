@@ -36,7 +36,12 @@ func handlerAllianceHomeInit(p view.PlayerEntity, sid int32) (int64, error) {
 // 这名玩家又有多少笔带键入账都不影响判重（维护者 2026-11-17）。所以入账用不判重的 Wallet().Add。
 // 同身份重试必须金额一致；账本满 128 条后拒新身份，不淘汰旧身份。
 //
-//roost:nest rollback=undo
+// durability=pipelined（维护者 2026-11-18 定 B）：deliverPending 在回复之后就在原服义务账本（Redis）标完成，
+// 标完成之后不再重投，所以回复必须在这条到账记录 fsync 之后——async 在整机掉电时可能丢掉已回复的到账，奖励就丢了。
+// pipelined 入队后先放实体锁、记录持久后才回复；要求提交器支持 Enqueue / DurableLSN，工程写了非空
+// nest.pipelined.allowlist 时把本 handler 列进去（生成工程缺省 allowlist: [] 即全部允许）。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerAllianceCredit(p view.PlayerEntity, sid int32, key activity.Key, amount int64) (int64, error) {
 	if p.Dao().GetHomeSID() != sid || (sid != 1000 && sid != 1001) || key.Validate() != nil || key.Phase != activity.PhaseSettle || amount <= 0 || amount > 100000 {
 		return 0, errAllianceReward

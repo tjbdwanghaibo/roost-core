@@ -90,7 +90,8 @@ cp "$repo_root/scripts/testdata/slg/timer_handlers.go.txt" game/entities/player/
 cp "$repo_root/scripts/testdata/slg/tasks.go.txt" game/handler/slg_tasks.go
 cp "$repo_root/scripts/testdata/slg/tasks_test.go.txt" game/handler/slg_tasks_test.go
 cp "$repo_root/scripts/testdata/slg/alliance_rewards.go.txt" game/handler/alliance_rewards.go
-# 原服奖励越过 wallet 回执窗口仍只发一次（维护者 2026-11-17）：与建造场景同包、共用 newSLGFixture，算进 8 条 TestSLG。
+# 原服奖励越过 wallet 回执窗口仍只发一次（维护者 2026-11-17）与到账回复在记录持久之后（2026-11-18，pipelined）：
+# 与建造场景同包、共用 newSLGFixture / newSLGFixtureWith，算进 9 条 TestSLG。
 cp "$repo_root/scripts/testdata/slg/alliance_rewards_test.go.txt" game/handler/alliance_rewards_test.go
 cp "$repo_root/scripts/testdata/slg/alliance_authority.go.txt" game/handler/alliance_authority.go
 mkdir -p game/modules/alliance
@@ -100,10 +101,10 @@ gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go ga
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" slg
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler | tee "$review_root/test.log"
-# 8 条场景（含业务 Robot、原服奖励越过 wallet 窗口仍只发一次）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 9 条场景（含业务 Robot、原服奖励越过 wallet 窗口仍只发一次、到账回复在记录持久之后）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestSLG' "$review_root/test.log" || true)"
-if [[ "$passed" != 8 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 8 passing TestSLG scenarios, got $passed" >&2
+if [[ "$passed" != 9 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 9 passing TestSLG scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

@@ -9,10 +9,12 @@ import (
 	sender "example.com/moba-practice/game/handler/syncsender"
 	"example.com/moba-practice/game/modules/moba"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +30,12 @@ type roundFixture struct {
 }
 
 func newRoundFixture(t *testing.T) *roundFixture {
+	t.Helper()
+	return newRoundFixtureWith(t, &mobaCommitter{})
+}
+
+// newRoundFixtureWith 用指定的提交器建 Round 夹具（MOBAAward 是 pipelined，提交器须实现 nest.PipelinedTransactionCommitter）。
+func newRoundFixtureWith(t *testing.T, committer nest.TransactionCommitter) *roundFixture {
 	t.Helper()
 	player.RegisterEntity()
 	roundentity.RegisterEntity()
@@ -61,7 +69,7 @@ func newRoundFixture(t *testing.T) *roundFixture {
 	}
 	f.directory = directory.(*directoryentity.BattleDirectory)
 	g[directoryID] = directory
-	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(mobaCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -286,6 +294,160 @@ func TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity(t *testing.T) {
 	}
 	if err := s.Sync_MOBAAward(ctx, f.players[1].ID(), awards[0]); err == nil {
 		t.Fatal("reward routed to another Player")
+	}
+}
+// mobaFsyncWAL 按 WAL 的持久语义模拟提交器：strict 记录在 Commit 里即 fsync；async 记录 Commit 时只写进“页缓存”，
+// 替身不跑组提交 ticker，所以用例里一直不持久；pipelined 记录 Enqueue 后挂起，用例调 fsync 才持久并完成票据。
+// fsync 按前缀生效（与真实 WAL 一样，持久水位之前的记录全部持久）。auto 时每次写入后立即 fsync，供夹具建局。
+type mobaFsyncWAL struct {
+	mu      sync.Mutex
+	auto    bool
+	records []dataengine.CommitRecord
+	durable int // 已持久的前缀长度，即 DurableLSN
+	pending []*mobaPendingTicket
+	waiting chan struct{} // 每张挂起的票据发一个信号：Nest 正在等这条记录持久
+}
+
+type mobaPendingTicket struct {
+	lsn  uint64
+	done chan struct{}
+}
+
+func (t *mobaPendingTicket) LSN() uint64           { return t.lsn }
+func (t *mobaPendingTicket) Done() <-chan struct{} { return t.done }
+func (t *mobaPendingTicket) Err() error            { return nil }
+
+func newMobaFsyncWAL() *mobaFsyncWAL {
+	return &mobaFsyncWAL{auto: true, waiting: make(chan struct{}, 16)}
+}
+
+func (w *mobaFsyncWAL) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.records = append(w.records, record)
+	if w.auto || record.Durability == dataengine.DurabilityStrict {
+		w.fsyncLocked()
+	}
+	return nil
+}
+
+func (w *mobaFsyncWAL) Enqueue(_ context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.records = append(w.records, record)
+	ticket := &mobaPendingTicket{lsn: uint64(len(w.records)), done: make(chan struct{})}
+	w.pending = append(w.pending, ticket)
+	if w.auto {
+		w.fsyncLocked()
+		return ticket, nil
+	}
+	select {
+	case w.waiting <- struct{}{}:
+	default: // 持锁调用不能阻塞；用例一次只等一张票据，缓冲足够
+	}
+	return ticket, nil
+}
+
+func (w *mobaFsyncWAL) DurableLSN() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return uint64(w.durable)
+}
+
+func (w *mobaFsyncWAL) fsyncLocked() {
+	w.durable = len(w.records)
+	for _, ticket := range w.pending {
+		close(ticket.done)
+	}
+	w.pending = nil
+}
+
+func (w *mobaFsyncWAL) fsync() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.fsyncLocked()
+}
+
+// setAuto 切换自动 fsync；切回自动时先落定挂起的票据。
+func (w *mobaFsyncWAL) setAuto(auto bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.auto = auto
+	if auto {
+		w.fsyncLocked()
+	}
+}
+
+// lastDurable 报告最近一条 handler 名含 name 的记录是否已持久，以及它的声明 durability。
+func (w *mobaFsyncWAL) lastDurable(name string) (durable bool, durability dataengine.Durability, found bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := len(w.records) - 1; i >= 0; i-- {
+		if strings.Contains(w.records[i].Handler, name) {
+			return i < w.durable, w.records[i].Durability, true
+		}
+	}
+	return false, 0, false
+}
+
+// 原服到账（MOBAAward）回复之后，调用方马上向权威确认这一席（ackSeat），确认之后重投扫描不再看这一席；整机掉电
+// 丢掉已回复的到账时奖励就丢了。所以到账必须在它的 WAL 记录持久之后才回复（维护者 2026-11-18 定 B：durability=pipelined）。
+// 替身只在用例 fsync 时持久；用例在 ackSeat 那一刻核对到账记录已持久，并核对持久之前没有回复。退回 async 时变红。
+func TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable(t *testing.T) {
+	wal := newMobaFsyncWAL()
+	f := newRoundFixtureWith(t, wal)
+	r := finishRound(t, f)
+	awards, err := r.Awards(f.round.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const seat = 5 // 胜方，到账有金币
+	award := awards[seat]
+	wal.setAuto(false)
+	t.Cleanup(func() { wal.setAuto(true) }) // 先于引擎关闭执行：失败时也落定挂起的票据
+	type reply struct {
+		err        error
+		durable    bool
+		durability dataengine.Durability
+		found      bool
+	}
+	replied := make(chan reply, 1)
+	go func() {
+		err := sender.NewMobaRoundSender(f.engine).Sync_MOBAAward(context.Background(), award.Member.PlayerID, award)
+		// 这里就是 ackSeat 的位置：记下此刻到账记录是否已持久。
+		durable, durability, found := wal.lastDurable("MOBAAward")
+		replied <- reply{err, durable, durability, found}
+	}()
+	var got reply
+	select {
+	case <-wal.waiting:
+		// Nest 在等到账记录持久：持久之前不得回复。
+		select {
+		case got = <-replied:
+			t.Fatalf("award replied before its record was durable: %+v", got)
+		case <-time.After(100 * time.Millisecond):
+		}
+		wal.fsync()
+		select {
+		case got = <-replied:
+		case <-time.After(10 * time.Second):
+			t.Fatal("award did not reply after its record became durable")
+		}
+	case got = <-replied:
+		// 回复没有等任何持久票据（async 只写进页缓存；strict 在 Commit 里已持久）。
+	case <-time.After(10 * time.Second):
+		t.Fatal("award neither replied nor waited for durability")
+	}
+	if got.err != nil || !got.found {
+		t.Fatalf("award err=%v recorded=%v", got.err, got.found)
+	}
+	if !got.durable {
+		t.Fatalf("award replied while its WAL record (durability=%v) was not durable: ackSeat would confirm a reward that power loss can erase", got.durability)
+	}
+	r = f.apply(t, moba.Change{Op: "ack", HostSID: 2000, Epoch: 1, Seat: seat, Digest: r.ResultDigest()})
+	d := f.players[seat].Dao()
+	if !r.Acknowledged[seat] || d.GetWallet().GetCoins() != 10 || d.GetWins() != 1 {
+		t.Fatalf("ack=%v coins=%d wins=%d", r.Acknowledged[seat], d.GetWallet().GetCoins(), d.GetWins())
 	}
 }
 func TestMOBARoundUndoRollsBackFrameAndCheckpoint(t *testing.T) {

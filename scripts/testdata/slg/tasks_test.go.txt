@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -38,9 +39,28 @@ func (g slgGetter) GetMany(ctx context.Context, ids []int64, cats []entity.Entit
 }
 
 // 正式 Nest 提交路径的替身；本场景不声称 WAL fsync / Mongo 验收，真实存储另跑标准生成工程脚本。
-type slgCommitter struct{}
+// AllianceCredit 声明 durability=pipelined，所以替身也接 Enqueue / DurableLSN（否则 Nest 报 ErrPipelinedCommitterRequired）：
+// 入队即视为已持久，票据立即完成。“回复在持久之后”由 TestSLGAllianceCreditRepliesOnlyAfterItsRecordIsDurable 单独验收。
+type slgCommitter struct{ durable atomic.Uint64 }
 
-func (slgCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+func (*slgCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+func (c *slgCommitter) Enqueue(context.Context, dataengine.CommitRecord) (nest.CommitTicket, error) {
+	return slgDurableTicket(c.durable.Add(1)), nil
+}
+
+func (c *slgCommitter) DurableLSN() uint64 { return c.durable.Load() }
+
+// slgDurableTicket 是入队即持久的票据。
+type slgDurableTicket uint64
+
+func (t slgDurableTicket) LSN() uint64 { return uint64(t) }
+func (slgDurableTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (slgDurableTicket) Err() error { return nil }
 
 type slgFixture struct {
 	now     time.Time
@@ -50,6 +70,12 @@ type slgFixture struct {
 }
 
 func newSLGFixture(t *testing.T) *slgFixture {
+	t.Helper()
+	return newSLGFixtureWith(t, &slgCommitter{})
+}
+
+// newSLGFixtureWith 用指定的提交器建夹具（AllianceCredit 是 pipelined，提交器须实现 nest.PipelinedTransactionCommitter）。
+func newSLGFixtureWith(t *testing.T, committer nest.TransactionCommitter) *slgFixture {
 	t.Helper()
 	f := &slgFixture{now: time.Unix(1_800_000_000, 0), getter: slgGetter{}}
 	// 定时器 Tick 按本条消息冻结的业务时间触发（fctx 取自进程业务时钟），驱动的到期查询用 SetClock：两处停在同一时刻。
@@ -69,7 +95,7 @@ func newSLGFixture(t *testing.T) *slgFixture {
 	}
 	f.subject = built.(*player.Player)
 	f.getter[id] = f.subject
-	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.getter), nest.NestOptionWithTransactionCommitter(slgCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.getter), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}

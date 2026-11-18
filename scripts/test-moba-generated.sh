@@ -95,10 +95,10 @@ cp "$repo_root/scripts/testdata/moba/settlement_test.go.txt" game/handler/moba_s
 gofmt -w loadtest/*.go db/def/*.go game/modules/moba/*.go game/handler/moba_*.go
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/modules/moba ./game/handler | tee "$review_root/test.log"
-# 28 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 29 条场景（含原服奖励到账回复在记录持久之后）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestMOBA' "$review_root/test.log" || true)"
-if [[ "$passed" != 28 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 28 passing TestMOBA scenarios, got $passed" >&2
+if [[ "$passed" != 29 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 29 passing TestMOBA scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...
