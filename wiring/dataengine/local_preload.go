@@ -98,8 +98,13 @@ func (m *LocalPreloadMod) Init(cfg *viper.Viper) error {
 	return nil
 }
 
+// Provide 记下 Registry，并把自己发布为 mods.ModDataEnginePreload：别的部件按 Kinds() 判断某个 kind 起服时是否经过
+// 预加载（及其准入检查）——rehome 的起服核对据此不再把本服库列一遍。
 func (m *LocalPreloadMod) Provide(r *app.Registry) error {
 	m.registry = r
+	if err := r.Register(mods.ModDataEnginePreload, m); err != nil {
+		return fmt.Errorf("dataengine preload mod: %w", err)
+	}
 	return nil
 }
 

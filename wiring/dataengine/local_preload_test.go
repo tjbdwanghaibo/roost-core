@@ -68,6 +68,21 @@ func (f preloadAdmitterFunc) AdmitPreload(ctx context.Context, kind entity.Entit
 	return f(ctx, kind, ids)
 }
 
+// 预加载 Mod 在 Provide 里把自己发布为 mods.ModDataEnginePreload：别的部件（rehome 的起服核对）按它的 Kinds() 判断某个
+// kind 起服时是否经过预加载与准入检查。没有发布时它们查不到，以为没有预加载，再把本服库列一遍（重复核对）。
+func TestLocalPreloadModIsPublishedUnderItsName(t *testing.T) {
+	player := entity.EntityKind(215)
+	mod := NewLocalPreloadMod(player)
+	registry := app.NewRegistry(viper.New())
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	found, ok := app.Lookup[*LocalPreloadMod](registry, mods.ModDataEnginePreload)
+	if !ok || found != mod || !slices.Contains(found.Kinds(), player) {
+		t.Fatalf("lookup %q after Provide = %v, %v; want this mod, preloading kind %d", mods.ModDataEnginePreload, found, ok, player)
+	}
+}
+
 // 准入检查按 kind 从 Registry 取（PreloadAdmitCapability）：登记了的 kind 问它，没登记的全部加载；一个都没登记时不包一层。
 func TestLocalPreloadModAsksTheAdmitterRegisteredForAKind(t *testing.T) {
 	guarded, open := entity.EntityKind(216), entity.EntityKind(217)
