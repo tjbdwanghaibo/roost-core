@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	mailboxcomp "{{MODULE}}/game/components/mailbox"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -27,6 +29,27 @@ func init() {
 		_, err := controller.mailboxMailer()
 		return err
 	})
+}
+
+// mailboxPersistence 是 DataEngine Mod（wiring/dataengine，能力名 mods.ModDataEngine）上的实体级持久屏障：
+// WaitEntityProjection 返回 nil 时，这名玩家（完整 Entity ID）在本进程此前已提交的修改都已落库（Mongo 多数派写），
+// 整机掉电也不会丢。发放事务用缺省 async，回复时记录只写进了 WAL 文件（可能还在页缓存）；让 mail 服务
+// CommitClaim 之前必须过这道屏障，否则掉电丢了发放而邮件已标成已领，附件没到账、账本里也没有这封，没人会补发。
+type mailboxPersistence interface {
+	WaitEntityProjection(ctx context.Context, entityID int64) error
+}
+
+// mailboxPersisted 等这名玩家在本进程已提交的修改持久。DataEngine Mod 在协议绑定之后才发布，所以用到时才取。
+func (controller *Controller) mailboxPersisted(ctx context.Context, entityID int64) error {
+	registry := controller.Registry()
+	if registry == nil {
+		return fmt.Errorf("mailbox controller: app registry is required")
+	}
+	engine, ok := app.Lookup[mailboxPersistence](registry, mods.ModDataEngine)
+	if !ok || engine == nil {
+		return fmt.Errorf("mailbox controller: capability %q not found; a mail cannot be committed before its grant is persisted", mods.ModDataEngine)
+	}
+	return engine.WaitEntityProjection(ctx, entityID)
 }
 
 // mailboxMailer 取 mail 服务的客户端；启动检查已经验过它在，取不到只会是装配错误，这一条请求按内部错误回答。
@@ -84,7 +107,12 @@ func (controller *Controller) HandleMailboxList(context *playeraccess.Context, r
 //
 //	ReserveClaim            mail 服务交出附件与 token；token 对（玩家，邮件）恒定，重试多少次都是同一个
 //	Sync_MailboxClaimReward Nest 锁住 Player 的一笔事务：附件到账，邮件 id 记进账本，两者同一次提交
+//	（等持久）              DataEngine 的 WaitEntityProjection：这名玩家在本进程已提交的修改落库
 //	CommitClaim             mail 服务把邮件标成已领；回包丢了再确认一次，同一个 token 幂等
+//
+// 发放是 async：回复时记录只写进了本进程的 WAL 文件，还没 fsync。CommitClaim 必须排在本地持久之后——
+// 先确认的话，整机掉电丢了发放、邮件却已领，附件就再也领不到。账本已有这封的重试（Claimed=false）同样先等：
+// 第一次的发放可能还没持久。
 //
 // 让领取恰好一次的是中间那一步。三次调用拼不成一个事务（邮件在另一个进程），所以窗口是真的：
 // 发放成功、CommitClaim 丢了、预留到期、重试用同一个 token 再预留一次。mail 服务只能把它算作重复尝试
@@ -99,6 +127,9 @@ func (controller *Controller) HandleMailboxList(context *playeraccess.Context, r
 //   - 发放被拒（种类没有登记发放方式、邮件在排队期间过期、余额溢出、背包放不下、玩家还没进入游戏、
 //     提交失败）：事务已回滚，账本里没有这一封，CancelClaim 归还预留，答对应的码
 //     （发放方式自己的拒绝原样透出，例如货币或背包模块的码）。
+//   - 发放成功但等持久失败（投影 fatal、WAL 不健康、等到截止）：不让 mail 服务确认，照常答成功（附件在本进程里）
+//     并记 ERROR，不归还预留。租约到期后玩家再领：发放留下来了，账本挡住重复发放、持久后补上确认；
+//     发放没留下来（掉电），账本里没有这封，重新发。
 //   - 发放成功但 CommitClaim 失败：奖励已到账，照常答成功并记 ERROR。邮件在 mail 服务那边仍是未领，
 //     玩家下次再领这一封时账本挡住重复发放、并把确认补上。
 //
@@ -158,13 +189,20 @@ func (controller *Controller) HandleMailboxClaim(context *playeraccess.Context, 
 		slog.Info("mailbox_claim: attachment was already granted; committing the mail only", "player_id", context.PlayerID, "mail_id", request.MailID)
 	}
 	slog.InfoContext(ctx, "mailbox: claim confirmed", "player_id", context.PlayerID, "mail_id", request.MailID, "attachment_type", attachment.Type, "item_id", attachment.ID, "amount", attachment.Amount, "held", result.Held, "newly_granted", result.Claimed)
+	granted := &pb.MailboxClaimResponse{
+		AttachmentType: string(attachment.Type), AttachmentID: attachment.ID,
+		Amount: attachment.Amount, Held: result.Held,
+	}
+	if err := controller.mailboxPersisted(ctx, entityID); err != nil {
+		// 发放还没确定持久：不让 mail 服务确认，邮件保持未领（租约到期后可再领）。答成功（附件在本进程里），记 ERROR；
+		// 不归还预留：租约兜底，再领时账本决定发不发。
+		slog.Error("mailbox_claim: granted but not yet persisted; mail left unclaimed", "player_id", context.PlayerID, "mail_id", request.MailID, "err", err)
+		return granted, nil
+	}
 	if _, err := mailer.CommitClaim(ctx, context.PlayerID, request.MailID, claim.Token); err != nil {
 		// 奖励已到账，只是 mail 服务那边没记上。答成功（客户端确实拿到了），记 ERROR；
 		// 不归还预留、不回滚发放：账本已经保证这封邮件不会再发第二次。
 		slog.Error("mailbox_claim: granted but not committed", "player_id", context.PlayerID, "mail_id", request.MailID, "err", err)
 	}
-	return &pb.MailboxClaimResponse{
-		AttachmentType: string(attachment.Type), AttachmentID: attachment.ID,
-		Amount: attachment.Amount, Held: result.Held,
-	}, nil
+	return granted, nil
 }

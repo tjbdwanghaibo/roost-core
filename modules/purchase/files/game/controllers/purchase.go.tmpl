@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -34,12 +35,32 @@ func (c *Controller) HandlePurchaseCollect(ctx *playeraccess.Context, request *p
 	return response, nil
 }
 
-// purchaseDeps 是领取发货用到的三样依赖：发货队列、platform 客户端、Nest 上的发货 Sender。都是无状态的客户端，
-// 每次领取从 Registry 现取（purchaseDepsFromRegistry），不挂在 Controller 上；测试直接填替身。
+// purchaseDeps 是领取发货用到的依赖：发货队列、platform 客户端、Nest 上的发货 Sender，以及等本地发货持久的屏障。
+// 都是无状态的客户端，每次领取从 Registry 现取（purchaseDepsFromRegistry），不挂在 Controller 上；测试直接填替身。
 type purchaseDeps struct {
 	queue    purchase.Queue
 	platform svcplatform.Platform
 	sender   *syncsender.PurchaseGrantSender
+	persist  purchasePersistence
+}
+
+// purchasePersistence 是 DataEngine Mod（wiring/dataengine，能力名 mods.ModDataEngine）上的实体级持久屏障：
+// WaitEntityProjection 返回 nil 时，这名玩家（完整 Entity ID）在本进程此前已提交的修改都已落库（Mongo 多数派写），
+// 整机掉电也不会丢。PurchaseGrant 用缺省 async，回复时记录只写进了 WAL 文件（可能还在页缓存）；
+// 删外部快照（Ack）之前必须过这道屏障，否则掉电丢了发货而快照已删，这笔奖励丢失、之后的订单永远答 purchase_sequence。
+type purchasePersistence interface {
+	WaitEntityProjection(ctx context.Context, entityID int64) error
+}
+
+// purchaseRegistryPersistence 用到时才从 Registry 取 DataEngine Mod：它在协议绑定之后才发布，启动检查时还取不到。
+type purchaseRegistryPersistence struct{ registry *app.Registry }
+
+func (p purchaseRegistryPersistence) WaitEntityProjection(ctx context.Context, entityID int64) error {
+	engine, ok := app.Lookup[purchasePersistence](p.registry, mods.ModDataEngine)
+	if !ok || engine == nil {
+		return fmt.Errorf("purchase: capability %q not found; grants cannot be acknowledged before they are persisted", mods.ModDataEngine)
+	}
+	return engine.WaitEntityProjection(ctx, entityID)
 }
 
 // PurchaseCollect 是不经协议的领取入口（PurchaseCollect 端点、进入游戏的联动、工程自己的购买流程都走它）：
@@ -77,11 +98,16 @@ func purchaseDepsFromRegistry(registry *app.Registry) (*purchaseDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &purchaseDeps{queue: queue, platform: platform, sender: syncsender.NewPurchaseGrantSender(client)}, nil
+	return &purchaseDeps{queue: queue, platform: platform, sender: syncsender.NewPurchaseGrantSender(client), persist: purchaseRegistryPersistence{registry: registry}}, nil
 }
 
 // Collect 只接受可信会话给出的玩家号，序号与奖励全部从队列取；客户端不得提供发货载荷。
 // 所有 Redis / platform I/O 都在 Nest 之外。单次最多处理 BatchLimit 条；失败保留当前和后续记录。
+//
+// 顺序是规则：一批先逐笔发货（Nest 提交），再等这名玩家的本地修改持久，最后才逐笔 Ack（删快照、推进 acked）。
+// 发货是 async，回复不等 fsync；持久之前 Ack 的话，整机掉电会留下“Redis 已越号、Player 游标没动”。
+// 等持久失败时一条都不 Ack：已返回的回执仍然成立（修改在本进程里），下一次补领重放这些订单（游标已到，不再写），
+// 持久之后再删。中途有一笔发不出去时，它之前已发的照样等持久后 Ack，再把那笔的错误返回。
 func (c *purchaseDeps) Collect(ctx context.Context, playerID int64) ([]purchase.Receipt, error) {
 	full, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
 	if err != nil {
@@ -91,41 +117,58 @@ func (c *purchaseDeps) Collect(ctx context.Context, playerID int64) ([]purchase.
 	if err != nil {
 		return nil, err
 	}
+	receipts, granted, grantErr := c.grant(ctx, playerID, full, pending)
+	if len(granted) == 0 {
+		return receipts, grantErr
+	}
+	if err := c.persist.WaitEntityProjection(ctx, full); err != nil {
+		slog.WarnContext(ctx, "purchase: grants not yet persisted; queue kept for the next collect", "player_id", playerID, "granted", len(granted), "err", err)
+		return receipts, errors.Join(grantErr, fmt.Errorf("purchase: grants not yet persisted locally: %w", err))
+	}
+	for _, grant := range granted {
+		if err := c.queue.Ack(ctx, grant); err != nil {
+			return receipts, errors.Join(grantErr, err)
+		}
+	}
+	return receipts, grantErr
+}
+
+// grant 逐笔向 platform 核对后发货，返回已确认的回执与对应的待发记录；遇到第一笔发不出去的就停，带回它的错误。
+func (c *purchaseDeps) grant(ctx context.Context, playerID, full int64, pending []purchase.Grant) ([]purchase.Receipt, []purchase.Grant, error) {
 	receipts := make([]purchase.Receipt, 0, len(pending))
+	granted := make([]purchase.Grant, 0, len(pending))
 	for _, grant := range pending {
 		if grant.PlayerID != playerID {
-			return receipts, fmt.Errorf("purchase: queue returned another player's grant")
+			return receipts, granted, fmt.Errorf("purchase: queue returned another player's grant")
 		}
 		// 先等 platform 投递完全终结再入账；这时不能重新打开订单或改成另一种结局。
 		// 该检查同时是稍后删除队列的依据，不把“超时/失败”当成“已没有在途投递”。
 		order, found, err := c.platform.Order(ctx, grant.OrderID)
 		if err != nil {
-			return receipts, err
+			return receipts, granted, err
 		}
 		if !found || order.OrderID != grant.OrderID || order.PlayerID != playerID || order.PayloadDigest != grant.Digest || order.ProductID != grant.ProductID {
 			slog.WarnContext(ctx, "purchase: queued order mismatch", "player_id", playerID, "order_id", grant.OrderID, "product_id", grant.ProductID)
-			return receipts, svcplatform.ErrOrderMismatch
+			return receipts, granted, svcplatform.ErrOrderMismatch
 		}
 		if len(order.PendingAttempts) != 0 {
-			return receipts, svcplatform.ErrDeliveryHeld
+			return receipts, granted, svcplatform.ErrDeliveryHeld
 		}
 		switch order.State {
 		case svcplatform.DeliveryDelivered:
 		case svcplatform.DeliverySettled:
 			grant.Settled = true
 		default:
-			return receipts, svcplatform.ErrDeliveryHeld
+			return receipts, granted, svcplatform.ErrDeliveryHeld
 		}
 		receipt, err := c.sender.Sync_PurchaseGrant(ctx, full, grant)
 		if err != nil {
-			return receipts, err
+			return receipts, granted, err
 		}
 		receipts = append(receipts, receipt)
-		// 确认在 Nest 提交后、队列确认之前：Ack 失败仍保留本次已确认的事实；同订单重试可能再次出现。
+		granted = append(granted, grant)
+		// 确认在 Nest 提交后、持久与队列确认之前：之后失败仍保留本次已确认的事实；同订单重试可能再次出现。
 		slog.InfoContext(ctx, "purchase: grant confirmed", "player_id", playerID, "order_id", receipt.OrderID, "sequence", receipt.Sequence, "reward_kind", receipt.Reward.Kind, "item_id", receipt.Reward.ID, "count", receipt.Reward.Count, "settled", receipt.Settled)
-		if err := c.queue.Ack(ctx, grant); err != nil {
-			return receipts, err
-		}
 	}
-	return receipts, nil
+	return receipts, granted, nil
 }

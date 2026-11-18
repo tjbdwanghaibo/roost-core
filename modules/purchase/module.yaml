@@ -2,7 +2,7 @@ name: purchase
 summary: 充值发货：platform 记单、Redis 顺序待发队列、Player 常量大小发货游标；金币默认、道具联动、渠道缺省拒绝
 requires: [wallet]
 needs:
-  mods: [nest, redis]
+  mods: [nest, dataengine, redis]
   features: [protocol, entity, dao, errcode]
   uses: [platform]
 entity: Player
@@ -20,7 +20,7 @@ replaces: [services/platform/collaborators.go]
 verify:
   packages: [./game/handler, ./game/modules/purchase, ./game/controllers, ./services/platform]
   run: ^TestPurchase
-  pass: 21
+  pass: 23
 with:
   bag:
     summary: 付费道具在发货游标同一笔事务中进入背包

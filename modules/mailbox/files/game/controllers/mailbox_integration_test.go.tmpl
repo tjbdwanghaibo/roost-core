@@ -293,7 +293,7 @@ func newMailboxRealEnv(t *testing.T, transport string) *mailboxRealEnv {
 			t.Error(err)
 		}
 	})
-	env.controller = newMailboxTestController(env.engine, env.remote)
+	env.controller = newMailboxTestController(env.engine, env.remote, &mailboxDurability{})
 	return env
 }
 
@@ -490,7 +490,7 @@ func TestMailboxRealDependenciesClaimOverNATSAndRedis(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				patientController := newMailboxTestController(env.engine, patient)
+				patientController := newMailboxTestController(env.engine, patient, &mailboxDurability{})
 				a := env.server
 				a.mail.stallNext("ReserveClaim", 20*time.Second)
 				answered := make(chan *pb.MailboxClaimResponse, 1)

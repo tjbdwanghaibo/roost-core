@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -37,9 +38,16 @@ func (g purchaseGetter) GetMany(ctx context.Context, ids []int64, categories []e
 	return targets, nil
 }
 
+// purchaseCommitter 是替身提交器，兼 DataEngine Mod 的实体持久屏障（WaitEntityProjection）。
+// Commit 只记“已写进 WAL 文件”：async 的 handler 此刻就回复，记录可能还在页缓存里，整机掉电会丢；
+// WaitEntityProjection 之后才把此前的提交算作已持久（正式实现是这名玩家的在途投影已落库）。
 type purchaseCommitter struct {
-	reject  atomic.Bool
-	commits atomic.Int64
+	reject    atomic.Bool
+	commits   atomic.Int64
+	mu        sync.Mutex
+	persisted int64
+	waits     int
+	waitErr   error
 }
 
 func (c *purchaseCommitter) Commit(context.Context, dataengine.CommitRecord) error {
@@ -48,6 +56,24 @@ func (c *purchaseCommitter) Commit(context.Context, dataengine.CommitRecord) err
 	}
 	c.commits.Add(1)
 	return nil
+}
+
+func (c *purchaseCommitter) WaitEntityProjection(context.Context, int64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.waits++
+	if c.waitErr != nil {
+		return c.waitErr
+	}
+	c.persisted = c.commits.Load()
+	return nil
+}
+
+// unpersisted 是此刻已回复、还没持久的提交数：此刻整机掉电，这些修改会丢。
+func (c *purchaseCommitter) unpersisted() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.commits.Load() - c.persisted
 }
 
 type purchaseFixture struct {
@@ -114,6 +140,9 @@ type purchaseQueue struct {
 	pending []purchase.Grant
 	acks    int
 	fail    bool
+	// committer 用来在 Ack 到达时核对本地提交是否已持久；early 记下本地还没持久就被确认的订单。
+	committer *purchaseCommitter
+	early     []string
 }
 
 func (q *purchaseQueue) Record(context.Context, svcplatform.Order) (purchase.Grant, error) {
@@ -125,6 +154,9 @@ func (q *purchaseQueue) Pending(context.Context, int64, int) ([]purchase.Grant, 
 func (q *purchaseQueue) Ack(_ context.Context, g purchase.Grant) error {
 	if q.fail {
 		return fmt.Errorf("injected ack failure")
+	}
+	if q.committer != nil && q.committer.unpersisted() > 0 {
+		q.early = append(q.early, g.OrderID)
 	}
 	q.acks++
 	q.pending = q.pending[1:]
@@ -143,9 +175,15 @@ func newPurchaseCollector(t *testing.T) (*purchaseDeps, *purchaseFixture, *purch
 	t.Helper()
 	f := newPurchaseFixture(t)
 	grant := purchaseTestGrant(1)
-	q := &purchaseQueue{pending: []purchase.Grant{grant}}
+	q := &purchaseQueue{pending: []purchase.Grant{grant}, committer: f.committer}
 	p := &purchasePlatform{order: svcplatform.Order{OrderID: grant.OrderID, PlayerID: 98801, ProductID: grant.ProductID, PayloadDigest: grant.Digest, State: svcplatform.DeliveryDelivered}}
-	return &purchaseDeps{queue: q, platform: p, sender: f.sender}, f, q, p
+	// 每个用例结束时核对：没有一笔订单在本地发货持久之前就从队列里删掉。
+	t.Cleanup(func() {
+		if len(q.early) != 0 {
+			t.Errorf("orders acknowledged before the grant was persisted locally: %v", q.early)
+		}
+	})
+	return &purchaseDeps{queue: q, platform: p, sender: f.sender, persist: f.committer}, f, q, p
 }
 func TestPurchaseCollectionWaitsForInFlightDelivery(t *testing.T) {
 	c, f, q, p := newPurchaseCollector(t)
@@ -216,4 +254,60 @@ func TestPurchaseCollectionRejectsWrongOrder(t *testing.T) {
 	if q.acks != 0 {
 		t.Fatal("different order acknowledged")
 	}
+}
+
+// 同一批两笔都发货之后才删外部快照，而且删之前这名玩家的本地修改已经持久：async 的回复只说明记录写进了
+// WAL 文件，此刻整机掉电会丢；若队列先删了快照，掉电后 Player 的游标停在旧号、Redis 的 acked 已越过，
+// 这笔奖励丢失、下一笔永远答 purchase_sequence。
+func TestPurchaseCollectionAcksOnlyAfterTheGrantsArePersisted(t *testing.T) {
+	c, f, q, p := newPurchaseCollector(t)
+	second := purchaseTestGrant(2)
+	q.pending = append(q.pending, second)
+	platform := &purchasePlatformByOrder{orders: map[string]svcplatform.Order{}}
+	for _, grant := range q.pending {
+		order := p.order
+		order.OrderID, order.PayloadDigest = grant.OrderID, grant.Digest
+		platform.orders[grant.OrderID] = order
+	}
+	c.platform = platform
+	receipts, err := c.Collect(context.Background(), 98801)
+	if err != nil || len(receipts) != 2 || q.acks != 2 || len(q.pending) != 0 {
+		t.Fatalf("receipts=%+v acks=%d pending=%d err=%v", receipts, q.acks, len(q.pending), err)
+	}
+	if len(q.early) != 0 {
+		t.Fatalf("orders acknowledged while the grant was only written, not persisted: %v", q.early)
+	}
+	f.expect(t, 2, 200, 2)
+}
+
+// 等持久失败（投影 fatal、WAL 不健康、等到截止）时队列一条不删，答错误；本地修改已在内存里，回执照常返回。
+// 下一次补领重放同一笔（游标已到，不再写），持久之后才删快照：奖励只发一次，队列最终清空。
+func TestPurchaseCollectionUnpersistedGrantKeepsTheQueue(t *testing.T) {
+	c, f, q, _ := newPurchaseCollector(t)
+	f.committer.waitErr = fmt.Errorf("injected: projection not confirmed")
+	first, err := c.Collect(context.Background(), 98801)
+	if err == nil || len(first) != 1 {
+		t.Fatalf("receipts=%+v err=%v, want the receipt and an error", first, err)
+	}
+	if q.acks != 0 || len(q.pending) != 1 {
+		t.Fatalf("an unpersisted grant was acknowledged: acks=%d pending=%d", q.acks, len(q.pending))
+	}
+	f.expect(t, 1, 100, 1)
+	f.committer.waitErr = nil
+	again, err := c.Collect(context.Background(), 98801)
+	if err != nil || !reflect.DeepEqual(first, again) || q.acks != 1 || len(q.pending) != 0 {
+		t.Fatalf("retry=%+v first=%+v acks=%d err=%v", again, first, q.acks, err)
+	}
+	f.expect(t, 1, 100, 1)
+}
+
+// purchasePlatformByOrder 按订单号回答，一批里有多笔订单时用。
+type purchasePlatformByOrder struct {
+	svcplatform.Platform
+	orders map[string]svcplatform.Order
+}
+
+func (p *purchasePlatformByOrder) Order(_ context.Context, id string) (svcplatform.Order, bool, error) {
+	order, ok := p.orders[id]
+	return order, ok, nil
 }
