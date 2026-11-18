@@ -1,0 +1,53 @@
+Unity 6000.7.0b7 WebGL 开发版构建（RelaySmokeEditor.BuildWebGL，不压缩），2026-11-18，macOS arm64，Claude 内置浏览器面板（Chromium）。
+“新”= 本分支：prepare.sh 打的 --managed-only 包，冒烟工程不带桥接，经 RoostPlatform 用包里的 BrowserWebSocket。
+“旧”= main bf68b3b8 的冒烟工程（git archive 出来再 prepare.sh），自带 BrowserRelayTransport + RoostRelayWebSocket.jslib。
+对端：serve.mjs <构建目录> <端口>（client/relay 的测试对端，relay + lobby，房间目录在内存）。页面 ?hold=40。
+下面是浏览器控制台里的 SMOKE 行（去掉 Unity 的调用栈），只抄了逐行读到的行；探针 6 行每次都相同，省略为一行。
+
+== 第 1 次：新，http://127.0.0.1:18789/?hold=40，面板隐藏
+SMOKE start: lobby http://127.0.0.1:18789/lobby, transport Ws, in browser True, pump driven True, main thread 1
+SMOKE probe …：Task.Run / Task.Delay / SemaphoreSlim.WaitAsync / CancelAfter / ConfigureAwait(false) / ThreadPool 都 DID NOT COMPLETE；await (Unity context) continued on thread 1 (main)
+SMOKE probes: 6 did not complete (the threaded scheduling depends on them; PumpDriven does not)
+SMOKE bridge: ok (UnityWebRequest lobby → jslib WebSocket → welcome + pong, awaits on the Unity context)
+SMOKE lobby created room 333bc29a90ddc4ce, relay ws://127.0.0.1:54872/relay
+SMOKE host connected: slot 1, host True, host slot 1, epoch 0
+SMOKE unity-smoke-host disconnected at 11.1s: IdleTimeout (reconnecting False): relay: closed by relay: IdleTimeout
+SMOKE FAIL Roost.Client.Relay.RelayClosedException: relay: closed by relay: RoomNotFound
+
+页面里量帧率（同一隐藏面板）：5s 内 requestAnimationFrame 9 次；另一次 15s 内 19 帧，最大的几个间隔 1011、1008、1008、1007、1007、1007 ms。
+
+== 第 2 次：新，同上（重新打开页面），面板隐藏
+（探针、bridge: ok 同上）
+SMOKE lobby created room 54a50ce96a1ebcc8, relay ws://127.0.0.1:54872/relay
+SMOKE host connected: slot 1, host True, host slot 1, epoch 0
+SMOKE unity-smoke-host disconnected at 9.2s: IdleTimeout (reconnecting False): relay: closed by relay: IdleTimeout
+SMOKE FAIL Roost.Client.Relay.RelayClosedException: relay: closed by relay: RoomNotFound
+
+== 第 3 次：旧，http://127.0.0.1:18788/?hold=40（rtt 约 8ms，帧率正常，面板应已显示；之前调过 show_pane）
+SMOKE start: lobby http://127.0.0.1:18788/lobby, transport Ws, browser websocket True, pump driven True, main thread 1
+SMOKE held 40s: still connected, rtt host 7.9ms member 8.8ms
+SMOKE unity-smoke-host disconnected at 43.3s: Left (reconnecting False): relay: closed by relay: Left
+（第 3 次没有逐行抄其余行；离开之后的 Left 是正常的）
+
+== 第 4 次：新，http://127.0.0.1:18789/?hold=40，面板可见（同一页面 5s 内 requestAnimationFrame 600 次）
+SMOKE frames: ok (member → host 5, host → member 1, room 1)
+SMOKE held 40s: still connected, rtt host 8.0ms member 9.0ms
+SMOKE left: ok (member room gone False, last one room gone True)
+SMOKE PASS
+（没有 “disconnected at … IdleTimeout” 行）
+
+== 第 5 次：旧，慢帧，http://127.0.0.1:18787/?hold=40
+构建目录复制一份，index.html 的 <head> 最前面加：
+  <script>(function(){var raf=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=function(cb){return setTimeout(function(){raf(cb);},1000);};})();</script>
+页面里量：5s 内 requestAnimationFrame 4 次。
+SMOKE unity-smoke-host disconnected at 14.1s: IdleTimeout (reconnecting False): relay: closed by relay: IdleTimeout
+SMOKE FAIL Roost.Client.Relay.RelayClosedException: relay: closed by relay: RoomNotFound
+（调用栈里是旧的 Roost.RelaySmoke.BrowserRelayTransport.Poll / PollAll）
+
+== 第 6 次：新，慢帧（同第 5 次的做法），http://127.0.0.1:18786/?hold=40
+SMOKE held 40s: still connected, rtt host 1.7ms member 999.8ms
+SMOKE left: ok (member room gone False, last one room gone True)
+SMOKE PASS
+（没有 “disconnected at” 行）
+
+另：第 4 次之后还在旧构建上试过在页面加载后用 setInterval 忙等 900ms/1s 来压帧率，那一次 rtt 0.9ms、PASS，说明那种做法没有压住帧率，不计入对照。

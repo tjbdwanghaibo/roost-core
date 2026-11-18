@@ -24,7 +24,7 @@ RV-20261101-04：v1.37.0 在业务占满容量时，心跳会报 `Pending reques
 2026-11-01 修后验证：`dotnet run --no-restore --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json` 全部通过；`GOWORK=off go test -count=1 -timeout 10m -run '^TestClientSDKAgainstGeneratedPlayerTCP$' ./codegen/internal/roost` 的真实生成工程 TCP 链路也通过。
 - `GameClient`：在创建线程调用 `Subscribe` / `Request` / `Pump`；PB 解析、推送和完成回调都在 Pump 中执行。取消/超时/网络/解析错误走失败回调；业务错误码仍由应答 PB 表示。未消费完成回调也占容量；满时同步拒绝新请求。
 - `EntityViews`：Full 清场、Delta/create/update/remove、对象代际、subject 版本、命名空间和 profile 路由。缺口或解析/应用失败关闭连接，恢复经正常鉴权流程，不跳过错误增量。默认容量 10000 对象，仍需按项目实际负载验证。
-- `RoostClientDriver`：Unity 主线程 Attach 后每帧 Pump，销毁时 Dispose。它与低层 `RoostConnection` 是不同使用层级，同一连接只选一个消费者。
+- `RoostClientDriver`：Unity 主线程 Attach 后每帧先轮询 WebGL 浏览器桥接（其他平台什么也不做）再 Pump，销毁时 Dispose。WebGL 上连接选项经 `RoostPlatform.Configure`（见下文“C# 经 WebSocket 连玩家接入”）。它与低层 `RoostConnection` 是不同使用层级，同一连接只选一个消费者。
 - `RoostSceneTime`：场景时间域（`SceneTimeDomain`）的 Unity 适配。业务把场景同步下来的锚点与倍率交给 `Apply`、设 `ServerBusinessNanos`（估计的服务端业务时间：校时探针的服务端 UTC 加 servertime 下发的逻辑偏移），每帧读 `NowNanos` / `DeltaSeconds`（2 倍速副本里是业务时间的 2 倍、时停为 0、单调不减）。.NET 测试工程链接正式源码跑 `TestUnitySceneTime`；Unity Editor / Player 未实跑。
 
 `Roost.Client` 本体无第三方依赖；可选 `Roost.Client.Codecs` 仅依赖 Google.Protobuf 3.31.1，提供生成 PB 类型的便利重载。默认 DAO 同步已在 main 改成 **PB 字段补丁**，持久化仍是 BSON；见 [DAO 同步协议](../docs/framework/DAO-SYNC-PROTOBUF.md)。v1.34.2 的旧同步客户端须重新生成，不能混用。
@@ -249,29 +249,30 @@ var client = new GameClient(new ConnectionOptions {
 await client.Connection.ConnectAsync(GetFreshTicketAsync);   // 与 TCP 相同的票据与重连
 ```
 
-**Unity WebGL**：浏览器里没有套接字，线程池、计时器与 `ConfigureAwait(false)` 之后的续行也不运行（开房间 SDK 2026-11-17 实测）。两样要换：
+**Unity WebGL**：浏览器里没有套接字，线程池、计时器与 `ConfigureAwait(false)` 之后的续行也不运行（开房间 SDK 2026-11-17 实测）。两样要换，Unity 包（`client/unity`，见 [unity/README](unity/README.md)）的 `RoostPlatform.Configure` 在 WebGL 上替你换好（维护者 2026-11-18 定方案 B），其他平台原样返回、行为不变：
 
 1. **调度：`ConnectionOptions.PumpDriven = true`**（WebGL 必开；缺省 false，其他平台行为不变；语义照开房间 SDK 的 `RelayClientOptions.PumpDriven`）。打开时 SDK 不用线程池与计时器：所有等待回到调用者的上下文；连接、请求与心跳超时，心跳间隔，重连退避都登记成 `Pump` 按单调时钟触发的计时（`GameClient.Pump` 开头调 `Connection.Pump`，不计入 budget；到期项投到主线程的 `SynchronizationContext` 再执行，不在 `Pump` 里同步跑，比到期时刻晚约一帧）。要求：在有 `SynchronizationContext` 的线程（Unity 主线程）上 `ConnectAsync` 与 `Pump`，否则 `ConnectAsync` 抛 `InvalidOperationException`；传输的 `ConnectAsync` / `ReceiveAsync` 在同一线程上完成，`SendAsync` 同步完成（Unity 的 Mono 运行库里发送锁的异步等待要线程池，WebGL 上不运行）。
-2. **传输：浏览器 WebSocket 的 `IGateTransport`**。SDK 不带桥接代码（维护者 2026-11-17 定），参考写法是 [unity-webgl-smoke](dotnet/unity-webgl-smoke/README.md) 的 `Assets/GateSmoke/BrowserGateTransport.cs`，JS 一侧与开房间 SDK 共用 `Assets/Plugins/WebGL/RoostRelayWebSocket.jslib`（收到的二进制消息排成字节队列，C# 每帧轮询，不从 JS 回调 C#）。两个文件拷进游戏工程即可。
+2. **传输：浏览器 WebSocket 的 `IGateTransport`**。在 Unity 包里：`Runtime/BrowserWebSocket.cs`（C# 一侧，同一个类也是开房间 SDK 的 `IRelayTransport`）+ `Runtime/WebGL/RoostWebSocket.jslib`（JS 一侧：收到的二进制消息排成字节队列，C# 每帧轮询，不从 JS 回调 C#）。`Roost.Client.dll` 本身不依赖 Unity，不带它们；游戏工程用 `scripts/client/build-unity.py`（含 `--managed-only`）打的包就有，不用再拷代码。
 
 ```csharp
-// 主线程（MonoBehaviour.Start）：
-var client = new GameClient(new ConnectionOptions {
-    WebSocketUrl = "wss://game.example.com/ws", PumpDriven = true, AutoReconnect = true,
-    TransportFactory = () => new BrowserGateTransport(),
-});
+// 主线程（MonoBehaviour.Start），所有平台同一份代码：WebGL 上 Configure 设 PumpDriven = true、TransportFactory = 浏览器桥接
+var client = new GameClient(RoostPlatform.Configure(new ConnectionOptions {
+    WebSocketUrl = "wss://game.example.com/ws", AutoReconnect = true,
+}));
 // 注册 Subscribe / EntityViews 等回调之后：
-driver.Attach(client, BrowserGateTransport.PollAll);   // RoostClientDriver：每帧先轮询浏览器桥接，再 Pump
+driver.Attach(client);   // RoostClientDriver：每帧先轮询浏览器桥接（RoostPlatform.Poll；其他平台什么也不做），再 Pump
 await client.Connection.ConnectAsync(GetFreshTicketAsync);
 ```
 
-**地址与票据从哪来**（维护者 2026-11-18 定）：登录时在 portal 的进服请求（`/portal/enter`、`/portal/login` 的 `enter`）里带 `"transport":"ws"`，portal 返回该接入方式的完整地址 `ws(s)://host:port/path`，把它原样填进 `WebSocketUrl`；不带时返回 TCP 地址，行为不变。SDK 只认调用方给的完整 URL，不从 TCP 地址推 WebSocket 地址。WebGL 上 `HttpClient` 不能用，登录请求用 `UnityWebRequest`，续行在主线程（开房间 SDK 的 `UnityWebRequestLobbyHttp` 是同样的写法）。
+WebGL 上没设 `WebSocketUrl` 时 `Configure` 抛 `ArgumentException`（浏览器里没有 TCP）。不用 `RoostClientDriver`、自己每帧 `client.Pump()` 的，在它之前调 `RoostPlatform.Poll()`。
+
+**地址与票据从哪来**（维护者 2026-11-18 定）：登录时在 portal 的进服请求（`/portal/enter`、`/portal/login` 的 `enter`）里带 `"transport":"ws"`，portal 返回该接入方式的完整地址 `ws(s)://host:port/path`，把它原样填进 `WebSocketUrl`；不带时返回 TCP 地址，行为不变。SDK 只认调用方给的完整 URL，不从 TCP 地址推 WebSocket 地址。WebGL 上 `HttpClient` 不能用，登录请求用 `UnityWebRequest`，续行在主线程（Unity 包的 `UnityWebRequestLobbyHttp` 是同样的写法）。
 
 **不 Pump 的后果**（加载场景卡住主线程、切后台时浏览器停了 Unity 的循环）：不发心跳、不判超时、不重连。服务端 `idle_timeout`（缺省 90s）内收不到任何帧就断开连接；恢复 `Pump` 后按 `AutoReconnect` 重连（新票据、新连接代号，`EntitiesReset` 之后重新收 Full）。请求超时也只在 `Pump` 时检查。
 
 **验证**（[证据](../docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)）：
 
-- `Roost.Client.Tests` 本地自测：假的 WebSocket 玩家接入核对每条消息恰好一帧、握手应答拆成两条、应答与推送合成一条、鉴权首包带代号信封、文本消息断开（`TestWebSocketMessageBoundaries`）；WebGL 桥接的 C# 部分（正式源码链接进来）用假的浏览器一侧喂拆开 / 合并 / 接近 1 MiB 的帧（`TestBrowserBridgeFraming`）。
+- `Roost.Client.Tests` 本地自测：假的 WebSocket 玩家接入核对每条消息恰好一帧、握手应答拆成两条、应答与推送合成一条、鉴权首包带代号信封、文本消息断开（`TestWebSocketMessageBoundaries`）；Unity 包的 WebGL 桥接（`BrowserWebSocket`，正式源码链接进来）用假的浏览器一侧喂拆开 / 合并 / 接近 1 MiB 的帧（`TestBrowserBridgeFraming`），并当 relay 的传输跑 Welcome 拆开、游戏帧合并与 Ping / Pong（`TestBrowserBridgeRelay`）。
 - 真实 Go 玩家接入（`infra/network/gateway` 的 `TestTheCSharpClientWorksOverWebSocket`、`…ThroughAStandaloneGate`，C# 进程由 Go 驱动）：嵌入 TCP 上缺省调度与 PumpDriven 单线程调度各跑一遍——握手、请求应答、校时、推送、心跳撑过 `idle_timeout`、服务端断开后重连（代号更大）、请求超时、不 Pump 被断开后恢复重连、连接超时；独立 Gate 上 PumpDriven 跑握手、请求、心跳与不 Pump 后的重连。单线程环境照开房间 SDK 的 `SingleThread.cs`：线程池或计时器上的续行、别的线程上调传输都记违规，要求零违规。
 - jslib 的 JS 逻辑：`node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs`。
 - Unity：`unity-webgl-smoke` 的 GateSmoke 只验“经 WebSocket 连进玩家接入、握手成功、只靠 Pump 的心跳保持连接超过 `idle_timeout`”（维护者 2026-11-18：WebSocket 之上的逻辑由 .NET 用例覆盖）。2026-11-18 用 `--managed-only` 托管包构建的 WebGL 版（Unity 6000.7.0b7）在 Claude 内置浏览器面板里握手 95ms、保持 100s（`idle_timeout` 90s）、6 次心跳往返，`SMOKE PASS`；编辑器里同样通过。Safari、Firefox、移动浏览器没测。
@@ -410,7 +411,7 @@ dirtyMeshes.Clear();
 | SDK | 位置 | 接入 relay | 通知线程 |
 |---|---|---|---|
 | Go | [client/relay](relay/README.md) | TCP | 连接的读 goroutine 上依次调用 |
-| C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP 或 WebSocket（`RelayClientOptions.Transport`；传输是公开接口 `IRelayTransport`，自带 TCP 与 `ClientWebSocket` 两种）。Unity WebGL 上用单线程调度 `PumpDriven`，见下 | `Pump` 的调用线程（Unity 主线程）；`PumpDriven` 时心跳、超时、重连退避也在 `Pump` 里 |
+| C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP 或 WebSocket（`RelayClientOptions.Transport`；传输是公开接口 `IRelayTransport`，自带 TCP 与 `ClientWebSocket` 两种）。Unity WebGL 上用单线程调度 `PumpDriven` 与 Unity 包里的浏览器桥接（`RoostPlatform`），见下 | `Pump` 的调用线程（Unity 主线程）；`PumpDriven` 时心跳、超时、重连退避也在 `Pump` 里 |
 | TS | [ts](ts/README.md)（`@roost/client/relay` 与 `/web`，浏览器；node 测试用 `ws` 包） | WebSocket，每条二进制消息一帧，收的时候按字节流解 | 事件循环 |
 
 三份共同的做法：
@@ -423,7 +424,7 @@ dirtyMeshes.Clear();
 - **前台上报**：成员 `SetForeground(bool)` 发 `Presence`，relay 只转给当前房主（`OnMemberPresence`）；SDK 收到 `HostChanged`、每次连上后自动重发。TS 的 `WebHost` 按页面可见性自动上报，房主在游戏没显式声明候选顺序时自动把前台成员排在前面；Go / C# 不自动排，由游戏决定。
 - **扩展点**：不认识的控制帧操作码丢弃，不断开；`OnControl(op, …)` 给任意操作码注册回调；发控制帧用 `SendControl`。
 - **WebSocket**（TS 只用它，C# 可选，Go 不支持）：发送一帧一条二进制消息；接收按字节流拼帧，不假设一条消息一帧。向 lobby 要哪种传输由选项决定，重连沿用同一种。
-- **C# 与 Unity WebGL**（交接 C1 实测；维护者 2026-11-18 定 A1）：WebGL 上没有套接字、线程池与计时器也不运行（2026-11-17 实测 `Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行都不跑）。C# SDK 的做法：`RelayClientOptions.PumpDriven = true`（WebGL 必开，缺省关、其他平台不变）——读循环在主线程上起、所有等待回到调用者的上下文，心跳、读超时、连接超时、重连退避都由 `Pump` 按时钟检查；`LobbyClient` 的 HTTP 抽成 `ILobbyHttp`（缺省 `HttpClient`，WebGL 用 `UnityWebRequest` 实现）并以 `pumpDriven: true` 构造；传输用浏览器 WebSocket 实现 `IRelayTransport`（参考写法 [unity-webgl-smoke](dotnet/unity-webgl-smoke/README.md)，SDK 不带）。代价：游戏不 `Pump`（加载场景、切后台）就不发心跳，成员超过 relay 的 `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）被断开，恢复 `Pump` 后靠重连回来。见 [C# README](dotnet/Roost.Client.Relay/README.md) 与 [证据](../docs/maintenance/evidence/sdk-webgl-a1-20261118/README.md)。
+- **C# 与 Unity WebGL**（交接 C1 实测；维护者 2026-11-18 定 A1）：WebGL 上没有套接字、线程池与计时器也不运行（2026-11-17 实测 `Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行都不跑）。C# SDK 的做法：`RelayClientOptions.PumpDriven = true`（WebGL 必开，缺省关、其他平台不变）——读循环在主线程上起、所有等待回到调用者的上下文，心跳、读超时、连接超时、重连退避都由 `Pump` 按时钟检查；`LobbyClient` 的 HTTP 抽成 `ILobbyHttp`（缺省 `HttpClient`，WebGL 用 `UnityWebRequest` 实现）并以 `pumpDriven: true` 构造；传输用浏览器 WebSocket 实现 `IRelayTransport`（Unity 包的 `BrowserWebSocket`，维护者 2026-11-18 定方案 B；`RoostPlatform.Configure(RelayClientOptions)` 与 `RoostPlatform.CreateLobby` 在 WebGL 上把三样一起换好，游戏每帧 `RoostPlatform.Poll(); relay.Pump();`）。代价：游戏不 `Pump`（加载场景、切后台）就不发心跳，成员超过 relay 的 `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）被断开，恢复 `Pump` 后靠重连回来。见 [C# README](dotnet/Roost.Client.Relay/README.md) 与 [证据](../docs/maintenance/evidence/sdk-webgl-a1-20261118/README.md)。
 
 验证（Redis 用 `~/.roost-it`：先 `source ~/.roost-it/roost-dataengine-it/env.sh`，没有时对端用内存房间目录）：
 
@@ -437,7 +438,7 @@ C# 与 TS 的用例把 `client/relay` 的测试二进制（`go test -c`，`ROOST
 
 ## Unity接入与其他引擎
 
-按 [Unity 构建入口](unity/README.md) 生成完整 UPM 包，再从输出目录导入 `package.json`；不要直接导入未构建的 `client/unity`，也不要重复放置 `Roost.Client.dll`。Unity 项目选择支持 .NET Standard 2.1 的兼容级别。C# 业务 PB 类型及 Google.Protobuf 依赖由游戏工程管理。包内保留纯 C# 适配，同时提供复用 native 网络线程的 `RoostNativeDriver`；同一连接选择一种路径。
+按 [Unity 构建入口](unity/README.md) 生成完整 UPM 包，再从输出目录导入 `package.json`；不要直接导入未构建的 `client/unity`，也不要重复放置 `Roost.Client.dll` / `Roost.Client.Relay.dll`（包里都有）。Unity 项目选择支持 .NET Standard 2.1 的兼容级别。C# 业务 PB 类型及 Google.Protobuf 依赖由游戏工程管理。包内保留纯 C# 适配，同时提供复用 native 网络线程的 `RoostNativeDriver`；同一连接选择一种路径。
 
 `Roost.Unity.RoostConnection`在Unity主线程Attach会话，`Update`每帧最多拉取配置数量的推送，然后触发`PacketReceived` / `Disconnected`；网络线程不访问Unity对象。Detach/销毁关闭自己的会话，替换时清掉旧连接队列。PB/Sync/Lockstep解码及游戏对象修改由主线程事件处理者实施；Lockstep异步消费必须串行await，不能直接挂并发async void事件。该正式适配源码已在.NET测试中直接链接，并通过真实TCP的缺口/业务异常关闭回归；测试只替代Unity宿主类型，`RoostConnection`尚未在Unity编辑器/IL2CPP平台实测。高层的`RoostClientDriver`在Unity WebGL构建里跑过（经WebSocket连玩家接入、握手并只靠Pump的心跳保持100s；编辑器batchmode那一轮直接调`GameClient.Pump`，见上文“C# 经 WebSocket 连玩家接入”的验证）；经TCP连服与桌面/移动Player没跑。
 

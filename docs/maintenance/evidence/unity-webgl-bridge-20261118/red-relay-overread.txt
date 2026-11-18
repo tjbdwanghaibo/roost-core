@@ -1,0 +1,17 @@
+Roost.Client.Tests 的变异核对（随后已恢复源码）：
+变异：BrowserWebSocket.TryReceive 里 js.Receive(id, scratch, Math.Min(count, scratch.Length)) 改成 js.Receive(id, scratch, scratch.Length)
+（按中转缓冲长度取，不按调用方给的 count），并把 TestBrowserBridgeRelay 临时排到 TestBrowserBridgeFraming 之前，看新的 relay 用例自己是否变红。
+命令：dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json；退出码 134。输出（第 30～41 行）：
+
+PASS heartbeat capacity and genuine timeout
+PASS Unity adapter source + real TCP: Sync gap/application failure closes stream
+PASS session push/correlation/cancellation/late response/close
+PASS pending limit/invalid budget/push overflow/fail pending
+PASS websocket: one frame per message, frames split / merged across messages, auth envelope, text closes
+Unhandled exception. System.ArgumentException: Offset and length were out of bounds for the array or count is greater than the number of elements from index to the end of the source collection.
+   at System.Buffer.BlockCopy(Array src, Int32 srcOffset, Array dst, Int32 dstOffset, Int32 count)
+   at Roost.Unity.BrowserWebSocket.TryReceive(Byte[] buffer, Int32 offset, Int32 count) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a97162fe866636753/client/unity/Runtime/BrowserWebSocket.cs:line 154
+   at Roost.Unity.BrowserWebSocket.ReceiveAsync(Byte[] buffer, Int32 offset, Int32 count, CancellationToken cancellation) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a97162fe866636753/client/unity/Runtime/BrowserWebSocket.cs:line 114
+   at Roost.Client.Relay.RelayCodec.ReadExactlyAsync(Func`5 read, Byte[] buffer, Boolean context, CancellationToken cancellation) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a97162fe866636753/client/dotnet/Roost.Client.Relay/RelayCodec.cs:line 376
+   at Roost.Client.Relay.RelayCodec.ReadAsync(Func`5 read, Int32 maxPayload, Boolean context, CancellationToken cancellation) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a97162fe866636753/client/dotnet/Roost.Client.Relay/RelayCodec.cs:line 364
+   at Roost.Client.Relay.RelayClient.DialAsync(String address, String token, CancellationToken cancellation) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a97162fe866636753/client/dotnet/Roost.Client.Relay/RelayClient.cs:line 1081

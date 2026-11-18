@@ -1,0 +1,19 @@
+scripts/test-client-dotnet.sh（完整模式，本分支），退出码 0。各段标题与结论行：
+
+test-client-dotnet: golden + SDK self tests (10.0.302)
+PASS browser bridge for the gate (BrowserWebSocket + fake jslib, PumpDriven): split / merged / near-max frames, one frame per Send
+PASS browser bridge for the relay (BrowserWebSocket + fake jslib, PumpDriven): split welcome, merged game frames, ping / pong
+test-client-dotnet: terrain SDK golden + self tests
+test-client-dotnet: cross-gate abandoned handshake with the C# client
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.783s
+test-client-dotnet: the C# client over WebSocket (embedded TCP and standalone Gate)
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	13.216s
+test-client-dotnet: WebGL bridge jslib framing (node)
+check-jslib-frames: ok (split / merged / near-max frames, one frame per send, text fails the socket)
+test-client-dotnet: relay SDK golden + tests against the Go relay peer
+[single-thread] the detector catches the threaded scheduling: ok
+[single-thread] pump-driven: create, join, frames, heartbeat, reconnect, no Pump, host transfer, connect timeout, leave: ok
+all 924 checks passed
+test-client-dotnet: terrain DAO fixture is current
+test-client-dotnet: generated player TCP project
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	158.417s

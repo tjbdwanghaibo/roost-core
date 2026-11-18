@@ -773,8 +773,8 @@ C# `Roost.Client` 经 WebSocket 连嵌入 TCP 或独立 Gate（main 上未发版
 - **PumpDriven 的前提**：
   - 要有 `SynchronizationContext`：在没有它的线程上 `ConnectAsync` 抛 `InvalidOperationException`，Unity 主线程有；
   - 只在 `Connection` / `GameClient` 上有：低层 `TcpSession` 与 `RoostConnection` 没有；
-  - 传输的 `SendAsync` 要同步完成：Unity 的 Mono 运行库里，发送锁的异步等待要线程池才能完成。浏览器的 `send` 不阻塞，参考桥接满足这一点；自己写的传输要照做。
-- **浏览器桥接不在 SDK 里**（维护者 2026-11-17 定）：游戏照抄 `unity-webgl-smoke` 的 `BrowserGateTransport.cs` 与 `RoostRelayWebSocket.jslib`（与开房间 SDK 共用）。桥接靠每帧轮询，不从 JS 回调 C#，所以收到的字节最早在下一帧的 `PollAll` 交给 SDK。浏览器发送缓冲积压超过 16 MiB 时当写失败断开。
+  - 传输的 `SendAsync` 要同步完成：Unity 的 Mono 运行库里，发送锁的异步等待要线程池才能完成。浏览器的 `send` 不阻塞，Unity 包的桥接满足这一点；自己写的传输要照做。
+- **浏览器桥接在 Unity 包里，不在 `Roost.Client.dll` 里**（维护者 2026-11-18 定方案 B，取代 2026-11-17 的“游戏照抄冒烟工程”）：`client/unity/Runtime` 的 `BrowserWebSocket`（连玩家接入与开房间共用）+ `RoostWebSocket.jslib`，由 `RoostPlatform.Configure` 在 WebGL 播放器里选上；纯 .NET 的 SDK 程序集不依赖 Unity，不带它。只用 DLL、不用 `build-unity.py` 打的包的工程仍要自己实现传输。桥接靠每帧轮询，不从 JS 回调 C#，所以收到的字节最早在下一帧的 `PollAll`（`RoostClientDriver` 每帧调；只用 `RelayClient` 的游戏自己调 `RoostPlatform.Poll()`）交给 SDK。浏览器发送缓冲积压超过 16 MiB 时当写失败断开。
 - **WebSocket 地址由调用方给完整 URL**（维护者 2026-11-18 定）：WebGL 登录时在 portal 的进服请求里带 `"transport":"ws"`，用返回的 `ws(s)://host:port/path` 连（portal 一侧另行实现）。SDK 不从 TCP 地址推算。
 - **自带的 `WebSocketGateTransport` 不发 `Origin` 头**：服务端对不带 `Origin` 的请求总是放行，身份仍靠票据。浏览器总会带 `Origin`，WebGL 页面的来源必须写进 `allowed_origins`。
 
@@ -795,6 +795,7 @@ Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（2026-11-18 起是
 
 - **连 relay：Go `client/relay` 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**。这一条只说连 relay；连玩家接入（嵌入 TCP / 独立 Gate）见本节开头的表。
 - **Unity WebGL 上 C# 开房间 SDK 要开 `PumpDriven`**（维护者 2026-11-18 定 A1，已实施）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行不运行（2026-11-17 实测）。打开 `PumpDriven` 后 SDK 只靠 `Pump`：游戏不调 `Pump`（加载场景卡住主线程、切后台浏览器停了循环）就不发心跳、不判超时、不重连；成员超过 relay `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）会被断开，房主宽限期 5s 内重连回来仍是房主，否则换 host；恢复 `Pump` 后按 `ReconnectAttempts` 重连。到期的计时器经同步上下文触发，比到期时刻晚约一帧。2026-11-18 在 Unity 6000.7.0b7 WebGL 构建、Claude 内置浏览器（隐藏面板）里两次通过。没测：Safari / Firefox / 移动浏览器、真实切后台、WebGL 里长时间卡帧的房主（[证据](evidence/sdk-webgl-a1-20261118/README.md)）。
+  - **约 1 帧/秒时房主会被 `host_idle_timeout` 断开，尚未确认原因**（2026-11-18，[证据](evidence/unity-webgl-bridge-20261118/README.md#4-webgl-实跑claude-内置浏览器面板chromium)）：内置浏览器面板隐藏时页面约 1 帧/秒（`requestAnimationFrame` 间隔约 1007ms），RelaySmoke 的房主连上后 9～14s 被 relay 以 `IdleTimeout` 断开；把帧率压到同样水平时，方案 B 之前的旧桥接也会断，新旧都是有时断、有时不断，与桥接在不在包里无关。房主心跳 600ms，按理每帧都发 Ping，间隔不该超过 2s，为什么超过还没查清；正常帧率下不出现。
 - **Web 房主在后台标签页靠 Worker 撑住只是缓解**：浏览器不保证 Worker 计时器不被限流，手机后台页随时被冻结，冻结后走 relay 的断线换 host。
 - **内置浏览器面板测不了真实后台**：Claude 桌面应用内置浏览器面板里，后台标签页的 `document.visibilityState` 始终是 `visible`，所以在那里“切到后台”只能用演示页的“模拟隐藏”按钮触发；后台限流对 Worker 计时器的影响没有实测。
 - **relay 选人不看前台状态**（交接 C2 选项 3 不做）：前台上报（`Presence = 85` / `MemberPresence = 70`，2026-11-17）只经房主声明的 `Successors` 生效，包括 TS `WebHost` 的自动声明。房主还没收到上报、或来不及声明就掉线时，兜底仍是槽位最小的在线成员。成员可以谎报前台状态，后果只是影响候选顺序。

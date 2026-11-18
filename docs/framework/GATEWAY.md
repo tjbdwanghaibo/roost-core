@@ -168,7 +168,7 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 - Go `client` 包不连 WebSocket（维护者 2026-11-17 定），robot 有自己的 WebSocket 传输。
 - C# `Roost.Client`（2026-11-18）：`ConnectionOptions.WebSocketUrl`（`ws://` / `wss://`）走 WebSocket。连接是可替换的 `IGateTransport`：
   - 自带 `TcpGateTransport` 与 `WebSocketGateTransport`（`ClientWebSocket`）；
-  - Unity WebGL 由游戏用浏览器 WebSocket 实现，参考 `client/dotnet/unity-webgl-smoke` 的 `BrowserGateTransport`，SDK 不带。
+  - Unity WebGL 用浏览器 WebSocket：Unity 包（`client/unity`）的 `BrowserWebSocket` + `RoostWebSocket.jslib`，由 `RoostPlatform.Configure` 在 WebGL 播放器里选上（维护者 2026-11-18 定方案 B）；纯 .NET 的 `Roost.Client.dll` 不带。
 - C# 客户端按本节契约收发：每帧一条二进制消息，收的一侧按字节流拼帧；不发 `Origin` 头；握手首包（连接代号信封）、心跳（MsgID=0）与 TCP 走同一套代码。
 - WebGL 上要开 `ConnectionOptions.PumpDriven`：超时、心跳与重连只由每帧的 `Pump` 驱动，不 `Pump` 时超过 `idle_timeout` 被本节的空闲超时断开。
 - 用法与边界见[客户端手册“C# 经 WebSocket 连玩家接入”](../../client/README.md#c-经-websocket-连玩家接入含-unity-webgl)。回归是下面的 `TestTheCSharpClientWorksOverWebSocket`（嵌入 TCP）与 `TestTheCSharpClientWorksOverWebSocketThroughAStandaloneGate`（独立 Gate）。它们由真实 C# 进程驱动，`scripts/test-client-dotnet.sh` 构建后运行。

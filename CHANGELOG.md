@@ -38,12 +38,20 @@
   - **升级**：生成的 portal / login 模块用到新字段，发版后要在单独提交里提高最低 core 版本。已装 portal 的工程，`services/account/portal/portal_rules.go` 归工程所有、不会被重写（`ServerChoice` 多了 `Transports` 字段），新行为只对新装的工程保证。
 - **C# 客户端经 WebSocket 连玩家接入，Unity WebGL 可以联机**（维护者 2026-11-18）：
   - `Roost.Client` 的连接抽成 `IGateTransport`，自带 `TcpGateTransport`（缺省，行为不变）与 `WebSocketGateTransport`（`ClientWebSocket`，可连 `wss://`）。
-  - `ConnectionOptions` 新增 `WebSocketUrl`（调用方给完整 `ws(s)://` 地址）、`TransportFactory`、`PumpDriven`；新增 `Connection.Pump`、`Connection.HeartbeatRoundTrips`、`RoostClientDriver.Attach(client, beforePump)`。
+  - `ConnectionOptions` 新增 `WebSocketUrl`（调用方给完整 `ws(s)://` 地址）、`TransportFactory`、`PumpDriven`；新增 `Connection.Pump`、`Connection.HeartbeatRoundTrips`；`RoostClientDriver` 每帧先轮询浏览器桥接再 Pump。
   - 握手首包、连接代号、请求、推送、心跳与 TCP 相同；每帧一条二进制消息，接收按字节流拼帧。
   - `PumpDriven`（WebGL 必开）不用线程池与计时器，超时、心跳、重连退避只由 `Pump` 驱动。不 Pump 就不发心跳，超过 `idle_timeout` 被断开，恢复后重连。
-  - 浏览器桥接 `BrowserGateTransport` 是参考写法，在 `client/dotnet/unity-webgl-smoke`，不进 SDK。
+  - 浏览器桥接在 Unity 包里，见下一条（方案 B）。
   - 验证：Unity 6000.7.0b7 的 WebGL 构建在 Chromium 内置浏览器面板里握手成功，只靠 Pump 的心跳保持 100s，通过。进入游戏后的自身视图同步在 IL2CPP 裁剪下没验证。证据 [csharp-gate-ws-20261118](docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)。
   - **升级**：无破坏性变化；Unity 工程重新执行 `scripts/client/build-unity.py`（可加 `--managed-only`）才拿到新的 `Roost.Client.dll`。
+- **Unity WebGL 的浏览器 WebSocket 桥接放进 Unity 包**（维护者 2026-11-18 定方案 B，取代 11-17 的 A“桥接只在冒烟工程给参考写法”）：
+  - `client/unity/Runtime` 新增 `BrowserWebSocket`（同时实现 `IGateTransport` 与 `IRelayTransport`）+ `WebGL/RoostWebSocket.jslib`（JS 一侧，连玩家接入与开房间共用）、`UnityWebRequestLobbyHttp`（lobby 的 `ILobbyHttp`），都从 `unity-webgl-smoke` 挪来；两份几乎相同的 C# 桥接合成一个类。
+  - 新增按平台选传输的 `RoostPlatform`：`Configure(ConnectionOptions)` / `Configure(RelayClientOptions)` 在 WebGL 播放器里设 `PumpDriven = true` 与浏览器传输（relay 另设 `Transport = Ws`；连玩家接入没设 `WebSocketUrl` 时抛 `ArgumentException`），`CreateLobby` 在 WebGL 上用 `UnityWebRequest` 并以 `pumpDriven` 构造，`Poll` 轮询桥接；编辑器与其他平台原样返回、行为不变。
+  - `RoostClientDriver.Update` 每帧先 `BrowserWebSocket.PollAll()` 再 `Pump`（没有浏览器连接时什么也不做）；`Attach(client, beforePump)` 重载删除，统一 `Attach(client)`。只用 `RelayClient` 的游戏每帧 `RoostPlatform.Poll(); relay.Pump();`。
+  - `scripts/client/build-unity.py`（含 `--managed-only`）把 `Roost.Client.Relay.dll` 一起放进包，`Roost.Unity` 引用它；包版本 0.3.0，声明依赖内置模块 `com.unity.modules.unitywebrequest`。
+  - `unity-webgl-smoke` 不再自带桥接副本，GateSmoke 与 RelaySmoke 都经 `RoostPlatform` 用包里的（RelaySmoke 去掉页面参数 `pump=0` / `transport=tcp`）；`prepare.sh` 不再单独放 `Roost.Client.Relay.dll`；`check-jslib*.mjs` 改读包里的 jslib。
+  - 验证：`Roost.Client.Tests` 新增 `TestBrowserBridgeRelay`（桥接当 relay 传输：Welcome 拆成三条消息、两帧合成一条、Ping / Pong，单线程零违规；把桥接改成按缓冲长度多取字节时变红）；用新包重新构建 WebGL（Unity 6000.7.0b7），在 Chromium 内置浏览器面板里实跑连玩家接入与开房间两条路径。Safari、Firefox、手机浏览器没测。证据 [unity-webgl-bridge-20261118](docs/maintenance/evidence/unity-webgl-bridge-20261118/README.md)。
+  - **升级**：Unity 工程重新执行 `scripts/client/build-unity.py`（可加 `--managed-only`）即可拿到桥接；之前照抄进工程的 `BrowserGateTransport.cs` / `BrowserRelayTransport.cs` / `UnityWebRequestLobbyHttp.cs` / `RoostRelayWebSocket.jslib` 要删掉（旧 jslib 与包里的定义同名函数，不要并存），也不要再单独放 `Roost.Client.Relay.dll`；`driver.Attach(client, …PollAll)` 改成 `driver.Attach(client)`，选项改成经 `RoostPlatform.Configure`。
 - **网页 TS 客户端经 WebSocket 连玩家接入**（维护者 2026-11-18，第 1 轮，先只做浏览器）：
   - 新增 `@roost/client/gate`（`GameClient`、`Connection`，对应 C# 的 `Roost.Client`）与 `@roost/client/protobuf`（`request` / `subscribe` / `notify`，protobuf-es 2.17.0，int64 为 `bigint`）。自身视图同步与配置表读取还没有（后续轮次），Sync 推送进 `unhandledPush`。
   - `client_export.languages` 可写 `ts`，导出 `ts/protocol_pb.ts`、`ts/dao_sync_pb.ts`、`ts/message_ids.ts`、`ts/error_codes.ts`；manifest 记录 `protoc_gen_es` / `protobuf_es` 版本。`roost client sync` 加 `--lang csharp|ts`，服务端两种语言都声明时必须写。

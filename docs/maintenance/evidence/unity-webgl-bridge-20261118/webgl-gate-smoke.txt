@@ -1,0 +1,19 @@
+Unity 6000.7.0b7 WebGL 开发版构建（GateSmokeEditor.BuildWebGL，prepare.sh 打的 --managed-only 包，冒烟工程不带桥接），2026-11-18，macOS arm64。
+页面：serve-gate.mjs <Build/GateWebGL> 18790（对端 ws://127.0.0.1:54742/ws，idle_timeout 90000ms → hold 100s），Claude 内置浏览器面板（隐藏）。
+日志是浏览器控制台里的 SMOKE 行（去掉 Unity 的调用栈）。
+
+SMOKE application paused: False
+SMOKE application focus: True
+SMOKE connecting ws://127.0.0.1:54742/ws (in browser True, pump-driven True, hold 100s)
+SMOKE handshake ok in 1994ms (state Ready)
+SMOKE holding 10s/100s, heartbeat round trips 0
+SMOKE holding 20s/100s, heartbeat round trips 1
+SMOKE holding 30s/100s, heartbeat round trips 1
+SMOKE holding 40s/100s, heartbeat round trips 2
+SMOKE holding 51s/100s, heartbeat round trips 3
+SMOKE holding 61s/100s, heartbeat round trips 3
+SMOKE holding 71s/100s, heartbeat round trips 4
+SMOKE holding 81s/100s, heartbeat round trips 5
+SMOKE holding 91s/100s, heartbeat round trips 5
+SMOKE holding 101s/100s, heartbeat round trips 6
+SMOKE PASS held 101s connected, heartbeat round trips 6, handshake 1994ms

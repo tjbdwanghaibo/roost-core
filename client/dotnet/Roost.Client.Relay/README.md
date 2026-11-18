@@ -73,20 +73,18 @@ client.OnMemberPresence(p => { });               // 房主：成员的前台状�
   var client = new RelayClient(lobby, new RelayClientOptions { Game = "party", Transport = RelayTransport.Ws });
   await client.ConnectAsync(ticket);               // 经 ws:// / wss:// 连 relay；重连也向 lobby 要 ws
   ```
-- **Unity WebGL**：浏览器里没有套接字，`ClientWebSocket`、`TcpClient` 和 `HttpClient` 自带的网络都用不了（Unity 文档所述的平台限制；本仓只实测了下面的替代写法），线程池与计时器也不运行（2026-11-17 实测：`Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行都不跑）。三样都要换（维护者 2026-11-18 定 A1）：
+- **Unity WebGL**：浏览器里没有套接字，`ClientWebSocket`、`TcpClient` 和 `HttpClient` 自带的网络都用不了（Unity 文档所述的平台限制；本仓只实测了下面的替代写法），线程池与计时器也不运行（2026-11-17 实测：`Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 之后的续行都不跑）。三样都要换（维护者 2026-11-18 定 A1），换法随 Unity 包（`client/unity`，`scripts/client/build-unity.py` 打包；维护者 2026-11-18 定方案 B，之前要从冒烟工程拷）提供，游戏调 `RoostPlatform` 即可，不用自己拷代码：
   1. **调度：`RelayClientOptions.PumpDriven = true`**（WebGL 必开；缺省 false，其他平台行为不变）。打开时 SDK 不用线程池与计时器：读循环在调用 `ConnectAsync` / `RejoinAsync` 的线程（主线程）上起，所有等待回到调用者的上下文；心跳、读超时、连接超时、重连退避都由 `Pump` 按时钟检查（`Pump` 开头先做一轮，不计入 `budget`）。只在主线程上调本类的方法。`LobbyClient` 也要以 `pumpDriven: true` 构造（否则 `RelayClient` 构造时抛 `ArgumentException`）。
-  2. **lobby 的 HTTP：`ILobbyHttp`**。`LobbyClient` 发请求的方式抽成这个小接口（`SendAsync(method, url, bearer, jsonBody)` → 状态码与正文；4xx / 5xx 照常返回，只有网络错误抛异常），缺省 `HttpClientLobbyHttp`；WebGL 上用 `UnityWebRequest` 实现，参考写法 `Assets/RelaySmoke/UnityWebRequestLobbyHttp.cs`：`new LobbyClient(url, gt2, new UnityWebRequestLobbyHttp(), pumpDriven: true)`。
-  3. **传输：浏览器 WebSocket 的 `IRelayTransport`**：`Assets/Plugins/WebGL/RoostRelayWebSocket.jslib`（JS 一侧，收到的二进制消息排成字节队列，C# 每帧轮询，不从 JS 回调 C#）+ `Assets/RelaySmoke/BrowserRelayTransport.cs`（C# 一侧）。SDK 不带桥接代码（维护者定）。
+  2. **lobby 的 HTTP：`ILobbyHttp`**。`LobbyClient` 发请求的方式抽成这个小接口（`SendAsync(method, url, bearer, jsonBody)` → 状态码与正文；4xx / 5xx 照常返回，只有网络错误抛异常），缺省 `HttpClientLobbyHttp`；WebGL 上用 `UnityWebRequest` 实现，即 Unity 包的 `UnityWebRequestLobbyHttp`。
+  3. **传输：浏览器 WebSocket 的 `IRelayTransport`**：Unity 包的 `BrowserWebSocket`（C# 一侧，与连玩家接入共用）+ `Runtime/WebGL/RoostWebSocket.jslib`（JS 一侧，收到的二进制消息排成字节队列，C# 每帧轮询，不从 JS 回调 C#）。本程序集不依赖 Unity，不带它们。
 
   ```csharp
-  var lobby = new LobbyClient(lobbyUrl, gt2, new UnityWebRequestLobbyHttp(), pumpDriven: true);
-  var client = new RelayClient(lobby, new RelayClientOptions
-  {
-      Game = "party", Transport = RelayTransport.Ws, PumpDriven = true, ReconnectAttempts = 5,
-      TransportFactory = () => new BrowserRelayTransport(),
-  });
+  // 所有平台同一份代码：WebGL 上 RoostPlatform 换成浏览器 WebSocket、Ws、PumpDriven 与 UnityWebRequest；其他平台原样
+  var options = RoostPlatform.Configure(new RelayClientOptions { Game = "party", Transport = RelayTransport.Ws, ReconnectAttempts = 5 });
+  var lobby = RoostPlatform.CreateLobby(lobbyUrl, gt2);
+  var client = new RelayClient(lobby, options);   // 建房 / 加入请求的 Transport 填 options.Transport
   // MonoBehaviour.Update：先收字节，再 Pump（心跳、超时、重连退避都在这里）
-  BrowserRelayTransport.PollAll();
+  RoostPlatform.Poll();
   client.Pump();
   ```
 

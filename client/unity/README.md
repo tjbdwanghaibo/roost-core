@@ -2,7 +2,7 @@
 
 ## 两条接入路线
 
-**缺省走托管路线**（维护者 2026-11-17）：`GameClient` + `RoostClientDriver`。网络、心跳、重连与 EntitySync 都在 C#（`Roost.Client`）里；业务把服务端导出目录（`roost.yaml` 的 `client_export`，见[客户端手册“前后端公共协议目录”](../README.md#前后端公共协议目录client_export)）的 `csharp/` 用 `roost client sync` 同步进 Unity 工程直接编译，再引用 `Roost.Client`、`Roost.Client.Codecs` 与 Google.Protobuf 3.31.1。业务工程不需要原生插件，也不需要 C++ 构建环境。在持续存在的 GameObject 上加 `RoostClientDriver`，`Attach(client)` 后它每帧在主线程 `Pump`、销毁时 `Dispose`；连接用 `client.Connection.ConnectAsync`，用法见[客户端手册“标准业务入口”](../README.md#标准业务入口)。
+**缺省走托管路线**（维护者 2026-11-17）：`GameClient` + `RoostClientDriver`。网络、心跳、重连与 EntitySync 都在 C#（`Roost.Client`）里；业务把服务端导出目录（`roost.yaml` 的 `client_export`，见[客户端手册“前后端公共协议目录”](../README.md#前后端公共协议目录client_export)）的 `csharp/` 用 `roost client sync` 同步进 Unity 工程直接编译，再引用 `Roost.Client`、`Roost.Client.Codecs` 与 Google.Protobuf 3.31.1。业务工程不需要原生插件，也不需要 C++ 构建环境。在持续存在的 GameObject 上加 `RoostClientDriver`，`Attach(client)` 后它每帧在主线程先轮询 WebGL 浏览器桥接（其他平台什么也不做）再 `Pump`、销毁时 `Dispose`；连接用 `client.Connection.ConnectAsync`，用法见[客户端手册“标准业务入口”](../README.md#标准业务入口)。
 
 **原生路线是可选的**：`RoostNativeDriver` + `NativeGameClient`，网络内核来自 `client/cpp`。适合要原生网络内核（例如网络线程与 Unity 主线程隔离、移动端原生 socket 行为），或要与 C++ 客户端行为一致的项目；代价是要按平台构建并导入原生插件（下文“构建可导入包”），插件、绑定和 DLL 必须一起更新。业务 PB 与 EntitySync 在两条路线上都复用 `Roost.Client` 与同一份导出的 C#。
 
@@ -10,12 +10,26 @@
 
 ### 托管路线连 WebSocket 与 Unity WebGL（2026-11-18）
 
-托管路线可以经 WebSocket 连玩家接入（嵌入 TCP 或独立 Gate 的 `websocket` 监听）：登录时在 portal 的进服请求里带 `"transport":"ws"`，把返回的完整 `ws(s)://` 地址填进 `ConnectionOptions.WebSocketUrl`，编辑器、桌面与移动端用 SDK 自带的 `ClientWebSocket`，其余用法不变。**WebGL 只能走托管路线**（浏览器里没有原生插件与套接字），额外两步：
+托管路线可以经 WebSocket 连玩家接入（嵌入 TCP 或独立 Gate 的 `websocket` 监听）：登录时在 portal 的进服请求里带 `"transport":"ws"`，把返回的完整 `ws(s)://` 地址填进 `ConnectionOptions.WebSocketUrl`，编辑器、桌面与移动端用 SDK 自带的 `ClientWebSocket`，其余用法不变。**WebGL 只能走托管路线**（浏览器里没有原生插件与套接字），要换调度（`PumpDriven`）与传输（浏览器 WebSocket）。这两样由包里的 `RoostPlatform` 按平台选（维护者 2026-11-18 定方案 B：浏览器桥接放进包里，游戏不再从冒烟工程拷代码）：
 
-1. `ConnectionOptions.PumpDriven = true`：SDK 不用线程池与计时器，超时、心跳、重连退避都由每帧的 `Pump` 驱动；在主线程上创建、连接。
-2. 传输用浏览器 WebSocket：把 [unity-webgl-smoke](../dotnet/unity-webgl-smoke/README.md) 的 `Assets/GateSmoke/BrowserGateTransport.cs` 与 `Assets/Plugins/WebGL/RoostRelayWebSocket.jslib` 拷进游戏工程（SDK 不带桥接代码），`TransportFactory = () => new BrowserGateTransport()`，并用 `driver.Attach(client, BrowserGateTransport.PollAll)` 让 `RoostClientDriver` 每帧先轮询桥接再 `Pump`。
+```csharp
+// 所有平台同一份代码；WebGL 上 Configure 设 PumpDriven = true、TransportFactory = 浏览器 WebSocket，其他平台原样返回
+var client = new GameClient(RoostPlatform.Configure(new ConnectionOptions { WebSocketUrl = wsUrl, AutoReconnect = true }));
+driver.Attach(client);                                   // RoostClientDriver：每帧先 RoostPlatform.Poll，再 Pump
+await client.Connection.ConnectAsync(ticketProvider);    // 在主线程上
+```
 
-完整示例、不 `Pump` 的后果与验证见[客户端手册“C# 经 WebSocket 连玩家接入”](../README.md#c-经-websocket-连玩家接入含-unity-webgl)。`--managed-only` 打出的包够 WebGL 用：2026-11-18 用它构建 `unity-webgl-smoke` 的 WebGL 版（Unity 6000.7.0b7），结果见[证据](../../docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)。包里原生绑定的 C# 源码在 WebGL 上也参与编译，只要不调用原生路线就不会去找原生库。
+开房间（`Roost.Client.Relay`）同理：`RoostPlatform.Configure(new RelayClientOptions { … })` 在 WebGL 上设 `Transport = Ws`、`PumpDriven = true` 与浏览器传输，`RoostPlatform.CreateLobby(url, gt2)` 在 WebGL 上用 `UnityWebRequest` 并以 `pumpDriven` 构造；游戏每帧先 `RoostPlatform.Poll()` 再 `relay.Pump()`（建房 / 加入请求的 `Transport` 填 `options.Transport`）。
+
+| 包里的文件 | 作用 |
+|---|---|
+| `Runtime/RoostPlatform.cs` | 按平台选传输：`InBrowser`、`Configure(ConnectionOptions)`、`Configure(RelayClientOptions)`、`CreateLobby`、`Poll`。只在 WebGL 播放器里（`UNITY_WEBGL && !UNITY_EDITOR`）改选项，编辑器切到 WebGL 目标时仍用 SDK 自带传输 |
+| `Runtime/BrowserWebSocket.cs` | 浏览器 WebSocket 的 C# 一侧，同时实现 `IGateTransport` 与 `IRelayTransport`；每帧 `PollAll` 把 JS 排好的字节交给 SDK 的读循环（续行在主线程），发送直接交给浏览器、同步完成，积压超过 16 MiB 当写失败 |
+| `Runtime/WebGL/RoostWebSocket.jslib` | JS 一侧：收到的二进制消息排成字节队列，不从 JS 回调 C#；文本消息当协议错误关掉连接 |
+| `Runtime/UnityWebRequestLobbyHttp.cs` | lobby 的 `ILobbyHttp` 经 `UnityWebRequest`（主线程上发，答复在主线程完成）；其他平台也能用 |
+| `Runtime/Roost.Client.Relay.dll` | 开房间 C# SDK，与 `Roost.Client.dll` 一起由 `build-unity.py` 放进包；`Roost.Unity` 引用两者 |
+
+完整示例、不 `Pump` 的后果与验证见[客户端手册“C# 经 WebSocket 连玩家接入”](../README.md#c-经-websocket-连玩家接入含-unity-webgl)。`--managed-only` 打出的包够 WebGL 用：`unity-webgl-smoke` 的 GateSmoke 与 RelaySmoke 都只用包里的桥接，2026-11-18 的 WebGL 实跑见[证据](../../docs/maintenance/evidence/unity-webgl-bridge-20261118/README.md)。包里原生绑定的 C# 源码在 WebGL 上也参与编译，只要不调用原生路线就不会去找原生库。
 
 ## 原生路线
 
@@ -29,7 +43,7 @@
 python3 scripts/client/build-unity.py --managed-only --output /tmp/roost-unity-sdk
 ```
 
-包里是 `Roost.Client.dll`、`RoostClientDriver` 等主线程 Driver、原生绑定的 C# 源码（`RoostNativeDriver` 引用它，没有插件时只在真用原生路线时报找不到库）、IL2CPP 保留声明与稳定 GUID；没有 native 插件和原生示例，`build-info.json` 的 `target` 是 `managed`。`Roost.Client.Codecs`、Google.Protobuf 与导出的 C# 仍按上文放进业务工程。
+包里是 `Roost.Client.dll`、`Roost.Client.Relay.dll`、`RoostClientDriver` 等主线程 Driver、`RoostPlatform` 与 WebGL 浏览器桥接（`BrowserWebSocket`、`RoostWebSocket.jslib`、`UnityWebRequestLobbyHttp`）、原生绑定的 C# 源码（`RoostNativeDriver` 引用它，没有插件时只在真用原生路线时报找不到库）、IL2CPP 保留声明与稳定 GUID；没有 native 插件和原生示例，`build-info.json` 的 `target` 是 `managed`。`Roost.Client.Codecs`、Google.Protobuf 与导出的 C# 仍按上文放进业务工程。
 
 **原生路线**在仓库根目录执行，要求 CMake、C++17 编译器、.NET SDK 和 protoc。输出目录必须是新目录，脚本不修改业务 Unity 工程。
 

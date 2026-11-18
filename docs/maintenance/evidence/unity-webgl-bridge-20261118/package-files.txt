@@ -1,0 +1,77 @@
+build-unity.py 产出的包里的文件（不含 .meta）。修前 = main bf68b3b8，修后 = 本分支。
+
+== 修前：python3 scripts/client/build-unity.py --managed-only --output <新目录>
+./Editor/NativePluginImporter.cs
+./Editor/Roost.Unity.Editor.asmdef
+./README.md
+./Runtime/Native/NativeClient.cs
+./Runtime/Native/NativeGameClient.cs
+./Runtime/Native/NativeLockstep.cs
+./Runtime/Native/NativeReconnect.cs
+./Runtime/Roost.Client.dll
+./Runtime/Roost.Unity.asmdef
+./Runtime/RoostClientDriver.cs
+./Runtime/RoostConnection.cs
+./Runtime/RoostNativeDriver.cs
+./Runtime/RoostSceneTime.cs
+./Runtime/link.xml
+./build-info.json
+./package.json
+
+== 修后：同一命令
+./Editor/NativePluginImporter.cs
+./Editor/Roost.Unity.Editor.asmdef
+./README.md
+./Runtime/BrowserWebSocket.cs
+./Runtime/Native/NativeClient.cs
+./Runtime/Native/NativeGameClient.cs
+./Runtime/Native/NativeLockstep.cs
+./Runtime/Native/NativeReconnect.cs
+./Runtime/Roost.Client.Relay.dll
+./Runtime/Roost.Client.dll
+./Runtime/Roost.Unity.asmdef
+./Runtime/RoostClientDriver.cs
+./Runtime/RoostConnection.cs
+./Runtime/RoostNativeDriver.cs
+./Runtime/RoostPlatform.cs
+./Runtime/RoostSceneTime.cs
+./Runtime/UnityWebRequestLobbyHttp.cs
+./Runtime/WebGL/RoostWebSocket.jslib
+./Runtime/link.xml
+./build-info.json
+./package.json
+
+== diff 修前 修后
+3a4
+> ./Runtime/BrowserWebSocket.cs
+7a9
+> ./Runtime/Roost.Client.Relay.dll
+12a15
+> ./Runtime/RoostPlatform.cs
+13a17,18
+> ./Runtime/UnityWebRequestLobbyHttp.cs
+> ./Runtime/WebGL/RoostWebSocket.jslib
+
+== 修后原生路线：python3 scripts/client/build-unity.py --target macos --output <新目录>（不含 Samples~）
+./Editor/NativePluginImporter.cs
+./Editor/Roost.Unity.Editor.asmdef
+./README.md
+./Runtime/BrowserWebSocket.cs
+./Runtime/Native/NativeClient.cs
+./Runtime/Native/NativeGameClient.cs
+./Runtime/Native/NativeLockstep.cs
+./Runtime/Native/NativeReconnect.cs
+./Runtime/Plugins/macOS/libroost_client.dylib
+./Runtime/Roost.Client.Relay.dll
+./Runtime/Roost.Client.dll
+./Runtime/Roost.Unity.asmdef
+./Runtime/RoostClientDriver.cs
+./Runtime/RoostConnection.cs
+./Runtime/RoostNativeDriver.cs
+./Runtime/RoostPlatform.cs
+./Runtime/RoostSceneTime.cs
+./Runtime/UnityWebRequestLobbyHttp.cs
+./Runtime/WebGL/RoostWebSocket.jslib
+./Runtime/link.xml
+./build-info.json
+./package.json
