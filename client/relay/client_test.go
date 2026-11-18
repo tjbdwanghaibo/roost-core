@@ -78,8 +78,12 @@ func newPlayer(t *testing.T, peer *testPeer, account string, opts relay.Options)
 	httpClient := &http.Client{Transport: countJoins{p.joins, http.DefaultTransport}}
 	p.lobby = relay.NewLobby(peer.LobbyURL, relay.StaticGameToken(peer.IssueGameToken(account, game)), httpClient)
 	opts.Game = game
+	dial := opts.Dial // 用例自己的拨号（例如包一层观察写出的帧）；没设就直接拨
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
 	opts.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
-		conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+		conn, err := dial(ctx, network, address)
 		if err == nil {
 			p.conns <- conn
 		}

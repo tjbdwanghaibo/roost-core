@@ -1,0 +1,14 @@
+== both checks off: Go formal test
+--- FAIL: TestATransferPreparedInAnEarlierHostTermIsDropped (0.00s)
+    host_test.go:429: peer: lobby http://127.0.0.1:63375, relay 127.0.0.1:63374, room directory memory
+    host_test.go:459: the epoch-0 transfer returned <nil>, want ErrTransferStale
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.920s
+FAIL
+== both checks off: review probe
+--- FAIL: TestReviewEarlierTransfer (0.00s)
+    review_transfer_test.go:10: peer: lobby http://127.0.0.1:63388, relay 127.0.0.1:63387, room directory memory
+    review_transfer_test.go:37: epoch 3 offered to C with state "old"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.342s
+FAIL

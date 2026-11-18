@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -256,22 +257,35 @@ func TestSnapshotPacingAndRejections(t *testing.T) {
 }
 
 // 定时快照：当房主时 SDK 按 SnapshotInterval 向游戏要状态、压缩后推；房主离开后候选拿到的是最近一份，seq 与推的次数一致。
+//
+// 同步点是“第三份快照已写到连接上”（数房主连接上写出的 Snapshot 帧），之后的 Ping/Pong 才能确认 relay 已收下它。
+// 只等 SnapshotState 被调了三次不够：计数在回调里加，压缩、分配 seq、写帧都在它之后，另一 goroutine 发的 Ping 可能排在
+// 第三份前面，离开后候选拿到 seq 2（v1.55.0 审查 RV-20261118-09 的偶发 offer seq 2 state "auto-2" (pushed 3)）。
+// 第三次取状态故意慢一点，把这个窗口固定下来：等错了同步点就必红。
 func TestAutoSnapshotIsPushedWhileHost(t *testing.T) {
 	peer := startPeer(t, relaysvc.Config{SnapshotMinInterval: 50 * time.Millisecond})
 	var pushed, candidatePushed atomic.Int32
-	state := func() []byte { return []byte(fmt.Sprintf("auto-%d", pushed.Add(1))) }
+	state := func() []byte {
+		n := pushed.Add(1)
+		if n == 3 {
+			time.Sleep(150 * time.Millisecond)
+		}
+		return []byte(fmt.Sprintf("auto-%d", n))
+	}
 	candidateState := func() []byte { candidatePushed.Add(1); return []byte("candidate") }
-	host, members, _ := openRoom(t, peer, "auto", relay.Options{SnapshotState: state, SnapshotInterval: 100 * time.Millisecond,
-		SnapshotMinInterval: 50 * time.Millisecond}, []relay.Options{{SnapshotState: candidateState, SnapshotInterval: 100 * time.Millisecond}})
-	waitFor(t, "a few automatic snapshots", func() bool { return pushed.Load() >= 3 })
-	waitPong(t, host)
+	var written atomic.Int32
+	hostOpts := relay.Options{SnapshotState: state, SnapshotInterval: 100 * time.Millisecond, SnapshotMinInterval: 50 * time.Millisecond,
+		Dial: countSnapshotFrames(&written)}
+	host, members, _ := openRoom(t, peer, "auto", hostOpts, []relay.Options{{SnapshotState: candidateState, SnapshotInterval: 100 * time.Millisecond}})
+	waitFor(t, "three automatic snapshots written to the connection", func() bool { return written.Load() >= 3 })
+	waitPong(t, host) // Ping 写在第三份之后：Pong 回来时 relay 已收下它
 	if _, err := host.client.Leave(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	n := pushed.Load()
 	offer := recv(t, members[0].youAreHost, "you are host")
 	if offer.Source != relay.StateSnapshot || offer.SnapshotSeq < 3 || string(offer.State) != fmt.Sprintf("auto-%d", offer.SnapshotSeq) || int32(offer.SnapshotSeq) > n {
-		t.Fatalf("offer seq %d state %q (pushed %d)", offer.SnapshotSeq, offer.State, n)
+		t.Fatalf("offer seq %d state %q (pushed %d, written %d)", offer.SnapshotSeq, offer.State, n, written.Load())
 	}
 	// 候选还没回 HostReady：不是房主，不向游戏要状态、不定时推。
 	time.Sleep(300 * time.Millisecond)
@@ -550,6 +564,33 @@ func TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne(t *testing.T) {
 }
 
 // gatedCompressor 不压缩，压缩前先调 hold（测试用它把某一份卡在压缩里）。
+// countSnapshotFrames 是一个拨号函数：连接每写完一帧 Snapshot 控制帧，written 加 1。SDK 每帧一次 Write（client.write），
+// 所以按 Write 的开头认帧头就够了。
+func countSnapshotFrames(written *atomic.Int32) func(ctx context.Context, network, address string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return snapshotCounter{Conn: conn, written: written}, nil
+	}
+}
+
+type snapshotCounter struct {
+	net.Conn
+	written *atomic.Int32
+}
+
+func (s snapshotCounter) Write(p []byte) (int, error) {
+	n, err := s.Conn.Write(p)
+	if err == nil && len(p) >= wire.HeaderSize {
+		if h, perr := wire.ParseRelayHeader(p[:wire.HeaderSize], len(p)); perr == nil && h.RelayChannel() == wire.RelayControl && h.MsgID == wire.RelayOpSnapshot {
+			s.written.Add(1)
+		}
+	}
+	return n, err
+}
+
 type gatedCompressor struct{ hold func([]byte) }
 
 func (gatedCompressor) ID() byte { return relay.NoCompression.ID() }

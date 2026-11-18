@@ -1,0 +1,15 @@
+✖ a transfer prepared in an earlier host term is not sent (1.849375ms)
+✖ a transfer prepared on one connection is not sent on the next one (9.298334ms)
+✖ a transfer started in an earlier host term is dropped: the target never sees the old handoff (14.899875ms)
+ℹ pass 71
+ℹ fail 3
+✖ failing tests:
+✖ a transfer prepared in an earlier host term is not sent (1.849375ms)
+  AssertionError [ERR_ASSERTION]: the epoch-0 transfer is dropped
+  true !== false
+✖ a transfer prepared on one connection is not sent on the next one (9.298334ms)
+  AssertionError [ERR_ASSERTION]: the transfer from the old connection is dropped
+  true !== false
+✖ a transfer started in an earlier host term is dropped: the target never sees the old handoff (14.899875ms)
+  AssertionError [ERR_ASSERTION]: the epoch-0 transfer is dropped
+  true !== false

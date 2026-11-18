@@ -1,0 +1,12 @@
+--- FAIL: TestReviewEarlierTransfer (0.00s)
+    review_transfer_test.go:10: peer: lobby http://127.0.0.1:59785, relay 127.0.0.1:59784, room directory memory
+    review_transfer_test.go:37: epoch 3 offered to C with state "old"
+--- FAIL: TestReviewEarlierTransfer (0.00s)
+    review_transfer_test.go:10: peer: lobby http://127.0.0.1:59791, relay 127.0.0.1:59790, room directory memory
+    review_transfer_test.go:37: epoch 3 offered to C with state "old"
+--- FAIL: TestReviewEarlierTransfer (0.00s)
+    review_transfer_test.go:10: peer: lobby http://127.0.0.1:59797, relay 127.0.0.1:59796, room directory memory
+    review_transfer_test.go:37: epoch 3 offered to C with state "old"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.562s
+FAIL

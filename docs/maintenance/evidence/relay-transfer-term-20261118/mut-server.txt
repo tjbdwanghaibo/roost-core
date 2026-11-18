@@ -1,0 +1,7 @@
+== server check off only
+--- FAIL: TestTransferFromAnEarlierHostTermIsRejected (0.00s)
+    host_test.go:201: slot 1 got channel 3 op 64 seq 1 payload "\x00\x00\x00\x00\x00\x00\x00\x03"; want control op 69 seq 0
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/relay	0.519s
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	0.896s
+FAIL

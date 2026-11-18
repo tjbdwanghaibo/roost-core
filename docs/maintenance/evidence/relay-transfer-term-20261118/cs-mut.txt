@@ -1,0 +1,14 @@
+golden: ok
+frames across message boundaries (fake transport): ok
+unknown control op: ok
+compressors: ok
+host frames against a fake relay: ok
+2026/11/18 16:20:34 WARN lobby: request failed method=POST path=/rooms err="lobby: no relay instance is available for transport ws"
+lobby without a ws relay: ok
+[tcp] peer: lobby http://127.0.0.1:65174, relay 127.0.0.1:65172, room directory memory
+FAILED: System.Exception: Check failed: the epoch-0 transfer is dropped, got Sent
+   at Program.Check(Boolean condition, String what) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a0c5d185416b6f154/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 138
+   at Program.StaleTransfer(Peer peer) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a0c5d185416b6f154/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 1083
+   at Program.AgainstPeers(String root, String binary) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a0c5d185416b6f154/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 126
+   at Program.AgainstPeers(String root, String binary) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a0c5d185416b6f154/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 123
+   at Program.Main(String[] args) in /Users/whb/roost/roost-core/.claude/worktrees/agent-a0c5d185416b6f154/client/dotnet/Roost.Client.Relay.Tests/Program.cs:line 49

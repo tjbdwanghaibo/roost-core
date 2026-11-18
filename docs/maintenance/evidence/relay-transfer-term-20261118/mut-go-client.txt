@@ -1,0 +1,9 @@
+--- FAIL: TestATransferPreparedInAnEarlierHostTermIsDropped (0.00s)
+    host_test.go:429: peer: lobby http://127.0.0.1:63064, relay 127.0.0.1:63063, room directory memory
+    host_test.go:459: the epoch-0 transfer returned <nil>, want ErrTransferStale
+--- FAIL: TestATransferPreparedOnAnEarlierConnectionIsDropped (0.02s)
+    host_test.go:476: peer: lobby http://127.0.0.1:63070, relay 127.0.0.1:63069, room directory memory
+    host_test.go:495: the transfer from the old connection returned relay: write: write tcp 127.0.0.1:63072->127.0.0.1:63069: use of closed network connection, want ErrTransferStale
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.608s
+FAIL
