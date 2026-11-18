@@ -1,6 +1,6 @@
 # H5 用 TypeScript 客户端连玩家接入：方案
 
-**状态**：**D1～D10 已定（全部按推荐 A，见第 10 节）；第 1 轮已实施，main 上未发版**（2026-11-18，基线 main `d6517c5d`，[证据](evidence/ts-gate-client-r1-20261118/README.md)；现行说明在 `client/ts/README.md`、`client/README.md`、GATEWAY §6、`codegen/docs`、KNOWN-LIMITS“TS 经 WebSocket 连玩家接入”。与本文的出入：protoc-gen-es 2.17.0 要 node 22 以上，不是 18+；根路径 `@roost/client` 不导出 protobuf 子路径；portal 的 `"transport":"ws"` 已在 main 上。第 2、3 轮未开始）。原始要求（维护者 2026-11-18 要求：非 Unity 的 H5——Cocos Creator、Laya、纯网页——要有一套 TS 客户端，经 WebSocket 连 roost 游戏服，能力对齐 C# 托管客户端；第一版只做浏览器，传输可替换，以后加微信、抖音小游戏时不改上层）。本文只出方案，没有写实现。基线 main `0a9976b8`。第 10 节的决定点定下后再动手；实施完把结论写进现行文档（`client/README.md`、`client/ts/README.md`、`docs/framework/GATEWAY.md` §6、`codegen/docs`、skill），本文留作来源。
+**状态**：**D1～D10 已定（全部按推荐 A，见第 10 节）；第 1 轮已实施，main 上未发版**（2026-11-18，基线 main `70c9d2f4`，[证据](evidence/ts-gate-client-r1-20261118/README.md)；现行说明在 `client/ts/README.md`、`client/README.md`、GATEWAY §6、`codegen/docs`、KNOWN-LIMITS“TS 经 WebSocket 连玩家接入”。与本文的出入：protoc-gen-es 2.17.0 要 node 22 以上，不是 18+；根路径 `@roost/client` 不导出 protobuf 子路径；portal 的 `"transport":"ws"` 已在 main 上。第 2、3 轮未开始）。原始要求（维护者 2026-11-18 要求：非 Unity 的 H5——Cocos Creator、Laya、纯网页——要有一套 TS 客户端，经 WebSocket 连 roost 游戏服，能力对齐 C# 托管客户端；第一版只做浏览器，传输可替换，以后加微信、抖音小游戏时不改上层）。本文只出方案，没有写实现。基线 main `0a9976b8`。第 10 节的决定点定下后再动手；实施完把结论写进现行文档（`client/README.md`、`client/ts/README.md`、`docs/framework/GATEWAY.md` §6、`codegen/docs`、skill），本文留作来源。
 
 ## 1. 背景与现状（2026-11-18 核对代码）
 

@@ -44,6 +44,14 @@
   - 浏览器桥接 `BrowserGateTransport` 是参考写法，在 `client/dotnet/unity-webgl-smoke`，不进 SDK。
   - 验证：Unity 6000.7.0b7 的 WebGL 构建在 Chromium 内置浏览器面板里握手成功，只靠 Pump 的心跳保持 100s，通过。进入游戏后的自身视图同步在 IL2CPP 裁剪下没验证。证据 [csharp-gate-ws-20261118](docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)。
   - **升级**：无破坏性变化；Unity 工程重新执行 `scripts/client/build-unity.py`（可加 `--managed-only`）才拿到新的 `Roost.Client.dll`。
+- **网页 TS 客户端经 WebSocket 连玩家接入**（维护者 2026-11-18，第 1 轮，先只做浏览器）：
+  - 新增 `@roost/client/gate`（`GameClient`、`Connection`，对应 C# 的 `Roost.Client`）与 `@roost/client/protobuf`（`request` / `subscribe` / `notify`，protobuf-es 2.17.0，int64 为 `bigint`）。自身视图同步与配置表读取还没有（后续轮次），Sync 推送进 `unhandledPush`。
+  - `client_export.languages` 可写 `ts`，导出 `ts/protocol_pb.ts`、`ts/dao_sync_pb.ts`、`ts/message_ids.ts`、`ts/error_codes.ts`；manifest 记录 `protoc_gen_es` / `protobuf_es` 版本。`roost client sync` 加 `--lang csharp|ts`，服务端两种语言都声明时必须写。
+  - 验证：node 自动化、Go 驱动对真实玩家接入的用例、Chromium 内置浏览器面板冒烟（连接、握手、心跳保持 100s）。证据 [ts-gate-client-r1-20261118](docs/maintenance/evidence/ts-gate-client-r1-20261118/README.md)，方案 [FEATURE-2026-11-18-ts-gate-client](docs/maintenance/FEATURE-2026-11-18-ts-gate-client.md)。
+  - **不兼容**：
+    - 包名 `@roost/relay-client` 改为 `@roost/client`，按子路径引用（`/relay`、`/web`、`/gate`、`/protobuf`）。
+    - `client_export.csharp.protoc` 改为顶层 `client_export.protoc`（C# 与 TS 共用），旧写法报错。
+    - 声明 `ts` 时服务端开发机要 node 22 以上与 protoc-gen-es 2.17.0。
 - **Unity 托管路线打包只要 .NET SDK**（2026-11-18）：`scripts/client/build-unity.py --managed-only` 不建 native 插件、不生成原生示例，不再要求 CMake、C++ 编译器与 protoc。证据 [unity-managed-only-20261118](docs/maintenance/evidence/unity-managed-only-20261118/README.md)。
 - **业务模块不再声明 `durability=strict`**（维护者 2026-11-18；strict 仍是框架能力，工程自己的 handler 可显式选择）：
   - 写 handler 取缺省 async，只读 handler 保留 memory。

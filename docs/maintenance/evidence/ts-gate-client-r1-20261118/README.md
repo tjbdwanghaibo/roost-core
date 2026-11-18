@@ -2,7 +2,7 @@
 
 方案 [FEATURE-2026-11-18-ts-gate-client](../../FEATURE-2026-11-18-ts-gate-client.md)（D1～D10 维护者 2026-11-18 全部按推荐 A），本轮做第 9 节的第 1 轮：连接、握手（带连接代号）、心跳、超时、重连、请求 / 应答、推送、校时；TS 协议导出（`*_pb.ts`、消息号、错误码）；`roost client sync --lang`；浏览器冒烟。不含自身视图同步与配置表。
 
-**基线**：main `d6517c5db5ac4b1182cf7ec4e6cf0e3fc36b2e51`（`d6517c5d`）。本机 macOS（Darwin 25.5.0，ARM64），node v26.7.0 / npm 11.19.0，Go `GOWORK=off`，protoc 31.1（`~/tools/protoc-31.1/bin/protoc`；PATH 上是 36.2）。
+**基线**：main `70c9d2f406bddf6d20cac8678e8746330af42b63`（`70c9d2f4`）。本机 macOS（Darwin 25.5.0，ARM64），node v26.7.0 / npm 11.19.0，Go `GOWORK=off`，protoc 31.1（`~/tools/protoc-31.1/bin/protoc`；PATH 上是 36.2）。
 
 | 文件 | 内容 |
 |---|---|
@@ -74,7 +74,7 @@ ROOST_TS_FULL=1 ROOST_PROTOC=<protoc 31.1> GOWORK=off go test -count=1 -run Test
 ## 5. 守卫与入口
 
 - `scripts/test-client-ts.sh`：`npm test` 之后跑两项 Go 集成；`ROOST_TS_FULL=1` 另跑真实工具链。pretag 在 `run_ts` 时调它（`scripts/pretag.sh`，没改）。
-- `scripts/pretag-scope.py`：TS 触发条件在原有 `client/ts/`、`client/relay/`、`client/spec/`、`client/wire/`、`service/relay/`、`service/lobby/`、`infra/network/wsconn/` 之上加 `infra/network/gateway/` 与 codegen 的 client_export / client sync / TS 生成器。以 `b7439bc4` 为基线试跑：只改 codegen 时输出 `TS yes`。
+- `scripts/pretag-scope.py`：TS 触发条件在原有 `client/ts/`、`client/relay/`、`client/spec/`、`client/wire/`、`service/relay/`、`service/lobby/`、`infra/network/wsconn/` 之上加 `infra/network/gateway/` 与 codegen 的 client_export / client sync / TS 生成器。以 `d9af17aa` 为基线试跑：只改 codegen 时输出 `TS yes`。
 - `TestSDKProtobufEsVersionMatchesClientTS`：`client/ts/package.json` 的 peer / dev 版本与生成器核对的 protoc-gen-es 版本一致。
 
 没有跑：全量 pretag、模块矩阵、`GOWORK=off go test ./...` 全量（按本轮要求只跑相关包与根包）。
