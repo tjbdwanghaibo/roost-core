@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+- **C# 客户端经 WebSocket 连玩家接入，Unity WebGL 可以联机**（维护者 2026-11-18）：
+  - `Roost.Client` 的连接抽成 `IGateTransport`，自带 `TcpGateTransport`（缺省，行为不变）与 `WebSocketGateTransport`（`ClientWebSocket`，可连 `wss://`）。
+  - `ConnectionOptions` 新增 `WebSocketUrl`（调用方给完整 `ws(s)://` 地址）、`TransportFactory`、`PumpDriven`；新增 `Connection.Pump`、`Connection.HeartbeatRoundTrips`、`RoostClientDriver.Attach(client, beforePump)`。
+  - 握手首包、连接代号、请求、推送、心跳与 TCP 相同；每帧一条二进制消息，接收按字节流拼帧。
+  - `PumpDriven`（WebGL 必开）不用线程池与计时器，超时、心跳、重连退避只由 `Pump` 驱动。不 Pump 就不发心跳，超过 `idle_timeout` 被断开，恢复后重连。
+  - 浏览器桥接 `BrowserGateTransport` 是参考写法，在 `client/dotnet/unity-webgl-smoke`，不进 SDK。
+  - 验证：Unity 6000.7.0b7 的 WebGL 构建在 Chromium 内置浏览器面板里握手成功，只靠 Pump 的心跳保持 100s，通过。进入游戏后的自身视图同步在 IL2CPP 裁剪下没验证。证据 [csharp-gate-ws-20261118](docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)。
+  - **升级**：无破坏性变化；Unity 工程重新执行 `scripts/client/build-unity.py`（可加 `--managed-only`）才拿到新的 `Roost.Client.dll`。
+- **Unity 托管路线打包只要 .NET SDK**（2026-11-18）：`scripts/client/build-unity.py --managed-only` 不建 native 插件、不生成原生示例，不再要求 CMake、C++ 编译器与 protoc。证据 [unity-managed-only-20261118](docs/maintenance/evidence/unity-managed-only-20261118/README.md)。
+- **业务模块不再声明 `durability=strict`**（维护者 2026-11-18；strict 仍是框架能力，工程自己的 handler 可显式选择）：
+  - 写 handler 取缺省 async，只读 handler 保留 memory。
+  - alliance 里被 Saga 步骤经 RPC 调到的联盟服务写（建盟、两步建盟、捐赠、守卫预约、领奖、撤销领奖）改为 `pipelined`。它们在 Remote 实体上走 strict 路径，行为不变。
+  - async 在写进 WAL 文件后回复：进程崩溃（kill -9、panic、OOM）不丢已回复的修改；整机掉电或内核崩溃可能丢最后一个组提交间隔（`dataengine.wal.group_commit_interval`，缺省 10ms）里的修改。
+  - purchase 与 mailbox 依赖“回复前已落盘”，掉电时有风险，见各自 README：
+    - purchase：发货回复后，`Ack` 删外部快照，掉电时可能卡住补领；
+    - mailbox：领附件回复后，调 `CommitClaim`，掉电时可能邮件已领、附件未到账。
+  - 证据 [modules-async-20261118](docs/maintenance/evidence/modules-async-20261118/README.md)。
+  - **升级**：已安装模块的工程不会自动变，新装或重装模块才生效。已有工程要手工去掉 handler 上的 `durability=strict`，alliance 的 6 个改为 `pipelined`。工程写了 `nest.pipelined.allowlist` 时，要把 alliance 的这 6 个 handler 列进去。
+- **生成器按组件包写法生成，骨架不写 strict**（维护者 2026-11-18）：
+  - `roost add component <X> --entity <E>` 写 `game/components/<包>/<包>.go` 与 `game/view/component_<包>.go`，实体只挂 `<x> *<包>.Component`；不再写实体包里的 `<x>_component.go` 与 `I<X>Entity`。
+  - `roost add entity` 骨架不再声明 `I<E>Entity`。
+  - `add handler` 与 `add saga -native` 按实体的 `comp:` 标签判断组件是否挂载；组件挂在多个实体上时写 `target=`。
+  - 定时器、心跳、行为、时间域生成的 handler 收 `view.<E>Entity`，经 `<X>Of(target)` 取组件。`IHeartbeatEntity`、`IBehaviorEntity`、`ITimeDomainEntity` 移除；`I<Timer>Entity` 暂留为 `= view.<E>Entity` 的别名。
+  - 生成器写出的骨架、生成工程的文档与 `roost help` 都不再写 `durability=strict`；saga 原生步骤仍是 `pipelined`。
+  - 修复：给单行 import 的实体文件加组件或 DAO 时，`//roost:entity` 标记会被挪进 import 块。
+  - 证据 [generator-component-package-20261118](docs/maintenance/evidence/generator-component-package-20261118/README.md)。
+  - **升级**：
+    - 老工程实体包里的旧组件不迁移，只影响新加的组件；实体包里已有同名旧组件时，`add component` 拒绝。
+    - `project sync` 后，生成的 Tick handler 参数变为 `view.<E>Entity`，实体要先跑过 `roost generate`。
+    - 手写代码里引用 `IHeartbeatEntity`、`IBehaviorEntity`、`ITimeDomainEntity` 的地方，改成 `view.<E>Entity` 加 `<e>.<X>Of(target)`。
+- **roost-genre skill 重写**（维护者 2026-11-18），入口版本 2026-11-18.1：
+  - 流程重排为：问清需求 → 判断要不要 roost → 拆需求分端 → 接入 → 建工程装模块 → 手写 → 验收 → 起服冒烟 → 文档 → 报告。
+  - 补客户端协同：
+    - `docs/CLIENT.zh-CN.md` 固定结构，复制到 `shared/README.md`；
+    - 服务器接入地址必须可配；
+    - 按客户端类型列出能力表。
+  - 新增专业模式决策单 `docs/DECISIONS.zh-CN.md`，以及被其他 agent 调用时的输入与交付摘要。
+  - 样例一律用缺省 async；组件写法与 `roost add component` 对齐。
+  - 维护规则移到 `docs/maintenance/README.md` §9。
 - **发版：pretag 只跑受影响的部分**（维护者 2026-11-18）：`scripts/pretag.sh` 先用新的 `scripts/pretag-scope.py` 按上一个发布 tag 以来的改动定范围——受影响的 Go 包（含反向依赖）、生成工程脚本（只在生成器目录或生成代码会用到的包改了时跑）、C# / TS SDK（客户端改了才跑）；改了 go.mod / 发版脚本、改动很多或设了 `ROOST_PRETAG_FULL=1` 时整跑。规则见维护手册 §5。
 - **生成物要求的最低 core 提到 v1.56.0**（2026-11-18）：portal 模块模板用 `httpserver.CheckCORSOrigins`、`RouteRegistrar.Options` 与登录时顺带进服，account 配置按游戏分账号号（`Identities`、`AccountIDs`、`Games`），relay 的转交帧带房主 epoch。
 
