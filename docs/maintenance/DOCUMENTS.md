@@ -56,3 +56,5 @@
 该交接的[逐项修复与验收](evidence/module-fixes-20261112/README.md)：草稿校验、Terrain 恢复代际、邀请与联盟入口、死亡后路径、客户端访问与审计，含真实 TCP / 存储链路与未修的 Scene 启动接线限制。
 
 App 生命周期“停机先关外部输入”的[方案](FEATURE-2026-11-04-app-lifecycle.md)（2026-11-04）：现行契约以 [App 生命周期设计篇](../framework/guide/01-app-lifecycle.md) 为准，方案保留盘点、决定与实施记录。
+
+超过每 subject 订阅者上限后重试机制的[方案](FEATURE-2026-11-19-sync-overcap-retry.md)（2026-11-19，M-9 处置 B）：方案稿，未实施，等维护者确认决定项；现行行为仍以 [ENTITY_SYNC](../framework/ENTITY_SYNC.md) 与 KNOWN-LIMITS 为准。
