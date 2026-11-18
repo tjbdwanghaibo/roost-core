@@ -17,7 +17,7 @@
   - `Equip(itemID int64, level int32) (slot int32, replaced int64, err error)`：内部从背包扣一件新的、把旧的退回背包。可信的服务端代码可以传 1～10000 的等级。槽里已经是同一道具、只是等级不同时不动背包，只改等级并发布穿戴变化事件，`replaced` 为 0。
   - `Unequip(slot int32) (itemID int64, found bool, err error)`：内部把道具退回背包后清槽。
   - `Worn(slot) (itemID, level, ok)` 与 `RangeWorn(fn)`：只读。
-- Nest handler（`game/handler/equipment_equip.go`、`equipment_unequip.go`）：`handlerEquipmentEquip`、`handlerEquipmentUnequip`，都是 `rollback=undo durability=strict`。端点 `HandleEquipmentEquip` / `HandleEquipmentUnequip` 直接分发到它们。
+- Nest handler（`game/handler/equipment_equip.go`、`equipment_unequip.go`）：`handlerEquipmentEquip`、`handlerEquipmentUnequip`，都是 `rollback=undo`（持久级别取缺省 async）。端点 `HandleEquipmentEquip` / `HandleEquipmentUnequip` 直接分发到它们。
 - 规则函数（`game/modules/equipment/equipment.go`）：`Lookup(itemID) (slot, attack, hp, ok)`、`SlotFor(itemID)`、`ValidSlot(slot)`、`Slots()`，常量 `SlotWeapon`（1）、`SlotArmor`（2）、`MaxSlots`（32）、`MaxLevel`（10000）、`MaxStat`（1e12）。
 
 ### 实体事件

@@ -2,7 +2,7 @@ package handler
 
 import "{{MODULE}}/game/view"
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerNamingBegin(target view.INamingEntity, operation string, name string) (view.NamingTicket, error) {
 	return target.Naming().Begin(operation, name)
 }

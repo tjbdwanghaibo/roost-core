@@ -11,7 +11,7 @@ import (
 // service instance: both sides are checked and recorded in one transaction,
 // so either both alliances are at war or neither is (plan §2.9).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceDeclareWar(target view.IAllianceRosterEntity, enemy view.IAllianceRosterEntity, requestID string, actorID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster, other := target.AllianceRoster(), enemy.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
@@ -39,7 +39,7 @@ func handlerAllianceDeclareWar(target view.IAllianceRosterEntity, enemy view.IAl
 // it). WarPending reports the wait, fresh or replayed, so a
 // retried declaration asks the enemy again too.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceDeclareWarDetached(target view.IAllianceRosterEntity, requestID string, actorID int64, enemyID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
@@ -60,7 +60,7 @@ func handlerAllianceDeclareWarDetached(target view.IAllianceRosterEntity, reques
 // its side, or refused it — the declaring side keeps its record either way).
 // Conditional on the request id, so a second answer changes nothing.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceWarAcknowledged(target view.IAllianceRosterEntity, requestID string) (bool, error) {
 	return target.AllianceRoster().EndWarAck(requestID), nil
 }
@@ -68,7 +68,7 @@ func handlerAllianceWarAcknowledged(target view.IAllianceRosterEntity, requestID
 // handlerAllianceWarAcks lists the declarations still waiting for their enemy
 // (the service's war scan).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceWarAcks(target view.IAllianceRosterEntity) ([]alliancerule.WarAck, error) {
 	return target.AllianceRoster().WarAcks(), nil
 }
@@ -81,7 +81,7 @@ func handlerAllianceWarAcks(target view.IAllianceRosterEntity) ([]alliancerule.W
 // The receipt makes a repeated acknowledgment (the declarer asks again after a
 // lost answer, a restart, a retried declaration) a replay.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceAcknowledgeWar(target view.IAllianceRosterEntity, requestID string, declarerID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {

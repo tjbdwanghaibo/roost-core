@@ -10,7 +10,7 @@
 - **服务端入口**
   - `Checkin().Claim(nowUnixMilli int64) (CheckinResult, error)`（逻辑、类型号 `checkin.CompTypeCheckin` 与工厂登记在 `game/components/checkin/checkin.go`，对外接口在 `game/view/component_checkin.go`）：要求调用方已持有这名 `Player` 的锁。`CheckinResult` 带 `Streak`、`Reward`、`Balance`。
   - `view.ICheckinEntity`（生成）：窄实体接口，别的 Nest handler 的目标参数写它即可调用组件；同一笔里还要用别的组件时写 `view.PlayerEntity`。
-  - Nest handler `handlerCheckinClaim`（`game/handler/checkin_claim.go`，`durability=strict`）：协议背后的事务；时间参数 `nowUnixMilli` 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
+  - Nest handler `handlerCheckinClaim`（`game/handler/checkin_claim.go`，持久级别取缺省 async）：协议背后的事务；时间参数 `nowUnixMilli` 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
 - **实体事件**（`game/event/checkin.go`）
   - `event.CheckinClaimed{Streak, Reward, Balance, NowUnixMilli}`：签到成功后在 Player 上发布。监听写成组件或实体方法上的 `//roost:listen`（`func (c *Component) OnCheckinClaimed(ev event.CheckinClaimed) error`），由生成器登记，按 `priority` 与固定规则排序执行。
   - 监听在 `Claim` 的同一笔事务里、`Player` 的实体锁内执行；只能改这名 `Player` 的状态，不能发消息或调别的服务。

@@ -27,7 +27,7 @@
 - `syncsender.NewFriendsOwnSender(nestClient).Sync_FriendsOwn(ctx, actorEntityID, peerEntityID, action)`：只锁操作者一人的单实体调用，只接受 `FriendsUnblock` 与 `FriendsReject`（别的动作答 `friends_invalid`）；对方的档不参与。
 - `syncsender.NewFriendsListSender(nestClient).Sync_FriendsList(ctx, entityID)`：返回 `friends.FriendsSnapshot{Peers, Incoming, Blocked}`（排序后的值拷贝）。
 - 组件 `Friends()`（对外接口 `view.Friends`；逻辑、类型号 `friends.CompTypeFriends` 与工厂登记在 `game/components/friends/friends.go`）：`Change(peer view.PlayerEntity, action int32) error` 只能在同时锁住双方的事务里调；`ChangeOwnSide(peerEntityID int64, action int32) error` 只改本人的名单（取消拉黑、拒绝申请），只需要本人的锁；`Snapshot()` 只能在本人的实体锁内读。
-- Nest handler（`game/handler/friends_change.go`、`friends_own.go`、`friends_list.go`，参数是 `view.IFriendsEntity`，对方是 `view.PlayerEntity`）：`handlerFriendsChange`（两个 Player，`rollback=undo durability=strict`）、`handlerFriendsOwn`（一个 Player，同样的事务选项）、`handlerFriendsList`（只读）。
+- Nest handler（`game/handler/friends_change.go`、`friends_own.go`、`friends_list.go`，参数是 `view.IFriendsEntity`，对方是 `view.PlayerEntity`）：`handlerFriendsChange`（两个 Player，`rollback=undo`（持久级别取缺省 async））、`handlerFriendsOwn`（一个 Player，同样的事务选项）、`handlerFriendsList`（只读）。
 - 端点 `HandleFriendsChange` / `HandleFriendsList` 在 `game/controllers/friends.go`。
 
 ### 登记点
@@ -55,7 +55,7 @@
 - **没有跨服好友、离线申请。** 不为远端玩家建本地镜像，没有 Saga 或邮件降级的路径。会话检查不是分布式锁：检查之后遇到实体迁移 / 交出，由 DataEngine 的交出屏障拒绝提交并返回失败。
 - **不带展示资料与通知。** 名单里只有玩家号，没有名字、等级、在线状态；收到申请、被同意、被删除都没有推送，对方要自己再拉 `FriendsList`。不含好友聊天、赠送、推荐、备注、分组。
 - **上限：** 三个名单各 64 人。申请时检查双方的好友数与对方的 `Incoming` 数，同意时检查双方的好友数，拉黑时检查操作者的黑名单数。
-- **一致性与幂等：** 要改双方的动作把两个 Player 放在同一笔 `durability=strict` 的事务里；任何检查失败都不写，提交失败两边一起回滚。重复的申请、对已是好友的再次同意、删除不存在的关系、重复拉黑、取消没有的拉黑、拒绝没有的申请都是零写入。存储只有当前名单，没有关系历史、申请的过期时间。
+- **一致性与幂等：** 要改双方的动作把两个 Player 放在同一笔事务里（持久级别取缺省 async）；任何检查失败都不写，提交失败两边一起回滚。重复的申请、对已是好友的再次同意、删除不存在的关系、重复拉黑、取消没有的拉黑、拒绝没有的申请都是零写入。存储只有当前名单，没有关系历史、申请的过期时间。
 - **前提：** nest Mod 与玩家 TCP 接入（模块安装时声明 `access.transport: tcp`）。没有别的业务模块依赖。实体的归属必须是工程的正式接线，不能让两个进程写同一个实体。
 - **已知限制：** `docs/maintenance/KNOWN-LIMITS.md` 的“场景模块的边界”一条（friends 的双边动作要求双方本进程在线）。
 

@@ -4,7 +4,7 @@ import "{{MODULE}}/game/view"
 
 // handlerFriendsChange 将两份 Player DAO 放进同一提交记录；提交失败两边一起回滚。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerFriendsChange(actor view.IFriendsEntity, peer view.PlayerEntity, action int32) error {
 	return actor.Friends().Change(peer, action)
 }

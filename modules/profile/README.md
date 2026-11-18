@@ -11,7 +11,7 @@
 
 **服务端入口**
 
-- 发经验：handler `ProfileAddExp(amount)`（`game/handler/profile_add_exp.go`，`rollback=undo durability=strict`），事务之外用 `syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, playerEntityID, amount)`，返回这一次升了几级。没有协议与端点，不对客户端开放。
+- 发经验：handler `ProfileAddExp(amount)`（`game/handler/profile_add_exp.go`，`rollback=undo`（持久级别取缺省 async）），事务之外用 `syncsender.NewProfileAddExpSender(client).Sync_ProfileAddExp(ctx, playerEntityID, amount)`，返回这一次升了几级。没有协议与端点，不对客户端开放。
 - 读名片：handler `ProfileCard`（`game/handler/profile_card.go`，只读），用 `syncsender.NewProfileCardSender(client)` 按玩家的 Entity ID 调，返回 `profile.ProfileCard{Name, Level}`。它是值，离开实体锁之后可以继续用。
 - 在自己的 Player handler 里直接用组件（目标参数写生成的 `view.IProfileEntity`；同一笔里还要用别的组件时写 `view.PlayerEntity`）：
   - `Profile().AddExp(amount) (gained int32, err error)`：发经验，够就升级。
@@ -46,7 +46,7 @@
 - **不做的事**：名字不查重（要全服唯一装 `naming`）、不查敏感词、改名不收费也不限次数；没有等级上限；经验曲线是平的，没有按等级查表；没有头像、签名、称号等别的档案字段；不记累计经验；不提供客户端查别人档案的协议。
 - **`AddExp` 不判重**：同一次发放调两次就加两次。调用方的请求会重试时，先在自己的状态里判重，或把发经验写进自己的 handler，让“发过了”与经验在同一笔事务里。
 - **名字长度按字符数**：一个汉字算一个，至多 16 个。
-- **一致性**：改名、发经验各是 Player 上的一笔严格事务；被拒绝时不写任何字段。升级钩子与经验、等级同一笔事务，所以钩子里不能做事务之外的事——要在升级之后通知别的服务（发邮件、推送），在钩子里发 effect，提交之后才送出。
+- **一致性**：改名、发经验各是 Player 上的一笔事务（持久级别取缺省 async）；被拒绝时不写任何字段。升级钩子与经验、等级同一笔事务，所以钩子里不能做事务之外的事——要在升级之后通知别的服务（发邮件、推送），在钩子里发 effect，提交之后才送出。
 - **连升多级不逐级循环**：`AddExp` 用除余算升级数；钩子里也不要按 `to-from` 逐级做重活，一次大额发放可以连升很多级。
 - **建档与等级**：`BuildEntity` 出来的档等级是 0，还不是可进入游戏的角色；新角色在 `enter` 的建档事务里经 `profile` + `enter` 的联动设为 1 级。初始等级不是一次升级，不触发升级钩子；建档之前已经被设成正等级的档保留原值；建档失败时初始等级与标记一起回滚，下次进入重试。构造实体的代码不能绕过 Nest 直接写持久字段。
 - **没升级的发放只动 `ProfilePrivate`**：别的玩家的视图不会为它收到增量。

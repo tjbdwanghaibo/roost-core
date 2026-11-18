@@ -21,7 +21,7 @@
 - `(*Runtime).Step(ctx)`：做一轮配对。模块的 `Start` 每 500 毫秒调一次，单轮上限 5 秒。
 - `NewRuntime(client, match, rooms, sid, resident)`：显式装配与离线验收用。
 
-**Nest handler**（`game/handler/match_*.go`，由 `Runtime` 经生成的 Sender 调用，不对客户端开放）：`MatchBegin`（单人记意图）、`MatchTeamBegin`（队伍与全部成员同一笔事务记意图并冻结名单）、`MatchUpdate`（全部成员同一笔事务推进阶段）、`MatchClear`、`MatchRelease`（解除队伍名单冻结）、`MatchState`（只读）、`MatchRoomClosed`（只读：这一局的匹配房关了没有）。写入的 handler 都是 `rollback=undo durability=strict`；两个只读 handler 声明 `durability=memory`（不开事务、不取回滚快照、不写 WAL，在里面改持久字段会 panic）——`MatchState` 是客户端轮询每次都走的路。
+**Nest handler**（`game/handler/match_*.go`，由 `Runtime` 经生成的 Sender 调用，不对客户端开放）：`MatchBegin`（单人记意图）、`MatchTeamBegin`（队伍与全部成员同一笔事务记意图并冻结名单）、`MatchUpdate`（全部成员同一笔事务推进阶段）、`MatchClear`、`MatchRelease`（解除队伍名单冻结）、`MatchState`（只读）、`MatchRoomClosed`（只读：这一局的匹配房关了没有）。写入的 handler 都是 `rollback=undo`（持久级别取缺省 async）；两个只读 handler 声明 `durability=memory`（不开事务、不取回滚快照、不写 WAL，在里面改持久字段会 panic）——`MatchState` 是客户端轮询每次都走的路。
 
 **实体事件**
 
@@ -52,7 +52,7 @@
 - **匹配规则是固定的**：一张 match 票代表一支完整队伍（单排是一人队伍），同一个 sid、同样人数的两支队伍成一局。2 人队不会被拆开，也不会与 1 人队拼局。
 - **上限**：队伍至多 8 人（`BeginMatching` 与 team 的 `MaxMembers`），所以一间匹配房至多 16 人；每个池每轮至多读 64 张票（`matcher.go` 的 `Candidates(ctx, q, 64)`）；人数从 1 到 8 共 8 个池，每 500 毫秒各扫一遍。没有吞吐承诺。
 - **一致性**：
-  - 队伍的名单冻结与全部成员的排队意图在 `[Team, []Player]` 一笔严格事务里提交或回滚；之后每一步阶段推进也是全体成员一笔事务。
+  - 队伍的名单冻结与全部成员的排队意图在 `[Team, []Player]` 一笔事务里提交或回滚（持久级别取缺省 async：进程崩溃不丢已回复的推进；整机掉电丢掉最后一个组提交间隔里已回复的推进时，档案退回更早的阶段，而 match 服务可能已经收到这次排队——这种情形没有场景覆盖，恢复是否仍只开一间房尚未确认）；之后每一步阶段推进也是全体成员一笔事务。
   - 与 match 服务、开房之间不是一笔事务，靠持久阶段加重试对齐：`preparing → dispatching` 的转换只选定一次 Enqueue；Enqueue 回包丢了只查候选、不重发；Commit 成功而开房或写结果失败时，下一次 `MatchStatus` 用同一个 `MatchID` 补齐，不会开第二间房。
   - 从未绑定过票的意图在 60 秒后（`Deadline`）可以安全过期（`abandon`）。这个期限不适用于已经绑定票的排队。
   - **票已绑定而 match 的历史已经没了时**，答 `matchmaking_unknown`，意图与名单冻结都保留，不自动解除。match 已结束的历史缺省只保留 10 分钟，查询与恢复要在保留期内完成。

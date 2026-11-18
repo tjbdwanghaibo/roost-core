@@ -91,7 +91,7 @@ func newFacebookFixture(t *testing.T) *facebookFixture {
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
 	t.Cleanup(func() { clock.SetSource(nil) })
 	f.engine = nest.NewEngine(nest.NestOptionWithRemoteEntityManager(remote), nest.NestOptionWithGetter(f.values), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
-	registerFacebookTestHandler(f.engine, handlerNameFacebookNote, invokeFacebookNote, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	registerFacebookTestHandler(f.engine, handlerNameFacebookNote, invokeFacebookNote, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	registerFacebookTestHandler(f.engine, handlerNameFacebookInvites, invokeFacebookInvites, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: nest.DurabilityMemory})
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)

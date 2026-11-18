@@ -15,7 +15,7 @@
 
 - **发件** `mailbox.SendTo(ctx, mailer, Letter)`（`game/modules/mailbox/mailbox_send.go`）：给一名玩家发一封邮件，返回 mail 服务产生的信封。`Letter{To, Subject, Body, Attachment, ExpiresInSeconds, RequestID}`；`RequestID` 是幂等键，必填；`ExpiresInSeconds` 为 0 用 `DefaultExpiresInSeconds`（7 天）。`mailer` 是 mail 服务的客户端（`app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)`）。
 - **附件**（`game/modules/mailbox/mailbox.go`）：`Attachment{Type, ID, Amount}`，线上格式是 JSON，例如 `{"type":"coins","amount":100}`。`Coins(amount)` 构造金币附件；`Encode` / `Decode` / `Validate` 是发件、列表、领取共用的同一个判断。
-- **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo durability=strict`，不对客户端开放）调组件 `Mailbox().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（逻辑、类型号 `mailbox.CompTypeMailbox` 与工厂登记在 `game/components/mailbox/mailbox.go`，对外接口在 `game/view/component_mailbox.go`，handler 参数写生成的 `view.IMailboxEntity`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
+- **发放事务**：Nest handler `handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`，`rollback=undo`（持久级别取缺省 async），不对客户端开放）调组件 `Mailbox().Claim(mailID, attachment, expiresAtUnix, nowUnix)`（逻辑、类型号 `mailbox.CompTypeMailbox` 与工厂登记在 `game/components/mailbox/mailbox.go`，对外接口在 `game/view/component_mailbox.go`，handler 参数写生成的 `view.IMailboxEntity`）。组件另有只读的 `Claimed(mailID)` 与 `LedgerSize()`。
 - **端点** `HandleMailboxList` / `HandleMailboxClaim` 在 `game/controllers/mailbox.go`。
 - **运行时** `mailbox.Start(registry)`（`game/modules/mailbox/mailbox_runtime.go`，清单 `runtime.start`）：启动联动登记的消费者；只装 mailbox 时没有消费者。
 
@@ -59,9 +59,10 @@
 - **不在事务里发邮件。** `SendTo` 是跨进程调用，不该在 Nest handler 里调。要让“状态变化”与“发邮件”一起成立，在事务里记一条 effect，由消费者拿 `EffectID` 当幂等键调 `SendTo`（与 profile 的联动就是这样做的）。
 - **“发得出去”不等于“领得到”。** `Encode` 只跑纯函数校验；道具号在不在道具表里、数量超不超背包上限要到领取时才知道。发了超过单种上限的道具，这封邮件每次领取都被背包拒绝，直到过期。
 - **一致性与幂等：**
-  - 附件到账与账本记录在一笔 `durability=strict` 的事务里。发放成功而 `CommitClaim` 丢失时，重试会再预留、再到发放事务一次，在账本上认出这封，返回 `Claimed=false` 与当前持有量，什么都不写，然后把确认补上。所以每封至多到账一次。
+  - 附件到账与账本记录在同一笔事务里（持久级别取缺省 async）。发放成功而 `CommitClaim` 丢失时，重试会再预留、再到发放事务一次，在账本上认出这封，返回 `Claimed=false` 与当前持有量，什么都不写，然后把确认补上。所以每封至多到账一次。
   - 没有后台补偿：`CommitClaim` 丢失之后，邮件在列表里仍显示可领，要等玩家再点一次才补上确认。
   - 预留成功后、发放前进程崩溃：邮件被占到 mail 服务的租约到期（缺省 30 秒），之后可以再领，什么都没丢。
+  - **async 的代价（维护者 2026-11-18 起不用 strict）**：发放事务回复时已写进本进程 WAL、还没 fsync，端点随即让 mail 服务 `CommitClaim`。进程崩溃不丢这笔发放；整机掉电 / 内核崩溃发生在刷盘之前、而 `CommitClaim` 已经到达 mail 服务时，邮件是“已领”、附件没有到账，模块不会自己发现，也没有补发——要靠运维按 mail 服务的已领记录与玩家账本对账。窗口是一次组提交间隔（`dataengine.wal.group_commit_interval`，缺省 10ms）。
   - 上一次已经完整成功、只是回包丢了的重发，会收到 mail 服务的“已领取”码，客户端当作已领。
   - `SendTo` 的幂等靠 `RequestID`：同一个键只产生一封，重发返回第一次的信封。键要取“这件事”自己的身份，不能用时间、随机数、自增计数。
 - **账本有界但没有独立的清扫：** 每次首次发放时顺手清掉“邮件过期后再过 600 秒”的记录。已过期且不在账本里的邮件一律拒绝首次发放（按发放执行时 Nest 冻结的业务时间判断）。game 进程之间业务时钟差超过 600 秒时，已遗忘的邮件可能被晚到的重放再发一次。

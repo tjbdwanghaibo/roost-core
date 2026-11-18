@@ -23,7 +23,7 @@ import (
 // membership it changed (Member), and the service sends the player's game
 // server a best-effort notice of it after the write answered.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceAdmit(target view.IAllianceRosterEntity, member view.IAllianceGuardEntity, requestID string, actorID int64, callerSID int32, viaApplication bool, deferHeld bool, maxMembers int32, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster, guard := target.AllianceRoster(), member.AllianceGuard()
 	playerID := guard.PlayerID()

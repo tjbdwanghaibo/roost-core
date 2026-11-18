@@ -7,24 +7,24 @@ import (
 
 // 所有handler只操作本地实体；RPC排行榜投影在controller提交之后进行。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerDungeonOpen(run view.IDungeonRunEntity, playerID int64, season int64, nowUnixMilli int64) (logic.Snapshot, error) {
 	return run.DungeonRun().Open(playerID, season, nowUnixMilli)
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerDungeonDefeated(run view.IDungeonRunEntity, instance string, epoch uint64, source string, sequence uint64, enemy string, nowUnixMilli int64) (logic.Snapshot, error) {
 	return run.DungeonRun().Defeated(instance, epoch, source, sequence, enemy, nowUnixMilli)
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerDungeonView(run view.IDungeonRunEntity, playerID int64, nowUnixMilli int64) (logic.Snapshot, error) {
 	return run.DungeonRun().View(playerID, nowUnixMilli)
 }
 
 // handlerDungeonClaim 同时锁权威关卡和领奖玩家；请求不提供奖励、结果、赛季或结算时间。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerDungeonClaim(run view.IDungeonRunEntity, target view.IDungeonEntity, nowUnixMilli int64) (logic.ClaimResult, error) {
 	season, amount, resolvedAt, err := run.DungeonRun().Reward(target.Dungeon().PlayerID())
 	if err != nil {

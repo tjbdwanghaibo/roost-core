@@ -14,7 +14,7 @@ import (
 
 // 初始化只在开图装载时调用；整组先校验再写，半份/旧版档不会被原始包覆盖。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTerrainLoad(targets []view.ITerrainChunkDataEntity, world *logic.World) ([]logic.ChunkState, error) {
 	if world == nil || len(targets) != world.Meta().Chunks() {
 		return nil, logic.ErrState
@@ -81,7 +81,7 @@ func terrainPublish(world *logic.World, targets map[core.ChunkKey]view.TerrainCh
 // 玩家的正常拒绝返回带业务码的 logic.Err…（请求不合规、越权、序号、出生点保护、脚下有建筑）；
 // 参与者与地图对不上是服务端路由或持久数据的问题，返回不带码的 logic.ErrState。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTerrainBrush(targets []view.ITerrainChunkDataEntity, target view.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
 	if world == nil || command.SceneID != world.ID {
 		return logic.Result{}, logic.ErrState
@@ -133,7 +133,7 @@ func handlerTerrainBrush(targets []view.ITerrainChunkDataEntity, target view.ITe
 
 // 建筑固定2x2占位，跨角点至多4块；拆除必须属主与每块Lots都匹配，地表保持当前编辑结果。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTerrainBuild(targets []view.ITerrainChunkDataEntity, site view.ITerrainSiteEntity, target view.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
 	if world == nil || command.SceneID != world.ID || command.Op != "build" && command.Op != "remove" {
 		return logic.Result{}, logic.ErrState
@@ -234,7 +234,7 @@ func handlerTerrainBuild(targets []view.ITerrainChunkDataEntity, site view.ITerr
 	return result, terrainPublish(world, chunks)
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTerrainQuery(value view.ITerrainChunkDataEntity, target view.PlayerEntity, world *logic.World) (logic.ChunkState, error) {
 	if world == nil || target.Actor().Body().Map.SceneID() != world.SceneID {
 		return logic.ChunkState{}, logic.ErrDenied
@@ -247,7 +247,7 @@ func handlerTerrainQuery(value view.ITerrainChunkDataEntity, target view.PlayerE
 	return state, nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTerrainSite(site view.ITerrainSiteEntity, world *logic.World) (logic.SiteState, error) {
 	value := site.TerrainSite()
 	if world == nil || value.SceneID() != world.ID {

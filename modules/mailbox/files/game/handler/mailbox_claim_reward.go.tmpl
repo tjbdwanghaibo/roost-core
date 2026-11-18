@@ -19,7 +19,7 @@ import (
 // 邮件的过期时刻是 Unix 秒，这里按 mail 服务同样的取整（向下取到秒）换算后再比较。
 // 规则本身见 game/components/mailbox 的 Component.Claim。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMailboxClaimReward(target view.IMailboxEntity, mailID string, attachmentType string, attachmentID int64, amount int64, expiresAtUnix int64, nowUnixMilli int64) (gamemailbox.ClaimResult, error) {
 	attachment := gamemailbox.Attachment{Type: gamemailbox.Type(attachmentType), ID: attachmentID, Amount: amount}
 	return target.Mailbox().Claim(mailID, attachment, expiresAtUnix, time.UnixMilli(nowUnixMilli).Unix())

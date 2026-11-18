@@ -18,7 +18,7 @@
   - `Draw(key string, poolID, count int64) (GachaResult, error)`：扣金币的单抽 / 十连，`GachaDraw` 协议用的就是它。
   - `DrawFree(key string, poolID int64) (GachaResult, error)`：**不扣费的单抽**。掉落、保底、背包检查、回执与 `Draw` 是同一段代码、同一个请求键窗口，只是不调货币组件：`Cost` 为 0，`Balance` 是当时的余额，不触发 wallet 的消费钩子；池的 `Price` 对它不起作用。没有对应的客户端协议：免费的次数规则（每日一次、活动送几次）属于工程，由工程自己的 handler 调它（见“复用方式”）。
   - `GachaResult{Cost, Balance, Items, Misses, Replayed}`。`Replayed` 为真表示这是窗口内同一个请求键的重放：结果取自原回执，这一次什么都没写。
-- Nest handler `handlerGachaDraw`（`game/handler/gacha_draw.go`，`rollback=undo durability=strict`）；端点 `HandleGachaDraw`（`game/controllers/gacha.go`）直接分发到它。
+- Nest handler `handlerGachaDraw`（`game/handler/gacha_draw.go`，`rollback=undo`（持久级别取缺省 async））；端点 `HandleGachaDraw`（`game/controllers/gacha.go`）直接分发到它。
 - 规则函数在 `game/components/gacha/rules.go`：`gachaRules(poolID)` 在一条请求里读一次配置快照并校验，`gachaPick(drops, roll)` 把一个均匀整数映射到权重区间。
 
 ### 登记点
@@ -59,6 +59,7 @@
   - 同一个 `Key` 在回执窗口内重发：返回原结果、零写入、`Replayed` 为真，即使这个池之后被下架或改了配置。窗口之外的旧键会被当成新请求再扣一次，客户端不得重放旧键。被拒绝的请求不留回执。
   - 免费与付费共用一个回执窗口，但回执不互通：同一个键先付费、再拿来免费抽（或反过来）答 `gacha_key_conflict`。
   - 应答里的 `Balance` 与 `Misses` 是成交时的快照；最新值以客户端的自身同步视图为准。
+  - 持久级别取缺省 async（维护者 2026-11-18 起不用 strict）：进程崩溃不丢已回复的抽卡。整机掉电 / 内核崩溃丢掉最后一个组提交间隔里已回复的抽卡时，扣费、道具、保底与回执一起没了；同一个 `Key` 重发按新请求重新抽样，只扣一次、发一次，但**结果可能与客户端已经展示过的不同**（“回执固定成功结果”在这种情况下不成立）。
 - **背包空间的检查是保守的：** 抽样之前按“每种候选道具都可能来 `Count` 个、可能新增 `min(Count, 未持有的候选种类数)` 个种类”检查，含权重为 0 的保底项。因此可能拒绝一次实际放得下的抽卡；这样做是为了不让玩家靠塞满背包、利用“失败不扣费”反复重抽。
 - **配置热更：** 新配置对下一次新的抽卡生效，一次十连用同一份快照，旧回执不重算。
 - **前提：** 依赖清单声明的业务模块与 Nest/configdata。单装即代办玩家 TCP 和自身同步（`access: {transport: tcp, self_sync: true}`），可读取穿戴、背包或保底的初始全量及后续变化；不依赖 enter 顺带打开。真正连入仍须实现认证器（或装 login）、启用 player-tcp 配置并创建 Player。已有自建 Sync Manager 的工程按 `--no-self-sync` 的正式接法装配，不能同时创建两个 Manager。

@@ -9,7 +9,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMatchRelease(target view.TeamEntity, members []view.IMatchmakingEntity, key string) error {
 	if target.Dao().GetMatchKey() != key {
 		return nil

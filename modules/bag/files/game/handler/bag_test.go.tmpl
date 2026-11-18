@@ -759,7 +759,7 @@ func (f *bagFixture) stashCall(stash *bagStash, op string, itemID, count int64) 
 				return nil, errors.New("the caller fails after the grant")
 			}
 			return nil, fmt.Errorf("unknown op %v", params[0])
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	ret, err := f.engine.Request(context.Background(), bagStashCallHandler, stash.ID(), nest.NewParams(op, itemID, count))
 	if err != nil {

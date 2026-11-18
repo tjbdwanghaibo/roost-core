@@ -95,7 +95,7 @@ func newGachaFixture(t *testing.T, coins int64) *gachaFixture {
 	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("gachaTestSetup"), func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		params[0].(func())()
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	// 服务端入口没有协议：场景经一个测试用的事务 handler 调组件，错误交还 Nest 回滚，与业务 handler 的用法一样。
 	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("gachaTestComponent"), func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		target := es[0].(*playerentity.Player).GachaComp()
@@ -103,7 +103,7 @@ func newGachaFixture(t *testing.T, coins int64) *gachaFixture {
 			return target.DrawFree(params[0].(string), params[1].(int64))
 		}
 		return target.Draw(params[0].(string), params[1].(int64), params[2].(int64))
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}

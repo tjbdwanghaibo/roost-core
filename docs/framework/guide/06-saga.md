@@ -60,7 +60,7 @@ if err := steps.Start(ctx); err != nil { ... }                   // 登记错误
 - **提交方式**（维护者 2026-10-29）：原生步骤推荐 `durability=pipelined`，`roost add saga -native` 就这样生成；saga 步骤是 Nest pipelined
   白名单的标准用户。生成的注册经 `saga.MustRegisterNativeStepHandler` 记下“这是原生步骤”，`wiring/dataengine` 启动时自动把声明 pipelined 的
   原生步骤补进 `nest.pipelined.allowlist`（写了名单时），并只为它们打开 Nest 异步完成（按 handler 生效，没有开关配置），项目不用手写；
-  其他 handler 不受影响，业务自己声明 pipelined 的 handler 也仍是派发 worker 等票据（框架内只有 saga 原生步骤用 pipelined，心跳不支持）。strict 仍可显式选择，但在锁内等 fsync，会占满生产缺省的 short 池。同一实体上紧跟在原生步骤后面的普通请求，回复与 AfterCommit
+  其他 handler 不受影响，业务自己声明 pipelined 的 handler 也仍是派发 worker 等票据（框架内只有 saga 原生步骤用 pipelined，心跳不支持；业务模块 alliance 的联盟服务里被 Saga 步骤调到的写也声明 pipelined，写了 `nest.pipelined.allowlist` 时要自己列进去）。strict 仍可显式选择，但在锁内等 fsync，会占满生产缺省的 short 池。同一实体上紧跟在原生步骤后面的普通请求，回复与 AfterCommit
   排在原生步骤完成之后（维护者 2026-10-29 决定：同实体对外可见效果按提交序），最多多等一次组提交。数字与运维信号见
   [SAGA §原生步骤的提交方式](../SAGA.md#原生步骤的提交方式维护者-2026-10-29-决定)。
 - **幂等键**是 `Command.IdempotencyKey`（一个操作实例 = 这一笔 saga 的某一步某方向，`<saga>:<生命周期>:<方向>:<步骤>`）：同一操作实例的全部尝试

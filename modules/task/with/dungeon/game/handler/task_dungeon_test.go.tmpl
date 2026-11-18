@@ -20,7 +20,7 @@ func taskDungeonClaim(f *taskFixture) error {
 		nest.MustRegisterHandlerWithMeta(taskDungeonHandler, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 			now := fctx.NowMilli() / 1000
 			return es[0].(*player.Player).DungeonComp().Claim(12345, 1, 100, now, now)
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	_, err := f.engine.Request(context.Background(), taskDungeonHandler, f.player.ID(), nest.NewParams())
 	return err

@@ -8,7 +8,7 @@ import (
 
 // handlerIdleClaim 的时间由 Nest 冻结；客户端不得上传离线时长或奖励金额。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerIdleClaim(target view.IIdleEntity, request *pb.IdleClaimRequest, nowUnixMilli int64) (*pb.IdleClaimResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrIdleSequence

@@ -8,7 +8,7 @@ import (
 
 // handlerCombatReady 声明参与者后才接触Host；失败返回Nest，两个CombatDAO与PlayerDAO一起回滚。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCombatReady(source view.ICombatEntity, request *pb.CombatReadyRequest) (*pb.CombatReadyResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrCombatInvalid

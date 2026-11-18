@@ -4,7 +4,7 @@
 // 跨 game 投递的路径（邀请已经在来源实体上成交之后，不在任何实体锁里）：
 //
 //  1. Ensure：把收件人的 Facebook 装进本进程内存（GetOrCreate，没有就新建一个空的）。
-//  2. Nest 事务 [Facebook] strict：收件箱记一条（handlerFacebookNote）。第一次写它时 Remote 写准入一条插入就把它认领成
+//  2. Nest 事务 [Facebook]（缺省 async）：收件箱记一条（handlerFacebookNote）。第一次写它时 Remote 写准入一条插入就把它认领成
 //     共享（实体声明了 ownership=shared），两个 game 同时第一次投给同一个人都成功。
 //  3. 告知：本进程直接交给登记的处理（OnInvite），同时在服务间同步总线的 Topic 主题上广播；别的 game 进程的运行时
 //     （Start 订阅的）收到后交给同一个处理。处理自己判断收件人是否连在本进程，在就推送。

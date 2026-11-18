@@ -12,7 +12,7 @@
     - `target` 是 `ActivityWorld` 的完整实体号（逻辑号加实体种类 `EntityKindActivityWorld`）。`Snapshot`、`Token` 是 `activity` 包同名类型的别名。
   - 服务实现 `Service`（`internal/rpc/activity_world/service.go`）：`CheckRoute`、`Pulse`、`Complete`。每次调用先核对目标种类与 Remote 所有权，再进 Nest。
   - 组件：`ActivityWorld` 结构体里直接挂 activity 的共用组件（`activity *activity.Component`，`comp:"activity.CompTypeActivity"`，与 Player 同一个类型号），`Activity()` 返回 `view.Activity`。宿主方法 `ActivityBook()` 由生成器交接 `ActivityWorldDao.ActivityWorld`，`ActivityScope()`（"world"）与 `ActivityCreatedAt()` 在 `game/entities/activity_world/activity.go` 手写。handler 参数写 `view.ActivityWorldEntity`，要 `Host()` 时经 `activity.Of(target)`。
-  - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerWorldActivityInit`（记下创建时间并首次对账）、`handlerWorldActivityPulse`、`handlerWorldActivityComplete`。
+  - Nest handler（`game/handler/`，都用缺省 async（标记不写 durability））：`handlerWorldActivityInit`（记下创建时间并首次对账）、`handlerWorldActivityPulse`、`handlerWorldActivityComplete`。
 - **登记点 / 钩子**：本模块不新增登记函数。活动逻辑仍用 `activity.Register` 登记，注意要登记在 **`activity_world` 进程**会加载的代码里；`Hooks` 回调拿到的 `Owner` 是 `*ActivityWorld`。
 - **状态**
   - 新实体 `ActivityWorld`（`game/entities/activity_world/entity.go`）：Remote 托管实体，归 `activity_world` 服务，启动时预加载。它的唯一号是逻辑区服 / 服务器组号，不是进程 SID。

@@ -60,7 +60,7 @@ result, err := controller.DungeonClaim(ctx, uniqueID, playerID)                 
   - 赛季计数最多 8 季，第 9 个赛季的首次领奖被拒，需要工程自己定归档规则。
 - **领奖窗口：** 成功后 4 小时内可领（恰好第 4 小时仍可领），以首次可信成功时保存的 `ResolvedAtUnix` 为准，不接受客户端时间。
 - **一致性与幂等：**
-  - `Open`、`Defeated`、`DungeonView`、领奖都是 `rollback=undo durability=strict` 的 Nest 事务。同序号同内容的事件重试零写入。
+  - `Open`、`Defeated`、`DungeonView`、领奖都是 `rollback=undo`（持久级别取缺省 async）的 Nest 事务。同序号同内容的事件重试零写入。
   - 领奖同时锁 `Dungeon` 与 `Player`：记账本、发经验、加赛季通关数与总通关数、发布 `event.DungeonClaimed`（监听的写入）在一笔事务里，提交失败整体回滚；重复领取返回当前计数、什么都不写。
   - 排行榜投影（装了 leaderboard 时）在事务之外，是尽力而为：失败只把 `BoardPending` 置 true 并记一条 Warn，没有后台自动重试。
 - **规则变更：** 冷加载时关卡定义的 hash 对不上会拒绝恢复；修改已经有存档的 `Program()` 要保留旧定义或显式迁移。两份 DAO 缺一半、身份不符的存档不能继续领奖。

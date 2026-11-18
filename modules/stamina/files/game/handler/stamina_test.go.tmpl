@@ -204,7 +204,7 @@ func (f *staminaFixture) call(op string, n int64, swallow bool) (int64, error) {
 				return staminaCallResult{err: err}, nil
 			}
 			return staminaCallResult{value: value}, err
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	ret, err := f.engine.Request(context.Background(), staminaCallHandler, f.player.ID(), nest.NewParams(op, n, swallow))
 	if err != nil {

@@ -5,7 +5,7 @@ import (
 	"{{MODULE}}/game/view"
 )
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMatchUpdate(members []view.IMatchmakingEntity, change gamematchmaking.MatchUpdate) (gamematchmaking.MatchSnapshot, error) {
 	group, err := gamematchmaking.Group(members)
 	if err != nil {

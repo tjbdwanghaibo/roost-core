@@ -19,7 +19,10 @@ import (
 // The answer names the founder's new membership (Member) for the service's
 // notice; no effect is recorded.
 //
-//roost:nest rollback=undo durability=strict
+// pipelined（不是缺省 async）：alliance_found Saga 的建盟步骤拿这次回复让协调器结束 Saga（建盟费已扣）；建盟在回复前
+// 没持久、事后丢了，钱扣了、联盟没了，协调器也不会补偿。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerAllianceFound(target view.IAllianceRosterEntity, founder view.IAllianceGuardEntity, requestID string, name string, homeSID int32, openJoin bool, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster, guard := target.AllianceRoster(), founder.AllianceGuard()
 	founderID := guard.PlayerID()
@@ -68,7 +71,9 @@ func handlerAllianceFound(target view.IAllianceRosterEntity, founder view.IAllia
 // allianceroster.Component.Settle) refuses the late founding the same way. The answer
 // names the founder's membership (Member) for the service's notice.
 //
-//roost:nest rollback=undo durability=strict
+// pipelined（不是缺省 async）：两步建盟时 alliance_found Saga 的建盟步骤拿这次回复结束 Saga，理由同 handlerAllianceFound。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerAllianceEstablish(target view.IAllianceRosterEntity, requestID string, founderID int64, name string, homeSID int32, openJoin bool, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	var joined alliancerule.MemberChange

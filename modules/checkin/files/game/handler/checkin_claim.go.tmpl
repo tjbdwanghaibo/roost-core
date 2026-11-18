@@ -7,7 +7,7 @@ import (
 
 // handlerCheckinClaim 领今天的签到奖励。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCheckinClaim(target view.ICheckinEntity, request *pb.CheckinClaimRequest, nowUnixMilli int64) (*pb.CheckinClaimResponse, error) {
 	result, err := target.Checkin().Claim(nowUnixMilli)
 	if err != nil {

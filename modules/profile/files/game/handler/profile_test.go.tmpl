@@ -328,7 +328,7 @@ func (f *profileFixture) damage(t *testing.T, level int32, exp int64) {
 			dao.GetProfile().SetLevel(params[0].(int32))
 			dao.GetProfilePrivate().SetExp(params[1].(int64))
 			return nil, nil
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	if _, err := f.engine.Request(context.Background(), profileDamageHandler, f.player.ID(), nest.NewParams(level, exp)); err != nil {
 		t.Fatal(err)
@@ -377,7 +377,7 @@ func (f *profileFixture) callIgnoringErrors(t *testing.T, name string, amount in
 				return nil, fmt.Errorf("this handler is for refused calls only: rename err=%v, add exp err=%v", renameErr, expErr)
 			}
 			return nil, nil
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	if _, err := f.engine.Request(context.Background(), profileIgnoreErrorsHandler, f.player.ID(), nest.NewParams(name, amount)); err != nil {
 		t.Fatal(err)
@@ -546,7 +546,7 @@ func (f *profileFixture) check(t *testing.T, amount int64) error {
 	registerProfileCheckHandler.Do(func() {
 		nest.MustRegisterHandlerWithMeta(profileCheckHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 			return profileCheckAnswer{refusal: es[0].(view.IProfileEntity).Profile().CheckAddExp(params[0].(int64))}, nil
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	answer, err := f.engine.Request(context.Background(), profileCheckHandler, f.player.ID(), nest.NewParams(amount))
 	if err != nil {
@@ -749,7 +749,7 @@ var profileLocalRenameHandler = nest.NewHandlerName("profileTestLocalRename")
 func init() {
 	nest.MustRegisterHandlerWithMeta(profileLocalRenameHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		return es[0].(*playerentity.Player).Profile().Rename(params[0].(string))
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 }
 
 // 正式旧 Sender 独立安装时仍可改名；组合 naming 时必须被它的 ProfileRenaming 监听拒绝。

@@ -11,7 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMatchTeamBegin(target view.TeamEntity, members []view.IMatchmakingEntity, leader, sequence int64, sid int32) (gamematchmaking.MatchSnapshot, error) {
 	t := target
 	info := t.TeamRoster().Info()

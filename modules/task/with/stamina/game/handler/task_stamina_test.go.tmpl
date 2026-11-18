@@ -19,7 +19,7 @@ func taskSpendStamina(f *taskFixture, n int64) error {
 	taskStaminaOnce.Do(func() {
 		nest.MustRegisterHandlerWithMeta(taskStaminaHandler, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
 			return es[0].(*player.Player).StaminaComp().Spend(args[0].(int64), fctx.NowMilli())
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	_, err := f.engine.Request(context.Background(), taskStaminaHandler, f.player.ID(), nest.NewParams(n))
 	return err

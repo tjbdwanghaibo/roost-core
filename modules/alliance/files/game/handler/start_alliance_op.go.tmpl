@@ -28,7 +28,7 @@ import (
 // (op, player, session, frame sequence), so a retried frame folds into the
 // same saga.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerStartAllianceOp(target view.IBagEntity, op string, state []byte, coins int32, businessKey string) (string, error) {
 	if coins > 0 {
 		if have := target.Bag().Count(alliance.CoinItemID); have < int64(coins) {

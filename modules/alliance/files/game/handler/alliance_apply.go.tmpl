@@ -9,7 +9,7 @@ import (
 
 // handlerAllianceApply records a player's application to join.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceApply(target view.IAllianceRosterEntity, requestID string, playerID int64, homeSID int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {

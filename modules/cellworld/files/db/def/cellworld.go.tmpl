@@ -2,7 +2,7 @@ package dbdef
 
 // CellworldBaseState 是模块追加在 PlayerDao 末尾的状态（PlayerDao.CellworldBase，存储键 cellworld_base，持久、不同步）：
 // Player 作为 Base 要跨重启保住的两样。Recovery 是 Buff / 冷却的恢复快照（SceneActor 回写时一起写，Base 重启后 Enter 按它
-// 重建）；DeathReceipts 是死亡回执（被击杀实体 → 那一条命的 Life），与 SettleDeath 的奖励在同一笔 strict 事务提交，重复投递
+// 重建）；DeathReceipts 是死亡回执（被击杀实体 → 那一条命的 Life），与 SettleDeath 的奖励在同一笔事务（缺省 async）提交，重复投递
 // 的死亡只结算一次。其余 Base 字段（路由、快照位置、面板）由工程在 PlayerDao 里声明，见 cellworldhost.BaseDao。
 type CellworldBaseState struct {
 	Recovery      *CellRecovery    `store:"1"`

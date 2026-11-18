@@ -7,7 +7,7 @@ import (
 	"{{MODULE}}/game/view"
 )
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceActivityComplete(target view.AllianceEntity, token activity.Token) error {
 	c, err := activity.Of(target)
 	if err != nil {

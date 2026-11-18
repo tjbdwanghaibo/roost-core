@@ -664,6 +664,33 @@ func (l *effectLog) Commit(_ context.Context, record dataengine.CommitRecord) er
 	return nil
 }
 
+// effectLog 也是 pipelined 提交器：saga 步骤会调到的联盟写（建盟、捐赠、守卫预约、领奖与撤销）声明
+// durability=pipelined，联盟实体又是 Remote 托管，这些事务走 strict 路径（Commit）；没有 Remote 批次时
+// 走 Enqueue，记录在入队时即视为已持久。
+func (l *effectLog) Enqueue(ctx context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	if err := l.Commit(ctx, record); err != nil {
+		return nil, err
+	}
+	return durableTicket(l.DurableLSN()), nil
+}
+
+func (l *effectLog) DurableLSN() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return uint64(l.records)
+}
+
+// durableTicket 是入队即持久的票据。
+type durableTicket uint64
+
+func (t durableTicket) LSN() uint64 { return uint64(t) }
+func (durableTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (durableTicket) Err() error { return nil }
+
 func (l *effectLog) take() []dataengine.Effect {
 	l.mu.Lock()
 	defer l.mu.Unlock()

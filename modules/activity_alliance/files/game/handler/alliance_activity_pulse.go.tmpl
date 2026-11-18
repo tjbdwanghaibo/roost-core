@@ -7,7 +7,7 @@ import (
 
 // AllianceActivityPulse 只能由权威服务登记；所有权由 RPC 和 Nest 的 Remote 提交再次校验。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceActivityPulse(target view.AllianceEntity, event string, createdAt int64) ([]activity.Snapshot, error) {
 	c, err := activity.Of(target)
 	if err != nil {

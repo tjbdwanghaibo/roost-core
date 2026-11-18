@@ -12,7 +12,7 @@ import (
 // same transaction. The answer names the membership that ended (Member) for
 // the service's notice.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceRemove(target view.IAllianceRosterEntity, member view.IAllianceGuardEntity, requestID string, actorID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster, guard := target.AllianceRoster(), member.AllianceGuard()
 	targetID := guard.PlayerID()
@@ -38,7 +38,7 @@ func handlerAllianceRemove(target view.IAllianceRosterEntity, member view.IAllia
 // carries the membership that ended (Ended), which ClearGuard names; a replay
 // does not (the first delivery already tried, and healing covers a loss).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceRemoveDetached(target view.IAllianceRosterEntity, requestID string, actorID int64, targetID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	var ended string

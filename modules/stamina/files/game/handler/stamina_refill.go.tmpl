@@ -8,7 +8,7 @@ import (
 // handlerStaminaRefill 是客户端发起的购买：花金币把体力补到上限。nowUnixMilli 由 Nest 填这条消息
 // 冻结的业务时间，客户端不传时间、也不传价格。规则与拒绝见 StaminaComponent.Refill。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerStaminaRefill(target view.IStaminaEntity, request *pb.StaminaRefillRequest, nowUnixMilli int64) (*pb.StaminaRefillResponse, error) {
 	result, err := target.Stamina().Refill(nowUnixMilli)
 	if err != nil {

@@ -85,7 +85,7 @@ func newIdleFixture(t *testing.T, coins int64) *idleFixture {
 	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("idleTestSetup"), func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		params[0].(func())()
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}

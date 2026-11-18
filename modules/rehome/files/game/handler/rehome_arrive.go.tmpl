@@ -6,7 +6,7 @@ import "{{MODULE}}/game/view"
 // 档里的换服意图指向 sid 时做到达——清意图、记冷却的起点、发布事务内的到达事件 event.RehomeArrived，同一笔事务、按换服 ID 只做一次；
 // 指向别的服时原样报回，由调用方向 account 确认之后用 RehomeCancel 清。nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerRehomeArrive(target view.IRehomeEntity, sid int32, nowUnixMilli int64) (view.RehomeArriveResult, error) {
 	return target.Rehome().Arrive(sid, nowUnixMilli)
 }

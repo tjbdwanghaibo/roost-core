@@ -138,5 +138,5 @@ func init() {
 		// 模拟业务运行途中跨日，消费仍应使用进入事务时的冻结时间。
 		args[0].(func())()
 		return es[0].(*player.Player).WalletComp().Apply("frozen", -10)
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 }

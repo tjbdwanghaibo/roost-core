@@ -8,7 +8,7 @@ import (
 
 // 所有错误交还 Nest，背包、穿戴及属性联动整笔回滚。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerEquipmentUnequip(target view.IEquipmentEntity, request *pb.EquipmentUnequipRequest) (*pb.EquipmentUnequipResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrEquipmentSlotInvalid

@@ -7,7 +7,7 @@ Player 只归它的承载 game 写，别的 game 写不了它的档，所以“�
 - **实体与号**：`game/entities/facebook` 的 `Facebook`（`category=entity.EntityCategoryRemote remote=managed service=<game> ownership=shared`，共享 kind：第一次写它时 Remote 写准入一条插入就把所有权记录写成共享的，两个 game 同时第一次写都成功，没有“先独占认领、再切共享”的中间态；不能退出共享模式）。号是 `entity.BuildEntityID(玩家号, facebook.EntityKindFacebook)`——与 Player 同一个唯一号、不同 kind，不要发号器，只用 `GetOrCreate`，不用 `Create`。号与承载 sid 无关：玩家换服（rehome）时 Facebook 不用搬。
 - **状态**（`db/def/facebook.go`）：`FacebookDao`（集合 `facebook`，主库），只落库。`Invites` 是收件箱：发出邀请的实体完整号（如队伍号）→ `FacebookInvite{From 邀请人玩家号, ExpireAt 过期时刻}`。
 - **组件** `Facebook`（`game/components/facebook/facebook.go`，对外接口 `view.Facebook`，handler 收 `view.IFacebookEntity`）：`Note(source, from, expireAt, now) bool`、`Invites(now) []view.FacebookInvite`。规则常量 `MaxInvites = 64` 归工程所有。
-- **Nest handler**（`game/handler/`，都只锁一个 Facebook）：`handlerFacebookNote`（`rollback=undo durability=strict`，回复时记录已持久）、`handlerFacebookInvites`（只读，`durability=memory`）。没有客户端协议：查询由用它的功能经自己的协议给出（team 的 `TeamInvites`）。
+- **Nest handler**（`game/handler/`，都只锁一个 Facebook）：`handlerFacebookNote`（`rollback=undo`，持久级别取缺省 async：回复时记录已写进本进程 WAL，Mongo 权威要等投影，别的 game 立刻查这个收件箱可能还看不到；告知照常发出，收件人凭推送里的来源号照样能接受）、`handlerFacebookInvites`（只读，`durability=memory`）。没有客户端协议：查询由用它的功能经自己的协议给出（team 的 `TeamInvites`）。
 - **服务端入口**（`game/modules/facebook`）
   - `EntityID(player)`：玩家的 Facebook 号。
   - `Ensure(ctx, registry, player)`：把 Facebook 装进本进程内存（`GetOrCreate`，没有就新建一个空的），返回号。不认领、不切共享（共享 kind 由第一次写入认领成共享）。要 I/O，只在 Nest handler 之外调用。

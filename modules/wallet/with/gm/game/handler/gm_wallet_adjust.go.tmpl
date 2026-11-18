@@ -4,7 +4,7 @@ import "{{MODULE}}/game/view"
 
 // handlerGMWalletAdjust 只给可信运维入口调用；不接玩家协议。运维补发需要可重试时用补偿邮件。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerGMWalletAdjust(target view.IWalletEntity, delta int64) (int64, error) {
 	return target.Wallet().Add(delta)
 }

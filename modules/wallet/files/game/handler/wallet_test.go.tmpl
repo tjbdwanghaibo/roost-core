@@ -165,7 +165,7 @@ func (f *walletFixture) call(op, key string, delta int64, swallow bool) (int64, 
 				return walletCallResult{err: err}, nil
 			}
 			return walletCallResult{balance: balance}, err
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	ret, err := f.engine.Request(context.Background(), walletCallHandler, f.player.ID(), nest.NewParams(op, key, delta, swallow))
 	if err != nil {
@@ -586,7 +586,7 @@ func (f *walletFixture) vaultCall(vault *walletVault, op, key string, delta int6
 				return component.Apply(params[1].(string), params[2].(int64))
 			}
 			return nil, fmt.Errorf("unknown op %v", params[0])
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	ret, err := f.engine.Request(context.Background(), walletVaultCallHandler, vault.ID(), nest.NewParams(op, key, delta))
 	if err != nil {

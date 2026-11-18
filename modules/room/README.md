@@ -25,7 +25,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 - `room.EntityID(roomID) (int64, error)`：把房间唯一号换成 Room 的完整 Entity ID。
 - `room.ConnectionKey(session) (string, error)`：从服务端 Session 的 `ConnectionID()` 取连接标识。
 
-**Nest handler**（`game/handler/room_*.go`，写入的都是 `rollback=undo durability=strict`；`RoomDisconnect` 只改不落库的在线标记，没有持久事实要提交）：`RoomOpen`、`RoomJoin`、`RoomView`、`RoomReconnect`、`RoomDisconnect`、`RoomLeave`、`RoomClose`。事务之外用生成的 `syncsender`（例如 `syncsender.NewRoomJoinSender(client).Sync_RoomJoin(ctx, id, playerID, connection)`）；handler 参数是生成的 `view.IRoomEntity`，组件 `Room()`（对外接口 `view.Room`；逻辑、类型号 `room.CompTypeRoom` 与工厂登记在 `game/components/room/room.go`）的方法（`Open`、`Join`、`Reconnect`、`Disconnect`、`Leave`、`Close`、`View`，以及 `Connected(playerID)`：这个席位现在在不在线）只能在持有 Room 锁的事务里调用。
+**Nest handler**（`game/handler/room_*.go`，写入的都是 `rollback=undo`（持久级别取缺省 async）；`RoomDisconnect` 只改不落库的在线标记，没有持久事实要提交）：`RoomOpen`、`RoomJoin`、`RoomView`、`RoomReconnect`、`RoomDisconnect`、`RoomLeave`、`RoomClose`。事务之外用生成的 `syncsender`（例如 `syncsender.NewRoomJoinSender(client).Sync_RoomJoin(ctx, id, playerID, connection)`）；handler 参数是生成的 `view.IRoomEntity`，组件 `Room()`（对外接口 `view.Room`；逻辑、类型号 `room.CompTypeRoom` 与工厂登记在 `game/components/room/room.go`）的方法（`Open`、`Join`、`Reconnect`、`Disconnect`、`Leave`、`Close`、`View`，以及 `Connected(playerID)`：这个席位现在在不在线）只能在持有 Room 锁的事务里调用。
 
 **同一 Room 上玩法命令的身份围栏**：`Room().Authorize(playerID, epoch, connection) (*db.RoomSeat, error)`——`epoch` 是这名成员当前的席位代际、`connection` 是席位认下的那条连接（`room.ConnectionKey`），并且这条连接现在在线，三样都对才返回席位。房间未开 / 已关、不在座透出 `Member` 的错误（`room_unopened` / `room_closed` / `room_not_member`）；代际过期、连接不对或格式不合法、席位断线（包括重启后还没 `RoomReconnect`）一律 `room_stale_epoch`，客户端先 `RoomReconnect` 换上新代际。只读，被拒不改任何东西。turn 的 `Start` / `End` / `CheckEnd` / `View` 用它；房间类玩法（塔防、撤离、自走棋、合作）的新命令也用它。`Member(playerID, epoch)` 只核对代际、不看连接与在线：玩法里“已有回执的重放、查回执不要求在线”（重启后全员断线时原连接、原代际的重试仍得原回执）的那一支，用 `Member` 再自己核对 `seat.GetConnection() == connection`，不用 `Authorize`（塔防的 `towerMember` 就这样分两支）。
 
@@ -44,7 +44,7 @@ Join / Reconnect / View 的应答带 `RoomInfo{RoomID, Capacity, HostID, Epoch, 
 - **不做的事**：不做匹配与邀请码；没有全服房间目录；不约束“一名玩家只能在一间房里”；不广播、不装 EntitySync 订阅（成员变化、上下线要别人知道，由玩法在提交成功之后自己推——维护者 D24 定为延后）；不踢人、不设掉线保留时长、不做重启后的房间清理；不分配房号。
 - **客户端不能开房**：开房只有服务端入口。缺省准入是“任何已认证的玩家都能加入任何已开、未满的房”，要限制就监听 `event.RoomJoining`。
 - **上限**：容量 1 到 64；连接标识至多 128 字节；一间房只有一个房主。`EpochSeed` 只增不减，到 `MaxInt64` 之后拒绝再分配。
-- **一致性**：开房与每一次席位变更都是 Room 上的一笔严格事务，提交失败时座位、房主与代际一起回滚，不提前确认。同一个代际的并发重连至多一条成功。已关闭的房号永不再开。
+- **一致性**：开房与每一次席位变更都是 Room 上的一笔事务（持久级别取缺省 async：进程崩溃不丢已回复的变更，整机掉电可能丢掉最后一个组提交间隔里已回复的变更），提交失败时座位、房主与代际一起回滚，不提前确认。同一个代际的并发重连至多一条成功。已关闭的房号永不再开。
 - **`Connected` 的含义**：本进程里认下的那条连接还没断。断线由订阅自动处理，延迟是接入层发布关闭事件的延迟；事件丢了时以补扫为界（至多 30 秒）。重启之后全部是断线，直到成员重连——在那之前玩法看到的是“全员断线”，不是“上一个进程最后的样子”。运维刷新 / 卸载再装载一间房（同一进程）同样清空在线状态，还连着的成员要换一条新连接 `RoomReconnect`（同一条连接的重放重连被拒）。
 - **连接标识必须可信**：来自服务端 Session（直连 TCP 与 Gate 代理都提供）。自定义接入适配器要给每条物理连接一个唯一、不复用的标识，不能用账号的 SessionID 代替，否则旧连接能操作新席位。
 - **客户端要保存 `RoomID` 与 `Epoch`**：换了连接之后只能 `RoomReconnect`，不能靠重复 `RoomJoin` 接管旧席位。客户端丢了本地 `Epoch` 的恢复途径要业务另加受信入口。

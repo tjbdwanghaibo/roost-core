@@ -10,7 +10,7 @@ import (
 // 活动组件也挂在 ActivityWorld、Alliance 上（同一个组件），参数写 view.IActivityEntity，target=Player 指明锁的是 Player
 // （归属服务、生成的 Sender 与 endpoint 都按它寻址）。
 //
-//roost:nest rollback=undo durability=strict target=Player
+//roost:nest rollback=undo target=Player
 func handlerActivityEvent(target view.IActivityEntity, event string, createdAt int64) ([]activity.Snapshot, error) {
 	c, err := activity.Of(target)
 	if err != nil {

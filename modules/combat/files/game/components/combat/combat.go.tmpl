@@ -108,7 +108,7 @@ func (c *Component) OnInitFinish(param *entity.EntityCreateParam, created bool) 
 		}
 		nest.AfterCommit(func() { gamecombat.Queue(c.ID(), peer, epoch) })
 		return nil
-	}, heartbeat.WithDurability(nest.DurabilityStrict))
+	})
 	if err != nil {
 		return err
 	}

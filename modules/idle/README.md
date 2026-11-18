@@ -17,7 +17,7 @@
 
 - 组件 `Idle()`（逻辑、类型号 `idle.CompTypeIdle` 与工厂登记在 `game/components/idle/idle.go`，对外接口在 `game/view/component_idle.go`）：`Claim(sequence, nowUnixMilli int64) (IdleResult, error)`，只能在持有 Player 锁的 Nest 事务里调，错误必须交还 Nest。`IdleResult{Reward, Balance, SettledAt, Sequence, Capped}`。
 - 结算函数 `idleAccrue(last, now, rules)`（同文件）：不逐秒循环，按整周期数一次算出。
-- Nest handler `handlerIdleClaim`（`game/handler/idle_claim.go`，`rollback=undo durability=strict`），`nowUnixMilli` 由 Nest 填这条消息冻结的业务时间；端点 `HandleIdleClaim`（`game/controllers/idle.go`）直接分发到它。
+- Nest handler `handlerIdleClaim`（`game/handler/idle_claim.go`，`rollback=undo`（持久级别取缺省 async）），`nowUnixMilli` 由 Nest 填这条消息冻结的业务时间；端点 `HandleIdleClaim`（`game/controllers/idle.go`）直接分发到它。
 
 ### 登记点
 

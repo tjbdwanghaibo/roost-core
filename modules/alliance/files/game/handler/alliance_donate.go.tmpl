@@ -9,7 +9,10 @@ import (
 
 // handlerAllianceDonate adds a member's donation to the alliance's funds.
 //
-//roost:nest rollback=undo durability=strict
+// pipelined（不是缺省 async）：alliance_donate Saga 的捐赠步骤拿这次回复结束 Saga（道具已扣）；记账在回复前没持久、
+// 事后丢了，道具扣了、资金与贡献没记上，协调器也不会补偿。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerAllianceDonate(target view.IAllianceRosterEntity, requestID string, actorID int64, amount int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {

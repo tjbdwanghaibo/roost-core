@@ -11,7 +11,7 @@ import (
 // 写名字之前先在 Player 上发布拦截事件 event.ProfileRenaming：监听返回错误就拒绝（装了 naming 时一律拒绝，
 // 名字必须经全服唯一的命名入口），什么都不写。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerProfileRename(target view.IProfileEntity, request *pb.ProfileRenameRequest) (*pb.ProfileRenameResponse, error) {
 	if err := target.Publish(event.ProfileRenaming{Name: request.Name}); err != nil {
 		return nil, err

@@ -2,7 +2,7 @@ package handler
 
 import "{{MODULE}}/game/view"
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMatchClear(member view.IMatchmakingEntity, key string) error {
 	return member.Matchmaking().Clear(key)
 }

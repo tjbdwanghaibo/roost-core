@@ -13,7 +13,7 @@
   - 服务实现 `Service`（`internal/rpc/activity_alliance/service.go`）：`CheckRoute`、`Pulse`、`Complete`，先核对目标种类与 Remote 所有权再进 Nest。
   - 组件：安装器按清单的 `component_package: game/components/activity` 把 activity 的共用组件挂到 `Alliance` 上（`activity *activity.Component`，`comp:"activity.CompTypeActivity"`，与 Player 同一个类型号，本模块不另分配号）。在联盟实体的 Nest 事务里调 `Activity().Reconcile(event, createdAt)`、`Activity().Rearm()`；要 `Host()` 时经 `activity.Of(target)`。handler 参数写 `view.AllianceEntity`。宿主方法 `ActivityBook()` 由生成器交接 `AllianceDao.ActivityAlliance`，`ActivityScope()`（"alliance"）与 `ActivityCreatedAt()` 在 `game/entities/alliance/activity.go` 手写。
   - 创建事实：`Alliance.ActivityCreatedAt()`（同一文件）返回联盟的持久建盟时间，单位毫秒（`AllianceDao.CreatedAtUnix` 以秒落库，这里乘 1000）。`Reconcile` / `Pulse` 的 `createdAt` 传 0 时共用组件从它取，所以 `Trigger=created` 的定义不需要调用方带创建时间。没建成或已解散的联盟（没有盟主）返回 0。
-  - Nest handler（`game/handler/`，都是 `durability=strict`）：`handlerAllianceActivityPulse`、`handlerAllianceActivityComplete`。
+  - Nest handler（`game/handler/`，都用缺省 async（标记不写 durability））：`handlerAllianceActivityPulse`、`handlerAllianceActivityComplete`。
 - **登记点 / 钩子**：本模块不新增登记函数。活动逻辑仍用 `activity.Register` 登记，要登记在**联盟服务进程**会加载的代码里；`Hooks` 回调拿到的 `Owner` 是 `*Alliance`，`Eligible` 读的是权威联盟实体的真实状态。
 - **状态**
   - `AllianceDao.ActivityAlliance`（类型 `ActivityBook`）：追加到联盟主 DAO 上的活动权威状态，`persist,nosync`。不进入 game 侧的联盟只读镜像。

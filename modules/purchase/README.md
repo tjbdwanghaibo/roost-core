@@ -13,7 +13,7 @@
 **服务端入口**
 
 - `controllers.FromRegistry(registry)` 之后 `controller.PurchaseCollect(ctx, playerID) ([]purchase.Receipt, error)`（`game/controllers/purchase.go`）：服务端替一名玩家补领一批，在 Nest 事务之外调用。
-- handler `PurchaseGrant(grant)`（`game/handler/purchase_grant.go`，`rollback=undo durability=strict`）：把一笔待发记录应用到 Player。参数只能来自待发队列。
+- handler `PurchaseGrant(grant)`（`game/handler/purchase_grant.go`，`rollback=undo`（持久级别取缺省 async））：把一笔待发记录应用到 Player。参数只能来自待发队列。
 - 待发队列 `purchase.Queue`（`game/modules/purchase/purchase.go`）：`Record(ctx, order)`（platform 一侧，第一次投递时写快照）、`Pending(ctx, playerID, limit)`、`Ack(ctx, grant)`。实现是 `RedisQueue`（`game/modules/purchase/queue.go`）。
 - platform 一侧的协作者（`services/platform/collaborators.go`，安装时替换生成的桩）：`Deliver()` 把订单记进待发队列；`Verify()` 与 `Players()` 一律拒绝（充值不管登录）。
 
@@ -44,11 +44,12 @@
 - **批量与暂缓**：每次补领至多 32 笔（`BatchLimit`）。队列按序号连续处理：某一笔发不出去（背包满、奖励种类没登记、platform 那边订单还没终结或查不到），它和它后面的订单都留在队列里，等它解决。
 - **“已投递”不等于到账**：platform 的 `delivered` 只表示写进了待发队列。Player 奖励到账以 `PurchaseGrant` 提交为准。
 - **一致性与幂等**：
-  - 奖励与游标 `Applied` 在同一笔 Player 严格事务里；提交失败两者都不变，可以重放。
+  - 奖励与游标 `Applied` 在同一笔 Player 事务里（持久级别取缺省 async）；提交失败两者都不变，可以重放。
   - 序号小于等于游标的重放不写任何字段，返回同样的回执；序号必须恰好是游标加一。
   - 序号与快照在 Redis 里用同一条 HSET 分配；同一订单重复投递拿到原序号与原快照，商品改价或下架不改变已有订单。价格、币种或商品对不上的订单不入队。
   - 发货之前在实体锁外向 platform 查订单：只有 `delivered` 或 `settled` 且没有在途投递的才进 Nest。
   - Nest 确认之后才 `Ack`（推进 `acked`、删快照）；`Ack` 失败可以原样重试，重试时 Player 不会再发一次。
+  - **async 的代价（维护者 2026-11-18 起不用 strict）**：`PurchaseGrant` 回复时已写进本进程 WAL、还没 fsync，随后的 `Ack` 删掉 Redis 里这笔的快照。进程崩溃不丢这笔发货；整机掉电 / 内核崩溃发生在刷盘之前、而 `Ack` 已经执行时，Player 的 `Applied` 停在上一号、Redis 的 `acked` 已经越过这一号且快照已删：这笔奖励没有到账，它后面的订单因“序号必须恰好是游标加一”答 `purchase_sequence`，该玩家的补领从此卡住，要人工按 platform 的订单记录修复（不能单侧回退，见下文“三处状态必须一起恢复”）。窗口是一次组提交间隔（`dataengine.wal.group_commit_interval`，缺省 10ms）。
 - **不过期**：离线期间的订单没有失效时间，不会因为“账本满了”被丢弃。Redis 里未履行的订单与 platform 的支付历史会一直占空间。
 - **三处状态必须一起恢复**：Redis 的游标与待发、Player 的 `Applied`、platform 的订单，不能单独重置、回退其中一侧，也不能把旧订单手工放回队列。`StoragePrefix` 在有在途发货时不能改。
 - **序号上限**：2^53−1（Redis Lua 的数值精度）。

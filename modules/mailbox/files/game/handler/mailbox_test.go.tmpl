@@ -242,10 +242,11 @@ func TestMailboxFirstClaimPaysTheCoins(t *testing.T) {
 	if !f.recorded(t, "mail-1") {
 		t.Fatal("the mail id is not in the ledger: a replay would be paid again")
 	}
-	// 发放必须在 handler 返回之前落盘（durability=strict）：端点拿到结果后紧接着让 mail 服务把邮件标成已领，
-	// 落盘之前进程崩溃就成了“邮件已领、钱没到”。
-	if got := dataengine.Durability(f.committer.durability.Load()); got != dataengine.DurabilityStrict {
-		t.Fatalf("the grant committed with durability %v, want strict", got)
+	// 发放用缺省 async 提交（维护者 2026-11-18：模块不用 strict）：handler 返回时 WAL 已写入、尚未 fsync。
+	// 端点随后让 mail 服务把邮件标成已领；进程被杀不丢已写入的 WAL，整机掉电 / 内核崩溃可能丢掉最后一个组提交
+	// 间隔里的发放，那时就是“邮件已领、钱没到”（见模块 README“一致性”）。
+	if got := dataengine.Durability(f.committer.durability.Load()); got != dataengine.DurabilityAsync {
+		t.Fatalf("the grant committed with durability %v, want async", got)
 	}
 }
 

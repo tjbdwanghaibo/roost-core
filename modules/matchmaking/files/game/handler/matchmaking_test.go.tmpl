@@ -23,9 +23,9 @@ import (
 
 func registerMatchmaking(engine *nest.NestMgr) {
 	registerTeamTestHandler(engine, handlerNameMatchState, invokeMatchState, nest.HandlerMeta{})
-	registerTeamTestHandler(engine, handlerNameMatchBegin, invokeMatchBegin, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
-	registerTeamTestHandler(engine, handlerNameMatchUpdate, invokeMatchUpdate, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
-	registerTeamTestHandler(engine, handlerNameMatchClear, invokeMatchClear, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	registerTeamTestHandler(engine, handlerNameMatchBegin, invokeMatchBegin, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	registerTeamTestHandler(engine, handlerNameMatchUpdate, invokeMatchUpdate, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	registerTeamTestHandler(engine, handlerNameMatchClear, invokeMatchClear, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	for _, register := range []func(*nest.NestMgr) error{RegisterMatchTeamBeginNestHandlersOn, RegisterMatchReleaseNestHandlersOn, RegisterMatchroomOpenNestHandlersOn, RegisterMatchRoomClosedNestHandlersOn, RegisterRoomJoinNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterRoomCloseNestHandlersOn} {
 		if err := register(engine); err != nil {
 			panic(err)

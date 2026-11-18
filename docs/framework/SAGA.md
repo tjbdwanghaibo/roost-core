@@ -275,7 +275,9 @@ return left, step.Complete(true, "")
 它们照旧按自己的声明提交（不写时 async），Nest 的 short / long / io 池缺省不变，也没有专门的 saga 池。Nest 异步完成**按 handler 生效**，
 只给声明 pipelined 的原生步骤。目前框架里只有 saga 原生步骤用 pipelined（心跳不支持 pipelined，`heartbeat.WithDurability(nest.DurabilityPipelined)`
 在登记时被拒绝）；Nest 仍允许其他 handler 自己声明 pipelined，这类 handler 仍是第一阶段（派发 worker 等票据、AfterCommit 在派发 goroutine 上、
-回复之前执行），不会悄悄得到异步完成。
+回复之前执行），不会悄悄得到异步完成。业务模块 alliance 的联盟服务写里，Saga 步骤经 RPC 调到、结论要先持久再交给协调器的那几个（建盟、捐赠、守卫预约、领奖与撤销领奖）
+声明的就是这种第一阶段 pipelined；联盟实体是 Remote 托管，它们实际走 strict 路径（维护者 2026-11-18：模块不用 strict，见
+[modules 约定“持久级别”](../../modules/README.md#必须遵守的约定)）。工程写了 `nest.pipelined.allowlist` 时要把它们也列进去，框架只自动补原生步骤。
 
 **为什么**：原生步骤跑在参与方 Nest 的 short 池上。`strict` 在锁内等所在 group commit 的 fsync，worker 整段被占住；生产缺省 short 池只有
 GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队。`pipelined` 在 WAL 记录入队后就放实体锁，异步完成再把“等落盘 → AfterCommit →

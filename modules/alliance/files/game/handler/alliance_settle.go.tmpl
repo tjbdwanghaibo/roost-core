@@ -15,7 +15,7 @@ import (
 // (the service's healGuard); before the deadline nothing is written, so a
 // cross-instance join still in flight is not cut short.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceSettle(target view.IAllianceRosterEntity, requestID string, playerID int64, decide bool, retentionSeconds int64, nowUnix int64) (alliancerule.ReceiptAnswer, error) {
 	roster := target.AllianceRoster()
 	outcome, decided, seated, err := roster.Settle(requestID, playerID, decide, nowUnix, time.Duration(retentionSeconds)*time.Second)

@@ -84,7 +84,7 @@ func (c *Component) Begin(operation, name string) (NamingTicket, error) {
 	return c.Ticket(), nil
 }
 
-// Step 的每个动作都是一笔 strict Nest 事务。旧 Seq/操作不能完成或清除新操作。
+// Step 的每个动作都是一笔 Nest 事务（缺省 async）。旧 Seq/操作不能完成或清除新操作。
 // 1=记录claim；2=目录已提交后写名字；3=旧名已释放后完成；4=Reserve明确拒绝且尚未记claim时中止；
 // 5=目录明确证明token已失效，回到意图阶段重新占名。结果未知时禁止动作4/5。
 func (c *Component) Step(seq int64, operation string, action int32, key, token string) (NamingTicket, error) {

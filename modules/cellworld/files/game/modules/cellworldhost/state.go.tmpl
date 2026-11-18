@@ -461,7 +461,7 @@ func WriteBase(d BaseDao, st cellworld.BaseState, sceneID int64) {
 }
 
 // DeathReceipt 是 Player 对 target 记下的最后一条命（cellworld.BasePlayer.CellDeathReceipt）；s 是 PlayerDao.CellworldBase。
-// 回执与 SettleDeath 的奖励在同一笔 Player strict 事务里提交：重复投递的死亡事实只结算一次。
+// 回执与 SettleDeath 的奖励在同一笔 Player 事务里提交（缺省 async）：重复投递的死亡事实只结算一次。
 func DeathReceipt(s *db.CellworldBaseState, target int64) uint64 {
 	v, _ := s.GetDeathReceipts(target)
 	return v

@@ -8,7 +8,7 @@ import (
 
 // handlerWalletSpend 是客户端发起的消费：扣 request.Amount，按 request.Key 幂等。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerWalletSpend(target view.IWalletEntity, request *pb.WalletSpendRequest) (*pb.WalletSpendResponse, error) {
 	if request.Amount <= 0 {
 		return nil, wallet.ErrAmount()

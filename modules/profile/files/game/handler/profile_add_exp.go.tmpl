@@ -9,7 +9,7 @@ import "{{MODULE}}/game/view"
 // 或者把发经验写进自己的 handler（目标参数写 view.IProfileEntity，直接调 Profile().AddExp），
 // 让事实与经验在同一笔事务里。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerProfileAddExp(target view.IProfileEntity, amount int64) (int32, error) {
 	return target.Profile().AddExp(amount)
 }

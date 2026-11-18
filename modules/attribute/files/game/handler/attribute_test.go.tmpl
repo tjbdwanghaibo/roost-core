@@ -92,7 +92,7 @@ func newAttributeFixture(t *testing.T, others ...entity.IThreadSafeEntity) *attr
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("attributeTestAction"), func(_ []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
 		return nil, p[0].(func() error)()
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if err = f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestAttributeProtocolUsesAuthenticatedIdentity(t *testing.T) {
 
 // AttributeGet 是只读 handler：它的事务声明必须是 memory 快路径（生成的注册代码里是空的 HandlerMeta）。
 // 不带选项的 //roost:nest 是 rollback=state durability=async，每次读都要先把整个 PlayerDao 序列化成回滚快照；
-// 写成 rollback=undo durability=strict 则是在声明“这里会写、答复要等落盘”。读完之后提交器一次都没被调用。
+// 写成 rollback=undo 则是在声明“这里会写、要进 WAL”。读完之后提交器一次都没被调用。
 func TestAttributeGetIsDeclaredReadOnly(t *testing.T) {
 	raw, err := os.ReadFile("attribute_get_nest_gen.go")
 	if err != nil {

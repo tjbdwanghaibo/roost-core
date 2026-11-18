@@ -13,7 +13,7 @@ import "{{MODULE}}/game/view"
 //
 // 它不判重，发一次推进一次；消息重发会多记。调用方要防重就自己保证只发一次。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTaskAdvance(target view.ITaskEntity, taskID int64, n int64, nowUnixMilli int64) (int64, error) {
 	return target.Task().Advance(taskID, n, nowUnixMilli)
 }

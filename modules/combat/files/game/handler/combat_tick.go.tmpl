@@ -9,7 +9,7 @@ import (
 
 // handlerCombatTick 仅供本服有界驱动调用，没有客户端协议；同一代际重复拍为时间幂等。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCombatTick(source, peer view.ICombatEntity, epoch uint64) error {
 	c, err := combat.Of(source)
 	if err != nil {

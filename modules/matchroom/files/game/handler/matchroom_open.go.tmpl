@@ -2,7 +2,7 @@ package handler
 
 import "{{MODULE}}/game/view"
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMatchroomOpen(target view.IMatchroomEntity, matchID string, members []int64) error {
 	return target.Matchroom().Open(matchID, members)
 }

@@ -115,7 +115,7 @@ func newScopeFixture(t *testing.T) *scopeFixture {
 			return nil, err
 		}
 		return nil, c.Rearm()
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict}); err != nil {
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync}); err != nil {
 		t.Fatal(err)
 	}
 	for _, register := range []func(*nest.NestMgr) error{handler.RegisterWorldActivityPulseNestHandlersOn, handler.RegisterWorldActivityCompleteNestHandlersOn} {

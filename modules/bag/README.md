@@ -15,7 +15,7 @@
   - `view.IBagEntity`（生成）：窄实体接口。别的功能的 Nest handler 把目标参数声明成它，就能在同一笔事务里调上面四个方法；同一笔里还要用别的组件时参数写实体总接口 `view.PlayerEntity`。
   - 宿主方法 `BagState() *db.BagState`（`view.BagHolder`）：Player 的由生成器写（`PlayerDao.Bag` 是唯一的 `BagState` 字段，纯 DAO 交接），实体包里没有手写文件。
   - Nest handler `handlerBagGrant`（`game/handler/bag_grant.go`）：服务端发放道具，没有协议与端点。不持有 `Player` 锁的服务端代码经生成的 Sender 调用：`syncsender.NewBagGrantSender(client).Sync_BagGrant(ctx, 完整实体号, itemID, count)`。
-  - Nest handler `handlerBagDiscard`（`game/handler/bag_discard.go`）：丢弃协议背后的事务，`durability=strict`。
+  - Nest handler `handlerBagDiscard`（`game/handler/bag_discard.go`）：丢弃协议背后的事务，持久级别取缺省 async。
 - **登记点 / 钩子**
   - 没有登记函数。规则入口是工程文件 `game/components/bag/items.go` 的 `ItemRule(itemID) (maxStack int64, ok bool)`：`Add` 在写入前调用它，决定“这个道具号能不能进背包、单种最多放多少”；`Remove` 不调用它。规则对挂这个组件的所有宿主一样生效。
 - **状态**
@@ -38,7 +38,7 @@
 - **上限**：至多 `bag.MaxKinds`（200）种道具；单种数量硬上限 `bag.MaxStack`（999999），道具表的 `max_stack` 填得更大也按硬上限算。到种类上限后只拒绝新种类，已有的种类照常加减。
 - **拒绝就是整笔拒绝**：`Add` 不做“能放多少放多少”，`Remove` 不做“有多少扣多少”；被拒绝时不写任何字段。
 - **不判重**：`Add`、`handlerBagGrant` 调一次发一次；`BagDiscard` 请求不带业务键，客户端超时后重发会再丢一次（数量不足时被拒）。“这一次发过没有”要由调用方记在自己的状态里，并在同一笔事务里调 `Add`。
-- **一致性**：`Add` / `Remove` 只改 `PlayerDao.Bag`，与调用它的 handler 的其他写入在同一笔 Nest 事务里提交或回滚；组件自己不登记 undo。只在持有这名 `Player` 的进程内有效，没有跨进程的背包操作。
+- **一致性**：`Add` / `Remove` 只改 `PlayerDao.Bag`，与调用它的 handler 的其他写入在同一笔 Nest 事务里提交或回滚；组件自己不登记 undo；丢弃协议的事务持久级别取缺省 async（整机掉电可能丢掉最后一个组提交间隔里已回复的丢弃，道具回到背包，玩家可以再丢一次）。只在持有这名 `Player` 的进程内有效，没有跨进程的背包操作。
 - **道具表变化**：从表里删掉一行后，这种道具不能再放入，已持有的仍能数、能扣、能丢。单种上限调小到持有量以下时只拒绝放入，不扣已有的。进程里没有装载配置时道具表为空，任何放入都答 `bag_item_invalid`。
 - **宿主**：组件本身不认具体实体，任何在自己 DAO 里放一份 `BagState` 的实体都能挂（见“复用方式”）。模块装好时只接在 `Player` 上：丢弃协议、发放 handler 与各联动都是 Player 的；挂到别的实体时这些不跟过去，那个实体的入口由接线的人写。种类上限、单种上限对每个宿主各算各的。
 - **跨实体**：组件的每个方法只改所在宿主自己的 DAO。一笔操作同时动两个宿主（例如玩家把道具存进公会仓库）照多实体 handler（两边在同一个进程、同一笔 Nest 事务）、Remote 实体或 Saga（跨进程、带补偿）写，组件不替你协调。

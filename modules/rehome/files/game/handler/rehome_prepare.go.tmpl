@@ -7,7 +7,7 @@ import "{{MODULE}}/game/view"
 // id 是换服 ID（幂等键），from 是本服，to 是目标服，operator 为 true 表示服务端发起（不受规则文件约束）。
 // nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerRehomePrepare(target view.IRehomeEntity, id string, from int32, to int32, operator bool, nowUnixMilli int64) error {
 	move := view.RehomeMove{PlayerID: target.UniqueID(), EntityID: target.ID(), ID: id, From: from, To: to, Operator: operator}
 	return target.Rehome().Prepare(move, nowUnixMilli)

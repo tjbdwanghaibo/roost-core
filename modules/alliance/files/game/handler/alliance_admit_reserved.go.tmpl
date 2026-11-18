@@ -15,7 +15,7 @@ import (
 // settles by this request's receipt can never turn into a seat. The answer
 // names the membership it made (Member) for the service's notice.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceAdmitReserved(target view.IAllianceRosterEntity, requestID string, actorID int64, playerID int64, callerSID int32, viaApplication bool, maxMembers int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	var joined alliancerule.MemberChange

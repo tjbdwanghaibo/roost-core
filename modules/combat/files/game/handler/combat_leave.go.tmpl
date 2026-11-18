@@ -9,7 +9,7 @@ import (
 
 // handlerCombatLeave 声明参与者后才接触Host；失败返回Nest，两个CombatDAO与PlayerDAO一起回滚。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCombatLeave(source, peer view.ICombatEntity, request *pb.CombatLeaveRequest) (*pb.CombatLeaveResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrCombatInvalid

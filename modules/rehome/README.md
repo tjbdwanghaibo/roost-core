@@ -27,7 +27,7 @@
 - `rehome.AdmitMessage(registry, playerID, messageID) error`（`game/modules/rehome/rehome_residency.go`）：给有自己的写闸门的工程在闸门里调，迁出表里的玩家一律拒绝。
 - `rehome.ExemptFromGate(messageID)`：登记一条不受写闸门约束的消息（它自己会查迁出表并给客户端带码的回答）。只在 `init` 里调。
 - `rehome.OwnerSID(err) (sid int32, ok bool)`：从 `rehome_elsewhere` 的拒绝里取出玩家现在的服。`rehome.SelfSID(registry)`：本进程的 sid。
-- Nest handler（`game/handler/rehome_*.go`，都是 `rollback=undo durability=strict`，由驱动器调用，不对客户端开放）：`RehomePrepare`（核对规则与事务内检查、记意图）、`RehomeCancel`（按换服 ID 清意图）、`RehomeArrive`（到达）。参数是生成的 `view.IRehomeEntity`。组件 `Rehome()`（对外接口 `view.Rehome`；逻辑、类型号 `rehome.CompTypeRehome` 与工厂登记在 `game/components/rehome/rehome.go`，实体包里没有 rehome 的手写文件）另有只读的 `LastAt()`、`Count()`。
+- Nest handler（`game/handler/rehome_*.go`，都是 `rollback=undo`（持久级别取缺省 async），由驱动器调用，不对客户端开放）：`RehomePrepare`（核对规则与事务内检查、记意图）、`RehomeCancel`（按换服 ID 清意图）、`RehomeArrive`（到达）。参数是生成的 `view.IRehomeEntity`。组件 `Rehome()`（对外接口 `view.Rehome`；逻辑、类型号 `rehome.CompTypeRehome` 与工厂登记在 `game/components/rehome/rehome.go`，实体包里没有 rehome 的手写文件）另有只读的 `LastAt()`、`Count()`。
 
 **登记点与实体事件**（三个时机；有的分事务内与事务外两半，一个功能两半都需要时两处都写。事务之外的三个登记点在实体锁之外执行，只在 `init` 里登记，空名、nil、重名直接 panic，按名字顺序执行；事务之内的两半是 Player 上的实体事件（`game/event/rehome.go`，rehome 组件发布），别的模块在自己的组件或 Player 的方法上标 `//roost:listen [priority=N]` 监听，`roost generate` 按优先级排好顺序）
 
@@ -93,7 +93,7 @@
 - **频率与大小**：一名玩家同一时刻至多一次换服在途；冷却缺省 7 天（GM 发起的不受约束）；意图至多一份、到达标记只记最近一次，玩家档里的记录大小不随换服次数增长。
 - **时间预算**（`rehome_driver.go` 的常量）：一次 account 调用或一笔 Nest 事务 5 秒；全部离开钩子合计 10 秒；安静下来 30 秒、交出实体 30 秒（等不到就中止）；结果未知时的重发间隔从 1 秒翻倍、封顶 30 秒。
 - **一致性**：
-  - 记意图与事务内检查是一笔 Player 严格事务；到达（清意图、冷却、次数、事务内钩子）是另一笔，按换服 ID 只做一次。
+  - 记意图与事务内检查是一笔 Player 事务；到达（清意图、冷却、次数、事务内钩子）是另一笔，按换服 ID 只做一次。两笔的持久级别取缺省 async：进程崩溃不丢已回复的事务；整机掉电丢掉已回复、已向 account 发起的意图时，换服照样由 account 的在途索引接着做完，但目标服到达时没有意图——与运维直接用 `accountctl` 换服一样，不起冷却、不跑到达钩子。
   - 与 account 之间不是一笔事务。结论**只按 account 带回的当前绑定判定**（承载服、绑定代数、在途的换服 ID），不从错误码推断某个换服 ID 当年是提交还是中止。
   - **结果未知时无限重发**：提交、中止、撤屏障在 account 或实体不给结论时一直重发，没有次数上限；停机时由 manager 取消（见上面第 4 条），留给重启之后。期间这名玩家在哪个服都进不去——有意如此，因为没有人知道他归谁。
   - 离开钩子可能被重复调用（源服重启后接着做完时再调一次）；钩子做的事在换服被中止时不会被撤回。

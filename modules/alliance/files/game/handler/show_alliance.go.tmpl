@@ -8,7 +8,7 @@ import (
 // 自己的入退盟、在线通知与进入后对账都走这里，生成的同步层在提交后发送变化。
 // replaces 非零时仅替换那个联盟，防止晚到的旧退盟通知清掉新联盟。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerShowAlliance(target view.IAllianceEntity, allianceID int64, replaces int64) (bool, error) {
 	profile := target.Alliance()
 	current := profile.AllianceID()

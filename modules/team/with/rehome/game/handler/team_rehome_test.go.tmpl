@@ -14,7 +14,7 @@ import (
 
 func TestWithTeamRehomeRejectsAPlayerInTeam(t *testing.T) {
 	f := newTeamFixture(t, func(engine *nest.NestMgr) {
-		registerTeamTestHandler(engine, handlerNameRehomePrepare, invokeRehomePrepare, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		registerTeamTestHandler(engine, handlerNameRehomePrepare, invokeRehomePrepare, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	f.create(t, 101)
 	err := sender.NewRehomePrepareSender(f.engine).Sync_RehomePrepare(context.Background(), f.playerID(101), "move-1", 1, 2, true)
@@ -36,7 +36,7 @@ func TestWithTeamRehomeRejectsAPlayerInTeam(t *testing.T) {
 }
 func TestWithTeamRehomeRejectsJoiningDuringMove(t *testing.T) {
 	f := newTeamFixture(t, func(engine *nest.NestMgr) {
-		registerTeamTestHandler(engine, handlerNameRehomePrepare, invokeRehomePrepare, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		registerTeamTestHandler(engine, handlerNameRehomePrepare, invokeRehomePrepare, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	f.create(t, 101)
 	f.invite(t, 101, 102)

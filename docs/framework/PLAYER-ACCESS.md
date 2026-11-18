@@ -71,7 +71,7 @@ func (c *Controller) HandleEquipmentEquip(
 [装备 handler](../../modules/equipment/files/game/handler/equipment_equip.go.tmpl) 调用模块组件：
 
 ```go
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerEquipmentEquip(
     target view.IEquipmentEntity, request *pb.EquipmentEquipRequest,
 ) (*pb.EquipmentEquipResponse, error) {
@@ -86,7 +86,7 @@ func handlerEquipmentEquip(
 }
 ```
 
-装备组件的 `Equip`（handler 经生成的窄接口 `view.IEquipmentEntity` 的访问器 `Equipment()` 调用）负责扣新物品、换槽、退旧物品，之后发布实体事件 `event.EquipmentChanged`，attribute 组件监听它、同事务重算属性。调用方不能再次扣包。业务不手动取 Entity 锁，错误交还 Nest 统一回滚；strict 等待 WAL 持久化，不表示 Mongo 投影已完成。多实体例子见 [AddExp Controller](../../demo/game/controllers/player_add_exp.go.tmpl) 和 [handler](../../demo/game/handler/add_exp.go.tmpl)。
+装备组件的 `Equip`（handler 经生成的窄接口 `view.IEquipmentEntity` 的访问器 `Equipment()` 调用）负责扣新物品、换槽、退旧物品，之后发布实体事件 `event.EquipmentChanged`，attribute 组件监听它、同事务重算属性。调用方不能再次扣包。业务不手动取 Entity 锁，错误交还 Nest 统一回滚；标记不写 durability 即缺省 async：回复时已写进本进程 WAL、还没 fsync，更不表示 Mongo 投影已完成（模块不用 strict，见 [modules 约定“持久级别”](../../modules/README.md#必须遵守的约定)）。多实体例子见 [AddExp Controller](../../demo/game/controllers/player_add_exp.go.tmpl) 和 [handler](../../demo/game/handler/add_exp.go.tmpl)。
 
 ## 5. Agent 能否发送响应
 

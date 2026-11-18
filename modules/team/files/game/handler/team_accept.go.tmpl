@@ -4,7 +4,7 @@ import "{{MODULE}}/game/view"
 
 // handlerTeamAccept 的 Team 权限由准备阶段取得，业务阶段统一锁住 Team 与 Player。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTeamAccept(target view.TeamEntity, member view.ITeamEntity, sid int32, nowUnixMilli int64) (view.TeamSnapshot, error) {
 	return member.Team().Accept(target, sid, nowUnixMilli)
 }

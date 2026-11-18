@@ -8,7 +8,7 @@ import (
 
 // handlerGachaDraw 把任何拒绝交还 Nest，保证十连不会留下前几次已发的奖励或已扣的金币。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerGachaDraw(target view.IGachaEntity, request *pb.GachaDrawRequest) (*pb.GachaDrawResponse, error) {
 	if request == nil {
 		return nil, apperrors.ErrGachaKeyInvalid

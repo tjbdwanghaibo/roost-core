@@ -30,7 +30,7 @@
 - `game/modules/login/enter_create.go` 的 `Assess(ctx, registry, entering, built)`：算出该告诉客户端什么（`Status{Code, Reason, NeedCreate}`），不推送、不断开。
 - `game/controllers/enter.go` 的 `Announce(ctx, registry, entering, sessionID)`：调 `Assess`，把结果作为 `EnterStatus` 推给这条会话；进入前检查拒绝时推完等 `StatusCloseDelay`（300 毫秒）再断开这名玩家在本进程的全部会话。
 - 不经 `Enter` 的工程可以自己调 `RunEntering`、`RunEntered`、`RunCreating`、`RunCreatePrepare`（都在 `game/modules/login`）。
-- Nest handler（`game/handler/enter_*.go`，都不对客户端开放，参数是生成的 `view.IEnterEntity`）：`handlerEnterInit`（加载或创建那条路的首次初始化）、`handlerEnterExisting`（只进入已建成的）、`handlerEnterCreate`（新建事务）、`handlerEnterBuilt`（只读，问“建成了没有”）。前三个是 `rollback=undo durability=strict`。
+- Nest handler（`game/handler/enter_*.go`，都不对客户端开放，参数是生成的 `view.IEnterEntity`）：`handlerEnterInit`（加载或创建那条路的首次初始化）、`handlerEnterExisting`（只进入已建成的）、`handlerEnterCreate`（新建事务）、`handlerEnterBuilt`（只读，问“建成了没有”）。前三个是 `rollback=undo`（持久级别取缺省 async）。
 - 组件 `Enter()`（对外接口 `view.Enter` 在 `game/view/component_enter.go`；逻辑、类型号 `enter.CompTypeEnter` 与工厂登记在 `game/components/enter/enter.go`）：`Init(nowUnixMilli)`、`Existing()`、`Create(name, nowUnixMilli)`、`Built()`，只能在持有 Player 锁的 Nest 事务里调。宿主方法 `view.EnterHolder`：`EnterState()` 由生成器交接 `PlayerDao.Enter`，`GrantFirstEnter(nowUnixMilli)` 手写在 `game/entities/player/enter.go`（调 `gamelogin.GrantFirstEnter`）。
 
 ### 登记点与实体事件

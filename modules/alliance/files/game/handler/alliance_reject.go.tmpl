@@ -9,7 +9,7 @@ import (
 
 // handlerAllianceReject drops an application; leader only.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceReject(target view.IAllianceRosterEntity, requestID string, actorID int64, applicantID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.AllianceRoster()
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {

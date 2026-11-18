@@ -262,7 +262,7 @@ func TestDungeonOpenPersistsBothOfficialDAOs(t *testing.T) {
 	if s.Instance == "" || s.Epoch != 1 || s.Stage != "waves" || s.Phase != string(level.Running) {
 		t.Fatalf("open=%+v", s)
 	}
-	if len(record.Mutations) != 2 || record.Durability != dataengine.DurabilityStrict {
+	if len(record.Mutations) != 2 || record.Durability != dataengine.DurabilityAsync {
 		t.Fatalf("aggregate commit=%+v", record)
 	}
 	collections := map[string]bool{}

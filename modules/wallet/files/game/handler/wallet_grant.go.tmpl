@@ -7,7 +7,7 @@ import (
 
 // handlerWalletGrant 是服务端发放（奖励、充值到账、GM），不对客户端开放。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerWalletGrant(target view.IWalletEntity, key string, amount int64) (int64, error) {
 	if amount <= 0 {
 		return 0, wallet.ErrAmount()

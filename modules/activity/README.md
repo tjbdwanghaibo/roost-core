@@ -16,7 +16,7 @@
     - `activity.Of(target)` 取回组件、再 `.Host()`：返回一次调用用的状态机入口 `activity.Host`。`Host`、`Views` 带本包的类型（`Token`、`Snapshot`），进不了 `game/view`，handler 经 `activity.Of` 用它们。
   - 宿主方法（`view.ActivityHolder`）：`ActivityBook()` 由生成器交接宿主 DAO 里唯一的 `ActivityBook` 字段；`ActivityScope()`、`ActivityCreatedAt()` 每种实体手写一份（Player 的在 `game/entities/player/activity.go`）。
   - `activity.Host` 的方法（`game/components/activity/engine.go`）：`Activate(d, event, factTime, now)`、`Reopen(d, event, factTime, now, nextGeneration)`、`Reconcile(definitions, event, createdAt, now)`、`Advance(now)`、`Complete(token, now)`、`CheckOpen(token, now)`、`MoveFlow(token, next, now)`、`JoinShared(shared, now)`、`Views()`、`NextDeadline(now)`。
-  - Nest handler（`game/handler/`，都是 `durability=strict`，没有持有 `Player` 锁的服务端代码经生成的 Sender 调用）：
+  - Nest handler（`game/handler/`，都用缺省 async（标记不写 durability），没有持有 `Player` 锁的服务端代码经生成的 Sender 调用）：
     - `handlerActivityEvent`（`Sync_ActivityEvent(ctx, 完整实体号, event, createdAt)`）：可信业务入口，上报一个事件并返回全部活动快照。
     - `handlerActivityComplete`（`Sync_ActivityComplete(ctx, 完整实体号, token)`）：确认某一期的异步初始化或结算已经完成。
     - `handlerActivityView`：协议背后的事务。

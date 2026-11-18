@@ -15,7 +15,7 @@ turn 挂在 room 模块的 Room 实体上：一场对局开局时把在座的人
   - `CheckEnd(playerID, epoch, connection, round, sequence) (replay bool, err error)`：只检查、不推进。`replay` 为真表示这是最后一条成功命令的重发，**不能再执行游戏动作**。
   - `End(playerID, epoch, connection, round, sequence) (TurnSnapshot, error)`：内部先 `CheckEnd`，再记回执、换定时器、推进一回合。
   - `View(playerID, epoch, connection) (TurnSnapshot, error)`
-  - Nest handler（`game/handler/`，`rollback=undo durability=strict`）：`handlerTurnStart`、`handlerTurnEnd`、`handlerTurnView`；例如 `syncsender.NewTurnEndSender(client).Sync_TurnEnd(ctx, roomEntityID, playerID, epoch, connection, round, sequence)`。
+  - Nest handler（`game/handler/`，`rollback=undo`（持久级别取缺省 async））：`handlerTurnStart`、`handlerTurnEnd`、`handlerTurnView`；例如 `syncsender.NewTurnEndSender(client).Sync_TurnEnd(ctx, roomEntityID, playerID, epoch, connection, round, sequence)`。
   - Controller（`game/controllers/turn.go`）：`HandleTurnStart`、`HandleTurnEnd`、`HandleTurnView`。
 - **登记点 / 钩子**
   - 模块没有“回合开始 / 结束 / 对局结束”的业务钩子。接游戏动作的方式是自己写 handler 组合 `CheckEnd` 与 `End`（见“复用方式”）。

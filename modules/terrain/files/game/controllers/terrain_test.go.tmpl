@@ -324,7 +324,7 @@ func (f *terrainFixture) editMutationKeys(site bool) map[dataengine.DocumentKey]
 }
 func (f *terrainFixture) assertMutationKeys(record dataengine.CommitRecord, want map[dataengine.DocumentKey]bool) {
 	f.t.Helper()
-	if record.Durability != dataengine.DurabilityStrict || len(record.Mutations) != len(want) {
+	if record.Durability != dataengine.DurabilityAsync || len(record.Mutations) != len(want) {
 		f.t.Fatalf("aggregate durability=%v documents=%d want=%d", record.Durability, len(record.Mutations), len(want))
 	}
 	for _, mutation := range record.Mutations {

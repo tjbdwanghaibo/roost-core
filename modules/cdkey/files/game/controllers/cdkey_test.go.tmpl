@@ -64,7 +64,7 @@ func (g cdkeyGetter) GetMany(ctx context.Context, ids []int64, cats []entity.Ent
 type cdkeyCommitter struct {
 	writes atomic.Int64
 	reject atomic.Bool
-	strict atomic.Bool
+	async  atomic.Bool
 }
 
 func (c *cdkeyCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
@@ -72,7 +72,7 @@ func (c *cdkeyCommitter) Commit(_ context.Context, record dataengine.CommitRecor
 		return errors.New("injected commit rejection")
 	}
 	c.writes.Add(1)
-	c.strict.Store(record.Durability == dataengine.DurabilityStrict)
+	c.async.Store(record.Durability == dataengine.DurabilityAsync)
 	return nil
 }
 
@@ -310,7 +310,7 @@ func TestCdkeyPlayerCodeSendsOneMailToEachPlayer(t *testing.T) {
 	}
 	e, _, _ := f.envelopes.Get(context.Background(), a.MailID)
 	attachment, err := mailbox.Decode(e.Attachment)
-	if err != nil || attachment.Amount != 100 || len(e.Recipients) != 1 || e.Recipients[0] != 95101 || !f.commit.strict.Load() {
+	if err != nil || attachment.Amount != 100 || len(e.Recipients) != 1 || e.Recipients[0] != 95101 || !f.commit.async.Load() {
 		t.Fatalf("mail=%+v attachment=%+v err=%v", e, attachment, err)
 	}
 }

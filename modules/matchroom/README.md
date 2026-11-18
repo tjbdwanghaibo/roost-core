@@ -16,7 +16,7 @@ roomID, err := rooms.Open(ctx, matchID, []int64{playerA, playerB}) // 返回房�
 - `Open(ctx, matchID, members) (int64, error)`：`matchID` 是可信的成局身份，`members` 是核实过的玩家唯一号。返回成功时名单与容量已经提交到 Room。失败可以用同样的参数重试。
 - `Binding`：持久映射的一行（`MatchID`、`RoomID`、`SID`、`Members`）。
 
-**Nest handler**（`game/handler/matchroom_open.go`）：`MatchroomOpen(matchID, members)`，`rollback=undo durability=strict`，由 `Open` 经生成的 Sender 调用。handler 参数是生成的 `view.IMatchroomEntity`；组件（逻辑、类型号 `matchroom.CompTypeMatchroom` 与工厂登记在 `game/components/matchroom/matchroom.go`）方法 `Matchroom().Open(matchID, members)` 与 `Matchroom().Closed(matchID)`（这一局的房关了没有，给可信流程核对用）只能在持有 Room 锁时调用。
+**Nest handler**（`game/handler/matchroom_open.go`）：`MatchroomOpen(matchID, members)`，`rollback=undo`（持久级别取缺省 async），由 `Open` 经生成的 Sender 调用。handler 参数是生成的 `view.IMatchroomEntity`；组件（逻辑、类型号 `matchroom.CompTypeMatchroom` 与工厂登记在 `game/components/matchroom/matchroom.go`）方法 `Matchroom().Open(matchID, members)` 与 `Matchroom().Closed(matchID)`（这一局的房关了没有，给可信流程核对用）只能在持有 Room 锁时调用。
 
 **实体事件**：模块自己不发布事件。它的组件监听 room 的拦截事件 `event.RoomJoining`（`game/components/matchroom/matchroom.go` 的 `OnRoomJoining`，`//roost:listen`）：房间有 MatchID 时，名单之外的玩家入房被拒，答 room 的 `room_not_member`。检查在 Room 的入房事务里。
 

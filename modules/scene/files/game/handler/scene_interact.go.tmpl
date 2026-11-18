@@ -16,7 +16,7 @@ import (
 // 序号不对（scene_sequence）、不在这张图（scene_not_here）、没有这个对象（scene_object_unknown）、够不着（scene_object_far）。
 // 都通过之后在 Player 上发布 event.SceneInteract，监听返回的错误原样带出：带码的照样答给客户端，不带码的按内部错误处理。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSceneInteract(target view.PlayerEntity, area scene.ISceneEntity, sequence uint64, objectID int64) (*pb.SceneInteractResponse, error) {
 	state := target.Dao().GetSceneInteraction()
 	if sequence == 0 {

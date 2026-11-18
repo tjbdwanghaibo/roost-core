@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | SceneActor 实体 | `game/entities/scene_actor`、`db/def/scene_actor.go` | 玩家在格上的那一份（自带实体，号由安装器分配）；`noPersist` / `ephemeral`，只由 Node 以 `CellMode` 建出，整份状态是 `SceneActorDao` 的 Cell* 字段，跨格交接整份带走 |
 | 分区状态的嵌套类型 | `db/def/cellworld.go` | CellHit / CellHandoff / CellOwnership / CellRecovery / CellEffect / CellCooldown / CellDeath；工程让自己的实体走格时 DAO 用同样的类型 |
-| Player 上的模块状态 | `PlayerDao.CellworldBase`（存储键 `cellworld_base`，持久、不同步） | 恢复快照（Buff / 冷却）与死亡回执，与 SettleDeath 的奖励同一笔 strict 事务 |
+| Player 上的模块状态 | `PlayerDao.CellworldBase`（存储键 `cellworld_base`，持久、不同步） | 恢复快照（Buff / 冷却）与死亡回执，与 SettleDeath 的奖励同一笔事务（框架的 cellworld handler 登记为 `rollback=undo`、缺省 async） |
 | 状态映射 | `cellworldhost.ReadActor` / `WriteActor`（`CellDao`）、`ReadBase` / `WriteBase`（`BaseDao`） | DAO 与 `cellworld.ActorState` / `BaseState` 之间唯一的一份映射：读出是副本，写经生成 setter（回滚即还原），快照位置只在回写时写 |
 | Node 安装点与格心跳 | `Install` / `Uninstall` / `Node` / `SceneID` / `Heartbeat`、`CellMode`、`RegisterActorBeat` / `RegisterBaseBeat` | 实体在回调里找本进程的 Node；心跳名与周期取 Node 配置，Node 卸下后什么都不做 |
 | 死亡回执 | `DeathReceipt` / `RecordDeathReceipt` | 表满时新目标被拒，Node 不确认这条死亡 |
@@ -44,7 +44,7 @@
 
 4. 调 `cellworldhost.New(registry, cfg)`。它只装配；`cellworldhost.Install(node, 场景 ID, 心跳驱动)`（SceneActor 从这个驱动取心跳宿主），先安装 Entity 心跳，再 `Runtime.Start(ctx)`；停机 `Runtime.Stop` 成功后 `Uninstall(node)`。Actor 心跳和 Scene 心跳按 50ms 驱动，普通业务仍走 Nest。**装配顺序**：manager 的 Start 在 Service.Init 之前，那时场景与心跳还没装，所以 manager 只发布 `cellworldhost.Host`、不启动 Node；Node 的启动点由服务给出——`Runtime.Start` 把 Runtime 交给 Host 再起 Node，Registry 里没有 Host（`Managers()` 里删掉了 `NewCellWorldHost()`）或 Host 已停（进程在停机）时拒绝、不起 Node；一个进程只能交一个 Node。
 5. NPC 启动时用 `Births.Reserve` 固定名字与序号，用 `SpawnID` 构建稳定 ID（`Static | home<<34 | 1<<33 | seq`，seq ≤ 50000；第 33 位是出生号段，同一 sid 下业务自己按 `sid<<34` 编码的运行期号序号只能用第 0～32 位，game-demo 的 `runtimeid` 与 monster 模块已按此封顶），调用 `Node.ReconcileSpawn` / `Runtime.StartSpawns`。改名、删槽、改变已存在槽的规则被拒绝，须明确离线处理旧槽。
-6. 有奖励时配置 `NodeConfig.SettleDeath`，在获奖 Player 的 strict 事务里调用钱包 / 背包组件；不得做外部 I/O、另开事务或在观察 Hook 中发奖。死亡回执和奖励同提交；重复投递不会重复奖励。
+6. 有奖励时配置 `NodeConfig.SettleDeath`，在获奖 Player 的事务里（缺省 async）调用钱包 / 背包组件；不得做外部 I/O、另开事务或在观察 Hook 中发奖。死亡回执和奖励同提交；重复投递不会重复奖励。
 7. 停止业务准入后、拆掉 Node 用到的场景（Mirror / Interest）之前调用 `Runtime.Stop(ctx)`，成功后才卸载实体与底层 Mods。服务没停下的 Node（Stop 超时、Init 在 Start 之后失败）由 manager 停时 `Host.Close` 在期限内排空并收回协程；`Runtime.Stop` 可以重复调用。
 
 完整且可生成运行的 Player / 怪物 / 服务适配在 [game-demo](../../demo/README.md) 的 `game/entities/player/cell_base.go`、`game/entities/monster/cell.go` 与 `internal/service/game/partition.go`（demo 先单独装本模块，再写用到模块类型的 MonsterDao）。

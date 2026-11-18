@@ -19,7 +19,10 @@ import (
 // handlerAllianceAdmit — a guard held by something else answers Held and
 // records nothing, so the service can heal it first.
 //
-//roost:nest rollback=undo durability=strict
+// pipelined（不是缺省 async）：两步建盟（alliance_found Saga 的建盟步骤）与跨实例入盟拿这次预约去建盟 / 入席；预约在回复前
+// 没持久、事后丢了，守卫就会“少占”（玩家在联盟里、守卫是空的），一人一盟不再成立，重投的建盟步骤也认不出回执。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerGuardReserve(target view.IAllianceGuardEntity, requestID string, allianceID int64, deadlineUnix int64, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
 	guard := target.AllianceGuard()
 	if _, decided := guard.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
@@ -43,7 +46,7 @@ func handlerGuardReserve(target view.IAllianceGuardEntity, requestID string, all
 // resolution changes nothing. (The service disarms its in-process deadline
 // once the guard no longer holds the reservation.)
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerGuardResolve(target view.IAllianceGuardEntity, requestID string, allianceID int64, joined bool) (alliancerule.GuardAnswer, error) {
 	guard := target.AllianceGuard()
 	changed := guard.Resolve(requestID, allianceID, joined)
@@ -54,7 +57,7 @@ func handlerGuardResolve(target view.IAllianceGuardEntity, requestID string, all
 // if it is still the current one (after the alliance unseated the player, or
 // after healing found the alliance holds no seat under joinRequestID).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerGuardClear(target view.IAllianceGuardEntity, allianceID int64, joinRequestID string, nowUnix int64) (alliancerule.GuardAnswer, error) {
 	guard := target.AllianceGuard()
 	changed := guard.Clear(allianceID, joinRequestID, nowUnix)
@@ -87,7 +90,10 @@ func handlerGuardReceipt(target view.IAllianceGuardEntity, requestID string) (al
 // [(n-1)·periodSeconds, n·periodSeconds), so 0 means "never claimed". The
 // answer's Subject is the alliance the reward was claimed in.
 //
-//roost:nest rollback=undo durability=strict
+// pipelined（不是缺省 async）：alliance_reward Saga 的 claim 步骤拿这次回复让协调器推进到发奖；标记在回复前没持久、
+// 事后丢了，同一周期就能再领一次。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerGuardClaimReward(target view.IAllianceGuardEntity, requestID string, periodSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
 	if periodSeconds <= 0 {
 		return alliancerule.GuardAnswer{}, fmt.Errorf("alliance reward: period must be positive, got %ds", periodSeconds)
@@ -107,7 +113,10 @@ func handlerGuardClaimReward(target view.IAllianceGuardEntity, requestID string,
 // saga's compensation). Only that claim is touched, so a redelivered release
 // changes nothing.
 //
-//roost:nest rollback=undo durability=strict
+// pipelined（不是缺省 async）：这是 alliance_reward Saga 的补偿，协调器拿这次回复判定补偿完成；撤销在回复前没持久、
+// 事后丢了，标记留着而道具没发，这一周期的奖励就丢了。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerGuardReleaseReward(target view.IAllianceGuardEntity, claimRequestID string) (alliancerule.GuardAnswer, error) {
 	guard := target.AllianceGuard()
 	changed := guard.ReleaseReward(claimRequestID)

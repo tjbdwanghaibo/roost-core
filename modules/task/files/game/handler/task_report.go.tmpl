@@ -4,7 +4,7 @@ import "{{MODULE}}/game/view"
 
 // handlerTaskReport 只给服务端用；独立消息不自带去重，事务内事件直接调 Task().Report。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerTaskReport(target view.ITaskEntity, event string, n int64, nowUnixMilli int64) error {
 	return target.Task().Report(event, n, nowUnixMilli)
 }

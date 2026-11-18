@@ -14,7 +14,7 @@
 - 协议 `NamingRename` 的入口 `Controller.HandleNamingRename`：请求键由客户端带，同一个键重发恢复同一笔。
 - 协调器 `namingRenamer`（包内私有，依赖每次从 Registry 取）：`newNamingRenamer(registry)` 后 `Rename(ctx, playerID, requestKey, name)`，只能在 Nest 事务之外调用，会等待目录与 Nest。别的包经 `profile.Rename`（本模块在 init 里登记的改名器）调到它。
 
-**Nest handler**（`game/handler/naming_begin.go`、`naming_step.go`，都是 `rollback=undo durability=strict`，由 `Rename` 经生成的 Sender 调用）
+**Nest handler**（`game/handler/naming_begin.go`、`naming_step.go`，都是 `rollback=undo`（持久级别取缺省 async），由 `Rename` 经生成的 Sender 调用）
 
 - `NamingBegin(operation, name)`：受理一次改名（校验名字与请求键、记下意图），返回 `view.NamingTicket`。
 - `NamingStep(seq, operation, action, key, token)`：推进一步。`action` 1 = 记下目录凭据，2 = 目录已提交、把名字写进档案，3 = 旧名已释放、完成，4 = 占名被明确拒绝、撤掉意图，5 = 凭据被明确判为失效、退回重新占名。
@@ -46,7 +46,8 @@
 - **名字规则来自 profile**：合法 UTF-8、去掉首尾空白后 1 到 16 个字符。初始的空名字不占名。唯一性按目录的小写规范化判断。
 - **请求键**：1 到 64 字节，不能带首尾空白。只保留最近一笔回执：完成之后再做别的改名，旧回执就被替换。需要长期幂等的调用方自己记账。与当前显示名完全相同的改名，用新请求键来会直接当作已完成。
 - **一致性**：玩家档与目录是两个存储，不是一笔事务。保证的是：
-  - 每一步阶段转换是 Player 上的一笔严格事务；同一名玩家同时只有一笔改名在途。
+  - 每一步阶段转换是 Player 上的一笔事务（持久级别取缺省 async）；同一名玩家同时只有一笔改名在途。
+  - 进程崩溃不丢已回复的阶段转换。整机掉电可能丢掉最后一个组提交间隔里已回复的转换，档案退回更早的阶段、`Seq` 不变，而目录可能已经走到后面：同一个请求键重发时目录属主（`naming:<玩家>:<Seq>`）与凭据都对得上，从档案的阶段接着做。客户端换了请求键、而丢掉的那一笔已在目录提交了新名字时，那个名字留在旧属主名下不会自动释放——这一种情形没有场景覆盖，尚未确认。
   - 超时、目录应答丢失、Nest 提交结果未知、旧名释放失败时，**不撤销也不释放新名字**，保留在途状态；同一个请求键重发从存下来的阶段继续，进程重启之后也一样。
   - 只有两种明确的回答会回退：占名时目录明确说“已被占”（撤掉还没拿到凭据的意图）；提交时目录明确说凭据不存在或已过期（清掉凭据退回已受理，本次仍返回错误，下一次重发重新占名）。
   - 释放旧名带着旧属主做 CAS；属主里有 `Seq`，迟到的旧清理删不掉同一名玩家后来重新取得的名字，也删不掉别人的。

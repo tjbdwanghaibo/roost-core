@@ -7,7 +7,7 @@ import (
 	"{{MODULE}}/game/view"
 )
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerWorldActivityInit(target view.ActivityWorldEntity, createdAt int64) error {
 	if createdAt <= 0 || createdAt > fctx.NowMilli() {
 		return activity.ErrRule

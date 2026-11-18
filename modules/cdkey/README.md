@@ -8,7 +8,7 @@
   - `CdkeyRedeem`（`protocol/def/cdkey_redeem.go`）：请求带 `Cdkey`（码），成功应答带 `MailID`（发出的邮件号）。玩家再用 `mailbox` 模块的列表与领取入口领附件；奖励不直接进钱包。端点是 `game/controllers/cdkey.go` 的 `HandleCdkeyRedeem`。
 - **服务端入口**
   - `Controller.CdkeyRedeem(ctx, playerID int64, code string) (gamecdkey.Intent, error)`（`game/controllers/cdkey.go`）：客户端与可信服务端共用的协调入口，`playerID` 是原始玩家号。只能在实体事务之外调用（它要做跨进程调用）。经生成的 `controllers.FromRegistry(registry)` 取得 `Controller`。
-  - Nest handler `handlerCdkeyPrepare`、`handlerCdkeyComplete`（`game/handler/cdkey.go`，都是 `durability=strict`）：只操作玩家账本，不发 RPC。一般不直接调用，由 `CdkeyRedeem` 驱动。
+  - Nest handler `handlerCdkeyPrepare`、`handlerCdkeyComplete`（`game/handler/cdkey.go`，都用缺省 async（标记不写 durability））：只操作玩家账本，不发 RPC。一般不直接调用，由 `CdkeyRedeem` 驱动。
   - 组件方法 `Cdkey().Prepare(raw string, nowUnixMilli int64)`、`Cdkey().Complete(code, mailID string)`（逻辑、类型号 `cdkey.CompTypeCdkey` 与工厂登记在 `game/components/cdkey/cdkey.go`，对外接口在 `game/view/component_cdkey.go`），Nest handler 的窄接口是生成的 `view.ICdkeyEntity`。
   - `game/modules/cdkey/cdkey.go`：`Normalize(code)`（去两侧空白、转大写、校验字符）、`Intent`（一次兑换的冻结内容）及其方法 `ClaimKey(playerID)`（directory 占用键）、`RequestID(playerID)`（发件幂等键）。
 - **登记点 / 钩子**：无。
@@ -31,7 +31,7 @@
 - **码的格式**：去掉两侧空白并统一大写后，只允许 ASCII 大写字母、数字、`-`、`_`，长度 1～64 字节。
 - **配置行的运行期检查**（`Prepare`）：`Mode` 只能是 `player` 或 `once`；`Coins` 为正；`Subject` 非空且不超过 128 字节；`Body` 不超过 4096 字节；`ExpiresInSeconds` 在 1 秒到 365 天之间；`EndsAtUnix` 非 0 时必须大于 `StartsAtUnix`。兑换时刻要落在 `[StartsAtUnix, EndsAtUnix)` 内，0 表示这一侧没有边界。不合规一律答 `cdkey_invalid`。
 - **数量上限**：每名玩家的账本至多 128 条，已成功的回执与在途的意图都占位，不淘汰。满了拒绝新码，旧码仍可继续恢复。全服码被别人占走时，本玩家那条没有奖励的意图也留着并占一个位置。
-- **一致性与幂等**：一次兑换分四步——① `Player` 严格持久事务记下意图并冻结奖励；② directory 占用（先 `Reserve` 再 `Commit`，不释放）；③ `mailbox.SendTo` 以稳定键发件；④ `Player` 严格持久事务记下邮件号。四步不是一笔事务。任一步结果未知都保留意图；玩家用同一个码再兑一次，从已有事实接着做，不换键、不重复发件。已确认的码再兑直接返回原 `MailID`，不调外部服务、不写任何字段，也不受配置下架影响。
+- **一致性与幂等**：一次兑换分四步——① `Player` 事务记下意图并冻结奖励；② directory 占用（先 `Reserve` 再 `Commit`，不释放）；③ `mailbox.SendTo` 以稳定键发件；④ `Player` 事务记下邮件号。四步不是一笔事务。两笔 `Player` 事务的持久级别取缺省 async：整机掉电可能丢掉最后一个组提交间隔里已回复的 ① 或 ④，这时 directory 的占用与已发的邮件还在——再兑一次时意图按同一份配置重新冻结，directory 按同一属主（玩家号）认出自己的占用，发件按同一个请求键返回原信封，所以不会多发也不会被自己的占用挡住（进程崩溃不丢已回复的事务）。任一步结果未知都保留意图；玩家用同一个码再兑一次，从已有事实接着做，不换键、不重复发件。已确认的码再兑直接返回原 `MailID`，不调外部服务、不写任何字段，也不受配置下架影响。
 - **恢复靠玩家重试**：没有启动扫描与后台重试。意图已记下但后续步骤没走完时，要等玩家用原码再发一次请求才继续。
 - **有效期只管首次受理**：已受理的意图按冻结的奖励继续，不再看开始、结束时刻。邮件过期后不会换一封新邮件补发，实际领取期限是邮件自己的期限。
 - **前提**

@@ -12,7 +12,7 @@
   - `Advance(taskID, n, nowUnixMilli int64) (int64, error)`：直接按任务号推进，返回推进后的进度。任务未解锁答 `task_incomplete`，拒绝前不写。
   - `Claim(taskID, nowUnixMilli int64) (TaskClaimResult, error)`：`TaskClaim` 协议用的那一个，发奖并记下“领过了”。
   - `nowUnixMilli` 一律是所在 Nest 消息冻结的业务时间，不采信客户端时间。
-  - Nest handler（都在 `game/handler/`，`rollback=undo durability=strict`）：
+  - Nest handler（都在 `game/handler/`，`rollback=undo`（持久级别取缺省 async））：
     - `handlerTaskClaim`（`task_claim.go`）：协议对应的 handler。
     - `handlerTaskReport`（`task_report.go`）：只给服务端用，不在这名玩家事务里的调用方发 `sender.NewTaskReportSender(client).Sync_TaskReport(ctx, playerEntityID, event, n)`。
     - `handlerTaskAdvance`（`task_advance.go`）：同上，按任务号：`sender.NewTaskAdvanceSender(client).Sync_TaskAdvance(ctx, playerEntityID, taskID, n)`。

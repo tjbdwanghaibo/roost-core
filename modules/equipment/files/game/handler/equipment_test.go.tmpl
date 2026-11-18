@@ -88,7 +88,7 @@ func newEquipmentFixture(t *testing.T) *equipmentFixture {
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(equipmentGetter{id: e}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("equipmentTestAction"), func(_ []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
 		return nil, p[0].(func() error)()
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if err = f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}

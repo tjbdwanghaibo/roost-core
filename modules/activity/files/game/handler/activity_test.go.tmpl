@@ -99,13 +99,13 @@ func newActivityFixture(t *testing.T) *activityFixture {
 			return nil, err
 		}
 		return nil, p.ActivityComp().Rearm()
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = f.engine.RegisterHandlerWithMeta(nest.NewHandlerName("handlerTickPlayer{{TIMER_COMPONENT}}"), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		return handlerTickPlayer{{TIMER_COMPONENT}}(es[0].(player.I{{TIMER_COMPONENT}}Entity))
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict}); err != nil {
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync}); err != nil {
 		t.Fatal(err)
 	}
 	if err = f.engine.Start(); err != nil {
