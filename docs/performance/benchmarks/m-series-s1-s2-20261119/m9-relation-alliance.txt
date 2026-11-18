@@ -1,0 +1,22 @@
+# 原始输出 1.36 GB（5,856,012 行），其中 5,856,000 行是同一条 WARN（976 个观察者 × 2000 个 subject = 1,952,000 个 pair，每个 pair 每次运行 1 条，-count 3）。
+# 下面保留全部非 WARN 行（基准结果行被 WARN 插断的地方已按原顺序保留），与 WARN 的首尾各 3 行；统计见 README 的 M-9 一节。
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      50	   2624319 ns/op	    188333 bytes/round	      1234 heap-MB	   1000000 pairs	  676996 B/op	    6339 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      50	   2643260 ns/op	    188333 bytes/round	      1234 heap-MB	   1000000 pairs	  676996 B/op	    6339 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      50	   2634459 ns/op	    188333 bytes/round	      1234 heap-MB	   1000000 pairs	  676996 B/op	    6339 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      50	 965691764 ns/op	    377176 bytes/round	      3851 heap-MB	   4000000 pairs	599783443 B/op	  201904 allocs/op
+      50	 957290872 ns/op	    377176 bytes/round	      3852 heap-MB	   4000000 pairs	599783333 B/op	  201903 allocs/op
+      50	 948900837 ns/op	    377176 bytes/round	      3852 heap-MB	   4000000 pairs	599783366 B/op	  201903 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	178.485s
+# WARN 首 3 行：
+2026/11/19 03:05:10 WARN entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain observer=11024 subject=10000 session=11024 attempts=10 err="entitysync: subscriber limit reached for this subject"
+2026/11/19 03:05:10 WARN entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain observer=11024 subject=10001 session=11024 attempts=10 err="entitysync: subscriber limit reached for this subject"
+2026/11/19 03:05:10 WARN entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain observer=11024 subject=10002 session=11024 attempts=10 err="entitysync: subscriber limit reached for this subject"
+# WARN 末 3 行：
+2026/11/19 03:07:16 WARN entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain observer=11999 subject=11997 session=11999 attempts=10 err="entitysync: subscriber limit reached for this subject"
+2026/11/19 03:07:16 WARN entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain observer=11999 subject=11998 session=11999 attempts=10 err="entitysync: subscriber limit reached for this subject"
+2026/11/19 03:07:16 WARN entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain observer=11999 subject=11999 session=11999 attempts=10 err="entitysync: subscriber limit reached for this subject"

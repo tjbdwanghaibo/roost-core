@@ -861,17 +861,17 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 ## 二、遗留问题
 
-本节只保留已决定待实施、待测与外部验收。114 条旧基线的 A / B / F 映射和当前状态见[收口计划](evidence/known-limits-remaining-20261114/remaining.md)；C 的拓扑、现行入口与关闭证据见[外部清单](evidence/known-limits-remaining-20261114/external.md)。本轮代码工作与功能矩阵已完成，生成器整包复验已补跑通过（406 顶层 PASS，见[最终验收报告](evidence/v147-final-validation-20261114/README.md)）；M-1～M-19、E-1 / E-3 的正式测量均未运行，详见[最终验证与性能交接](HANDOFF-2026-11-14-v147-validation-performance.md)。本机功能通过不能替代容量结论。[维护者决定](evidence/known-limits-remaining-20261114/decisions.md)（D1～D26，含 N1～N4）已于 2026-11-14 答复：确认 / 文档类（D2～D6、D9、D10、D14、D15、D20）已写进一或关闭，随 v1.47.0 合入的实施（D1、D12、D16、D18、D25、D26）已回写；已决定、排在 v1.47.0 之后实施的条目标“已决定（D#，2026-11-14），v1.47.0 之后实施”，分批与做法见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)；v1.47.0 之后已在 feat/v148 实施：D13 C（B / E 等 M-15）、D22 的 login / rehome 两项；后台 checkpoint 已合入，M-19 开 / 关无退步后缺省打开。
+本节只保留已决定待实施、待测与外部验收。114 条旧基线的 A / B / F 映射和当前状态见[收口计划](evidence/known-limits-remaining-20261114/remaining.md)；C 的拓扑、现行入口与关闭证据见[外部清单](evidence/known-limits-remaining-20261114/external.md)。本轮代码工作与功能矩阵已完成，生成器整包复验已补跑通过（406 顶层 PASS，见[最终验收报告](evidence/v147-final-validation-20261114/README.md)）；M 的正式测量逐项状态见[收口计划 §3](evidence/known-limits-remaining-20261114/remaining.md#3-m空闲机器上的运行序列)（2026-11-19：M-1、M-2、M-9、M-15、M-18、M-19 已测，M-5 = E-1 与 E-3 已归因，其余未运行），历史交接见[最终验证与性能交接](HANDOFF-2026-11-14-v147-validation-performance.md)。本机功能通过不能替代容量结论。[维护者决定](evidence/known-limits-remaining-20261114/decisions.md)（D1～D26，含 N1～N4）已于 2026-11-14 答复：确认 / 文档类（D2～D6、D9、D10、D14、D15、D20）已写进一或关闭，随 v1.47.0 合入的实施（D1、D12、D16、D18、D25、D26）已回写；已决定、排在 v1.47.0 之后实施的条目标“已决定（D#，2026-11-14），v1.47.0 之后实施”，分批与做法见 [HANDOFF §四](HANDOFF-2026-11-14-v147-leftovers.md#四维护者答复后要实施的2026-11-14)；v1.47.0 之后已在 feat/v148 实施：D13 C（B / E 等 M-15）、D22 的 login / rehome 两项；后台 checkpoint 已合入，M-19 开 / 关无退步后缺省打开。
 
 ### Nest、App 与实体定时器（遗留）
 
 #### 实体心跳：遗留
 
-- **批量作业参数与热点实体**：M-1 待测真实回调 5～20µs、组 2 / 4、时间片 50 / 100µs 及热点冲突转单目标率。历史组 4 / 100µs 只在当时组合中最优，不是全参数最优；Linux 复测与宿主时段变化见 C-L1。
+- **批量作业参数**（M-1 已测，2026-11-19，macOS、2 轮、负载 3～5.5）：缺省组 4 / 100µs 下每拍回调 0 / 5 / 10 / 20µs，进程 CPU 0.77 / 1.26 / 1.69 / 2.37 核，普通业务消息 p99 0.127 / 0.18 / 0.21 / 0.146ms，心跳迟到 p99 3.0～4.8ms，24 次运行零跳拍 / 准入失败。回调 10µs 时时间片 50µs 比 100µs 业务 p99 低约 32%（0.140～0.147 对 0.208～0.211ms），CPU、迟到不变，组 2 与组 4 无差别——历史组 4 / 100µs 是在回调几十纳秒时选的，回调接近真实时更短时间片更好；只测了 10µs 一档、2 轮，**是否改缺省待维护者决定**（50µs 在回调 0 / 5 / 20µs 下的代价未测）。20µs 回调的业务 p99 反而低于 10µs，两轮一致，原因尚未确认。原“热点冲突转单目标率”已测完、不再是遗留：一半业务消息集中到 64 个心跳实体时，冲突转单目标 3.7～6.6 次/s，占心跳拍 0.004%～0.007%，对业务 p99、迟到与 CPU 无可见影响。Linux 复测与宿主时段变化见 C-L1（[证据](../performance/benchmarks/m-series-s1-s2-20261119/README.md)）。
 
 #### 移动与动作、行为与技能：遗留
 
-- **移动每拍分配**（M-2 已测，2026-11-18）：`BenchmarkMoveBeatAllocations` 六轮稳定，空事务底数 5 次 / 945 B / 约 355 ns，一拍移动 17 次 / 1885 B / 约 808 ns，移动本身每拍 12 次分配、约 940 B；分配来源没拆（没跑 -memprofile）。维护者 2026-11-18 定不改：按 1000 个单位每秒 5 拍估算约每秒 6 万次分配、不到 5 MB，等真实负载里 GC 成为瓶颈再压（[证据](evidence/perf-compressed-20261118/README.md)）。
+- **移动每拍分配**（M-2 已测，2026-11-18）：`BenchmarkMoveBeatAllocations` 六轮稳定，空事务底数 5 次 / 945 B / 约 355 ns，一拍移动 17 次 / 1885 B / 约 808 ns，移动本身每拍 12 次分配、约 940 B；分配来源没拆（没跑 -memprofile）。维护者 2026-11-18 定不改：按 1000 个单位每秒 5 拍估算约每秒 6 万次分配、不到 5 MB，等真实负载里 GC 成为瓶颈再压（[证据](evidence/perf-compressed-20261118/README.md)）。2026-11-19 第二类 S1 复测六轮，分配逐次相同，耗时差 1～3% 属时段差异（[复测](../performance/benchmarks/m-series-s1-s2-20261119/README.md)）。
 - **Linux SLG 恢复**：macOS 的默认 / REAL / MOBA ROUTING 已复验；SLG 修后 Linux 复跑仍见 C-L2。
 
 #### 压测工具的心跳驱动：遗留
@@ -911,7 +911,8 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 - **self_sync**：M-6 独立 Gate 重档待测。整轮重试放大已由 D1 合入的按 subject 作废 + 从被拒会话轮转修掉（`2e1486b4`）；同参数演练 16 KiB 171 / 200、64 KiB 200 / 200 轮提交。
 - **出站预算**：M-7 健康 1000 + 停读 50 连接待测；256 MiB 的历史正常负载拒绝为 0，不证明停读容量。
-- **Interest / 关系视图**：M-8 16 视野诊断构建、逐 tick backlog 与 M-9 `BenchmarkRelationViewAllianceFlush` 待测。CPU=0 参数已修并仅做小冒烟，不能当正式数据；千人互相可见的百万 pair 容量未验。
+- **Interest / 关系视图**：M-8 16 视野诊断构建与逐 tick backlog 待测，CPU=0 参数已修并仅做小冒烟，不能当正式数据。M-9 已测（2026-11-19，`BenchmarkRelationViewAllianceFlush`，单进程、传输层只数字节）：订阅者上限内每轮成本按“变化成员数 × 观察者数”线性，约 0.27µs / 18～19B 每次 pair 更新；1000 人互见（100 万 pair）每轮 1% 变化 2.63ms、堆增量 1.23GB，2000 人（上限提到 2016）10.8ms、4.85GB，约 1.2KB / pair。端到端（Gate、网络、客户端）的百万 pair 容量仍未验（[证据](../performance/benchmarks/m-series-s1-s2-20261119/README.md)）。
+- **超过每 subject 订阅者上限时被拒 pair 每轮全量重说（尚未确认是否算缺陷，2026-11-19 M-9 测出）**：按计划命令跑的 2000 人档没有提高 `MaxSubscribersPerSubject`（缺省 1024），每个 subject 有 976 个观察者被拒，195 万个被拒 pair 按设计留在 retry 里每次 Flush 重说、没有退避：每轮 Flush 约 960ms（上限内 10.8ms）、分配 600MB，收敛期每个 pair 打一条 WARN（3 次运行 1.36GB 日志）。是否算缺陷取决于“成员数超上限”是只应出现在配置错误时（则应在定义视图 / 设成员时报错并写进契约），还是应作为可持续的降级状态（则重说需要退避或等容量释放再唤醒、WARN 需聚合），待维护者定；基准本身也要把上限随人数一起提高（测试代码，未改）。
 
 #### Lockstep：遗留
 
@@ -1029,7 +1030,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 
 #### 游戏接入验收：遗留
 
-- **组同步容量**：独立 Gate 组同步与慢消费者已具专用回归，不再写“仅由 self_sync 间接覆盖”；M-18 房间数 × 成员数正式测量未运行。
+- **组同步容量**：独立 Gate 组同步与慢消费者已具专用回归，不再写“仅由 self_sync 间接覆盖”；M-18 已测（2026-11-19，`BenchmarkGroupViewFlush`，只量政策 + 打包 + 编码）：成本只随成员总数线性，约 0.55～0.67µs、28.7B、5～6.5 次分配 / 成员·轮，100×50 与 10×500 相同，1000×4 每成员略贵约 20%；5000 成员一轮约 2.76ms。经独立 Gate 与网络的端到端组同步容量未测（[证据](../performance/benchmarks/m-series-s1-s2-20261119/README.md)）。
 
 #### 待补测（历史压测遗留）
 

@@ -1,0 +1,17 @@
+--- a/framework/sync/entitysync/policy/benchmark_test.go
++++ b/framework/sync/entitysync/policy/benchmark_test.go
+@@ -556,7 +556,7 @@
+ 	runtime.ReadMemStats(&before)
+ 	transport := &byteSink{}
+ 	// 每个会话要容得下全体成员（缺省每会话 100 个对象）。
+-	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: transport, Limits: frame.Limits{MaxObjects: players + 16}})
++	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: transport, MaxSubscribersPerSubject: players + 16, Limits: frame.Limits{MaxObjects: players + 16}})
+ 	if err != nil {
+ 		b.Fatal(err)
+ 	}
+@@ -634,4 +634,4 @@
+ }
+ 
+ // allianceSizes 是 BenchmarkRelationViewAllianceFlush 的人数档；冒烟时临时调小。
+-var allianceSizes = []int{1000, 2000}
++var allianceSizes = []int{2000}

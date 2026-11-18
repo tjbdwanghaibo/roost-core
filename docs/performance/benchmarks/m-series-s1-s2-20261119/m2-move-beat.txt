@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+BenchmarkMoveBeatAllocations/empty-10         	 3272152	       350.8 ns/op	     945 B/op	       5 allocs/op
+BenchmarkMoveBeatAllocations/empty-10         	 3476528	       348.0 ns/op	     945 B/op	       5 allocs/op
+BenchmarkMoveBeatAllocations/empty-10         	 3449594	       345.4 ns/op	     945 B/op	       5 allocs/op
+BenchmarkMoveBeatAllocations/empty-10         	 3504163	       343.0 ns/op	     945 B/op	       5 allocs/op
+BenchmarkMoveBeatAllocations/empty-10         	 3506070	       343.9 ns/op	     945 B/op	       5 allocs/op
+BenchmarkMoveBeatAllocations/empty-10         	 3463340	       345.4 ns/op	     945 B/op	       5 allocs/op
+BenchmarkMoveBeatAllocations/advance-10       	 1504539	       798.4 ns/op	    1885 B/op	      17 allocs/op
+BenchmarkMoveBeatAllocations/advance-10       	 1516730	       794.5 ns/op	    1885 B/op	      17 allocs/op
+BenchmarkMoveBeatAllocations/advance-10       	 1518262	       793.8 ns/op	    1885 B/op	      17 allocs/op
+BenchmarkMoveBeatAllocations/advance-10       	 1496035	       806.2 ns/op	    1885 B/op	      17 allocs/op
+BenchmarkMoveBeatAllocations/advance-10       	 1510527	       807.6 ns/op	    1885 B/op	      17 allocs/op
+BenchmarkMoveBeatAllocations/advance-10       	 1495713	       798.9 ns/op	    1885 B/op	      17 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/movement	15.206s

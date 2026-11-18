@@ -1,0 +1,8 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      50	  10997490 ns/op	    736793 bytes/round	      4853 heap-MB	   4000000 pairs	 2055988 B/op	   12720 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      50	  10762717 ns/op	    736793 bytes/round	      4854 heap-MB	   4000000 pairs	 2055988 B/op	   12720 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      50	  10787270 ns/op	    736793 bytes/round	      4853 heap-MB	   4000000 pairs	 2055988 B/op	   12720 allocs/op
+PASS

@@ -1,0 +1,11 @@
+--- a/framework/nest/try_batch.go
++++ b/framework/nest/try_batch.go
+@@ -35,7 +35,7 @@
+ // 占住的时间越长。取 4：心跳缺省走批量作业，普通业务消息的 p99 随组变大而升高，同时段对照
+ // 组 4 / 8 / 16 的业务 p99 0.187 / 0.235 / 0.316ms、进程 CPU 不升（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md
+ // §3A、§3F）；与时间片 100µs 合起来的对照见 tryBatchSlice。
+-const tryBatchGroup = 4
++const tryBatchGroup = 2
+ 
+ // tryBatchSlice 是一个 worker 连续执行同一批量作业的时间片：每组目标结束后检查，超过且还有剩余目标时把作业放回
+ // 就绪链尾，让链上的普通作业先走（见设计 §5）。一个 worker 一次被批量作业占住的时长约为“时间片 + 一组的执行时间”，

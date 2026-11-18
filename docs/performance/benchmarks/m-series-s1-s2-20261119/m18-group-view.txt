@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkGroupViewFlush/rooms=100/members=4-10         	     200	    326389 ns/op	        28.41 bytes/member-round	     11365 bytes/round	  172728 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10         	     200	    230050 ns/op	        28.41 bytes/member-round	     11365 bytes/round	  172645 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10         	     200	    230034 ns/op	        28.41 bytes/member-round	     11365 bytes/round	  172646 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10        	     200	   2666926 ns/op	        28.70 bytes/member-round	    114793 bytes/round	 2400845 B/op	   25951 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10        	     200	   2663347 ns/op	        28.70 bytes/member-round	    114793 bytes/round	 2400818 B/op	   25951 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10        	     200	   2662829 ns/op	        28.70 bytes/member-round	    114793 bytes/round	 2400817 B/op	   25951 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10        	     200	   2777174 ns/op	        28.70 bytes/member-round	    143523 bytes/round	 2081446 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10        	     200	   2762957 ns/op	        28.70 bytes/member-round	    143523 bytes/round	 2081445 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10        	     200	   2773575 ns/op	        28.70 bytes/member-round	    143523 bytes/round	 2081445 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10        	     200	   2763401 ns/op	        28.70 bytes/member-round	    143523 bytes/round	 2046713 B/op	   24039 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10        	     200	   2754215 ns/op	        28.70 bytes/member-round	    143523 bytes/round	 2046715 B/op	   24039 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10        	     200	   2762590 ns/op	        28.70 bytes/member-round	    143523 bytes/round	 2046715 B/op	   24039 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	5.666s
