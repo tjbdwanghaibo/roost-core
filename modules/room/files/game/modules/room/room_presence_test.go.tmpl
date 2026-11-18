@@ -166,10 +166,12 @@ func TestRoomPresenceRetriesAFailedDisconnectAndGivesUp(t *testing.T) {
 		t.Fatalf("%d tracked after a successful retry", n)
 	}
 
-	w.presence.Track(2, 102, "b", 1) // 连接本来就不在：登记时就断线
+	// 三次失败要在 Track 之前入队：Track 发现连接不在就立即唤醒后台断线，它可能在下一行之前就调用完。错误后放时，
+	// 第一次调用看到空队列、答成功并撤掉登记，后面就测不到重试与放弃（RV-20261118-01）。
 	for range 3 {
 		w.fail <- errors.New("room store unavailable")
 	}
+	w.presence.Track(2, 102, "b", 1) // 连接本来就不在：登记时就断线
 	w.expect(t, presenceCall{2, 102, 1})
 	w.presence.Sweep()
 	w.expect(t, presenceCall{2, 102, 1})
