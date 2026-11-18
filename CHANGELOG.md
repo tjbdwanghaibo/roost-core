@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **换服时邮箱满不再漏旧服全服邮件（RV-20261117-01，只对新生成的工程）**：mail 的 `Summary` 新增 `BroadcastsBehind`，表示这一次全服邮件合并因邮箱全是未读而停在半路（`Summary` 本身仍成功，普通 List / Summary 的满箱语义不变）。mailbox 的 `with/rehome` 离开钩子看到它就中止换服（错误带 `svcmail.ErrMailboxFull`），玩家留在本服、清掉一些邮件后再申请；修前钩子把 `Summary` 成功当作旧服邮件已合并完，换走后旧服那封补不回来。`mailbox+rehome` 场景 2 → 3。已生成的工程手动同步 `game/controllers/mailbox_rehome.go`。[证据](docs/maintenance/evidence/v153-review-fixes-20261118/README.md)
+- **C# 错误码常量避开生成器自身的名字（RV-20261117-02）**：`ErrorCodes.cs` 里与类名 `ErrorCodes`、方法 `Name` / `Message`、object 继承成员（`Equals` / `GetHashCode` / `ToString` / `GetType` / `ReferenceEquals` / `MemberwiseClone`）同名的常量加后缀 `_`（`name` → `Name_`），修前合法的 errcode 名 `name` / `message` / `error_codes` 等会让客户端编译失败；`ErrorCodes` 类补 XML 注释（开 XML 文档且警告即错误时不再 CS1591）。新增 dotnet 实际编译回归 `TestGenerateCSharpCompiles`（`ROOST_REQUIRE_DOTNET=1` 时缺 dotnet 失败）。**行为变化**：用到这些名字的客户端代码改用带 `_` 的常量名。[证据](docs/maintenance/evidence/v153-review-fixes-20261118/README.md)
+- **room 断线重试用例的夹具时序（RV-20261118-01，测试）**：`TestRoomPresenceRetriesAFailedDisconnectAndGivesUp` 先把三次失败入队再 `Track`，修前后台断线先跑时用例偶发 `no disconnect`（审查的自走棋矩阵首次失败）。产品代码不变。[证据](docs/maintenance/evidence/v153-review-fixes-20261118/README.md)
 - **team：Team 声明为 Remote 共享 kind**（维护者 2026-11-18）：Team 实体加 `ownership=shared`，建队认领的那一条插入就是共享的所有权记录，不再 `EnterRemoteSharedMode`（少一次所有权记录的 findAndModify，没有建队进程独占的中间态，建队中途崩溃留下的是不卡人的共享空认领）；认领答出非共享记录时建队报错（本进程登记没有声明共享）。Team 不能退出共享。team 场景 31 → 32（新增 `TestTeamCreateClaimsSharedInOneStep`，修前红，三个变异红），4 条社交真实依赖用例通过。只对新生成 / 重新装 team 的工程生效；不要新旧二进制混跑。[证据](docs/maintenance/evidence/team-shared-kind-20261118/README.md)
 - **account：合服前检查在途换服**（换服遗留，方案三期，2026-11-18）：`MergeServer`（`accountctl merge-server`，含 `-dry-run`）在被并走的服是在途换服的来源或目标时拒绝（`ErrTransferInProgress`），
   `MergeResult.TransfersInFlight` 列出这些换服，错误给出 `transfer-role list / abort` 的提示；角色存储没有在途索引时答 `ErrNoTransferIndex`。

@@ -636,6 +636,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
   - **Player 不预加载时的起服核对窗口**：起服后恢复循环把本服库列一遍再问 account（每 500 人一次），做完之前若有业务路径加载了旧档玩家，他的定时逻辑可能写这份旧档（只写源库，不影响目标服），落定时交出屏障卸载它。代价随本服库玩家数增长；大库起服核对的耗时没有测。
   - **Redis Cluster 上 account 的 `key_prefix` 必须带 hash tag**（如 `{acct}`）：在途换服索引与角色记录同一个脚本维护，否则 Mod 初始化报错。
   - 验证范围见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
+- **换服前邮箱满会被拒（mailbox + rehome，2026-11-18）**：邮箱全是未读、还有属于他的旧服全服邮件没合并进来时，离开钩子中止换服（`ErrMailboxFull`），要玩家先清邮件；中止原因只在 rehome 的 Warn 日志与向 account 中止时带的 reason 里，客户端没有专门的提示码。没有做“持久保留旧范围的待合并义务”。[证据](evidence/v153-review-fixes-20261118/README.md)
 - **没装 enter 的工程要自己接两处**：加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive`，否则换走的玩家仍能进旧服、目标服不做到达。工程改写了进入端点（game-demo 就改写了）时要自己调 `gamelogin.RunEntering`。
 - **费用不在模块里**：模块不依赖货币，没有实现费用；规则文件里写了做法。
 
