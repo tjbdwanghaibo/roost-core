@@ -13,8 +13,10 @@
   模板、modules、demo、scripts/testdata 里出现的本仓库 import 路径的依赖闭包。改动的非测试包落在这个闭包里，或者改了
   codegen/、modules/、demo/、scripts/testdata/，全部生成工程脚本都跑，codegen/internal/roost 也跑；否则只跑自己被改过的脚本。
   只改 _test.go 不影响生成的工程。
-- C# SDK：改了 client/dotnet/、client/unity/（Roost.Client.Tests 链接其中的 RoostClientDriver 与 WebGL 桥接）、infra/network/gateway/ 或共同对端（client/spec/、client/wire/、service/relay/、service/lobby/、
-  infra/network/wsconn/）才跑；TS SDK：改了 client/ts/、client/relay/ 或共同对端才跑。
+- C# SDK：改了 client/dotnet/、client/unity/（Roost.Client.Tests 链接其中的 RoostClientDriver 与 WebGL 桥接）、
+  scripts/test-client-dotnet.sh、infra/network/gateway/ 或共同对端（client/spec/、client/wire/、service/relay/、
+  service/lobby/、infra/network/wsconn/）才跑；TS SDK：改了 client/ts/、client/relay/、scripts/test-client-ts.sh
+  或共同对端才跑。自检在 scripts/pretag_scope_test.py（根包 TestPretagScopeSelfTest 运行）。
 """
 import json
 import os
@@ -155,8 +157,9 @@ def main():
     peers = ("client/spec/", "client/wire/", "service/relay/", "service/lobby/", "infra/network/wsconn/", "infra/network/gateway/")
     ts_codegen = ("codegen/internal/roost/client_export", "codegen/internal/roost/client_sync.go",
                   "codegen/internal/protocol/client_export", "codegen/internal/errcode/ts")
-    dotnet = any(f.startswith(("client/dotnet/", "client/unity/") + peers) for f in changed)
-    ts = any(f.startswith(("client/ts/", "client/relay/") + peers + ts_codegen) for f in changed)
+    # 各自的验收脚本也是触发项：只改了 test-client-ts.sh / test-client-dotnet.sh 时，跑的正是它要验的那道门（RV-20261118-12）。
+    dotnet = any(f == "scripts/test-client-dotnet.sh" or f.startswith(("client/dotnet/", "client/unity/") + peers) for f in changed)
+    ts = any(f == "scripts/test-client-ts.sh" or f.startswith(("client/ts/", "client/relay/") + peers + ts_codegen) for f in changed)
     say(f"affected run: {len(go_packages)} of {len(set(pkgs.values()))} packages, {len(genres)} of {len(GENRE_SCRIPTS)} genre scripts, "
         f"C# {'yes' if dotnet else 'no'}, TS {'yes' if ts else 'no'}")
     emit("affected", go_packages, genres, dotnet, ts)

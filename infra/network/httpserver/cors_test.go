@@ -118,3 +118,66 @@ func TestCheckCORSOriginsRefusesWhatABrowserNeverSends(t *testing.T) {
 		t.Fatalf("non-default ports: %v", err)
 	}
 }
+
+// RV-20261118-10：配置检查接受的每一项，都要与浏览器（WHATWG URL 序列化）实际发出的 Origin 逐字节相同，否则预检 403。
+// 端口与数字主机有多种写法指向同一个地址：前导零的端口（:0443 → 省略，:08443 → :8443）、空端口（"…:" → 省略）、
+// 简写或八进制 / 十六进制的 IPv4（127.1、0x7f.0.0.1 → 127.0.0.1）。这些写法要么被拒绝（端口类给出该写的值），
+// 要么预检 204；不能“检查通过、预检 403”。浏览器解析不了的（越界的 IPv4、越界端口）一律拒绝。
+// 规范写法（非默认端口 :8443、点分十进制 IPv4、方括号 IPv6、DNS 名）照常接受，预检 204。
+func TestCheckCORSOriginsAcceptsOnlyWhatTheBrowserSerializes(t *testing.T) {
+	const key = "portal.cors_origins"
+	preflight := func(configured, browser string) int {
+		request := httptest.NewRequest(http.MethodOptions, "/portal/login", nil)
+		request.Header.Set("Origin", browser)
+		recorder := httptest.NewRecorder()
+		NewCORS([]string{configured}, []string{http.MethodPost}, []string{"Content-Type"}).Preflight(recorder, request)
+		return recorder.Code
+	}
+	// 配置的写法 → 浏览器序列化后的 Origin（Chrome / Firefox / Node 的 new URL(...).origin 相同）。
+	for configured, browser := range map[string]string{
+		"https://play.example.com:0443":  "https://play.example.com",
+		"https://play.example.com:08443": "https://play.example.com:8443",
+		"http://localhost:080":           "http://localhost",
+		"https://[::1]:08443":            "https://[::1]:8443",
+		"https://play.example.com:":      "https://play.example.com",
+		"http://127.1:5173":              "http://127.0.0.1:5173",
+		"https://0x7f.0.0.1":             "https://127.0.0.1",
+		"https://010.0.0.1":              "https://8.0.0.1",
+		"https://[2001:db8:0:0:0:0:0:1]": "https://[2001:db8::1]",
+		"https://[::ffff:192.0.2.30]":    "https://[::ffff:c000:21e]",
+	} {
+		err := CheckCORSOrigins(key, []string{configured})
+		if err == nil {
+			if code := preflight(configured, browser); code != http.StatusNoContent {
+				t.Errorf("%q passed the config check but the browser sends Origin %q and the preflight answers %d", configured, browser, code)
+			}
+			continue
+		}
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("%q: err = %v, want it to name the key", configured, err)
+		}
+		if strings.Contains(configured, "example.com") || strings.Contains(configured, "localhost") || strings.Contains(configured, "[") {
+			if !strings.Contains(err.Error(), `"`+browser+`"`) {
+				t.Errorf("%q: err = %v, want it to suggest %q", configured, err, browser)
+			}
+		}
+	}
+	for _, origin := range []string{"https://192.0.2.300", "https://192.0.2.30.1.1", "https://1.2.3.4.example.1", "https://play.example.com:65536", "https://[::1%25en0]:8443", "https://[1.2.3.4]"} {
+		if err := CheckCORSOrigins(key, []string{origin}); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%q: err = %v, want refused naming the key (a browser cannot parse it)", origin, err)
+		}
+	}
+	// 0 号端口浏览器能解析（序列化为 :0），但没有页面能从那里打开：与 WebSocket 地址的规则一样只收 1～65535。
+	if err := CheckCORSOrigins(key, []string{"https://play.example.com:0"}); err == nil {
+		t.Error(`"https://play.example.com:0" passed; port 0 serves no page`)
+	}
+	for _, origin := range []string{"https://play.example.com:8443", "https://192.0.2.30", "http://192.0.2.30:5173", "https://[2001:db8::1]:8443", "https://[::ffff:c000:21e]", "http://localhost:5173", "https://a1.example", "https://2048.example.com"} {
+		if err := CheckCORSOrigins(key, []string{origin}); err != nil {
+			t.Errorf("%q: %v, want accepted", origin, err)
+			continue
+		}
+		if code := preflight(origin, origin); code != http.StatusNoContent {
+			t.Errorf("%q: preflight %d", origin, code)
+		}
+	}
+}

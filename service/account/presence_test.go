@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,50 @@ func TestServerPresenceRefusesBadReports(t *testing.T) {
 	}
 	if err := s.WithdrawServerPresence(ctx, 0); !errors.Is(err, ErrRangeInvalid) {
 		t.Fatalf("withdraw of server 0: err = %v", err)
+	}
+}
+
+// RV-20261118-13：WebSocket 地址交给浏览器（Unity WebGL、TS SDK 缺省传输）按 WHATWG URL 解析。数字主机（末段是数字的
+// 主机名、方括号 IPv6）浏览器解析不了时，CheckWebSocketAddr 在配置 / 上报阶段就拒绝（portal.websocket_servers、
+// login.presence.ws_addr 与 account 收上报都经它），不让连不上的地址进区服目录；浏览器能解析但会改写成另一种样子的
+// IPv4 写法（127.1、010.0.0.1、0x7f.0.0.1、末尾带点）同样拒绝并给出该写的值——别的客户端（C#、原生）未必按同样的
+// 规则读它们（010 在浏览器里是八进制）。合法的点分十进制 IPv4、方括号 IPv6（含展开写法）与 DNS 名照常接受
+// （含末段字母数字混合、首段是数字的 DNS 名）。
+func TestCheckWebSocketAddrRefusesNumericHostsBrowsersCannotUse(t *testing.T) {
+	for _, addr := range []string{
+		"ws://192.0.2.300:7080/ws", // 末段越界
+		"ws://192.0.2.30.1.1/ws",   // 五段
+		"ws://256.0.0.1/ws",
+		"ws://09.1.1.1/ws",             // 八进制里没有 9
+		"ws://game.1:7080/ws",          // 末段是数字的主机名按 IPv4 解析，失败
+		"ws://game.0x1f/ws",            // 末段是十六进制数同理
+		"wss://[1.2.3.4]/ws",           // 方括号里只能是 IPv6
+		"ws://[fe80::1%25en0]:7080/ws", // 浏览器不认区域号
+	} {
+		if _, err := CheckWebSocketAddr(addr); err == nil {
+			t.Errorf("%q passed; a browser cannot parse it", addr)
+		}
+	}
+	for addr, want := range map[string]string{
+		"ws://127.1:7080/ws":       "127.0.0.1",
+		"ws://010.0.0.1/ws":        "8.0.0.1",
+		"ws://0x7f.0.0.1/ws":       "127.0.0.1",
+		"ws://192.0.2.30.:7080/ws": "192.0.2.30",
+	} {
+		_, err := CheckWebSocketAddr(addr)
+		if err == nil || !strings.Contains(err.Error(), `"`+want+`"`) {
+			t.Errorf("%q: err = %v, want refused suggesting %q (what browsers rewrite it to)", addr, err, want)
+		}
+	}
+	for _, addr := range []string{
+		"ws://192.0.2.30:7080/ws", "wss://192.0.2.30/ws", "ws://0.0.0.0:7080/ws", "ws://[::1]:7080/ws", "wss://[2001:db8::1]/ws",
+		"ws://game.example:7080/ws", "wss://lb.example/game/ws?zone=1", "ws://localhost:7080/ws", "ws://game-1:7080/ws",
+		"ws://1e3.example/ws", "ws://2048.example.com/ws", "ws://game.example./ws",
+		"ws://[2001:db8:0:0:0:0:0:1]/ws", "ws://[::ffff:192.0.2.30]:7080/ws", // IPv6 的展开写法各家读法相同，不强求压缩
+	} {
+		if got, err := CheckWebSocketAddr(addr); err != nil || got != addr {
+			t.Errorf("%q: got %q, %v; want accepted unchanged", addr, got, err)
+		}
 	}
 }
 

@@ -200,12 +200,17 @@ export class Connection {
     const forward = (source: AbortSignal) => () => budget.abort(source.reason);
     const fromLifetime = forward(lifetime.controller.signal);
     const fromCaller = signal ? forward(signal) : undefined;
-    lifetime.controller.signal.addEventListener("abort", fromLifetime, { once: true });
+    // 生命周期可能在进来之前就已中止：connect 先同步派发 Connecting，监听器里 disconnect / dispose 时 abort 事件已经
+    // 发过，之后挂的监听收不到（RV-20261118-11）。与调用方的信号一样先看一眼 aborted。
+    if (lifetime.controller.signal.aborted) budget.abort(lifetime.controller.signal.reason);
+    else lifetime.controller.signal.addEventListener("abort", fromLifetime, { once: true });
     if (signal && fromCaller) {
       if (signal.aborted) budget.abort(signal.reason);
       else signal.addEventListener("abort", fromCaller, { once: true });
     }
     try {
+      // 已经中止（断开、销毁或调用方取消）就不再取票：业务取消后不该再发一次取票请求。
+      if (budget.signal.aborted) throw abortReason(budget.signal);
       // 取票函数必须异步返回，预算覆盖取票：卡住的取票由预算中止。
       const ticket = await raceAbort(lifetime.ticket(budget.signal), budget.signal);
       if (budget.signal.aborted) throw abortReason(budget.signal);

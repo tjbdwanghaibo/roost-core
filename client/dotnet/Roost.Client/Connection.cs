@@ -125,6 +125,9 @@ namespace Roost.Client
             using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             using (scheduler.CancelAfter(budget, options.ConnectTimeout))
             {
+                // 已被取消（调用方取消，或别的线程在 ConnectAsync 放锁之后 Disconnect / Dispose）就不再取票：
+                // 取消之后不该再发一次取票请求（RV-20261118-11，与 TS SDK 相同）。
+                budget.Token.ThrowIfCancellationRequested();
                 // provider 必须异步返回，不得阻塞或访问 Unity 对象；预算覆盖取票和握手。
                 Task<string> ticketTask = ticketProvider(budget.Token);
                 Task expired = scheduler.Delay(Timeout.InfiniteTimeSpan, budget.Token);

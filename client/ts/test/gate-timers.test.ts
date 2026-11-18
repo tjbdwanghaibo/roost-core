@@ -102,6 +102,51 @@ test("the connect timeout covers the ticket and the handshake", async () => {
   }
 });
 
+// RV-20261118-11：disconnect 无论在 connect 返回 Promise 之后，还是在同步派发的 Connecting 监听器里，都立刻结束这次连接：
+// connect 以 GateClosedError 结束（不等连接超时、不报 GateTimeoutError），不留计时器；监听器里断开时取票函数不再被调用，
+// 已经在取票时它收到的信号被中止。
+test("disconnect while connecting ends connect at once with GateClosedError, even from the Connecting listener", async () => {
+  for (const fromListener of [false, true]) {
+    const { clock, client } = setup({ connectTimeoutMs: 5000 });
+    const connection = client.connection;
+    if (fromListener) {
+      connection.on("stateChanged", (state) => {
+        if (state === ConnectionState.Connecting) connection.disconnect();
+      });
+    }
+    let calls = 0;
+    let abortedAtCall: boolean | undefined;
+    let aborted = false;
+    const outcome = connection
+      .connect((signal) => {
+        calls++;
+        abortedAtCall = signal.aborted;
+        aborted = signal.aborted;
+        signal.addEventListener("abort", () => (aborted = true), { once: true });
+        return new Promise<string>(() => {}); // 取票不返回：只有中止能结束它
+      })
+      .then(
+        () => "connected" as const,
+        (e: Error) => e,
+      );
+    if (!fromListener) connection.disconnect();
+    await settle();
+    const what = fromListener ? "from the Connecting listener" : "after connect returned";
+    const error = await Promise.race([outcome, settle().then(() => "still pending" as const)]);
+    assert.ok(error instanceof GateClosedError, `${what}: connect ended with ${error} at ${clock.now()}ms, want GateClosedError at once`);
+    assert.equal(clock.now(), 0, `${what}: no virtual time passed`);
+    assert.equal(connection.state, ConnectionState.Disconnected, what);
+    assert.deepEqual(clock.pending(), [], `${what}: the connect timeout is cleared`);
+    if (fromListener) {
+      assert.equal(calls, 0, `${what}: the ticket provider is not called after disconnect (called with aborted=${abortedAtCall})`);
+    } else {
+      assert.equal(calls, 1, what);
+      assert.ok(aborted, `${what}: the ticket provider's signal is aborted`);
+    }
+    client.dispose();
+  }
+});
+
 test("the request timeout fails the request and keeps the connection", async () => {
   const { clock, network, client } = setup({ requestTimeoutMs: 1000, heartbeatIntervalMs: 0 });
   await client.connection.connect("t");

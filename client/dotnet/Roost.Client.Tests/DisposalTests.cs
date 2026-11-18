@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 using Roost.Client;
 
@@ -59,6 +60,22 @@ internal static partial class Program
             client.Request(42, 43, ReadOnlyMemory<byte>.Empty, bytes => bytes, _ => { }, failed);
             PumpUntil(client, () => client.Connection.State == ConnectionState.Disposed);
             Check(failures == 1, "request failure callbacks after disposal");
+        }
+        // RV-20261118-11（与 TS SDK 对齐）：连接已被取消（调用方的取消，或别的线程先 Disconnect）时不再取票，
+        // ConnectAsync 当场以取消结束、回到 Disconnected，不等连接超时。C# 的状态回调在 Pump 里派发，没有 TS 那种
+        // “Connecting 监听器里同步断开”的入口；这里用进来前已取消的令牌固定“取消在取票之前”这一刻。
+        using (var client = new GameClient(new ConnectionOptions()))
+        {
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            int tickets = 0;
+            var opening = client.Connection.ConnectAsync(_ => { tickets++; return new TaskCompletionSource<string>().Task; }, cancelled.Token);
+            Check(opening.IsCompleted, "connect cancelled before the ticket must end at once, not at the connect timeout");
+            bool cancelledOutcome = false;
+            try { opening.GetAwaiter().GetResult(); } catch (OperationCanceledException) { cancelledOutcome = true; }
+            Check(cancelledOutcome, "connect cancelled before the ticket ends as cancelled");
+            Check(tickets == 0, $"the ticket provider must not be called after cancellation (called {tickets} times)");
+            Check(client.Connection.State == ConnectionState.Disconnected, "cancelled connect returns to Disconnected");
         }
         Console.WriteLine("PASS GameClient state/reset/failure disposal boundaries");
     }

@@ -43,6 +43,7 @@ client.dispose();
 - **回调时机**：浏览器是单线程事件循环，帧到了就在 WebSocket 的 `message` 事件里同步分发，不需要 C# 那样的 `Pump`（D6）。同一条 WebSocket 消息里的应答与推送，回调形式（`GameClient.request`、protobuf 的 `request`）严格按线上顺序调用；Promise 形式（`requestAsync`）的后续在这条消息的推送都交出去之后才运行（微任务）。推送回调里 `disconnect()` 后，这条消息剩下的帧丢弃。
 - **握手**：第一帧是认证信封 `0x00 'G'` + 8 字节连接代号 + 票据（票据 1～8182 字节 UTF-8，不能以 NUL 开头），连接代号取 `max(上次 + 1, Date.now() × 10⁶)`（bigint），同一个 `Connection` 的每次握手严格递增，Gate 据此丢弃旧连接的迟到握手；握手应答必须是空的成功控制帧。
 - **心跳**：缺省每 15s 一次（从上一次应答算起），独占一个槽位、不占请求名额；`heartbeatTimeoutMs`（缺省 5s）内没应答就当断线。不心跳会被 `idle_timeout`（缺省 90s）断开。后台标签页的计时器被浏览器限流或冻结时心跳跟着停，回到前台靠重连（KNOWN-LIMITS）。
+- **连接中途断开**：`connect()` 还没完成时 `disconnect()` / `dispose()`（含在同步派发的 `Connecting` 状态监听器里调用），`connect()` 当场以 `GateClosedError` 结束，不等连接超时；已在取票时取票函数收到的 `signal` 被中止，还没取票的不再调用取票函数（调用方的 `signal` 已中止时同样不调用）。C# `Connection` 相同：已取消就不调用取票函数（2026-11-18，RV-20261118-11）。
 - **超时与上限**：`connectTimeoutMs`（取票 + 握手，缺省 10s）、`requestTimeoutMs`（缺省 10s）、`maxPendingRequests`（缺省 64，超出直接失败）、`maxPayloadBytes`（缺省 1 MiB，收发两向，与 Gate 的 `max_payload_bytes` 一致）。
 - **重连**：`autoReconnect` 开着时，连接意外断开后按 `reconnectInitialDelayMs`（1s）起、翻倍、`reconnectMaxDelayMs`（30s）封顶、乘 0.5～1 的抖动退避，最多 `maxReconnectAttempts`（8）次；每次重新取票、换新的连接代号；每次尝试发一个 `reconnected` 事件（`attempt`、`connectionVersion`、`error`、`willRetry`）。没完成的请求在断开时以 `GateClosedError` 失败，不自动重发。
 - **校时**：`probeClockAsync` / `GameClient.probeClock` 发 `RCN1` 探测，得到 `ClockSample`（本地发出 / 收到、服务端收到 / 发出）；`NetworkClock` 与 C# 同一算法（取往返最小的样本，`ready`、`roundTrip`、`uncertainty`）。

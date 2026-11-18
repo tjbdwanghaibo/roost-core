@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -77,6 +78,13 @@ func (c *CORS) allowOrigin(w http.ResponseWriter, r *http.Request) bool {
 // CheckCORSOrigins 检查配置里的 Origin 白名单（key 是配置键名，用来点名）：每一项是 "*"，或浏览器发的 Origin 的
 // 样子——http / https 的 scheme://host[:port]，不带路径（连结尾的 / 也不带）、查询、片段与用户信息，主机名小写。写成
 // https://play.example.com/ 这种多一个斜杠的，浏览器发的 Origin 永远对不上，所以在读配置时就拒绝。
+//
+// 契约：通过检查的每一项都与浏览器（WHATWG URL 序列化）发出的 Origin 逐字节相同。同一个地址有多种写法时只收浏览器的
+// 那一种，别的写法拒绝并给出该写的值，而不是悄悄改写——配置里写的就是比较时用的：
+//   - 端口：默认端口（https 的 443、http 的 80）浏览器省掉（RV-20261118-08）；前导零浏览器去掉（:0443 → 省略、
+//     :08443 → :8443，RV-20261118-10）；空端口（"…:"）浏览器省掉；只收 1～65535。
+//   - 数字主机（BrowserHost）：IPv4 只收点分十进制（127.1、010.0.0.1 这类浏览器会改写），IPv6 只收浏览器的压缩写法；
+//     浏览器解析不了的（192.0.2.300）拒绝。
 func CheckCORSOrigins(key string, origins []string) error {
 	for _, origin := range origins {
 		if origin == "*" {
@@ -88,12 +96,30 @@ func CheckCORSOrigins(key string, origins []string) error {
 			parsed.Host != strings.ToLower(parsed.Host) || origin != parsed.Scheme+"://"+parsed.Host {
 			return fmt.Errorf("config: %s entry %q is not an origin like https://example.com or https://example.com:8443 (no path, no trailing slash)", key, origin)
 		}
-		// 浏览器序列化 Origin 时省掉默认端口（https 的 443、http 的 80）：写明默认端口的项永远对不上（RV-20261118-08），
-		// 拒绝并给出该写的值，而不是悄悄改写——配置里写的就是比较时用的。
-		if port := parsed.Port(); (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
-			bare := strings.TrimSuffix(origin, ":"+port)
-			return fmt.Errorf("config: %s entry %q names the default port, which browsers leave out of Origin; write %q", key, origin, bare)
+		host, err := BrowserHost(parsed)
+		if err != nil {
+			return fmt.Errorf("config: %s entry %q: %v", key, origin, err)
 		}
+		// 按浏览器的序列化重新拼一遍，与原文比较。
+		serialized := parsed.Scheme + "://" + host
+		defaultPort := false
+		if port := parsed.Port(); port != "" {
+			number, err := strconv.Atoi(port)
+			if err != nil || number < 1 || number > 65535 {
+				return fmt.Errorf("config: %s entry %q has port %q; it must be 1..65535", key, origin, port)
+			}
+			defaultPort = (parsed.Scheme == "https" && number == 443) || (parsed.Scheme == "http" && number == 80)
+			if !defaultPort {
+				serialized += ":" + strconv.Itoa(number)
+			}
+		}
+		if serialized == origin {
+			continue
+		}
+		if defaultPort {
+			return fmt.Errorf("config: %s entry %q names the default port, which browsers leave out of Origin; write %q", key, origin, serialized)
+		}
+		return fmt.Errorf("config: %s entry %q is not how browsers write this origin in the Origin header; write %q", key, origin, serialized)
 	}
 	return nil
 }

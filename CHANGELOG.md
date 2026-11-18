@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+- **审查修复 RV-20261118-10～13**（2026-11-18 审查报告的四项新问题，先红后绿，[证据](docs/maintenance/evidence/rv-20261118-10-13/README.md)）：
+  - RV-20261118-10（P3）：`httpserver.CheckCORSOrigins`（`portal.cors_origins`、`lobby.cors_origins`）原来接受 `:0443`、`:08443` 这类带前导零的端口与空端口 `…:`，浏览器把它们规范化后与白名单逐字节对不上、预检 403。现在只收浏览器序列化出的写法，别的写法拒绝并给出该写的值；端口限 1～65535；数字主机同样按浏览器规则（`127.1`、`010.0.0.1` 拒绝并提示点分十进制，`192.0.2.300` 拒绝，IPv6 只收压缩写法）。合法的非默认端口（`:8443`）照常。
+  - RV-20261118-11（P2）：TS Gate 在同步派发的 `Connecting` 监听器里 `disconnect()` 后，取票函数仍被调用、拿到的 `signal` 没有中止，`connect()` 等到连接超时才以 `GateTimeoutError` 结束。现在已断开（或调用方 `signal` 已中止）就不再取票，`connect()` 当场以 `GateClosedError` 结束。C# `Connection` 没有同步的状态回调，不会等到超时；对齐为已取消就不调用取票函数。
+  - RV-20261118-12（P3）：`scripts/pretag-scope.py` 只改 `scripts/test-client-ts.sh` 时给出 `run_ts=0`，C# 的 `scripts/test-client-dotnet.sh` 也不是触发项。两个验收脚本现在各自触发自己的 SDK 门；新增自检 `scripts/pretag_scope_test.py`（根包 `TestPretagScopeSelfTest` 运行）。
+  - RV-20261118-13（P3）：`svcaccount.CheckWebSocketAddr`（`portal.websocket_servers`、`login.presence.ws_addr`、account 收上报）接受 `ws://192.0.2.300:7080/ws` 这类浏览器解析不了的数字主机。现在按浏览器（WHATWG URL）规则检查数字主机：解析不了的拒绝，浏览器会改写的 IPv4 写法（`127.1`、`010.0.0.1`、末尾带点）拒绝并给出点分十进制；合法 IPv4、方括号 IPv6、DNS 名照常。规则在新的 `httpserver.BrowserHost`。
+  - **升级**：配置里写了上述被拒写法的 portal / lobby / login 工程，启动与 `--check-config` 会报错并给出该写的值；照提示改。生成物不用新 API，最低 core 不变。
 - **MOBA 原服到账与 SLG 联盟到账改 `durability=pipelined`**（维护者 2026-11-18 定 B）：
   - 改动原因：`MOBAAward` 回复后马上向权威 ackSeat，`AllianceCredit` 回复后马上在原服义务账本标完成，确认之后不再重投。用 async 时，整机掉电可能丢掉已回复的到账，奖励就丢了。
   - 现在的做法：入队后先放 Player 锁，fsync 之后才回复。

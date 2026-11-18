@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 )
 
 // 区服入口登记（维护者 D23，2026-11-14）：game 进程经总线定期向 account 上报“本服现在连这个地址、这么忙”，
@@ -108,6 +110,8 @@ func (presence ServerPresence) validate() (ServerPresence, error) {
 //
 //   - 完整的 URL，scheme 是小写的 ws 或 wss（TLS 由前置负载均衡终结时是 wss）；
 //   - 有主机（不能是 "ws://:7080/ws" 或 "ws:///ws"）；写了端口时在 1～65535，不写取 scheme 的缺省端口；
+//   - 主机是浏览器能用的（httpserver.BrowserHost）：末段是数字的主机必须是点分十进制 IPv4（192.0.2.300、game.1 浏览器
+//     解析不了，127.1、010.0.0.1 浏览器会改写），方括号里必须是不带 %区域号的 IPv6；DNS 名不限；
 //   - 不带用户名密码、不带片段（#…），不含空白；路径与查询串原样保留（路径由部署决定，缺省的玩家接入是 /ws）；
 //   - 至多 MaxPresenceAddrBytes（255）字节。
 func CheckWebSocketAddr(raw string) (string, error) {
@@ -124,6 +128,15 @@ func CheckWebSocketAddr(raw string) (string, error) {
 	}
 	if parsed.Hostname() == "" {
 		return "", errors.New("the websocket address must name the host clients connect to")
+	}
+	// 浏览器（Unity WebGL、TS SDK 的缺省传输）按 WHATWG URL 解析：它解析不了的数字主机在这里拒绝，不让连不上的地址
+	// 进区服目录（RV-20261118-13）；它会改写的 IPv4 写法（127.1、010.0.0.1）也拒绝并给出该写的值，别的客户端未必同样读。
+	browserHost, err := httpserver.BrowserHost(parsed)
+	if err != nil {
+		return "", fmt.Errorf("the websocket address: %w", err)
+	}
+	if !strings.HasPrefix(parsed.Host, "[") && browserHost != parsed.Hostname() {
+		return "", fmt.Errorf("the websocket address host %q is an IPv4 address browsers rewrite to %q and other clients may read differently; write %q", parsed.Hostname(), browserHost, browserHost)
 	}
 	if port := parsed.Port(); port != "" || strings.HasSuffix(parsed.Host, ":") {
 		if number, err := strconv.Atoi(port); err != nil || number <= 0 || number > 65535 {

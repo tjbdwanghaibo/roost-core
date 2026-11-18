@@ -186,6 +186,19 @@ func TestGapmapWorkflowGroupsMatchScript(t *testing.T) {
 	}
 }
 
+// TestPretagScopeSelfTest 跑 scripts/pretag_scope_test.py：pretag 的范围脚本 scripts/pretag-scope.py 在“只改了某一类
+// 文件”时选中什么（SDK 验收脚本自身要触发对应 SDK 门，RV-20261118-12；文档不触发；整跑触发项照旧）。自检把 git 与
+// go 换成假函数，在空临时目录里跑，几十毫秒。pretag 本身要 python3，所以缺 python3 时跳过而不是失败。
+func TestPretagScopeSelfTest(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not installed")
+	}
+	if out, err := exec.Command(python, filepath.Join("scripts", "pretag_scope_test.py")).CombinedOutput(); err != nil {
+		t.Fatalf("scripts/pretag_scope_test.py: %v\n%s", err, out)
+	}
+}
+
 // TestReleaseScriptSelfTest 跑 scripts/release_test.sh：scripts/release.sh 的纯文本部分（版本号校验与比较、
 // CHANGELOG 归档、framework-release / 生成物最低 core / 两个工作流的改写）在 scripts/release-lib.sh 里，
 // 自检对着仓库真实文件改写一遍。版本号文件换了写法（比如 framework-compat 多了一处钉版本）时，
