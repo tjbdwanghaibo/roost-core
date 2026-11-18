@@ -327,6 +327,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **空间视野总数上限 `MaxSpatialViews`**（2026-10-22，[O3](../release/v1.31.0-NOTES.md#o3)）：① 只数 `DefineSpatialView` 定义的业务空间视野，玩家主视野不计（由在线玩家数约束），所以 AOI 观察者总数 = 主视野数 + 至多 `MaxSpatialViews`；② 缺省 8192 来自一台机器（M5）、一种密度（1000 玩家、每视野可见约 50）的 D19 实测，玩家更多、更密或移动比例更高时同样数量的视野政策阶段更长，没有测；③ 只在定义时拒绝，不按耗时自适应，ApplyAsync 没有政策阶段耗时预算。
 - **AOICluster 容量抖动**：Cluster 的 `MaxVisible` 每次移动后严格等于候选内最近 N 个，容量层没有滞回，两个目标在第 N 名附近来回时每次移动都 Leave/Enter（`BenchmarkClusterFlushRandomWalkCapped` Enter +15.6%）。维护者 2026-10-17 决定不加滞回：抖动只在候选数超过 N 时出现，不设 `MaxVisible` 或把 N 设到常规候选数之上即可，容量只作人群聚集时的带宽保护阀。单区域 AOI 不受影响；Cluster 目前没有生产装配调用方。见 [INTEREST-BLOCK-AOI](../framework/INTEREST-BLOCK-AOI.md)。
 - **AOI 视野（D14 / D19）**：① 视野变大时新进入范围的目标一次性订阅、各下发全量，峰值受 `MaxVisible`（按视野计）与 Manager 快照预算约束，没有按玩家单独的预算。② 改视野、视野操作都没有排队版（维护者决定），事务内决定的视野变化（入盟、放眼、组队、Buff 改视野）由业务在提交之后调用。③ 一个玩家挂多个视野时，它持有的目标数受 Manager `Limits.MaxObjects`（缺省 100，也是每帧对象上限）约束：`Subscribe` 不按它拒绝，超出时（2026-11-08 起，D17）不关会话：Manager 暂缓放不下的新对象，Interest 收紧视野、留下最近的（见上“超额降级的剩余边界”）；业务仍用各视野的 `MaxVisible` 把持有量压在 `MaxObjects` 以下，按玩法调大，否则玩家会在边界上少看几个。④ 共享视野的扇出：一次变化的成本 = 变化量 × 挂接人数，由 `MaxPlayersPerView`（缺省 4096）约束；`BenchmarkRelationViewMemberChange` 1024 人挂接、1024 成员时约 0.78ms；sync-aoi 共享关系视野 100 / 1000 人与单视野同量级（[NIGHT §14'](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md#14-aoi-三点对照d14--d19)）。⑤ **两种应用模式**（维护者 2026-10-21 由业务选，选择指引见 [guide/04-sync](../framework/guide/04-sync.md#谁看见谁视野viewd19)）：**ApplySync（缺省）** 每玩家视野不超过主视野 + 8（含关系视野），超过拒绝构造；AOI 在 Flush 的政策阶段，原场景（1000 玩家、可见每视野约 50）Flush 均值 4 / 8 个额外视野时 15 / 25～27 ms，玩家更多、更密或移动比例更高时同样 8 个视野 Flush 更长，没有测；**ApplyAsync** 不限视野数、Flush 只结算，比 direct 多约一个同步周期（维护者接受，选 C），改值集中在周期末尾到达的负载下尾部会更差，没有测。本夹具里 ApplySync 的测得延迟没有比 ApplyAsync 低，它的好处是“提交后下一次 Flush 必定可见、没有额外线程”。⑥ sync-aoi 夹具是内存提交（`DurabilityMemory`），strict / pipelined 的 WAL 等待与排队事实就绪的关系没有测；新订阅全量只计本 tick 改的值，跨 tick 才送到的全量不计入，全量 P99 偏乐观。⑦ 包含关系按 `ViewSets` 字段判断；不配 `ViewSets` 时不同层级一律取并集身份，手写 packer 若不经 `SyncViewSet.Lookup` 解析就要自己认 `SyncProfile.Layers()`。⑧ 层级并集只在一个 Interest 内部合并；同一 pair 同时被 Interest 与 Group / Direct / SelfView 持有时，Manager 仍按优先级取一个视图（维护者 2026-10-21 按推荐保留）。⑨ 关系视野不排除挂接玩家自己的实体（按包含取高或取并集，维护者 2026-10-21 按推荐保留）。⑩ D14 / D19 前后对照（2026-10-20 夜间）：`ClusterFlushRandomWalk` +3.5%（D14 引入），其余 AOI / Cluster 基准无差异；sync-aoi 单视野三点无差异。⑪ 可见性只看距离与关系视野，没有按观察者过滤（隐身、相位、遮挡），`MaxVisible` 按距离选、没有“必须可见”的优先级（[DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#优化项下一阶段)的“按观察者过滤可见性”“MaxVisible 优先级”两行）。见 [guide/04-sync](../framework/guide/04-sync.md#谁看见谁视野viewd19)、[impl/04-sync §2E](../framework/impl/04-sync.md#2e-interest-的视野d19在-d14-上扩展)。（大联盟未压测见[自身视图、嵌入 TCP 与 AOI：未测部分](#自身视图嵌入-tcp-与-aoi未测部分)）
+- **AOI 并行重评的代码布局敏感（E-1，2026-11-18）**：`BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4` 在 `SetObserverLimit`（每观察者上限）合入后慢约 6～7%（约 0.66µs / 批，macOS M5、负载 5～7、30 轮交替 p<0.001）；去掉移动路径上 `observer.limited` 的三处判断即消失，但串行 `workers=1` 执行同样的判断却无差异，所以不是判断本身的开销，而是这几个函数的代码形态 / 布局在并行 worker 冷启动时的敏感（机理是推断，未用硬件计数器证实）。这一稀疏小批量配置下 4 worker 本来就比串行慢约 1.8 倍；不改。见[证据](evidence/category3-anomalies-20261118/README.md) §1。
 
 #### 场景主视野的视图与 Codec
 
@@ -727,7 +728,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 物理 Room 默认启用接收者分频/字段裁剪，远处规则障碍可按固定关卡轨迹显示；完整对象仍为 34 字节，RP2 明确标记省略速度，RP1 客户端须同步更新。近处/抓取关联与快速接近对象保留高频；包围球用于分频保护，AOI 仍为中心距离，不是几何遮挡或全形状相交查询。降频引入样本年龄和插值延迟，不能用量化的 5mm 误差宣称实时显示误差。指标与同帧对照见 [Room 手册](../framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。（未验收的部分见[LevelComponent 与 UGC 物理闯关：遗留](#levelcomponent-与-ugc-物理闯关遗留)）
 
 - **验证到哪一层**：可选 PhysX 房间支持运动学转轮 / 平台、动态 Box、弹簧抓取与铰链马达、固定版本关卡加载、Unity 预测 / 纠偏接法；Linux 原生功能、真实 TCP / Gate / NATS / Nest 联合链与 C# 预测核心已验证。历史单房间性能数据不覆盖新载荷 / 约束，也不是多房间容量。
-- **多房间与内存的已测口径**：物理房间已补 Linux 的 1/4/8 房间短测（每房 20 个逻辑客户端，普通/机关两类）。这是直接 Service + PhysX + Nest、预热 1 秒/采集 5 秒的证据，不含生产网络、原生内存与长稳，不能作为容量上限；普通 8 房间样本实际物理均频 49.32Hz。Go 分配已于 2026-10-29 profile 定位并削减：macOS ARM64 同机对照，机关 8 房间 81.57→31.15MB/s、普通 70.04→27.38MB/s，载荷字节不变；同日晚每帧状态索引与 AOI 索引由 map 改为切片（房间提交路径不再复制本帧状态），再降到机关 23.46、普通 19.87MB/s（同机交替 3 轮，载荷字节不变）；剩余主要是 `StateDAO.Accept` 的所有权副本（约 3MB/s，去掉要让 Nest undo 保护的权威状态与网络侧索引共用切片，判断为高风险，不做）与交给网络 / 视图账本的副本。**macOS ARM64 长稳已测**（2026-10-29，机关 8 房间 × 20 客户端连续 20 分钟）：footprint、Go 映射、goroutine、PhysX 原生堆（malloc 已分配约 9.6MiB / 8 房间，个数持平）在稳定窗口斜率都在 0 附近，没有发现无界增长；物理均频 49.85Hz（不含 vmmap 挂起窗口最低 49.93Hz）。RSS 每分钟 +0.035MB 推断为干净页换入（footprint 持平），未逐区域核对；交付频率后 8 分钟比前 8 分钟低 0.9%，原因尚未确认（倾向客户端定时器）。这些外部复测与小时级边界见二和 C-S4。见 [测量口径和复跑](../framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)、[分配 profile](../framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64) 与 [长稳与原生内存](../framework/PHYSICS-ROOM-SERVICE.md#长稳rss-与原生内存2026-10-29macos-arm64)。闯关流程由通用 `gameplay/level` 承担（见上文“通用 LevelComponent 首版边界”），不另建专用检查点 / 排名 / 结算状态机；物理动作执行器与 LevelComponent 的真实联合玩法尚未验收。
+- **多房间与内存的已测口径**：物理房间已补 Linux 的 1/4/8 房间短测（每房 20 个逻辑客户端，普通/机关两类）。这是直接 Service + PhysX + Nest、预热 1 秒/采集 5 秒的证据，不含生产网络、原生内存与长稳，不能作为容量上限；普通 8 房间样本实际物理均频 49.32Hz。Go 分配已于 2026-10-29 profile 定位并削减：macOS ARM64 同机对照，机关 8 房间 81.57→31.15MB/s、普通 70.04→27.38MB/s，载荷字节不变；同日晚每帧状态索引与 AOI 索引由 map 改为切片（房间提交路径不再复制本帧状态），再降到机关 23.46、普通 19.87MB/s（同机交替 3 轮，载荷字节不变）；剩余主要是 `StateDAO.Accept` 的所有权副本（约 3MB/s，去掉要让 Nest undo 保护的权威状态与网络侧索引共用切片，判断为高风险，不做）与交给网络 / 视图账本的副本。**macOS ARM64 长稳已测**（2026-10-29，机关 8 房间 × 20 客户端连续 20 分钟）：footprint、Go 映射、goroutine、PhysX 原生堆（malloc 已分配约 9.6MiB / 8 房间，个数持平）在稳定窗口斜率都在 0 附近，没有发现无界增长；物理均频 49.85Hz（不含 vmmap 挂起窗口最低 49.93Hz）。RSS 每分钟 +0.035MB 推断为干净页换入（footprint 持平），未逐区域核对；交付频率后 8 分钟比前 8 分钟低 0.9%：2026-11-18 复现确认是夹具客户端循环的计时（定时器晚醒与 Submit / Poll 的 CPU 时间）随本机状态成台阶变化，一个已确认的触发是显示器关闭，与运行时长无关，物理频率与空 Poll 不变（[证据](evidence/category3-anomalies-20261118/README.md) §3）；长稳测量期间应 `caffeinate -d -i` 并看 `timer_late_mean`。这些外部复测与小时级边界见二和 C-S4。见 [测量口径和复跑](../framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)、[分配 profile](../framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64) 与 [长稳与原生内存](../framework/PHYSICS-ROOM-SERVICE.md#长稳rss-与原生内存2026-10-29macos-arm64)。闯关流程由通用 `gameplay/level` 承担（见上文“通用 LevelComponent 首版边界”），不另建专用检查点 / 排名 / 结算状态机；物理动作执行器与 LevelComponent 的真实联合玩法尚未验收。
 
 ### 客户端
 
@@ -779,6 +780,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 13 类网络玩法已扩至现有规则的对局/经营闭环；公共 Robot 增加有界 Full/Delta/Remove 应用延迟观测，见 [Robot](../framework/ROBOT.md)。这些默认玩法仍使用替身鉴权/提交器。通用 game-demo 的真实账号/Gate/PB/strict WAL/Mongo 热点诊断与每个玩法的生产组合不是同一项验收。
 - **“除去组”门槛一次只除去一个组**：`p95_excluding:<组>` 按单组保存直方图；`Parallel` 里并行的同组步骤会让组时间超过墙钟时间（除去组按 0 截底）；“除去组”的分位数用约 9% 指数桶，整场景 `quantiles_ms` 用 obs 直方图，两者不能逐毫秒相减。
+- **gate-mixed 100/s 的输入丢拍来自服务端 strict 往返（E-3，2026-11-18）**：夹具是单账号、一条在途的闭环，丢拍按原因分开计数（`drop_reasons`）。macOS 本机私有依赖 100/s × 30s 五轮丢 48～88 拍、两轮诊断 283 / 297 拍，全部是 `slow_round_trip`：上一笔 PB 往返超过 10ms 间隔；压测端定时器落后、Nest 准入拒绝、请求超时、heartbeat 跳拍都是 0。往返主体是 `handlerAddExp` 锁内等 strict WAL 的 `F_FULLFSYNC`（负载中均值约 5.7ms、最长约 18ms，独立探针 p50 3.7ms），往返均值 8～10ms 贴着间隔，所以夹具在 macOS 上维持不了 100/s，丢拍数随环境在 48～297 间变化。这是 strict 单实体每笔 fsync 的固有代价（NEST_PIPELINED_COMMIT §12.3），不是压测端问题，也没有可修的缺陷。负载中 fsync 比独立探针慢约 1.5 倍的来源（同盘 Mongo journal / 投影 / 其他进程）未拆分；Linux 未测，仍归 C-L8。见[证据](evidence/category3-anomalies-20261118/README.md) §2。
 
 #### sync-business 夹具的范围
 
@@ -849,7 +851,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 #### 同步：尚未确认的偶发与疑点
 
 - **类型调度性能**：生产 on_change 接线的功能冒烟已通过；M-4 periodic / on_change 正式对照待测。
-- **AOI workers=4 的 7～11% 微基准差异**：历史三次同机交替仍不足以定位；M-5 / E-1 三个二进制、十轮交替待报告，不能先归为布局噪声。
 
 #### 自身视图、嵌入 TCP 与 AOI：未测部分
 
@@ -930,7 +931,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### LevelComponent 与 UGC 物理闯关：遗留
 
 - **UGC 外部验收**：新增 Unity 交互 / 编辑器、WAN 与多房间容量 C-U3 / C-X7；Linux RSS / 原生堆复测 C-L7；小时级反复建销、真实 Gate / NATS / TCP 内存与原生堆按房间分解 C-S4 未验。现成同一测试二进制 count=12 只覆盖每轮整套 Service + Host + 房间创建销毁，不覆盖长寿 Service 内房间 churn；保留全量 -v 日志并以 unix_s 拼接，TSV 不能覆盖写。
-- **玩法联合链**：PhysX 动作执行器与 LevelComponent 的真实联合玩法尚未验收；20 分钟 macOS 样本的后段交付频率约低 0.9% 原因仍未确认，RSS 页来源未逐区域核对。
+- **玩法联合链**：PhysX 动作执行器与 LevelComponent 的真实联合玩法尚未验收；RSS 页来源未逐区域核对。
 
 ### 客户端（遗留）
 
@@ -947,10 +948,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **跨机 / HA 与物理故障**：C-X1～X11 与 [EXTERNAL-VERIFICATION](EXTERNAL-VERIFICATION.md) E01～E28 的未完成项保留；E14 的本机精确窗口已通过，E25 不要求服务端 Windows。单机 loopback、私有副本集和本地进程 SIGKILL 不证明跨机器分区、掉电、网卡或卷迁移。用户暂无生产部署，本轮不执行 C。
 - **Player 跨机**：本机 rehome / sidmove 的旧证据与 P1 / P7 不替代 C-X10 的目标拓扑、卷、客户端重连；schema 操作也需目标部署验证。
-
-#### Robot 推广验收（2026-11-01）
-
-既有记录器修复后的 100/s 短测仍有输入丢拍；E-3 / C-L8 将区分 Scheduled / Completed / Dropped、请求期限、服务端拒绝与心跳信号。正式五轮 30s 未运行，不能将客户端节拍落后直接归因于客户端或服务端。
 
 #### 10-23 候选诊断边界
 

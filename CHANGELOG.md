@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 测试：`scripts/perf/gate-mixed.sh` 的 Gate 负载夹具把丢拍按原因分开（`drop_reasons`：`client_beat_lag` / `deadline_expired` / `admission_reject` / `heartbeat_skipped_beat` / `slow_round_trip`，合计等于 Dropped），并输出 `drop_detail`、`drop_events` 与负载区间计时 `load_timers`；`result.json` 不再有 `drop_reasons.client_pacing`，读它的脚本改为按合计校验。
+- 测试：物理房间长稳 TSV 追加 `loop_mean` / `submit_mean` / `poll_mean` / `timer_late_mean` / `loadavg1` 五列，用于把交付频率拆成客户端循环的各段。
 - **生成物要求的最低 core 提到 v1.55.0**（2026-11-18）：生成的 Remote 登记对 `ownership=shared` 的 kind 调 `entity.DeclareRemoteSharedKind`（facebook、team），game-demo 机器人场景写 `group`，mailbox+rehome 读 mail `Summary` 的 `BroadcastsBehind`。
 
 ## [v1.55.0] - 2026-11-18

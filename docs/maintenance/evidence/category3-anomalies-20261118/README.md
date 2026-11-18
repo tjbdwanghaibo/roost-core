@@ -157,11 +157,11 @@ codebase-memory-mcp 本次连不上，代码定位按当前源码与 grep。提�
 
 **加到**“一 / Sync、玩家接入与 Lockstep / 广播与 AOI”（若维护者选 A）：
 
-> - **AOI 并行重评的代码布局敏感（E-1，2026-11-18）**：`BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4` 在 `SetObserverLimit`（每观察者上限）合入后慢约 6～7%（约 0.66µs / 批，macOS M5、负载 5～7、30 轮交替 p<0.001）；去掉移动路径上 `observer.limited` 的三处判断即消失，但串行 `workers=1` 执行同样的判断却无差异，所以不是判断本身的开销，而是这几个函数的代码形态 / 布局在并行 worker 冷启动时的敏感（机理是推断，未用硬件计数器证实）。这一稀疏小批量配置下 4 worker 本来就比串行慢约 1.8 倍；不改。见[证据](evidence/category3-anomalies-20261118/README.md) §1。
+> - **AOI 并行重评的代码布局敏感（E-1，2026-11-18）**：`BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4` 在 `SetObserverLimit`（每观察者上限）合入后慢约 6～7%（约 0.66µs / 批，macOS M5、负载 5～7、30 轮交替 p<0.001）；去掉移动路径上 `observer.limited` 的三处判断即消失，但串行 `workers=1` 执行同样的判断却无差异，所以不是判断本身的开销，而是这几个函数的代码形态 / 布局在并行 worker 冷启动时的敏感（机理是推断，未用硬件计数器证实）。这一稀疏小批量配置下 4 worker 本来就比串行慢约 1.8 倍；不改。见[证据](README.md) §1。
 
 **改写**“二 / 验收与运维 / Robot 推广验收（2026-11-01）”那一段，移到“一 / 验收与运维 / Robot 推广验收的范围（2026-11-01）”末尾：
 
-> - **gate-mixed 100/s 的输入丢拍来自服务端 strict 往返（E-3，2026-11-18）**：夹具是单账号、一条在途的闭环，丢拍按原因分开计数（`drop_reasons`）。macOS 本机私有依赖 100/s × 30s 五轮丢 48～88 拍、两轮诊断 283 / 297 拍，全部是 `slow_round_trip`：上一笔 PB 往返超过 10ms 间隔；压测端定时器落后、Nest 准入拒绝、请求超时、heartbeat 跳拍都是 0。往返主体是 `handlerAddExp` 锁内等 strict WAL 的 `F_FULLFSYNC`（负载中均值约 5.7ms、最长约 18ms，独立探针 p50 3.7ms），往返均值 8～10ms 贴着间隔，所以夹具在 macOS 上维持不了 100/s，丢拍数随环境在 48～297 间变化。这是 strict 单实体每笔 fsync 的固有代价（NEST_PIPELINED_COMMIT §12.3），不是压测端问题，也没有可修的缺陷。负载中 fsync 比独立探针慢约 1.5 倍的来源（同盘 Mongo journal / 投影 / 其他进程）未拆分；Linux 未测，仍归 C-L8。见[证据](evidence/category3-anomalies-20261118/README.md) §2。
+> - **gate-mixed 100/s 的输入丢拍来自服务端 strict 往返（E-3，2026-11-18）**：夹具是单账号、一条在途的闭环，丢拍按原因分开计数（`drop_reasons`）。macOS 本机私有依赖 100/s × 30s 五轮丢 48～88 拍、两轮诊断 283 / 297 拍，全部是 `slow_round_trip`：上一笔 PB 往返超过 10ms 间隔；压测端定时器落后、Nest 准入拒绝、请求超时、heartbeat 跳拍都是 0。往返主体是 `handlerAddExp` 锁内等 strict WAL 的 `F_FULLFSYNC`（负载中均值约 5.7ms、最长约 18ms，独立探针 p50 3.7ms），往返均值 8～10ms 贴着间隔，所以夹具在 macOS 上维持不了 100/s，丢拍数随环境在 48～297 间变化。这是 strict 单实体每笔 fsync 的固有代价（NEST_PIPELINED_COMMIT §12.3），不是压测端问题，也没有可修的缺陷。负载中 fsync 比独立探针慢约 1.5 倍的来源（同盘 Mongo journal / 投影 / 其他进程）未拆分；Linux 未测，仍归 C-L8。见[证据](README.md) §2。
 
 **改写**“二 / 玩法组件与物理房间 / 玩法联合链”一条，去掉交付频率半句：
 
@@ -169,7 +169,7 @@ codebase-memory-mcp 本次连不上，代码定位按当前源码与 grep。提�
 
 并把“一 / 玩法组件与物理房间”里“多房间与内存的已测口径”中“交付频率后 8 分钟比前 8 分钟低 0.9%，原因尚未确认（倾向客户端定时器）”改为：
 
-> 交付频率后 8 分钟比前 8 分钟低 0.9%：2026-11-18 复现确认是夹具客户端循环的计时（定时器晚醒与 Submit / Poll 的 CPU 时间）随本机状态成台阶变化，一个已确认的触发是显示器关闭，与运行时长无关，物理频率与空 Poll 不变（[证据](evidence/category3-anomalies-20261118/README.md) §3）；长稳测量期间应 `caffeinate -d -i` 并看 `timer_late_mean`。
+> 交付频率后 8 分钟比前 8 分钟低 0.9%：2026-11-18 复现确认是夹具客户端循环的计时（定时器晚醒与 Submit / Poll 的 CPU 时间）随本机状态成台阶变化，一个已确认的触发是显示器关闭，与运行时长无关，物理频率与空 Poll 不变（[证据](README.md) §3）；长稳测量期间应 `caffeinate -d -i` 并看 `timer_late_mean`。
 
 （显示器常亮时仍出现过一次只在晚醒上的台阶，来源尚未确认；它只影响夹具的交付频率读数，不再作为产品遗留。）
 
