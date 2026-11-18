@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.57.0] - 2026-11-18
+
 - **审查修复 RV-20261118-10～13**（2026-11-18 审查报告的四项新问题，先红后绿，[证据](docs/maintenance/evidence/rv-20261118-10-13/README.md)）：
   - RV-20261118-10（P3）：`httpserver.CheckCORSOrigins`（`portal.cors_origins`、`lobby.cors_origins`）原来接受 `:0443`、`:08443` 这类带前导零的端口与空端口 `…:`，浏览器把它们规范化后与白名单逐字节对不上、预检 403。现在只收浏览器序列化出的写法，别的写法拒绝并给出该写的值；端口限 1～65535；数字主机同样按浏览器规则（`127.1`、`010.0.0.1` 拒绝并提示点分十进制，`192.0.2.300` 拒绝，IPv6 只收压缩写法）。合法的非默认端口（`:8443`）照常。
   - RV-20261118-11（P2）：TS Gate 在同步派发的 `Connecting` 监听器里 `disconnect()` 后，取票函数仍被调用、拿到的 `signal` 没有中止，`connect()` 等到连接超时才以 `GateTimeoutError` 结束。现在已断开（或调用方 `signal` 已中止）就不再取票，`connect()` 当场以 `GateClosedError` 结束。C# `Connection` 没有同步的状态回调，不会等到超时；对齐为已取消就不调用取票函数。
