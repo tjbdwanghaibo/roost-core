@@ -1,6 +1,6 @@
 # Roost 客户端协议与 C# SDK
 
-Roost 的自定义协议负责帧、路由编号与请求关联，业务载荷由包头选择 PB / Sync / Lockstep。本批提供公共 Go wire、纯 C# `netstandard2.1` TCP 运行库和 Unity 主线程适配。Lockstep 已接线：输入/Hash/Catchup命令、既有C7广播与C#有序消费、C9 v2恢复失败通知与CA 01快照恢复。
+Roost 的自定义协议负责帧、路由编号与请求关联，业务载荷由包头选择 PB / Sync / Lockstep。本批提供公共 Go wire、纯 C# `netstandard2.1` 运行库（TCP 或 WebSocket，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入含-unity-webgl)）和 Unity 主线程适配。Lockstep 已接线：输入/Hash/Catchup命令、既有C7广播与C#有序消费、C9 v2恢复失败通知与CA 01快照恢复。
 
 ## 标准业务入口
 
@@ -88,7 +88,7 @@ client.EntitiesReset += () => ClearVisibleEntities();
 
 固定16字节，整数大端；`payload_length`仅包含载荷，不包含头。
 
-浏览器经 WebSocket 连接（玩家接入或 relay 开了 WebSocket 监听时）：每条二进制消息装一个 RS v2 帧，服务端发来的每条消息也恰好是一帧，握手、票据与心跳和 TCP 相同，见 [GATEWAY.md §6](../docs/framework/GATEWAY.md#6-websocket-接入)。
+浏览器经 WebSocket 连接（玩家接入或 relay 开了 WebSocket 监听时）：每条二进制消息装一个 RS v2 帧，服务端发来的每条消息也恰好是一帧，握手、票据与心跳和 TCP 相同，见 [GATEWAY.md §6](../docs/framework/GATEWAY.md#6-websocket-接入)。C# `Roost.Client` 用 `ConnectionOptions.WebSocketUrl` 连，见下文[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入含-unity-webgl)。
 
 | 偏移 | 大小 | 字段 | 语义 |
 | --- | ---: | --- | --- |
@@ -124,7 +124,7 @@ bits3..7必须为0。PB请求/响应flags=0，PB推送=1，Sync推送=3；Lockst
 - **每次连接（包括重连）取一个新代号**，同一客户端越晚发起的连接代号越大，而且**客户端重启后仍要更大**：推荐`max(上一个 + 1, 当前UTC Unix纳秒)`，上一个只存在内存里。进程内严格递增、不受时钟回拨影响；重启后从当时的时钟起算，自然大于旧进程发过的代号。不要用从1开始的纯内存计数器：重启后新连接会输给旧连接。精度只有毫秒的平台用`Unix毫秒 × 1000000`。
 - 时钟在重启前后被往回拨时，新连接的代号可能偏小；后果只是与旧进程仍在途的握手重叠时被拒一次，重连即恢复。服务端只在重叠的握手之间比较代号，一个异常大的代号挡不住之后的正常重连。
 - Go实现：`wire.EncodeAuth(ticket, generation)`；robot的`transport.AuthPacket(token)`每次调用自动取`transport.NextConnectionGeneration()`。
-- C#运行库（`client/dotnet`，2026-11-06）：`TcpSession.ConnectAsync`每次连接取`AuthPayload.NextConnectionGeneration()`写成信封，`Connection` / `GameClient`的首次连接与自动重连、Unity托管适配`RoostConnection` / `RoostClientDriver`都经它，调用方API不变、没有新配置项。代号在发起连接时取，进程内所有连接共用一个递增序列。`AuthPayload.Encode` / `Decode`公开，供自建工具核对字节。票据上限由8192改为8182字节：服务端缺省的首包上限`MaxHandshakeBytes`是8 KiB，其中10字节是信封。以`0x00`开头的票据在连接前抛`ArgumentException`。
+- C#运行库（`client/dotnet`，2026-11-06）：`TcpSession.ConnectAsync`每次连接取`AuthPayload.NextConnectionGeneration()`写成信封（2026-11-18起与传输无关：经WebSocket或自定义`IGateTransport`连接时同样写，信封是第一帧的载荷，传输不看帧的内容），`Connection` / `GameClient`的首次连接与自动重连、Unity托管适配`RoostConnection` / `RoostClientDriver`都经它，调用方API不变、没有新配置项。代号在发起连接时取，进程内所有连接共用一个递增序列。`AuthPayload.Encode` / `Decode`公开，供自建工具核对字节。票据上限由8192改为8182字节：服务端缺省的首包上限`MaxHandshakeBytes`是8 KiB，其中10字节是信封。以`0x00`开头的票据在连接前抛`ArgumentException`。
 - C++运行库（`client/cpp`，2026-11-06）：`roost_connect`每次连接取进程内新代号写成信封（全部`roost_client`共用一个递增序列）。C++ `roost::client::connect`、`game_client`重连、Unity的`NativeClient` / `NativeGameClient` / `NativeReconnect`，以及经C ABI的Unreal模块都经它。C ABI与`roost_abi_version()==2`不变，托管绑定不用改，替换native库即可。票据为空或以`0x00`开头时原样发出，由服务端拒绝（`CLOSED`），与以前的失败方式相同。这里的连接代号与事件里按`roost_client`计数的连接`generation`不是一回事。
 - Unity：正式网络核心是C++（`RoostNativeDriver` + `NativeGameClient`），托管适配走C# `TcpSession`，两条路线都已带代号。重新执行`scripts/client/build-unity.py`打包，新的native插件与`Roost.Client.dll`才生效。Unreal使用同一C++库。
 - 跨语言金样：`client/spec/packets.json`的`auth_generation`（票据`ticket`，代号最高位为1，检验按无符号64位大端写出）。Go（`TestClientProtocolGolden*`）、C#（`Roost.Client.Tests`）和C++（`native_client`）都用同一票据与代号编码，并与金样逐字节比对。
@@ -226,6 +226,53 @@ RV-20261101-06 的原报告见 [review 1bf08673](https://github.com/tjbdwanghaib
 底层 `SyncReceiver`按单连接单流核对epoch、tick、baseTick与schema：首帧必须Full，重复/旧代不再应用，缺口或业务回调失败后拒绝增量，成功应用才推进基线。其内存状态固定，不缓存历史帧或业务实体。Go对应`sync/frame.Receiver`。同一连接串行消费，直接使用底层 Receiver 时，组件状态由业务维护；上层 EntityViews 校验 generation 与 subject 版本，按注册的 codec 应用数据，不提供预测回滚或任意 packer 的自动解析。
 
 接入方捕获缺口/应用错误后关闭旧TcpSession，清理业务状态、经正常票据鉴权重连并恢复订阅；新连接重新创建或Reset接收器，不能把旧连接排队的包送给新基线。已有鉴权控制链的业务也可调用服务端HoldSession/ReadySession得到新epoch；本库不新增客户端任意请求全量的公开协议。Full可能只是恢复的第一包，后续连续Delta/create补齐其余对象，不能等“一个Full含全部可见对象”。Unity的`RoostConnection`已接入缺口关闭与Disconnected通知，Attach前必须安装PacketReceived；Sync回调异常不再仅打印后继续增量。真实Unity运行验证仍未执行。
+
+## C# 经 WebSocket 连玩家接入（含 Unity WebGL）
+
+2026-11-18（维护者要求：Unity WebGL 游戏能联机）。`Roost.Client` 的连接抽成可替换的传输，形状照开房间 SDK 的 `IRelayTransport`；WebSocket 只是接入层，握手首包、连接代号、路由、请求关联、推送与心跳（MsgID=0，不用 WebSocket ping）都与 TCP 共用同一套代码。服务端要先开 WebSocket 监听：`roost add transport websocket`，写上 `player_access.{tcp,gate}.websocket.addr`（约定 7080），浏览器页面的来源写进 `allowed_origins`（[GATEWAY §6](../docs/framework/GATEWAY.md#6-websocket-接入)）。
+
+**传输**（`client/dotnet/Roost.Client/GateTransport.cs`）：
+
+- `IGateTransport`：`ConnectAsync(address)`、`SendAsync(frame)` 发一整帧、`ReceiveAsync` 收字节（返回 0 表示关闭）、`Dispose` 立即关闭。约定见接口注释：一个实例只连一次，重连时 SDK 向工厂要新的；`SendAsync` 由 SDK 串行调用；收的一侧不要求与帧对齐，SDK 按包头拼帧，一条消息里几帧、一帧拆成几条消息都行。
+- 自带两种：`TcpGateTransport`（缺省，行为与以前相同）、`WebSocketGateTransport`（`System.Net.WebSockets.ClientWebSocket`，给编辑器、桌面与纯 C#；每帧一条二进制消息，文本消息当协议错误断开，不发 `Origin` 头）。
+- `ConnectionOptions`：`WebSocketUrl`（完整的 `ws://` / `wss://` 地址，通常是 portal 进服应答给的，见下文“地址与票据从哪来”；路径与服务端 `websocket.path` 一致、缺省 `/ws`；设了就走 WebSocket，`Host` / `Port` 不用）、`TransportFactory`（每次连接与重连各新建一个；null 时按 `WebSocketUrl` 选自带的）、`PumpDriven`（见下）。低层用户也可以 `TcpSession.ConnectAsync(transport, address, ticket, timeout)`。
+- `Connection.HeartbeatRoundTrips`：收到应答的心跳次数（诊断用）。
+
+```csharp
+var client = new GameClient(new ConnectionOptions {
+    WebSocketUrl = "wss://game.example.com/ws", AutoReconnect = true,
+});
+await client.Connection.ConnectAsync(GetFreshTicketAsync);   // 与 TCP 相同的票据与重连
+```
+
+**Unity WebGL**：浏览器里没有套接字，线程池、计时器与 `ConfigureAwait(false)` 之后的续行也不运行（开房间 SDK 2026-11-17 实测）。两样要换：
+
+1. **调度：`ConnectionOptions.PumpDriven = true`**（WebGL 必开；缺省 false，其他平台行为不变；语义照开房间 SDK 的 `RelayClientOptions.PumpDriven`）。打开时 SDK 不用线程池与计时器：所有等待回到调用者的上下文；连接、请求与心跳超时，心跳间隔，重连退避都登记成 `Pump` 按单调时钟触发的计时（`GameClient.Pump` 开头调 `Connection.Pump`，不计入 budget；到期项投到主线程的 `SynchronizationContext` 再执行，不在 `Pump` 里同步跑，比到期时刻晚约一帧）。要求：在有 `SynchronizationContext` 的线程（Unity 主线程）上 `ConnectAsync` 与 `Pump`，否则 `ConnectAsync` 抛 `InvalidOperationException`；传输的 `ConnectAsync` / `ReceiveAsync` 在同一线程上完成，`SendAsync` 同步完成（Unity 的 Mono 运行库里发送锁的异步等待要线程池，WebGL 上不运行）。
+2. **传输：浏览器 WebSocket 的 `IGateTransport`**。SDK 不带桥接代码（维护者 2026-11-17 定），参考写法是 [unity-webgl-smoke](dotnet/unity-webgl-smoke/README.md) 的 `Assets/GateSmoke/BrowserGateTransport.cs`，JS 一侧与开房间 SDK 共用 `Assets/Plugins/WebGL/RoostRelayWebSocket.jslib`（收到的二进制消息排成字节队列，C# 每帧轮询，不从 JS 回调 C#）。两个文件拷进游戏工程即可。
+
+```csharp
+// 主线程（MonoBehaviour.Start）：
+var client = new GameClient(new ConnectionOptions {
+    WebSocketUrl = "wss://game.example.com/ws", PumpDriven = true, AutoReconnect = true,
+    TransportFactory = () => new BrowserGateTransport(),
+});
+// 注册 Subscribe / EntityViews 等回调之后：
+driver.Attach(client, BrowserGateTransport.PollAll);   // RoostClientDriver：每帧先轮询浏览器桥接，再 Pump
+await client.Connection.ConnectAsync(GetFreshTicketAsync);
+```
+
+**地址与票据从哪来**（维护者 2026-11-18 定）：登录时在 portal 的进服请求（`/portal/enter`、`/portal/login` 的 `enter`）里带 `"transport":"ws"`，portal 返回该接入方式的完整地址 `ws(s)://host:port/path`，把它原样填进 `WebSocketUrl`；不带时返回 TCP 地址，行为不变。SDK 只认调用方给的完整 URL，不从 TCP 地址推 WebSocket 地址。WebGL 上 `HttpClient` 不能用，登录请求用 `UnityWebRequest`，续行在主线程（开房间 SDK 的 `UnityWebRequestLobbyHttp` 是同样的写法）。
+
+**不 Pump 的后果**（加载场景卡住主线程、切后台时浏览器停了 Unity 的循环）：不发心跳、不判超时、不重连。服务端 `idle_timeout`（缺省 90s）内收不到任何帧就断开连接；恢复 `Pump` 后按 `AutoReconnect` 重连（新票据、新连接代号，`EntitiesReset` 之后重新收 Full）。请求超时也只在 `Pump` 时检查。
+
+**验证**（[证据](../docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)）：
+
+- `Roost.Client.Tests` 本地自测：假的 WebSocket 玩家接入核对每条消息恰好一帧、握手应答拆成两条、应答与推送合成一条、鉴权首包带代号信封、文本消息断开（`TestWebSocketMessageBoundaries`）；WebGL 桥接的 C# 部分（正式源码链接进来）用假的浏览器一侧喂拆开 / 合并 / 接近 1 MiB 的帧（`TestBrowserBridgeFraming`）。
+- 真实 Go 玩家接入（`infra/network/gateway` 的 `TestTheCSharpClientWorksOverWebSocket`、`…ThroughAStandaloneGate`，C# 进程由 Go 驱动）：嵌入 TCP 上缺省调度与 PumpDriven 单线程调度各跑一遍——握手、请求应答、校时、推送、心跳撑过 `idle_timeout`、服务端断开后重连（代号更大）、请求超时、不 Pump 被断开后恢复重连、连接超时；独立 Gate 上 PumpDriven 跑握手、请求、心跳与不 Pump 后的重连。单线程环境照开房间 SDK 的 `SingleThread.cs`：线程池或计时器上的续行、别的线程上调传输都记违规，要求零违规。
+- jslib 的 JS 逻辑：`node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs`。
+- Unity：`unity-webgl-smoke` 的 GateSmoke 只验“经 WebSocket 连进玩家接入、握手成功、只靠 Pump 的心跳保持连接超过 `idle_timeout`”（维护者 2026-11-18：WebSocket 之上的逻辑由 .NET 用例覆盖）。2026-11-18 用 `--managed-only` 托管包构建的 WebGL 版（Unity 6000.7.0b7）在 Claude 内置浏览器面板里握手 95ms、保持 100s（`idle_timeout` 90s）、6 次心跳往返，`SMOKE PASS`；编辑器里同样通过。Safari、Firefox、移动浏览器没测。
+
+边界见 [KNOWN-LIMITS“C# 经 WebSocket 连玩家接入”](../docs/maintenance/KNOWN-LIMITS.md#c-经-websocket-连玩家接入2026-11-18)。TS 没有连玩家接入的客户端（只有开房间 SDK）。
 
 ## Lockstep接入
 
@@ -379,7 +426,7 @@ C# 与 TS 的用例把 `client/relay` 的测试二进制（`go test -c`，`ROOST
 
 `Roost.Unity.RoostConnection`在Unity主线程Attach会话，`Update`每帧最多拉取配置数量的推送，然后触发`PacketReceived` / `Disconnected`；网络线程不访问Unity对象。Detach/销毁关闭自己的会话，替换时清掉旧连接队列。PB/Sync/Lockstep解码及游戏对象修改由主线程事件处理者实施；Lockstep异步消费必须串行await，不能直接挂并发async void事件。该正式适配源码已在.NET测试中直接链接，并通过真实TCP的缺口/业务异常关闭回归；测试只替代Unity宿主类型，尚未在Unity编辑器/IL2CPP平台实测。
 
-后续Godot .NET复用纯C#库并补主线程适配；Godot GDExtension与Unreal优先使用共享C++实现及同一金样。当前没有C++运行库、Godot/Unreal插件或浏览器传输，不把本机.NET通过等同于引擎验收。Lockstep复用纯C#库；Unreal/GDExtension仍需C++实现，不将.NET验证当C++验收。
+后续Godot .NET复用纯C#库并补主线程适配；Godot GDExtension与Unreal优先使用共享C++实现及同一金样。当前没有Godot/Unreal插件；浏览器只有C#（Unity WebGL，经上文的WebSocket传输与`PumpDriven`），不把本机.NET通过等同于引擎验收。Lockstep复用纯C#库；Unreal/GDExtension仍需C++实现，不将.NET验证当C++验收。
 
 ## 本地验证与金样
 
@@ -391,7 +438,7 @@ go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$'
 ./scripts/test-client-dotnet.sh
 ```
 
-测试程序只接受三种参数：`<packets.json>`；`<packets.json> <host> <port>`；`<packets.json> cross-gate <gateAPort> <gateBPort> <requestId> <responseId>`。第三种只供 gateway 包的跨 Gate 用例驱动，见下文。其他参数打印用法并以 2 退出。`scripts/test-client-dotnet.sh` 在金样与自测之后跑 `infra/network/gateway` 的 `TestAcrossGatesTheCSharpClientThatAbandonsAHandshakeKeepsItsNewerConnection`：同一进程里起两个独立 Gate 和一个 Game（进程内 NATS 替身），用真实 C# 进程依次完成以下步骤，先后用标准输入输出做屏障：
+测试程序只接受五种参数：`<packets.json>`；`<packets.json> <host> <port>`；`<packets.json> cross-gate <gateAPort> <gateBPort> <requestId> <responseId>`；`<packets.json> websocket <ws-url> <requestId> <responseId> <pushId>`；`<packets.json> websocket-gate <ws-url> <requestId> <responseId>`。后三种只供 gateway 包的用例驱动（跨 Gate 见下文，WebSocket 两种见上文“C# 经 WebSocket 连玩家接入”）。其他参数打印用法并以 2 退出。`scripts/test-client-dotnet.sh` 在金样与自测之后跑 `infra/network/gateway` 的 `TestAcrossGatesTheCSharpClientThatAbandonsAHandshakeKeepsItsNewerConnection`：同一进程里起两个独立 Gate 和一个 Game（进程内 NATS 替身），用真实 C# 进程依次完成以下步骤，先后用标准输入输出做屏障：
 
 1. 在 Gate A 上发起握手，旧 Bind 停在 Game 的鉴权里；
 2. 放弃这次握手，转连 Gate B，完成握手并答完一个请求；

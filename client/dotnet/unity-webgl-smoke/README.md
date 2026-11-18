@@ -1,6 +1,8 @@
-# unity-webgl-smoke：Roost.Client.Relay 在 Unity（含 WebGL）上的最小冒烟
+# unity-webgl-smoke：Roost.Client.Relay 与 Roost.Client（连玩家接入）在 Unity（含 WebGL）上的最小冒烟
 
 交接 C1（维护者 2026-11-17“做一个最小的测试”）：看 `Roost.Client.Relay` 在 Unity 的调度下能不能跑，重点是 **WebGL 单线程**。同时是 WebGL 接入的参考写法（SDK 不带桥接代码，维护者定）。2026-11-18 起 WebGL 上以 `RelayClientOptions.PumpDriven` 跑（维护者定 A1）。
+
+2026-11-18 另加 **GateSmoke**：`Roost.Client` 经 WebSocket 连玩家接入（嵌入 TCP 或独立 Gate），见下文“连玩家接入（GateSmoke）”。
 
 ## 内容
 
@@ -42,7 +44,43 @@ ROOST_RELAYPEER_BIN=/tmp/relaypeer node client/dotnet/unity-webgl-smoke/serve.mj
 
 看什么：探针各行是否完成（`DID NOT COMPLETE` 表示这个原语在该平台上不跑）；`bridge: ok`（桥接本身能用）；端到端每一步（`lobby created room`、`host connected`、`frames: ok`、`held …: still connected, rtt …`、`left: ok`、`PASS`），卡住时 `stuck at step`；切到别的标签页再回来时的 `application paused / focus` 行与之后连接是否还在。
 
+## 连玩家接入（GateSmoke）
+
+维护者 2026-11-18：Unity / WebGL 只验“经 WebSocket 连进玩家接入、完成鉴权握手”，再只靠 `Pump` 驱动的心跳把连接保持到超过服务端 `idle_timeout` 至少 10s；不做请求、推送、重连——WebSocket 之上的逻辑与 TCP 共用，由 `Roost.Client.Tests` 与 Go 驱动的用例覆盖（[client/README](../../README.md#c-经-websocket-连玩家接入含-unity-webgl)）。
+
+| 文件 | 作用 |
+|---|---|
+| `Assets/GateSmoke/BrowserGateTransport.cs` | WebGL 上的 `IGateTransport` 参考实现（给游戏照抄，SDK 不带）：浏览器 WebSocket，JS 一侧与开房间共用 `RoostRelayWebSocket.jslib`，每帧 `BrowserGateTransport.PollAll()` 轮询。浏览器一侧的函数抽成 `IBrowserSocket`，`Roost.Client.Tests` 链接本文件、用假的浏览器一侧测拼帧。 |
+| `Assets/GateSmoke/GateSmoke.cs` | 冒烟本体：`GameClient`（`WebSocketUrl`、`PumpDriven`）连上、握手，保持 `hold` 秒，期间连接一断即 `SMOKE FAIL`；到时心跳往返次数（`Connection.HeartbeatRoundTrips`）不少于 `hold/15 - 1`（缺省心跳 15s）则 `SMOKE PASS held …s connected, heartbeat round trips N`。30s 没握手成功也算失败。 |
+| `Assets/GateSmoke/GateSmokeBehaviour.cs` | 播放器入口：用托管包的 `RoostClientDriver`（WebGL 上 `Attach(client, BrowserGateTransport.PollAll)`，游戏照抄的接法）驱动，`LateUpdate` 判定，OnGUI 显示日志。WebGL 读页面参数 `ws`、`hold`；桌面播放器读 `-roostWs`、`-roostHold`。 |
+| `Assets/Editor/GateSmokeEditor.cs` | `RunInEditor`（SDK 自带的 `ClientWebSocket`，`PumpDriven` 开，`EditorApplication.update` 里 Pump；环境变量 `ROOST_SMOKE_WS`、`ROOST_SMOKE_HOLD`；不要加 `-quit`）、`BuildWebGL`（输出 `Build/GateWebGL`）。 |
+| `serve-gate.mjs` | 起玩家接入对端（`infra/network/gateway` 的 `TestServeAWebSocketPlayerAccessForTheBrowserSmoke`：`DefaultTCPConfig` 缺省值、加 WebSocket 监听、放行 `127.0.0.1:*` / `localhost:*` 来源、任何票据都认），发 WebGL 构建目录；打开 `/` 时自动补 `?ws=<对端>&hold=<idle_timeout + 10>`。目录写 `-` 只起对端。 |
+| `check-jslib-frames.mjs` | 不经 Unity、不经浏览器、不要对端：脚本自带最小 WebSocket 服务端，核对 jslib 交出的字节拼回完整、有序的帧（一帧拆成三条消息、三帧合成一条、接近 1 MiB 的大帧），每次 send 恰好一条消息，文本消息之后状态是 3。 |
+
+`prepare.sh` 同时用 `scripts/client/build-unity.py --managed-only` 打托管包放进 `<目录>/RoostSdk` 并在 `Packages/manifest.json` 引用它，GateSmoke 只用这个包里的 `Roost.Client.dll` 与 `RoostClientDriver`。
+
+```sh
+node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs                   # jslib 拼帧
+client/dotnet/unity-webgl-smoke/prepare.sh /tmp/roost-gate-smoke              # 拷工程 + 托管包
+UNITY7=/Applications/Unity/Hub/Editor/6000.7.0b7/Unity.app/Contents/MacOS/Unity
+"$UNITY7" -batchmode -nographics -quit -projectPath /tmp/roost-gate-smoke -buildTarget WebGL \
+  -executeMethod GateSmokeEditor.BuildWebGL -logFile /tmp/gate-webgl-build.log
+GOWORK=off go test -c -o /tmp/gatepeer ./infra/network/gateway
+ROOST_GATEPEER_BIN=/tmp/gatepeer node client/dotnet/unity-webgl-smoke/serve-gate.mjs /tmp/roost-gate-smoke/Build/GateWebGL 8790
+# 浏览器开 http://127.0.0.1:8790/ ，等 hold（缺省 idle_timeout 90s + 10s = 100s），看页面上（或控制台里）的 SMOKE 行：
+#   SMOKE handshake ok in …ms → SMOKE holding …（每 10s 一行）→ SMOKE PASS held 100s connected, heartbeat round trips N
+# 编辑器（ClientWebSocket + PumpDriven）：serve-gate.mjs 打印的 ROOST_SMOKE_WS / ROOST_SMOKE_HOLD 加在下面命令前
+"$UNITY7" -batchmode -nographics -projectPath /tmp/roost-gate-smoke -executeMethod GateSmokeEditor.RunInEditor -logFile /tmp/gate-editor.log
+```
+
+实测见[证据](../../../docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)。
+
 ## 实测结果
+
+2026-11-18 GateSmoke（连玩家接入），详见[证据](../../../docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)：
+
+- **WebGL**（6000.7.0b7，`--managed-only` 托管包，Claude 内置浏览器面板）：`SMOKE PASS held 100s connected, heartbeat round trips 6, handshake 95ms`。对端 `idle_timeout` 是缺省的 90s。
+- **编辑器**（6000.7.0b7 batchmode，`ClientWebSocket` + `PumpDriven`）：`SMOKE PASS held 100s connected, heartbeat round trips 6, handshake 193ms`。
 
 2026-11-18（WebGL A1 之后），详见 [证据](../../../docs/maintenance/evidence/sdk-webgl-a1-20261118/README.md)：
 

@@ -8,6 +8,15 @@
 
 同一连接只选一条路线，不要两个 Driver 同时消费。下文“构建可导入包”“业务接线”是原生路线的步骤。
 
+### 托管路线连 WebSocket 与 Unity WebGL（2026-11-18）
+
+托管路线可以经 WebSocket 连玩家接入（嵌入 TCP 或独立 Gate 的 `websocket` 监听）：登录时在 portal 的进服请求里带 `"transport":"ws"`，把返回的完整 `ws(s)://` 地址填进 `ConnectionOptions.WebSocketUrl`，编辑器、桌面与移动端用 SDK 自带的 `ClientWebSocket`，其余用法不变。**WebGL 只能走托管路线**（浏览器里没有原生插件与套接字），额外两步：
+
+1. `ConnectionOptions.PumpDriven = true`：SDK 不用线程池与计时器，超时、心跳、重连退避都由每帧的 `Pump` 驱动；在主线程上创建、连接。
+2. 传输用浏览器 WebSocket：把 [unity-webgl-smoke](../dotnet/unity-webgl-smoke/README.md) 的 `Assets/GateSmoke/BrowserGateTransport.cs` 与 `Assets/Plugins/WebGL/RoostRelayWebSocket.jslib` 拷进游戏工程（SDK 不带桥接代码），`TransportFactory = () => new BrowserGateTransport()`，并用 `driver.Attach(client, BrowserGateTransport.PollAll)` 让 `RoostClientDriver` 每帧先轮询桥接再 `Pump`。
+
+完整示例、不 `Pump` 的后果与验证见[客户端手册“C# 经 WebSocket 连玩家接入”](../README.md#c-经-websocket-连玩家接入含-unity-webgl)。`--managed-only` 打出的包够 WebGL 用：2026-11-18 用它构建 `unity-webgl-smoke` 的 WebGL 版（Unity 6000.7.0b7），结果见[证据](../../docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)。包里原生绑定的 C# 源码在 WebGL 上也参与编译，只要不调用原生路线就不会去找原生库。
+
 ## 原生路线
 
 正式网络内核来自 `client/cpp`，Unity 主线程通过 `RoostNativeDriver` 消费事件；业务 PB 和 EntitySync 复用 `Roost.Client` 与项目生成的 DAO codec。不会启动第二条 C# TCP 连接。网络 ABI 为 2，插件、绑定和 DLL 必须一起更新。

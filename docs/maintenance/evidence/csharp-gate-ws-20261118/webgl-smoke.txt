@@ -1,0 +1,20 @@
+# Unity 6000.7.0b7 WebGL 开发版（GateSmokeEditor.BuildWebGL，托管包 build-unity.py --managed-only），
+# serve-gate.mjs <Build/GateWebGL> 18795，Claude 桌面应用内置浏览器面板（Chrome/156 内核，document.visibilityState = visible）
+# 打开 http://127.0.0.1:18795/ → 302 到 /?ws=ws%3A%2F%2F127.0.0.1%3A64633%2Fws&hold=100
+# 对端：DefaultTCPConfig（idle_timeout 90s）+ WebSocket 监听，放行 127.0.0.1:* 来源
+# 浏览器控制台里的 SMOKE 行（去掉了 Unity 附带的调用栈；handshake 那一行的调用栈显示续行经
+# SynchronizationContextAwaitTaskContinuation → UnitySynchronizationContext.ExecuteTasks 回到主线程）：
+SMOKE application paused: False
+SMOKE application focus: True
+SMOKE connecting ws://127.0.0.1:64633/ws (browser websocket True, pump-driven True, hold 100s)
+SMOKE handshake ok in 95ms (state Ready)
+SMOKE holding 10s/100s, heartbeat round trips 0
+SMOKE holding 20s/100s, heartbeat round trips 1
+SMOKE holding 30s/100s, heartbeat round trips 1
+SMOKE holding 40s/100s, heartbeat round trips 2
+SMOKE holding 50s/100s, heartbeat round trips 3
+SMOKE holding 60s/100s, heartbeat round trips 3
+SMOKE holding 70s/100s, heartbeat round trips 4
+SMOKE holding 81s/100s, heartbeat round trips 5
+SMOKE holding 91s/100s, heartbeat round trips 5
+SMOKE PASS held 100s connected, heartbeat round trips 6, handshake 95ms

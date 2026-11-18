@@ -10,6 +10,8 @@
   <ItemGroup><ProjectReference Include="../Roost.Client.Codecs/Roost.Client.Codecs.csproj" /></ItemGroup>
   <ItemGroup><Compile Include="../../unity/Runtime/RoostClientDriver.cs" Link="Unity/RoostClientDriver.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../../unity/Runtime/RoostSceneTime.cs" Link="Unity/RoostSceneTime.cs" /></ItemGroup>
+  <!-- WebGL 浏览器桥接的参考写法（不进 SDK）：链接正式源码，用假的浏览器一侧测拼帧（BrowserBridgeTests.cs）。 -->
+  <ItemGroup><Compile Include="../unity-webgl-smoke/Assets/GateSmoke/BrowserGateTransport.cs" Link="Unity/BrowserGateTransport.cs" /></ItemGroup>
   <ItemGroup>
     <PackageReference Include="Grpc.Tools" Version="2.72.0" PrivateAssets="all" />
     <Protobuf Include="../../../codegen/internal/dao/testdata/golden/dao_sync.proto" GrpcServices="None" />

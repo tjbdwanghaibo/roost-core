@@ -71,31 +71,29 @@ namespace Roost.Client
                 (PayloadKind)((data[3] >> 1) & 3), (data[3] & 1) != 0);
         }
 
-        internal static async Task<Packet> ReadAsync(Stream stream, int maxPayload)
+        // 从连接上读一帧：按包头拼帧，不看字节是怎么到的（WebSocket 上一条消息里有几帧、一帧拆成几条消息都行）。
+        // context 为 true 时每次等待之后回到调用者的上下文（ConnectionOptions.PumpDriven：WebGL 上 ConfigureAwait(false) 之后的续行不运行）。
+        internal static Task<Packet> ReadAsync(IGateTransport transport, int maxPayload, bool context) =>
+            ReadAsync((buffer, offset, count) => transport.ReceiveAsync(buffer, offset, count, CancellationToken.None), maxPayload, context);
+
+        private static async Task<Packet> ReadAsync(Func<byte[], int, int, Task<int>> read, int maxPayload, bool context)
         {
             var header = new byte[HeaderSize];
-            await ReadExactlyAsync(stream, header).ConfigureAwait(false);
+            await ReadExactlyAsync(read, header, 0, context).ConfigureAwait(context);
             int size = CheckHeader(header, maxPayload); // 校验在申请载荷内存前完成。
             var data = new byte[checked(HeaderSize + size)];
             Buffer.BlockCopy(header, 0, data, 0, HeaderSize);
-            int offset = HeaderSize;
-            while (offset < data.Length)
-            {
-                int read = await stream.ReadAsync(data, offset, data.Length - offset, CancellationToken.None).ConfigureAwait(false);
-                if (read == 0) throw new EndOfStreamException();
-                offset += read;
-            }
+            await ReadExactlyAsync(read, data, HeaderSize, context).ConfigureAwait(context);
             return Decode(data, maxPayload);
         }
 
-        private static async Task ReadExactlyAsync(Stream stream, byte[] data)
+        private static async Task ReadExactlyAsync(Func<byte[], int, int, Task<int>> read, byte[] data, int offset, bool context)
         {
-            int offset = 0;
             while (offset < data.Length)
             {
-                int read = await stream.ReadAsync(data, offset, data.Length - offset, CancellationToken.None).ConfigureAwait(false);
-                if (read == 0) throw new EndOfStreamException();
-                offset += read;
+                int got = await read(data, offset, data.Length - offset).ConfigureAwait(context);
+                if (got == 0) throw new EndOfStreamException();
+                offset += got;
             }
         }
     }

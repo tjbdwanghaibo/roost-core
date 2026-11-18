@@ -1,0 +1,1 @@
+client/dotnet/Roost.Client.Tests/WebSocketTests.cs(477,53): error CS0246: 未能找到类型或命名空间名“IGateTransport”(是否缺少 using 指令或程序集引用?) [/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/base/client/dotnet/Roost.Client.Tests/Roost.Client.Tests.csproj]

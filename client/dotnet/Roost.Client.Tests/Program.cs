@@ -21,10 +21,17 @@ internal static partial class Program
         // 其他参数个数打印用法并以 2 退出，不让缺参数变成 IndexOutOfRangeException。
         if (args.Length == 6 && args[1] == "cross-gate")
             return await CrossGate(int.Parse(args[2]), int.Parse(args[3]), uint.Parse(args[4]), uint.Parse(args[5]));
+        // WebSocket 玩家接入（WebSocketTests.cs）：Go 用例起服务端再驱动这两种模式。
+        if (args.Length == 6 && args[1] == "websocket")
+            return await WebSocketAgainstPlayerAccess(args[2], uint.Parse(args[3]), uint.Parse(args[4]), uint.Parse(args[5]));
+        if (args.Length == 5 && args[1] == "websocket-gate")
+            return await WebSocketAgainstGate(args[2], uint.Parse(args[3]), uint.Parse(args[4]));
         if (args.Length != 1 && args.Length != 3)
         {
             Console.Error.WriteLine("usage: dotnet run --project client/dotnet/Roost.Client.Tests -- <packets.json> [<host> <port>]");
             Console.Error.WriteLine("       ... -- <packets.json> cross-gate <gateAPort> <gateBPort> <requestId> <responseId>");
+            Console.Error.WriteLine("       ... -- <packets.json> websocket <ws-url> <requestId> <responseId> <pushId>");
+            Console.Error.WriteLine("       ... -- <packets.json> websocket-gate <ws-url> <requestId> <responseId>");
             Console.Error.WriteLine("  e.g. dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json");
             return 2;
         }
@@ -118,7 +125,7 @@ internal static partial class Program
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));
         else
-            { await LocalSession(); await Capacity(); await LockstepGapRetry(); await LockstepSnapshotClient(); }
+            { await LocalSession(); await Capacity(); await TestWebSocketMessageBoundaries(); await TestBrowserBridgeFraming(); await LockstepGapRetry(); await LockstepSnapshotClient(); }
         return 0;
     }
     private static void Refuses(Action run, string why, Type? expected = null)

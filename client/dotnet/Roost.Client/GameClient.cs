@@ -9,6 +9,7 @@ namespace Roost.Client
 {
     // 引擎无关的业务入口。构造、订阅、Request 与 Pump 在同一消费线程使用；
     // 网络和取票在后台执行，全部业务通知只由 Pump 派发。Dispose 后不再通知业务。
+    // ConnectionOptions.PumpDriven（Unity WebGL）时没有后台：等待都回到创建线程的上下文，计时由 Pump 开头的 Connection.Pump 触发。
     public sealed class GameClient : IDisposable
     {
         public Connection Connection { get; }
@@ -85,7 +86,7 @@ namespace Roost.Client
         {
             TPacket response = default!;
             Exception? failure = null;
-            try { response = await request().ConfigureAwait(false); }
+            try { response = await request().ConfigureAwait(Connection.PumpDriven); }
             catch (Exception error) { failure = error; }
             lock (completionGate)
             {
@@ -110,6 +111,8 @@ namespace Roost.Client
             pumping = true;
             try
             {
+                // PumpDriven：先触发到期的计时（超时、心跳、重连退避），投到上下文执行，不计入 budget；否则什么也不做。
+                Connection.Pump();
                 long currentVersion = Connection.ConnectionVersion;
                 if (version != currentVersion) { ResetEntities(); version = currentVersion; }
                 if (disposed) return;

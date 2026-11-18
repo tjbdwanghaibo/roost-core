@@ -1,0 +1,12 @@
+SMOKE connecting ws://127.0.0.1:64633/ws (browser websocket False, pump-driven True, hold 100s)
+SMOKE handshake ok in 193ms (state Ready)
+SMOKE holding 10s/100s, heartbeat round trips 0
+SMOKE holding 20s/100s, heartbeat round trips 1
+SMOKE holding 30s/100s, heartbeat round trips 1
+SMOKE holding 40s/100s, heartbeat round trips 2
+SMOKE holding 50s/100s, heartbeat round trips 3
+SMOKE holding 60s/100s, heartbeat round trips 3
+SMOKE holding 70s/100s, heartbeat round trips 4
+SMOKE holding 80s/100s, heartbeat round trips 5
+SMOKE holding 90s/100s, heartbeat round trips 5
+SMOKE PASS held 100s connected, heartbeat round trips 6, handshake 193ms

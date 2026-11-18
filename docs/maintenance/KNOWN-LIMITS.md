@@ -752,11 +752,24 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 
 - **没有实现的传输**：TLS / WS / UDP / KCP 适配没有实现。已实跑的是 macOS ARM64 的 Editor、Mono / IL2CPP Player、50～10000 可见集解码与 TCP 延迟 / 分片 / 故障（[客户端报告](../performance/CLIENT-20261101.md)）。
 
+#### C# 经 WebSocket 连玩家接入（2026-11-18）
+
+C# `Roost.Client` 经 WebSocket 连嵌入 TCP 或独立 Gate（未发版）。用法见 [client/README“C# 经 WebSocket 连玩家接入”](../../client/README.md#c-经-websocket-连玩家接入含-unity-webgl)，契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，[证据](evidence/csharp-gate-ws-20261118/README.md)。没验证的部分见[客户端：遗留](#客户端遗留)。
+
+- **Unity WebGL 必须开 `ConnectionOptions.PumpDriven`，代价是不 `Pump` 就不跑**（照开房间 SDK 的 A1，维护者 2026-11-18 要求）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行不运行。打开后连接、请求与心跳超时，心跳间隔，重连退避都只在 `Pump` 时检查。游戏不 `Pump`（加载场景卡住主线程、切后台时浏览器停了循环）就不发心跳。服务端 `idle_timeout`（`DefaultTCPConfig` 缺省 90s）内收不到帧就断开，恢复 `Pump` 后按 `AutoReconnect` 重连，`EntitiesReset` 之后重新收 Full。到期的计时经主线程的 `SynchronizationContext` 触发，比到期时刻晚约一帧。
+- **PumpDriven 的前提**：
+  - 要有 `SynchronizationContext`：在没有它的线程上 `ConnectAsync` 抛 `InvalidOperationException`，Unity 主线程有；
+  - 只在 `Connection` / `GameClient` 上有：低层 `TcpSession` 与 `RoostConnection` 没有；
+  - 传输的 `SendAsync` 要同步完成：Unity 的 Mono 运行库里，发送锁的异步等待要线程池才能完成。浏览器的 `send` 不阻塞，参考桥接满足这一点；自己写的传输要照做。
+- **浏览器桥接不在 SDK 里**（维护者 2026-11-17 定）：游戏照抄 `unity-webgl-smoke` 的 `BrowserGateTransport.cs` 与 `RoostRelayWebSocket.jslib`（与开房间 SDK 共用）。桥接靠每帧轮询，不从 JS 回调 C#，所以收到的字节最早在下一帧的 `PollAll` 交给 SDK。浏览器发送缓冲积压超过 16 MiB 时当写失败断开。
+- **WebSocket 地址由调用方给完整 URL**（维护者 2026-11-18 定）：WebGL 登录时在 portal 的进服请求里带 `"transport":"ws"`，用返回的 `ws(s)://host:port/path` 连（portal 一侧另行实现）。SDK 不从 TCP 地址推算。
+- **自带的 `WebSocketGateTransport` 不发 `Origin` 头**：服务端对不带 `Origin` 的请求总是放行，身份仍靠票据。浏览器总会带 `Origin`，WebGL 页面的来源必须写进 `allowed_origins`。
+
 #### 开房间 SDK（2026-11-17）
 
 Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（未发版），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
 
-- **Go 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**：C# 的 `Roost.Client`（连 Gate）没有 WebSocket。
+- **Go 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**：这一条说的是连 relay。连玩家接入（Gate）的 C# `Roost.Client` 2026-11-18 起也能走 WebSocket，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入2026-11-18)。
 - **Unity WebGL 上 C# 开房间 SDK 要开 `PumpDriven`**（维护者 2026-11-18 定 A1，已实施）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行不运行（2026-11-17 实测）。打开 `PumpDriven` 后 SDK 只靠 `Pump`：游戏不调 `Pump`（加载场景卡住主线程、切后台浏览器停了循环）就不发心跳、不判超时、不重连；成员超过 relay `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）会被断开，房主宽限期 5s 内重连回来仍是房主，否则换 host；恢复 `Pump` 后按 `ReconnectAttempts` 重连。到期的计时器经同步上下文触发，比到期时刻晚约一帧。2026-11-18 在 Unity 6000.7.0b7 WebGL 构建、Claude 内置浏览器（隐藏面板）里两次通过。没测：Safari / Firefox / 移动浏览器、真实切后台、WebGL 里长时间卡帧的房主（[证据](evidence/sdk-webgl-a1-20261118/README.md)）。
 - **Web 房主在后台标签页靠 Worker 撑住只是缓解**：浏览器不保证 Worker 计时器不被限流，手机后台页随时被冻结，冻结后走 relay 的断线换 host。
 - **内置浏览器面板测不了真实后台**：Claude 桌面应用内置浏览器面板里，后台标签页的 `document.visibilityState` 始终是 `visible`，所以在那里“切到后台”只能用演示页的“模拟隐藏”按钮触发；后台限流对 Worker 计时器的影响没有实测。
@@ -959,6 +972,11 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 - **设备与引擎**：C-U1～U4 包括 Unity / IL2CPP 场景时间与地形、快照 restore、UGC 交互、Windows / Linux / Android / iOS 与 Unreal / Godot 实机，线程、移动前后台、WAN / 跨 Gate 和确定性。已有 macOS ARM64 Editor / Mono / IL2CPP 与 .NET 功能证据不能代表全矩阵。
 - **只在内置浏览器面板里演练过**：Web 端房主（`WebHost` + Worker 规则循环、主动转交、刷新恢复、隐藏让出）在 Claude 桌面应用内置的 Chromium 面板里两个标签页演练通过（[证据](evidence/lobby-relay-browser-20261117/README.md)，第一轮发现的“主动转交后新房主规则不跑”已由 f2532dba 修掉并复测）。“切到后台”是用演示页的“模拟隐藏”按钮触发的；Safari、Firefox、手机浏览器没测，真实后台标签页的计时器限流对 Worker 的影响没实测。TS SDK 的自动化用例仍只在 node 上跑（`ws` 包代替浏览器的 WebSocket，`document`、`sessionStorage` 用假的）。
 - **Unity / IL2CPP 没有实跑**：开房间的 C# SDK `Roost.Client.Relay` 与配置导出的 C# 读取代码只在 .NET 上编译和运行过（netstandard2.1、`TreatWarningsAsErrors`），没有在 Unity Editor、Mono / IL2CPP Player 上跑过。
+- **C# 经 WebSocket 连玩家接入：没验证的部分**（2026-11-18，[证据](evidence/csharp-gate-ws-20261118/README.md)）：
+  - **自身视图同步在 IL2CPP 裁剪后能不能用**：WebGL 走 IL2CPP。冒烟只做握手与心跳，只走到很少的编解码路径。进入游戏后的 EntitySync / 生成的 DAO Apply 有没有被代码裁剪影响，没有验证，留给真实项目接入时验收。
+  - **浏览器与平台**：Safari、Firefox、移动浏览器没测；真实后台标签页的限流没测；`wss://` 经真实负载均衡与 TLS 终结没测。
+  - **其他**：跨机网络没测；Unity 桌面播放器、移动端（`ClientWebSocket`）没测。
+  - 已验证的范围：.NET 用例与 jslib 的 node 检查覆盖握手、请求、推送、心跳、重连、超时与拼帧。Unity 只验连入、握手与靠 `Pump` 的心跳保活：6000.7.0b7 的 WebGL 构建在 Claude 内置浏览器面板（Chromium）里、编辑器 batchmode 里，各保持 100s（服务端 `idle_timeout` 90s）、6 次心跳往返，都通过。
 - **同一 SessionID 跨 Gate**：C++ 独立客户端进程经真实 TCP / NATS 已验先 A 后 B 与迟到 Bind 拒绝；Gate / Game 仍同 Go 测试进程。Unity Editor / Player、IL2CPP、Unreal 与真实分机重连未验。C++ protobuf 已用 libprotoc 36.2 跑 8 / 8 CTest，不再列“没有 protoc 未跑”。见[原生验收](evidence/known-limits-remaining-20261114/native-acceptance.md)。
 
 ### 验收与运维（遗留）

@@ -334,7 +334,8 @@ func TestGateForwardExposesTheBoundConnectionIdentity(t *testing.T) {
 }
 
 // startStandaloneGate 在 broker 上起一个独立 Gate 及它的 TCP 监听，所有连接都路由到 game。
-func startStandaloneGate(t *testing.T, broker *loopbackBroker, identity, game ProcessIdentity, auth Authenticator) *TCPServer {
+// configure 改 Gate 的玩家接入配置（例如打开 WebSocket 监听、缩短空闲超时）。
+func startStandaloneGate(t *testing.T, broker *loopbackBroker, identity, game ProcessIdentity, auth Authenticator, configure ...func(*TCPConfig)) *TCPServer {
 	t.Helper()
 	config := DefaultConfig()
 	config.Namespace = standaloneTestNamespace
@@ -358,6 +359,9 @@ func startStandaloneGate(t *testing.T, broker *loopbackBroker, identity, game Pr
 	tcp.Addr = "127.0.0.1:0"
 	tcp.HandshakeTimeout = 5 * time.Second
 	tcp.MaxPayloadBytes = uint32(config.MaxPayloadBytes)
+	for _, option := range configure {
+		option(&tcp)
+	}
 	server, err := NewTCPServer(tcp, gate.Forward, auth)
 	if err != nil {
 		t.Fatal(err)

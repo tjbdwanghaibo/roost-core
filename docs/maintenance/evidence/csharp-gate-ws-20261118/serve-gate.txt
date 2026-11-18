@@ -1,0 +1,6 @@
+# ROOST_GATEPEER_BIN=<scratchpad>/gatepeer node client/dotnet/unity-webgl-smoke/serve-gate.mjs <scratchpad>/gate-smoke/Build/GateWebGL 18795
+2026/11/18 19:26:19 INFO player tcp listener started addr=127.0.0.1:64632 max_connections=10000
+2026/11/18 19:26:19 INFO player websocket listener started addr=127.0.0.1:64633 path=/ws
+peer: player access ws://127.0.0.1:64633/ws, idle_timeout 90000ms → hold 100s
+editor: ROOST_SMOKE_WS=ws://127.0.0.1:64633/ws ROOST_SMOKE_HOLD=100
+smoke: http://127.0.0.1:18795/

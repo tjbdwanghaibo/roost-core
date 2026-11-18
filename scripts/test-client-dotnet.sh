@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# C# 客户端 SDK 的验证：金样（client/spec/packets.json）往返、会话 / 推送 / Sync 恢复 / Lockstep 追帧与快照恢复 / Unity 适配
+# C# 客户端 SDK 的验证：金样（client/spec/packets.json）往返、会话 / 推送 / Sync 恢复 / Lockstep 追帧与快照恢复 / Unity 适配 /
+# WebSocket 消息边界与 WebGL 浏览器桥接拼帧
 # 自测，地形 SDK 的金样与自测（client/dotnet/Roost.Client.Terrain.Tests），跨 Gate 放弃握手（infra/network/gateway 的
 # C# 客户端用例），以及真实生成工程上的 TCP 鉴权 → PB → Sync 推送 → Lockstep 追帧（TestClientSDKAgainstGeneratedPlayerTCP）。
 #
@@ -37,6 +38,20 @@ dotnet run --project client/dotnet/Roost.Client.Terrain.Tests -- client/spec
 echo "test-client-dotnet: cross-gate abandoned handshake with the C# client"
 ROOST_CLIENT_TEST_DLL="$repo_dir/client/dotnet/Roost.Client.Tests/bin/Debug/net10.0/Roost.Client.Tests.dll" \
   GOWORK=off go test -count=1 -run '^TestAcrossGatesTheCSharpClientThatAbandonsAHandshakeKeepsItsNewerConnection$' ./infra/network/gateway
+
+# C# 经 WebSocket 连玩家接入（2026-11-18）：真实 TCPServer 的 WebSocket 监听与独立 Gate，缺省调度与 PumpDriven 单线程调度
+# （Unity WebGL 的做法）各跑一遍：握手、请求、推送、心跳撑过 idle_timeout、重连、超时，约 15 秒。pretag 的 ROOST_DOTNET_GOLDEN_ONLY 也跑。
+echo "test-client-dotnet: the C# client over WebSocket (embedded TCP and standalone Gate)"
+ROOST_CLIENT_TEST_DLL="$repo_dir/client/dotnet/Roost.Client.Tests/bin/Debug/net10.0/Roost.Client.Tests.dll" \
+  GOWORK=off go test -count=1 -run '^TestTheCSharpClientWorksOverWebSocket' ./infra/network/gateway
+
+# WebGL 浏览器桥接的 jslib：拆开 / 合并 / 接近上限的帧经它的字节队列拼回完整、有序（node 自带 WebSocket，不要对端）。没有 node 时跳过。
+if command -v node >/dev/null 2>&1; then
+  echo "test-client-dotnet: WebGL bridge jslib framing (node)"
+  node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs
+else
+  echo "test-client-dotnet: SKIP WebGL bridge jslib framing: node not found" >&2
+fi
 
 # 开房间 C# SDK（Roost.Client.Relay）：金样 relay-packets.json 逐字节一致，以及对真实 relay + lobby 的用例（对端是
 # go test -c ./client/relay 的测试二进制；没有 ROOST_REDIS_TEST_ADDR / ROOST_DATAENGINE_IT_REDIS_ADDR 时房间目录用内存）。

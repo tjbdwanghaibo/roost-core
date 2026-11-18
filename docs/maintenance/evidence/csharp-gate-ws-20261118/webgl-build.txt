@@ -1,0 +1,3 @@
+Build Finished, Result: Success.
+SMOKE built WebGL at Build/GateWebGL
+Exiting batchmode successfully now!

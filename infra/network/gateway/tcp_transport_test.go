@@ -6,10 +6,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -640,3 +645,178 @@ func (c *writeObservedConn) WriteMessage(parts ...[]byte) (int64, error) {
 // TCPConfig 必须保持可比较：生成工程的 TestDeclaredDefaultsAreDefaultConfig 用 != 比较整份配置，
 // 所以 WebSocketConfig.AllowedOrigins 是逗号分隔的字符串而不是切片。这一行在它变得不可比较时编译失败。
 var _ = TCPConfig{} == TCPConfig{}
+
+// C# 客户端（client/dotnet/Roost.Client，Unity 托管路线同用）经 WebSocket 连嵌入 TCP 的玩家接入（维护者 2026-11-18）：
+// 真实 C# 进程（ROOST_CLIENT_TEST_DLL，scripts/test-client-dotnet.sh 构建后设置；没设时跳过）用 ConnectionOptions.WebSocketUrl
+// 连本用例的 TCPServer 的 WebSocket 监听，两种调度各跑一遍：缺省（线程池），以及 PumpDriven（Unity WebGL 的单线程调度：
+// 单线程环境 + 像浏览器桥接那样只在轮询里交字节的传输，凡是线程池、计时器上的续行都记违规）。C# 一侧核对握手、请求应答、
+// 校时控制帧、推送、心跳撑过 idle_timeout、服务端断开后自动重连（新连接的代号更大）、请求超时、PumpDriven 下不 Pump 就被
+// idle_timeout 断开而恢复后重连回来、连接超时由 Pump 触发；本用例另核对服务端看到的连接代号非 0、同一会话重连后更大。
+//
+// 请求协议（stuckRequestID → stuckResponseID，载荷是文本）：gen 回本连接的代号；push:<x> 回 ok 并推一条 pushTestMessageID；
+// close 回 closing 后关掉会话；slow 1.5s 后才回；其余原样回。
+func TestTheCSharpClientWorksOverWebSocket(t *testing.T) {
+	dll := csharpClientDLL(t)
+	config := DefaultTCPConfig()
+	config.Addr = "127.0.0.1:0"
+	withWebSocket(&config)
+	config.IdleTimeout = time.Second
+	config.DispatchTimeout = 5 * time.Second
+	runtime := NewTCPRuntime(func(_ uint32, value any) ([]byte, error) { return value.([]byte), nil }, config.LoginTimeout)
+	var mu sync.Mutex
+	generations := map[string][]uint64{} // SessionID → 各条连接 gen 时的代号，按出现顺序
+	dispatch := func(_ context.Context, session Session, msgID, seq uint32, kind wire.PayloadKind, payload []byte) (any, error) {
+		if msgID != stuckRequestID || kind != wire.PayloadProtobuf {
+			return nil, ErrInvalidRequest
+		}
+		text, reply := string(payload), string(payload)
+		sessionID := session.Principal().SessionID
+		switch {
+		case text == "gen":
+			generation := session.(ConnectionSession).Generation()
+			mu.Lock()
+			if list := generations[sessionID]; len(list) == 0 || list[len(list)-1] != generation {
+				generations[sessionID] = append(list, generation)
+			}
+			mu.Unlock()
+			reply = strconv.FormatUint(generation, 10)
+		case strings.HasPrefix(text, "push:"):
+			reply = "ok"
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				if err := runtime.PushSession(context.Background(), sessionID, pushTestMessageID, []byte(strings.TrimPrefix(text, "push:"))); err != nil {
+					t.Errorf("push to %s: %v", sessionID, err)
+				}
+			}()
+		case text == "close":
+			reply = "closing"
+			go func() { time.Sleep(50 * time.Millisecond); _ = session.Close(errors.New("closed by the test")) }()
+		case text == "slow":
+			time.Sleep(1500 * time.Millisecond)
+		}
+		return &TCPResponse{MessageID: stuckResponseID, Sequence: seq, Payload: []byte(reply)}, nil
+	}
+	players := map[string]int64{"ws-threaded": 1, "ws-detector": 2, "ws-pump": 3}
+	server, err := NewTCPServer(config, dispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
+		if players[token] == 0 {
+			return Principal{}, errors.New("unknown test ticket")
+		}
+		return Principal{PlayerID: players[token], SessionID: token}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ConnectRuntime(runtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	})
+	url := "ws://" + server.WebSocketAddr().String() + server.config.WebSocket.path()
+	runCSharpClient(t, dll, "websocket", url, strconv.FormatUint(uint64(stuckRequestID), 10),
+		strconv.FormatUint(uint64(stuckResponseID), 10), strconv.FormatUint(uint64(pushTestMessageID), 10))
+	mu.Lock()
+	defer mu.Unlock()
+	for _, sessionID := range []string{"ws-threaded", "ws-pump"} {
+		list := generations[sessionID]
+		if len(list) < 2 {
+			t.Errorf("%s: the server saw generations %v, want one per connection across a reconnect", sessionID, list)
+			continue
+		}
+		for i, generation := range list {
+			if generation == 0 || (i > 0 && generation <= list[i-1]) {
+				t.Errorf("%s: connection generations %v are not non-zero and increasing", sessionID, list)
+				break
+			}
+		}
+	}
+}
+
+// 同一个 C# 客户端经 WebSocket 连独立 Gate（Gate → 进程内 NATS 替身 → Game Ingress）：PumpDriven 单线程调度下握手、
+// 请求应答（Game 原样回）、心跳撑过 Gate 的 idle_timeout、不 Pump 被 Gate 断开后恢复 Pump 重连回来，全程零违规。
+func TestTheCSharpClientWorksOverWebSocketThroughAStandaloneGate(t *testing.T) {
+	dll := csharpClientDLL(t)
+	broker := newLoopbackBroker()
+	gateID := ProcessIdentity{ServerID: 11, Incarnation: "gate000000000001"}
+	gameID := ProcessIdentity{ServerID: 22, Incarnation: "game000000000001"}
+	principal := Principal{PlayerID: 7, ServerID: gameID.ServerID, SessionID: "ws-gate"}
+	auth := AuthenticatorFunc(func(context.Context, string, net.Addr) (Principal, error) { return principal, nil })
+	startStandaloneGame(t, broker, gameID, auth, nil)
+	server := startStandaloneGate(t, broker, gateID, gameID, auth, withWebSocket, func(config *TCPConfig) { config.IdleTimeout = time.Second })
+	url := "ws://" + server.WebSocketAddr().String() + server.config.WebSocket.path()
+	runCSharpClient(t, dll, "websocket-gate", url, strconv.FormatUint(uint64(stuckRequestID), 10), strconv.FormatUint(uint64(stuckResponseID), 10))
+}
+
+// csharpClientDLL 返回构建好的 C# 测试程序（Roost.Client.Tests.dll）；没设 ROOST_CLIENT_TEST_DLL 或没有 dotnet 时跳过。
+func csharpClientDLL(t *testing.T) string {
+	t.Helper()
+	dll := os.Getenv("ROOST_CLIENT_TEST_DLL")
+	if dll == "" {
+		t.Skip("ROOST_CLIENT_TEST_DLL not set (scripts/test-client-dotnet.sh builds the C# client and runs this test)")
+	}
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		t.Skip(".NET SDK unavailable")
+	}
+	return dll
+}
+
+// runCSharpClient 跑 C# 测试程序的一种模式（金样路径之后的参数），等它退出；非 0 退出时带上输出失败。
+func runCSharpClient(t *testing.T, dll string, args ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client := exec.CommandContext(ctx, "dotnet", append([]string{dll, "../../../client/spec/packets.json"}, args...)...)
+	client.Env = append(os.Environ(), "DOTNET_CLI_TELEMETRY_OPTOUT=1")
+	output, err := client.CombinedOutput()
+	t.Logf("C# client %s:\n%s", args[0], output)
+	if err != nil {
+		t.Fatalf("the C# client (%s) failed: %v", args[0], err)
+	}
+}
+
+// 不是回归用例：WebGL 冒烟（client/dotnet/unity-webgl-smoke 的 GateSmoke，serve-gate.mjs 起它）用的玩家接入对端。只在
+// ROOST_GATEPEER_SERVE=1 时运行：缺省配置（DefaultTCPConfig，idle_timeout 等与生成工程的缺省相同）加 WebSocket 监听，放行
+// 127.0.0.1 / localhost 的页面来源，任何票据都认、请求原样回；第一行标准输出是 GATEPEER {ws, idle_timeout_ms}，标准输入关闭时停。
+// ROOST_GATEPEER_WS_ADDR 指定 WebSocket 监听地址（缺省 127.0.0.1:0）。
+func TestServeAWebSocketPlayerAccessForTheBrowserSmoke(t *testing.T) {
+	if os.Getenv("ROOST_GATEPEER_SERVE") != "1" {
+		t.Skip("only for the WebGL smoke (client/dotnet/unity-webgl-smoke/serve-gate.mjs)")
+	}
+	config := DefaultTCPConfig()
+	config.Addr = "127.0.0.1:0"
+	config.WebSocket.Addr = "127.0.0.1:0"
+	if addr := os.Getenv("ROOST_GATEPEER_WS_ADDR"); addr != "" {
+		config.WebSocket.Addr = addr
+	}
+	config.WebSocket.AllowedOrigins = "127.0.0.1:*,localhost:*"
+	dispatch := func(_ context.Context, _ Session, msgID, seq uint32, kind wire.PayloadKind, payload []byte) (any, error) {
+		if kind != wire.PayloadProtobuf {
+			return nil, ErrInvalidRequest
+		}
+		return &TCPResponse{MessageID: msgID, Sequence: seq, Payload: payload}, nil
+	}
+	var players atomic.Int64
+	server, err := NewTCPServer(config, dispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
+		id := players.Add(1) // 每条连接一个玩家：页面刷新不顶号
+		return Principal{PlayerID: id, SessionID: token + "-" + strconv.FormatInt(id, 10)}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	}()
+	fmt.Printf("GATEPEER {\"ws\":%q,\"idle_timeout_ms\":%d}\n",
+		"ws://"+server.WebSocketAddr().String()+server.config.WebSocket.path(), config.IdleTimeout.Milliseconds())
+	_, _ = io.Copy(io.Discard, os.Stdin)
+}

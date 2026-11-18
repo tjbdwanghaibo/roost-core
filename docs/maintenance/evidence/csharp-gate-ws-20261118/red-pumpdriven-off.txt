@@ -1,0 +1,35 @@
+2026/11/18 19:11:43 INFO player tcp listener started addr=127.0.0.1:63196 max_connections=10000
+2026/11/18 19:11:43 INFO player websocket listener started addr=127.0.0.1:63197 path=/ws
+--- FAIL: TestTheCSharpClientWorksOverWebSocket (3.38s)
+    tcp_transport_test.go:720: C# client websocket:
+        PASS websocket player access (threaded): handshake, request, clock probe, push, heartbeat past idle_timeout, reconnect with a newer generation
+        PASS websocket single-thread detector, e.g.: transport ReceiveAsync on thread 4 (thread pool)
+        Unhandled exception. System.Exception: connect and request: everything ran on the loop thread; violations: transport ReceiveAsync on thread 4 (thread pool) | transport SendAsync on thread 4 (thread pool) | transport ReceiveAsync on thread 14 (thread pool) | a continuation posted to the loop on thread 12 (thread pool) | transport ReceiveAsync on thread 14 (thread pool) | transport ReceiveAsync on thread 14 (thread pool)
+           at Program.Check(Boolean ok, String message) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/Program.cs:line 13
+           at Program.<>c__DisplayClass54_0.<WsPumpDriven>g__Clean|0(String step) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 244
+           at Program.WsPumpDriven(StrictLoop loop, String url, WsIds ids, Boolean pumpDriven, Boolean full) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 263
+           at Program.StrictLoop.<>c__DisplayClass8_0.<RunAsync>b__0() in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 371
+        --- End of stack trace from previous location ---
+           at Program.StrictLoop.RunAsync(String name, TimeSpan limit, Func`2 body, Boolean expectViolations) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 379
+           at Program.WebSocketAgainstPlayerAccess(String url, UInt32 request, UInt32 response, UInt32 push) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 169
+           at Program.Main(String[] args) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/Program.cs:line 26
+           at Program.<Main>(String[] args)
+    tcp_transport_test.go:720: the C# client (websocket) failed: signal: abort trap
+2026/11/18 19:11:46 INFO player tcp listener started addr=127.0.0.1:63206 max_connections=10000
+2026/11/18 19:11:46 INFO player websocket listener started addr=127.0.0.1:63207 path=/ws
+--- FAIL: TestTheCSharpClientWorksOverWebSocketThroughAStandaloneGate (0.17s)
+    tcp_transport_test.go:751: C# client websocket-gate:
+        Unhandled exception. System.Exception: connect and request: everything ran on the loop thread; violations: transport ReceiveAsync on thread 6 (thread pool) | transport SendAsync on thread 6 (thread pool) | transport ReceiveAsync on thread 11 (thread pool) | a continuation posted to the loop on thread 11 (thread pool) | transport ReceiveAsync on thread 11 (thread pool) | transport ReceiveAsync on thread 11 (thread pool)
+           at Program.Check(Boolean ok, String message) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/Program.cs:line 13
+           at Program.<>c__DisplayClass54_0.<WsPumpDriven>g__Clean|0(String step) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 244
+           at Program.WsPumpDriven(StrictLoop loop, String url, WsIds ids, Boolean pumpDriven, Boolean full) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 263
+           at Program.StrictLoop.<>c__DisplayClass8_0.<RunAsync>b__0() in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 371
+        --- End of stack trace from previous location ---
+           at Program.StrictLoop.RunAsync(String name, TimeSpan limit, Func`2 body, Boolean expectViolations) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 379
+           at Program.WebSocketAgainstGate(String url, UInt32 request, UInt32 response) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/WebSocketTests.cs:line 177
+           at Program.Main(String[] args) in /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/Program.cs:line 28
+           at Program.<Main>(String[] args)
+    tcp_transport_test.go:751: the C# client (websocket-gate) failed: signal: abort trap
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	3.907s
+FAIL

@@ -1,0 +1,55 @@
+## M1 一帧拆成两条消息写（包头一条、载荷一条）
+命令：dotnet /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/bin/Debug/net10.0/Roost.Client.Tests.dll client/spec/packets.json
+退出码：-6（红）
+Unhandled exception. System.Exception: websocket peer failed during: handshake over a split acknowledgement
+---> System.Exception: a client message of 16 bytes is not exactly one frame
+---> System.IO.InvalidDataException: Incomplete or trailing packet bytes.
+
+## M2 PumpDriven 下读循环的等待用回线程池（ConfigureAwait(false)）
+命令：go test -count=1 -run ^TestTheCSharpClientWorksOverWebSocket$ ./infra/network/gateway
+退出码：1（红）
+--- FAIL: TestTheCSharpClientWorksOverWebSocket (3.32s)
+Unhandled exception. System.Exception: connect and request: everything ran on the loop thread; violations: a continuation posted to the loop on thread 6 (thread pool) | transport ReceiveAsync on thread 6 (thread pool) | transport ReceiveAsync on thread 6 (thread pool) | a continuation posted to the loop on thread 6 (thread pool) | transport ReceiveAsync on thread 6 (thread pool)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	3.821s
+FAIL
+
+## M3 PumpDriven 下等待（心跳间隔、重连退避）仍用 Task.Delay
+命令：go test -count=1 -run ^TestTheCSharpClientWorksOverWebSocket$ ./infra/network/gateway
+退出码：1（红）
+--- FAIL: TestTheCSharpClientWorksOverWebSocket (5.97s)
+Unhandled exception. System.Exception: heartbeat on Pump: everything ran on the loop thread; violations: a continuation posted to the loop on thread 14 (thread pool) | a continuation posted to the loop on thread 14 (thread pool) | a continuation posted to the loop on thread 8 (thread pool) | a continuation posted to the loop on thread 4 (thread pool) | a continuation posted to the loop on thread 4 (thread pool) | a continuation posted to the loop on thread 14 (thread pool) | a continuation posted to the loop on thread 14 (thread pool) | a continuation posted to the loop on thread 4 (thread poo
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	6.252s
+FAIL
+
+## M4 GameClient.Pump 不触发计时（不调 Connection.Pump）
+命令：go test -count=1 -run ^TestTheCSharpClientWorksOverWebSocket$ ./infra/network/gateway
+退出码：1（红）
+--- FAIL: TestTheCSharpClientWorksOverWebSocket (5.94s)
+Unhandled exception. System.Exception: heartbeats on Pump kept the connection past idle_timeout: System.IO.EndOfStreamException: Attempted to read past the end of the stream.
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	6.228s
+FAIL
+
+## M5 PumpDriven 下超时仍用 CancelAfter 的计时器
+命令：go test -count=1 -run ^TestTheCSharpClientWorksOverWebSocket$ ./infra/network/gateway
+退出码：1（红）
+--- FAIL: TestTheCSharpClientWorksOverWebSocket (7.74s)
+Unhandled exception. System.Exception: request timeout: everything ran on the loop thread; violations: a continuation posted to the loop on thread 10 (thread pool)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	8.016s
+FAIL
+
+## M6 浏览器桥接 C# 一侧拼帧时丢掉剩余字节（一次取满中转缓冲、只交 count 个）
+命令：dotnet /Users/whb/roost/roost-core/.claude/worktrees/agent-aaf99c33f02867c18/client/dotnet/Roost.Client.Tests/bin/Debug/net10.0/Roost.Client.Tests.dll client/spec/packets.json
+退出码：-6（红）
+Unhandled exception. System.Exception: Timed out waiting for reply to split
+
+## M7 jslib 取了一部分就丢掉这条消息的剩余字节
+命令：node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs
+退出码：1（红）
+check-jslib-frames: FAIL timed out: 1048988 bytes with 7-byte receives
+
+## 恢复
+构建 成功

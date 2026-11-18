@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 namespace Roost.Client
 {
     // 一实例对应一个连接生命周期。断线后创建新实例，旧应答不能跨实例匹配。
+    // 名字沿用 TcpSession（公开 API），底下的连接是 IGateTransport：缺省 TCP，也可以是 WebSocket 或游戏自己的实现（GateTransport.cs）。
     public sealed class TcpSession : IDisposable
     {
         private sealed class Pending
@@ -17,7 +18,9 @@ namespace Roost.Client
             internal readonly TaskCompletionSource<Packet> Result = new TaskCompletionSource<Packet>(TaskCreationOptions.RunContinuationsAsynchronously);
             internal Pending(uint responseId) { ResponseId = responseId; }
         }
-        private readonly Stream stream;
+        private readonly IGateTransport transport;
+        private readonly PumpScheduler scheduler;
+        private readonly bool context; // 每个 await 的 ConfigureAwait 参数：PumpDriven 时回到调用者的上下文
         private readonly object gate = new object();
         private readonly SemaphoreSlim send = new SemaphoreSlim(1, 1);
         private readonly Dictionary<uint, Pending> pending = new Dictionary<uint, Pending>();
@@ -30,45 +33,73 @@ namespace Roost.Client
         public Task Completion { get; }
         public Exception? CloseReason { get { lock (gate) return closed; } }
 
-        private TcpSession(Stream stream, int maxPayload, int maxPending, int maxPushes)
+        private TcpSession(IGateTransport transport, PumpScheduler scheduler, int maxPayload, int maxPending, int maxPushes)
         {
-            this.stream = stream; this.maxPayload = maxPayload; this.maxPending = maxPending; this.maxPushes = maxPushes;
+            this.transport = transport; this.scheduler = scheduler; context = scheduler.ContinueOnContext;
+            this.maxPayload = maxPayload; this.maxPending = maxPending; this.maxPushes = maxPushes;
+            // PumpDriven 时读循环在调用线程上起，之后的续行回到调用者的上下文（WebGL 上由浏览器桥接的轮询完成收字节）。
             Completion = ReadLoopAsync();
         }
 
-        public static async Task<TcpSession> ConnectAsync(string host, int port, string token,
+        public static Task<TcpSession> ConnectAsync(string host, int port, string token,
             TimeSpan timeout, CancellationToken cancellation = default,
             int maxPayload = PacketCodec.DefaultMaxPayload, int maxPending = 64, int maxPushes = 256)
         {
-            if (maxPayload <= 0 || maxPending <= 0 || maxPushes <= 0 || timeout <= TimeSpan.Zero)
-                throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout and capacities must be positive.");
-            ValidateTimeout(timeout);
-            byte[] ticket = Encoding.UTF8.GetBytes(token ?? throw new ArgumentNullException(nameof(token)));
-            // 服务端缺省的鉴权首包上限是 8 KiB（gateway TCPConfig.MaxHandshakeBytes），其中 10 字节是连接代号信封。
-            if (ticket.Length == 0 || ticket.Length > 8182) throw new ArgumentException("Ticket must be 1..8182 UTF-8 bytes.", nameof(token));
-            if (ticket[0] == 0) throw new ArgumentException("Ticket must not start with a NUL byte.", nameof(token));
-            // 鉴权首包带本次连接的新代号（AuthPayload）：同一会话跨 Gate 重连时，Game 据此认出迟到完成的旧握手。
-            // 代号在发起连接时取，越晚发起的连接越大；每次 ConnectAsync（包括 Connection 的自动重连）都取新的。
-            byte[] auth = AuthPayload.Encode(ticket, AuthPayload.NextConnectionGeneration());
-            var tcp = new TcpClient();
+            if (host == null) throw new ArgumentNullException(nameof(host));
+            return ConnectAsync(new TcpGateTransport(), TcpGateTransport.Address(host, port), token, timeout, cancellation,
+                maxPayload, maxPending, maxPushes, PumpScheduler.Threaded);
+        }
+
+        /// <summary>
+        /// 经指定的传输连接并完成鉴权握手（缺省调度：计时器与线程池）。transport 是新建、还没连过的实例，归本会话所有（失败或
+        /// Dispose 时关闭）；address 交给 transport.ConnectAsync（WebSocket 是 ws:// / wss:// URL）。握手首包与连接代号与 TCP 相同。
+        /// 要单线程调度（Unity WebGL）用 Connection / GameClient 的 ConnectionOptions.PumpDriven。
+        /// </summary>
+        public static Task<TcpSession> ConnectAsync(IGateTransport transport, string address, string token,
+            TimeSpan timeout, CancellationToken cancellation = default,
+            int maxPayload = PacketCodec.DefaultMaxPayload, int maxPending = 64, int maxPushes = 256)
+        {
+            if (transport == null) throw new ArgumentNullException(nameof(transport));
+            return ConnectAsync(transport, address, token, timeout, cancellation, maxPayload, maxPending, maxPushes, PumpScheduler.Threaded);
+        }
+
+        internal static async Task<TcpSession> ConnectAsync(IGateTransport transport, string address, string token,
+            TimeSpan timeout, CancellationToken cancellation, int maxPayload, int maxPending, int maxPushes, PumpScheduler scheduler)
+        {
+            byte[] auth;
+            try
+            {
+                if (maxPayload <= 0 || maxPending <= 0 || maxPushes <= 0 || timeout <= TimeSpan.Zero)
+                    throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout and capacities must be positive.");
+                ValidateTimeout(timeout);
+                byte[] ticket = Encoding.UTF8.GetBytes(token ?? throw new ArgumentNullException(nameof(token)));
+                // 服务端缺省的鉴权首包上限是 8 KiB（gateway TCPConfig.MaxHandshakeBytes），其中 10 字节是连接代号信封。
+                if (ticket.Length == 0 || ticket.Length > 8182) throw new ArgumentException("Ticket must be 1..8182 UTF-8 bytes.", nameof(token));
+                if (ticket[0] == 0) throw new ArgumentException("Ticket must not start with a NUL byte.", nameof(token));
+                // 鉴权首包带本次连接的新代号（AuthPayload）：同一会话跨 Gate 重连时，Game 据此认出迟到完成的旧握手。
+                // 代号在发起连接时取，越晚发起的连接越大；每次 ConnectAsync（包括 Connection 的自动重连）都取新的，与传输无关。
+                auth = AuthPayload.Encode(ticket, AuthPayload.NextConnectionGeneration());
+            }
+            catch { transport.Dispose(); throw; }
+            bool context = scheduler.ContinueOnContext;
             TcpSession? session = null;
             using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
+            using (scheduler.CancelAfter(budget, timeout))
             {
-                budget.CancelAfter(timeout);
                 try
                 {
-                    using (budget.Token.Register(() => tcp.Dispose()))
-                        await tcp.ConnectAsync(host, port).ConfigureAwait(false);
+                    // 超时或取消时关掉连接：不依赖各实现对 CancellationToken 的处理。
+                    using (budget.Token.Register(transport.Dispose))
+                        await transport.ConnectAsync(address, budget.Token).ConfigureAwait(context);
                     budget.Token.ThrowIfCancellationRequested();
-                    tcp.NoDelay = true;
-                    session = new TcpSession(tcp.GetStream(), maxPayload, maxPending, maxPushes);
-                    Packet ack = await session.RequestAsync(0, 0, auth, timeout, budget.Token).ConfigureAwait(false);
+                    session = new TcpSession(transport, scheduler, maxPayload, maxPending, maxPushes);
+                    Packet ack = await session.RequestAsync(0, 0, auth, timeout, budget.Token).ConfigureAwait(context);
                     if (ack.Payload.Length != 0) throw new InvalidDataException("Authentication acknowledgement must be empty.");
                     return session;
                 }
                 catch
                 {
-                    session?.Dispose(); tcp.Dispose();
+                    session?.Dispose(); transport.Dispose();
                     budget.Token.ThrowIfCancellationRequested();
                     throw;
                 }
@@ -79,14 +110,14 @@ namespace Roost.Client
         public async Task<Packet> RequestAsync(uint messageId, uint responseId, ReadOnlyMemory<byte> payload,
             TimeSpan timeout, CancellationToken cancellation = default)
         {
-            return (await SendAsync(messageId, PayloadKind.Protobuf, payload, timeout, cancellation, new Pending(responseId)).ConfigureAwait(false))!;
+            return (await SendAsync(messageId, PayloadKind.Protobuf, payload, timeout, cancellation, new Pending(responseId)).ConfigureAwait(context))!;
         }
 
         // 仅连接监控器使用一个独立槽位，业务及校时探测不能借用；序列与写锁仍统一。
         internal async Task<Packet> HeartbeatAsync(TimeSpan timeout, CancellationToken cancellation)
         {
             return (await SendAsync(0, PayloadKind.Protobuf, ReadOnlyMemory<byte>.Empty,
-                timeout, cancellation, new Pending(0), heartbeat: true).ConfigureAwait(false))!;
+                timeout, cancellation, new Pending(0), heartbeat: true).ConfigureAwait(context))!;
         }
 
         // Notify完成只表示写出；与Request共享序列、发送锁和容量，禁止自动重试输入。
@@ -95,7 +126,7 @@ namespace Roost.Client
         {
             if (messageId == 0 || (kind != PayloadKind.Protobuf && kind != PayloadKind.Lockstep))
                 throw new ArgumentException("Notify requires a PB/Lockstep business route.");
-            await SendAsync(messageId, kind, payload, timeout, cancellation, null).ConfigureAwait(false);
+            await SendAsync(messageId, kind, payload, timeout, cancellation, null).ConfigureAwait(context);
         }
 
         private async Task<Packet?> SendAsync(uint messageId, PayloadKind kind, ReadOnlyMemory<byte> payload,
@@ -118,13 +149,13 @@ namespace Roost.Client
                 }
             }
             using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
+            using (scheduler.CancelAfter(budget, timeout))
             {
-                budget.CancelAfter(timeout);
                 try
                 {
                     // 先编码，坏输入不会写出半包或关闭健康连接。
                     byte[] data = PacketCodec.Encode(new Packet(messageId, 0, payload, kind), maxPayload);
-                    await send.WaitAsync(budget.Token).ConfigureAwait(false);
+                    await send.WaitAsync(budget.Token).ConfigureAwait(context);
                     bool writing = false;
                     try
                     {
@@ -139,14 +170,15 @@ namespace Roost.Client
                         System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(8, 4), sequence);
                         // 写期间取消可能留下半包，保守关闭整个连接；等待应答期间取消不关连接。
                         writing = true;
+                        // 一帧一次 SendAsync：WebSocket 上恰好一条二进制消息（GATEWAY §6）。
                         using (budget.Token.Register(() => Close(new OperationCanceledException(budget.Token))))
-                            await stream.WriteAsync(data, 0, data.Length, budget.Token).ConfigureAwait(false);
+                            await transport.SendAsync(data, budget.Token).ConfigureAwait(context);
                     }
                     catch (Exception error) { if (writing) Close(error); throw; }
                     finally { send.Release(); }
                     if (item == null) return null;
                     using (budget.Token.Register(() => item.Result.TrySetCanceled()))
-                        return await item.Result.Task.ConfigureAwait(false);
+                        return await item.Result.Task.ConfigureAwait(context);
                 }
                 finally
                 {
@@ -178,7 +210,8 @@ namespace Roost.Client
             {
                 while (true)
                 {
-                    Packet packet = await PacketCodec.ReadAsync(stream, maxPayload).ConfigureAwait(false);
+                    // 按包头拼帧，不看字节是怎么到的：WebSocket 上一条消息里有几帧、一帧拆成几条消息都行。
+                    Packet packet = await PacketCodec.ReadAsync(transport, maxPayload, context).ConfigureAwait(context);
                     lock (gate)
                     {
                         if (closed != null) return;
@@ -210,7 +243,7 @@ namespace Roost.Client
                 foreach (Pending item in pending.Values) item.Result.TrySetException(reason);
                 pending.Clear(); pushes.Clear();
             }
-            stream.Dispose();
+            transport.Dispose();
         }
         private static void ValidateTimeout(TimeSpan timeout)
         {
