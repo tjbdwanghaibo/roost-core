@@ -1,0 +1,1505 @@
+[
+  {
+    "file": "robot.log",
+    "line": 8,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:47 WARN robot runner: scenario failed robot=130 player=900130 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 9,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:48 WARN robot runner: scenario failed robot=46 player=900046 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 10,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:48 WARN robot runner: scenario failed robot=163 player=900163 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 11,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:48 WARN robot runner: scenario failed robot=196 player=900196 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 12,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:49 WARN robot runner: scenario failed robot=23 player=900023 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 13,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:49 WARN robot runner: scenario failed robot=84 player=900084 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 14,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:49 WARN robot runner: scenario failed robot=71 player=900071 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 15,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:49 WARN robot runner: scenario failed robot=60 player=900060 scenario=demo err=\"robot action gift_status: gift saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 16,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=31 player=900031 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 17,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=102 player=900102 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 18,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=112 player=900112 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 19,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=146 player=900146 scenario=demo err=\"robot action gift_status: gift saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 20,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=3 player=900003 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 21,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=6 player=900006 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 22,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=189 player=900189 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 23,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=26 player=900026 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 24,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=57 player=900057 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 25,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=59 player=900059 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 26,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:50 WARN robot runner: scenario failed robot=127 player=900127 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 27,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:51 WARN robot runner: scenario failed robot=142 player=900142 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 28,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:51 WARN robot runner: scenario failed robot=42 player=900042 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 29,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:51 WARN robot runner: scenario failed robot=47 player=900047 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 30,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:51 WARN robot runner: scenario failed robot=20 player=900020 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 31,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:51 WARN robot runner: scenario failed robot=126 player=900126 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 32,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:51 WARN robot runner: scenario failed robot=159 player=900159 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 33,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=154 player=900154 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 34,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=30 player=900030 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 35,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=171 player=900171 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 36,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=22 player=900022 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 37,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=119 player=900119 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 38,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=123 player=900123 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 39,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=198 player=900198 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 40,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=41 player=900041 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 41,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=183 player=900183 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 42,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=16 player=900016 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 43,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=120 player=900120 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 44,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=15 player=900015 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 45,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:52 WARN robot runner: scenario failed robot=17 player=900017 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 46,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=8 player=900008 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 47,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=197 player=900197 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 48,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=140 player=900140 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 49,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=51 player=900051 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 50,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=24 player=900024 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 51,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=81 player=900081 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 52,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=179 player=900179 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 53,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=95 player=900095 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 54,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=99 player=900099 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 55,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=91 player=900091 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 56,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=54 player=900054 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 57,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=144 player=900144 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 58,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=114 player=900114 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 59,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=188 player=900188 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 60,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=174 player=900174 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 61,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:53 WARN robot runner: scenario failed robot=131 player=900131 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 62,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=177 player=900177 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 63,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=172 player=900172 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 64,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=193 player=900193 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 65,
+    "matches": [
+      "gift_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=192 player=900192 scenario=demo err=\"robot action gift_status: gift saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 66,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=103 player=900103 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 67,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=141 player=900141 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 68,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=100 player=900100 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 69,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=85 player=900085 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 70,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=148 player=900148 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 71,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=170 player=900170 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 72,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=187 player=900187 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 73,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:54 WARN robot runner: scenario failed robot=155 player=900155 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 74,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=7 player=900007 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 75,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=151 player=900151 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 76,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=199 player=900199 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 77,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=153 player=900153 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 78,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=2 player=900002 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 79,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=50 player=900050 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 80,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=109 player=900109 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 81,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=181 player=900181 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 82,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=149 player=900149 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 83,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=160 player=900160 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 84,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=65 player=900065 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 85,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=61 player=900061 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 86,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=121 player=900121 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 87,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=185 player=900185 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 88,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=55 player=900055 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 89,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=182 player=900182 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 90,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:55 WARN robot runner: scenario failed robot=137 player=900137 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 91,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=98 player=900098 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 92,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=161 player=900161 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 93,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=27 player=900027 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 94,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=150 player=900150 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 95,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=92 player=900092 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 96,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=147 player=900147 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 97,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=29 player=900029 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 98,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=63 player=900063 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 99,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=113 player=900113 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 100,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=145 player=900145 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 101,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=44 player=900044 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 102,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=143 player=900143 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 103,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=111 player=900111 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 104,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=162 player=900162 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 105,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=132 player=900132 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 106,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:56 WARN robot runner: scenario failed robot=125 player=900125 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 107,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=38 player=900038 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 108,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=195 player=900195 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 109,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=90 player=900090 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 110,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=186 player=900186 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 111,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=21 player=900021 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 112,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=191 player=900191 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 113,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=76 player=900076 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 114,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=12 player=900012 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 115,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=175 player=900175 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 116,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=152 player=900152 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 117,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=178 player=900178 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 118,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=157 player=900157 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 119,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=176 player=900176 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 120,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=93 player=900093 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 121,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=11 player=900011 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 122,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=19 player=900019 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 123,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=49 player=900049 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 124,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=43 player=900043 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 125,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=28 player=900028 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 126,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:57 WARN robot runner: scenario failed robot=104 player=900104 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 127,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=165 player=900165 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 128,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=115 player=900115 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 129,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=40 player=900040 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 130,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=13 player=900013 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 131,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=64 player=900064 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 132,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=158 player=900158 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 133,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=86 player=900086 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 134,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=39 player=900039 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 135,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=169 player=900169 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 136,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=110 player=900110 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 137,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=52 player=900052 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 138,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:58 WARN robot runner: scenario failed robot=53 player=900053 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 139,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=134 player=900134 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 140,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=167 player=900167 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 141,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=68 player=900068 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 142,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=106 player=900106 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 143,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=194 player=900194 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 144,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=200 player=900200 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 145,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=78 player=900078 scenario=demo err=\"robot action alliance_op_status: alliance saga still unknown (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 146,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=73 player=900073 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 147,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=139 player=900139 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 148,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=118 player=900118 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 149,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=88 player=900088 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 150,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=1 player=900001 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 151,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=108 player=900108 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 152,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=45 player=900045 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 153,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=69 player=900069 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 154,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=173 player=900173 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 155,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:52:59 WARN robot runner: scenario failed robot=48 player=900048 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 156,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:00 WARN robot runner: scenario failed robot=34 player=900034 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 0)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 157,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:00 WARN robot runner: scenario failed robot=80 player=900080 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 158,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:00 WARN robot runner: scenario failed robot=124 player=900124 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 159,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:00 WARN robot runner: scenario failed robot=184 player=900184 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 160,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:00 WARN robot runner: scenario failed robot=122 player=900122 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 161,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:00 WARN robot runner: scenario failed robot=72 player=900072 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 162,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:00 WARN robot runner: scenario failed robot=74 player=900074 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 163,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:01 WARN robot runner: scenario failed robot=89 player=900089 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 164,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:01 WARN robot runner: scenario failed robot=101 player=900101 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 165,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:01 WARN robot runner: scenario failed robot=168 player=900168 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 166,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:01 WARN robot runner: scenario failed robot=83 player=900083 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 167,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:01 WARN robot runner: scenario failed robot=33 player=900033 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 168,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:02 WARN robot runner: scenario failed robot=180 player=900180 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 169,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:02 WARN robot runner: scenario failed robot=97 player=900097 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 170,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:02 WARN robot runner: scenario failed robot=128 player=900128 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 171,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:02 WARN robot runner: scenario failed robot=66 player=900066 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 172,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:02 WARN robot runner: scenario failed robot=79 player=900079 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 173,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:03 WARN robot runner: scenario failed robot=94 player=900094 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  },
+  {
+    "file": "robot.log",
+    "line": 174,
+    "matches": [
+      "alliance_saga_still",
+      "saga_unknown_or_waiting"
+    ],
+    "text": "2026/11/18 12:53:04 WARN robot runner: scenario failed robot=136 player=900136 scenario=demo err=\"robot action alliance_op_status: alliance saga still waiting (step 1)\""
+  }
+]

@@ -1,0 +1,6 @@
+2026-11-18T04:48:21Z
+12:48  up 45 days, 20:59, 5 users, load averages: 4.66 4.53 4.55
+hw.logicalcpu: 10
+hw.memsize: 34359738368
+vm.loadavg: { 4.66 4.53 4.55 }
+vm.swapusage: total = 8192.00M  used = 6655.56M  free = 1536.44M  (encrypted)

@@ -1,0 +1,72 @@
+file dispatch-34455.csv rows 5411
+World id 1024010 kind 2; AddExp jobs 232
+
+## AddExp: who released it last
+    207  World (last releaser shared World id)
+     25  no predecessor
+AddExp dependency wait (ready-admitted): n=232 mean=145.1ms p50=153.7 p95=332.6 max=342.6
+AddExp worker wait (started-ready): n=232 mean=1.6ms p50=0.0 p95=0.0 max=101.3
+AddExp run (ended-started): n=232 mean=0.0ms p50=0.0 p95=0.1 max=0.3
+AddExp admitted->ended: n=232 mean=146.7ms p50=153.7 p95=332.7 max=350.2
+AddExp admitted->ended > 5s: 0; started-admitted > 5s: 0
+
+## World chain: 1066 jobs
+  handlerClaimDungeon run: n=372 mean=12.8ms p50=8.3 p95=39.2 max=113.2 total=4754ms
+  handlerRecordMatch run: n=32 mean=16.3ms p50=15.6 p95=34.4 max=39.5 total=523ms
+  handlerAddExp run: n=232 mean=0.0ms p50=0.0 p95=0.1 max=0.3 total=10ms
+  handlerArmActivity run: n=12 mean=0.7ms p50=0.1 p95=8.2 max=8.2 total=9ms
+  handlerRecordEnter run: n=200 mean=0.0ms p50=0.0 p95=0.1 max=0.6 total=9ms
+  handlerActivitySettled run: n=186 mean=0.0ms p50=0.0 p95=0.1 max=0.1 total=6ms
+  handlerWorldStats run: n=32 mean=0.0ms p50=0.0 p95=0.1 max=0.1 total=1ms
+AddExp window 40450ms: World jobs 862, World run total 5295ms (13% busy)
+gap between consecutive World jobs in window: n=861 mean=40.8ms p50=0.1 p95=101.3 max=4173.8
+World jobs in window by handler: {'handlerAddExp': 232, 'handlerArmActivity': 8, 'handlerClaimDungeon': 372, 'handlerActivitySettled': 186, 'handlerRecordMatch': 32, 'handlerWorldStats': 32}
+
+## per second (relative to first AddExp admission): World completions / AddExp admitted / AddExp started
+  t+ 0s  world_done= 200  addexp_admitted= 200  addexp_started= 200
+  t+ 1s  world_done=   1  addexp_admitted=   0  addexp_started=   0
+  t+ 4s  world_done=   1  addexp_admitted=   0  addexp_started=   0
+  t+ 5s  world_done=  14  addexp_admitted=   0  addexp_started=   0
+  t+ 6s  world_done=  13  addexp_admitted=   0  addexp_started=   0
+  t+ 7s  world_done=   9  addexp_admitted=   0  addexp_started=   0
+  t+ 8s  world_done=   6  addexp_admitted=   0  addexp_started=   0
+  t+ 9s  world_done=   9  addexp_admitted=   0  addexp_started=   0
+  t+10s  world_done=  35  addexp_admitted=   0  addexp_started=   0
+  t+11s  world_done=  34  addexp_admitted=   0  addexp_started=   0
+  t+12s  world_done=  39  addexp_admitted=   0  addexp_started=   0
+  t+13s  world_done=  29  addexp_admitted=   0  addexp_started=   0
+  t+14s  world_done=  50  addexp_admitted=   0  addexp_started=   0
+  t+15s  world_done=  51  addexp_admitted=   0  addexp_started=   0
+  t+16s  world_done=  37  addexp_admitted=   0  addexp_started=   0
+  t+17s  world_done=  50  addexp_admitted=   0  addexp_started=   0
+  t+18s  world_done=  49  addexp_admitted=   0  addexp_started=   0
+  t+19s  world_done=  48  addexp_admitted=   0  addexp_started=   0
+  t+20s  world_done=  26  addexp_admitted=   0  addexp_started=   0
+  t+21s  world_done=  20  addexp_admitted=   0  addexp_started=   0
+  t+22s  world_done=  15  addexp_admitted=   0  addexp_started=   0
+  t+23s  world_done=  12  addexp_admitted=   0  addexp_started=   0
+  t+24s  world_done=   8  addexp_admitted=   0  addexp_started=   0
+  t+25s  world_done=   4  addexp_admitted=   0  addexp_started=   0
+  t+26s  world_done=   1  addexp_admitted=   0  addexp_started=   0
+  t+27s  world_done=   3  addexp_admitted=   0  addexp_started=   0
+  t+31s  world_done=   1  addexp_admitted=   0  addexp_started=   0
+  t+35s  world_done=   1  addexp_admitted=   0  addexp_started=   0
+  t+36s  world_done=   4  addexp_admitted=   0  addexp_started=   0
+  t+37s  world_done=  12  addexp_admitted=   2  addexp_started=   2
+  t+38s  world_done=  40  addexp_admitted=  14  addexp_started=  14
+  t+39s  world_done=  35  addexp_admitted=  14  addexp_started=  14
+  t+40s  world_done=   5  addexp_admitted=   2  addexp_started=   2
+
+## other jobs on the AddExp players: 4714
+AddExp whose Player had another job overlapping its wait: 2
+all jobs run in window: n=4402 mean=11.8ms p50=7.2 p95=36.1 max=113.2
+burst AddExp admitted in first 1s: 200
+World jobs admitted before first AddExp and not yet finished: Counter({'handlerAddExp': 1}) their remaining World time ms=0
+World busy in [t0,t0+3s]: 9 ms (0%), jobs 201 Counter({'handlerAddExp': 200, 'handlerArmActivity': 1})
+burst AddExp started within 3s of admission: 200
+Traceback (most recent call last):
+  File "/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/c3b2/window.py", line 24, in <module>
+    print('burst AddExp run<3ms (likely deadline already expired):',len(fast),' run>=3ms:',len(slow),' median run of the latter %.1fms'%(st.median([r['ended_us']-r['started_us'] for r in slow])/1000))
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/statistics.py", line 430, in median
+    raise StatisticsError("no median for empty data")
+statistics.StatisticsError: no median for empty data

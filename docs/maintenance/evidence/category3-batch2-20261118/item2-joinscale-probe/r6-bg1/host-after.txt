@@ -1,0 +1,4 @@
+2026-11-18T05:20:13Z
+13:20  up 45 days, 21:31, 5 users, load averages: 13.48 13.66 11.26
+vm.swapusage: total = 8192.00M  used = 6655.56M  free = 1536.44M  (encrypted)
+/dev/disk3s1s1   926Gi    12Gi   275Gi     5%    459k  2.9G    0%   /

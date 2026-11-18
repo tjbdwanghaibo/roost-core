@@ -1,0 +1,156 @@
+diff --git a/framework/nest/dispatch_queue.go b/framework/nest/dispatch_queue.go
+index 1c988e54..a0b90311 100644
+--- a/framework/nest/dispatch_queue.go
++++ b/framework/nest/dispatch_queue.go
+@@ -31,19 +31,22 @@ const (
+ // 指针、切片集中在前部，标志集中在末尾，减少填充及每个排队对象的体积。
+ // ID 和依赖计数保持原类型，不以窄整数限制多实体请求。
+ type dispatchJob struct {
+-	waitingPrev, waitingNext *dispatchJob
+-	msg                      *Msg
+-	tryBatch                 *tryBatchJob // 非 nil 表示批量作业（DispatchTryBatch）：不登记同 ID 顺序，msg 为 nil。
+-	ids                      []int64
+-	successors               []*dispatchJob
+-	next                     *dispatchJob
+-	inlineID                 [1]int64 // 单目标直接存在job内；ids只读引用，不交给外部函数填充。
+-	admittedAt, readyAt      time.Duration
+-	predecessors             int
+-	lane                     int
+-	ioStage                  bool
+-	continuation             bool
+-	waitedForPredecessor     bool
++	waitingPrev, waitingNext  *dispatchJob
++	msg                       *Msg
++	tryBatch                  *tryBatchJob // 非 nil 表示批量作业（DispatchTryBatch）：不登记同 ID 顺序，msg 为 nil。
++	ids                       []int64
++	successors                []*dispatchJob
++	next                      *dispatchJob
++	inlineID                  [1]int64 // 单目标直接存在job内；ids只读引用，不交给外部函数填充。
++	admittedAt, readyAt       time.Duration
++	predecessors              int
++	lane                      int
++	ioStage                   bool
++	continuation              bool
++	waitedForPredecessor      bool
++	diagName, diagBlockerName string
++	diagBlockerID             int64
++	diagStarted               time.Duration
+ }
+ 
+ // readyJobs 是经 dispatchJob.next 串起的 FIFO 单链表。
+@@ -173,7 +176,7 @@ func dispatchIDs(msg *Msg) []int64 {
+ 
+ // newDispatchJob 在发布到队列前固定目标集合，之后直到完成都不再修改。
+ func newDispatchJob(msg *Msg, prepareIO bool) *dispatchJob {
+-	j := &dispatchJob{msg: msg, ioStage: prepareIO}
++	j := &dispatchJob{msg: msg, ioStage: prepareIO, diagName: msg.Name}
+ 	switch {
+ 	case len(msg.Tids) == 0 && len(msg.GroupTIds) == 0:
+ 		// 没有目标时仍用 ID 0 保持原来的顺序域。
+@@ -315,6 +318,7 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
+ 		state.waiting.remove(j)
+ 		stats := &state.observation
+ 		stats.Started++
++		j.diagStarted = time.Since(q.clockOrigin)
+ 		waited := time.Since(q.clockOrigin) - j.readyAt
+ 		stats.WorkerWait += waited
+ 		stats.MaxWorkerWait = max(stats.MaxWorkerWait, waited)
+@@ -404,6 +408,9 @@ func (q *dispatchQueue) finishJobLocked(state *dispatchLane, j *dispatchJob) {
+ 	} else {
+ 		state.running--
+ 	}
++	if !j.continuation {
++		q.diagRecordJob(j, time.Since(q.clockOrigin))
++	}
+ 	q.releaseIDsLocked(j)
+ 	q.pending--
+ 	if q.stopping && q.pending == 0 {
+@@ -424,6 +431,12 @@ func (q *dispatchQueue) releaseIDsLocked(j *dispatchJob) {
+ 	for _, next := range j.successors {
+ 		next.predecessors--
+ 		if next.predecessors == 0 {
++			for _, id := range j.ids {
++				if slices.Contains(next.ids, id) {
++					next.diagBlockerID, next.diagBlockerName = id, j.diagName
++					break
++				}
++			}
+ 			q.enqueueReady(next.lane, next)
+ 		}
+ 	}
+
+# 新文件 framework/nest/diag_dispatch_trace.go（未提交），全文如下
++package nest
++
++// 临时诊断（第三类批次 2，不提交）：ROOST_DIAG_DISPATCH_DIR 非空时，每个外部作业结束时记一行 CSV 到
++// <dir>/dispatch-<pid>.csv：队列名、handler、各目标的 kind:id、准入 / 就绪 / 开始 / 结束（相对队列原点的 µs）、
++// 是否等过前驱、最后一个放行它的前驱共享的目标 ID 与该前驱的 handler。
++
++import (
++	"bufio"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/tjbdwanghaibo/roost-core/framework/entity"
++)
++
++var diagDispatch = struct {
++	once sync.Once
++	ch   chan string
++}{}
++
++func diagDispatchChan() chan string {
++	diagDispatch.once.Do(func() {
++		dir := os.Getenv("ROOST_DIAG_DISPATCH_DIR")
++		if dir == "" {
++			return
++		}
++		f, err := os.Create(filepath.Join(dir, fmt.Sprintf("dispatch-%d.csv", os.Getpid())))
++		if err != nil {
++			return
++		}
++		ch := make(chan string, 1<<17)
++		diagDispatch.ch = ch
++		go func() {
++			w := bufio.NewWriterSize(f, 1<<16)
++			fmt.Fprintln(w, "queue,handler,targets,admitted_us,ready_us,started_us,ended_us,waited_pred,blocker_id,blocker_handler")
++			tick := time.NewTicker(200 * time.Millisecond)
++			for {
++				select {
++				case line := <-ch:
++					w.WriteString(line)
++				case <-tick.C:
++					w.Flush()
++				}
++			}
++		}()
++	})
++	return diagDispatch.ch
++}
++
++func diagTargets(ids []int64) string {
++	parts := make([]string, len(ids))
++	for i, id := range ids {
++		parts[i] = fmt.Sprintf("%d:%d", entity.GetEntityKindFromID(id), id)
++	}
++	return strings.Join(parts, " ")
++}
++
++// diagRecordJob 在 q.mu 内调用；只做非阻塞投递。
++func (q *dispatchQueue) diagRecordJob(j *dispatchJob, ended time.Duration) {
++	ch := diagDispatchChan()
++	if ch == nil || j.continuation || j.tryBatch != nil {
++		return
++	}
++	line := fmt.Sprintf("%s,%s,%s,%d,%d,%d,%d,%t,%d,%s\n", q.name, j.diagName, diagTargets(j.ids),
++		j.admittedAt.Microseconds(), j.readyAt.Microseconds(), j.diagStarted.Microseconds(), ended.Microseconds(),
++		j.waitedForPredecessor, j.diagBlockerID, j.diagBlockerName)
++	select {
++	case ch <- line:
++	default:
++	}
++}

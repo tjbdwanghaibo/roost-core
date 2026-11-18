@@ -1,0 +1,947 @@
+[
+  {
+    "file": "logs/game.log",
+    "line": 917,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.491869+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1683,\"frame\":144,\"server_time_ms\":1794977306491,\"player_id\":100109,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 918,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.497769+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1852,\"frame\":144,\"server_time_ms\":1794977306497,\"player_id\":100092,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 921,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.497863+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1766,\"frame\":144,\"server_time_ms\":1794977306497,\"player_id\":100134,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 922,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.498054+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1894,\"frame\":144,\"server_time_ms\":1794977306498,\"player_id\":100180,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 923,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.503818+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1901,\"frame\":144,\"server_time_ms\":1794977306503,\"player_id\":100171,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 924,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.503823+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1686,\"frame\":144,\"server_time_ms\":1794977306503,\"player_id\":100140,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 925,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.503825+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1896,\"frame\":144,\"server_time_ms\":1794977306503,\"player_id\":100197,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 926,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.503829+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1888,\"frame\":144,\"server_time_ms\":1794977306503,\"player_id\":100198,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 927,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.503834+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1911,\"frame\":144,\"server_time_ms\":1794977306503,\"player_id\":100177,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 929,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.506696+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1885,\"frame\":144,\"server_time_ms\":1794977306506,\"player_id\":100188,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 931,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.506738+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1923,\"frame\":144,\"server_time_ms\":1794977306506,\"player_id\":100185,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 932,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.509924+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1812,\"frame\":144,\"server_time_ms\":1794977306509,\"player_id\":100122,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 933,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.509929+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1874,\"frame\":144,\"server_time_ms\":1794977306509,\"player_id\":100133,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 934,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.509935+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1811,\"frame\":144,\"server_time_ms\":1794977306509,\"player_id\":100079,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 935,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.509937+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1753,\"frame\":144,\"server_time_ms\":1794977306509,\"player_id\":100124,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 939,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.514074+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1919,\"frame\":144,\"server_time_ms\":1794977306514,\"player_id\":100174,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 940,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.514082+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1816,\"frame\":144,\"server_time_ms\":1794977306514,\"player_id\":100095,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 941,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.514082+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1693,\"frame\":144,\"server_time_ms\":1794977306514,\"player_id\":100151,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 942,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.514087+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1900,\"frame\":144,\"server_time_ms\":1794977306514,\"player_id\":100175,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 943,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.514132+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1696,\"frame\":144,\"server_time_ms\":1794977306514,\"player_id\":100126,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 944,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.5207+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1884,\"frame\":144,\"server_time_ms\":1794977306520,\"player_id\":100123,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 946,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.520712+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1843,\"frame\":144,\"server_time_ms\":1794977306520,\"player_id\":100088,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 947,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.520714+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1887,\"frame\":144,\"server_time_ms\":1794977306520,\"player_id\":100183,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 948,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.523956+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1813,\"frame\":144,\"server_time_ms\":1794977306523,\"player_id\":100116,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 949,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.523961+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1814,\"frame\":144,\"server_time_ms\":1794977306523,\"player_id\":100152,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 950,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.523965+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1851,\"frame\":144,\"server_time_ms\":1794977306523,\"player_id\":100094,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 951,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.52397+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1913,\"frame\":144,\"server_time_ms\":1794977306523,\"player_id\":100172,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 952,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.523975+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1916,\"frame\":144,\"server_time_ms\":1794977306523,\"player_id\":100170,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 953,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.524048+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1689,\"frame\":144,\"server_time_ms\":1794977306524,\"player_id\":100089,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 954,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.533843+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1880,\"frame\":144,\"server_time_ms\":1794977306533,\"player_id\":100150,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 955,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.533852+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1795,\"frame\":144,\"server_time_ms\":1794977306533,\"player_id\":100067,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 956,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.53389+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1895,\"frame\":144,\"server_time_ms\":1794977306533,\"player_id\":100178,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 958,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.533895+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1799,\"frame\":144,\"server_time_ms\":1794977306533,\"player_id\":100100,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 959,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.540778+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1767,\"frame\":145,\"server_time_ms\":1794977306540,\"player_id\":100137,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 960,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.540787+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1865,\"frame\":145,\"server_time_ms\":1794977306540,\"player_id\":100165,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 961,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.540809+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1881,\"frame\":145,\"server_time_ms\":1794977306540,\"player_id\":100169,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 962,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.540843+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1918,\"frame\":145,\"server_time_ms\":1794977306540,\"player_id\":100163,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 963,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.540904+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1844,\"frame\":145,\"server_time_ms\":1794977306540,\"player_id\":100112,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 964,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.540967+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1822,\"frame\":145,\"server_time_ms\":1794977306540,\"player_id\":100107,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 965,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.547802+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1692,\"frame\":145,\"server_time_ms\":1794977306547,\"player_id\":100117,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 966,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.547805+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1690,\"frame\":145,\"server_time_ms\":1794977306547,\"player_id\":100103,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 967,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.547809+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1685,\"frame\":145,\"server_time_ms\":1794977306547,\"player_id\":100121,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 968,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.547858+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1518,\"frame\":145,\"server_time_ms\":1794977306547,\"player_id\":100097,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 969,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.556173+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1917,\"frame\":145,\"server_time_ms\":1794977306556,\"player_id\":100164,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 970,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.556177+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1798,\"frame\":145,\"server_time_ms\":1794977306556,\"player_id\":100104,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 971,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.556181+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1849,\"frame\":145,\"server_time_ms\":1794977306556,\"player_id\":100093,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 972,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.556186+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1850,\"frame\":145,\"server_time_ms\":1794977306556,\"player_id\":100142,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 973,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.556188+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1921,\"frame\":145,\"server_time_ms\":1794977306556,\"player_id\":100157,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 974,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.561693+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1870,\"frame\":145,\"server_time_ms\":1794977306561,\"player_id\":100146,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 975,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.561701+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1796,\"frame\":145,\"server_time_ms\":1794977306561,\"player_id\":100077,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 976,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.561705+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1515,\"frame\":145,\"server_time_ms\":1794977306561,\"player_id\":100096,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 977,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.561955+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1697,\"frame\":145,\"server_time_ms\":1794977306561,\"player_id\":100132,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 978,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.564771+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1842,\"frame\":145,\"server_time_ms\":1794977306564,\"player_id\":100106,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 979,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.564774+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1875,\"frame\":145,\"server_time_ms\":1794977306564,\"player_id\":100125,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 980,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.564777+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1759,\"frame\":145,\"server_time_ms\":1794977306564,\"player_id\":100115,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 981,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.564782+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1906,\"frame\":145,\"server_time_ms\":1794977306564,\"player_id\":100166,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 982,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.564784+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1890,\"frame\":145,\"server_time_ms\":1794977306564,\"player_id\":100161,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 983,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.564785+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1517,\"frame\":145,\"server_time_ms\":1794977306564,\"player_id\":100158,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 985,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.567656+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1694,\"frame\":145,\"server_time_ms\":1794977306567,\"player_id\":100179,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 986,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.56766+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1909,\"frame\":145,\"server_time_ms\":1794977306567,\"player_id\":100127,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 988,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.5677+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1691,\"frame\":145,\"server_time_ms\":1794977306567,\"player_id\":100167,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 989,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.570849+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1912,\"frame\":145,\"server_time_ms\":1794977306570,\"player_id\":100160,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 991,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.570889+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1760,\"frame\":145,\"server_time_ms\":1794977306570,\"player_id\":100102,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 993,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.570895+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1821,\"frame\":145,\"server_time_ms\":1794977306570,\"player_id\":100139,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 994,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.570898+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1845,\"frame\":145,\"server_time_ms\":1794977306570,\"player_id\":100099,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 995,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.576773+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1871,\"frame\":145,\"server_time_ms\":1794977306576,\"player_id\":100187,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 996,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.576777+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1891,\"frame\":145,\"server_time_ms\":1794977306576,\"player_id\":100173,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 997,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.576781+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1808,\"frame\":145,\"server_time_ms\":1794977306576,\"player_id\":100081,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 998,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.576789+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1907,\"frame\":145,\"server_time_ms\":1794977306576,\"player_id\":100156,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 999,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.57987+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1886,\"frame\":145,\"server_time_ms\":1794977306579,\"player_id\":100153,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1000,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.579874+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1854,\"frame\":145,\"server_time_ms\":1794977306579,\"player_id\":100136,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1001,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.579882+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1922,\"frame\":145,\"server_time_ms\":1794977306579,\"player_id\":100131,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1002,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.579886+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1862,\"frame\":145,\"server_time_ms\":1794977306579,\"player_id\":100085,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1003,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.579889+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1831,\"frame\":145,\"server_time_ms\":1794977306579,\"player_id\":100111,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1004,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.579892+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1872,\"frame\":145,\"server_time_ms\":1794977306579,\"player_id\":100120,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1005,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.586999+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1761,\"frame\":146,\"server_time_ms\":1794977306587,\"player_id\":100119,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1006,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.587005+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1521,\"frame\":146,\"server_time_ms\":1794977306587,\"player_id\":100114,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1007,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.587008+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1910,\"frame\":146,\"server_time_ms\":1794977306587,\"player_id\":100176,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1008,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.587011+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1883,\"frame\":146,\"server_time_ms\":1794977306587,\"player_id\":100148,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1012,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.597271+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1818,\"frame\":146,\"server_time_ms\":1794977306597,\"player_id\":100049,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1013,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.597276+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1898,\"frame\":146,\"server_time_ms\":1794977306597,\"player_id\":100193,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1014,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.59728+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1893,\"frame\":146,\"server_time_ms\":1794977306597,\"player_id\":100195,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1015,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.597381+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1889,\"frame\":146,\"server_time_ms\":1794977306597,\"player_id\":100190,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1016,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.597785+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1868,\"frame\":146,\"server_time_ms\":1794977306597,\"player_id\":100182,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1017,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.604857+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1882,\"frame\":146,\"server_time_ms\":1794977306604,\"player_id\":100181,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1018,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.604866+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1757,\"frame\":146,\"server_time_ms\":1794977306604,\"player_id\":100149,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1019,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.604868+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1846,\"frame\":146,\"server_time_ms\":1794977306604,\"player_id\":100113,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1020,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.60487+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1892,\"frame\":146,\"server_time_ms\":1794977306604,\"player_id\":100199,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1023,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.61173+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1878,\"frame\":146,\"server_time_ms\":1794977306611,\"player_id\":100159,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1024,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.611735+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1876,\"frame\":146,\"server_time_ms\":1794977306611,\"player_id\":100194,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1025,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.611738+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1904,\"frame\":146,\"server_time_ms\":1794977306611,\"player_id\":100192,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1026,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.611743+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1858,\"frame\":146,\"server_time_ms\":1794977306611,\"player_id\":100145,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1027,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.611745+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1879,\"frame\":146,\"server_time_ms\":1794977306611,\"player_id\":100196,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1028,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.611747+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1897,\"frame\":146,\"server_time_ms\":1794977306611,\"player_id\":100162,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1031,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.614691+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1877,\"frame\":146,\"server_time_ms\":1794977306614,\"player_id\":100141,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1032,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.614697+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1867,\"frame\":146,\"server_time_ms\":1794977306614,\"player_id\":100128,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1033,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.6147+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1864,\"frame\":146,\"server_time_ms\":1794977306614,\"player_id\":100138,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1034,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.614756+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1695,\"frame\":146,\"server_time_ms\":1794977306614,\"player_id\":100189,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1035,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.617887+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1869,\"frame\":146,\"server_time_ms\":1794977306617,\"player_id\":100168,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1036,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.617894+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1905,\"frame\":146,\"server_time_ms\":1794977306617,\"player_id\":100186,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1037,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.617897+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1873,\"frame\":146,\"server_time_ms\":1794977306617,\"player_id\":100191,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1038,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.617896+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1687,\"frame\":146,\"server_time_ms\":1794977306617,\"player_id\":100090,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1039,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.617901+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1754,\"frame\":146,\"server_time_ms\":1794977306617,\"player_id\":100101,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1040,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.617903+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1815,\"frame\":146,\"server_time_ms\":1794977306617,\"player_id\":100144,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  },
+  {
+    "file": "logs/game.log",
+    "line": 1041,
+    "matches": [
+      "nest_sync_timeout",
+      "player_world_add_exp_sync_timeout"
+    ],
+    "text": "{\"time\":\"2026-11-18T12:48:26.6238+08:00\",\"level\":\"ERROR\",\"msg\":\"add_exp failed\",\"goId\":1866,\"frame\":146,\"server_time_ms\":1794977306623,\"player_id\":100130,\"amount\":150,\"err\":\"nest: sync timeout\"}"
+  }
+]

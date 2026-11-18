@@ -1,0 +1,6 @@
+r1-c128-bg1 exit=0
+r1-c256-bg1 exit=0
+r2-c128-bg1 exit=0
+r2-c256-bg1 exit=0
+r3-c128-bg1 exit=0
+r3-c256-bg1 exit=0

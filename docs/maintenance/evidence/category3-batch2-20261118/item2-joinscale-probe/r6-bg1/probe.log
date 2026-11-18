@@ -1,0 +1,31 @@
+    joinretry_test.go:231: PERF rpc found conc=16 n=257 failed=0 in 3.284s 78.3/s ok=78.3/s p50 166.08ms p99 728.57ms max 728.62ms
+    joinretry_test.go:232: PERF rpc found retried=0
+    joinretry_test.go:231: PERF rpc info-warm conc=32 n=257 failed=0 in 5ms 47837.0/s ok=47837.0/s p50 560µs p99 1.48ms max 1.61ms
+    joinretry_test.go:232: PERF rpc info-warm retried=0
+    joinretry_test.go:231: PERF rpc join-new-c128 conc=128 n=5291 failed=0 in 12.123s 436.5/s ok=436.5/s p50 283.44ms p99 529.29ms max 599.02ms
+    joinretry_test.go:232: PERF rpc join-new-c128 retried=0
+    joinretry_test.go:231: PERF rpc leave-c128 conc=128 n=5291 failed=0 in 10.762s 491.6/s ok=491.6/s p50 247.68ms p99 450.07ms max 476.14ms
+    joinretry_test.go:232: PERF rpc leave-c128 retried=0
+    joinretry_test.go:231: PERF rpc join-existing-c128 conc=128 n=5291 failed=0 in 10.701s 494.4/s ok=494.4/s p50 240.51ms p99 402.47ms max 521.48ms
+    joinretry_test.go:232: PERF rpc join-existing-c128 retried=0
+    joinretry_test.go:231: PERF rpc leave2-c128 conc=128 n=5291 failed=0 in 11.325s 467.2/s ok=467.2/s p50 261.01ms p99 413.22ms max 493.11ms
+    joinretry_test.go:232: PERF rpc leave2-c128 retried=0
+    joinretry_test.go:231: PERF rpc join-new-c256 conc=256 n=5088 failed=1 in 12.558s 405.2/s ok=405.1/s p50 553.72ms p99 1.40694s max 1.96735s
+    joinretry_test.go:232: PERF rpc join-new-c256 retried=19049
+    joinretry_test.go:234: PERF rpc join-new-c256 first error: remote.4: not executed; retry with the same request id
+    joinretry_test.go:231: PERF rpc leave-c256 conc=256 n=5088 failed=1 in 10.069s 505.3/s ok=505.2/s p50 451.76ms p99 982.44ms max 1.57896s
+    joinretry_test.go:232: PERF rpc leave-c256 retried=17386
+    joinretry_test.go:234: PERF rpc leave-c256 first error: remote.100082: alliance or member not found
+    joinretry_test.go:231: PERF rpc join-existing-c256 conc=256 n=5088 failed=0 in 10.217s 498.0/s ok=498.0/s p50 446.28ms p99 1.10077s max 1.79152s
+    joinretry_test.go:232: PERF rpc join-existing-c256 retried=15010
+    joinretry_test.go:231: PERF rpc leave2-c256 conc=256 n=5088 failed=0 in 10.608s 479.7/s ok=479.7/s p50 476.04ms p99 1.03206s max 1.71686s
+    joinretry_test.go:232: PERF rpc leave2-c256 retried=18430
+    joinretry_test.go:231: PERF rpc join-new-c256 conc=256 n=5138 failed=0 in 12.488s 411.4/s ok=411.4/s p50 579.43ms p99 1.34896s max 2.00898s
+    joinretry_test.go:232: PERF rpc join-new-c256 retried=24643
+    joinretry_test.go:231: PERF rpc leave-c256 conc=256 n=5138 failed=0 in 11.216s 458.1/s ok=458.1/s p50 484.66ms p99 1.09046s max 1.61917s
+    joinretry_test.go:232: PERF rpc leave-c256 retried=20820
+    joinretry_test.go:231: PERF rpc join-existing-c256 conc=256 n=5138 failed=0 in 12.192s 421.4/s ok=421.4/s p50 506.72ms p99 1.33621s max 1.73016s
+    joinretry_test.go:232: PERF rpc join-existing-c256 retried=22386
+    joinretry_test.go:231: PERF rpc leave2-c256 conc=256 n=5138 failed=0 in 12.508s 410.8/s ok=410.8/s p50 543.82ms p99 1.16876s max 1.9869s
+    joinretry_test.go:232: PERF rpc leave2-c256 retried=21571
+--- PASS: TestJoinScaleRetry (141.43s)

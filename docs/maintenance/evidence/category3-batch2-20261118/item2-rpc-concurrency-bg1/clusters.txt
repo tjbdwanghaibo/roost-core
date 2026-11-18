@@ -1,0 +1,72 @@
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-rpc-concurrency-bg1/r1-c128-bg1/perf.log
+  config: background_checkpoint=true concurrency=128 max_concurrent_writes=512
+  phase found          conc=1   n=16    failed=0    slow>=3s=0         14.8/s p50 57.04ms p99 79.73ms max 176.7ms
+  phase found          conc=16  n=128   failed=0    slow>=3s=0         83.1/s p50 177.83ms p99 252.02ms max 279.01ms
+  phase info           conc=1   n=200   failed=0    slow>=3s=0       4448.4/s p50 180µs p99 700µs max 1ms
+  phase info-spread16  conc=128 n=12800 failed=0    slow>=3s=0      61682.5/s p50 1.78ms p99 5.34ms max 8.59ms
+  phase info-same      conc=128 n=6400  failed=0    slow>=3s=0      23490.5/s p50 4.92ms p99 8.44ms max 9.21ms
+  phase join           conc=1   n=32    failed=0    slow>=3s=0         24.3/s p50 40.71ms p99 49.38ms max 50.67ms
+  phase join-spread16  conc=128 n=1024  failed=0    slow>=3s=0        127.5/s p50 973.24ms p99 1.09925s max 1.14074s
+  phase join-same      conc=128 n=256   failed=0    slow>=3s=185       23.6/s p50 5.29674s p99 5.43675s max 5.45801s
+  slow sample error  join-same    x185: <nil>
+  slow samples 185; max slow completions in one 1s window: 25; clusters (>=32 in 1s): 0; stack samples: {}
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-rpc-concurrency-bg1/r1-c256-bg1/perf.log
+  config: background_checkpoint=true concurrency=256 max_concurrent_writes=512
+  phase found          conc=1   n=16    failed=0    slow>=3s=0         13.4/s p50 63.8ms p99 93.03ms max 188.62ms
+  phase found          conc=16  n=128   failed=0    slow>=3s=0         84.4/s p50 178.36ms p99 253.78ms max 264.18ms
+  phase info           conc=1   n=200   failed=0    slow>=3s=0       4783.0/s p50 190µs p99 400µs max 1.54ms
+  phase info-spread16  conc=256 n=25600 failed=0    slow>=3s=0      76393.3/s p50 2.97ms p99 7.65ms max 14.9ms
+  phase info-same      conc=256 n=12800 failed=0    slow>=3s=0      27432.5/s p50 8.09ms p99 14.78ms max 15.41ms
+  phase join           conc=1   n=32    failed=0    slow>=3s=0         22.7/s p50 44.43ms p99 51.02ms max 57.42ms
+  phase join-spread16  conc=256 n=2048  failed=0    slow>=3s=0        123.2/s p50 2.03692s p99 2.33466s max 2.39886s
+  phase join-same      conc=256 n=256   failed=0    slow>=3s=190       21.5/s p50 5.82796s p99 11.74772s max 11.88273s
+  slow sample error  join-same    x190: <nil>
+  slow samples 190; max slow completions in one 1s window: 23; clusters (>=32 in 1s): 0; stack samples: {}
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-rpc-concurrency-bg1/r2-c128-bg1/perf.log
+  config: background_checkpoint=true concurrency=128 max_concurrent_writes=512
+  phase found          conc=1   n=16    failed=0    slow>=3s=0         13.8/s p50 63.95ms p99 91.92ms max 165.79ms
+  phase found          conc=16  n=128   failed=0    slow>=3s=0         84.0/s p50 167.1ms p99 256.32ms max 260.38ms
+  phase info           conc=1   n=200   failed=0    slow>=3s=0       4172.7/s p50 200µs p99 690µs max 2.04ms
+  phase info-spread16  conc=128 n=12800 failed=0    slow>=3s=0      82221.9/s p50 1.4ms p99 3.5ms max 9.42ms
+  phase info-same      conc=128 n=6400  failed=0    slow>=3s=0      26351.4/s p50 4.19ms p99 7.21ms max 7.49ms
+  phase join           conc=1   n=32    failed=0    slow>=3s=0         21.2/s p50 47.25ms p99 57.64ms max 72.81ms
+  phase join-spread16  conc=128 n=1024  failed=0    slow>=3s=0        126.6/s p50 977.84ms p99 1.12501s max 1.19225s
+  phase join-same      conc=128 n=256   failed=0    slow>=3s=190       22.0/s p50 5.73662s p99 5.88484s max 5.89439s
+  slow sample error  join-same    x190: <nil>
+  slow samples 190; max slow completions in one 1s window: 23; clusters (>=32 in 1s): 0; stack samples: {}
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-rpc-concurrency-bg1/r2-c256-bg1/perf.log
+  config: background_checkpoint=true concurrency=256 max_concurrent_writes=512
+  phase found          conc=1   n=16    failed=0    slow>=3s=0         13.3/s p50 64.2ms p99 98.96ms max 189.27ms
+  phase found          conc=16  n=128   failed=0    slow>=3s=0         81.7/s p50 183.61ms p99 237.93ms max 238.98ms
+  phase info           conc=1   n=200   failed=0    slow>=3s=0       4757.3/s p50 200µs p99 300µs max 1.04ms
+  phase info-spread16  conc=256 n=25600 failed=0    slow>=3s=0      77156.5/s p50 2.96ms p99 8.24ms max 13.39ms
+  phase info-same      conc=256 n=12800 failed=0    slow>=3s=0      27422.5/s p50 8.37ms p99 13.65ms max 14.16ms
+  phase join           conc=1   n=32    failed=0    slow>=3s=0         22.9/s p50 42.45ms p99 53.93ms max 55.02ms
+  phase join-spread16  conc=256 n=2048  failed=0    slow>=3s=0        122.7/s p50 2.05885s p99 2.30229s max 2.4119s
+  phase join-same      conc=256 n=256   failed=0    slow>=3s=191       22.0/s p50 5.82825s p99 11.49974s max 11.63009s
+  slow sample error  join-same    x191: <nil>
+  slow samples 191; max slow completions in one 1s window: 23; clusters (>=32 in 1s): 0; stack samples: {}
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-rpc-concurrency-bg1/r3-c128-bg1/perf.log
+  config: background_checkpoint=true concurrency=128 max_concurrent_writes=512
+  phase found          conc=1   n=16    failed=0    slow>=3s=0         13.6/s p50 65.56ms p99 92.04ms max 170.78ms
+  phase found          conc=16  n=128   failed=0    slow>=3s=0         84.8/s p50 177.58ms p99 223.28ms max 230.91ms
+  phase info           conc=1   n=200   failed=0    slow>=3s=0       4882.6/s p50 190µs p99 530µs max 1.32ms
+  phase info-spread16  conc=128 n=12800 failed=0    slow>=3s=0      82819.0/s p50 1.41ms p99 3.47ms max 5.12ms
+  phase info-same      conc=128 n=6400  failed=0    slow>=3s=0      29397.0/s p50 3.97ms p99 7.57ms max 8.34ms
+  phase join           conc=1   n=32    failed=0    slow>=3s=0         19.7/s p50 49.05ms p99 64.47ms max 67.92ms
+  phase join-spread16  conc=128 n=1024  failed=0    slow>=3s=0        122.6/s p50 1.02394s p99 1.21107s max 1.24432s
+  phase join-same      conc=128 n=256   failed=0    slow>=3s=192       21.3/s p50 5.83952s p99 6.12806s max 6.14132s
+  slow sample error  join-same    x192: <nil>
+  slow samples 192; max slow completions in one 1s window: 23; clusters (>=32 in 1s): 0; stack samples: {}
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-rpc-concurrency-bg1/r3-c256-bg1/perf.log
+  config: background_checkpoint=true concurrency=256 max_concurrent_writes=512
+  phase found          conc=1   n=16    failed=0    slow>=3s=0         13.6/s p50 66.47ms p99 95ms max 189.46ms
+  phase found          conc=16  n=128   failed=0    slow>=3s=0         85.0/s p50 178.88ms p99 219.16ms max 224.37ms
+  phase info           conc=1   n=200   failed=0    slow>=3s=0       7012.2/s p50 120µs p99 430µs max 1.04ms
+  phase info-spread16  conc=256 n=25600 failed=0    slow>=3s=0      84799.1/s p50 2.67ms p99 7.14ms max 13.15ms
+  phase info-same      conc=256 n=12800 failed=0    slow>=3s=0      35729.8/s p50 7.05ms p99 8.93ms max 9.19ms
+  phase join           conc=1   n=32    failed=0    slow>=3s=0         22.5/s p50 43.34ms p99 52.99ms max 54.58ms
+  phase join-spread16  conc=256 n=2048  failed=0    slow>=3s=0        119.5/s p50 2.10656s p99 2.3698s max 2.48164s
+  phase join-same      conc=256 n=256   failed=0    slow>=3s=192       21.6/s p50 5.96459s p99 11.73861s max 11.8768s
+  slow sample error  join-same    x192: <nil>
+  slow samples 192; max slow completions in one 1s window: 22; clusters (>=32 in 1s): 0; stack samples: {}

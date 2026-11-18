@@ -1,0 +1,137 @@
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r1-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.563s 72.1/s ok=72.1/s p50 185.05ms p99 796.37ms max 796.52ms
+  info-warm conc=32 n=257 failed=0 in 7ms 35388.5/s ok=35388.5/s p50 730µs p99 2.15ms max 2.34ms
+  join-new-c128 conc=128 n=5082 failed=0 in 12.126s 419.1/s ok=419.1/s p50 297.01ms p99 511.94ms max 678.16ms
+  leave-c128 conc=128 n=5082 failed=0 in 9.604s 529.1/s ok=529.1/s p50 230.68ms p99 399.65ms max 459.94ms
+  join-existing-c128 conc=128 n=5082 failed=0 in 10.393s 489.0/s ok=489.0/s p50 250.85ms p99 403.26ms max 459.68ms
+  leave2-c128 conc=128 n=5082 failed=0 in 11.754s 432.4/s ok=432.4/s p50 283.89ms p99 468.43ms max 514.75ms
+  join-new-c256 conc=256 n=5600 failed=0 in 12.395s 451.8/s ok=451.8/s p50 523.11ms p99 1.19395s max 1.82968s
+  leave-c256 conc=256 n=5600 failed=0 in 11.169s 501.4/s ok=501.4/s p50 441.2ms p99 1.01237s max 1.48622s
+  join-existing-c256 conc=256 n=5600 failed=0 in 11.79s 475.0/s ok=475.0/s p50 483.84ms p99 1.03333s max 1.6468s
+  leave2-c256 conc=256 n=5600 failed=1 in 11.841s 472.9/s ok=472.8/s p50 468.88ms p99 1.14346s max 1.79287s
+  leave2-c256 first error: remote.4: not executed; retry with the same request id
+  join-new-c256 conc=256 n=4613 failed=0 in 12.272s 375.9/s ok=375.9/s p50 629.64ms p99 1.47915s max 2.27698s
+  leave-c256 conc=256 n=4613 failed=1 in 10.498s 439.4/s ok=439.3/s p50 515.64ms p99 1.18383s max 1.89152s
+  leave-c256 first error: remote.4: not executed; retry with the same request id
+  join-existing-c256 conc=256 n=4613 failed=1 in 10.943s 421.5/s ok=421.4/s p50 494.59ms p99 1.21708s max 2.53924s
+  join-existing-c256 first error: remote.4: not executed; retry with the same request id
+  leave2-c256 conc=256 n=4613 failed=2 in 11.571s 398.7/s ok=398.5/s p50 530.65ms p99 1.258s max 1.89214s
+  leave2-c256 first error: remote.100082: alliance or member not found
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r2-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.327s 77.2/s ok=77.2/s p50 175.63ms p99 663.34ms max 663.39ms
+  info-warm conc=32 n=257 failed=0 in 8ms 33197.0/s ok=33197.0/s p50 800µs p99 2.38ms max 2.82ms
+  join-new-c128 conc=128 n=5334 failed=0 in 12.167s 438.4/s ok=438.4/s p50 277.87ms p99 499.7ms max 584.74ms
+  leave-c128 conc=128 n=5334 failed=0 in 10.925s 488.2/s ok=488.2/s p50 240.52ms p99 566.23ms max 701.69ms
+  join-existing-c128 conc=128 n=5334 failed=0 in 10.898s 489.5/s ok=489.5/s p50 243.11ms p99 394.15ms max 422.47ms
+  leave2-c128 conc=128 n=5334 failed=0 in 12.146s 439.2/s ok=439.2/s p50 279.08ms p99 472.43ms max 572.18ms
+  join-new-c256 conc=256 n=5399 failed=0 in 12.46s 433.3/s ok=433.3/s p50 562.79ms p99 1.21813s max 1.45229s
+  leave-c256 conc=256 n=5399 failed=0 in 10.412s 518.5/s ok=518.5/s p50 441.89ms p99 915.37ms max 1.29896s
+  join-existing-c256 conc=256 n=5399 failed=0 in 10.268s 525.8/s ok=525.8/s p50 423.95ms p99 960.06ms max 1.52606s
+  leave2-c256 conc=256 n=5399 failed=0 in 10.179s 530.4/s ok=530.4/s p50 418.57ms p99 977.89ms max 1.45298s
+  join-new-c256 conc=256 n=5268 failed=0 in 12.59s 418.4/s ok=418.4/s p50 567.84ms p99 1.32584s max 2.07106s
+  leave-c256 conc=256 n=5268 failed=0 in 11.356s 463.9/s ok=463.9/s p50 468.82ms p99 1.13367s max 1.58954s
+  join-existing-c256 conc=256 n=5268 failed=0 in 11.333s 464.8/s ok=464.8/s p50 474.6ms p99 1.06763s max 1.93538s
+  leave2-c256 conc=256 n=5268 failed=1 in 11.846s 444.7/s ok=444.6/s p50 473.54ms p99 1.23561s max 2.01435s
+  leave2-c256 first error: remote.4: not executed; retry with the same request id
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r3-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.581s 71.8/s ok=71.8/s p50 182.92ms p99 800.51ms max 813.89ms
+  info-warm conc=32 n=257 failed=0 in 13ms 20399.0/s ok=20399.0/s p50 1.29ms p99 3.66ms max 3.77ms
+  join-new-c128 conc=128 n=4663 failed=0 in 12.191s 382.5/s ok=382.5/s p50 322.6ms p99 565.19ms max 622.54ms
+  leave-c128 conc=128 n=4663 failed=0 in 9.12s 511.3/s ok=511.3/s p50 233.32ms p99 410.5ms max 515.88ms
+  join-existing-c128 conc=128 n=4663 failed=0 in 9.232s 505.1/s ok=505.1/s p50 237.12ms p99 384.76ms max 437.45ms
+  leave2-c128 conc=128 n=4663 failed=0 in 9.457s 493.1/s ok=493.1/s p50 247.24ms p99 377.15ms max 423.44ms
+  join-new-c256 conc=256 n=5808 failed=0 in 12.36s 469.9/s ok=469.9/s p50 508.99ms p99 1.11857s max 1.48038s
+  leave-c256 conc=256 n=5808 failed=0 in 10.735s 541.0/s ok=541.0/s p50 413.34ms p99 897ms max 1.34339s
+  join-existing-c256 conc=256 n=5808 failed=0 in 10.847s 535.4/s ok=535.4/s p50 416.22ms p99 984.11ms max 1.45995s
+  leave2-c256 conc=256 n=5808 failed=0 in 11.107s 522.9/s ok=522.9/s p50 430.23ms p99 1.02058s max 1.54864s
+  join-new-c256 conc=256 n=5071 failed=0 in 12.287s 412.7/s ok=412.7/s p50 572.64ms p99 1.34834s max 2.18352s
+  leave-c256 conc=256 n=5071 failed=0 in 10.32s 491.4/s ok=491.4/s p50 457.47ms p99 1.01823s max 1.67894s
+  join-existing-c256 conc=256 n=5071 failed=0 in 11.561s 438.6/s ok=438.6/s p50 492.17ms p99 1.15681s max 1.80515s
+  leave2-c256 conc=256 n=5071 failed=0 in 10.822s 468.6/s ok=468.6/s p50 463.32ms p99 1.13791s max 2.02188s
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r4-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.499s 73.5/s ok=73.5/s p50 180.71ms p99 740.03ms max 743.51ms
+  info-warm conc=32 n=257 failed=0 in 12ms 21375.8/s ok=21375.8/s p50 1.22ms p99 3.2ms max 3.34ms
+  join-new-c128 conc=128 n=5107 failed=0 in 12.14s 420.7/s ok=420.7/s p50 296.04ms p99 499.38ms max 673.5ms
+  leave-c128 conc=128 n=5107 failed=0 in 9.334s 547.2/s ok=547.2/s p50 226.66ms p99 347.25ms max 382.26ms
+  join-existing-c128 conc=128 n=5107 failed=0 in 10.104s 505.4/s ok=505.4/s p50 244.71ms p99 399.32ms max 445.05ms
+  leave2-c128 conc=128 n=5107 failed=0 in 11.229s 454.8/s ok=454.8/s p50 272.96ms p99 447.56ms max 511.3ms
+  join-new-c256 conc=256 n=5695 failed=0 in 12.409s 458.9/s ok=458.9/s p50 519.19ms p99 1.14398s max 1.72179s
+  leave-c256 conc=256 n=5695 failed=0 in 11.194s 508.8/s ok=508.8/s p50 442.61ms p99 979.21ms max 1.69642s
+  join-existing-c256 conc=256 n=5695 failed=0 in 11.512s 494.7/s ok=494.7/s p50 448.52ms p99 1.02823s max 1.86402s
+  leave2-c256 conc=256 n=5695 failed=0 in 11.924s 477.6/s ok=477.6/s p50 456.85ms p99 1.06843s max 1.89001s
+  join-new-c256 conc=256 n=4757 failed=1 in 12.463s 381.7/s ok=381.6/s p50 623.04ms p99 1.49239s max 2.60592s
+  join-new-c256 first error: remote.4: not executed; retry with the same request id
+  leave-c256 conc=256 n=4757 failed=1 in 10.324s 460.8/s ok=460.7/s p50 467.53ms p99 1.16819s max 1.94873s
+  leave-c256 first error: remote.100082: alliance or member not found
+  join-existing-c256 conc=256 n=4757 failed=0 in 10.425s 456.3/s ok=456.3/s p50 472.65ms p99 1.09383s max 1.70726s
+  leave2-c256 conc=256 n=4757 failed=0 in 11.116s 427.9/s ok=427.9/s p50 506.72ms p99 1.21044s max 1.73427s
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r5-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.487s 73.7/s ok=73.7/s p50 166.89ms p99 858.38ms max 868.74ms
+  info-warm conc=32 n=257 failed=0 in 7ms 37214.2/s ok=37214.2/s p50 700µs p99 1.7ms max 1.76ms
+  join-new-c128 conc=128 n=4955 failed=0 in 12.175s 407.0/s ok=407.0/s p50 303.26ms p99 558.86ms max 671.64ms
+  leave-c128 conc=128 n=4955 failed=0 in 12.4s 399.6/s ok=399.6/s p50 288.6ms p99 679.13ms max 807.9ms
+  join-existing-c128 conc=128 n=4955 failed=0 in 10.165s 487.4/s ok=487.4/s p50 244.14ms p99 378.53ms max 446.24ms
+  leave2-c128 conc=128 n=4955 failed=0 in 13.182s 375.9/s ok=375.9/s p50 318.62ms p99 547.84ms max 642.83ms
+  join-new-c256 conc=256 n=5818 failed=0 in 12.308s 472.7/s ok=472.7/s p50 514.76ms p99 1.17847s max 1.57015s
+  leave-c256 conc=256 n=5818 failed=0 in 9.996s 582.0/s ok=582.0/s p50 383.05ms p99 907.39ms max 1.6121s
+  join-existing-c256 conc=256 n=5818 failed=0 in 11.381s 511.2/s ok=511.2/s p50 440.82ms p99 1.06201s max 1.76005s
+  leave2-c256 conc=256 n=5818 failed=0 in 11.123s 523.1/s ok=523.1/s p50 424.07ms p99 981.86ms max 1.68149s
+  join-new-c256 conc=256 n=5207 failed=0 in 12.346s 421.8/s ok=421.8/s p50 550.5ms p99 1.29191s max 1.91498s
+  leave-c256 conc=256 n=5207 failed=0 in 10.625s 490.1/s ok=490.1/s p50 440.35ms p99 1.10023s max 1.70425s
+  join-existing-c256 conc=256 n=5207 failed=0 in 11.654s 446.8/s ok=446.8/s p50 487.5ms p99 1.21275s max 1.91999s
+  leave2-c256 conc=256 n=5207 failed=0 in 11.587s 449.4/s ok=449.4/s p50 475.06ms p99 1.23956s max 1.9078s
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r6-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.284s 78.3/s ok=78.3/s p50 166.08ms p99 728.57ms max 728.62ms
+  info-warm conc=32 n=257 failed=0 in 5ms 47837.0/s ok=47837.0/s p50 560µs p99 1.48ms max 1.61ms
+  join-new-c128 conc=128 n=5291 failed=0 in 12.123s 436.5/s ok=436.5/s p50 283.44ms p99 529.29ms max 599.02ms
+  leave-c128 conc=128 n=5291 failed=0 in 10.762s 491.6/s ok=491.6/s p50 247.68ms p99 450.07ms max 476.14ms
+  join-existing-c128 conc=128 n=5291 failed=0 in 10.701s 494.4/s ok=494.4/s p50 240.51ms p99 402.47ms max 521.48ms
+  leave2-c128 conc=128 n=5291 failed=0 in 11.325s 467.2/s ok=467.2/s p50 261.01ms p99 413.22ms max 493.11ms
+  join-new-c256 conc=256 n=5088 failed=1 in 12.558s 405.2/s ok=405.1/s p50 553.72ms p99 1.40694s max 1.96735s
+  join-new-c256 first error: remote.4: not executed; retry with the same request id
+  leave-c256 conc=256 n=5088 failed=1 in 10.069s 505.3/s ok=505.2/s p50 451.76ms p99 982.44ms max 1.57896s
+  leave-c256 first error: remote.100082: alliance or member not found
+  join-existing-c256 conc=256 n=5088 failed=0 in 10.217s 498.0/s ok=498.0/s p50 446.28ms p99 1.10077s max 1.79152s
+  leave2-c256 conc=256 n=5088 failed=0 in 10.608s 479.7/s ok=479.7/s p50 476.04ms p99 1.03206s max 1.71686s
+  join-new-c256 conc=256 n=5138 failed=0 in 12.488s 411.4/s ok=411.4/s p50 579.43ms p99 1.34896s max 2.00898s
+  leave-c256 conc=256 n=5138 failed=0 in 11.216s 458.1/s ok=458.1/s p50 484.66ms p99 1.09046s max 1.61917s
+  join-existing-c256 conc=256 n=5138 failed=0 in 12.192s 421.4/s ok=421.4/s p50 506.72ms p99 1.33621s max 1.73016s
+  leave2-c256 conc=256 n=5138 failed=0 in 12.508s 410.8/s ok=410.8/s p50 543.82ms p99 1.16876s max 1.9869s
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r7-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.828s 67.1/s ok=67.1/s p50 195.03ms p99 720.26ms max 720.28ms
+  info-warm conc=32 n=257 failed=0 in 10ms 25717.7/s ok=25717.7/s p50 1.05ms p99 2.93ms max 2.97ms
+  join-new-c128 conc=128 n=4562 failed=0 in 12.134s 376.0/s ok=376.0/s p50 331.89ms p99 693.2ms max 830.1ms
+  leave-c128 conc=128 n=4562 failed=0 in 8.503s 536.5/s ok=536.5/s p50 222.87ms p99 348.76ms max 440.49ms
+  join-existing-c128 conc=128 n=4562 failed=0 in 8.916s 511.7/s ok=511.7/s p50 227.09ms p99 429.25ms max 480.77ms
+  leave2-c128 conc=128 n=4562 failed=0 in 9.609s 474.8/s ok=474.8/s p50 247.16ms p99 493.53ms max 556.33ms
+  join-new-c256 conc=256 n=6133 failed=0 in 12.246s 500.8/s ok=500.8/s p50 490.37ms p99 975.54ms max 1.47015s
+  leave-c256 conc=256 n=6133 failed=0 in 10.619s 577.6/s ok=577.6/s p50 390.29ms p99 890.95ms max 1.19734s
+  join-existing-c256 conc=256 n=6133 failed=0 in 11.155s 549.8/s ok=549.8/s p50 407.37ms p99 871.72ms max 1.48208s
+  leave2-c256 conc=256 n=6133 failed=0 in 11.655s 526.2/s ok=526.2/s p50 425.15ms p99 972.12ms max 1.6015s
+  join-new-c256 conc=256 n=5207 failed=0 in 12.434s 418.8/s ok=418.8/s p50 559.76ms p99 1.25416s max 1.86147s
+  leave-c256 conc=256 n=5207 failed=0 in 10.673s 487.9/s ok=487.9/s p50 448.1ms p99 1.12313s max 2.08471s
+  join-existing-c256 conc=256 n=5207 failed=0 in 11.263s 462.3/s ok=462.3/s p50 476.91ms p99 1.0585s max 1.89253s
+  leave2-c256 conc=256 n=5207 failed=0 in 11.137s 467.6/s ok=467.6/s p50 467.44ms p99 1.0984s max 1.60495s
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
+== /Users/whb/roost/roost-core/.claude/worktrees/agent-acb3c435f4be2cf12/docs/maintenance/evidence/category3-batch2-20261118/item2-joinscale-probe/r8-bg1/probe.log
+  found conc=16 n=257 failed=0 in 3.192s 80.5/s ok=80.5/s p50 164.32ms p99 720.51ms max 720.57ms
+  info-warm conc=32 n=257 failed=0 in 7ms 39250.4/s ok=39250.4/s p50 750µs p99 1.34ms max 1.37ms
+  join-new-c128 conc=128 n=4645 failed=0 in 12.183s 381.3/s ok=381.3/s p50 329.73ms p99 593.16ms max 658.51ms
+  leave-c128 conc=128 n=4645 failed=0 in 9.187s 505.6/s ok=505.6/s p50 238.8ms p99 444.41ms max 586.3ms
+  join-existing-c128 conc=128 n=4645 failed=0 in 9.505s 488.7/s ok=488.7/s p50 243.47ms p99 661.01ms max 760.65ms
+  leave2-c128 conc=128 n=4645 failed=0 in 9.161s 507.0/s ok=507.0/s p50 240.05ms p99 392.36ms max 465.12ms
+  join-new-c256 conc=256 n=5942 failed=0 in 12.365s 480.6/s ok=480.6/s p50 487.28ms p99 1.0463s max 1.56148s
+  leave-c256 conc=256 n=5942 failed=0 in 10.187s 583.3/s ok=583.3/s p50 377.29ms p99 876.96ms max 1.34871s
+  join-existing-c256 conc=256 n=5942 failed=0 in 10.724s 554.1/s ok=554.1/s p50 392.65ms p99 913.42ms max 1.50653s
+  leave2-c256 conc=256 n=5942 failed=0 in 10.837s 548.3/s ok=548.3/s p50 401.75ms p99 937.42ms max 1.75948s
+  join-new-c256 conc=256 n=5377 failed=0 in 12.131s 443.2/s ok=443.2/s p50 533.24ms p99 1.2936s max 1.56564s
+  leave-c256 conc=256 n=5377 failed=0 in 10.468s 513.7/s ok=513.7/s p50 426.48ms p99 991.22ms max 1.79062s
+  join-existing-c256 conc=256 n=5377 failed=0 in 10.502s 512.0/s ok=512.0/s p50 428.69ms p99 1.01718s max 1.56962s
+  leave2-c256 conc=256 n=5377 failed=0 in 11.267s 477.2/s ok=477.2/s p50 458.44ms p99 1.21915s max 1.76804s
+  attempts>=2.5s: 0; STALL dumps: 0 []; clusters (>=32 ending >=2.5s within 1s): 0 []
