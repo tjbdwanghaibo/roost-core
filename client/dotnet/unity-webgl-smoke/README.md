@@ -1,6 +1,6 @@
 # unity-webgl-smoke：Roost.Client.Relay 与 Roost.Client（连玩家接入）在 Unity（含 WebGL）上的最小冒烟
 
-交接 C1（维护者 2026-11-17“做一个最小的测试”）：看 `Roost.Client.Relay` 在 Unity 的调度下能不能跑，重点是 **WebGL 单线程**。同时是 WebGL 接入的参考写法（SDK 不带桥接代码，维护者定）。2026-11-18 起 WebGL 上以 `RelayClientOptions.PumpDriven` 跑（维护者定 A1）。
+交接 C1（维护者 2026-11-17“做一个最小的测试”）：看 `Roost.Client.Relay` 在 Unity 的调度下能不能跑，重点是 **WebGL 单线程**。2026-11-18 起 WebGL 上以 `RelayClientOptions.PumpDriven` 跑（维护者定 A1）；同日维护者定方案 B，浏览器桥接（C# 传输、jslib、lobby 的 `UnityWebRequest` HTTP）挪进 Unity 包（`client/unity`，`RoostPlatform` 按平台选传输），冒烟工程不再自带副本，与游戏工程一样用包里的。
 
 2026-11-18 另加 **GateSmoke**：`Roost.Client` 经 WebSocket 连玩家接入（嵌入 TCP 或独立 Gate），见下文“连玩家接入（GateSmoke）”。
 
@@ -8,14 +8,12 @@
 
 | 文件 | 作用 |
 |---|---|
-| `Assets/RelaySmoke/RelaySmoke.cs` | 冒烟本体：①调度原语探针（`Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 续行、线程池；对照组是回到 Unity 上下文的 `await`）；②只走桥接（WebGL 下）：`UnityWebRequest` 向 lobby 要票据 → `BrowserRelayTransport` 连 relay → 令牌、Ping → 收 Welcome、Pong，不经 SDK 的调度；③端到端经 SDK（WebGL 上 `PumpDriven`）：房主建房、成员加入、成员 → 房主 5 帧、房主广播、房间通道、停 `hold` 秒（大于 relay 空闲超时 30s，看心跳）、离开（成员正常离开 `RoomGone` 为 false）。日志行以 `SMOKE` 开头，最后一行 `SMOKE PASS` / `SMOKE FAIL …`；某一步 `hold + 20` 秒没往下走时报 `SMOKE FAIL stuck at step '…'`。冒烟自己的等待按帧计时，不借助被测的原语。 |
-| `Assets/RelaySmoke/BrowserRelayTransport.cs` + `Assets/Plugins/WebGL/RoostRelayWebSocket.jslib` | WebGL 上的 `IRelayTransport` 参考实现：浏览器 WebSocket，JS 把二进制消息排成字节队列，C# 每帧 `BrowserRelayTransport.PollAll()` 轮询（不从 JS 回调 C#，续行在主线程同步执行）。 |
-| `Assets/RelaySmoke/UnityWebRequestLobbyHttp.cs` | `LobbyClient` 的 `ILobbyHttp` 经 `UnityWebRequest` 实现（主线程上直接发，别的线程上调时投到主线程；任务在主线程上完成）。用法 `new LobbyClient(url, gt2, new UnityWebRequestLobbyHttp(), pumpDriven: true)`。 |
-| `Assets/RelaySmoke/RelaySmokeBehaviour.cs` | 播放器入口：Update 每帧驱动、OnGUI 显示日志、记录切前后台。WebGL 读页面查询参数 `lobby`（缺省同源 `/lobby`）、`hold`、`pump`（缺省开 `PumpDriven`，`pump=0` 关掉，只为看修前卡在哪）；桌面播放器读 `-roostLobby`、`-roostTransport ws|tcp`、`-roostHold`、`-roostPumpDriven 1`。 |
+| `Assets/RelaySmoke/RelaySmoke.cs` | 冒烟本体：①调度原语探针（`Task.Run`、`Task.Delay`、`SemaphoreSlim.WaitAsync(超时)`、`CancelAfter`、`ConfigureAwait(false)` 续行、线程池；对照组是回到 Unity 上下文的 `await`）；②只走桥接（WebGL 下）：`UnityWebRequest` 向 lobby 要票据 → 包里的 `BrowserWebSocket` 连 relay → 令牌、Ping → 收 Welcome、Pong，不经 SDK 的调度；③端到端经 SDK（选项与 lobby 经 `RoostPlatform`，WebGL 上 `PumpDriven`）：房主建房、成员加入、成员 → 房主 5 帧、房主广播、房间通道、停 `hold` 秒（大于 relay 空闲超时 30s，看心跳）、离开（成员正常离开 `RoomGone` 为 false）。日志行以 `SMOKE` 开头，最后一行 `SMOKE PASS` / `SMOKE FAIL …`；某一步 `hold + 20` 秒没往下走时报 `SMOKE FAIL stuck at step '…'`。冒烟自己的等待按帧计时，不借助被测的原语。 |
+| `Assets/RelaySmoke/RelaySmokeBehaviour.cs` | 播放器入口：Update 每帧驱动、OnGUI 显示日志、记录切前后台。WebGL 读页面查询参数 `lobby`（缺省同源 `/lobby`）、`hold`（传输与 `PumpDriven` 由 `RoostPlatform` 选，不再有 `pump=0`、`transport=tcp` 开关）；桌面播放器读 `-roostLobby`、`-roostTransport ws|tcp`、`-roostHold`、`-roostPumpDriven 1`。 |
 | `Assets/Editor/RelaySmokeEditor.cs` | 批处理入口：`RunInEditor`（编辑器里直接跑，环境变量 `ROOST_SMOKE_LOBBY`、`ROOST_SMOKE_TRANSPORT`、`ROOST_SMOKE_HOLD`、`ROOST_SMOKE_PUMP_DRIVEN=1`；不要加 `-quit`）、`BuildWebGL`（不压缩、开发版，输出 `Build/WebGL`）、`BuildMac`。 |
-| `prepare.sh` | 把工程拷到仓库外的新目录并放进刚编好的 `Roost.Client.Relay.dll`（Unity 会生成 `Library/` 与 `.meta`，不在仓库里打开）。 |
+| `prepare.sh` | 把工程拷到仓库外的新目录，用 `scripts/client/build-unity.py --managed-only` 打 Unity 包放进 `<目录>/RoostSdk` 并在 `Packages/manifest.json` 引用（Unity 会生成 `Library/` 与 `.meta`，不在仓库里打开）。包里有 `Roost.Client.dll`、`Roost.Client.Relay.dll`、`RoostClientDriver`、`RoostPlatform` 与浏览器桥接，冒烟工程自己不带。 |
 | `serve.mjs` | 起测试对端（真实 relay + lobby，带 WebSocket 监听），发静态目录，`/lobby/*` 同源代理到 lobby。 |
-| `check-jslib.mjs` | 不经 Unity、不经浏览器，在 node 里用 Emscripten 替身加载 jslib，连真实对端核对它的 JS 逻辑。 |
+| `check-jslib.mjs` | 不经 Unity、不经浏览器，在 node 里用 Emscripten 替身加载包里的 jslib（`client/unity/Runtime/WebGL/RoostWebSocket.jslib`），连真实对端核对它的 JS 逻辑。 |
 
 `Packages/manifest.json` 只用编辑器自带的内置模块（imgui、jsonserialize、unitywebrequest），不从网上取包。
 
@@ -25,7 +23,7 @@
 source ~/.roost-it/roost-dataengine-it/env.sh                       # 可选：房间目录用 Redis
 go test -c -o /tmp/relaypeer ./client/relay                         # 对端，serve.mjs / check-jslib.mjs 用 ROOST_RELAYPEER_BIN 复用
 node client/dotnet/unity-webgl-smoke/check-jslib.mjs                # jslib 的 JS 逻辑
-client/dotnet/unity-webgl-smoke/prepare.sh /tmp/roost-relay-smoke   # 拷工程 + 放 DLL
+client/dotnet/unity-webgl-smoke/prepare.sh /tmp/roost-relay-smoke   # 拷工程 + 打 Unity 包
 
 # 编辑器里跑（SDK 自带的 ClientWebSocket / TCP）：先起服务，再批处理
 ROOST_RELAYPEER_BIN=/tmp/relaypeer node client/dotnet/unity-webgl-smoke/serve.mjs /tmp/empty 8788 &
@@ -50,14 +48,13 @@ ROOST_RELAYPEER_BIN=/tmp/relaypeer node client/dotnet/unity-webgl-smoke/serve.mj
 
 | 文件 | 作用 |
 |---|---|
-| `Assets/GateSmoke/BrowserGateTransport.cs` | WebGL 上的 `IGateTransport` 参考实现（给游戏照抄，SDK 不带）：浏览器 WebSocket，JS 一侧与开房间共用 `RoostRelayWebSocket.jslib`，每帧 `BrowserGateTransport.PollAll()` 轮询。浏览器一侧的函数抽成 `IBrowserSocket`，`Roost.Client.Tests` 链接本文件、用假的浏览器一侧测拼帧。 |
-| `Assets/GateSmoke/GateSmoke.cs` | 冒烟本体：`GameClient`（`WebSocketUrl`、`PumpDriven`）连上、握手，保持 `hold` 秒，期间连接一断即 `SMOKE FAIL`；到时心跳往返次数（`Connection.HeartbeatRoundTrips`）不少于 `hold/15 - 1`（缺省心跳 15s）则 `SMOKE PASS held …s connected, heartbeat round trips N`。30s 没握手成功也算失败。 |
-| `Assets/GateSmoke/GateSmokeBehaviour.cs` | 播放器入口：用托管包的 `RoostClientDriver`（WebGL 上 `Attach(client, BrowserGateTransport.PollAll)`，游戏照抄的接法）驱动，`LateUpdate` 判定，OnGUI 显示日志。WebGL 读页面参数 `ws`、`hold`；桌面播放器读 `-roostWs`、`-roostHold`。 |
+| `Assets/GateSmoke/GateSmoke.cs` | 冒烟本体：`GameClient`（`RoostPlatform.Configure(new ConnectionOptions { WebSocketUrl, … })`，与游戏同样的写法）连上、握手，保持 `hold` 秒，期间连接一断即 `SMOKE FAIL`；到时心跳往返次数（`Connection.HeartbeatRoundTrips`）不少于 `hold/15 - 1`（缺省心跳 15s）则 `SMOKE PASS held …s connected, heartbeat round trips N`。30s 没握手成功也算失败。 |
+| `Assets/GateSmoke/GateSmokeBehaviour.cs` | 播放器入口：用 Unity 包的 `RoostClientDriver`（`Attach(client)`，每帧先轮询浏览器桥接再 Pump，与游戏的接法相同）驱动，`LateUpdate` 判定，OnGUI 显示日志。WebGL 读页面参数 `ws`、`hold`；桌面播放器读 `-roostWs`、`-roostHold`。 |
 | `Assets/Editor/GateSmokeEditor.cs` | `RunInEditor`（SDK 自带的 `ClientWebSocket`，`PumpDriven` 开，`EditorApplication.update` 里 Pump；环境变量 `ROOST_SMOKE_WS`、`ROOST_SMOKE_HOLD`；不要加 `-quit`）、`BuildWebGL`（输出 `Build/GateWebGL`）。 |
 | `serve-gate.mjs` | 起玩家接入对端（`infra/network/gateway` 的 `TestServeAWebSocketPlayerAccessForTheBrowserSmoke`：`DefaultTCPConfig` 缺省值、加 WebSocket 监听、放行 `127.0.0.1:*` / `localhost:*` 来源、任何票据都认），发 WebGL 构建目录；打开 `/` 时自动补 `?ws=<对端>&hold=<idle_timeout + 10>`。目录写 `-` 只起对端。 |
-| `check-jslib-frames.mjs` | 不经 Unity、不经浏览器、不要对端：脚本自带最小 WebSocket 服务端，核对 jslib 交出的字节拼回完整、有序的帧（一帧拆成三条消息、三帧合成一条、接近 1 MiB 的大帧），每次 send 恰好一条消息，文本消息之后状态是 3。 |
+| `check-jslib-frames.mjs` | 不经 Unity、不经浏览器、不要对端：脚本自带最小 WebSocket 服务端，核对包里的 jslib 交出的字节拼回完整、有序的帧（一帧拆成三条消息、三帧合成一条、接近 1 MiB 的大帧），每次 send 恰好一条消息，文本消息之后状态是 3。 |
 
-`prepare.sh` 同时用 `scripts/client/build-unity.py --managed-only` 打托管包放进 `<目录>/RoostSdk` 并在 `Packages/manifest.json` 引用它，GateSmoke 只用这个包里的 `Roost.Client.dll` 与 `RoostClientDriver`。
+GateSmoke 与 RelaySmoke 用同一个 `prepare.sh` 打的包（GateSmoke 用其中的 `Roost.Client.dll`、`RoostClientDriver`、`RoostPlatform` 与桥接）。
 
 ```sh
 node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs                   # jslib 拼帧

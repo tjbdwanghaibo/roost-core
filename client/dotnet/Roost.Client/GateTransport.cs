@@ -11,9 +11,9 @@ namespace Roost.Client
     /// <summary>
     /// TcpSession 与玩家接入（嵌入 TCP 或独立 Gate）之间的一条连接（维护者 2026-11-18：C# 客户端经 WebSocket 连玩家接入，
     /// 形状照开房间 SDK 的 IRelayTransport）。SDK 自带 TCP（<see cref="TcpGateTransport"/>，缺省）与 WebSocket
-    /// （<see cref="WebSocketGateTransport"/>，用 ClientWebSocket，给编辑器、桌面与纯 C#）；Unity WebGL 上没有套接字，由游戏用浏览器的
-    /// WebSocket（.jslib）实现这个接口，经 <see cref="ConnectionOptions.TransportFactory"/> 交给 SDK，参考写法见
-    /// client/dotnet/unity-webgl-smoke（SDK 不带桥接代码，维护者 2026-11-17 定）。
+    /// （<see cref="WebSocketGateTransport"/>，用 ClientWebSocket，给编辑器、桌面与纯 C#）；Unity WebGL 上没有套接字，浏览器 WebSocket
+    /// （.jslib）的实现在 Unity 包里（client/unity/Runtime 的 BrowserWebSocket，维护者 2026-11-18 定方案 B），由
+    /// RoostPlatform.Configure 填进 <see cref="ConnectionOptions.TransportFactory"/>；本程序集不依赖 Unity，不带它。
     ///
     /// 约定（SDK 按这些调用，实现要做到）：
     /// - 一个实例只连一次：<see cref="ConnectAsync"/> 一次，之后 <see cref="SendAsync"/> / <see cref="ReceiveAsync"/>，最后 Dispose；

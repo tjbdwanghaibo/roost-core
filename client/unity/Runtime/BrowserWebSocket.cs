@@ -6,32 +6,26 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Roost.Client;
+using Roost.Client.Relay;
 
-namespace Roost.GateSmoke
+namespace Roost.Unity
 {
     /// <summary>
-    /// Unity WebGL 上连玩家接入（嵌入 TCP 或独立 Gate 的 WebSocket 监听）的连接：用浏览器的 WebSocket 实现 Roost.Client 的
-    /// IGateTransport。SDK 不带它（维护者 2026-11-17 定：桥接代码不进 SDK），这是给游戏照抄的参考写法，与开房间 SDK 的
-    /// BrowserRelayTransport 同一个做法、同一个 jslib（Assets/Plugins/WebGL/RoostRelayWebSocket.jslib，函数是通用的字节队列）。
-    ///
-    /// 用法（client/README“Unity WebGL”）：
-    ///   var client = new GameClient(new ConnectionOptions {
-    ///       WebSocketUrl = "wss://game.example.com/ws", PumpDriven = true, AutoReconnect = true,
-    ///       TransportFactory = () => new BrowserGateTransport() });
-    ///   driver.Attach(client, BrowserGateTransport.PollAll);   // RoostClientDriver：每帧先 PollAll 再 Pump
-    ///   await client.Connection.ConnectAsync(ticketProvider);  // 在主线程上
+    /// Unity WebGL 上的连接：用浏览器的 WebSocket（同目录 WebGL/RoostWebSocket.jslib）同时实现连玩家接入的 IGateTransport 与
+    /// 开房间 relay 的 IRelayTransport。维护者 2026-11-18 定方案 B：桥接放进 Unity 包（之前是 unity-webgl-smoke 里的参考写法）。
+    /// 游戏一般不直接用它，而是经 <see cref="RoostPlatform"/> 按平台配置选项；RoostClientDriver 每帧先调 <see cref="PollAll"/> 再 Pump。
     ///
     /// 做法是轮询，不从 JS 回调 C#：JS 一侧把收到的二进制消息排成字节队列，PollAll 每帧把字节交给等着的 ReceiveAsync、并检查
-    /// 连接状态；续行在 PollAll 里（主线程）同步执行，不经线程池。SDK 按包头拼帧，所以这里只管按顺序交字节，不看消息边界。
-    /// SendAsync 直接调浏览器的 send（不阻塞），同步完成——ConnectionOptions.PumpDriven 要求如此。
-    /// 只在 WebGL 播放器里能用（DllImport "__Internal" 只有 WebGL 构建链接得到）；编辑器与其他平台用 SDK 自带的 WebSocketGateTransport。
+    /// 连接状态；续行在 PollAll 里（主线程）同步执行，不经线程池。两个 SDK 都按包头拼帧，所以这里只管按顺序交字节，不看消息边界。
+    /// 发送直接调浏览器的 send（不阻塞），同步完成——两个 SDK 的 PumpDriven 都要求如此。连接超时与取消由 SDK Dispose 这个连接。
+    /// 只在 WebGL 播放器里能用（DllImport "__Internal" 只有 WebGL 构建链接得到）；编辑器与其他平台用 SDK 自带的 TCP / ClientWebSocket。
     /// 浏览器一侧的函数抽成 <see cref="IBrowserSocket"/>，.NET 测试（Roost.Client.Tests 的 BrowserBridgeTests）用假的喂消息。
     /// </summary>
-    public sealed class BrowserGateTransport : IGateTransport
+    public sealed class BrowserWebSocket : IGateTransport, IRelayTransport
     {
         // JS 侧的连接状态，与 jslib 的 RoostWs 状态码一致。
         public const int Connecting = 0, Open = 1, Closed = 2, Failed = 3;
-        /// <summary>浏览器发送缓冲积压的上限：超过就当写失败，SDK 随之断开（与开房间 SDK 相同的 16 MiB）。</summary>
+        /// <summary>浏览器发送缓冲积压的上限：超过就当写失败，SDK 随之断开（与 SDK 自带 WebSocket 传输相同的 16 MiB）。</summary>
         public const int MaxBufferedBytes = 16 << 20;
 
         /// <summary>浏览器一侧的六个函数（jslib）。</summary>
@@ -62,7 +56,7 @@ namespace Roost.GateSmoke
             public void Close(int id) => RoostWsClose(id);
         }
 
-        private static readonly List<BrowserGateTransport> Live = new List<BrowserGateTransport>();
+        private static readonly List<BrowserWebSocket> Live = new List<BrowserWebSocket>();
 
         private readonly IBrowserSocket js;
         private readonly byte[] scratch = new byte[64 << 10];
@@ -73,34 +67,45 @@ namespace Roost.GateSmoke
         private byte[]? receiveBuffer;
         private int receiveOffset, receiveCount;
 
-        public BrowserGateTransport() : this(JsLib.Instance) { }
-        public BrowserGateTransport(IBrowserSocket js) { this.js = js ?? throw new ArgumentNullException(nameof(js)); }
+        public BrowserWebSocket() : this(JsLib.Instance) { }
+        public BrowserWebSocket(IBrowserSocket js) { this.js = js ?? throw new ArgumentNullException(nameof(js)); }
 
-        /// <summary>每帧在主线程调一次（在 GameClient.Pump 之前）：完成等着的连接与收字节。</summary>
+        /// <summary>每帧在主线程调一次（在 GameClient.Pump / RelayClient.Pump 之前）：完成等着的连接与收字节。没有连接时什么也不做。</summary>
         public static void PollAll()
         {
-            BrowserGateTransport[] live;
-            lock (Live) live = Live.ToArray();
-            foreach (var transport in live) transport.Poll();
+            BrowserWebSocket[] live;
+            lock (Live)
+            {
+                if (Live.Count == 0) return;
+                live = Live.ToArray();
+            }
+            foreach (var socket in live) socket.Poll();
         }
 
         public Task ConnectAsync(string address, CancellationToken cancellation)
         {
             if (!address.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) && !address.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException($"'{address}' is not a ws:// or wss:// URL (set ConnectionOptions.WebSocketUrl).");
+                throw new ArgumentException($"'{address}' is not a ws:// or wss:// URL (ConnectionOptions.WebSocketUrl, or a relay ticket asked with Transport = Ws).");
             connecting = new TaskCompletionSource<bool>();
             id = js.Open(address);
             lock (Live) Live.Add(this);
-            return connecting.Task; // 超时与取消由 SDK Dispose 这个连接
+            return connecting.Task;
         }
 
+        /// <summary>连玩家接入：一帧一条二进制消息，交给浏览器即完成。</summary>
         public Task SendAsync(byte[] frame, CancellationToken cancellation)
         {
-            if (disposed) throw new ObjectDisposedException(nameof(BrowserGateTransport));
+            Send(frame);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>relay：一帧一条二进制消息，交给浏览器即返回。</summary>
+        public void Send(byte[] frame)
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(BrowserWebSocket));
             // 浏览器的 send 不阻塞，网络跟不上时字节积在 bufferedAmount 里；超过上限就当写失败（SDK 随之断开）。
-            if (js.Buffered(id) + frame.Length > MaxBufferedBytes) throw new IOException("gate: websocket send buffer is full.");
-            if (js.Send(id, frame, frame.Length) == 0) throw new IOException("gate: websocket is not open.");
-            return Task.CompletedTask; // 一帧一条二进制消息，已交给浏览器
+            if (js.Buffered(id) + frame.Length > MaxBufferedBytes) throw new IOException("websocket: send buffer is full.");
+            if (js.Send(id, frame, frame.Length) == 0) throw new IOException("websocket: not open.");
         }
 
         public Task<int> ReceiveAsync(byte[] buffer, int offset, int count, CancellationToken cancellation)
@@ -119,7 +124,7 @@ namespace Roost.GateSmoke
             disposed = true;
             lock (Live) Live.Remove(this);
             if (id != 0) js.Close(id);
-            Take(ref connecting)?.TrySetException(new IOException("gate: websocket closed."));
+            Take(ref connecting)?.TrySetException(new IOException("websocket: closed."));
             Take(ref receiving)?.TrySetResult(0);
         }
 
@@ -130,7 +135,7 @@ namespace Roost.GateSmoke
             {
                 int state = js.State(id);
                 if (state == Open) Take(ref connecting)?.TrySetResult(true);
-                else if (state != Connecting) Take(ref connecting)?.TrySetException(new IOException("gate: websocket failed to open."));
+                else if (state != Connecting) Take(ref connecting)?.TrySetException(new IOException("websocket: failed to open."));
             }
             if (receiving != null)
             {

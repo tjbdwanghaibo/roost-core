@@ -20,7 +20,7 @@ public static class GateSmokeEditor
 
     public static void RunInEditor()
     {
-        var config = new GateSmokeConfig { BrowserWebSocket = false, PumpDriven = true };
+        var config = new GateSmokeConfig { PumpDriven = true };
         config.Url = Environment.GetEnvironmentVariable("ROOST_SMOKE_WS") ?? config.Url;
         if (float.TryParse(Environment.GetEnvironmentVariable("ROOST_SMOKE_HOLD"), out float hold)) config.HoldSeconds = hold;
         smoke = new GateSmoke(config, line => Debug.Log(line), () => EditorApplication.timeSinceStartup);

@@ -2,6 +2,7 @@
 using System;
 using System.Threading.Tasks;
 using Roost.Client;
+using Roost.Unity;
 
 namespace Roost.GateSmoke
 {
@@ -12,9 +13,7 @@ namespace Roost.GateSmoke
         public string Url = "ws://127.0.0.1:7080/ws";
         /// <summary>握手之后保持连接的秒数：要超过服务端的 idle_timeout（缺省 90s）至少 10s，证明心跳在跑。</summary>
         public float HoldSeconds = 100;
-        /// <summary>WebGL：用浏览器 WebSocket（BrowserGateTransport）；否则用 SDK 自带的 WebSocketGateTransport。</summary>
-        public bool BrowserWebSocket;
-        /// <summary>ConnectionOptions.PumpDriven（WebGL 必开）。</summary>
+        /// <summary>ConnectionOptions.PumpDriven（编辑器 / 桌面播放器用；WebGL 上由 RoostPlatform.Configure 打开）。</summary>
         public bool PumpDriven = true;
         public string Ticket = "smoke";
     }
@@ -23,7 +22,8 @@ namespace Roost.GateSmoke
     /// 连玩家接入的最小冒烟（维护者 2026-11-18：Unity / WebGL 只验“经 WebSocket 连进玩家接入、握手成功”，再只靠 Pump 驱动的心跳
     /// 保持连接超过服务端 idle_timeout）。不做请求、推送、重连：WebSocket 之上的逻辑与 TCP 共用，由 .NET 用例覆盖。
     /// 日志行以 SMOKE 开头，最后一行 SMOKE PASS / SMOKE FAIL …；PASS 行带握手耗时、保持秒数与心跳往返次数。
-    /// 驱动：游戏线程每帧先 BrowserGateTransport.PollAll（WebGL）、再 GameClient.Pump（播放器里由 RoostClientDriver 做），再调 Tick。
+    /// 选项经 Unity 包的 RoostPlatform.Configure（游戏同样的写法）：WebGL 上换成包里的浏览器 WebSocket 桥接并打开 PumpDriven，
+    /// 其他平台用 SDK 自带的 WebSocketGateTransport。驱动：每帧先轮询桥接、再 GameClient.Pump（播放器里由 RoostClientDriver 做），再调 Tick。
     /// </summary>
     public sealed class GateSmoke
     {
@@ -40,18 +40,17 @@ namespace Roost.GateSmoke
         public GateSmoke(GateSmokeConfig config, Action<string> log, Func<double> now)
         {
             this.config = config; this.log = log; this.now = now;
-            Client = new GameClient(new ConnectionOptions
+            Client = new GameClient(RoostPlatform.Configure(new ConnectionOptions
             {
                 WebSocketUrl = config.Url, PumpDriven = config.PumpDriven, AutoReconnect = false,
-                TransportFactory = config.BrowserWebSocket ? () => new BrowserGateTransport() : (Func<IGateTransport>?)null,
-            });
+            }));
         }
 
         /// <summary>在主线程上调用：开始连接与握手（PumpDriven 时续行回到主线程）。</summary>
         public async Task RunAsync()
         {
             started = now();
-            log($"SMOKE connecting {config.Url} (browser websocket {config.BrowserWebSocket}, pump-driven {config.PumpDriven}, hold {config.HoldSeconds}s)");
+            log($"SMOKE connecting {config.Url} (in browser {RoostPlatform.InBrowser}, pump-driven {config.PumpDriven || RoostPlatform.InBrowser}, hold {config.HoldSeconds}s)");
             try
             {
                 await Client.Connection.ConnectAsync(config.Ticket);

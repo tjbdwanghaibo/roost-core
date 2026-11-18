@@ -2,7 +2,8 @@
   "name": "Roost.Unity",
   "overrideReferences": true,
   "precompiledReferences": [
-    "Roost.Client.dll"
+    "Roost.Client.dll",
+    "Roost.Client.Relay.dll"
   ],
   "autoReferenced": true
 }

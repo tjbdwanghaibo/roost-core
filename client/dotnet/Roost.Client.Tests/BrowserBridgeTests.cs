@@ -3,14 +3,17 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Roost.Client;
-using Roost.GateSmoke;
+using Roost.Client.Relay;
+using Roost.Unity;
 
-// 浏览器桥接的 C# 部分（unity-webgl-smoke 的 BrowserGateTransport，正式源码链接进来）在 PumpDriven 单线程环境里拼帧：
-// 假的浏览器一侧（FakeBrowserSocket，按 jslib 的做法把收到的消息排成字节队列、按调用方给的长度取）喂三种消息——
-// 一帧拆成多条消息、多帧合成一条消息、接近 max_payload 的大帧——断言 SDK 收到的应答与推送完整、顺序不乱，
-// 每次 Send 恰好一帧，全程零违规。jslib 本身的 JS 逻辑由 check-jslib-frames.mjs 在 node 里核对。
+// 浏览器桥接的 C# 部分（Unity 包 client/unity/Runtime 的 BrowserWebSocket，正式源码链接进来）在 PumpDriven 单线程环境里拼帧：
+// 假的浏览器一侧（FakeBrowserQueue，按 jslib 的做法把收到的消息排成字节队列、按调用方给的长度取）喂消息。
+// 连玩家接入（GameClient）：一帧拆成多条消息、多帧合成一条消息、接近 max_payload 的大帧——应答与推送完整、顺序不乱；
+// 开房间（RelayClient，同一个类当 IRelayTransport）：Welcome 拆成三条消息、两帧游戏帧合成一条、Ping / Pong 测出 Rtt。
+// 两边都断言每次 Send 恰好一帧、全程零违规。jslib 本身的 JS 逻辑由 check-jslib-frames.mjs 在 node 里核对。
 internal static partial class Program
 {
     private static async Task TestBrowserBridgeFraming()
@@ -18,11 +21,11 @@ internal static partial class Program
         var fake = new FakeBrowserSocket();
         await StrictLoop.RunAsync("browser-bridge", TimeSpan.FromSeconds(30), async loop =>
         {
-            loop.BeforePump.Add(BrowserGateTransport.PollAll);
+            loop.BeforePump.Add(BrowserWebSocket.PollAll);
             var client = loop.Client(new ConnectionOptions
             {
                 WebSocketUrl = "ws://browser.test/ws", PumpDriven = true, HeartbeatInterval = TimeSpan.FromMilliseconds(100),
-                TransportFactory = () => new BrowserGateTransport(fake),
+                TransportFactory = () => new BrowserWebSocket(fake),
             });
             var pushes = new List<string>();
             var replies = new Queue<byte[]>();
@@ -48,60 +51,66 @@ internal static partial class Program
             Check(fake.Errors.Count == 0, "every Send was exactly one frame: " + string.Join(" | ", fake.Errors));
             Check(loop.Violations.IsEmpty, "everything ran on the loop thread: " + string.Join(" | ", loop.Violations));
         }, expectViolations: false);
-        Console.WriteLine("PASS browser bridge (BrowserGateTransport + fake jslib, PumpDriven): split / merged / near-max frames, one frame per Send");
+        Console.WriteLine("PASS browser bridge for the gate (BrowserWebSocket + fake jslib, PumpDriven): split / merged / near-max frames, one frame per Send");
     }
 
-    /// <summary>假的浏览器一侧：jslib 的 RoostWs* 同样的语义（字节队列、按长度取），按收到的帧回预先编排好的消息。</summary>
-    private sealed class FakeBrowserSocket : BrowserGateTransport.IBrowserSocket
+    private static async Task TestBrowserBridgeRelay()
     {
-        internal static readonly string SplitReply = string.Concat(Enumerable.Range(0, 300).Select(i => (char)('a' + i % 26)));
-        // 缺省 MaxPayloadBytes 是 1 MiB：差 3 字节到上限，跨过桥接 64 KiB 的中转缓冲很多次。
-        internal static readonly byte[] BigPayload = Enumerable.Range(0, PacketCodec.DefaultMaxPayload - 3).Select(i => (byte)(i * 31 + 7)).ToArray();
+        var fake = new FakeRelaySocket();
+        await StrictLoop.RunAsync("browser-bridge-relay", TimeSpan.FromSeconds(30), async loop =>
+        {
+            // lobby 不会被调到（只连 relay、不重连、不离开）；PumpDriven 的 RelayClient 要求 LobbyClient 也是 pumpDriven。
+            var lobby = new LobbyClient("http://lobby.test", "gt2.test", new UnusedLobbyHttp(), pumpDriven: true);
+            var relay = new RelayClient(lobby, new RelayClientOptions
+            {
+                Game = "party", Transport = RelayTransport.Ws, PumpDriven = true, PingInterval = TimeSpan.FromMilliseconds(100),
+                TransportFactory = () => new BrowserWebSocket(fake),
+            });
+            var frames = new List<string>();
+            relay.GameFrame += frame => frames.Add($"{frame.Slot}:{frame.MessageId}:{Utf8.GetString(frame.Payload.Span)}");
+            relay.Error += error => loop.Violations.Enqueue("relay callback threw: " + error.Message);
+            loop.BeforePump.Add(BrowserWebSocket.PollAll); // 像 Unity 每帧：RoostPlatform.Poll(); relay.Pump();
+            loop.BeforePump.Add(() => relay.Pump());
+            try
+            {
+                var ticket = new RoomTicket(new RoomInfo(), "ws://relay.test/ws", "rt1.test", 0);
+                var welcome = await relay.ConnectAsync(ticket); // Welcome 拆成三条消息
+                Check(welcome.Slot == 2 && !welcome.IsHost && welcome.HostSlot == 1, "a welcome split into three messages arrives whole: " + welcome);
+                Check(relay.SendGame(1, 100, Utf8.GetBytes("move")), "the member sends a game frame");
+                await loop.Until("both echoed game frames", () => frames.Count >= 2);
+                Check(frames.SequenceEqual(new[] { "1:100:move", "1:101:move-again" }), "two frames merged in one message arrive whole and in order: " + string.Join(",", frames));
+                await loop.Until("a ping / pong round trip", () => relay.Rtt > TimeSpan.Zero);
+                Check(fake.Errors.Count == 0, "every Send was exactly one frame: " + string.Join(" | ", fake.Errors));
+                Check(loop.Violations.IsEmpty, "everything ran on the loop thread: " + string.Join(" | ", loop.Violations));
+            }
+            finally { relay.Dispose(); }
+        }, expectViolations: false);
+        Console.WriteLine("PASS browser bridge for the relay (BrowserWebSocket + fake jslib, PumpDriven): split welcome, merged game frames, ping / pong");
+    }
+
+    /// <summary>
+    /// 假的浏览器一侧：jslib 的 RoostWs* 同样的语义（Open 后过两轮才连上；收到的消息排成字节队列，按调用方给的长度取，可以跨消息）。
+    /// 子类在 OnSend 里拿到一次 Send 的字节，用 Reply 排回要“收到”的消息。
+    /// </summary>
+    private abstract class FakeBrowserQueue : BrowserWebSocket.IBrowserSocket
+    {
         public readonly List<string> Errors = new List<string>();
         private readonly Queue<byte[]> chunks = new Queue<byte[]>();
-        private int head, state = BrowserGateTransport.Closed, polls;
-        private bool authed;
+        private int head, state = BrowserWebSocket.Closed, polls;
 
-        public int Open(string url) { state = BrowserGateTransport.Connecting; polls = 0; authed = false; chunks.Clear(); head = 0; return 1; }
+        public int Open(string url) { state = BrowserWebSocket.Connecting; polls = 0; chunks.Clear(); head = 0; OnOpen(); return 1; }
         public int State(int id)
         {
-            if (state == BrowserGateTransport.Connecting && ++polls > 2) state = BrowserGateTransport.Open; // 过两轮才连上
+            if (state == BrowserWebSocket.Connecting && ++polls > 2) state = BrowserWebSocket.Open; // 过两轮才连上
             return state;
         }
         public int Buffered(int id) => 0;
-        public void Close(int id) => state = BrowserGateTransport.Closed;
+        public void Close(int id) => state = BrowserWebSocket.Closed;
 
         public int Send(int id, byte[] data, int length)
         {
-            if (state != BrowserGateTransport.Open) return 0;
-            Packet packet;
-            try { packet = PacketCodec.Decode(data.AsSpan(0, length).ToArray()); }
-            catch (InvalidDataException error) { Errors.Add($"a {length}-byte send is not exactly one frame: {error.Message}"); return 1; }
-            byte[] Frame(uint message, byte[] payload, bool push = false) => PacketCodec.Encode(new Packet(message, push ? 1u : packet.Sequence, payload, isPush: push));
-            if (packet.MessageId == 0)
-            {
-                byte[] ack = Frame(0, Array.Empty<byte>());
-                if (!authed) { authed = true; chunks.Enqueue(ack[..5]); chunks.Enqueue(ack[5..6]); chunks.Enqueue(ack[6..]); }
-                else chunks.Enqueue(ack);
-                return 1;
-            }
-            string text = Utf8.GetString(packet.Payload.Span);
-            switch (text)
-            {
-                case "split":
-                    var reply = Frame(43, Utf8.GetBytes(SplitReply));
-                    for (int at = 0; at < reply.Length; at += 7) chunks.Enqueue(reply[at..Math.Min(reply.Length, at + 7)]);
-                    break;
-                case "merged":
-                    chunks.Enqueue(Frame(43, Utf8.GetBytes("merged-reply")).Concat(Frame(9, Utf8.GetBytes("m1"), true)).Concat(Frame(9, Utf8.GetBytes("m2"), true)).ToArray());
-                    break;
-                case "big":
-                    chunks.Enqueue(Frame(43, BigPayload));
-                    break;
-                default:
-                    chunks.Enqueue(Frame(43, packet.Payload.ToArray()));
-                    break;
-            }
+            if (state != BrowserWebSocket.Open) return 0;
+            OnSend(data.AsSpan(0, length).ToArray());
             return 1;
         }
 
@@ -119,5 +128,78 @@ internal static partial class Program
             }
             return copied;
         }
+
+        protected void Reply(byte[] message) => chunks.Enqueue(message);
+        protected virtual void OnOpen() { }
+        protected abstract void OnSend(byte[] frame);
+    }
+
+    /// <summary>连玩家接入：按收到的帧回预先编排好的消息。</summary>
+    private sealed class FakeBrowserSocket : FakeBrowserQueue
+    {
+        internal static readonly string SplitReply = string.Concat(Enumerable.Range(0, 300).Select(i => (char)('a' + i % 26)));
+        // 缺省 MaxPayloadBytes 是 1 MiB：差 3 字节到上限，跨过桥接 64 KiB 的中转缓冲很多次。
+        internal static readonly byte[] BigPayload = Enumerable.Range(0, PacketCodec.DefaultMaxPayload - 3).Select(i => (byte)(i * 31 + 7)).ToArray();
+        private bool authed;
+
+        protected override void OnOpen() => authed = false;
+
+        protected override void OnSend(byte[] data)
+        {
+            Packet packet;
+            try { packet = PacketCodec.Decode(data); }
+            catch (InvalidDataException error) { Errors.Add($"a {data.Length}-byte send is not exactly one frame: {error.Message}"); return; }
+            byte[] Frame(uint message, byte[] payload, bool push = false) => PacketCodec.Encode(new Packet(message, push ? 1u : packet.Sequence, payload, isPush: push));
+            if (packet.MessageId == 0)
+            {
+                byte[] ack = Frame(0, Array.Empty<byte>());
+                if (!authed) { authed = true; Reply(ack[..5]); Reply(ack[5..6]); Reply(ack[6..]); }
+                else Reply(ack);
+                return;
+            }
+            switch (Utf8.GetString(packet.Payload.Span))
+            {
+                case "split":
+                    var reply = Frame(43, Utf8.GetBytes(SplitReply));
+                    for (int at = 0; at < reply.Length; at += 7) Reply(reply[at..Math.Min(reply.Length, at + 7)]);
+                    break;
+                case "merged":
+                    Reply(Frame(43, Utf8.GetBytes("merged-reply")).Concat(Frame(9, Utf8.GetBytes("m1"), true)).Concat(Frame(9, Utf8.GetBytes("m2"), true)).ToArray());
+                    break;
+                case "big":
+                    Reply(Frame(43, BigPayload));
+                    break;
+                default:
+                    Reply(Frame(43, packet.Payload.ToArray()));
+                    break;
+            }
+        }
+    }
+
+    /// <summary>开房间：令牌首帧回 Welcome（拆成三条消息），游戏帧回两帧合成的一条消息，Ping 回 Pong。</summary>
+    private sealed class FakeRelaySocket : FakeBrowserQueue
+    {
+        protected override void OnSend(byte[] data)
+        {
+            RelayFrame frame;
+            try { frame = RelayCodec.Decode(data, int.MaxValue); }
+            catch (InvalidDataException error) { Errors.Add($"a {data.Length}-byte send is not exactly one frame: {error.Message}"); return; }
+            if (frame.Channel == RelayChannel.None)
+            {
+                var welcome = RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 2, RelayOps.Welcome, RelayCodec.EncodeWelcome(new RelayWelcome(2, false, 1))));
+                Reply(welcome[..5]); Reply(welcome[5..17]); Reply(welcome[17..]);
+            }
+            else if (frame.Channel == RelayChannel.Control && frame.MessageId == RelayOps.Ping)
+                Reply(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Pong, frame.Payload)));
+            else if (frame.Channel == RelayChannel.Game)
+                Reply(RelayCodec.Encode(new RelayFrame(RelayChannel.Game, 1, frame.MessageId, frame.Payload))
+                    .Concat(RelayCodec.Encode(new RelayFrame(RelayChannel.Game, 1, frame.MessageId + 1, Utf8.GetBytes("move-again")))).ToArray());
+        }
+    }
+
+    private sealed class UnusedLobbyHttp : ILobbyHttp
+    {
+        public Task<LobbyHttpResponse> SendAsync(string method, string url, string bearer, string? jsonBody, CancellationToken cancellation) =>
+            throw new InvalidOperationException($"the bridge test must not call the lobby ({method} {url})");
     }
 }

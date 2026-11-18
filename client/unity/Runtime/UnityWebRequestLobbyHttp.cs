@@ -6,12 +6,13 @@ using System.Threading.Tasks;
 using Roost.Client.Relay;
 using UnityEngine.Networking;
 
-namespace Roost.RelaySmoke
+namespace Roost.Unity
 {
     /// <summary>
     /// LobbyClient 的 HTTP 经 UnityWebRequest 发（ILobbyHttp，WebGL A1）：WebGL 上 HttpClient 自带的网络不可用（浏览器沙箱里没有套接字，
-    /// 只能经 fetch / XHR，Unity 里就是 UnityWebRequest）。SDK 不带它（参考写法），编辑器与其他平台上也能用。
-    /// 用法：new LobbyClient(url, gt2, new UnityWebRequestLobbyHttp(), pumpDriven: true)（WebGL 上与 RelayClientOptions.PumpDriven 一起开）。
+    /// 只能经 fetch / XHR，Unity 里就是 UnityWebRequest）。随 Unity 包提供（维护者 2026-11-18 定方案 B），编辑器与其他平台上也能用。
+    /// WebGL 上一般经 RoostPlatform.CreateLobby 拿到 LobbyClient；直接用时 new LobbyClient(url, gt2, new UnityWebRequestLobbyHttp(), pumpDriven: true)
+    /// （与 RelayClientOptions.PumpDriven 一起开）。
     ///
     /// UnityWebRequest 只能在主线程上用：在主线程上调时直接发；SDK 不是 PumpDriven 时可能在后台线程上调 lobby（断线重连），
     /// 那时投到构造时所在线程的 SynchronizationContext（Unity 主线程）再发。答复在主线程的 completed 回调里交回（任务在主线程上完成）。

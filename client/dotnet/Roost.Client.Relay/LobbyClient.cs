@@ -143,8 +143,8 @@ namespace Roost.Client.Relay
 
     /// <summary>
     /// LobbyClient 发 HTTP 请求的方式（WebGL A1，维护者 2026-11-18）。缺省 <see cref="HttpClientLobbyHttp"/>（HttpClient）；
-    /// Unity WebGL 上 HttpClient 自带的网络用不了，游戏用 UnityWebRequest 实现它（参考写法见 client/dotnet/unity-webgl-smoke 的
-    /// UnityWebRequestLobbyHttp），并让返回的任务在主线程上完成。
+    /// Unity WebGL 上 HttpClient 自带的网络用不了，用 UnityWebRequest 实现它、返回的任务在主线程上完成（Unity 包的
+    /// UnityWebRequestLobbyHttp；RoostPlatform.CreateLobby 在 WebGL 上用它）。
     ///
     /// 约定：method 是 GET / POST；bearer 是游戏账号 token（Authorization: Bearer）；jsonBody 不为 null 时以 application/json
     /// 发出。4xx / 5xx 照常返回答复（LobbyClient 要读 lobby 的错误 JSON），只有连不上等网络错误抛异常。

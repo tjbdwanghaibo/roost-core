@@ -23,7 +23,7 @@ p.add_argument("--arch", choices=["arm64"], default="arm64")
 p.add_argument(
     "--managed-only",
     action="store_true",
-    help="托管路线只要 Roost.Client.dll 与 RoostClientDriver：不构建 native 插件、不生成原生示例，只需要 .NET SDK",
+    help="托管路线（Roost.Client.dll、Roost.Client.Relay.dll、RoostClientDriver 与 WebGL 浏览器桥接）：不构建 native 插件、不生成原生示例，只需要 .NET SDK",
 )
 a = p.parse_args()
 root = pathlib.Path(__file__).resolve().parents[2]
@@ -100,17 +100,21 @@ if not a.managed_only:
         [cmake, "--build", str(out / "build"), "--config", "Release", "--parallel", "4"],
         check=True,
     )
-subprocess.run(
-    [
-        "dotnet",
-        "build",
-        str(root / "client/dotnet/Roost.Client/Roost.Client.csproj"),
-        "-c",
-        "Release",
-        "--disable-build-servers",
-    ],
-    check=True,
-)
+# 两个托管 SDK 都进包：Roost.Client（连玩家接入）与 Roost.Client.Relay（开房间）；Runtime 里的 WebGL 浏览器桥接
+# （BrowserWebSocket + RoostWebSocket.jslib）与 RoostPlatform 同时实现两边的传输，缺一个 Roost.Unity 编译不过。
+managed = ["Roost.Client", "Roost.Client.Relay"]
+for assembly in managed:
+    subprocess.run(
+        [
+            "dotnet",
+            "build",
+            str(root / "client/dotnet" / assembly / (assembly + ".csproj")),
+            "-c",
+            "Release",
+            "--disable-build-servers",
+        ],
+        check=True,
+    )
 package = out / "com.roost.client"
 shutil.copytree(root / "client/unity", package)
 shutil.copytree(root / "client/cpp/unity", package / "Runtime/Native")
@@ -135,10 +139,11 @@ if not a.managed_only:
         check=True,
     )
     shutil.copy2(proto.parent / "dao_sync_apply.cs", generated / "DaoSyncApply.cs")
-shutil.copy2(
-    root / "client/dotnet/Roost.Client/bin/Release/netstandard2.1/Roost.Client.dll",
-    package / "Runtime/Roost.Client.dll",
-)
+for assembly in managed:
+    shutil.copy2(
+        root / "client/dotnet" / assembly / "bin/Release/netstandard2.1" / (assembly + ".dll"),
+        package / "Runtime" / (assembly + ".dll"),
+    )
 name = {
     "macos": "libroost_client.dylib",
     "linux": "libroost_client.so",

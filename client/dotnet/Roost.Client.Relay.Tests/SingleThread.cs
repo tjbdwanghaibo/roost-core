@@ -15,7 +15,7 @@ using Roost.Client.Relay;
 // 单线程调度（WebGL A1，维护者 2026-11-18）：在一个“像 Unity WebGL 主线程”的环境里跑 RelayClientOptions.PumpDriven 的关键路径。
 //
 // 环境（StrictLoop）：一个专用线程 + 只在这个线程上执行的 SynchronizationContext；每一轮先执行投进来的续行，再轮询连接与 HTTP，
-// 再对每个客户端调 Pump，像 Unity 每帧先 BrowserRelayTransport.PollAll() 再 Pump。WebGL 上线程池、计时器不运行，这里没法让它们
+// 再对每个客户端调 Pump，像 Unity 每帧先 RoostPlatform.Poll()（轮询浏览器桥接）再 Pump。WebGL 上线程池、计时器不运行，这里没法让它们
 // 不运行，改成“用了就记一笔”：
 //   - 往这个上下文投续行的必须是这个线程自己（Task.Delay、CancelAfter、IO 线程完成的任务把续行投回来时，调用者是别的线程）；
 //   - SDK 调传输（ConnectAsync / Send / ReceiveAsync / Dispose）与 lobby HTTP 的线程必须是这个线程（Task.Run 起的读循环、心跳，

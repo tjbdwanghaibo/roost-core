@@ -352,7 +352,7 @@ internal static partial class Program
         private readonly List<(Func<bool> done, DateTime deadline, TaskCompletionSource<bool> signal)> waits = new List<(Func<bool>, DateTime, TaskCompletionSource<bool>)>();
         private readonly List<GameClient> clients = new List<GameClient>();
         public readonly ConcurrentQueue<string> Violations = new ConcurrentQueue<string>();
-        /// <summary>每一轮 Pump 之前调用（像 Unity 每帧先 BrowserGateTransport.PollAll 再 Pump）。</summary>
+        /// <summary>每一轮 Pump 之前调用（像 Unity 每帧先 BrowserWebSocket.PollAll 再 Pump）。</summary>
         public readonly List<Action> BeforePump = new List<Action>();
         /// <summary>这些客户端这一轮不 Pump（模拟游戏不调 Pump）。</summary>
         public readonly HashSet<GameClient> Paused = new HashSet<GameClient>();
@@ -482,7 +482,7 @@ internal static partial class Program
     internal interface IPolled { void Poll(); }
 
     /// <summary>
-    /// 像浏览器 WebSocket 桥接（unity-webgl-smoke 的 BrowserGateTransport + jslib）的连接：“浏览器”一侧是线程池上的 ClientWebSocket，
+    /// 像浏览器 WebSocket 桥接（Unity 包的 BrowserWebSocket + jslib）的连接：“浏览器”一侧是线程池上的 ClientWebSocket，
     /// 收到的消息排成字节队列；SDK 看到的任务只在 loop 线程的轮询里完成，SendAsync 交给“浏览器”后同步完成。SDK 在别的线程上调它时记违规。
     /// </summary>
     private sealed class PolledWebSocketTransport : IGateTransport, IPolled

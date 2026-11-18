@@ -1,8 +1,8 @@
-// Unity WebGL 上 relay 连接的浏览器一侧（参考写法，SDK 不带它；C# 一侧见 Assets/RelaySmoke/BrowserRelayTransport.cs）。
-// 不从 JS 回调 C#：收到的二进制消息排成字节队列，C# 每帧轮询（RoostWsReceive / RoostWsState）。
-// 状态码：0 连接中、1 已连上、2 已关闭、3 出错（与 BrowserRelayTransport 的常量一致）。
-// relay 发来的每条消息恰好一帧，但这里按字节流交出，不依赖这一点；文本消息当协议错误，关掉连接。
-var RoostRelayWebSocket = {
+// Unity WebGL 上浏览器 WebSocket 的 JS 一侧（Roost.Unity 包，维护者 2026-11-18 定方案 B；C# 一侧见 ../BrowserWebSocket.cs，
+// 连玩家接入与开房间 relay 共用）。不从 JS 回调 C#：收到的二进制消息排成字节队列，C# 每帧轮询（RoostWsReceive / RoostWsState）。
+// 状态码：0 连接中、1 已连上、2 已关闭、3 出错（与 BrowserWebSocket 的常量一致）。
+// 两边的服务端每条消息恰好一帧，但这里按字节流交出，不依赖这一点；文本消息当协议错误，关掉连接。
+var RoostWebSocket = {
   $RoostWs: { next: 1, sockets: {} },
 
   RoostWsOpen: function (urlPtr) {
@@ -81,5 +81,5 @@ var RoostRelayWebSocket = {
   },
 };
 
-autoAddDeps(RoostRelayWebSocket, "$RoostWs");
-mergeInto(LibraryManager.library, RoostRelayWebSocket);
+autoAddDeps(RoostWebSocket, "$RoostWs");
+mergeInto(LibraryManager.library, RoostWebSocket);

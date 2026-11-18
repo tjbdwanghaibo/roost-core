@@ -19,8 +19,8 @@ namespace Roost.Client
         public string? WebSocketUrl { get; set; }
         /// <summary>
         /// 每次连接（含自动重连）新建一个传输。null 时按 WebSocketUrl 用 SDK 自带的 WebSocketGateTransport，否则 TcpGateTransport。
-        /// Unity WebGL 上没有套接字，填一个用浏览器 WebSocket 实现的 IGateTransport（参考 client/dotnet/unity-webgl-smoke 的
-        /// BrowserGateTransport），同时设 WebSocketUrl。传输的 ConnectAsync 收到的地址是 WebSocketUrl，没设时是 host:port。
+        /// Unity WebGL 上没有套接字，用浏览器 WebSocket 实现的 IGateTransport（Unity 包的 BrowserWebSocket；RoostPlatform.Configure
+        /// 在 WebGL 上替你填，同时要求设了 WebSocketUrl）。传输的 ConnectAsync 收到的地址是 WebSocketUrl，没设时是 host:port。
         /// </summary>
         public Func<IGateTransport>? TransportFactory { get; set; }
         /// <summary>

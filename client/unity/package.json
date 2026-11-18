@@ -1,9 +1,12 @@
 {
   "name": "com.roost.client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "displayName": "Roost Client",
-  "description": "Roost managed and native TCP clients. Build the complete package with scripts/client/build-unity.py.",
+  "description": "Roost managed and native TCP clients, the relay (party room) client, and the Unity WebGL browser WebSocket bridge. Build the complete package with scripts/client/build-unity.py.",
   "unity": "2021.3",
+  "dependencies": {
+    "com.unity.modules.unitywebrequest": "1.0.0"
+  },
   "samples": [
     {
       "displayName": "Native Session",

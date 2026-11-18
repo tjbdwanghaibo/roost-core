@@ -1,4 +1,4 @@
-// 在 node 里核对 RoostRelayWebSocket.jslib 的逻辑（不经 Unity、不经浏览器）：用最小的 Emscripten 替身（mergeInto、HEAPU8、
+// 在 node 里核对 Unity 包的 RoostWebSocket.jslib（client/unity/Runtime/WebGL）的逻辑（不经 Unity、不经浏览器）：用最小的 Emscripten 替身（mergeInto、HEAPU8、
 // UTF8ToString）加载 jslib，再用 node 自带的 WebSocket 连真实的测试对端（client/relay/peer_test.go）：经 lobby 要 ws 地址，
 // 令牌与 Ping 分两条消息发（一条一帧），每次只收 7 字节（逼出跨消息、跨帧的拼接），解出 Welcome 与 Pong，最后关闭。
 // 它只证明 jslib 里的 JS 对；Unity 的 DllImport 封送、WebGL 构建与浏览器里的行为仍要按 README 在 WebGL 构建里看。
@@ -25,7 +25,7 @@ globalThis.UTF8ToString = (ptr) => {
   while (HEAPU8[end] !== 0) end++;
   return new TextDecoder().decode(HEAPU8.subarray(ptr, end));
 };
-vm.runInThisContext(readFileSync(join(here, "Assets/Plugins/WebGL/RoostRelayWebSocket.jslib"), "utf8"));
+vm.runInThisContext(readFileSync(join(here, "../../unity/Runtime/WebGL/RoostWebSocket.jslib"), "utf8"));
 globalThis.RoostWs = library.$RoostWs; // Emscripten 把 $RoostWs 变成全局的 RoostWs
 const lib = library;
 

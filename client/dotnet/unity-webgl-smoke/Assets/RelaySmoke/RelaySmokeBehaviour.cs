@@ -8,8 +8,8 @@ namespace Roost.RelaySmoke
 {
     /// <summary>
     /// 播放器（WebGL 或桌面）里的冒烟入口：Start 读设置并开始，Update 每帧驱动（先浏览器桥接、再 Pump），OnGUI 显示日志。
-    /// 设置来源：WebGL 页面 URL 的查询参数（?lobby=/lobby&amp;transport=ws&amp;hold=40），桌面播放器的命令行（-roostLobby、
-    /// -roostTransport、-roostHold）。WebGL 上缺省用 .jslib 的浏览器 WebSocket、lobby 走同源的 /lobby（serve.mjs 代理）。
+    /// 设置来源：WebGL 页面 URL 的查询参数（?lobby=/lobby&amp;hold=40），桌面播放器的命令行（-roostLobby、-roostTransport、
+    /// -roostHold、-roostPumpDriven）。WebGL 上由 Unity 包的 RoostPlatform 选浏览器 WebSocket 与 PumpDriven，lobby 走同源的 /lobby（serve.mjs 代理）。
     /// </summary>
     public sealed class RelaySmokeBehaviour : MonoBehaviour
     {
@@ -21,11 +21,8 @@ namespace Roost.RelaySmoke
         {
             var config = new RelaySmokeConfig();
 #if UNITY_WEBGL && !UNITY_EDITOR
-            config.BrowserWebSocket = true;
-            var page = new Uri(Application.absoluteURL);
-            config.PumpDriven = Query(page.Query, "pump") != "0"; // WebGL 上必开；pump=0 只为看清修前卡在哪
+            var page = new Uri(Application.absoluteURL); // 传输与 PumpDriven 由 RoostPlatform 选（浏览器 WebSocket、PumpDriven）
             config.LobbyUrl = new Uri(page, Query(page.Query, "lobby") ?? "/lobby").ToString().TrimEnd('/');
-            if (Query(page.Query, "transport") == "tcp") config.Transport = RelayTransport.Tcp; // WebGL 上连不了 TCP：只为看清错误
             if (float.TryParse(Query(page.Query, "hold"), out float hold)) config.HoldSeconds = hold;
 #else
             var args = Environment.GetCommandLineArgs();

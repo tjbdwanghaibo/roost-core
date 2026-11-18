@@ -45,7 +45,7 @@ echo "test-client-dotnet: the C# client over WebSocket (embedded TCP and standal
 ROOST_CLIENT_TEST_DLL="$repo_dir/client/dotnet/Roost.Client.Tests/bin/Debug/net10.0/Roost.Client.Tests.dll" \
   GOWORK=off go test -count=1 -run '^TestTheCSharpClientWorksOverWebSocket' ./infra/network/gateway
 
-# WebGL 浏览器桥接的 jslib：拆开 / 合并 / 接近上限的帧经它的字节队列拼回完整、有序（node 自带 WebSocket，不要对端）。没有 node 时跳过。
+# Unity 包里 WebGL 浏览器桥接的 jslib（client/unity/Runtime/WebGL/RoostWebSocket.jslib）：拆开 / 合并 / 接近上限的帧经它的字节队列拼回完整、有序（node 自带 WebSocket，不要对端）。没有 node 时跳过。
 if command -v node >/dev/null 2>&1; then
   echo "test-client-dotnet: WebGL bridge jslib framing (node)"
   node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs

@@ -1,8 +1,8 @@
-// 在 node 里核对 RoostRelayWebSocket.jslib（开房间 SDK 的 BrowserRelayTransport 与连玩家接入的 BrowserGateTransport 共用）
+// 在 node 里核对 Unity 包的 RoostWebSocket.jslib（client/unity/Runtime/WebGL；BrowserWebSocket 连玩家接入与开房间 relay 共用）
 // 交出的字节能拼回完整、有序的 RS v2 帧，不依赖消息边界。不要 Go 对端：脚本自己起一个最小的 WebSocket 服务端（RFC 6455），
 // 用 node 自带的 WebSocket 当浏览器，按 jslib 的做法加载它（Emscripten 替身同 check-jslib.mjs）。
 //   服务端发：一帧拆成三条消息、三帧合成一条消息、接近 1 MiB 上限的大帧（一条消息）、再一帧；最后一条文本消息。
-//   客户端按两种长度取（每次 7 字节 / 每次 64 KiB，与 BrowserGateTransport 的中转缓冲相同）拼帧，逐帧比对内容与顺序；
+//   客户端按两种长度取（每次 7 字节 / 每次 64 KiB，与 BrowserWebSocket 的中转缓冲相同）拼帧，逐帧比对内容与顺序；
 //   RoostWsSend 两次，服务端核对恰好两条消息、每条一帧；文本消息之后状态是 3（出错）。
 //   node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs
 import { createHash } from "node:crypto";
@@ -25,7 +25,7 @@ globalThis.UTF8ToString = (ptr) => {
   while (HEAPU8[end] !== 0) end++;
   return new TextDecoder().decode(HEAPU8.subarray(ptr, end));
 };
-vm.runInThisContext(readFileSync(join(here, "Assets/Plugins/WebGL/RoostRelayWebSocket.jslib"), "utf8"));
+vm.runInThisContext(readFileSync(join(here, "../../unity/Runtime/WebGL/RoostWebSocket.jslib"), "utf8"));
 globalThis.RoostWs = library.$RoostWs;
 const lib = library;
 

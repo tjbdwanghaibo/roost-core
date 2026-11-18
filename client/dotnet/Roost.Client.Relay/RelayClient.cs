@@ -41,7 +41,7 @@ namespace Roost.Client.Relay
         /// 重连退避都由 Pump 按时钟检查。代价：游戏不调 Pump（加载场景、切后台时 Unity 停了循环）就不发心跳、不判超时、
         /// 不重连——超过 relay 的 idle_timeout（缺省 30s）会被 relay 断开，恢复 Pump 后按 ReconnectAttempts 重连回来。
         /// 要求：只在一个线程（有 SynchronizationContext 的主线程）上调用本类的方法；传入的 LobbyClient 也要以 pumpDriven 构造；
-        /// 传输的 ConnectAsync / ReceiveAsync 在同一线程上完成（例如 unity-webgl-smoke 的 BrowserRelayTransport：每帧先
+        /// 传输的 ConnectAsync / ReceiveAsync 在同一线程上完成（例如 Unity 包的 BrowserWebSocket：每帧先
         /// PollAll 再 Pump）。
         /// </summary>
         public bool PumpDriven { get; set; }

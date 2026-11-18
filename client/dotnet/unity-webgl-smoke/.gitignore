@@ -8,7 +8,6 @@
 *.csproj
 *.sln
 *.meta
-/Assets/Plugins/*.dll
 /Assets/RelaySmoke.unity
 /ProjectSettings/*
 !/ProjectSettings/ProjectVersion.txt

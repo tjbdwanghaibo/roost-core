@@ -5,24 +5,24 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Roost.Client.Relay;
+using Roost.Unity;
 
 namespace Roost.RelaySmoke
 {
-    /// <summary>冒烟的设置：lobby 地址、传输、是否用浏览器 WebSocket 桥接、在房间里停多久。</summary>
+    /// <summary>冒烟的设置：lobby 地址、传输、在房间里停多久。WebGL 上的传输与调度由 Unity 包的 RoostPlatform 选。</summary>
     public sealed class RelaySmokeConfig
     {
         /// <summary>lobby 的根地址；WebGL 页面上用同源代理（serve.mjs 的 /lobby）。</summary>
         public string LobbyUrl = "http://127.0.0.1:8787/lobby";
+        /// <summary>编辑器 / 桌面播放器连 relay 的方式；WebGL 上 RoostPlatform.Configure 换成 Ws。</summary>
         public RelayTransport Transport = RelayTransport.Ws;
-        /// <summary>true 时用 .jslib 的浏览器 WebSocket（只在 WebGL 播放器里有）；false 时用 SDK 自带的 TCP / ClientWebSocket。</summary>
-        public bool BrowserWebSocket;
         /// <summary>连上之后在房间里停的秒数：要大于 relay 的 idle_timeout（缺省 30s），才能看出心跳任务在不在跑。</summary>
         public float HoldSeconds = 40;
         /// <summary>账号名前缀（测试对端的 /harness/game-token 按它签 gt2）。</summary>
         public string Account = "unity-smoke";
         /// <summary>
-        /// RelayClientOptions.PumpDriven 与 LobbyClient 的 pumpDriven（WebGL A1，维护者 2026-11-18）：WebGL 上必开（缺省开，页面参数
-        /// pump=0 关掉看修前的卡住）；编辑器 / 桌面播放器缺省关（现在的线程池调度），ROOST_SMOKE_PUMP_DRIVEN=1 / -roostPumpDriven 打开。
+        /// RelayClientOptions.PumpDriven 与 LobbyClient 的 pumpDriven（WebGL A1，维护者 2026-11-18）：WebGL 上由 RoostPlatform 打开；
+        /// 编辑器 / 桌面播放器缺省关（线程池调度），ROOST_SMOKE_PUMP_DRIVEN=1 / -roostPumpDriven 打开。
         /// </summary>
         public bool PumpDriven;
     }
@@ -36,7 +36,8 @@ namespace Roost.RelaySmoke
     /// 1. 探针：单独起上面每一种调度原语，看它们在规定时间内有没有完成（等待按帧计时，不借助被测的原语）；
     /// 2. 端到端：同一进程里一个房主一个成员，经 lobby 建房 / 加入 → 连 relay → 成员发、房主收，房主广播、成员收，房间通道 →
     ///    停 HoldSeconds 秒（超过 relay 的空闲超时）后两边仍在线且 Rtt 非 0（心跳在跑）→ 离开（成员正常离开 RoomGone 为 false）。
-    ///    WebGL 上 SDK 以 PumpDriven 跑（WebGL A1）：心跳、超时都在 Pump 里，所有续行回主线程；lobby 的 HTTP 经 UnityWebRequestLobbyHttp。
+    ///    选项与 lobby 经 Unity 包的 RoostPlatform（游戏同样的写法）：WebGL 上换成包里的浏览器 WebSocket 桥接、打开 PumpDriven
+    ///    （心跳、超时都在 Pump 里，所有续行回主线程），lobby 的 HTTP 经包里的 UnityWebRequestLobbyHttp。
     ///
     /// 由宿主每帧调 Tick（播放器里是 RelaySmokeBehaviour.Update，编辑器批处理里是 EditorApplication.update）；结果写成
     /// “SMOKE ...”开头的日志行，最后一行是 “SMOKE PASS” 或 “SMOKE FAIL ...”。本类自己的等待都按帧检查，不用 Task.Delay。
@@ -50,6 +51,8 @@ namespace Roost.RelaySmoke
             new List<(Func<bool>, double, TaskCompletionSource<bool>)>();
         private readonly List<RelayClient> clients = new List<RelayClient>();
         private readonly int mainThread = Thread.CurrentThread.ManagedThreadId;
+        /// <summary>经 RoostPlatform.Configure 之后实际用的传输（WebGL 上是 Ws）；建房 / 加入请求填它。</summary>
+        private RelayTransport transport;
         private double started;
         private string? step;
         private double stepAt;
@@ -70,9 +73,9 @@ namespace Roost.RelaySmoke
             try
             {
                 started = now();
-                Log($"start: lobby {config.LobbyUrl}, transport {config.Transport}, browser websocket {config.BrowserWebSocket}, pump driven {config.PumpDriven}, main thread {mainThread}");
+                Log($"start: lobby {config.LobbyUrl}, transport {config.Transport}, in browser {RoostPlatform.InBrowser}, pump driven {config.PumpDriven || RoostPlatform.InBrowser}, main thread {mainThread}");
                 await ProbesAsync();
-                if (config.BrowserWebSocket) await BridgeAsync();
+                if (RoostPlatform.InBrowser) await BridgeAsync();
                 await EndToEndAsync();
                 Passed = true;
                 Log("PASS");
@@ -99,7 +102,7 @@ namespace Roost.RelaySmoke
                 Finished = true;
                 return;
             }
-            if (config.BrowserWebSocket) BrowserRelayTransport.PollAll();
+            RoostPlatform.Poll(); // 游戏同样的写法：每帧先轮询浏览器桥接（其他平台什么也不做），再 Pump
             foreach (var client in clients.ToArray()) client.Pump();
             double t = now();
             for (int i = waits.Count - 1; i >= 0; i--)
@@ -181,7 +184,7 @@ namespace Roost.RelaySmoke
 
         /// <summary>
         /// 只在浏览器 WebSocket 下跑：不经 RelayClient、LobbyClient 与 HttpClient，用 UnityWebRequest 直接向 lobby 要 gt2 与 ws 票据，
-        /// 用 BrowserRelayTransport 连 relay、发令牌与 Ping、收 Welcome 与 Pong。等待都不加 ConfigureAwait(false)（续行回主线程），
+        /// 用包里的 BrowserWebSocket 连 relay、发令牌与 Ping、收 Welcome 与 Pong。等待都不加 ConfigureAwait(false)（续行回主线程），
         /// 读字节也不经 RelayCodec.ReadAsync（它内部用 ConfigureAwait(false)）。用来把“桥接（jslib + DllImport）能不能用”与
         /// “SDK 的调度在单线程下能不能跑”分开。
         /// </summary>
@@ -192,14 +195,14 @@ namespace Roost.RelaySmoke
             var reply = await RawPostAsync(config.LobbyUrl + "/rooms", "{\"game\":\"party\",\"mode\":\"bridge\",\"transport\":\"ws\"}", gt1);
             string url = Field(reply, "relay_addr"), token = Field(reply, "token");
             Step("bridge: open " + url);
-            var transport = new BrowserRelayTransport();
-            await transport.ConnectAsync(url, CancellationToken.None);
-            transport.Send(RelayCodec.EncodeToken(token));
-            transport.Send(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Ping, new byte[] { 1, 2, 3 })));
+            IRelayTransport socket = new BrowserWebSocket();
+            await socket.ConnectAsync(url, CancellationToken.None);
+            socket.Send(RelayCodec.EncodeToken(token));
+            socket.Send(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Ping, new byte[] { 1, 2, 3 })));
             Step("bridge: read welcome and pong");
-            var welcome = await ReadFrameAsync(transport);
-            var pong = await ReadFrameAsync(transport);
-            transport.Dispose();
+            var welcome = await ReadFrameAsync(socket);
+            var pong = await ReadFrameAsync(socket);
+            socket.Dispose();
             Require(welcome.MessageId == RelayOps.Welcome && RelayCodec.DecodeWelcome(welcome.Slot, welcome.Payload.Span).IsHost, "bridge welcome");
             Require(pong.MessageId == RelayOps.Pong && pong.Payload.Length == 3, "bridge pong");
             Log("bridge: ok (UnityWebRequest lobby → jslib WebSocket → welcome + pong, awaits on the Unity context)");
@@ -260,11 +263,11 @@ namespace Roost.RelaySmoke
 
         private async Task EndToEndAsync()
         {
-            Step("end to end: lobby (LobbyClient + UnityWebRequestLobbyHttp)");
+            Step("end to end: lobby (LobbyClient via RoostPlatform)");
             var host = await PlayerAsync(config.Account + "-host");
             var member = await PlayerAsync(config.Account + "-m2");
 
-            var ticket = await host.lobby.CreateRoomAsync(new CreateRoomRequest { Game = "party", Mode = "smoke", Transport = config.Transport });
+            var ticket = await host.lobby.CreateRoomAsync(new CreateRoomRequest { Game = "party", Mode = "smoke", Transport = transport });
             Log($"lobby created room {ticket.Room.Id}, relay {ticket.RelayAddr}");
             Step("end to end: host connect (RelayClient.ConnectAsync)");
             var hostWelcome = await host.client.ConnectAsync(ticket);
@@ -272,7 +275,7 @@ namespace Roost.RelaySmoke
             Log("host connected: " + hostWelcome);
 
             Step("end to end: member join and connect");
-            var joined = await member.lobby.JoinRoomAsync(ticket.Room.Id, new JoinRoomRequest { Game = "party", Transport = config.Transport });
+            var joined = await member.lobby.JoinRoomAsync(ticket.Room.Id, new JoinRoomRequest { Game = "party", Transport = transport });
             var memberWelcome = await member.client.ConnectAsync(joined);
             Require(!memberWelcome.IsHost && memberWelcome.Slot == 2, "member welcome " + memberWelcome);
             Log("member connected: " + memberWelcome);
@@ -323,9 +326,12 @@ namespace Roost.RelaySmoke
             // 测试对端签 gt2（client/relay/peer_test.go 的 /harness/game-token）；正式游戏从账号服务拿。
             string token = Field(await RawPostAsync(config.LobbyUrl + "/harness/game-token", "{\"account\":\"" + account + "\"}", null), "token");
 
-            var player = new SmokePlayer { lobby = new LobbyClient(config.LobbyUrl, token, new UnityWebRequestLobbyHttp(), config.PumpDriven) };
-            var options = new RelayClientOptions { Game = "party", Transport = config.Transport, PumpDriven = config.PumpDriven };
-            if (config.BrowserWebSocket) options.TransportFactory = () => new BrowserRelayTransport();
+            // 游戏同样的写法：RoostPlatform.Configure 在 WebGL 上换成浏览器 WebSocket、Ws、PumpDriven，其他平台原样返回。
+            var options = RoostPlatform.Configure(new RelayClientOptions { Game = "party", Transport = config.Transport, PumpDriven = config.PumpDriven });
+            transport = options.Transport;
+            // WebGL 上 RoostPlatform.CreateLobby（UnityWebRequest、pumpDriven）；编辑器 / 桌面照旧用 UnityWebRequestLobbyHttp，pumpDriven 跟着选项。
+            var lobby = RoostPlatform.InBrowser ? RoostPlatform.CreateLobby(config.LobbyUrl, token) : new LobbyClient(config.LobbyUrl, token, new UnityWebRequestLobbyHttp(), options.PumpDriven);
+            var player = new SmokePlayer { lobby = lobby };
             player.client = new RelayClient(player.lobby, options);
             player.client.GameFrame += player.game.Add;   // 回调都在 Pump 里、主线程上
             player.client.RoomFrame += player.room.Add;

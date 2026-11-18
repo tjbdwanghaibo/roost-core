@@ -7,10 +7,10 @@ using UnityEngine;
 namespace Roost.GateSmoke
 {
     /// <summary>
-    /// 播放器（WebGL 或桌面）里的连玩家接入冒烟入口。网络由托管包的 RoostClientDriver 每帧驱动——WebGL 上
-    /// Attach(client, BrowserGateTransport.PollAll)，即游戏照抄的接法；本组件的 LateUpdate 只做判定，OnGUI 显示日志。
+    /// 播放器（WebGL 或桌面）里的连玩家接入冒烟入口。网络由 Unity 包的 RoostClientDriver 每帧驱动（先轮询浏览器桥接再 Pump），
+    /// 与游戏的接法相同；本组件的 LateUpdate 只做判定，OnGUI 显示日志。
     /// 设置来源：WebGL 页面 URL 的查询参数（?ws=ws://127.0.0.1:7080/ws&amp;hold=100，serve-gate.mjs 自动补上），桌面播放器的命令行
-    /// （-roostWs、-roostHold）。WebGL 上用浏览器 WebSocket 且必开 PumpDriven。
+    /// （-roostWs、-roostHold）。WebGL 上的浏览器 WebSocket 与 PumpDriven 由 RoostPlatform.Configure 选。
     /// </summary>
     public sealed class GateSmokeBehaviour : MonoBehaviour
     {
@@ -22,8 +22,6 @@ namespace Roost.GateSmoke
         {
             var config = new GateSmokeConfig();
 #if UNITY_WEBGL && !UNITY_EDITOR
-            config.BrowserWebSocket = true;
-            config.PumpDriven = true;
             var page = new Uri(Application.absoluteURL);
             config.Url = Query(page.Query, "ws") ?? config.Url;
             if (float.TryParse(Query(page.Query, "hold"), out float hold)) config.HoldSeconds = hold;
@@ -36,12 +34,7 @@ namespace Roost.GateSmoke
             }
 #endif
             smoke = new GateSmoke(config, Write, () => Time.realtimeSinceStartupAsDouble);
-            var driver = gameObject.AddComponent<RoostClientDriver>();
-#if UNITY_WEBGL && !UNITY_EDITOR
-            driver.Attach(smoke.Client, BrowserGateTransport.PollAll); // 每帧先收浏览器的字节，再 Pump
-#else
-            driver.Attach(smoke.Client);
-#endif
+            gameObject.AddComponent<RoostClientDriver>().Attach(smoke.Client); // 每帧先收浏览器的字节（WebGL），再 Pump
             _ = smoke.RunAsync();
         }
 
