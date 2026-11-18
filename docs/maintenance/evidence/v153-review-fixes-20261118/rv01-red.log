@@ -1,0 +1,11 @@
+2026/11/18 08:24:37 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=57.25µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving
+--- PASS: TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving (0.00s)
+=== RUN   TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged
+    mailbox_rehome_test.go:177: leave hook with server 3's mail not merged (mailbox full, watermark 0): err = <nil>; want the move refused with mail's ErrMailboxFull
+--- FAIL: TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged (0.00s)
+=== RUN   TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails
+--- PASS: TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails (0.00s)
+FAIL
+FAIL	example.com/rvfix/game/controllers	0.555s
+FAIL

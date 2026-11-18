@@ -1,0 +1,7 @@
+2026/11/18 08:25:04 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=23.542µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+    room_presence_test.go:176: no disconnect, want {roomID:2 playerID:102 epoch:1}
+--- FAIL: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (2.06s)
+FAIL
+FAIL	example.com/rvfix/game/modules/room	2.805s
+FAIL

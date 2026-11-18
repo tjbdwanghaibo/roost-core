@@ -1,0 +1,21 @@
+=== RUN   TestClientConfigCSharpRuntime
+--- PASS: TestClientConfigCSharpRuntime (4.26s)
+=== RUN   TestSDKGoogleProtobufVersionMatchesCodecs
+--- PASS: TestSDKGoogleProtobufVersionMatchesCodecs (0.00s)
+=== RUN   TestClientExportSpecValidation
+=== RUN   TestUndeclaredClientExportChangesNothing
+=== RUN   TestGenerateClientExport
+=== RUN   TestClientExportNamespace
+=== RUN   TestClientExportProtocVersion
+--- PASS: TestClientExportProtocVersion (1.28s)
+=== RUN   TestClientExportTransactionalCommitAndRetirement
+=== RUN   TestClientSync
+=== RUN   TestModuleGMScenariosAndMutations
+--- PASS: TestModuleGMScenariosAndMutations (104.63s)
+--- PASS: TestClientExportSpecValidation (0.00s)
+--- PASS: TestUndeclaredClientExportChangesNothing (0.00s)
+--- PASS: TestClientExportNamespace (1.92s)
+--- PASS: TestClientSync (2.82s)
+--- PASS: TestClientExportTransactionalCommitAndRetirement (3.69s)
+--- PASS: TestGenerateClientExport (3.94s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	114.717s

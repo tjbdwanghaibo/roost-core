@@ -1,0 +1,8 @@
+--- FAIL: TestLazyBroadcastSummaryReportsAMergeThatDidNotCatchUp (0.01s)
+    --- FAIL: TestLazyBroadcastSummaryReportsAMergeThatDidNotCatchUp/local (0.00s)
+        broadcast_test.go:464: summary with a broadcast that does not fit = {PlayerID:7 Unread:200 Evicted:0 BroadcastsBehind:false}, <nil>; want success with BroadcastsBehind
+    --- FAIL: TestLazyBroadcastSummaryReportsAMergeThatDidNotCatchUp/bus (0.00s)
+        broadcast_test.go:464: summary with a broadcast that does not fit = {PlayerID:7 Unread:200 Evicted:0 BroadcastsBehind:false}, <nil>; want success with BroadcastsBehind
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/mail	1.040s
+FAIL

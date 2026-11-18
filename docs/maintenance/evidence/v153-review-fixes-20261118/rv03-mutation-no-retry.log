@@ -1,0 +1,8 @@
+2026/11/18 08:28:25 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=57.417µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestRoomPresenceRetriesAFailedDisconnectAndGivesUp
+2026/11/18 08:28:25 WARN room presence: gave up marking a closed connection offline room_id=1 player_id=101 epoch=3 err="room store unavailable"
+    room_presence_test.go:157: a failed disconnect dropped the seat: 0 tracked
+--- FAIL: TestRoomPresenceRetriesAFailedDisconnectAndGivesUp (0.05s)
+FAIL
+FAIL	example.com/rvfix/game/modules/room	0.593s
+FAIL

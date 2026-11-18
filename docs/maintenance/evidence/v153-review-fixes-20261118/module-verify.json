@@ -1,0 +1,65 @@
+{
+  "modules": [
+    {
+      "name": "mailbox",
+      "want": 33,
+      "passed": 33,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+rehome",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 62,
+      "passed": 62,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "room",
+      "want": 34,
+      "passed": 34,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}

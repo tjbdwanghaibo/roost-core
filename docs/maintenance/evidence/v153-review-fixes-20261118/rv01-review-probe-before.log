@@ -1,0 +1,15 @@
+2026/11/18 08:24:47 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=29.291µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestReviewMailboxRehomeFull
+=== RUN   TestReviewMailboxRehomeFull/full_false
+    review_full_probe_test.go:54: leave hook err=<nil> entries=200 watermark=2
+    review_full_probe_test.go:74: after new-server pull and freeing space: old=true new-before=false watermark=2
+=== RUN   TestReviewMailboxRehomeFull/full_true
+    review_full_probe_test.go:54: leave hook err=<nil> entries=200 watermark=0
+    review_full_probe_test.go:74: after new-server pull and freeing space: old=false new-before=true watermark=2
+    review_full_probe_test.go:76: move succeeded but broadcast ownership changed: old=false want true; new-before=true want false
+--- FAIL: TestReviewMailboxRehomeFull (0.00s)
+    --- PASS: TestReviewMailboxRehomeFull/full_false (0.00s)
+    --- FAIL: TestReviewMailboxRehomeFull/full_true (0.00s)
+FAIL
+FAIL	example.com/rvfix/game/controllers	0.543s
+FAIL

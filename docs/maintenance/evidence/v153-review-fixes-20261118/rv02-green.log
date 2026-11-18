@@ -1,0 +1,8 @@
+=== RUN   TestGenerateCSharp
+--- PASS: TestGenerateCSharp (0.00s)
+=== RUN   TestGenerateCSharpRenamesIdentifiersThatClashWithItsOwnSymbols
+--- PASS: TestGenerateCSharpRenamesIdentifiersThatClashWithItsOwnSymbols (0.00s)
+=== RUN   TestGenerateCSharpCompiles
+--- PASS: TestGenerateCSharpCompiles (1.20s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	1.664s

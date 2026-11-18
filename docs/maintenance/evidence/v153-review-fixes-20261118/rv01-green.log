@@ -1,0 +1,18 @@
+2026/11/18 08:27:37 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=104.584µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving
+--- PASS: TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving (0.00s)
+=== RUN   TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged
+--- PASS: TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged (0.01s)
+=== RUN   TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails
+--- PASS: TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails (0.00s)
+=== RUN   TestReviewMailboxRehomeFull
+=== RUN   TestReviewMailboxRehomeFull/full_false
+    review_full_probe_test.go:54: leave hook err=<nil> entries=200 watermark=2
+    review_full_probe_test.go:74: after new-server pull and freeing space: old=true new-before=false watermark=2
+=== RUN   TestReviewMailboxRehomeFull/full_true
+    review_full_probe_test.go:54: leave hook err=mailbox: player 94309's mailbox is full, so server 3's server-wide mail is not all merged; clear some mail before moving to server 4: mail: mailbox is full entries=200 watermark=0
+--- PASS: TestReviewMailboxRehomeFull (0.01s)
+    --- PASS: TestReviewMailboxRehomeFull/full_false (0.01s)
+    --- PASS: TestReviewMailboxRehomeFull/full_true (0.01s)
+PASS
+ok  	example.com/rvfix/game/controllers	1.627s
