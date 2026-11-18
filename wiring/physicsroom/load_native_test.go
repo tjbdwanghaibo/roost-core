@@ -57,6 +57,10 @@ type loadWindow struct {
 	samples                map[domain.Ref][]loadSample
 	polls                  []time.Duration
 	payload, frames, empty uint64
+	// 客户端一圈的分段（长稳里拆交付频率用）：圈数、整圈、Submit、Poll 与定时器晚醒（醒来时刻减 Reset+50ms）的累计。
+	// 交付频率就是客户端循环频率 = 1 / (50ms + Submit + Poll + 晚醒 + 其余调度)。
+	loops                                uint64
+	loopSum, submitSum, pollSum, lateSum time.Duration
 }
 
 // roomLoad 是多房间测量的共用夹具：真实 Room/PhysX/Nest，每房 20 个逻辑客户端
@@ -164,12 +168,14 @@ func startRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool, l
 			timer := time.NewTimer(0)
 			defer timer.Stop()
 			var sequence uint64
+			var armed, lastWake time.Time
 			for {
 				select {
 				case <-clientCtx.Done():
 					return
 				case <-timer.C:
 				}
+				woke := time.Now()
 				sequence++
 				a := float64(i%20)*2*math.Pi/20 + float64(sequence)/30
 				if err := rooms.Submit(clientCtx, o.member, domain.Input{Sequence: sequence, Acceleration: physx.Vec3{float32(8 * math.Cos(a)), 0, float32(8 * math.Sin(a))}}); err != nil {
@@ -182,6 +188,8 @@ func startRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool, l
 				d, err := rooms.Poll(clientCtx, o.member, o.ack)
 				duration := time.Since(began)
 				timer.Reset(50 * time.Millisecond)
+				previousArmed, previousWake := armed, lastWake
+				armed, lastWake = time.Now(), woke
 				if err != nil {
 					if clientCtx.Err() == nil {
 						l.failures <- err
@@ -191,6 +199,13 @@ func startRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool, l
 				l.mu.Lock()
 				if l.recording {
 					l.window.polls = append(l.window.polls, duration)
+					if !previousArmed.IsZero() {
+						l.window.loops++
+						l.window.loopSum += woke.Sub(previousWake)
+						l.window.submitSum += began.Sub(woke)
+						l.window.pollSum += duration
+						l.window.lateSum += woke.Sub(previousArmed) - 50*time.Millisecond
+					}
 					l.window.payload += uint64(len(d.Payload))
 					if len(d.Payload) > 0 {
 						l.window.frames++
@@ -381,7 +396,7 @@ func TestPhysicsRoomSoak(t *testing.T) {
 	const roomCount = 8
 	duration := time.Duration(minutes * float64(time.Minute))
 	l := startRoomLoad(t, "mechanisms", roomCount, true, int64(duration/time.Second)+120)
-	header := "unix_s\telapsed_s\trss_kb\theap_inuse_bytes\theap_objects\ttotal_alloc_bytes\tgc_cycles\tgoroutines\tgo_mapped_bytes\tgo_released_bytes\tphysics_hz\tmin_room_hz\tdelivered_hz\tempty_polls\tstep_p99_ms\tcommit_p99_ms\ttick_interval_p99_ms\tpoll_p99_ms"
+	header := "unix_s\telapsed_s\trss_kb\theap_inuse_bytes\theap_objects\ttotal_alloc_bytes\tgc_cycles\tgoroutines\tgo_mapped_bytes\tgo_released_bytes\tphysics_hz\tmin_room_hz\tdelivered_hz\tempty_polls\tstep_p99_ms\tcommit_p99_ms\ttick_interval_p99_ms\tpoll_p99_ms\tloop_mean\tsubmit_mean\tpoll_mean\ttimer_late_mean\tloadavg1"
 	t.Logf("SOAK pid=%d rooms=%d clients=%d interval=%s", os.Getpid(), roomCount, l.clients, interval)
 	t.Log("SOAK " + header)
 	if out != nil {
@@ -425,6 +440,11 @@ func TestPhysicsRoomSoak(t *testing.T) {
 			strconv.FormatFloat(loadPercentile(s.commits, .99), 'f', 3, 64),
 			strconv.FormatFloat(loadPercentile(s.intervals, .99), 'f', 3, 64),
 			strconv.FormatFloat(loadPercentile(w.polls, .99), 'f', 3, 64),
+			soakMeanMS(w.loopSum, w.loops),
+			soakMeanMS(w.submitSum, w.loops),
+			soakMeanMS(w.pollSum, w.loops),
+			soakMeanMS(w.lateSum, w.loops),
+			soakLoadAvg(),
 		)
 		line := strings.Join(row, "\t")
 		t.Log("SOAK " + line)
@@ -448,6 +468,32 @@ func soakRSSKB() int64 {
 		return -1
 	}
 	return v
+}
+
+// soakMeanMS 把窗口累计时长按圈数折成毫秒均值（三位小数）；没有完整的一圈时为 0。
+func soakMeanMS(sum time.Duration, n uint64) string {
+	if n == 0 {
+		return "0"
+	}
+	return strconv.FormatFloat(float64(sum.Microseconds())/1000/float64(n), 'f', 3, 64)
+}
+
+// soakLoadAvg 读本机 1 分钟负载（macOS 与 Linux 都用 uptime，取 "load average" 后第一个数）；读不到返回 "-1"。
+// 机器另有负载时交付频率随定时器晚醒变化，记下负载才能把频率变化与环境对上。
+func soakLoadAvg() string {
+	out, err := exec.Command("uptime").Output()
+	if err != nil {
+		return "-1"
+	}
+	_, after, ok := strings.Cut(string(out), "load average")
+	if !ok {
+		return "-1"
+	}
+	fields := strings.Fields(strings.NewReplacer(":", " ", "s:", " ", ",", " ").Replace(after))
+	if len(fields) == 0 {
+		return "-1"
+	}
+	return strings.TrimPrefix(fields[0], "s")
 }
 
 // loadToken 给测量用的逻辑客户端生成唯一绑定标识。

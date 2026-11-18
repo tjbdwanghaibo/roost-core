@@ -354,7 +354,7 @@ python3 docs/performance/benchmarks/physicsroom-alloc-20261029/summ.py runs.txt
 
 **只覆盖 macOS ARM64**：Apple M5（10 核）、macOS 26.5.2（25F84）、Go 1.27.3、GOMAXPROCS=10，PhysX 4.1.2 ABI 2 arm64 动态库（按 [CHUNK-PHYSICS](CHUNK-PHYSICS.md#原生构建) 用 `.physics-deps/PhysX-4.1` 源码在私有构建目录编出）。Linux 的复测、RSS 与长稳都没有做（本机 Docker 未运行）。
 
-**入口**：`TestPhysicsRoomSoak`（`wiring/physicsroom`，`physx && cgo`，`ROOST_PHYSICS_SOAK_MINUTES` 启用，缺省跳过）与上一节同一夹具：机关场景 8 房间 × 20 逻辑客户端（每房 83 个非静态刚体），每个客户端按 Relay 节奏提交输入后 Poll；不含 Gate/NATS/TCP。每 15 秒一行：Go `runtime/metrics`（heap 对象字节与个数、累计分配、GC 次数、goroutine、Go 映射与已归还）、`ps` RSS、该窗口的物理 / 交付频率与分位数；每个窗口的原始记录整体换出，夹具自身内存不随时长增长。进程外 `sample.py` 每 30 秒跑 `footprint`（物理占用；untagged VM_ALLOCATE 即 Go 堆与栈映射，MALLOC_* 即 libc malloc），每 2 分钟跑 `vmmap --summary`（malloc 区已分配字节与个数）。
+**入口**：`TestPhysicsRoomSoak`（`wiring/physicsroom`，`physx && cgo`，`ROOST_PHYSICS_SOAK_MINUTES` 启用，缺省跳过）与上一节同一夹具：机关场景 8 房间 × 20 逻辑客户端（每房 83 个非静态刚体），每个客户端按 Relay 节奏提交输入后 Poll；不含 Gate/NATS/TCP。每 15 秒一行：Go `runtime/metrics`（heap 对象字节与个数、累计分配、GC 次数、goroutine、Go 映射与已归还）、`ps` RSS、该窗口的物理 / 交付频率与分位数，以及客户端一圈的分段均值（整圈、Submit、Poll、定时器晚醒）与 1 分钟负载（2026-11-18 起）；每个窗口的原始记录整体换出，夹具自身内存不随时长增长。进程外 `sample.py` 每 30 秒跑 `footprint`（物理占用；untagged VM_ALLOCATE 即 Go 堆与栈映射，MALLOC_* 即 libc malloc），每 2 分钟跑 `vmmap --summary`（malloc 区已分配字节与个数）。
 
 **原生内存的口径**：binding 用 PhysX 自带 `PxDefaultAllocator`，没有分配回调或计数器；它在 macOS 上走 libc `malloc`，Go 运行时不用 malloc，所以 malloc 区已分配字节就是 PhysX 加少量 libSystem 的原生堆（空 Go 程序约 12KB）。另给“估算原生 = footprint − Go 映射 dirty”，它还包含 malloc 元数据、页表与库的 dirty 数据段。`vmmap` 会挂起目标进程约 0.4～0.5 秒，含它的窗口物理均频约 48.7Hz，下面的频率判断排除这些窗口。
 
@@ -377,7 +377,7 @@ python3 docs/performance/benchmarks/physicsroom-alloc-20261029/summ.py runs.txt
 
 累计分配 30.57MB/s、GC 4.8 次/s，80 个窗口空 Poll 合计 0，每个房间每个窗口已提交 tick 连续。
 
-**判断：没有发现无界增长。**footprint、Go 映射 dirty、Go 映射 − 已归还、goroutine 稳定窗口斜率均为 0 附近；Go heap 对象字节每 4 分钟段的采样最低值（第 4 分钟起）9.9 / 9.9 / 10.0 / 9.6MB，不随时间升高；PhysX 侧 malloc 已分配第 2～18 分钟 +0.04MB（10,087,424→10,126,336 字节，约 0.4%），分配个数 6513～6527 持平，没有逐 Tick 泄漏的形态（每秒 400 个 Tick，逐 Tick 泄漏哪怕 1 字节也会是每分钟 24KB 且个数随之增长）。RSS 稳定窗口 +0.035MB/分钟，而 footprint 持平、RSS − footprint 由 11MB 升到约 15.8MB：增长落在不计入 footprint 的干净页（代码段等文件映射逐步换入），**是推断，没有逐区域核对**。交付频率由前 8 分钟 19.66Hz 降到最后 8 分钟约 19.48Hz（−0.9%）：空 Poll 为 0，交付频率就是客户端循环频率（50ms 定时器 + 提交与 Poll），Poll P99 与物理频率没有同步变化，倾向本机定时器 / 后台负载，**原因尚未确认**。8 房间的 PhysX 原生堆约 9.6MiB（含 SDK / foundation 共用部分，平均每房间不超过约 1.2MiB），没有按房间分开测。
+**判断：没有发现无界增长。**footprint、Go 映射 dirty、Go 映射 − 已归还、goroutine 稳定窗口斜率均为 0 附近；Go heap 对象字节每 4 分钟段的采样最低值（第 4 分钟起）9.9 / 9.9 / 10.0 / 9.6MB，不随时间升高；PhysX 侧 malloc 已分配第 2～18 分钟 +0.04MB（10,087,424→10,126,336 字节，约 0.4%），分配个数 6513～6527 持平，没有逐 Tick 泄漏的形态（每秒 400 个 Tick，逐 Tick 泄漏哪怕 1 字节也会是每分钟 24KB 且个数随之增长）。RSS 稳定窗口 +0.035MB/分钟，而 footprint 持平、RSS − footprint 由 11MB 升到约 15.8MB：增长落在不计入 footprint 的干净页（代码段等文件映射逐步换入），**是推断，没有逐区域核对**。交付频率由前 8 分钟 19.66Hz 降到最后 8 分钟约 19.48Hz（−0.9%）：空 Poll 为 0，交付频率就是客户端循环频率（50ms 定时器 + 提交与 Poll），Poll P99 与物理频率没有同步变化。2026-11-18 复现（TSV 追加整圈 / Submit / Poll / 定时器晚醒 / 负载五列）确认：变化全在客户端循环的定时器晚醒与 Submit / Poll 的 CPU 时间上，随本机状态成台阶变化、与运行时长无关，一个已确认的触发是显示器关闭（关屏时交付 −0.7%、开屏后回升）；原样本那一刻的触发已无法核对。长稳与频率对照应在测量期间 `caffeinate -d -i` 并看 `timer_late_mean`，见[证据](../maintenance/evidence/category3-anomalies-20261118/README.md) §3。8 房间的 PhysX 原生堆约 9.6MiB（含 SDK / foundation 共用部分，平均每房间不超过约 1.2MiB），没有按房间分开测。
 
 **优化后复跑**：下文两项削减之后（`c3946490`）同口径 4 分钟：估算原生 13.58MB 持平（+0.005MB/分钟）、malloc dirty 10.11MB 不变、footprint 41.7MB、goroutine 206、累计分配 23.66MB/s、GC 3.73 次/s。
 
