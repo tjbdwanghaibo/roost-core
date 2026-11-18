@@ -17,7 +17,9 @@ import (
 
 // roost client sync：把服务端工程的导出目录同步进客户端工程（维护者 2026-11-17：简单版，不生成 Unity 的 .meta）。
 //
-//   - 协议（client_export，--to）：csharp/ 下的文件平铺拷入 --to，另存一份服务端的 manifest.json，对比报告消息号与错误码；
+//   - 协议（client_export，--to）：--lang 那种语言的目录（csharp/ 或 ts/，维护者 2026-11-18 D9）下的文件平铺拷入 --to，另存
+//     一份服务端的 manifest.json，对比报告消息号与错误码。一个客户端仓库只用一种语言：服务端只声明一种时 --lang 可以省略，
+//     两种都声明时必须写；
 //   - 配置（client_export.config，--config-code-to / --config-data-to）：csharp/ 拷入代码目录，data/ 拷入数据目录，
 //     服务端的配置清单另存为代码目录里的 config-manifest.json（同步记录，含数据版本），对比报告表、字段、行数与数据版本。
 //
@@ -28,14 +30,15 @@ import (
 const clientConfigSyncRecord = "config-manifest.json"
 
 func runClient(args []string, stdout, stderr io.Writer) error {
-	const usage = "usage: roost client sync --from <server project> [--to <client dir>] [--config-code-to <dir> --config-data-to <dir>] [--dry-run]"
+	const usage = "usage: roost client sync --from <server project> [--lang csharp|ts] [--to <client dir>] [--config-code-to <dir> --config-data-to <dir>] [--dry-run]"
 	if len(args) == 0 || args[0] != "sync" {
 		return errors.New(usage)
 	}
 	fs := flag.NewFlagSet("client sync", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	from := fs.String("from", "", "server project root (the directory holding roost.yaml with client_export)")
-	to := fs.String("to", "", "client directory that receives the exported protocol C# files and manifest.json")
+	to := fs.String("to", "", "client directory that receives the exported protocol files (C# or TS, see --lang) and manifest.json")
+	lang := fs.String("lang", "", "client language to sync: csharp or ts; may be omitted when client_export declares only one")
 	configCode := fs.String("config-code-to", "", "client directory that receives the config C# files and config-manifest.json (client_export.config)")
 	configData := fs.String("config-data-to", "", "client directory that receives the config data files (client_export.config)")
 	dryRun := fs.Bool("dry-run", false, "report what would change without writing")
@@ -49,9 +52,16 @@ func runClient(args []string, stdout, stderr io.Writer) error {
 	if (codeTo == "") != (dataTo == "") {
 		return errors.New("--config-code-to and --config-data-to go together: the generated C# checks the data files it was generated with; " + usage)
 	}
+	if *lang != "" && !contains(clientExportLanguages, *lang) {
+		return fmt.Errorf("--lang %q is not a client language; use one of %s", *lang, strings.Join(clientExportLanguages, ", "))
+	}
+	if *lang == "ts" && codeTo != "" {
+		// 配置表的 TS 读取是 TS 客户端方案的第 3 轮（FEATURE-2026-11-18-ts-gate-client §9），导出里还没有 ts/。
+		return errors.New("--lang ts does not sync the config export yet: client_export.config exports C# only (TS config tables are planned for a later round); drop --config-code-to / --config-data-to")
+	}
 	var plans []*syncPlan
 	if strings.TrimSpace(*to) != "" {
-		plan, err := planProtocolSync(*from, *to)
+		plan, err := planProtocolSync(*from, *to, *lang)
 		if err != nil {
 			return err
 		}
@@ -72,9 +82,9 @@ func runClient(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// ClientSync 是 roost client sync --to 的实现（协议部分）。
-func ClientSync(from, to string, dryRun bool, stdout io.Writer) error {
-	plan, err := planProtocolSync(from, to)
+// ClientSync 是 roost client sync --to 的实现（协议部分）。lang 为空时取服务端声明的唯一一种语言。
+func ClientSync(from, to, lang string, dryRun bool, stdout io.Writer) error {
+	plan, err := planProtocolSync(from, to, lang)
 	if err != nil {
 		return err
 	}
@@ -201,8 +211,31 @@ func (plan *syncPlan) run(dryRun bool, stdout io.Writer) error {
 	return nil
 }
 
-// planProtocolSync 计划协议部分：csharp/ 平铺进 to，另存 manifest.json。
-func planProtocolSync(from, to string) (*syncPlan, error) {
+// syncLanguage 决定协议同步哪种语言：写了 --lang 就要服务端声明过它；没写时服务端只声明一种就用它，两种都声明时报错。
+func syncLanguage(m Manifest, from, lang string) (string, error) {
+	var declared []string
+	for _, language := range clientExportLanguages {
+		if m.ClientExport.protocol() && contains(m.ClientExport.Languages, language) {
+			declared = append(declared, language)
+		}
+	}
+	yaml := filepath.Join(from, ManifestName)
+	switch {
+	case lang != "" && !contains(declared, lang):
+		return "", fmt.Errorf("client_export in %s does not list %s in languages (declared: %s); add it and run roost generate there first", yaml, lang, orNone(strings.Join(declared, ", ")))
+	case lang != "":
+		return lang, nil
+	case len(declared) == 1:
+		return declared[0], nil
+	case len(declared) == 0:
+		return "", fmt.Errorf("client_export in %s lists no client language (csharp or ts); roost client sync copies the generated C# or TS files", yaml)
+	default:
+		return "", fmt.Errorf("client_export in %s lists %s; pass --lang %s to say which one this client uses", yaml, strings.Join(declared, " and "), strings.Join(declared, "|"))
+	}
+}
+
+// planProtocolSync 计划协议部分：<lang>/ 平铺进 to，另存 manifest.json。
+func planProtocolSync(from, to, lang string) (*syncPlan, error) {
 	m, err := LoadManifest(from)
 	if err != nil {
 		return nil, err
@@ -210,9 +243,10 @@ func planProtocolSync(from, to string) (*syncPlan, error) {
 	if !m.ClientExport.protocol() {
 		return nil, fmt.Errorf("%s does not export the protocol (client_export in %s); add it and run roost generate there first", from, ManifestName)
 	}
-	if !m.ClientExport.csharp() {
-		return nil, fmt.Errorf("client_export in %s does not list csharp in languages; roost client sync copies the C# files", filepath.Join(from, ManifestName))
+	if lang, err = syncLanguage(m, from, lang); err != nil {
+		return nil, err
 	}
+	prefix := lang + "/"
 	exportDir := under(from, m.ClientExport.dir())
 	manifestPath := filepath.Join(exportDir, exportManifest)
 	manifestRaw, err := os.ReadFile(manifestPath)
@@ -231,7 +265,7 @@ func planProtocolSync(from, to string) (*syncPlan, error) {
 	}
 	var files []syncFile
 	for name := range next.Files {
-		if !strings.HasPrefix(name, "csharp/") {
+		if !strings.HasPrefix(name, prefix) {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(exportDir, filepath.FromSlash(name)))
@@ -251,10 +285,10 @@ func planProtocolSync(from, to string) (*syncPlan, error) {
 	} else if !os.IsNotExist(statErr) {
 		return nil, statErr
 	}
-	owned := map[string]syncFile{} // 上次同步写的文件 → 当时的哈希
+	owned := map[string]syncFile{} // 上次同步写的文件 → 当时的哈希（只认这种语言的目录）
 	if previous != nil {
 		for name, hash := range previous.Files {
-			if strings.HasPrefix(name, "csharp/") {
+			if strings.HasPrefix(name, prefix) {
 				owned[filepath.Join(to, path.Base(name))] = syncFile{label: path.Base(name), raw: []byte(hash)}
 			}
 		}
@@ -263,9 +297,15 @@ func planProtocolSync(from, to string) (*syncPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan.header = exportDir + " -> " + to
+	plan.header = exportDir + " (" + lang + ") -> " + to
 	plan.recordRaw = manifestRaw
-	plan.report = func(w io.Writer) { reportClientExportDiff(w, previous, next) }
+	plan.report = func(w io.Writer) {
+		reportClientExportDiff(w, previous, next)
+		if lang == "ts" && next.ProtobufEs != "" {
+			// 导出的 *_pb.ts 要求使用方工程装同一版运行库，版本不一致时 protobuf-es 运行期报错。
+			fmt.Fprintf(w, "TS: install @bufbuild/protobuf %s exactly in the client project (the generated *_pb.ts need that runtime version)\n", next.ProtobufEs)
+		}
+	}
 	return plan, nil
 }
 
@@ -417,8 +457,8 @@ func reportClientConfigDiff(w io.Writer, previous *clientConfigManifest, next cl
 // reportClientExportDiff 打印两份导出清单的差别：版本、消息号、错误码。
 func reportClientExportDiff(w io.Writer, previous *clientExportManifest, next clientExportManifest) {
 	if previous == nil {
-		fmt.Fprintf(w, "first sync: core %s, generator %s, protoc %s / Google.Protobuf %s; %d message id(s), %d errcode(s)\n",
-			orNone(next.Core), orNone(next.Generator), orNone(next.Protoc), orNone(next.GoogleProtobuf), len(next.Messages), len(next.ErrorCodes))
+		fmt.Fprintf(w, "first sync: core %s, generator %s, protoc %s / Google.Protobuf %s / protobuf-es %s; %d message id(s), %d errcode(s)\n",
+			orNone(next.Core), orNone(next.Generator), orNone(next.Protoc), orNone(next.GoogleProtobuf), orNone(next.ProtobufEs), len(next.Messages), len(next.ErrorCodes))
 		return
 	}
 	for _, item := range []struct{ label, before, after string }{
@@ -426,6 +466,7 @@ func reportClientExportDiff(w io.Writer, previous *clientExportManifest, next cl
 		{"generator", previous.Generator, next.Generator},
 		{"protoc", previous.Protoc, next.Protoc},
 		{"Google.Protobuf", previous.GoogleProtobuf, next.GoogleProtobuf},
+		{"protobuf-es", previous.ProtobufEs, next.ProtobufEs},
 	} {
 		if item.before != item.after {
 			fmt.Fprintf(w, "%s: %s -> %s\n", item.label, orNone(item.before), orNone(item.after))

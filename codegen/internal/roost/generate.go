@@ -486,9 +486,14 @@ func runGenerators(ctx context.Context, root string, manifest Manifest, generato
 	if err := checkEntityOwnersBeforeGenerate(root, manifest); err != nil {
 		return err
 	}
-	// client_export 要 C# 时先核对 protoc，版本不对不跑任何生成器（而不是全跑完才在最后一步失败）。
-	if manifest.ClientExport.csharp() && !options.DryRun {
+	// client_export 要 C# / TS 时先核对 protoc（TS 还有 protoc-gen-es），版本不对不跑任何生成器（而不是全跑完才在最后一步失败）。
+	if manifest.ClientExport.needsProtoc() && !options.DryRun {
 		if _, err := manifest.ClientExport.resolveProtoc(); err != nil {
+			return err
+		}
+	}
+	if manifest.ClientExport.ts() && !options.DryRun {
+		if _, err := manifest.ClientExport.resolveProtocGenEs(); err != nil {
 			return err
 		}
 	}

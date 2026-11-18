@@ -24,9 +24,10 @@ import (
 )
 
 // 前后端公共协议目录（roost.yaml 的 client_export，维护者 2026-11-17，见
-// docs/maintenance/FEATURE-2026-11-17-client-export.md）。声明了它的工程，roost generate 每次把客户端要的协议产物
-// 整份写进 <dir>：proto 副本、protoc 生成的 C#、Go 生成的消息号 / 错误码 / DAO 补丁应用代码和 manifest.json。
-// 没声明的工程不跑这一步，生成结果与之前逐字节相同。
+// docs/maintenance/FEATURE-2026-11-17-client-export.md；TS 见 FEATURE-2026-11-18-ts-gate-client.md）。声明了它的工程，
+// roost generate 每次把客户端要的协议产物整份写进 <dir>：proto 副本、protoc 生成的 C#（csharp）与 protoc-gen-es 生成的
+// TS（ts）、Go 生成的消息号 / 错误码 / DAO 补丁应用代码和 manifest.json。没声明的工程不跑这一步，生成结果与之前逐字节相同；
+// 只声明 csharp 的工程与加入 ts 之前相同。
 
 // DefaultClientExportDir 是 client_export.dir 的缺省值。
 const DefaultClientExportDir = "shared/protocol"
@@ -35,6 +36,11 @@ const DefaultClientExportDir = "shared/protocol"
 // Google.Protobuf 版本：生成器不能读仓库里的 csproj，这里是副本，TestSDKGoogleProtobufVersionMatchesCodecs
 // 核对两处一致。所需的 protoc 版本由它推出（见 requiredProtocVersion），不另写一份。
 const sdkGoogleProtobufVersion = "3.31.1"
+
+// sdkProtobufEsVersion 是 TS SDK（client/ts/package.json）锁定的 protobuf-es 版本：运行库 @bufbuild/protobuf 与插件
+// @bufbuild/protoc-gen-es 必须同一版本（生成码与运行库不同版时 protobuf-es 运行期报错）。生成器不能读仓库里的 package.json，
+// 这里是副本，TestSDKProtobufEsVersionMatchesClientTS 核对三处一致。生成 TS 时要求 protoc-gen-es --version 答这一版。
+const sdkProtobufEsVersion = "2.17.0"
 
 // clientExportKind 写在 manifest.json 里，roost client sync 凭它认出导出清单。
 const clientExportKind = "roost-client-export"
@@ -51,14 +57,22 @@ const (
 	exportDaoSyncApply  = "csharp/DaoSyncApply.cs"
 	exportMessageIDs    = "csharp/MessageIds.cs"
 	exportErrorCodes    = "csharp/ErrorCodes.cs"
+	exportProtocolTS    = "ts/protocol_pb.ts"
+	exportDaoSyncTS     = "ts/dao_sync_pb.ts"
+	exportMessageIDsTS  = "ts/message_ids.ts"
+	exportErrorCodesTS  = "ts/error_codes.ts"
 	exportManifest      = "manifest.json"
 )
 
 var clientExportFiles = []string{
 	exportProtocolProto, exportDaoSyncProto,
 	exportProtocolCS, exportDaoSyncCS, exportDaoSyncApply, exportMessageIDs, exportErrorCodes,
+	exportProtocolTS, exportDaoSyncTS, exportMessageIDsTS, exportErrorCodesTS,
 	exportManifest,
 }
+
+// clientExportLanguages 是 client_export.languages 认的语言；roost client sync --lang 取其一。
+var clientExportLanguages = []string{"csharp", "ts"}
 
 // 缺省命名空间：protoc 按 proto package 推出 Roost.Protocol / Roost.Dao.Sync；消息号与错误码沿用 -csharp 的
 // Roost.Generated。配了 csharp.namespace 时：协议、消息号、错误码都在 <namespace>，DAO 同步在 <namespace>.DaoSync。
@@ -70,17 +84,21 @@ const (
 // ClientExportSpec 是 roost.yaml 的 client_export。
 type ClientExportSpec struct {
 	// Protocol 是协议导出的显式开关：写 false 表示不导出协议（只导出配置时用，不找 protoc，doctor 也不查协议导出）；
-	// 不写或写 true 照常导出。false 时不能再写 dir、languages、csharp。
+	// 不写或写 true 照常导出。false 时不能再写 dir、languages、protoc、csharp、ts。
 	Protocol *bool `yaml:"protocol,omitempty"`
 	// Dir 相对工程根，缺省 shared/protocol；产物提交进仓库。
 	Dir string `yaml:"dir,omitempty"`
-	// Languages 目前只支持 csharp；为空时只导出 proto 副本与 manifest.json。
-	Languages []string            `yaml:"languages,omitempty"`
-	CSharp    *ClientExportCSharp `yaml:"csharp,omitempty"`
+	// Languages 是 csharp、ts 的任意组合；为空时只导出 proto 副本与 manifest.json。
+	Languages []string `yaml:"languages,omitempty"`
+	// Protoc 是 protoc 的路径（相对路径按工程根解析），csharp 与 ts 共用（维护者 2026-11-18 D4：从 csharp.protoc 挪到这里，
+	// 旧写法报错）；不写时依次找环境变量 ROOST_PROTOC 与 PATH。
+	Protoc string              `yaml:"protoc,omitempty"`
+	CSharp *ClientExportCSharp `yaml:"csharp,omitempty"`
+	TS     *ClientExportTS     `yaml:"ts,omitempty"`
 	// Config 是配置表导出（client_export.config，见 client_config_export.go）；不写就不导出配置。
 	Config *ClientConfigExportSpec `yaml:"config,omitempty"`
 
-	// projectRoot 是读 roost.yaml 时的工程根（绝对路径），用来解析相对的 csharp.protoc：生成在暂存树里跑，
+	// projectRoot 是读 roost.yaml 时的工程根（绝对路径），用来解析相对的 protoc 与 ts.protoc_gen_es：生成在暂存树里跑，
 	// 暂存树不保留可执行位。Not part of roost.yaml.
 	projectRoot string
 }
@@ -89,8 +107,15 @@ type ClientExportSpec struct {
 type ClientExportCSharp struct {
 	// Namespace 缺省为空：协议用 proto package 推出的 Roost.Protocol，DAO 同步 Roost.Dao.Sync，消息号与错误码 Roost.Generated。
 	Namespace string `yaml:"namespace,omitempty"`
-	// Protoc 是 protoc 的路径（相对路径按工程根解析）；不写时依次找环境变量 ROOST_PROTOC 与 PATH。
-	Protoc string `yaml:"protoc,omitempty"`
+	// RetiredProtoc 只为认出旧写法 csharp.protoc：写了就报错，提示挪到 client_export.protoc（D4，项目未上线，不做兼容）。
+	RetiredProtoc string `yaml:"protoc,omitempty"`
+}
+
+// ClientExportTS 是 client_export.ts。
+type ClientExportTS struct {
+	// ProtocGenEs 是 protoc-gen-es 插件的路径（相对路径按工程根解析）；不写时依次找环境变量 ROOST_PROTOC_GEN_ES 与 PATH。
+	// 插件在拷出的同版本 client/ts 里 npm ci 后是 node_modules/.bin/protoc-gen-es（要 node 22+）。
+	ProtocGenEs string `yaml:"protoc_gen_es,omitempty"`
 }
 
 var csharpNamespacePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
@@ -105,6 +130,15 @@ func (spec *ClientExportSpec) dir() string {
 
 func (spec *ClientExportSpec) csharp() bool {
 	return spec.protocol() && contains(spec.Languages, "csharp")
+}
+
+func (spec *ClientExportSpec) ts() bool {
+	return spec.protocol() && contains(spec.Languages, "ts")
+}
+
+// needsProtoc：导出任何一种语言的 PB 代码都要 protoc（只导出 proto 副本时不要）。
+func (spec *ClientExportSpec) needsProtoc() bool {
+	return spec.csharp() || spec.ts()
 }
 
 // protocol 判断是否导出协议：只看显式开关 client_export.protocol，写 false 才不导出（维护者 2026-11-17：不从别的键推断，
@@ -134,8 +168,14 @@ func (spec *ClientExportSpec) validate() error {
 		if len(spec.Languages) > 0 {
 			set = append(set, "languages")
 		}
+		if strings.TrimSpace(spec.Protoc) != "" {
+			set = append(set, "protoc")
+		}
 		if spec.CSharp != nil {
 			set = append(set, "csharp")
+		}
+		if spec.TS != nil {
+			set = append(set, "ts")
 		}
 		if len(set) > 0 {
 			joined = errors.Join(joined, fmt.Errorf("client_export.protocol is false but client_export also sets %s, which only the protocol export reads; remove them or the protocol: false line", strings.Join(set, ", ")))
@@ -146,8 +186,8 @@ func (spec *ClientExportSpec) validate() error {
 	}
 	seen := map[string]bool{}
 	for _, language := range spec.Languages {
-		if language != "csharp" {
-			joined = errors.Join(joined, fmt.Errorf("client_export.languages has unsupported language %q; supported: csharp", language))
+		if !contains(clientExportLanguages, language) {
+			joined = errors.Join(joined, fmt.Errorf("client_export.languages has unsupported language %q; supported: %s", language, strings.Join(clientExportLanguages, ", ")))
 		}
 		if seen[language] {
 			joined = errors.Join(joined, fmt.Errorf("client_export.languages repeats %q", language))
@@ -161,6 +201,12 @@ func (spec *ClientExportSpec) validate() error {
 		if ns := spec.CSharp.Namespace; ns != "" && !csharpNamespacePattern.MatchString(ns) {
 			joined = errors.Join(joined, fmt.Errorf("client_export.csharp.namespace %q is not a C# namespace (dot-separated identifiers)", ns))
 		}
+		if old := strings.TrimSpace(spec.CSharp.RetiredProtoc); old != "" {
+			joined = errors.Join(joined, fmt.Errorf("client_export.csharp.protoc moved to client_export.protoc (shared by csharp and ts); write \"protoc: %s\" directly under client_export and remove it from csharp", old))
+		}
+	}
+	if spec.TS != nil && !seen["ts"] {
+		joined = errors.Join(joined, errors.New("client_export.ts is set but client_export.languages does not list ts"))
 	}
 	if spec.Config != nil {
 		joined = errors.Join(joined, spec.Config.validate())
@@ -236,27 +282,32 @@ func requiredProtocVersion() string {
 
 func protocInstallHint(version string) string {
 	return fmt.Sprintf("install protoc %[1]s from https://github.com/protocolbuffers/protobuf/releases/tag/v%[1]s (protoc-%[1]s-<os>-<arch>.zip), "+
-		"then point client_export.csharp.protoc or the ROOST_PROTOC environment variable at its bin/protoc, or put it first on PATH", version)
+		"then point client_export.protoc or the ROOST_PROTOC environment variable at its bin/protoc, or put it first on PATH", version)
 }
 
-// resolveProtoc 按 client_export.csharp.protoc、环境变量 ROOST_PROTOC、PATH 的顺序找 protoc，并要求版本与 SDK 锁定的
-// Google.Protobuf 一致。返回路径与它的来源（报错时写明）。
+// projectPath 把 roost.yaml 里写的相对路径按工程根解析。
+func (spec *ClientExportSpec) projectPath(raw string) string {
+	if !filepath.IsAbs(raw) && spec.projectRoot != "" {
+		return filepath.Join(spec.projectRoot, raw)
+	}
+	return raw
+}
+
+// resolveProtoc 按 client_export.protoc、环境变量 ROOST_PROTOC、PATH 的顺序找 protoc，并要求版本与 C# SDK 锁定的
+// Google.Protobuf 一致（csharp 与 ts 共用这一份 protoc）。返回路径；报错时写明来源。
 func (spec *ClientExportSpec) resolveProtoc() (string, error) {
 	want := requiredProtocVersion()
 	var candidate, source string
 	switch {
-	case spec.CSharp != nil && strings.TrimSpace(spec.CSharp.Protoc) != "":
-		candidate, source = strings.TrimSpace(spec.CSharp.Protoc), "client_export.csharp.protoc"
-		if !filepath.IsAbs(candidate) && spec.projectRoot != "" {
-			candidate = filepath.Join(spec.projectRoot, candidate)
-		}
+	case strings.TrimSpace(spec.Protoc) != "":
+		candidate, source = spec.projectPath(strings.TrimSpace(spec.Protoc)), "client_export.protoc"
 	case os.Getenv("ROOST_PROTOC") != "":
 		candidate, source = os.Getenv("ROOST_PROTOC"), "ROOST_PROTOC"
 	default:
 		found, err := exec.LookPath("protoc")
 		if err != nil {
-			return "", fmt.Errorf("client_export.languages lists csharp, which needs protoc %s (Google.Protobuf %s is what the Roost C# SDK locks), but none was found in client_export.csharp.protoc, ROOST_PROTOC or PATH; %s",
-				want, sdkGoogleProtobufVersion, protocInstallHint(want))
+			return "", fmt.Errorf("client_export.languages lists %s, which needs protoc %s (Google.Protobuf %s is what the Roost C# SDK locks; ts uses the same protoc), but none was found in client_export.protoc, ROOST_PROTOC or PATH; %s",
+				strings.Join(spec.Languages, ", "), want, sdkGoogleProtobufVersion, protocInstallHint(want))
 		}
 		candidate, source = found, "PATH"
 	}
@@ -268,6 +319,40 @@ func (spec *ClientExportSpec) resolveProtoc() (string, error) {
 	if strings.TrimPrefix(got, "libprotoc ") != want {
 		return "", fmt.Errorf("client_export needs protoc %s to match Google.Protobuf %s locked by the Roost C# SDK, but %s (from %s) reports %q; %s",
 			want, sdkGoogleProtobufVersion, candidate, source, got, protocInstallHint(want))
+	}
+	return candidate, nil
+}
+
+func protocGenEsInstallHint() string {
+	return fmt.Sprintf("copy client/ts from roost-core at this roost version and run npm ci there (node 22+); the plugin is node_modules/.bin/protoc-gen-es (@bufbuild/protoc-gen-es %s). "+
+		"Point client_export.ts.protoc_gen_es or the ROOST_PROTOC_GEN_ES environment variable at it, or put it first on PATH", sdkProtobufEsVersion)
+}
+
+// resolveProtocGenEs 按 client_export.ts.protoc_gen_es、环境变量 ROOST_PROTOC_GEN_ES、PATH 的顺序找 protoc-gen-es，并要求
+// --version 答 TS SDK 锁定的版本（生成码与使用方工程里的 @bufbuild/protobuf 必须同版本）。
+func (spec *ClientExportSpec) resolveProtocGenEs() (string, error) {
+	var candidate, source string
+	switch {
+	case spec.TS != nil && strings.TrimSpace(spec.TS.ProtocGenEs) != "":
+		candidate, source = spec.projectPath(strings.TrimSpace(spec.TS.ProtocGenEs)), "client_export.ts.protoc_gen_es"
+	case os.Getenv("ROOST_PROTOC_GEN_ES") != "":
+		candidate, source = os.Getenv("ROOST_PROTOC_GEN_ES"), "ROOST_PROTOC_GEN_ES"
+	default:
+		found, err := exec.LookPath("protoc-gen-es")
+		if err != nil {
+			return "", fmt.Errorf("client_export.languages lists ts, which needs protoc-gen-es %s (the protobuf-es version the Roost TS SDK locks), but none was found in client_export.ts.protoc_gen_es, ROOST_PROTOC_GEN_ES or PATH; %s",
+				sdkProtobufEsVersion, protocGenEsInstallHint())
+		}
+		candidate, source = found, "PATH"
+	}
+	output, err := exec.Command(candidate, "--version").Output()
+	if err != nil {
+		return "", fmt.Errorf("client_export needs protoc-gen-es %s; %s (from %s) did not run: %v; %s", sdkProtobufEsVersion, candidate, source, err, protocGenEsInstallHint())
+	}
+	got := strings.TrimSpace(string(output))
+	if strings.TrimPrefix(got, "protoc-gen-es v") != sdkProtobufEsVersion {
+		return "", fmt.Errorf("client_export needs protoc-gen-es %s to match @bufbuild/protobuf %s locked by the Roost TS SDK, but %s (from %s) reports %q; %s",
+			sdkProtobufEsVersion, sdkProtobufEsVersion, candidate, source, got, protocGenEsInstallHint())
 	}
 	return candidate, nil
 }
@@ -293,15 +378,18 @@ type clientErrorCode struct {
 
 // clientExportManifest 是 <dir>/manifest.json。
 type clientExportManifest struct {
-	Kind           string                  `json:"kind"`
-	Schema         int                     `json:"schema"`
-	Core           string                  `json:"core"`
-	Generator      string                  `json:"generator"`
-	Languages      []string                `json:"languages"`
-	Protoc         string                  `json:"protoc,omitempty"`
-	GoogleProtobuf string                  `json:"google_protobuf,omitempty"`
-	Namespaces     *clientExportNamespaces `json:"csharp_namespaces,omitempty"`
-	Sources        clientExportSources     `json:"sources"`
+	Kind           string   `json:"kind"`
+	Schema         int      `json:"schema"`
+	Core           string   `json:"core"`
+	Generator      string   `json:"generator"`
+	Languages      []string `json:"languages"`
+	Protoc         string   `json:"protoc,omitempty"`
+	GoogleProtobuf string   `json:"google_protobuf,omitempty"`
+	// ProtocGenEs 与 ProtobufEs 只在导出 ts 时有：生成 *_pb.ts 的插件版本，以及使用方工程要装的 @bufbuild/protobuf 版本（相同）。
+	ProtocGenEs string                  `json:"protoc_gen_es,omitempty"`
+	ProtobufEs  string                  `json:"protobuf_es,omitempty"`
+	Namespaces  *clientExportNamespaces `json:"csharp_namespaces,omitempty"`
+	Sources     clientExportSources     `json:"sources"`
 	// Files 是除 manifest.json 外每个导出文件的哈希（键相对 <dir>）。
 	Files      map[string]string        `json:"files"`
 	Messages   []protocol.ClientMessage `json:"messages"`
@@ -486,6 +574,56 @@ func runProtocCSharp(protoc string, protos map[string][]byte) (map[string][]byte
 	return results, nil
 }
 
+// runProtocTS 在临时目录里对导出的 proto 跑 protoc + protoc-gen-es（target=ts，import_extension=js：生成的 import 带 .js
+// 后缀，Node 的 ESM 与各打包器都认），返回 proto 文件名 → 生成的 *_pb.ts。生成文件头写的是 protoc-gen-es 的版本与参数和 proto
+// 的文件名，不带临时路径。
+func runProtocTS(protoc, plugin string, protos map[string][]byte) (map[string][]byte, error) {
+	if len(protos) == 0 {
+		return nil, nil
+	}
+	tmp, err := os.MkdirTemp("", "roost-client-export-ts-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	in, out := filepath.Join(tmp, "proto"), filepath.Join(tmp, "ts")
+	for _, dir := range []string{in, out} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	names := make([]string, 0, len(protos))
+	for name, raw := range protos {
+		if err := os.WriteFile(filepath.Join(in, name), raw, 0o644); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	absPlugin, err := filepath.Abs(plugin)
+	if err != nil {
+		return nil, err
+	}
+	args := append([]string{"-I", in, "--plugin=protoc-gen-es=" + absPlugin, "--es_out=" + out, "--es_opt=target=ts,import_extension=js"}, names...)
+	command := exec.Command(protoc, args...)
+	command.Dir = tmp
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("protoc --es_out: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	results := make(map[string][]byte, len(names))
+	for _, name := range names {
+		tsName := strings.TrimSuffix(name, ".proto") + "_pb.ts"
+		raw, err := os.ReadFile(filepath.Join(out, tsName))
+		if err != nil {
+			return nil, fmt.Errorf("protoc-gen-es did not write %s: %w", tsName, err)
+		}
+		results[name] = raw
+	}
+	return results, nil
+}
+
 // protocCSharpFileName 是 protoc C# 插件的输出文件名：proto 文件名去扩展名后按 _ 分词转 PascalCase。
 func protocCSharpFileName(protoName string) string {
 	base := strings.TrimSuffix(protoName, ".proto")
@@ -545,7 +683,7 @@ func readClientExportInputs(root string, m Manifest) (clientExportInputs, error)
 	return in, nil
 }
 
-// buildClientExport 算出导出目录的全部文件（键相对 <dir>）。csharp 需要 protoc，版本先核对。
+// buildClientExport 算出导出目录的全部文件（键相对 <dir>）。csharp 与 ts 需要 protoc（ts 还要 protoc-gen-es），版本先核对。
 func buildClientExport(root string, m Manifest) (map[string][]byte, error) {
 	spec := m.ClientExport
 	in, err := readClientExportInputs(root, m)
@@ -591,12 +729,39 @@ func buildClientExport(root string, m Manifest) (map[string][]byte, error) {
 	for _, def := range in.errcodes {
 		manifest.ErrorCodes = append(manifest.ErrorCodes, clientErrorCode{Code: def.Code, Name: def.Name, Message: def.Message})
 	}
-	if spec.csharp() {
-		protoc, err := spec.resolveProtoc()
-		if err != nil {
+	var protoc string
+	if spec.needsProtoc() {
+		if protoc, err = spec.resolveProtoc(); err != nil {
 			return nil, err
 		}
 		manifest.Protoc = requiredProtocVersion()
+	}
+	if spec.ts() {
+		plugin, err := spec.resolveProtocGenEs()
+		if err != nil {
+			return nil, err
+		}
+		manifest.ProtocGenEs = sdkProtobufEsVersion
+		manifest.ProtobufEs = sdkProtobufEsVersion
+		// 与 C# 用同一份 proto 副本（含配置的 csharp_namespace 选项，它只影响 C#），*_pb.ts 与导出的 proto 一致。
+		generated, err := runProtocTS(protoc, plugin, protos)
+		if err != nil {
+			return nil, err
+		}
+		if raw, ok := generated["protocol.proto"]; ok {
+			files[exportProtocolTS] = raw
+		}
+		if raw, ok := generated["dao_sync.proto"]; ok {
+			files[exportDaoSyncTS] = raw
+		}
+		files[exportMessageIDsTS] = in.ids.TS
+		errorCodes, err := codeerr.GenerateTS(in.errcodes)
+		if err != nil {
+			return nil, err
+		}
+		files[exportErrorCodesTS] = errorCodes
+	}
+	if spec.csharp() {
 		manifest.GoogleProtobuf = sdkGoogleProtobufVersion
 		manifest.Namespaces = &ns
 		generated, err := runProtocCSharp(protoc, protos)

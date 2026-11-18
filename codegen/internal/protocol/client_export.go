@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"sort"
@@ -26,13 +27,15 @@ const (
 	DirectionPush     = "push"
 )
 
-// ClientIDs 是 roost generate 的 client_export 从 protocol/def 得到的客户端消息号：C# 常量表与清单。
+// ClientIDs 是 roost generate 的 client_export 从 protocol/def 得到的客户端消息号：C# 与 TS 常量表、清单。
 type ClientIDs struct {
 	CSharp   []byte
+	TS       []byte
 	Messages []ClientMessage
 }
 
-// ExportClientIDs 读协议定义目录，产出 namespace 下的 C# 消息号表（与 -csharp 同一个生成函数）和消息号清单。
+// ExportClientIDs 读协议定义目录，产出 namespace 下的 C# 消息号表（与 -csharp 同一个生成函数）、TS 消息号表
+// （message_ids.ts，名字与 C# 一一对应）和消息号清单。
 // 目录不存在或没有协议时得到空表与空清单。清单按号、再按方向（请求、应答、推送）排序。
 func ExportClientIDs(defDir, namespace string) (ClientIDs, error) {
 	defs := &Definitions{}
@@ -68,5 +71,24 @@ func ExportClientIDs(defDir, namespace string) (ClientIDs, error) {
 		}
 		return order[messages[i].Direction] < order[messages[j].Direction]
 	})
-	return ClientIDs{CSharp: raw, Messages: messages}, nil
+	return ClientIDs{CSharp: raw, TS: generateTSIDs(defs), Messages: messages}, nil
+}
+
+// generateTSIDs 是 MessageIds.cs 的 TS 版（client_export 声明 ts 时写成 ts/message_ids.ts）：同一份 Definitions、同样的
+// Request / Response / Push 名字，用法 MessageIds.RequestAddExp 与 C# 相同。名字由 Go 标识符转来，只含字母数字，作对象键
+// 不会撞上 __proto__ 一类的特殊键。
+func generateTSIDs(defs *Definitions) []byte {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "%s\n\n/** 客户端消息号（服务端 protocol/def）：请求、应答与推送。 */\nexport const MessageIds = {\n", protocolGeneratedHeader)
+	for _, message := range defs.Messages {
+		fmt.Fprintf(&b, "  Request%s: %d,\n", msgName(message), message.ReqID)
+		if message.Resp != "" {
+			fmt.Fprintf(&b, "  Response%s: %d,\n", msgName(message), message.RespID)
+		}
+	}
+	for _, push := range defs.Pushes {
+		fmt.Fprintf(&b, "  Push%s: %d,\n", pushName(push), push.MsgID)
+	}
+	b.WriteString("} as const;\n")
+	return b.Bytes()
 }

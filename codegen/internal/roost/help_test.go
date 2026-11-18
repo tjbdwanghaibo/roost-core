@@ -153,6 +153,23 @@ func TestHelpAccessExplainsSelfSync(t *testing.T) {
 	}
 }
 
+// roost help client 写明 ts 导出、顶层 client_export.protoc（D4）、protoc-gen-es 版本与 --lang（D9），且版本与生成器核对的一致。
+func TestHelpClientExplainsTheTSExport(t *testing.T) {
+	var output bytes.Buffer
+	if err := Run([]string{"help", "client"}, &output, &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[--lang csharp|ts]", "client_export.protoc（顶层", "ts/protocol_pb.ts", "client_export.ts.protoc_gen_es", "ROOST_PROTOC_GEN_ES",
+		"@bufbuild/protobuf（现为 " + sdkProtobufEsVersion + "）", "protoc_gen_es: ", "--lang ts --to ", "client/ts/README.md"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("help client does not mention %q", want)
+		}
+	}
+	if strings.Contains(output.String(), "    protoc: tools/") && !strings.Contains(output.String(), "  protoc: tools/protoc-31.1/bin/protoc   # 可选（2026-11-18 前写在 csharp.protoc") {
+		t.Errorf("help client example still puts protoc under csharp:\n%s", output.String())
+	}
+}
+
 func TestHelpAllPrintsEveryTopic(t *testing.T) {
 	var output bytes.Buffer
 	if err := Run([]string{"help", "all"}, &output, &output); err != nil {
