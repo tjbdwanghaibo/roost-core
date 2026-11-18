@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **team：Team 声明为 Remote 共享 kind**（维护者 2026-11-18）：Team 实体加 `ownership=shared`，建队认领的那一条插入就是共享的所有权记录，不再 `EnterRemoteSharedMode`（少一次所有权记录的 findAndModify，没有建队进程独占的中间态，建队中途崩溃留下的是不卡人的共享空认领）；认领答出非共享记录时建队报错（本进程登记没有声明共享）。Team 不能退出共享。team 场景 31 → 32（新增 `TestTeamCreateClaimsSharedInOneStep`，修前红，三个变异红），4 条社交真实依赖用例通过。只对新生成 / 重新装 team 的工程生效；不要新旧二进制混跑。[证据](docs/maintenance/evidence/team-shared-kind-20261118/README.md)
 - **account：合服前检查在途换服**（换服遗留，方案三期，2026-11-18）：`MergeServer`（`accountctl merge-server`，含 `-dry-run`）在被并走的服是在途换服的来源或目标时拒绝（`ErrTransferInProgress`），
   `MergeResult.TransfersInFlight` 列出这些换服，错误给出 `transfer-role list / abort` 的提示；角色存储没有在途索引时答 `ErrNoTransferIndex`。
   合服 runbook 第 3 步加跑 `merge-server -dry-run`。测试用的进程内角色存储请用 `account.NewMemoryRoles()`（带索引）。
