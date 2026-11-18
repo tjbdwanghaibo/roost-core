@@ -7,6 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Roost.Client;
 using Roost.Client.Relay;
+#if UNITY_6000_7_OR_NEWER
+using Unity.Scripting.LifecycleManagement;
+#endif
 
 namespace Roost.Unity
 {
@@ -41,6 +44,11 @@ namespace Roost.Unity
 
         private sealed class JsLib : IBrowserSocket
         {
+            // 静态成员在“进入 Play Mode 不重载域”的工程里要标注（Unity 6000.7 起的 UAL0010 / UAL0013）；这两个只在 WebGL 播放器里
+            // 有内容（那里没有 Play Mode），跨 Play 保留是对的，标 NoAutoStaticsCleanup。旧版 Unity 没有这个特性，按版本条件编译。
+#if UNITY_6000_7_OR_NEWER
+            [NoAutoStaticsCleanup]
+#endif
             internal static readonly JsLib Instance = new JsLib();
             [DllImport("__Internal")] private static extern int RoostWsOpen(string url);
             [DllImport("__Internal")] private static extern int RoostWsState(int id);
@@ -56,6 +64,9 @@ namespace Roost.Unity
             public void Close(int id) => RoostWsClose(id);
         }
 
+#if UNITY_6000_7_OR_NEWER
+        [NoAutoStaticsCleanup] // 见 JsLib.Instance 的说明
+#endif
         private static readonly List<BrowserWebSocket> Live = new List<BrowserWebSocket>();
 
         private readonly IBrowserSocket js;

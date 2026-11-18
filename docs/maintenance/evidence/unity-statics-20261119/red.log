@@ -1,0 +1,8 @@
+client/unity/Runtime/BrowserWebSocket.cs(24,25): warning UAL0010: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute. Static members: Live.
+client/unity/Runtime/BrowserWebSocket.cs(42,30): warning UAL0010: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute. Static members: Instance.
+client/unity/Runtime/BrowserWebSocket.cs(44,44): warning UAL0013: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute
+client/unity/Runtime/BrowserWebSocket.cs(59,56): warning UAL0013: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute
+client/unity/Runtime/Native/NativeLockstep.cs(66,42): warning UAL0013: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute
+client/unity/Runtime/Native/NativeLockstep.cs(67,46): warning UAL0013: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute
+client/unity/Runtime/Native/NativeLockstep.cs(68,45): warning UAL0013: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute
+client/unity/Runtime/Native/NativeLockstep.cs(8,21): warning UAL0010: A type with static fields, automatic properties or events must have an AutoStaticsCleanup or NoAutoStaticsCleanup attribute. Static members: send, simulate, restore.

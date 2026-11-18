@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+#if UNITY_6000_7_OR_NEWER
+using Unity.Scripting.LifecycleManagement;
+#endif
 namespace Roost.Native
 {
 // 每场比赛一个实例。所有 native 回调都由 Receive/Submit 的消费线程同步调用。
@@ -63,8 +66,18 @@ public sealed class NativeLockstep : IDisposable
     private static extern IntPtr roost_lockstep_error(IntPtr state);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern void roost_lockstep_destroy(IntPtr state);
+    // 交给 native 的反向回调委托，进程内要一直活着；“进入 Play Mode 不重载域”的工程里跨 Play 保留（Unity 6000.7 起 UAL0010 / UAL0013 要求标注）。
+#if UNITY_6000_7_OR_NEWER
+    [NoAutoStaticsCleanup]
+#endif
     private static readonly SendCallback send = Send;
+#if UNITY_6000_7_OR_NEWER
+    [NoAutoStaticsCleanup]
+#endif
     private static readonly SimulateCallback simulate = Simulate;
+#if UNITY_6000_7_OR_NEWER
+    [NoAutoStaticsCleanup]
+#endif
     private static readonly RestoreCallback restore = Restore;
     private readonly NativeGameClient game;
     private readonly uint commandId, broadcastId;

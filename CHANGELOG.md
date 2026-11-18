@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **修复：Unity 包的静态成员标注 `[NoAutoStaticsCleanup]`**（2026-11-19）：`BrowserWebSocket` 的 `Live`、`JsLib.Instance` 与 `NativeLockstep` 的三个反向回调委托，在关闭“进入 Play Mode 时重载域”的工程里（如客户端模板）被 Unity 6000.7 分析器报 UAL0010 / UAL0013。按 `UNITY_6000_7_OR_NEWER` 条件编译标注，旧版 Unity 不受影响。Unity 工程重新执行 `scripts/client/build-unity.py`（或模板的同步脚本）即可。[证据](docs/maintenance/evidence/unity-statics-20261119/README.md)
+
 - **生成物要求的最低 core 提到 v1.57.0**（2026-11-19）：portal / login 模块模板按连接方式给地址（`ServerPresence.WSAddr`、`CheckWebSocketAddr`、错误码 `portal_transport_unavailable`），生成器按组件包写法生成，purchase / mailbox 用 `durability=pipelined`。
 
 ## [v1.57.0] - 2026-11-18
