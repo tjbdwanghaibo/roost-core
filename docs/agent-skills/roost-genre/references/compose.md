@@ -268,20 +268,18 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 
 本表是 skill 里客户端一侧能力的唯一说明，别处只引用它。DEMO 第 7 节、CLIENT 文档第 1 节与交付摘要只写用户的客户端对应的那一行（能用哪几条路、不支持的与替代做法），从本表取，不凭印象写。“连 game”指连嵌入 TCP 或独立 Gate（玩家协议、自身视图、Lockstep）；“开房间”指第 6 步的 lobby（HTTP）+ relay。
 
-<!-- TODO(gate-ws-csharp) -->
-
 | 客户端 | 连 game | 开房间（lobby + relay） | 登录入口 portal 与大厅 lobby 的 HTTP | 协议与配置表 | 实跑到哪 |
 | --- | --- | --- | --- | --- | --- |
-| Unity 桌面，托管路线（缺省） | TCP：`Roost.Client` 的 `GameClient` + `RoostClientDriver`；不能走 WebSocket | `Roost.Client.Relay`，TCP 或 WebSocket | 自己用 `UnityWebRequest` / `HttpClient` 调 portal；lobby 用 SDK 的 `LobbyClient` | 导出的 C# 直接编译 | 运行库在 .NET 上实跑；托管包只在 macOS 的 Unity Editor 里编译导入过，没有进 Play 连服。relay SDK 在 Unity Editor（Mono）上 TCP 与 WebSocket 都实跑过（WebSocket 偶发断线修复后没有复跑），桌面 Player 没跑 |
+| Unity 桌面，托管路线（缺省） | TCP（缺省）或 WebSocket：`Roost.Client` 的 `GameClient` + `RoostClientDriver`；走 WebSocket 时 `ConnectionOptions.WebSocketUrl` 填完整 `ws(s)://` 地址 | `Roost.Client.Relay`，TCP 或 WebSocket | 自己用 `UnityWebRequest` / `HttpClient` 调 portal；lobby 用 SDK 的 `LobbyClient` | 导出的 C# 直接编译 | 运行库在 .NET 上实跑；托管包只在 macOS 的 Unity Editor 里编译导入过，没有进 Play 连服。relay SDK 在 Unity Editor（Mono）上 TCP 与 WebSocket 都实跑过（WebSocket 偶发断线修复后没有复跑），桌面 Player 没跑 |
 | Unity 原生路线（可选） | TCP：`RoostNativeDriver` + `client/cpp` 的网络内核 | 同上（relay 只有托管 SDK） | 同上 | 同上 | macOS ARM64 的 Editor、Mono / IL2CPP Player 实跑；Windows / Linux 没有编译实跑 |
-| Unity WebGL | **不支持**：浏览器里没有 TCP 套接字，原生插件也用不了，没有 SDK 能经 WebSocket 连 game | `Roost.Client.Relay` 经 WebSocket，三样要自己配：`RelayClientOptions.PumpDriven = true`（每帧 `Pump`，不 Pump 就不发心跳，房主卡住超过 2s 被断开）、浏览器 WebSocket 的 `IRelayTransport` 桥接、`UnityWebRequest` 实现的 `ILobbyHttp`；后两样 SDK 不带，参考写法在 `client/dotnet/unity-webgl-smoke` | `UnityWebRequest`；页面与服务不同源时服务端配 `portal.cors_origins`、`lobby.cors_origins`，relay 配 `ws_allowed_origins` | 同上 | relay 只在一个 Unity 版本的 WebGL 构建、Chromium 内置浏览器面板里冒烟通过；Safari、Firefox、手机浏览器、真实切后台没测 |
+| Unity WebGL | WebSocket：`Roost.Client` + `ConnectionOptions{ WebSocketUrl, PumpDriven = true, TransportFactory = () => new BrowserGateTransport() }`，`driver.Attach(client, BrowserGateTransport.PollAll)`；地址由 portal 进服请求带 `"transport":"ws"` 返回。浏览器桥接 SDK 不带，从 `client/dotnet/unity-webgl-smoke` 拷 `BrowserGateTransport.cs` 与 jslib。不 Pump 就不发心跳，超过 `idle_timeout`（缺省 90s）被断开、恢复后重连 | `Roost.Client.Relay` 经 WebSocket，三样要自己配：`RelayClientOptions.PumpDriven = true`（每帧 `Pump`，不 Pump 就不发心跳，房主卡住超过 2s 被断开）、浏览器 WebSocket 的 `IRelayTransport` 桥接、`UnityWebRequest` 实现的 `ILobbyHttp`；后两样 SDK 不带，参考写法在 `client/dotnet/unity-webgl-smoke` | `UnityWebRequest`；页面与服务不同源时服务端配 `portal.cors_origins`、`lobby.cors_origins`，relay 配 `ws_allowed_origins` | 同上 | 连 game 与 relay 各在一个 Unity 版本的 WebGL 构建、Chromium 内置浏览器面板里冒烟通过（连 game：握手 + 只靠 Pump 的心跳保持 100s）；进入游戏后的自身视图同步在 IL2CPP 裁剪下没验证；Safari、Firefox、手机浏览器、真实切后台没测 |
 | 手机（Unity Android / iOS） | TCP：托管路线与桌面同一份代码；原生路线有 Android ARM64、iOS ARM64 的打包入口 | `Roost.Client.Relay` | 同 Unity 桌面 | 同上 | 没有在设备上编译实跑；切后台要断开，回前台重新取票登录 |
-| 纯 C# / .NET（工具、Godot .NET） | TCP：`Roost.Client`，在主循环里自己调 `Pump()`；Godot 没有现成的主线程适配 | `Roost.Client.Relay`，TCP 或 WebSocket | `HttpClient` | 同上 | .NET 上的自测与生成工程联合链路；Godot 没跑 |
-| 网页（TS / JS） | **不支持**：服务端能开 WebSocket，但没有浏览器端的 game SDK，也没有 TS 协议导出 | `client/ts`（`@roost/relay-client`，含房主辅助 `WebHost`；不在 npm 上，把同版本的 `$CORE/client/ts` 拷出来再 `npm ci && npm run build`，`$CORE` 本身只读），只走 WebSocket | `fetch`；跨域配 `portal.cors_origins`、`lobby.cors_origins` | 协议导出只有 C#；配置表的 `data/*.json` 能直接读，读取与校验代码只有 C# | relay：node 上的自动化与 Chromium 内置浏览器面板演练 |
+| 纯 C# / .NET（工具、Godot .NET） | TCP 或 WebSocket：`Roost.Client`，在主循环里自己调 `Pump()`；Godot 没有现成的主线程适配 | `Roost.Client.Relay`，TCP 或 WebSocket | `HttpClient` | 同上 | .NET 上的自测与生成工程联合链路；Godot 没跑 |
+| 网页（TS / JS） | **不支持**：服务端能开 WebSocket，但没有 TS 的 game SDK，也没有 TS 协议导出；浏览器联机用上面的 Unity WebGL | `client/ts`（`@roost/relay-client`，含房主辅助 `WebHost`；不在 npm 上，把同版本的 `$CORE/client/ts` 拷出来再 `npm ci && npm run build`，`$CORE` 本身只读），只走 WebSocket | `fetch`；跨域配 `portal.cors_origins`、`lobby.cors_origins` | 协议导出只有 C#；配置表的 `data/*.json` 能直接读，读取与校验代码只有 C# | relay：node 上的自动化与 Chromium 内置浏览器面板演练 |
 | Go（机器人、压测、工具） | TCP：`robot` 包与生成工程的 `cmd/robot`；`robot/transport` 另有 `ws` 拨号器（没有对 game 的 WebSocket 接入跑过），KCP / QUIC 拨号器给帧同步用 | `client/relay`，只走 TCP | `net/http` | Go 代码就在工程里 | 各玩法的 Robot 场景 |
 | C++ / Unreal | TCP：`client/cpp`（C++17 与 C ABI）；不支持 TLS、WebSocket、KCP，地址只收数值 IP | 没有 SDK | 自己写 | 导出目录的 `proto/` 副本自己用 protoc 生成 C++ | macOS ARM64 实跑；没有运行过 Unreal 工程；Linux、Windows、移动没有编译实跑 |
 
-- 所有 SDK 连 game 都是明文 TCP，进程里不终结 TLS；对公网要放在终结 TLS 的代理后面，或只开在受保护的内网。
+- 服务端玩家接入不终结 TLS：TCP 是明文，对公网要放在终结 TLS 的代理后面或只开在内网；WebSocket 的 `wss://` 由前置负载均衡终结，C# 的 `ClientWebSocket` 与浏览器都能连 `wss://`。
 - 帧同步（Lockstep）：C# `LockstepClient` 与 C++ 走 TCP；KCP / UDP 在服务端只有装配函数，客户端只有 Go 机器人的拨号器。
 - 开发端口：玩家 TCP 7000（独立 Gate 时是 Gate 的）、玩家 WebSocket 7080（写了 `addr` 才开）、portal 是 account 的 `web.addr`（8080 + account 的端口块）、lobby 8080 + 端口块、relay 7100 + 端口块（WebSocket 7200 + 端口块）。
 - 细节：[client/README](../../../../client/README.md)、[client/unity/README](../../../../client/unity/README.md)、[Roost.Client.Relay](../../../../client/dotnet/Roost.Client.Relay/README.md)、[client/ts](../../../../client/ts/README.md)、[client/cpp](../../../../client/cpp/README.md)。
@@ -697,6 +695,7 @@ make dev-stop && make dev-down
     ```
 
     - 回复与推送在 `client.Pump()` 里回调，Unity 交给 `RoostClientDriver`；不用 Unity 时在主循环里自己调 `Pump()`。
+    - **走 WebSocket**（浏览器或客户端表里选了 WebSocket 的）：portal 进服请求带 `"transport":"ws"`，用答复里的完整 `ws(s)://` 地址，构造时把 `Host` / `Port` 换成 `WebSocketUrl = 地址`。Unity WebGL 再加 `PumpDriven = true`、`TransportFactory = () => new BrowserGateTransport()`（桥接从 `client/dotnet/unity-webgl-smoke` 拷），用 `RoostClientDriver.Attach(client, BrowserGateTransport.PollAll)`，`ConnectAsync` 在主线程上调；其余代码不变。
     - `EnterGame` 答 `enter_need_create` 时先发 `EnterCreate{Name}` 再发一次 `EnterGame`。
     - 重连不自动重发业务请求；回到前台要重新取票登录；完整说明见 [client/README](../../../../client/README.md)、[client/unity/README](../../../../client/unity/README.md)。
     - 写进 CLIENT 文档前，把例子里的消息名换成本工程 `MessageIds.cs` 里实际有的常量。
