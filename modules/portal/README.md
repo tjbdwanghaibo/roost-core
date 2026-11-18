@@ -10,7 +10,7 @@
 
 | 端点 | 请求 | 响应 | 做什么 |
 | --- | --- | --- | --- |
-| `POST /portal/login` | `{channel, open_id, credential, game?}` | `{ok, account_ticket, account_ticket_expires_at, game_token?, game_token_expires_at?}` | 让 account 向渠道确认身份并落到 `game` 这个游戏的账号（`Login`；不带 `game` 时是 `account.default_game`，只有一个游戏时就是它），再向它要一张账号票据（`IssueAccountTicket`）；带了 `game` 时再凭票要一张这个游戏的游戏账号 token（`IssueGameToken`） |
+| `POST /portal/login` | `{channel, open_id, credential, game?, enter?}` | `{ok, account_ticket, account_ticket_expires_at, game_token?, game_token_expires_at?, enter?}` | 让 account 向渠道确认身份并落到 `game` 这个游戏的账号（`Login`；不带 `game` 时是 `account.default_game`，只有一个游戏时就是它），再向它要一张账号票据（`IssueAccountTicket`）；带了 `game` 时再凭票要一张这个游戏的游戏账号 token（`IssueGameToken`）；带了 `enter` 时再替它进服（指定的服或推荐的服），`enter` 里是与 `/portal/enter` 相同的进服结果 |
 | `POST /portal/servers` | `{account_ticket, service?}` | `{ok, recommended_server_id, services[]?, servers[]}` | 区服清单：每个服的名字、所属服务、状态、是否并入别的服、地址、负载、标签、本账号在那里有没有角色；外加推荐的服。配置了 `account.services` 时另有服务清单（`ListServices`），`service` 只列那个 game 服务的服 |
 | `POST /portal/enter` | `{account_ticket, server_id}` | `{ok, ticket, server_id, serving_server_id, expires_at, addr, addr_source}` | 向 account 要一张进服票据（`IssueEnterTicket`），连同承载服的地址交给客户端；`ticket` 是握手时原样出示的 `enter:<进服票据>` |
 | `POST /portal/game-token` | `{account_ticket, game}` | `{ok, game, game_token, expires_at}` | 凭账号票据向 account 换一张**票据自己那个游戏**的游戏账号 token（`IssueGameToken`，`gt2.…`，刷新用；别的游戏答 `560120`）；开房间类游戏的大厅（lobby）请求里带它，大厅经 account 的 `ValidateGameToken` 认人 |
@@ -121,7 +121,7 @@ roost project doctor      # collaborators:account 通过，0 FAIL
 
 ## 验证范围
 
-- `roost module verify portal`：16 条场景（`services/account/portal`）；与 `login` 的联动 1 条，与 `enter`（还要 login）的联动 2 条。
+- `roost module verify portal`：17 条场景（`services/account/portal`）；与 `login` 的联动 1 条，与 `enter`（还要 login）的联动 2 条。
 - 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）；握手那一侧直接问 account 的 `EnterServer`（认证器做的就是这件事；联动场景里用 login 真实的认证器）；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
 - 覆盖：从渠道身份走到 account 认的进服票据、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt2 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）；浏览器跨域（`portal.cors_origins` 里的 Origin 四个端点预检 204、响应带 Allow-Origin，别的 Origin 预检 403、响应不带，不写时不允许跨域，浏览器发不出的写法在配置检查与启动时拒绝）。CORS 头本身的规则在 core 的 `infra/network/httpserver`（`TestCORS*`）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；game-demo 的这一段有可重复的脚本（仓库的 `scripts/test-demo-login.sh`：`make dev-run`、curl 三步、机器人 `-login portal` 新号与老号，最后经独立 Gate 再跑一遍）。已并入别的服的老角色也有脚本（`scripts/test-demo-merge.sh`：合服后原服 1001 的角色走三步，清单标出 `merged_into`、地址给承载服，1001 的进服票据在承载服 1000 上嵌入 TCP 与经独立 Gate 各握手一次，进到原角色、背包延续）。
@@ -135,6 +135,7 @@ POST /portal/login    {channel, open_id, credential}   -> 账号票据
 POST /portal/servers  {account_ticket}                  -> 区服清单（地址、负载、本账号有没有角色）+ 推荐的服
 POST /portal/enter    {account_ticket, server_id}       -> 握手票据 enter:<进服票据> + 该连的地址
 （开房间类游戏没有区服：POST /portal/game-token {account_ticket, game} -> 游戏账号 token，拿去大厅）
+（三步并一步：POST /portal/login {…, enter: {}} 或 {…, enter: {server_id}} -> 账号票据 + 握手票据 + 该连的地址）
 连那个地址（Gate，或直连的 game），握手帧出示握手票据    -> 认证器问 account：这个账号在这个服上是哪一名玩家，没有就新建映射
 （game 推送 EnterStatus）                                -> 本服能不能进、要不要先新建（只是告知）
 要新建：发 EnterCreate{name}                             -> game 建成这名玩家：建档、起名、初始发放
@@ -211,8 +212,14 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 | `open_id` | 128 字节 | 渠道里的用户标识。只是提示：账号以渠道确认的身份为准——拿自己的凭据配上别人的 `open_id`，得到的仍是自己的账号 |
 | `credential` | 8 KiB | 交给渠道校验的凭据（开发登录是 `login.dev_token` 的值）。不记日志、不回显 |
 | `game` | 32 字节，可选 | 登录到哪个游戏（`account.games` 里的）。不写时是 account 的缺省游戏（`account.default_game`；`account.games` 只有一个游戏时就是它），没有缺省游戏时答 `560120`。写了就在答复里一并给一张这个游戏的游戏账号 token |
+| `enter` | 可选 | 登录时顺带进服，省掉 `/portal/servers` 与 `/portal/enter` 两个来回：`{"server_id": 1001}` 进那个服；`{}`（不写 `server_id`）进推荐的服，与 `/portal/servers` 同一条推荐规则，可加 `"service"`（32 字节）只在那个 game 服务的服里挑。服号为负、服号与 `service` 同时写、`service` 过长时答 `portal_request_invalid`，在问 account 之前就拒绝 |
 
 响应：`{"ok": true, "account_ticket": "at2.…", "account_ticket_expires_at": 1800000600}`；带了 `game` 时另有 `"game_token": "gt2.…", "game_token_expires_at": 1800007200`。票据有效期 `account.ticket_ttl`（缺省 10 分钟），期内可以重复使用；过期了重新登录。游戏账号 token 的寿命是 `account.games.<游戏>.token_ttl`。`game` 不在 `account.games` 里时整个登录答 `560120`，不给账号票据。账号票据绑定登录的那个游戏。
+
+带了 `enter` 时另有 `"enter": {"ticket": "enter:et1.…", "server_id": 1001, "serving_server_id": 1001, "expires_at": …, "addr": "…", "addr_source": "directory"}`，字段与 `/portal/enter` 的响应相同（没有自己的 `ok`）；账号票据照样给，之后换服、断线后进服照常凭它调 `/portal/enter`。
+- 推荐规则一个服也没推荐时登录照样成功，只是没有 `enter`：客户端改走 `/portal/servers` 让玩家自己选。
+- 进服失败（服号不是 account 登记过的服 `560104`、`service` 不是 game 服务、account 问不到）整个登录失败、不给账号票据，与 `game` 拿不到 token 时一样；渠道凭据若是一次性的，客户端要重新向渠道取。
+- 进推荐的服时入口先算一遍清单（开销同一次 `/portal/servers`：每个服一次角色查询）。
 
 ### POST /portal/servers
 

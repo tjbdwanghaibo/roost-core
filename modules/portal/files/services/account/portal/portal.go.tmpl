@@ -221,9 +221,20 @@ type loginRequest struct {
 	// Game 可选：开房间类游戏的客户端写自己的游戏名（account.games 里的），登录成功时一并拿到一张游戏账号 token，
 	// 省掉一次 /portal/game-token。游戏不在 account.games 里时整个登录失败（account 的码 560120）。
 	Game string `json:"game,omitempty"`
+	// Enter 可选：写了就在登录时一并要好进服票据，等于登录成功后马上调一次 /portal/enter，客户端一个请求拿齐
+	// 账号票据、进服票据与该连的地址，直接去握手。不写时与原来一样，只回账号票据。
+	Enter *loginEnter `json:"enter,omitempty"`
 }
 
-// loginResponse 是登录成功的响应：账号票据；请求带了游戏名时另有一张游戏账号 token。区服清单是下一步（/portal/servers）。
+// loginEnter 是登录时顺带进服的选择。
+type loginEnter struct {
+	// ServerID 写服号就进那个服；不写（或 0）进推荐的服——与 /portal/servers 用的是同一条推荐规则。
+	ServerID int32 `json:"server_id,omitempty"`
+	// Service 只在进推荐的服时有用：只在这个 game 服务的服里挑（同 /portal/servers 的 service）。与 ServerID 同时写算请求不成样子。
+	Service string `json:"service,omitempty"`
+}
+
+// loginResponse 是登录成功的响应：账号票据；请求带了游戏名时另有一张游戏账号 token；请求带了 enter 时另有进服结果。
 type loginResponse struct {
 	OK bool `json:"ok"`
 	// AccountTicket 是 account 签发的账号票据：拿清单、要进服票据时原样带上。不要长期保存——
@@ -234,6 +245,9 @@ type loginResponse struct {
 	// GameToken 与 GameTokenExpiresAt 只在请求带了 game 时出现：与 /portal/game-token 给的是同一种 token。
 	GameToken          string `json:"game_token,omitempty"`
 	GameTokenExpiresAt int64  `json:"game_token_expires_at,omitempty"`
+	// Enter 只在请求带了 enter 时可能出现：与 /portal/enter 回的是同样的字段。进推荐的服而推荐规则一个服也没推荐时
+	// 不出现（登录照样成功），客户端改走 /portal/servers 让玩家自己选。
+	Enter *enterResult `json:"enter,omitempty"`
 }
 
 func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -258,10 +272,18 @@ func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
 // 不带 game 时 account 落到它的缺省游戏（account.default_game，只有一个游戏时就是它），没有缺省游戏答 560120。
 // 带了 game 时，账号票据签好之后再凭它向 account 要一张这个游戏的游戏账号 token；要不到整个登录失败，不交出一个缺了
 // token 的“成功”。
+//
+// 带了 enter 时，票据（与 token）都要到之后再替这个账号进服：写了服号就是那个服，没写就先算一遍清单与推荐
+// （与 /portal/servers 一样：一次清单、一次登记表、每个服一次角色查询）。进服失败（服号不是 account 登记过的服、
+// account 问不到）整个登录失败，同 game；推荐规则没有推荐时登录成功、不带进服结果。enter 写得不成样子
+// （负的服号、服号与 service 同时写、service 过长）在去问 account 之前就拒绝，不消耗渠道凭据。
 func (portal *Portal) login(ctx context.Context, request loginRequest) (loginResponse, error) {
 	channel, openID := strings.TrimSpace(request.Channel), strings.TrimSpace(request.OpenID)
 	if channel == "" || len(channel) > MaxChannelBytes || openID == "" || len(openID) > MaxOpenIDBytes || len(request.Credential) > MaxCredentialBytes ||
 		len(request.Game) > MaxNameBytes {
+		return loginResponse{}, invalidRequest()
+	}
+	if enter := request.Enter; enter != nil && (enter.ServerID < 0 || len(enter.Service) > MaxNameBytes || (enter.ServerID > 0 && enter.Service != "")) {
 		return loginResponse{}, invalidRequest()
 	}
 	account, err := portal.accounts.Login(ctx, svcaccount.Identity{Channel: svcaccount.Channel(channel), OpenID: openID, Credential: request.Credential, Game: request.Game})
@@ -288,6 +310,23 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 			return loginResponse{}, err
 		}
 		response.GameToken, response.GameTokenExpiresAt = token.Token, token.ExpiresAtUnix
+	}
+	if request.Enter != nil {
+		sid := request.Enter.ServerID
+		if sid == 0 {
+			list, err := portal.servers(ctx, serversRequest{AccountTicket: ticket.Ticket, Service: request.Enter.Service})
+			if err != nil {
+				return loginResponse{}, err
+			}
+			sid = list.RecommendedServerID
+		}
+		if sid > 0 {
+			entered, err := portal.enter(ctx, enterRequest{AccountTicket: ticket.Ticket, ServerID: sid})
+			if err != nil {
+				return loginResponse{}, err
+			}
+			response.Enter = &entered.enterResult
+		}
 	}
 	slog.InfoContext(ctx, "portal: login completed", "account_id", account.ID, "channel", channel, "game", account.Game)
 	return response, nil
@@ -473,6 +512,11 @@ type enterRequest struct {
 // enterResponse 是进服的响应。
 type enterResponse struct {
 	OK bool `json:"ok"`
+	enterResult
+}
+
+// enterResult 是一次进服的结果：/portal/enter 的响应与登录时顺带进服（loginResponse.Enter）用的都是它。
+type enterResult struct {
 	// Ticket 是握手帧里出示的票据（enter:<进服票据>），原样使用。
 	Ticket string `json:"ticket"`
 	// ServerID 是选中的服，ServingServerID 是承载它的服（选中的服并入了别的服时两者不同）：客户端连的是承载服。
@@ -523,10 +567,10 @@ func (portal *Portal) enter(ctx context.Context, request enterRequest) (enterRes
 	if err != nil {
 		return enterResponse{}, err
 	}
-	response := enterResponse{
-		OK: true, Ticket: EnterTicketPrefix + ticket.Ticket,
+	response := enterResponse{OK: true, enterResult: enterResult{
+		Ticket:   EnterTicketPrefix + ticket.Ticket,
 		ServerID: ticket.ServerID, ServingServerID: ticket.ServingServerID, ExpiresAt: ticket.ExpiresAtUnix,
-	}
+	}}
 	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID)
 	slog.InfoContext(ctx, "portal: enter ticket issued", "account_id", account.ID, "server_id", ticket.ServerID, "serving_server_id", ticket.ServingServerID)
 	return response, nil

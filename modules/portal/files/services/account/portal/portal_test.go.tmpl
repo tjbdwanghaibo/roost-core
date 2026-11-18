@@ -1219,6 +1219,94 @@ func TestPortalEnterHandsOutATicketAndTheServingAddress(t *testing.T) {
 	}
 }
 
+// 登录时顺带进服（enter）：一个请求拿齐账号票据、进服票据与该连的地址，握手照常成功。写服号进那个服；不写进推荐的服
+// （新号推荐最新开的服，有角色了推荐角色所在的服）；推荐规则一个服也没推荐时登录成功、没有进服结果。
+// 服号不是 account 登记过的服时整个登录失败、不交出任何票据；enter 写得不成样子在问 account 之前就拒绝。
+func TestPortalLoginCanEnterInTheSameRequest(t *testing.T) {
+	w := newPortalWorld(t, func(options *Options) {
+		options.Directory = portalAddrs(t, map[int32]string{1000: "203.0.113.7:7000", 1001: "203.0.113.8:7001"})
+	})
+	login := func(openID string, enter map[string]any) portalReply {
+		t.Helper()
+		return w.post("/portal/login", map[string]any{"channel": "dev", "open_id": openID, "credential": portalDevToken, "enter": enter})
+	}
+	entered := func(label string, reply portalReply, sid int32, addr string) map[string]any {
+		t.Helper()
+		enter, _ := reply.body["enter"].(map[string]any)
+		ticket, _ := enter["ticket"].(string)
+		gotSID, _ := enter["server_id"].(float64)
+		if reply.status != http.StatusOK || reply.text("account_ticket") == "" || int32(gotSID) != sid || enter["serving_server_id"] != float64(sid) ||
+			enter["addr"] != addr || enter["addr_source"] != "directory" || !strings.HasPrefix(ticket, "enter:et1.") || enter["expires_at"] != float64(1_800_000_000+30*60) {
+			t.Fatalf("%s: %d %s; want server %d at %s", label, reply.status, reply.raw, sid, addr)
+		}
+		if _, present := enter["ok"]; present {
+			t.Fatalf("%s: the nested enter result carries its own ok: %s", label, reply.raw)
+		}
+		return enter
+	}
+
+	// 写了服号：进那个服。账号票据同时可用（之后换服、重进不用再登录）。
+	alice := login("alice", map[string]any{"server_id": 1000})
+	aliceID, created := w.handshake(entered("alice into 1000", alice, 1000, "203.0.113.7:7000")["ticket"].(string))
+	if !created {
+		t.Fatal("the handshake with the ticket from the login did not create alice's mapping")
+	}
+	if again, isNew := w.handshake(w.enter(alice.text("account_ticket"), 1000).text("ticket")); again != aliceID || isNew {
+		t.Fatalf("entering with the account ticket from the same login gave player %d (new %v), want %d", again, isNew, aliceID)
+	}
+
+	// 不写服号：进推荐的服。新号去最新开的服；有角色了回角色所在的服（同 /portal/servers 的推荐）。
+	bob := login("bob", map[string]any{})
+	if _, isNew := w.handshake(entered("bob into the recommended server", bob, 1001, "203.0.113.8:7001")["ticket"].(string)); !isNew {
+		t.Fatal("bob's handshake on the recommended server did not create his mapping")
+	}
+	if _, recommended := w.servers(login("alice", nil).text("account_ticket")); recommended != 1000 {
+		t.Fatalf("the list recommends %d to alice, want 1000 (her role)", recommended)
+	}
+	if again, isNew := w.handshake(entered("alice back to her server", login("alice", map[string]any{}), 1000, "203.0.113.7:7000")["ticket"].(string)); again != aliceID || isNew {
+		t.Fatalf("alice's recommended enter gave player %d (new %v), want %d", again, isNew, aliceID)
+	}
+
+	// 一个服也推荐不出来（都在维护）：登录照样成功，没有进服结果，客户端改走清单。
+	w.upsert(1000, svcaccount.ServerMaintenance)
+	w.upsert(1001, svcaccount.ServerMaintenance)
+	carol := login("carol", map[string]any{})
+	if _, present := carol.body["enter"]; carol.status != http.StatusOK || carol.text("account_ticket") == "" || present {
+		t.Fatalf("carol with nothing to recommend: %d %s; want a login without an enter result", carol.status, carol.raw)
+	}
+
+	// 服号不是登记过的服：整个登录失败，带着 account 的 560104，不交出账号票据。
+	if refused := login("dave", map[string]any{"server_id": 4242}); refused.status != http.StatusBadRequest || refused.code() != 560104 ||
+		refused.text("account_ticket") != "" || refused.body["enter"] != nil {
+		t.Fatalf("enter a server nobody registered at login: %d %s; want 400 with 560104 and no ticket", refused.status, refused.raw)
+	}
+
+	// 写得不成样子：不去问 account（渠道凭据没被用掉）。
+	logins := w.accounts.count("Login")
+	for label, enter := range map[string]map[string]any{
+		"a negative server id":      {"server_id": -1},
+		"a server id and a service": {"server_id": 1000, "service": "main"},
+		"a 33-byte service":         {"service": strings.Repeat("s", 33)},
+	} {
+		if reply := login("erin", enter); reply.status != http.StatusBadRequest || reply.code() != portalCodeRequestInvalid || reply.text("account_ticket") != "" {
+			t.Fatalf("%s: %d %s; want 400 with %d", label, reply.status, reply.raw, portalCodeRequestInvalid)
+		}
+	}
+	// 服号不是整数：请求体解不开，与别的接口一样答 400（解码错误不带业务码）。
+	if reply := login("erin", map[string]any{"server_id": "1000"}); reply.status != http.StatusBadRequest || reply.text("account_ticket") != "" {
+		t.Fatalf("a server id that is not an int: %d %s; want 400 and no ticket", reply.status, reply.raw)
+	}
+	if got := w.accounts.count("Login"); got != logins {
+		t.Fatalf("malformed enter requests reached account's Login %d times", got-logins)
+	}
+	if got := w.accounts.count("IssueEnterTicket"); got != 5 {
+		t.Fatalf("IssueEnterTicket was asked %d times, want 5 (four login enters, one /portal/enter; carol had nothing recommended)", got)
+	}
+	if got := w.accounts.roleWrites(); got != 0 {
+		t.Fatalf("the portal itself reached CreateRole / SelectRole / EnterServer %d times", got)
+	}
+}
+
 // D23：入口的动态目录是 account 持有的带过期登记表，不是入口进程自己的表。用 Start（缺省的 newDirectory）起两个
 // 入口副本，共用一个 account：game 只向 account 报一次，两个副本给出的地址一样（以前每个副本各有一张进程内的表，
 // 上报只到一个副本时两次请求看到的清单不一样）；上报盖住 portal.servers；停报到期后两个副本都回到配置；
@@ -1861,6 +1949,18 @@ func TestPortalListsServersByService(t *testing.T) {
 		if reply := w.post("/portal/servers", map[string]any{"account_ticket": ticket, "service": service}); reply.status != http.StatusBadRequest || reply.code() != portalCodeRequestInvalid {
 			t.Fatalf("service %q: %d %s; want 400 portal_request_invalid", service, reply.status, reply.raw)
 		}
+	}
+	// 登录时顺带进推荐的服，service 同样限定在哪个 game 服务里挑：不限定是 2000，限定 slg 是 1001。
+	for service, want := range map[string]float64{"": 2000, "slg": 1001, "mmo": 2000} {
+		reply := w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "frank-" + service, "credential": portalDevToken, "enter": map[string]any{"service": service}})
+		enter, _ := reply.body["enter"].(map[string]any)
+		if reply.status != http.StatusOK || enter["server_id"] != want {
+			t.Fatalf("login entering the recommended server of service %q: %d %s; want server %v", service, reply.status, reply.raw, want)
+		}
+	}
+	if reply := w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "frank", "credential": portalDevToken, "enter": map[string]any{"service": "lobby"}}); reply.status != http.StatusBadRequest ||
+		reply.code() != portalCodeRequestInvalid || reply.text("account_ticket") != "" {
+		t.Fatalf("login entering the recommended server of lobby: %d %s; want 400 portal_request_invalid and no ticket", reply.status, reply.raw)
 	}
 	// ListServices 问不到：整个清单 500。
 	w.accounts.fail("ListServices")
