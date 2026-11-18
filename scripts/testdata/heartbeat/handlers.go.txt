@@ -5,13 +5,15 @@ import (
 
 	monster "example.com/planet/game/entities/monster"
 	scene "example.com/planet/game/entities/scene"
+	"example.com/planet/game/view"
 )
 
-// 端到端用例（scripts/test-heartbeat-generated.sh）读状态用的 handler：只读，不改 DAO。
+// 端到端用例（scripts/test-heartbeat-generated.sh）读状态用的 handler：只读，不改 DAO。handler 收 game/view 的实体总接口，
+// 经实体包生成的 <X>Of(target) 取回心跳 / 行为 / 时间域组件（实体的基础设施，生成在实体包里）。
 
 //roost:nest rollback=undo durability=memory
-func handlerMonsterExampleProgress(target monster.IBehaviorEntity) (string, error) {
-	component := target.BehaviorComp()
+func handlerMonsterExampleProgress(target view.MonsterEntity) (string, error) {
+	component := monster.BehaviorOf(target)
 	started := 0
 	if strategy, ok := component.AI().Strategy().(*monster.ExampleStrategy); ok {
 		started = strategy.Started()
@@ -24,11 +26,11 @@ func handlerMonsterExampleProgress(target monster.IBehaviorEntity) (string, erro
 }
 
 //roost:nest rollback=undo durability=memory
-func handlerSceneSetRate(target scene.ITimeDomainEntity, rate float64) error {
-	return target.TimeDomainComp().Domain().SetRate(rate)
+func handlerSceneSetRate(target view.SceneEntity, rate float64) error {
+	return scene.TimeDomainOf(target).Domain().SetRate(rate)
 }
 
 //roost:nest rollback=undo durability=memory
-func handlerSceneStartExampleBeat(target scene.IHeartbeatEntity) error {
-	return target.HeartbeatComp().Beat("example").Start()
+func handlerSceneStartExampleBeat(target view.SceneEntity) error {
+	return scene.HeartbeatOf(target).Beat("example").Start()
 }

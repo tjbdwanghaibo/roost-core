@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -1042,3 +1043,135 @@ func TestOwnerModStopWithdrawsTheHandlers(t *testing.T) {
 	}
 }
 ` + generatedOwnerStopHelpers
+
+// 生成器写出的组件按 compose §4D（组件包 + game/view + 实体事件，2026-11-16 起）的写法。新建 -template game 工程，
+// add entity / dao / component / handler / timer / behavior 之后 roost generate：
+//   - 组件在 game/components/<包>/（类型号常量、工厂登记、Owner、NewComponent），view 里有 <X> 与 <X>Holder，实体结构体
+//     直接挂 `<字段> *<包>.Component` 与 comp:"<包>.CompType<X>"；
+//   - 实体包里的手写文件不声明组件结构体、组件方法与 I<X>Entity，也没有 <x>_component.go；
+//   - handler 收 game/view 的接口（组件窄接口 view.I<X>Entity；生成的定时器组件收 view.<实体>Entity），不引用实体包里的接口；
+//   - 生成器写出的文件都不写 durability=strict（缺省 async，维护者 2026-11-18）；
+//   - 工程 go build / go vet 通过。
+func TestGeneratedComponentFollowsTheComponentPackageRule(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "planet")
+	roost := func(args ...string) {
+		t.Helper()
+		var out bytes.Buffer
+		if err := Run(args, &out, &out); err != nil {
+			t.Fatalf("roost %s: %v\n%s", strings.Join(args, " "), err, out.String())
+		}
+	}
+	read := func(rel string) string {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Errorf("%s: %v", rel, err)
+		}
+		return string(raw)
+	}
+	roost("project", "new", "planet", "-module", "example.com/planet", "-out", root, "-skip-deps", "-template", "game")
+	for _, args := range [][]string{
+		{"add", "entity", "Guild"},
+		{"add", "dao", "Guild", "--entity", "Guild"},
+		{"add", "component", "Roster", "--entity", "Guild"},
+		{"add", "handler", "JoinGuild", "--entity", "Guild", "--component", "Roster"},
+		{"add", "component", "DailyQuest", "--entity", "Player"},
+		{"add", "handler", "ClaimDailyQuest", "--entity", "Player", "--component", "DailyQuest"},
+		{"add", "timer", "--entity", "Guild"},
+		{"add", "handler", "ArmGuildTimer", "--entity", "Guild", "--component", "Timer"},
+		{"add", "behavior", "--entity", "Guild"},
+	} {
+		roost(append(args, "--root", root)...)
+	}
+	roost("generate", "--root", root)
+
+	component := read("game/components/roster/roster.go")
+	for _, want := range []string{"package roster\n", "//roost:component type=", "const CompTypeRoster entity.ComponentType = ",
+		"entity.RegisterComponentFactory(CompTypeRoster, NewComponent)", "type Owner ", "type Component struct",
+		"func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error)"} {
+		if !strings.Contains(component, want) {
+			t.Errorf("game/components/roster/roster.go lacks %q:\n%s", want, component)
+		}
+	}
+	read("game/components/dailyquest/dailyquest.go")
+	if view := read("game/view/component_roster.go"); !strings.Contains(view, "type RosterHolder interface") || !strings.Contains(view, "type Roster interface") {
+		t.Errorf("game/view/component_roster.go lacks Roster / RosterHolder:\n%s", view)
+	}
+	read("game/view/component_dailyquest.go")
+	for entityName, want := range map[string]string{"guild": "`comp:\"roster.CompTypeRoster\"`", "player": "`comp:\"dailyquest.CompTypeDailyQuest\"`"} {
+		if source := read("game/entities/" + entityName + "/entity.go"); !strings.Contains(source, want) {
+			t.Errorf("game/entities/%s/entity.go does not mount the component package with %s:\n%s", entityName, want, source)
+		}
+	}
+
+	// 实体包里的手写文件（生成的 _gen 文件之外）不声明组件、组件方法与 I<X>Entity。定时器 / 行为组件是实体的基础设施，
+	// 生成在 _gen 文件里；业务文件 timer_handlers.go / behavior_actions.go / heartbeat_beats.go 只放它们的回调与动作。
+	componentStruct := regexp.MustCompile(`(?m)^type \w*Component struct\b`)
+	componentMethod := regexp.MustCompile(`(?m)^func \(\w+ \*\w*Component\) `)
+	narrow := regexp.MustCompile(`(?m)^type I\w+Entity\b`)
+	for _, entityName := range []string{"guild", "player", "world"} {
+		paths, err := filepath.Glob(filepath.Join(root, "game", "entities", entityName, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			base := filepath.Base(path)
+			if strings.HasSuffix(base, "_component.go") {
+				t.Errorf("game/entities/%s/%s: the component belongs to game/components/<package>", entityName, base)
+			}
+			if strings.HasSuffix(base, "_gen.go") || strings.HasSuffix(base, "_gen_wire.go") || strings.HasSuffix(base, "_test.go") {
+				continue
+			}
+			raw := read("game/entities/" + entityName + "/" + base)
+			for _, pattern := range []*regexp.Regexp{componentStruct, componentMethod, narrow} {
+				if base != "entity.go" && pattern != narrow {
+					continue // 回调与动作文件里的组件方法是定时器 / 行为组件的回调，规则另查（下面的一行回调）
+				}
+				if found := pattern.FindString(raw); found != "" {
+					t.Errorf("game/entities/%s/%s declares %q; components and their narrow interfaces belong to game/components and game/view", entityName, base, found)
+				}
+			}
+		}
+	}
+	for rel, want := range map[string]string{
+		"game/handler/join_guild.go":           "target view.IRosterEntity",
+		"game/handler/claim_daily_quest.go":    "target view.IDailyQuestEntity",
+		"game/handler/arm_guild_timer.go":      "target view.GuildEntity",
+		"game/handler/tick_guild_timer_gen.go": "target view.GuildEntity",
+		"game/handler/guild_behavior.go":       "target view.GuildEntity",
+	} {
+		if source := read(rel); !strings.Contains(source, want) {
+			t.Errorf("%s does not take %s:\n%s", rel, want, source)
+		}
+	}
+	entityNarrow := regexp.MustCompile(`\b(guild|player|world)\.I\w+Entity\b`)
+	handlers, err := filepath.Glob(filepath.Join(root, "game", "handler", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range handlers {
+		if found := entityNarrow.FindString(read(relativeSlash(root, path))); found != "" {
+			t.Errorf("%s takes %s; a Nest handler takes a game/view interface", relativeSlash(root, path), found)
+		}
+	}
+	// 缺省 async：生成器写出的文件都不写 durability=strict。
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") {
+			return walkErr
+		}
+		if strings.Contains(read(relativeSlash(root, path)), "durability=strict") {
+			t.Errorf("%s writes durability=strict; generated scaffolds use the default (async)", relativeSlash(root, path))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if testing.Short() || t.Failed() {
+		return
+	}
+	useLocalRoostCore(t, root)
+	for _, action := range []string{"build", "vet"} {
+		runGeneratedGo(t, root, action, "./...")
+	}
+}

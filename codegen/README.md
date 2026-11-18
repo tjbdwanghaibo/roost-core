@@ -87,7 +87,7 @@ Game Ingress 与两端配置（`roost help gate`）。
     roost generate
     roost project doctor --workflow first-business
 
-Component 与 DAO 自动挂到目标 Entity；业务在 Component 里写玩法方法，通过 DAO 的生成方法改状态。Nest handler 进入前已经持有 Entity 锁，不要在业务层重复加锁。生成项目里的 `docs/FIRST_BUSINESS.zh-CN.md` 有完整可复制例子。
+Component 与 DAO 自动挂到目标 Entity：组件写在自己的包 `game/components/<包>/`（与 `game/view/component_<包>.go` 的接口），实体结构体只挂字段；业务在组件里写玩法方法，handler 收生成的 `view.I<X>Entity` 经访问器调用，通过 DAO 的生成方法改状态。Nest handler 进入前已经持有 Entity 锁，不要在业务层重复加锁。生成项目里的 `docs/FIRST_BUSINESS.zh-CN.md` 有完整可复制例子。
 
 ### 4. DAO 与生成
 

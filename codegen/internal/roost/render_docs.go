@@ -87,12 +87,14 @@ go.mod/go.sum；全部成功后才提交，后置步骤失败不会留下半生�
 然后只编辑不带 Code generated 标识的定义或业务文件：
 
 - protocol/def：消息结构；
-- game/entities：Entity 定义与 Component 组合；
+- game/entities：Entity 定义与组件挂载；
+- game/components：组件逻辑（每个组件一个包）；
 - db/def：DAO 定义；
 - game/handler：Nest handler 业务逻辑；
 - internal/service/{{SERVICE}}：服务接入与业务生命周期；game 服务的 manager 登记点在 game/managers/managers.go（该服务启动的内存单例）。
 
-目录约定：game/ 放玩法与实体（game/entities/<实体> 是本体、生成文件与组件的薄接线；game/components/<功能> 是组件逻辑；
+目录约定：game/ 放玩法与实体（game/entities/<实体> 只放实体本体、roost generate 写的 _gen 文件与组件要实体手写提供的宿主方法
+<功能>.go，不放组件、组件方法与 I<X>Entity；game/components/<功能> 是组件包：类型号与工厂登记、组件逻辑、宿主接口 Owner；
 game/view 只放接口：component_<功能>.go 是组件接口与 <功能>Holder，entity_<实体>.go 由 roost generate 生成，
 组件包、game/modules/login 与联动只依赖 view，实体包依赖组件包并实现 view 的接口；
 game/modules/login 是登录链（含进入钩子与首次发放 enter_first.go）；game/managers 是 manager 登记点）；internal/ 放框架接线（bootstrap、registry、access、service）；
@@ -148,7 +150,8 @@ func renderEntityComponentGuide(manifest Manifest) string {
 # Entity、Component 与 DAO 零基础实战
 
 这条路径不要求手写工厂、组件注册、Manager、字段 tag 或 getter。生成器负责接线，业务只写
-Component 方法和 Nest handler。
+组件方法和 Nest handler。组件写在自己的包 game/components/<功能>/ 里，实体包只挂字段；包之间经 game/view
+的接口相连（组件包、handler 只依赖 view，实体包依赖组件包并实现 view 的接口）。
 
 ## 1. 创建一个完整聚合
 
@@ -169,13 +172,19 @@ Component 方法和 Nest handler。
 
 | 文件 | 所有权 | 应该做什么 |
 | --- | --- | --- |
-| game/entities/player/entity.go | 业务 | Entity 聚合、Component/DAO 字段与接口；不要删除生成器添加的 tag |
-| game/entities/player/profile_component.go | 业务 | 在文件末尾添加玩法方法 |
-| game/view/component_profile.go | 业务 | Profile 接口：列出 handler 与别的组件能调的组件方法 |
+| game/entities/player/entity.go | 业务 | Entity 本体：组件字段 profile *profile.Component 与 DAO 字段；不要删除生成器添加的 tag |
+| game/components/profile/profile.go | 业务 | 组件包：类型号与工厂登记、宿主接口 Owner、Component；在文件末尾添加玩法方法 |
+| game/view/component_profile.go | 业务 | Profile 接口：列出 handler 与别的组件能调的组件方法；ProfileHolder：访问器与宿主方法 |
+| game/view/entity_player.go | 生成器 | 实体接口 view.PlayerEntity（DAO getter 与各组件的 Holder）；禁止手改 |
 | game/view/holder_entities_gen.go | 生成器 | 窄接口 view.IProfileEntity（handler 的参数类型）；禁止手改 |
 | db/def/player.go | 业务 | 声明持久化/同步字段，不写 ID、id、tracker |
 | db/gen_player_dao.go | 生成器 | 使用 GetName()/SetName() 等方法访问；禁止直接访问存储字段 |
-| game/entities/player/player_gen_wire.go | 生成器 | 工厂、装配、getter、Snapshot；禁止手改 |
+| game/entities/player/player_gen_wire.go | 生成器 | 工厂、装配、getter、view 访问器 Profile()、Snapshot；禁止手改 |
+
+组件要实体提供的东西（例如只属于这个实体的计算）写成宿主方法：方法签名加进 view 的 ProfileHolder，实体在
+game/entities/player/profile.go 手写实现（只交出 DAO 某个字段的由生成器写）；漏写时 roost generate 写的编译期断言
+var _ view.PlayerEntity = (*Player)(nil) 报错。同一个组件要挂到别的实体上时再跑一次 roost add component Profile --entity <实体>：
+组件包已在，只挂字段；这时把组件的 Owner 改成它用得到的最小接口（entity.IThreadSafeEntity + view.ProfileHolder）。
 
 ## 2. 写 Component 逻辑
 
@@ -186,15 +195,20 @@ Component 方法和 Nest handler。
         Level int32  ` + "`store:\"level\" dao:\"persist,sync\"`" + `
     }
 
-然后在 profile_component.go 末尾写业务方法：
+然后在 game/components/profile/profile.go 末尾写业务方法（实体上的业务规则都写在组件里，不写成实体方法）：
 
-    func (component *ProfileComponent) Rename(name string) error {
+    func (component *Component) Rename(name string) error {
         if name == "" {
             return fmt.Errorf("invalid name %q", name)
         }
-        component.Owner().Dao().SetName(name)
+        component.owner.Dao().SetName(name)
         return nil
     }
+
+component.owner 的类型是组件包的 Owner（缺省 view.PlayerEntity）：DAO getter、各组件的访问器（跨组件写
+component.owner.Bag().Remove(...)，不写 Owner().BagComp()）与 Publish。做完一件别的功能要跟着动的事时，在
+game/event/<功能>.go 定义事件，组件里 component.owner.Publish(event.<事件>{...})、错误原样返回；监听方在自己的组件上写
+//roost:listen 方法 On<事件>(ev event.<事件>) error，同一笔事务。
 
 必须使用 DAO 生成的 SetXxx/UpdateXxx/RemoveXxx 方法，不能直接写字段。生成方法会同时维护
 dirty mask、回滚、持久化 patch 和同步标记。
@@ -214,13 +228,15 @@ Nest 同时需要 roost.yaml 的 nest feature（生成 Sender/handler）和目�
 
     import "{{MODULE}}/game/view"
 
-    //roost:nest rollback=undo durability=strict
+    //roost:nest rollback=undo
     func handlerRenamePlayer(target view.IProfileEntity, name string) error {
         return target.Profile().Rename(name)
     }
 
-handler 经 game/view 拿组件：Rename 也要写进 game/view/component_profile.go 的 Profile 接口；
-view.IProfileEntity 与实体上的访问器 Profile() 由 roost generate 生成。
+handler 收 view 的窄接口、经访问器调组件方法（target.Profile().Rename(...)），不写 target.ProfileComp() 或
+target.Profile().Owner().Dao().Set…：规则在组件里。Rename 也要写进 game/view/component_profile.go 的 Profile 接口；
+view.IProfileEntity 与实体上的访问器 Profile() 由 roost generate 生成。组件挂在几种实体上、它们归属不同服务时，在
+//roost:nest 上写 target=<实体>（add handler 发现组件挂在多个实体上时会写上）。
 
     // game/view/component_profile.go
     type Profile interface {
@@ -231,21 +247,13 @@ view.IProfileEntity 与实体上的访问器 Profile() 由 roost generate 生成
 并按声明完成回滚和 durability。业务层不要再次给
 Entity 或 Component 加 mutex，也不要绕过 Sender 直接并发调用 handler。
 
-选择 rollback/durability：
-
-| 场景 | 推荐标记 |
-| --- | --- |
-| 只读查询 | 默认，或 durability=memory |
-| 单 Entity 普通写入 | rollback=undo durability=async |
-| 交易、付费、跨实体关键写入 | rollback=undo durability=strict |
-| 依赖完整状态快照回滚 | rollback=state；先确认 Entity 支持 snapshot |
-
-不确定时先使用 strict；压测和故障演练后再放宽，不要为了吞吐直接关闭 durability。
+durability 用缺省的 async（不写）：WAL 写入完成就可以回复，不等每次 fsync，也不等 Mongo 投影。生成的骨架都不写 durability。
+rollback 用 undo；依赖完整状态快照回滚时用 rollback=state（先确认 Entity 支持 snapshot）。
 
 ## 4. 哪些数据放在哪里
 
 - Entity：身份、生命周期和聚合边界，不堆放可变业务字段。
-- Component：玩法行为和对 Entity/DAO 的编排；不持有事务里会改的状态。组件普通字段既不随事务回滚，重启后也不会恢复，只放与事务无关的东西（只读引用、配置句柄）。
+- Component：玩法行为和对 Entity/DAO 的编排，写在 game/components/<功能>/ 自己的包里；不持有事务里会改的状态。组件普通字段既不随事务回滚，重启后也不会恢复，只放与事务无关的东西（只读引用、配置句柄）。
 - DAO：需要 save/load、rollback 或 sync 的状态。字段默认既落库又同步给客户端，账本、回执、种子这类只给服务端用的字段写 dao:"nosync"。事务内会改的状态一律放进 DAO：不该落库的用 dao:"nopersist,sync"（只同步）或 dao:"nopersist,nosync"（只参与事务），派生值也一样——回滚由 DAO 统一完成，组件不要自己登记 undo，也不要把事务会改的状态放在组件的普通字段里（go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet 对两者都会提示；确属缓存、允许不随事务回滚的组件字段在声明上一行或行尾写 //roost:cache）。
 - Config：策划静态数据，放 configs/schema 与 configs/table，不写进 Entity。
 - 时间：业务时间（活动窗口、定时器、冷却、业务过期、赛季、排行周期、匹配票据、展示给玩家的聊天时间、账号与角色创建 / 登录时间）读业务时钟 app.BusinessClock(registry)，它带 time.logic_offset（只在测试环境用，生产必须为 0；同一套部署的所有服务配置必须一致，roost project doctor 会检查；业务时间只许前进，偏移改小到让业务时间回到部署已经到过的时刻时 App 拒绝启动，要回到过去只能清库重建）；租约、超时、重试、存储 TTL、日志是系统时间，直接用 time 包。Nest handler、心跳回调、定时器回调里的业务时间一律读 fctx.Now()（这条消息开始时冻结一次，同一条消息里读到同一个值），handler 参数 nowUnix / nowUnixMilli 由生成的分发包装从它填；app.BusinessClock 留给 Nest 之外的服务 goroutine。game 目录下的包直接读 time.Now / Since / Until 时 glsvet 会提示，系统时间在同一行写 //glsvet:system-clock <理由>；Nest handler 里读 app.BusinessClock 或 clock.Now 同样会提示改读 fctx.Now。
@@ -261,7 +269,7 @@ Entity 或 Component 加 mutex，也不要绕过 Sender 直接并发调用 handl
 
 提交前再执行 make ci。以下错误不要绕过：
 
-- no component factory：Component 没有通过 roost add component --entity 创建或注册被删除；
+- no component factory：组件没有通过 roost add component --entity 创建，或组件包 init 里的工厂登记被删除；
 - multiple Entities exist：补上 --entity；
 - generated files are stale：重新 make generate 并提交生成物；
 - reserved field id/tracker：删除 DAO 中的保留字段，身份和 tracker 由生成器管理；

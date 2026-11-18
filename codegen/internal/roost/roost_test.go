@@ -439,7 +439,8 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(componentPaths, ","), "game/entities/player/inventory_component.go,game/entities/player/entity.go,game/view/component_inventory.go"; got != want {
+	// 组件包写法（compose §4D，2026-11-18）：组件包、实体挂字段、view 接口。
+	if got, want := strings.Join(componentPaths, ","), "game/components/inventory/inventory.go,game/entities/player/entity.go,game/view/component_inventory.go"; got != want {
 		t.Fatalf("component paths = %s, want %s", got, want)
 	}
 	if _, err := Add(root, AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}); err != nil {
@@ -456,29 +457,30 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"type IPlayerEntity interface", "entity.IThreadSafeEntity", "entity.ComponentManager", "entity.DaoManager",
-		"inventory *InventoryComponent `comp:\"CompTypeInventory\"`",
+		"entity.ComponentManager", "entity.DaoManager",
+		"inventory *inventory.Component `comp:\"inventory.CompTypeInventory\"`", `"example.com/planet/game/components/inventory"`,
 		"*db.PlayerDao", "`dao:\"player\"`", `db "example.com/planet/db"`,
 	} {
 		if !strings.Contains(string(entitySource), want) {
 			t.Errorf("Entity scaffold missing %q:\n%s", want, entitySource)
 		}
 	}
-	componentSource, err := os.ReadFile(filepath.Join(root, "game", "entities", "player", "inventory_component.go"))
+	// 实体包不声明 I<X>Entity（handler 收 view 的接口）。
+	if strings.Contains(string(entitySource), "type IPlayerEntity interface") {
+		t.Errorf("Entity scaffold still declares IPlayerEntity:\n%s", entitySource)
+	}
+	componentSource, err := os.ReadFile(filepath.Join(root, "game", "components", "inventory", "inventory.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"entity.RegisterComponentFactory", "owner.(*Player)", "func (component *InventoryComponent) Owner() *Player",
-		"Do not add mutexes here", "CompTypeInventory entity.ComponentType = 2000", "view.IInventoryEntity",
+		"package inventory", "entity.RegisterComponentFactory(CompTypeInventory, NewComponent)", "type Owner = view.PlayerEntity",
+		"func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error)", "value.(Owner)",
+		"func (component *Component) Owner() Owner", "不要在组件里加锁", "CompTypeInventory entity.ComponentType = 2000", "view.IInventoryEntity",
 	} {
 		if !strings.Contains(string(componentSource), want) {
 			t.Errorf("Component scaffold missing %q:\n%s", want, componentSource)
 		}
-	}
-	// 2026-11-16：窄接口不再写进实体包，改由 view 的 <X>Holder 生成 view.I<X>Entity。
-	if strings.Contains(string(componentSource), "type IInventoryEntity interface") {
-		t.Errorf("Component scaffold still declares the narrow interface in the entity package:\n%s", componentSource)
 	}
 	viewSource, err := os.ReadFile(filepath.Join(root, "game", "view", "component_inventory.go"))
 	if err != nil {
@@ -499,7 +501,7 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"CreateComponent(CompTypeInventory", "func (e *Player) InventoryComp() *InventoryComponent", "func (e *Player) Dao() *db.PlayerDao",
+	for _, want := range []string{"CreateComponent(inventory.CompTypeInventory", "func (e *Player) InventoryComp() *inventory.Component", "func (e *Player) Dao() *db.PlayerDao",
 		"func (e *Player) Inventory() view.Inventory { return e.inventory }", "var _ view.PlayerEntity = (*Player)(nil)"} {
 		if !strings.Contains(string(wire), want) {
 			t.Errorf("generated Entity wire missing %q:\n%s", want, wire)
@@ -513,10 +515,14 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"handlerRenamePlayer", "view.IInventoryEntity", "nest.DurabilityStrict"} {
+	for _, want := range []string{"handlerRenamePlayer", "view.IInventoryEntity"} {
 		if !strings.Contains(string(nestWire), want) {
 			t.Errorf("generated Nest wire missing %q:\n%s", want, nestWire)
 		}
+	}
+	// 骨架不写 durability：用缺省的 async（维护者 2026-11-18）。
+	if strings.Contains(string(nestWire), "DurabilityStrict") {
+		t.Errorf("the handler scaffold asks for strict durability:\n%s", nestWire)
 	}
 }
 
@@ -566,12 +572,12 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		}
 		switch step.Kind {
 		case "component":
-			path := filepath.Join(root, "game", "entities", "player", "profile_component.go")
+			path := filepath.Join(root, "game", "components", "profile", "profile.go")
 			raw, readErr := os.ReadFile(path)
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			raw = append(raw, []byte("\nfunc (component *ProfileComponent) Rename(name string) error { return nil }\n")...)
+			raw = append(raw, []byte("\nfunc (component *Component) Rename(name string) error { return nil }\n")...)
 			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
 				t.Fatal(writeErr)
 			}
@@ -2216,10 +2222,18 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 		"roost add handler RenamePlayer --entity Player --component Profile",
 		`import "example.com/planet/game/view"`, "target view.IProfileEntity", "target.Profile().Rename(name)",
 		"game/view/component_profile.go", "game/view/holder_entities_gen.go", "Rename(name string) error", "SetName(name)",
-		"业务层不要再次", "rollback=undo durability=strict", "ID、id、tracker",
+		"业务层不要再次", "//roost:nest rollback=undo\n", "ID、id、tracker",
+		// 组件包写法与缺省 async（compose §4D，维护者 2026-11-18）。
+		"game/components/profile/profile.go", "func (component *Component) Rename(name string) error", "component.owner.Dao().SetName(name)",
+		"durability 用缺省的 async",
 	} {
 		if !strings.Contains(entityGuide, want) {
 			t.Errorf("Entity beginner guide missing %q:\n%s", want, entityGuide)
+		}
+	}
+	for _, stale := range []string{"durability=strict", "profile_component.go", "ProfileComponent", "component.Owner().Dao()"} {
+		if strings.Contains(entityGuide, stale) {
+			t.Errorf("Entity beginner guide still says %q:\n%s", stale, entityGuide)
 		}
 	}
 }

@@ -384,8 +384,8 @@ func TestDemoEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
 // game-demo 自己的组件同模块一样按组件包写法挂载（2026-11-17）：类型号、//roost:component 与 RegisterComponentFactory 在
 // game/components/<包>/，实体字段写 comp:"<包>.CompType<X>"。实体包里不再有组件的类型号、别名（XComponent = <包>.Component）
 // 与组件窄接口（I<X>Entity；handler 收 game/view 的 I<X>Entity 或 <E>Entity）。唯一的例外是 World 的定时器组件
-// （timer_component.go）：它是实体定时器宿主，按规则留在实体包。步骤里因此没有 roost add component（它把组件写在实体包里），
-// roost add handler --component 只剩锁定时器组件的那一个（别的组件在实体包里没有组件文件，骨架无从生成）。
+// （timer_component.go）：它是实体定时器宿主，按规则留在实体包。demo 的组件都是手写的（demo 不迁到生成器产物上），步骤里
+// 没有 roost add component；roost add handler --component 只剩锁定时器组件的那一个。
 func checkDemoComponentsMountedFromTheirPackages(t *testing.T) {
 	t.Helper()
 	const timerFile = "game/entities/world/timer_component.go.tmpl"

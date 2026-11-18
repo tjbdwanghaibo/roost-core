@@ -364,7 +364,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		printDirectServiceNext(stdout, args[0], toSnake(args[1]), len(paths) == 0)
 	}
 	if args[0] == "timer" {
-		fmt.Fprintln(stdout, "next: define the timer types and callbacks in the generated *_handlers.go, arm them with <Component>Comp().NewTimer(...) inside a Nest handler, then roost generate")
+		fmt.Fprintln(stdout, "next: define the timer types in the generated *_handlers.go; each callback is one line handing the node to a component method (the business lives in game/components/<feature>). A component arms a node through a host method on the entity (game/entities/<entity>/<feature>.go: e.<Component>Comp().NewTimer(...), listed in the view Holder); then roost generate")
 		fmt.Fprintln(stdout, "guide: "+entityTimerDocURL)
 	}
 	if args[0] == "heartbeat" || args[0] == "behavior" || args[0] == "timedomain" {

@@ -461,7 +461,7 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 		name, pattern, needle, detail, fix string
 	}{
 		{"entity", "game/entities/*/entity.go", "//roost:entity", "an Entity aggregate exists", "roost add entity " + names.entity},
-		{"component", "game/entities/*/*_component.go", "//roost:component", "an Entity Component exists", "roost add component Profile --entity " + names.entity + exampleNameNote},
+		{"component", "game/components/*/*.go", "//roost:component", "an Entity Component exists", "roost add component Profile --entity " + names.entity + exampleNameNote},
 		{"dao", "db/def/*.go", "//roost:dao", "a DAO definition exists", "roost add dao " + names.entity + " --entity " + names.entity},
 		{"nest-handler", "game/handler/*.go", "//roost:nest", "a Nest business handler exists", "roost add handler RenamePlayer --entity " + names.entity + " --component " + names.component + exampleNameNote},
 		{"protocol", "protocol/def/*.go", "handler=", "a protocol is assigned to a controller", "roost add protocol " + names.protocol + " --group " + names.group + " --handler " + names.domain + names.protocolNote},
@@ -473,8 +473,9 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 		if check.name == "endpoint" {
 			found, err = anyConnectedEndpoint(root)
 		}
-		// 组件也可以在组件包里（game/components/<x>，类型号与 //roost:component 跟着组件走，2026-11-16 起）。
-		for _, pattern := range []string{"game/components/*/*.go", "game/components/*/*/*.go"} {
+		// 组件在组件包里（game/components/<x>，类型号与 //roost:component 跟着组件走；2026-11-18 起 roost add component 也这样写）。
+		// 实体包里的旧写法（<x>_component.go）也算。
+		for _, pattern := range []string{"game/components/*/*/*.go", "game/entities/*/*_component.go"} {
 			if check.name == "component" && !found && err == nil {
 				found, err = anyFileContains(root, pattern, check.needle)
 			}
@@ -538,6 +539,9 @@ type workflowNames struct {
 	endpoint, endpointDomain, endpointNote      string
 }
 
+// mountedComponentTag 认实体结构体上的组件字段标签，取组件名 X。
+var mountedComponentTag = regexp.MustCompile(`\bcomp:"(?:[A-Za-z_][A-Za-z0-9_]*\.)?CompType([A-Za-z0-9_]+)`)
+
 func firstBusinessNames(root string, manifest Manifest) (workflowNames, error) {
 	names := workflowNames{entity: "Player", component: "Profile", group: "game", domain: "player",
 		protocol: "RenamePlayer", protocolNote: exampleNameNote, endpoint: "RenamePlayer", endpointNote: exampleNameNote}
@@ -560,12 +564,13 @@ func firstBusinessNames(root string, manifest Manifest) (workflowNames, error) {
 	}
 	if entityDir != "" {
 		names.entity = toPascal(entityDir)
-		components, err := filepath.Glob(filepath.Join(root, "game", "entities", entityDir, "*_component.go"))
-		if err != nil {
+		// 第一个挂在实体结构体上的组件（comp:"<包>.CompType<X>"，或实体包里旧写法的 comp:"CompType<X>"）。
+		raw, err := os.ReadFile(filepath.Join(root, "game", "entities", entityDir, "entity.go"))
+		if err != nil && !os.IsNotExist(err) {
 			return names, err
 		}
-		if len(components) > 0 {
-			names.component = toPascal(strings.TrimSuffix(filepath.Base(components[0]), "_component.go"))
+		if match := mountedComponentTag.FindSubmatch(raw); match != nil {
+			names.component = string(match[1])
 		}
 	}
 	// 登录用的 lifecycle：每个实体包都有生成的 lifecycle_gen.go，用 Entity 自己的。

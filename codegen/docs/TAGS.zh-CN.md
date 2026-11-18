@@ -6,7 +6,7 @@
 
 | 形式 | 写在哪里 | 谁读取 | 示例 |
 | --- | --- | --- | --- |
-| 注释标记 | 对应类型、函数或接口方法的声明上方 | 生成器；部分由 ID 检查器读取 | `//roost:nest rollback=undo durability=strict` |
+| 注释标记 | 对应类型、函数或接口方法的声明上方 | 生成器；部分由 ID 检查器读取 | `//roost:nest rollback=undo` |
 | Go struct tag | 字段类型后的反引号内 | 对应生成器或运行时编码器 | `dao:"nosync" store:"coins"` |
 | 项目配置 | `roost.yaml`、服务 YAML | 生成流水线、装配与运行时 | feature、扫描目录、Mod、同步模式 |
 
@@ -29,7 +29,7 @@
 | `//roost:dao` | DAO 定义 struct；生成事务化读写、持久与同步代码 | `coll`、`db`、`dbscope`、`schema`；或独立 flag `nocoll` |
 | `//roost:redisdao` | Redis DAO 定义 struct；生成 Redis 访问包装 | 必需 `key`、`prefix`；可选 `mode`、`key_type`、`version`、`ttl`、`name` |
 | `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service`、`preload`、`preload_order`、`snapshots`、`ownership` |
-| `//roost:component type=N` | 组件声明；供 ID 空间检查。组件包写法（2026-11-16 起模块统一用它）写在 `game/components/<包>/` 里，实体包的写法（`roost add component`）写在实体包里 | `type` 为组件类型号，按组件分配：同一个组件挂在几种实体上都用同一个号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
+| `//roost:component type=N` | 组件声明；供 ID 空间检查。组件包写法写在 `game/components/<包>/` 里（2026-11-16 起模块统一用它，2026-11-18 起 `roost add component` 也生成它）；实体包里只剩生成的定时器 / 心跳 / 行为 / 时间域组件（实体的基础设施） | `type` 为组件类型号，按组件分配：同一个组件挂在几种实体上都用同一个号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
 | `//roost:listen` | 实体方法或组件方法；标成实体事件的监听，生成 `<实体>_event_gen.go` 的登记（见[实体事件](#实体事件roostlisten)） | 可选 `priority=<整数>`（-1000～1000，缺省 0，大的先执行） |
 | `//roost:mirror` | 手写只读 DTO；生成读取器 | `entityKind`、`coll`，对应拥有者 kind 与 DAO 集合 |
 | `//roost:endpoint` | 手写 `Controller.Handle<Protocol>` 方法；持续生成同包 dispatch 转交 | 必需 `nest=<Nest handler>`；可选 `target=<实体>`（handler 收的组件挂在多个实体上时指定寻址哪个实体，`roost add endpoint --target`）；协议名由方法名推导 |
@@ -210,7 +210,7 @@ func (c *Component) OnProfileLevelUp(ev event.ProfileLevelUp) error {
 ## 5. Nest 与 Remote 请求
 
 ```go
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerRename(target view.IProfileEntity, name string) error {
     // 经 view 访问器调组件，组件经 DAO setter 改状态；进入时目标已加锁。
     _, err := target.Profile().Rename(name)

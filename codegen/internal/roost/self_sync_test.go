@@ -280,8 +280,10 @@ type PlayerDao struct {
 }
 `)
 	// 组件只经生成的 setter 改 DAO，不手动标脏：客户端收到增量靠 Nest 提交时自动收集，本用例钉住这一点。
-	edit("game/entities/player/wallet_component.go", "// Add business methods below.", `// AddGold 加金币；同步变化由 Nest 在提交时收集，不用手动标脏。
-func (component *WalletComponent) AddGold(amount int64) error {
+	edit("game/components/wallet/wallet.go", "// 不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。", `// 不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+// AddGold 加金币；同步变化由 Nest 在提交时收集，不用手动标脏。
+func (component *Component) AddGold(amount int64) error {
  if amount == -4 {
   dao := component.owner.Dao()
   dao.DelItems(50)
@@ -302,7 +304,7 @@ func (component *WalletComponent) AddGold(amount int64) error {
  return nil
 }
 
-// Add business methods below.`)
+`)
 	write("game/handler/add_gold.go", `package handler
 
 import (
@@ -319,7 +321,7 @@ func handlerAddGold(target view.IWalletEntity, request *messages.AddGoldRequest,
 `)
 	// handler 经 view.Wallet 调用组件（roost add component 写的 view 接口）：方法也写进 view。
 	edit("game/view/component_wallet.go", "type Wallet interface{}", "type Wallet interface {\n\tAddGold(amount int64) error\n\tGold() int64\n}")
-	edit("game/entities/player/wallet_component.go", "// Add business methods below.", "func (component *WalletComponent) Gold() int64 { return component.owner.Dao().GetGold() }\n\n// Add business methods below.")
+	edit("game/components/wallet/wallet.go", "func (component *Component) AddGold(", "func (component *Component) Gold() int64 { return component.owner.Dao().GetGold() }\n\nfunc (component *Component) AddGold(")
 	edit("protocol/def/add_gold.go", "type AddGoldRequest struct{}", "type AddGoldRequest struct {\n\tAmount int64 `pb:\"1\"`\n\tPlayerID int64 `pb:\"2\"`\n}")
 	edit("protocol/def/add_gold.go", "type AddGoldResponse struct {", "type AddGoldResponse struct {\n\tGold int64 `pb:\"3\"`")
 	// 协议生成先放了“未实现”的 controller 占位；add endpoint 接管它，换成 endpoint 生成的 Sender 映射。

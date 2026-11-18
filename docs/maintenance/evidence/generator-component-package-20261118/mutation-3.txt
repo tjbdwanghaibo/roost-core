@@ -1,0 +1,7 @@
+--- FAIL: TestGeneratedComponentFollowsTheComponentPackageRule (3.15s)
+    add_test.go:1131: game/entities/guild/entity.go declares "type IGuildEntity"; components and their narrow interfaces belong to game/components and game/view
+    add_test.go:1131: game/entities/player/entity.go declares "type IPlayerEntity"; components and their narrow interfaces belong to game/components and game/view
+    add_test.go:1131: game/entities/world/entity.go declares "type IWorldEntity"; components and their narrow interfaces belong to game/components and game/view
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	3.750s
+FAIL

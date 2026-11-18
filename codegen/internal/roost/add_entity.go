@@ -9,63 +9,132 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 const coreEntityImport = "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
-// addEntityComponent creates a component in its owning Entity package and
-// updates the Entity aggregate in one operation. A component generated in an
-// unrelated package is not useful until its factory and field are wired, so
-// the high-level command deliberately owns that repetitive integration.
+// addEntityComponent 是 roost add component <X> --entity <E>：按 compose §4D 的组件包写法（2026-11-16 起，与模块模板
+// 和 game-demo 一致）一次做完组件的三处：
+//
+//	game/components/<包>/<包>.go      组件包：类型号常量与工厂登记、Component、宿主接口 Owner、NewComponent（业务文件）
+//	game/view/component_<包>.go        组件对外的接口 <X> 与 <X>Holder（view 里已有 <X>Holder 时不写）
+//	game/entities/<实体>/entity.go     挂字段 `<x> *<包>.Component` 与 comp:"<包>.CompType<X>"
+//
+// 实体包里不写组件文件、类型别名与 I<X>Entity。组件包已存在（挂到第二个实体）时只挂字段：组件的 Owner 若是别的实体的
+// view.<实体>Entity，提示改成最小接口；宿主方法写在 view 的 <X>Holder 里，实体漏写时 roost generate 写的编译期断言报错。
 func addEntityComponent(root string, manifest Manifest, options AddOptions) ([]string, error) {
 	entityName, entityPath, err := resolveEntitySource(root, options.Entity)
 	if err != nil {
 		return nil, err
 	}
-	componentSnake, componentType := toSnake(options.Name), toPascal(options.Name)
-	componentPath := filepath.Join(filepath.Dir(entityPath), componentSnake+"_component.go")
-	if _, err := os.Stat(componentPath); err == nil {
-		return nil, fmt.Errorf("%s already exists", relativeSlash(root, componentPath))
-	} else if !os.IsNotExist(err) {
-		return nil, err
+	componentType, fieldName := toPascal(options.Name), toSnake(options.Name)
+	pkg := componentPackageName(options.Name)
+	if !token.IsIdentifier(pkg) || token.IsKeyword(pkg) {
+		return nil, fmt.Errorf("component %q: its package name %q is not a usable Go package name; choose another name", options.Name, pkg)
+	}
+	// 旧写法（组件在实体包里）留下的同名组件：新挂一个组件包会和它重名。
+	if legacy := filepath.Join(filepath.Dir(entityPath), fieldName+"_component.go"); regularFileExists(legacy) {
+		return nil, fmt.Errorf("%s already exists (a component written in the entity package); move it to game/components/%s or choose another name", relativeSlash(root, legacy), pkg)
+	}
+	pkgDir := filepath.Join(root, "game", "components", pkg)
+	componentPath := filepath.Join(pkgDir, pkg+".go")
+	existingPackage := false
+	if info, statErr := os.Stat(pkgDir); statErr == nil && info.IsDir() {
+		declared, err := packageDeclaresConst(pkgDir, "CompType"+componentType)
+		if err != nil {
+			return nil, err
+		}
+		existingPackage = declared
+		if !declared && regularFileExists(componentPath) {
+			return nil, fmt.Errorf("%s exists but does not declare CompType%s; choose another component name", relativeSlash(root, componentPath), componentType)
+		}
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return nil, statErr
 	}
 
 	raw, err := os.ReadFile(entityPath)
 	if err != nil {
 		return nil, err
 	}
-	updated, pkg, err := wireComponentField(raw, entityPath, toPascal(entityName), componentSnake, componentType)
+	importPath := manifest.Project.Module + "/game/components/" + pkg
+	updated, err := wireComponentPackageField(raw, entityPath, toPascal(entityName), fieldName, componentType, importPath)
 	if err != nil {
 		return nil, err
 	}
-	body, err := format.Source([]byte(renderEntityComponent(pkg, toPascal(entityName), componentSnake, componentType, options.ID)))
+	var changes []syncChange
+	var written []string
+	if !existingPackage {
+		body, err := format.Source([]byte(renderComponentPackage(manifest.Project.Module, pkg, fieldName, componentType, toPascal(entityName), options.ID)))
+		if err != nil {
+			return nil, fmt.Errorf("format component scaffold: %w", err)
+		}
+		changes = append(changes, syncChange{rel: relativeSlash(root, componentPath), path: componentPath, body: body})
+		written = append(written, relativeSlash(root, componentPath))
+	} else if other, err := componentOwnerEntity(pkgDir); err != nil {
+		return nil, err
+	} else if other != "" && other != toPascal(entityName) && options.Warnings != nil {
+		fmt.Fprintf(options.Warnings, "game/components/%s: Owner is view.%sEntity, which %s does not implement; change Owner to the smallest interface the component needs "+
+			"(entity.IThreadSafeEntity + view.%sHolder, with what it needs from the entity as host methods in the Holder), otherwise creating %s fails\n",
+			pkg, other, toPascal(entityName), componentType, toPascal(entityName))
+	}
+	changes = append(changes, syncChange{rel: relativeSlash(root, entityPath), path: entityPath, before: raw, body: updated, existed: true})
+	written = append(written, relativeSlash(root, entityPath))
+	// view 侧：组件对外的接口 <X> 与 <X>Holder（访问器与宿主方法）。别的实体已经挂过这个组件、或模块带来了它时不动。
+	holder, err := viewDeclaresHolder(root, componentType)
 	if err != nil {
-		return nil, fmt.Errorf("format component scaffold: %w", err)
+		return nil, err
 	}
-	changes := []syncChange{
-		{rel: filepath.ToSlash(componentPath), path: componentPath, body: body},
-		{rel: filepath.ToSlash(entityPath), path: entityPath, before: raw, body: updated, existed: true},
-	}
-	written := []string{relativeSlash(root, componentPath), relativeSlash(root, entityPath)}
-	// view 侧：组件对外的接口 <X> 与 <X>Holder（访问器与宿主方法）。别的实体已经加过同名组件、或模块带来了这个文件时不动它。
-	viewPath := filepath.Join(root, "game", "view", "component_"+componentSnake+".go")
-	if _, statErr := os.Stat(viewPath); os.IsNotExist(statErr) {
-		viewBody, err := format.Source([]byte(renderViewComponent(componentType, toSnake(entityName), componentSnake)))
+	if !holder {
+		viewPath := filepath.Join(root, "game", "view", "component_"+pkg+".go")
+		if regularFileExists(viewPath) {
+			return nil, fmt.Errorf("%s exists but does not declare %sHolder; add the Holder or choose another component name", relativeSlash(root, viewPath), componentType)
+		}
+		viewBody, err := format.Source([]byte(renderViewComponent(componentType, pkg)))
 		if err != nil {
 			return nil, fmt.Errorf("format component view scaffold: %w", err)
 		}
-		changes = append(changes, syncChange{rel: filepath.ToSlash(viewPath), path: viewPath, body: viewBody})
+		changes = append(changes, syncChange{rel: relativeSlash(root, viewPath), path: viewPath, body: viewBody})
 		written = append(written, relativeSlash(root, viewPath))
-	} else if statErr != nil {
-		return nil, statErr
 	}
 	if err := commitSyncChanges(changes); err != nil {
 		return nil, err
 	}
-	_ = manifest // reserved for future component policy validation
 	return written, nil
+}
+
+// componentPackageName 是组件包名：蛇形名去掉下划线（DailyQuest → dailyquest），与模块的组件包同一写法。
+func componentPackageName(name string) string { return strings.ReplaceAll(toSnake(name), "_", "") }
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// componentOwnerRe 认组件包里的 `type Owner = view.<E>Entity`。
+var componentOwnerRe = regexp.MustCompile(`(?m)^type Owner = view\.(\w+)Entity\b`)
+
+// componentOwnerEntity 返回组件包的 Owner 写成 view.<E>Entity 时的 E；Owner 是别的写法（最小接口）时返回空。
+func componentOwnerEntity(dir string) (string, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		return "", err
+	}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		if match := componentOwnerRe.FindSubmatch(raw); match != nil {
+			return string(match[1]), nil
+		}
+	}
+	return "", nil
 }
 
 func addEntityDAO(root string, manifest Manifest, options AddOptions) ([]string, error) {
@@ -398,7 +467,14 @@ func ensureImport(file *ast.File, importPath, preferredAlias string) (string, er
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if ok && gen.Tok == token.IMPORT {
-			gen.Lparen = token.Pos(1)
+			// 新 import 放在原有最后一条之后、括号之内：位置落在原来的 import 范围里，go/printer 才不会把紧跟在 import
+			// 后面的注释（例如实体标记上方的说明与 //roost:entity）挪进 import 块。单行 import 补上括号。
+			last := gen.Specs[len(gen.Specs)-1].End()
+			if !gen.Lparen.IsValid() {
+				gen.Lparen, gen.Rparen = gen.Specs[0].Pos(), last
+			}
+			placeNodeAt(spec, last)
+			spec.EndPos = last
 			gen.Specs = append(gen.Specs, spec)
 			file.Imports = append(file.Imports, spec)
 			return alias, nil
@@ -418,11 +494,16 @@ func formatAST(fset *token.FileSet, file *ast.File) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func renderEntityComponent(pkg, entityType, name, componentType string, id int64) string {
+// renderComponentPackage 写 roost add component 的组件包 game/components/<包>/<包>.go（compose §4D 第 1 条）。
+// Owner 缺省是整个宿主实体（view.<E>Entity：DAO getter 与它挂的各组件访问器，roost generate 生成），与只挂在一个实体上的
+// 模块组件（checkin、profile）同一写法。
+func renderComponentPackage(module, pkg, name, componentType, entityType string, id int64) string {
 	return fmt.Sprintf(`package %[1]s
 
 import (
 	"fmt"
+
+	"%[7]s/game/view"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -430,60 +511,67 @@ import (
 //roost:component type=%[2]d
 const CompType%[3]s entity.ComponentType = %[2]d
 
-// %[3]sComponent owns %[4]s gameplay logic. It keeps no state a transaction
-// changes: such state lives in the DAO and moves through the generated
-// mutators — a nopersist field when it must not be stored — so the DAO's
-// rollback is the only rollback and dirty tracking stays correct. Do not
-// register undo here.
-//
-// Other packages reach it through game/view: view.%[3]s (component_%[5]s.go) lists
-// the methods they may call, and Nest handlers take the generated narrow
-// interface view.I%[3]sEntity and call target.%[3]s().<Method>().
-type %[3]sComponent struct {
-	entity.ComponentBase
-	owner *%[4]s
-}
-
+// init 登记组件工厂：实体结构体里 comp:"%[1]s.CompType%[3]s" 的字段经它创建组件。
 func init() {
-	entity.RegisterComponentFactory(CompType%[3]s, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
-		typed, ok := owner.(*%[4]s)
-		if !ok {
-			return nil, fmt.Errorf("%[5]s component: owner %%T is not *%[4]s", owner)
-		}
-		return &%[3]sComponent{owner: typed}, nil
-	})
+	entity.RegisterComponentFactory(CompType%[3]s, NewComponent)
 }
 
-func (component *%[3]sComponent) Name() string { return %[6]q }
+// Owner 是 %[3]s 组件的宿主，只在实体被 Nest 锁住期间使用。缺省是整个 %[4]s（view.%[4]sEntity：实体的 DAO getter 与它
+// 挂的各组件的访问器，roost generate 生成）。要把组件挂到别的实体上时改成组件用得到的最小接口，例如
+//
+//	type Owner interface {
+//		entity.IThreadSafeEntity
+//		view.%[3]sHolder // 访问器 %[3]s() + 组件要实体提供的宿主方法（例如 %[3]sState() *db.%[3]sState）
+//	}
+//
+// 宿主方法写在 game/view/component_%[1]s.go 的 %[3]sHolder 里；只交出实体 DAO 某个字段的由 roost generate 写，其余在实体包
+// game/entities/<实体>/%[1]s.go 手写，漏写时生成的编译期断言报错。
+type Owner = view.%[4]sEntity
 
-// Owner is available only while the Entity is alive and locked by Nest.
-func (component *%[3]sComponent) Owner() *%[4]s { return component.owner }
-
-// Add business methods below. Add the ones handlers call to view.%[3]s too.
-// Do not add mutexes here: Nest enters business handlers only after locking
-// the owning Entity.
-`, pkg, id, componentType, entityType, name, name)
+// Component 是 %[3]s 的业务逻辑。它不保存事务会改的状态：状态放在实体的 DAO 里，经生成的 setter 修改（不落盘的写成
+// nopersist 字段），所以回滚只有 DAO 一处、脏标记由 Nest 收集；不要在这里登记 undo。
+type Component struct {
+	entity.ComponentBase
+	owner Owner
 }
 
-// renderViewComponent 写 roost add component 的 view 侧：组件对外的接口 <X> 与 <X>Holder。访问器 <X>() 与
-// 窄接口 view.I<X>Entity 由 roost generate（entity 生成器）写。
-func renderViewComponent(componentType, entitySnake, componentSnake string) string {
+// NewComponent 是组件工厂；上面的 init 登记。
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(Owner)
+	if !ok {
+		return nil, fmt.Errorf("%[5]s component: owner %%T does not implement %[1]s.Owner", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (component *Component) Name() string { return %[6]q }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *Component) Owner() Owner { return component.owner }
+
+// 下面写业务方法（实体上的业务规则都写在组件里，不写成实体方法）。handler 与别的组件要调用的方法同时写进
+// view.%[3]s（game/view/component_%[1]s.go），它们经访问器调用：handler 收 view.I%[3]sEntity，写 target.%[3]s().<方法>()；
+// 跨组件写 component.owner.<别的组件>().<方法>()。做完一件别的功能要跟着动的事时，在 game/event/ 定义事件并
+// component.owner.Publish(event.<事件>{...})，错误原样返回；监听方在自己的组件上写 //roost:listen 方法。
+// 不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+`, pkg, id, componentType, entityType, name, name, module)
+}
+
+// renderViewComponent 写 roost add component 的 view 侧 game/view/component_<包>.go：组件对外的接口 <X> 与 <X>Holder。
+// 访问器 <X>() 与窄接口 view.I<X>Entity 由 roost generate（entity 生成器）写。
+func renderViewComponent(componentType, pkg string) string {
 	return fmt.Sprintf(`package view
 
-// %[1]s is what other packages may call on the %[1]s component (implemented by
-// %[1]sComponent in game/entities/%[2]s/%[3]s_component.go). Add each method a
-// handler or another component calls; they run only while Nest holds the
-// entity's lock.
+// %[1]s 是 %[1]s 组件对 game/ 下其它包公开的方法（实现在 game/components/%[2]s 的 *Component）；只在宿主被 Nest 锁住期间
+// 调用。handler 或别的组件要调用的方法都列在这里；签名只用内建类型、db、协议与别的 view 类型（结果结构体以 %[1]s 作前缀
+// 写在本文件，组件包里留同名别名）。
 type %[1]s interface{}
 
-// %[1]sHolder is "has a %[1]s component". roost generate implements the
-// accessor %[1]s() on every entity that mounts the component and writes the
-// narrow interface I%[1]sEntity (holder_entities_gen.go) that Nest handlers
-// take. Methods the component needs from its entity (host methods) go here too
-// and the entity implements them; one that only hands over a field of the
-// entity's DAO (for example State() *db.%[1]sState) is generated.
+// %[1]sHolder 是“带有 %[1]s 组件”的小接口：roost generate 在挂了这个组件的每个实体上实现访问器 %[1]s()，并写出
+// handler 的参数类型 I%[1]sEntity（holder_entities_gen.go）。组件要实体提供的东西（宿主方法）也写在这里由实体实现；
+// 只交出实体 DAO 某个字段的（例如 %[1]sState() *db.%[1]sState）由生成器写。
 type %[1]sHolder interface{ %[1]s() %[1]s }
-`, componentType, entitySnake, componentSnake)
+`, componentType, pkg)
 }
 
 // defaultDAODatabase 是 DAO 骨架 db= 的逻辑库名（D9 修订版 A）：代码里写固定的逻辑名，物理库名交给部署配置

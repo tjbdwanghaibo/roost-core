@@ -1288,7 +1288,7 @@ func TestModulesInstallOntoAProjectWithBusinessCodeAndRollBackOnFailure(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(entityFile, []byte("ProfileComponent")) || !bytes.Contains(entityFile, []byte(`comp:"wallet.CompTypeWallet"`)) {
+	if !bytes.Contains(entityFile, []byte(`comp:"profile.CompTypeProfile"`)) || !bytes.Contains(entityFile, []byte(`comp:"wallet.CompTypeWallet"`)) {
 		t.Fatalf("entity lost a component:\n%s", entityFile)
 	}
 	if report, err := VerifyModules(context.Background(), root, []string{"wallet"}, nil); err != nil {

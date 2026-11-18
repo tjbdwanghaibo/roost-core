@@ -46,6 +46,7 @@ import (
 	"time"
 
 	gameheartbeat "@Module@/game/modules/heartbeat"
+	view "@Module@/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
@@ -70,10 +71,13 @@ type HeartbeatComponent struct {
 	beats map[string]*heartbeat.Reg
 }
 
-// IHeartbeatEntity 是 Nest handler 使用本组件的锁安全视图。
-type IHeartbeatEntity interface {
-	entity.IThreadSafeEntity
-	HeartbeatComp() *HeartbeatComponent
+// HeartbeatOf 取回 @Entity@ 的心跳组件：Nest handler 收实体总接口 view.@Entity@Entity（compose §4D，handler 的参数是
+// game/view 的接口），要启停心跳时经它取组件。target 不是 *@Entity@ 时返回 nil。
+func HeartbeatOf(target view.@Entity@Entity) *HeartbeatComponent {
+	if typed, ok := target.(*@Entity@); ok {
+		return typed.HeartbeatComp()
+	}
+	return nil
 }
 
 func init() {
@@ -143,8 +147,8 @@ import (
 // （心跳不持久，每次加载都要重新登记）。返回错误时实体初始化失败。
 func (component *HeartbeatComponent) onHeartbeatInit(isCreate bool) error {
 	_ = isCreate
-	// 示例：一个 1 秒档的登记，停止状态（不占调度）。需要时在 Nest handler 里
-	// target.HeartbeatComp().Beat("example").Start()，不需要时 Stop()。
+	// 示例：一个 1 秒档的登记，停止状态（不占调度）。需要时在 Nest handler（参数 view.@Entity@Entity）里
+	// @entity@.HeartbeatOf(target).Beat("example").Start()，不需要时 Stop()。
 	_, err := component.Register("example", time.Second, component.onExampleBeat)
 	if errors.Is(err, heartbeat.ErrHeartbeatRemoteShared) {
 		return nil // Remote 托管实体处于共享模式时不允许挂心跳；周期逻辑由负责它的服务驱动
@@ -154,6 +158,9 @@ func (component *HeartbeatComponent) onHeartbeatInit(isCreate bool) error {
 
 // onExampleBeat 是示例心跳的回调：实体锁与事务内。按 beat.Elapsed（距上次执行的业务时间）推进，不按“第几拍”算；
 // beat.Now 是这一拍冻结的业务时间。
+//
+// 心跳组件是 @Entity@ 的基础设施，回调里不写业务（compose §4D 第 1 条）：回调只有一句，把这一拍交给业务组件的导出
+// 方法，例如 return component.owner.<组件>().OnBeat(beat.Elapsed, beat.Now)；推进规则写在 game/components/<功能>/ 里。
 func (component *HeartbeatComponent) onExampleBeat(beat heartbeat.Beat) error {
 	_ = beat
 	return nil
@@ -201,6 +208,7 @@ package @entity@
 import (
 	"fmt"@TimeImport@
 
+	view "@Module@/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"@AIImport@
 )
@@ -222,10 +230,13 @@ type BehaviorComponent struct {
 	behavior *actionflow.Behavior@AIField@
 }
 
-// IBehaviorEntity 是 Nest handler 使用本组件的锁安全视图。
-type IBehaviorEntity interface {
-	entity.IThreadSafeEntity
-	BehaviorComp() *BehaviorComponent
+// BehaviorOf 取回 @Entity@ 的行为组件：Nest handler 收实体总接口 view.@Entity@Entity（compose §4D，handler 的参数是
+// game/view 的接口），要发起 / 结束动作时经它取组件。target 不是 *@Entity@ 时返回 nil。
+func BehaviorOf(target view.@Entity@Entity) *BehaviorComponent {
+	if typed, ok := target.(*@Entity@); ok {
+		return typed.BehaviorComp()
+	}
+	return nil
 }
 
 func init() {
@@ -363,7 +374,8 @@ type ExampleParam struct {
 
 // ExampleAction 是示例动作：每拍按 ctx.Elapsed 累计，满 Duration 成功结束。它演示动作的三件事：Start 校验（返回错误 =
 // 没能启动）、Tick 按经过时间推进（不按“第几拍”，掉拍时下一拍一次覆盖）、Cancel 收尾。动作自己的状态只在内存里；
-// 要改实体状态，经 ctx.Owner 取到实体、写 DAO（随这一拍的事务提交或回滚）。
+// 要改实体状态时交给业务组件（compose §4D：业务规则写在 game/components/<功能>/）：ctx.Owner 断言成 view.@Entity@Entity，
+// 调组件的导出方法，随这一拍的事务提交或回滚。
 type ExampleAction struct {
 	param  ExampleParam
 	waited time.Duration
@@ -499,11 +511,12 @@ func renderBehaviorHandlers(n heartbeatNames, spec BehaviorSpec) string {
 // 每 500ms 决策一次，主组空闲时发起示例动作。返回设定后的策略名。
 //
 //roost:nest rollback=undo
-func handler@StrategyHandler@(target @entity@.IBehaviorEntity) (string, error) {
-	if err := target.BehaviorComp().AI().SetStrategy(@entity@.NewExampleStrategy()); err != nil {
+func handler@StrategyHandler@(target view.@Entity@Entity) (string, error) {
+	controller := @entity@.BehaviorOf(target).AI()
+	if err := controller.SetStrategy(@entity@.NewExampleStrategy()); err != nil {
 		return "", err
 	}
-	return target.BehaviorComp().AI().Strategy().Name(), nil
+	return controller.Strategy().Name(), nil
 }`
 	}
 	return n.replacer("@Strategy@", n.replacer().Replace(strategy)).Replace(`package handler
@@ -512,9 +525,11 @@ import (
 	"time"
 
 	@entity@ "@Module@/game/entities/@entity@"
+	"@Module@/game/view"
 )
 
-// 这个文件归业务：roost add behavior 只在缺失时创建，project sync 不改写。
+// 这个文件归业务：roost add behavior 只在缺失时创建，project sync 不改写。handler 收实体总接口 view.@Entity@Entity，
+// 经 @entity@.BehaviorOf(target) 取行为组件（行为组件是实体的基础设施，生成在实体包里）。
 
 // handler@StartHandler@ 在 @Entity@ 上发起一个示例动作，持续 millis 毫秒，返回动作 ID（roost add behavior 生成的示例，
 // 归业务）。动作由主组的心跳推进（100ms 一拍），到时成功结束。
@@ -522,8 +537,8 @@ import (
 // runner 不随事务回滚：先做完会失败的校验与修改，发起动作是 handler 的最后一步。
 //
 //roost:nest rollback=undo
-func handler@StartHandler@(target @entity@.IBehaviorEntity, millis int64) (int64, error) {
-	return target.BehaviorComp().Behavior().CreateAction(@entity@.ActionExample, @entity@.ExampleParam{Duration: time.Duration(millis) * time.Millisecond})
+func handler@StartHandler@(target view.@Entity@Entity, millis int64) (int64, error) {
+	return @entity@.BehaviorOf(target).Behavior().CreateAction(@entity@.ActionExample, @entity@.ExampleParam{Duration: time.Duration(millis) * time.Millisecond})
 }@Strategy@
 `)
 }
@@ -539,6 +554,7 @@ package @entity@
 import (
 	"fmt"
 
+	view "@Module@/game/view"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 )
@@ -560,10 +576,13 @@ type TimeDomainComponent struct {
 	domain *timedomain.Domain
 }
 
-// ITimeDomainEntity 是 Nest handler 使用本组件的锁安全视图。
-type ITimeDomainEntity interface {
-	entity.IThreadSafeEntity
-	TimeDomainComp() *TimeDomainComponent
+// TimeDomainOf 取回 @Entity@ 的时间域组件：Nest handler 收实体总接口 view.@Entity@Entity（compose §4D，handler 的参数
+// 是 game/view 的接口），要改倍率时经它取组件。target 不是 *@Entity@ 时返回 nil。
+func TimeDomainOf(target view.@Entity@Entity) *TimeDomainComponent {
+	if typed, ok := target.(*@Entity@); ok {
+		return typed.TimeDomainComp()
+	}
+	return nil
 }
 
 func init() {

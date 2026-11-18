@@ -1,0 +1,18 @@
+--- FAIL: TestGeneratedComponentFollowsTheComponentPackageRule (4.33s)
+    add_test.go:1068: game/components/roster/roster.go: open <tmp>/planet/game/components/roster/roster.go: no such file or directory
+    add_test.go:1093: game/components/roster/roster.go lacks "package roster\n":
+    add_test.go:1093: game/components/roster/roster.go lacks "//roost:component type=":
+    add_test.go:1093: game/components/roster/roster.go lacks "const CompTypeRoster entity.ComponentType = ":
+    add_test.go:1093: game/components/roster/roster.go lacks "entity.RegisterComponentFactory(CompTypeRoster, NewComponent)":
+    add_test.go:1093: game/components/roster/roster.go lacks "type Owner ":
+    add_test.go:1093: game/components/roster/roster.go lacks "type Component struct":
+    add_test.go:1093: game/components/roster/roster.go lacks "func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error)":
+    add_test.go:1068: game/components/dailyquest/dailyquest.go: open <tmp>/planet/game/components/dailyquest/dailyquest.go: no such file or directory
+    add_test.go:1068: game/view/component_dailyquest.go: open <tmp>/planet/game/view/component_dailyquest.go: no such file or directory
+    add_test.go:1103: game/entities/guild/entity.go does not mount the component package with `comp:"roster.CompTypeRoster"`:
+    add_test.go:1103: game/entities/player/entity.go does not mount the component package with `comp:"dailyquest.CompTypeDailyQuest"`:
+    add_test.go:1120: game/entities/guild/roster_component.go: the component belongs to game/components/<package>
+    add_test.go:1120: game/entities/player/daily_quest_component.go: the component belongs to game/components/<package>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	4.958s
+FAIL

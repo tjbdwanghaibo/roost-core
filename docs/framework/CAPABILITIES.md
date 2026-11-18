@@ -189,7 +189,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | `roost add transport` | 嵌入 player TCP | `roost add transport tcp` | 正式。要求先有 access player | 同上 |
 | `roost add protocol` | 协议定义骨架并分配消息号 | `roost add protocol <name> --group <g> --handler <domain>` | 正式 | 同上 |
 | `roost add entity` | Entity 骨架并分配 kind | `roost add entity <name>` | 正式 | 同上 |
-| `roost add component` | Component 骨架并接入 Entity | `roost add component <name> --entity <owner>` | 正式 | 同上 |
+| `roost add component` | 组件包骨架（`game/components/<包>/`、`game/view/component_<包>.go`）并挂到 Entity | `roost add component <name> --entity <owner>` | 正式 | 同上 |
 | `roost add handler` | Nest handler 骨架 | `roost add handler <name> --entity <E> --component <C>` | 正式 | 同上 |
 | 实体 lifecycle（生成） | 实体的加载、创建、销毁边界 | `roost generate` → `game/entities/<e>/lifecycle_gen.go`（v1.47.0 起不再有 `roost add lifecycle`） | 正式 | 同上 |
 | `roost add endpoint` | 协议到 Nest Sender 的映射 | `roost add endpoint <name> --handler <domain>` | 正式 | 同上 |

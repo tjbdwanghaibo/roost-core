@@ -253,7 +253,7 @@ roost add rpc guild -service game
 | --- | --- |
 | `saga/<name>/definition.go` | `Type` / `Version`、步骤主题常量 `Topic<Step>` / `Topic<Step>Compensation`、`Definition()` / `Definitions()`、`Register(engine)`、`EmitStart`、`Start`、`Lookup(ctx, engine, businessKey)`（发起方按自己给 `EmitStart` 的业务键查结果，`saga.ErrNotFound` = 还没开始；业务键取能交还给客户端的值，例如请求号）（不再生成 `Subscribe<Step>` 辅助：步骤消费者只有 `steps.go` 一种写法） |
 | `saga/<name>/steps.go` | `StepsGroup = "<service>-<name>"`（durable 前缀，上线后不要改名）、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿的步骤体、`RegisterSteps(steps, deps)`（按 `-steps` 顺序与主题常量登记：`-native` 的 `Steps.Native`，其余 `Steps.Mongo`；`WithAdmit` 留空并注释多进程分片要补）、`StartSteps(ctx, registry, deps)`；注释写明单进程容量 |
-| `game/handler/<name>_<step>.go`、`<name>_<step>_compensation.go` | 每个 `-native` 步骤两个 Nest handler：`func handler<Name><Step>(target <entity>.I<Component>Entity, step saga.NativeStep) error`，`//roost:nest rollback=undo durability=pipelined`，事务里 `step.Complete`，业务拒绝也提交。生成的注册走 `saga.MustRegisterNativeStepHandler`：saga 原生步骤是 Nest pipelined 白名单的标准用户，框架启动时自动把它们补进 `nest.pipelined.allowlist`（写了名单时）并只为它们打开 Nest 异步完成（按 handler 生效，没有开关配置），配置不用写。改回 `durability=strict` 也合法，代价是锁内等 fsync 占住 short 池 worker（[SAGA §原生步骤的提交方式](../../docs/framework/SAGA.md#原生步骤的提交方式维护者-2026-10-29-决定)） |
+| `game/handler/<name>_<step>.go`、`<name>_<step>_compensation.go` | 每个 `-native` 步骤两个 Nest handler：`func handler<Name><Step>(target view.I<Component>Entity, step saga.NativeStep) error`（组件挂在几种实体上时 `//roost:nest` 带 `target=<实体>`；生成在实体包里的定时器等基础设施组件没有 Holder，参数是 `view.<Entity>Entity`），`//roost:nest rollback=undo durability=pipelined`，事务里 `step.Complete`，业务拒绝也提交。生成的注册走 `saga.MustRegisterNativeStepHandler`：saga 原生步骤是 Nest pipelined 白名单的标准用户，框架启动时自动把它们补进 `nest.pipelined.allowlist`（写了名单时）并只为它们打开 Nest 异步完成（按 handler 生效，没有开关配置），配置不用写。原生步骤保持 `durability=pipelined`（推荐写法；[SAGA §原生步骤的提交方式](../../docs/framework/SAGA.md#原生步骤的提交方式维护者-2026-10-29-决定)） |
 
 `-native` 保序解析，必须是 `-steps` 的子集、不能重复；锁目标 `-entity` / `-component` 与 `add handler` 相同（工程只有一个 Entity 时 `-entity` 可省），跑步骤的服务要有 nest Mod，与已有 Nest handler 同名时拒绝。骨架默认拒绝（`... is not implemented`），写完业务前 saga 不报告成功。服务的 `Init` / `Shutdown` 不改写：next 提示给出 `steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})` 与 `steps.Drain(ctx)` 两行，doctor 的 `saga-steps:<name>` 在没有服务调用 `StartSteps` / `RegisterSteps`（或所在包没有 `Steps.Drain(ctx)`）时 WARN。
 
@@ -353,7 +353,7 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 
 ```go
 // game/handler/add_gold.go（view、pb 分别导入本工程的 game/view 和协议包）
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAddGold(target view.IWalletEntity, request *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
     if err := target.Wallet().AddGold(request.Amount); err != nil {
         return nil, err
@@ -427,10 +427,10 @@ DAO 里，到点由驱动投递一次 Tick，在实体的 Nest 锁与事务内�
 | `db/def/<entity>.go`（实体 DAO 定义） | 业务（add 时加字段） | `<Component>s map[int64]*<Entity><Component>Node`（`nosync,map=fast`）与 `<Component>Seed int64`（`nosync`），只落库不同步；同名同类型已存在时不改 |
 | `game/entities/<entity>/entity.go` | 业务（add 时加字段） | 组件字段 `<component> *<Component>Component`（tag `comp:"CompType<Component>"`）；已有时不改 |
 | `db/def/<entity>_<component>_node_gen.go` | 生成（sync 重写） | 节点类型（期限按毫秒） |
-| `game/entities/<entity>/<component>_component_gen.go` | 生成（sync 重写） | `//roost:component`、`<Component>Component`（`New<Component>` / `New<Component>WithPriority` / `New<Component>At` / `Change<Component>` / `Remove<Component>` / `<Component>(id)` / `<Component>s()` / `Tick`）、`I<Component>Entity`、DAO 适配、`<Component>Driver` 与 `<Component>TickHandler` |
-| `game/handler/tick_<entity>_<component>_gen.go`（+`_test.go`） | 生成（sync 重写） | `//roost:nest rollback=undo durability=strict` 的 `handlerTick<Entity><Component>(target) (int32, error)`（Tick 消息不带时间，按这条消息冻结的业务时间触发）；测试钉住驱动投递的名字就是 Nest 生成器得出的名字 |
+| `game/entities/<entity>/<component>_component_gen.go` | 生成（sync 重写） | `//roost:component`、`<Component>Component`（`New<Component>` / `New<Component>WithPriority` / `New<Component>At` / `Change<Component>` / `Remove<Component>` / `<Component>(id)` / `<Component>s()` / `Tick`）、`<Component>Of(target view.<Entity>Entity)`（handler 收实体总接口时取回组件）、DAO 适配、`<Component>Driver` 与 `<Component>TickHandler`；定时器组件是实体的基础设施，留在实体包。`I<Component>Entity` 只剩兼容别名（`= view.<Entity>Entity`，已装模块的测试还在用，模块改完后删除） |
+| `game/handler/tick_<entity>_<component>_gen.go`（+`_test.go`） | 生成（sync 重写） | `//roost:nest rollback=undo`（缺省 async）的 `handlerTick<Entity><Component>(target view.<Entity>Entity) (int32, error)`，调 `<entity>.<Component>Of(target).Tick()`（Tick 消息不带时间，按这条消息冻结的业务时间触发）；测试钉住驱动投递的名字就是 Nest 生成器得出的名字 |
 | `internal/bootstrap/generated.go` | 生成（sync 重写） | 该服务追加 `kitentitytimer.NewMod(EntityAccess, <entity>.<Component>Driver, ...)` |
-| `game/entities/<entity>/<component>_handlers.go` | 业务（只在缺失时创建） | 定时器类型号常量与 `register<Component>Handlers`（`handlers.Register(type, callback)`），回调签名 `func(entitytimer.Fire) time.Duration` |
+| `game/entities/<entity>/<component>_handlers.go` | 业务（只在缺失时创建） | 定时器类型号常量与 `register<Component>Handlers`（`handlers.Register(type, callback)`），回调签名 `func(entitytimer.Fire) time.Duration`。回调只有一句：把到期节点交给业务组件的导出方法（`component.Owner().<组件>().OnDeadline(fire)`），规则写在组件包里；组件要建 / 删节点时在实体包写宿主方法（只建 / 删节点）并列进 view 的 Holder（compose §4D 第 1 条） |
 
 **驱动**：进程内按“已加载实例的最早期限”排的小堆。实例加载（组件 `OnInitFinish`）时报告存量里的最早期限，事务里的增删改在提交后
 （`nest.AfterCommit`）报告新的最早期限，回滚的事务不改索引；同一实例的报告带单调序号，晚到的旧报告丢弃；卸载 / 删档 / 撤销新建
@@ -778,6 +778,21 @@ roost generate
 roost project doctor
 ```
 
+`roost add component <X> --entity <E>` 按组件包写法生成（compose §4D，2026-11-18 起；与模块模板、game-demo 一致）：
+
+| 文件 | 所有权 | 内容 |
+| --- | --- | --- |
+| `game/components/<包>/<包>.go` | 业务（只建一次） | `//roost:component type=<号>` 与 `const CompType<X> entity.ComponentType`、`init()` 里 `entity.RegisterComponentFactory(CompType<X>, NewComponent)`、宿主接口 `Owner`（缺省 `= view.<E>Entity`）、`Component`、`NewComponent(value any, *entity.EntityCreateParam)`；包名是蛇形名去掉下划线（DailyQuest → `dailyquest`） |
+| `game/view/component_<包>.go` | 业务（view 里已有 `<X>Holder` 时不写） | 组件接口 `<X>`（handler 与别的组件要调的方法）与 `<X>Holder`（访问器 `<X>()` 与宿主方法） |
+| `game/entities/<E>/entity.go` | 业务（add 时加字段） | `<x> *<包>.Component` 与 `comp:"<包>.CompType<X>"`，并 import 组件包 |
+
+实体包里不再写 `<x>_component.go`、类型别名与 `I<X>Entity`。组件包已存在时（同一个组件挂到第二个实体）只挂字段；
+组件的 `Owner` 是别的实体的 `view.<实体>Entity` 时打印提示，改成最小接口（`entity.IThreadSafeEntity` + `view.<X>Holder`，
+组件要实体提供的东西写成 Holder 里的宿主方法，实体漏写时 `roost generate` 写的编译期断言报错）。`roost generate` 生成
+访问器 `<X>()`、`view.<E>Entity` 与窄接口 `view.I<X>Entity`；之后 `roost add handler --component <X>` 生成收 `view.I<X>Entity`
+的 handler（组件挂在几种实体上时 `//roost:nest` 带 `target=<E>`）。`roost add entity` 的骨架不声明 `I<E>Entity`：handler 收
+生成的 `view.<E>Entity` 或组件窄接口。生成的 handler 骨架不写 `durability`（缺省 async）。
+
 生成项目的 `docs/ENTITY_COMPONENT.zh-CN.md` 说明业务代码位置、DAO 方法式读写和 Nest 锁边界。
 handler 会同时校验 nest feature 和至少一个 Service 的 nest 运行时 Mod；缺失时错误会给出
 `roost add mod nest -service <service>` 修复命令。
@@ -834,14 +849,14 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/nest@latest \
 ```
 
 ```go
-//roost:nest rollback=undo durability=strict
-func handlerTransfer(from IPlayerEntity, to IPlayerEntity, itemID int64, count int32) error {
+//roost:nest rollback=undo
+func handlerTransfer(from view.IBagEntity, to view.IBagEntity, itemID int64, count int32) error {
     // 进入前两个 Entity 已按全局顺序加锁
     return nil
 }
 
-//roost:nest sync rollback=state durability=async
-func handlerQuery(player IPlayerEntity) (PlayerView, error) { return PlayerView{}, nil }
+//roost:nest sync rollback=state
+func handlerQuery(player view.PlayerEntity) (PlayerView, error) { return PlayerView{}, nil }
 ```
 
 | 选项 | 值 | 含义 |
@@ -852,7 +867,7 @@ func handlerQuery(player IPlayerEntity) (PlayerView, error) { return PlayerView{
 | `completion` | `async` | 只能配 `durability=pipelined`：异步完成（`HandlerMeta.AsyncCompletion`）。Enqueue 之后作业结束，同一实体的下一条消息不等这条持久，回复与 AfterCommit 在持久后按提交序由完成池执行；AfterCommit 不带请求上下文、不持实体锁、不能同步等同一实体的 Nest 请求。热点单例实体上的同步写用它，见 [NEST_PIPELINED_COMMIT §12](../../docs/framework/NEST_PIPELINED_COMMIT.md#12-热点单例实体的写吞吐2026-11-15) |
 | `sync` | flag | 生成同步 Sender |
 
-未声明时默认 `rollback=state durability=async`，业务修改先进入 Nest WAL；需要请求返回前确认 durable admission 时声明 `durability=strict`，只有明确不持久化的 handler 才显式写 `durability=memory`。
+未声明时默认 `rollback=state durability=async`，业务修改先进入 Nest WAL；生成器写出的骨架与示例都用缺省 async、不写 durability（维护者 2026-11-18）。`strict` 仍是运行时支持的取值（返回前确认 WAL fsync）；只有明确不持久化的 handler 才显式写 `durability=memory`。
 
 第一个或多个 Entity 接口参数是锁目标；`[]IEntity` 表示实体组。既没写 `target(s)`、参数类型名也不含 `Entity` 时找不到锁目标，`roost generate` 报 `//roost:nest found no entity parameter` 并点名 handler（以前静默跳过该函数、成功退出，还把此前生成的 Sender 当孤儿删除）。进入 handler 前目标已按全局顺序加锁，业务层不要重复加锁。生成 `<source>_nest_gen.go`、sender/syncsender 和 bootstrap 注册代码。生成的 `sender` / `syncsender` 包是可注入的 `*Sender` 类型：接入层用 `NewXxxSender(nestClient)` 构造，方法带 `context.Context`、可返回入队错误；不生成包级 Send/Sync，也不读取全局 Nest。sender / syncsender 是 handler 包的子包，签名里的参数与结果类型原样搬进去，所以这些类型不能声明在 handler 包本身（子包看不见它，又不能反向导入 handler 包——handler 会调用 sender，导入成环）：生成器遇到这种类型直接报错 `type X is declared in package handler ... move X to a package the handler imports`，把它移到实体包或其他 handler 已导入的包即可（demo 的结果类型都在实体包里）。执行池（short / long / io）、`businessPool` 与 `SendOptionIO` 见 [Nest 业务执行模型](NEST_RUNTIME.zh-CN.md) 与 [Nest 三池](../../docs/framework/NEST-AWAIT.md)。
 

@@ -40,7 +40,7 @@
   它们要么放在端点里（进锁之前 / 出锁之后），要么放在 effect 消费者里（路径 B）。
 - **只走生成的 mutator**（`dao.SetItems(...)`）。直接写字段的话，dirty 追踪、undo 和 patch 全部看不见，
   表现是"内存改了、库里没有"，而且 `rollback=undo` 回滚不掉。
-- **`rollback=undo durability=strict`**：handler 返回 error，本次调用过的所有 mutator 回滚；
+- **`rollback=undo`**（durability 缺省 async）：handler 返回 error，本次调用过的所有 mutator 回滚；
   提交成功则这条 WAL 记录里的实体变更、收据、effect 一起生效。
 
 **跨实体**：一个 handler 可以有多个实体参数（demo 的 `AddExp` 是 Player + World），Nest 按锁档顺序

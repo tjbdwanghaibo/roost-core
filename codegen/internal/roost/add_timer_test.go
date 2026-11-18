@@ -68,13 +68,15 @@ func TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks(t *testing.T) {
 		"TimerDriver.NewHost(typed, playerTimerStore{owner: typed}, component.registerTimerHandlers)",
 		"func (component *TimerComponent) NewTimer(", "func (component *TimerComponent) NewTimerAt(", "func (component *TimerComponent) Tick() int",
 		"dao.RangeTimers(", "Overdue",
+		"func TimerOf(target view.PlayerEntity) *TimerComponent {", "type ITimerEntity = view.PlayerEntity",
 	} {
 		if !strings.Contains(component, fragment) {
 			t.Fatalf("component misses %q:\n%s", fragment, component)
 		}
 	}
 	tick := readProjectFile(t, root, "game/handler/tick_player_timer_gen.go")
-	if !strings.Contains(tick, "//roost:nest rollback=undo durability=strict\nfunc handlerTickPlayerTimer(target player.ITimerEntity) (int32, error)") {
+	// 缺省 async，参数是 game/view 的实体总接口，经 player.TimerOf 取回定时器组件（compose §4D）。
+	if !strings.Contains(tick, "//roost:nest rollback=undo\nfunc handlerTickPlayerTimer(target view.PlayerEntity) (int32, error) {\n\treturn int32(player.TimerOf(target).Tick()), nil") {
 		t.Fatalf("tick handler:\n%s", tick)
 	}
 	dao := readProjectFile(t, root, "db/def/player.go")
@@ -380,25 +382,26 @@ import (
 	"time"
 
 	player "example.com/planet/game/entities/player"
+	"example.com/planet/game/view"
 )
 
-//roost:nest rollback=undo durability=strict
-func handlerArmBuff(target player.ITimerEntity, seconds int64) (int64, error) {
-	target.TimerComp().Owner().Dao().SetBuffActive(true)
-	return target.TimerComp().NewTimer(time.Duration(seconds)*time.Second, player.TimerTypeBuffExpire, 0, 0, nil), nil
+//roost:nest rollback=undo
+func handlerArmBuff(target view.PlayerEntity, seconds int64) (int64, error) {
+	target.Dao().SetBuffActive(true)
+	return player.TimerOf(target).NewTimer(time.Duration(seconds)*time.Second, player.TimerTypeBuffExpire, 0, 0, nil), nil
 }
 
-//roost:nest rollback=undo durability=strict
-func handlerArmIncome(target player.ITimerEntity) (int64, error) {
-	return target.TimerComp().NewTimer(time.Minute, player.TimerTypeIncome, 0, 0, nil), nil
+//roost:nest rollback=undo
+func handlerArmIncome(target view.PlayerEntity) (int64, error) {
+	return player.TimerOf(target).NewTimer(time.Minute, player.TimerTypeIncome, 0, 0, nil), nil
 }
 
-//roost:nest rollback=undo durability=strict
-func handlerTimerState(target player.ITimerEntity) (string, error) {
-	dao := target.TimerComp().Owner().Dao()
+//roost:nest rollback=undo
+func handlerTimerState(target view.PlayerEntity) (string, error) {
+	dao := target.Dao()
 	return fmt.Sprintf("buff=%v expired=%d income=%d gold=%d overdue=%v deadline=%d now=%d interval=%d nodes=%d",
 		dao.GetBuffActive(), dao.GetBuffExpired(), dao.GetIncomeFires(), dao.GetGold(), dao.GetLastOverdue(),
-		dao.GetLastDeadline(), dao.GetLastNow(), dao.GetLastInterval(), len(target.TimerComp().Timers())), nil
+		dao.GetLastDeadline(), dao.GetLastNow(), dao.GetLastInterval(), len(player.TimerOf(target).Timers())), nil
 }
 `
 

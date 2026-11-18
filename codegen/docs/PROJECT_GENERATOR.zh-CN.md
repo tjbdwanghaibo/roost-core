@@ -180,7 +180,7 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 | `game/managers/` | game 服务的 manager 登记点 `Managers()`（新工程是空列表）；别的业务服务仍是 `internal/service/<name>/managers.go` |
 | `game/modules/<包>/` | 功能包（维护者 2026-11-15 起新生成的工程）：模块自带的包（`game/modules/login`、`game/modules/mailbox`、`game/modules/alliance/runtime`……）与生成器的功能目录（`roost add skill` 的 `game/modules/skills`、`add effect` 的 `game/modules/effects`、`add heartbeat` 的 `game/modules/heartbeat`、`add attribute` 的 `game/modules/gameplay/attribute`）。包名与原来相同；`game/modules/` 只是目录，本身不放文件。`game/` 下只剩下面这几层与 `game/modules/`，模块清单的落点不合这条规则时安装器拒绝加载 |
 | `game/modules/login/` | 登录链：票据校验与认证器（login 模块）、进入游戏的事务外登记点（`OnEntering` / `OnEntered` / `OnCreating` / `OnCreatePrepare`）与“先新建”（enter 模块）、工程的首次发放 `enter_first.go`（发放后在 Player 上发布实体事件 `event.EnterFirst`）、新建时的角色名校验（enter×profile） |
-| `game/components/<功能>/` | 组件逻辑（宿主接口 `Owner`，工厂 `NewComponent`），文件名与包名同名（`bag/bag.go`）；2026-11-16 起 `//roost:component` 类型号、`CompType<X>` 与工厂登记也在这里（模块清单 `component_package`，实体字段写 `comp:"<包>.CompType<X>"`）；别的功能的联动（`<功能>_<对方>.go`，含 `//roost:listen` 监听）也在这里 |
+| `game/components/<功能>/` | 组件逻辑（宿主接口 `Owner`，工厂 `NewComponent`），文件名与包名同名（`bag/bag.go`）；2026-11-16 起 `//roost:component` 类型号、`CompType<X>` 与工厂登记也在这里（模块清单 `component_package`，实体字段写 `comp:"<包>.CompType<X>"`；2026-11-18 起 `roost add component` 也生成这种组件包）；别的功能的联动（`<功能>_<对方>.go`，含 `//roost:listen` 监听）也在这里 |
 | `game/event/` | 第七个固定层（2026-11-16 起）：实体事件定义，每个模块一个 `<模块>.go`，只放值类型，只 import 标准库与 `db`（安装器检查）；见 [Nest 与实体 §3A](../../docs/framework/guide/02-nest-entity.md#3a-实体事件) |
 | `game/controllers/` | 一个包（2026-11-16 起）：生成器所有的 `controller.go`（Controller、FromRegistry、推送辅助、按模块懒建状态、启动期依赖检查 `CheckAtStart`）；每个模块一个 `<模块>.go`、联动 `<模块>_<对方>.go`，测试同名加 `_test`；不允许子目录 |
 | `game/view/` | 只放接口：`component_<功能>.go`（组件接口与 `<功能>Holder`，Holder 里除访问器外还可列宿主方法，模块带来）、`entity_<实体>.go`（`<实体>Entity`，`roost generate` 生成）、`holder_entities_gen.go`（每个 Holder 一个窄接口 `I<功能>Entity`，handler 的参数类型，生成）。组件包、`game/modules/login` 与联动只依赖它，所以不会反向引用实体包 |
@@ -441,10 +441,11 @@ Makefile 也提供了对应入口，例如：
     make generate-changed
     make test
 
-`--entity` 会自动完成 Component 工厂注册、Manager、字段 tag、DAO import，并写出
-`game/view/component_<name>.go`（组件接口 `<Name>` 与 `<Name>Holder`）；`roost generate` 生成 view 访问器、
-handler 用的窄接口 `view.I<Name>Entity`（2026-11-16 起不再在实体包里声明 `I<Name>Entity`）与 Component/DAO getter，
-不需要手工编辑这些接线。玩法方法写在 `<name>_component.go`（handler 要调的同时列进 view 接口），持久化/同步字段写在
+`--entity` 会自动完成组件包、工厂注册、Manager、字段 tag 与 import：`roost add component` 写组件包
+`game/components/<包>/<包>.go`（类型号、工厂登记、宿主接口 `Owner`、`Component`）与 `game/view/component_<包>.go`（组件接口
+`<Name>` 与 `<Name>Holder`），实体结构体只挂 `<name> *<包>.Component`（2026-11-18 起，与模块一致；实体包里不再写
+`<name>_component.go` 与 `I<Name>Entity`）；`roost generate` 生成 view 访问器、实体接口 `view.<Entity>Entity`、handler 用的窄接口
+`view.I<Name>Entity` 与 Component/DAO getter，不需要手工编辑这些接线。玩法方法写在组件包里（handler 要调的同时列进 view 接口），持久化/同步字段写在
 `db/def` 并通过生成的 getter/setter 访问。完整流程见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md` 和 `docs/ENTITY_COMPONENT.zh-CN.md`。
 

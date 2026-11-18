@@ -1,4 +1,4 @@
-package player
+package wallet
 
 import "fmt"
 
@@ -7,11 +7,11 @@ import "fmt"
 const MaxGold = 1000
 
 // Gold is the wallet's balance.
-func (component *WalletComponent) Gold() int64 { return component.Owner().Dao().GetGold() }
+func (component *Component) Gold() int64 { return component.owner.Dao().GetGold() }
 
 // Spend takes amount out, refusing an overdraft.
-func (component *WalletComponent) Spend(amount int64) error {
-	dao := component.Owner().Dao()
+func (component *Component) Spend(amount int64) error {
+	dao := component.owner.Dao()
 	if amount <= 0 || dao.GetGold() < amount {
 		return fmt.Errorf("not enough gold: have %d, want %d", dao.GetGold(), amount)
 	}
@@ -20,8 +20,8 @@ func (component *WalletComponent) Spend(amount int64) error {
 }
 
 // Receive adds amount, refusing to go past MaxGold.
-func (component *WalletComponent) Receive(amount int64) error {
-	dao := component.Owner().Dao()
+func (component *Component) Receive(amount int64) error {
+	dao := component.owner.Dao()
 	if amount <= 0 || dao.GetGold()+amount > MaxGold {
 		return fmt.Errorf("wallet full: have %d, receive %d, cap %d", dao.GetGold(), amount, MaxGold)
 	}
@@ -30,14 +30,14 @@ func (component *WalletComponent) Receive(amount int64) error {
 }
 
 // Refund gives amount back without the cap: undoing a debit must not be refused.
-func (component *WalletComponent) Refund(amount int64) {
-	dao := component.Owner().Dao()
+func (component *Component) Refund(amount int64) {
+	dao := component.owner.Dao()
 	dao.SetGold(dao.GetGold() + amount)
 }
 
 // LevelUp raises the level by one and returns it.
-func (component *WalletComponent) LevelUp() int32 {
-	dao := component.Owner().Dao()
+func (component *Component) LevelUp() int32 {
+	dao := component.owner.Dao()
 	dao.SetLevel(dao.GetLevel() + 1)
 	return dao.GetLevel()
 }

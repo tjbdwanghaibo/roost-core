@@ -98,8 +98,10 @@ roost generate
 
 它在 `PlayerDao` 里加 `Timers` / `TimerSeed` 两个字段，生成 `TimerComponent`（`timer_component_gen.go`）、到期 Tick 的
 Nest handler（`game/handler/tick_player_timer_gen.go`）和 bootstrap 里的驱动接线；你只写
-`game/entities/player/timer_handlers.go`：定时器类型号与回调（`registerTimerHandlers`）。在 handler 里用
-`target.TimerComp().NewTimer(30*time.Minute, player.TimerTypeBuffExpire, 0, 0, nil)` 登记。
+`game/entities/player/timer_handlers.go`：定时器类型号与回调（`registerTimerHandlers`）。回调只有一句，把到期节点交给业务组件的
+导出方法（`component.Owner().DoubleGold().OnExpire(fire)`）；规则写在组件包 `game/components/<功能>/` 里，组件要建节点时调实体上的
+宿主方法（实体包 `game/entities/player/<功能>.go` 里 `e.TimerComp().NewTimer(30*time.Minute, TimerTypeBuffExpire, 0, 0, nil)`，列进
+view 的 Holder）。handler 直接要定时器组件时收 `view.PlayerEntity`，用 `player.TimerOf(target)` 取回。
 
 - 驱动按已加载玩家的最早期限只给到期的那一个投递 Tick，不按在线人数轮询；时间取 App 业务时钟（含 `time.logic_offset`）。
 - 回调在玩家的 Nest 锁与事务内执行：只改 DAO、记 effect，不做 I/O。返回正值是下次间隔（从 `fire.Now` 起算），0 结束。

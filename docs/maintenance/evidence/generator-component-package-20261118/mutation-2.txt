@@ -1,0 +1,10 @@
+--- FAIL: TestGeneratedComponentFollowsTheComponentPackageRule (3.75s)
+    add_test.go:1144: game/handler/tick_guild_timer_gen.go does not take target view.GuildEntity:
+    add_test.go:1154: game/handler/tick_guild_timer_gen.go takes guild.ITimerEntity; a Nest handler takes a game/view interface
+    add_test.go:1154: game/handler/tick_guild_timer_gen_nest_gen.go takes guild.ITimerEntity; a Nest handler takes a game/view interface
+    add_test.go:1163: game/handler/arm_guild_timer.go writes durability=strict; generated scaffolds use the default (async)
+    add_test.go:1163: game/handler/claim_daily_quest.go writes durability=strict; generated scaffolds use the default (async)
+    add_test.go:1163: game/handler/join_guild.go writes durability=strict; generated scaffolds use the default (async)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	4.466s
+FAIL

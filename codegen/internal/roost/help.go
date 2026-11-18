@@ -47,18 +47,19 @@ roost add transport tcp
 # 实现 auth.go 后：roost config enable player-tcp
 make dev-up
 make run SERVICE=game`,
-		Configuration: `不需要先记住全部命令：每完成一步运行 roost project next，它只显示当前一步、原因、复查命令和对应文档。access player 生成传输无关的协议边界；Entity 是锁与生命周期边界；Component 写玩法方法；持久化字段放 DAO 并只通过生成 mutator 修改。完整逐步说明见 docs/BEGINNER_WORKBOOK.zh-CN.md。`,
-		Example: `// profile_component.go
-func (component *ProfileComponent) Rename(name string) error {
-    component.Owner().Dao().SetName(name)
+		Configuration: `不需要先记住全部命令：每完成一步运行 roost project next，它只显示当前一步、原因、复查命令和对应文档。access player 生成传输无关的协议边界；Entity 是锁与生命周期边界；Component 写玩法方法（roost add component 生成组件包 game/components/<包>/ 与 game/view 接口，实体包只挂字段）；持久化字段放 DAO 并只通过生成 mutator 修改。完整逐步说明见 docs/BEGINNER_WORKBOOK.zh-CN.md。`,
+		Example: `// game/components/profile/profile.go（roost add component 生成的组件包，业务写在组件里）
+func (component *Component) Rename(name string) error {
+    component.owner.Dao().SetName(name)
     return nil
 }
 
 // game/view/component_profile.go：handler 要调用的方法也写进 view.Profile
 type Profile interface{ Rename(name string) error }
 
-// game/handler/profile.go：参数是 roost generate 写的窄接口 view.IProfileEntity
-//roost:nest rollback=undo durability=strict
+// game/handler/rename_player.go：参数是 roost generate 写的窄接口 view.IProfileEntity，经访问器调组件；
+// 不写 durability（缺省 async）
+//roost:nest rollback=undo
 func handlerRenamePlayer(target view.IProfileEntity, name string) error {
     return target.Profile().Rename(name)
 }`,
@@ -72,7 +73,7 @@ roost project next [--workflow first-business|player-tcp]
 roost project doctor --workflow first-business
 roost project upgrade [--root dir] [--dry-run] [--skip-deps] [-core version]
 make project-upgrade`,
-		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：只有第一个业务 Service，带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/entities/world/singleton.go 的 EnsureWorld，Service.Init 里确保存在；每个实体包的 lifecycle_gen.go 由 roost generate 产出）。它缺省不托管任何框架服务：roost module add 装的模块用到哪个（chat、rank、mail、account……）就在同一个安装事务里声明哪个（services.<name>.framework 并加进业务 Service 的 uses），-recipe 也只带它的模块用到的。-framework 让 -template game 一开始就托管指定的框架服务：all 是 account、activity、chat、global、mail、match、platform、rank、session 九个全部，或逗号分隔列出其中几个；每个作为独立子命令托管，第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器。托管服务的协作者（身份校验、投递、频道策略……）在 services/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现（接管它的模块会替换掉）。-framework 只对 -template game（含 -recipe）有效。-template lobby 不带业务服务，只托管 account、lobby、relay（开房间联机，roost help lobby）。-template game-demo 托管全部九个框架服务（demo 都在用），并在 game 之上再生成一套可运行的完整游戏 demo：登录、背包与经验、升级发奖励邮件、匹配、聊天、副本、送礼 saga、地图与服务端权威同步、lockstep 战斗、GM 运维面和机器人压测（逐项说明见本仓 demo/WALKTHROUGH.md）；最小的写入链路是 Player 的 Profile / Bag 组件与 PlayerDao 持久化字段、一个 //roost:nest rollback=undo durability=strict 的加道具事务和 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
+		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：只有第一个业务 Service，带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/entities/world/singleton.go 的 EnsureWorld，Service.Init 里确保存在；每个实体包的 lifecycle_gen.go 由 roost generate 产出）。它缺省不托管任何框架服务：roost module add 装的模块用到哪个（chat、rank、mail、account……）就在同一个安装事务里声明哪个（services.<name>.framework 并加进业务 Service 的 uses），-recipe 也只带它的模块用到的。-framework 让 -template game 一开始就托管指定的框架服务：all 是 account、activity、chat、global、mail、match、platform、rank、session 九个全部，或逗号分隔列出其中几个；每个作为独立子命令托管，第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器。托管服务的协作者（身份校验、投递、频道策略……）在 services/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现（接管它的模块会替换掉）。-framework 只对 -template game（含 -recipe）有效。-template lobby 不带业务服务，只托管 account、lobby、relay（开房间联机，roost help lobby）。-template game-demo 托管全部九个框架服务（demo 都在用），并在 game 之上再生成一套可运行的完整游戏 demo：登录、背包与经验、升级发奖励邮件、匹配、聊天、副本、送礼 saga、地图与服务端权威同步、lockstep 战斗、GM 运维面和机器人压测（逐项说明见本仓 demo/WALKTHROUGH.md）；最小的写入链路是 Player 的 Profile / Bag 组件与 PlayerDao 持久化字段、一个 //roost:nest rollback=undo 的加道具 Nest 事务和 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
 		Example: `roost project new planet -module example.com/planet
 cd planet
 roost project next
@@ -159,7 +160,7 @@ roost module list
 roost module plan checkin          # checkin 依赖 wallet：两个都会装
 roost module add checkin
 roost module verify
-# 之后在 game/entities/player/checkin_component.go 里改奖励规则，改完再 roost module verify`,
+# 之后在 game/components/checkin/checkin.go 里改奖励规则，改完再 roost module verify`,
 	},
 	{
 		Name: "access", Aliases: []string{"player-access", "gateway-access"},
@@ -221,8 +222,10 @@ roost add endpoint EnterGame --handler player --lifecycle Player`,
 		Usage:         `roost add timer --entity <Entity> [--component Timer] [--service <service>] [--id <component-id>]`,
 		Configuration: `要求实体已有 DAO（roost add dao <Entity> --entity <Entity>）、工程有 nest 运行时；Remote 托管（remote=managed）与 noPersist 的实体拒绝。写入 roost.yaml timers.<entity>，在实体 DAO 定义里加节点 map 与种子两个字段、实体加组件字段（这两处之后归业务）；生成部分 <component>_component_gen.go、db/def/<entity>_<component>_node_gen.go、game/handler/tick_<entity>_<component>_gen.go 与 bootstrap 里的 wiring/entitytimer 驱动由 project sync 重写；定时器类型与回调写在 game/entities/<entity>/<component>_handlers.go（业务文件，只建一次）。驱动按已加载实体的最早期限只给到期的那一个实体投递 Tick，不按在线人数轮询，时间取 App 业务时钟。离线语义：框架不追帧，实体不在内存期间到期的节点加载后只触发一次，回调参数 entitytimer.Fire 带原定期限 Deadline、触发时刻 Now、加载时刻 LoadedAt、补触发标志 Overdue 与间隔 Interval，补算错过的周期由业务做；回调返回正值为下次间隔（从 Now 起算）。说明见 ` + entityTimerDocURL + `。`,
 		Example: `roost add timer --entity Player
-# game/entities/player/timer_handlers.go：定义 TimerTypeBuffExpire 与回调
-# Nest handler 里：target.TimerComp().NewTimerAt(expireAt, player.TimerTypeBuffExpire, 0, 0, nil)
+# game/entities/player/timer_handlers.go：定义 TimerTypeBuffExpire 与回调（回调一句，把节点交给组件的导出方法）
+# 组件要建定时节点时：实体包 game/entities/player/buff.go 写宿主方法
+#   func (e *Player) ArmBuffExpire(at time.Time) int64 { return e.TimerComp().NewTimerAt(at, TimerTypeBuffExpire, 0, 0, nil) }
+# 列进 view.BuffHolder，组件里 component.owner.ArmBuffExpire(at)；handler 直接用时收 view.PlayerEntity，player.TimerOf(target)
 roost generate`,
 	},
 	{
@@ -232,7 +235,7 @@ roost generate`,
 		Configuration: `要求工程有 entity 与 nest；全部实体都支持（Remote 托管实体只在拥有方跳，共享模式下不允许挂载）。写入 roost.yaml heartbeats.<entity>，服务的 mods 加 heartbeat（依赖 nest；按需装配：空转的驱动也每 10ms 走一格、多一个 Mod 让 shutdown.total_timeout 多 3s），实体加组件字段（之后归业务）；生成部分 game/modules/heartbeat/driver_gen.go（工程唯一的驱动）、game/entities/<entity>/heartbeat_component_gen.go 与 bootstrap 里的 wiring/heartbeat 由 project sync 重写；本实体自己的心跳登记写在 heartbeat_beats.go（业务文件，只建一次，示例登记是停止状态）。档位只有 50ms～60s 十个；每个登记至多一拍在途，不追帧，回调按 Beat.Elapsed 推进，只做内存计算与入队。心跳不持久，加载后按 DAO 状态重新登记 / 启动。服务 Init / Shutdown 不用改。说明见 ` + heartbeatDocURL + `。`,
 		Example: `roost add heartbeat --entity Scene
 # game/entities/scene/heartbeat_beats.go：component.Register("frame", 100*time.Millisecond, component.onFrame)
-# Nest handler 里：target.HeartbeatComp().Beat("frame").Start()
+# Nest handler（参数 view.SceneEntity）里：scene.HeartbeatOf(target).Beat("frame").Start()
 roost generate`,
 	},
 	{
@@ -250,7 +253,7 @@ roost generate
 		Usage:         `roost add timedomain --entity <Scene> [--id <component-id>]`,
 		Configuration: `要求实体有 DAO。在 DAO 定义里加 TimeAnchorBusiness / TimeAnchorDomain / TimeRate 三个 nopersist,sync 字段（随同步下发、不落库；要持久的场景改成 persist），实体加组件字段（两处之后归业务）；生成部分 timedomain_component_gen.go（加载时 timedomain.New 并发布、DAO 适配）由 project sync 重写；倍率范围写在 timedomain_config.go（业务文件，只建一次，缺省 [0, 4]）。SetRate 只在场景自己的锁内调用，提交后才发布给成员；成员的行为组件在 behavior_actions.go 的 timeDomain 里返回场景的域。说明见 ` + timeDomainDocURL + `。`,
 		Example: `roost add timedomain --entity Scene
-# 场景的 Nest handler：target.TimeDomainComp().Domain().SetRate(2)`,
+# 场景的 Nest handler（参数 view.SceneEntity）：scene.TimeDomainOf(target).Domain().SetRate(2)`,
 	},
 	{
 		Name: "skill", Aliases: []string{"skills", "ability"},
@@ -333,23 +336,23 @@ name := dao.GetName()`,
 roost add component <name> --entity <owner>
 roost add dao <name> --entity <owner>
 roost generate`,
-		Configuration: `高层 add 命令自动分配 ID、注册 Component 工厂、生成窄 Entity 接口，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag；Entity wire 生成 getter。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //roost:entity entityKind=<const>，还可配置 businessPool=short|long、remote=managed、sync=true、syncNamespace、subjectPacker；service=<服务名> 声明归属服务（只在那个服务注册锁住它的 handler，别的服务经 rpc 写；未声明时任何带 Nest 的服务都能写），改了之后先 roost project sync 再 roost generate。`,
+		Configuration: `高层 add 命令自动分配 ID，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag。add component 按组件包写法（compose §4D）生成 game/components/<包>/<包>.go（类型号常量与工厂登记、Component、宿主接口 Owner、NewComponent）与 game/view/component_<包>.go（组件接口 <X> 与 <X>Holder），实体结构体只挂 ` + "`<x> *<包>.Component` comp:\"<包>.CompType<X>\"" + `，实体包里不写组件文件与 I<X>Entity；组件包已存在时只挂字段（挂到第二个实体）。roost generate 生成 Entity wire 的 getter、view 访问器 <X>()、实体接口 view.<E>Entity 与 handler 用的窄接口 view.I<X>Entity。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //roost:entity entityKind=<const>，还可配置 businessPool=short|long、remote=managed、sync=true、syncNamespace、subjectPacker；service=<服务名> 声明归属服务（只在那个服务注册锁住它的 handler，别的服务经 rpc 写；未声明时任何带 Nest 的服务都能写），改了之后先 roost project sync 再 roost generate。`,
 		Example: `//roost:entity entityKind=EntityKindPlayer
 type Player struct {
     *entity.EntityBase
     entity.ComponentManager
     entity.DaoManager
-    bag *BagComponent ` + "`comp:\"CompTypeBag\"`" + `
-    dao *PlayerDao    ` + "`dao:\"players\"`" + `
+    bag *bag.Component ` + "`comp:\"bag.CompTypeBag\"`" + `
+    dao *db.PlayerDao  ` + "`dao:\"players\"`" + `
 }`,
 	},
 	{
 		Name: "nest", Aliases: []string{"handler", "sender"},
 		Summary:       "生成 Entity 加锁调度、Sender、回滚和 durability 接入",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/nest@latest -dir ./game [-sender=true] [-force]`,
-		Configuration: `handler 使用 //roost:nest；rollback=state|undo，durability=memory|async|strict，可加 sync。锁目标是开头的 Entity 参数：类型名含 Entity（如 IPlayerEntity）或用 target= / targets= 指明，两者都没有时 generate 报错；多个目标按全局顺序加锁。Remote read 放在带 remote tag 的 RemoteViewRef 字段。`,
-		Example: `//roost:nest rollback=undo durability=strict
-func handlerTransfer(from IPlayerEntity, to IPlayerEntity, itemID int64) error {
+		Configuration: `handler 使用 //roost:nest；rollback=state|undo，durability=memory|async|strict（不写时 async；生成的骨架都不写，按缺省 async），可加 sync。锁目标是开头的 Entity 参数：类型名含 Entity（如 view.IBagEntity、view.PlayerEntity）或用 target= / targets= 指明，两者都没有时 generate 报错；多个目标按全局顺序加锁。Remote read 放在带 remote tag 的 RemoteViewRef 字段。`,
+		Example: `//roost:nest rollback=undo
+func handlerTransfer(from view.IBagEntity, to view.IBagEntity, itemID int64) error {
     return nil
 }`,
 	},
@@ -470,7 +473,7 @@ roost generate`,
 		Configuration: `目标 Service 自动加上 saga Mod（补齐 dataengine、nats、mongo）。-steps 按执行顺序书写：生成的 Definition 原样保留这个顺序，Saga 按它推进、按它的倒序补偿；步骤名不能重复。-native 列出哪些步骤的业务是一笔 Nest 事务（必须是 -steps 的子集，不能重复），这些步骤走原生路径：改实体与实体里的回执同一条 WAL 记录，至多生效一次，不需要自己的幂等，落盘后结果直接发回协调器；-entity / -component 与 add handler 相同（工程只有一个 Entity 时 -entity 可省），-entity 的 DAO 生成回执字段 SagaReceipts 与 game/entities/<entity>/saga_receipts.go，服务要有 nest Mod。其余步骤是 Mongo 步骤：在 Mongo 事务里运行，调用别的服务要按 Command.IdempotencyKey 幂等。
 生成物都是业务文件、只建一次：saga/<name>/definition.go（定义、步骤主题常量、EmitStart / Start、按业务键查结果的 Lookup）；saga/<name>/steps.go（State 与 EncodeState / DecodeState、每步正向与补偿的步骤体、按主题常量登记的 RegisterSteps、StartSteps；durable 为 <service>-<name>-<步骤>）；每个原生步骤两个 Nest handler：game/handler/<name>_<step>.go 与 <name>_<step>_compensation.go（参数带 saga.NativeStep，事务里调用 step.Complete，业务拒绝也提交）。骨架默认拒绝（"... is not implemented"），写完业务前 saga 不会报告成功。
 服务的 Init / Shutdown 归业务、不改写：Init 里 steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})，Shutdown 里 if err := steps.Drain(ctx); err != nil { steps.Stop() }；roost project doctor 的 saga-steps:<name> 在没人调用 StartSteps 时 WARN。Nest handler 里启动一笔 saga：state, _ := <name>.EncodeState(<name>.State{...})；<name>.EmitStart(businessKey, state, deadline)。一个 (Type, businessKey) 在运行期间与结束后 saga.terminal_retention（缺省 1h）内只有一笔 saga，ID 由二者派生（saga.IDOf）：业务键取发起方能交还给客户端的值（例如请求号），之后在装了 saga Mod 的进程里 <name>.Lookup(ctx, engine, businessKey) 查结果（engine 是 app.Lookup[*saga.Engine](registry, mods.ModSaga)；saga.ErrNotFound 表示还没开始或结束超过保留期（开启 saga.cold_copy 时保留期外的终态从 Mongo 冷副本读，只读、不参与唯一性），终态 Completed / Compensated / Failed 即结果，ManualRequired 常驻等运维）。saga.coordinators 写跑协调器的 sid（生成配置写本服务的 sid）；超时、重试与回执参数在 saga 配置段（saga.step_defaults、saga.steps.<type>.<step>、saga.receipt_retention）。
-容量：步骤的 durable 由服务的全部副本共用，每个副本同时处理至多 32 条命令；原生步骤的结果在 Nest 事务落盘（strict：WAL fsync，WAL 放快盘）后直接发回协调器分区，发布成功才 ack 命令。参与方投影积压超过 saga.admission.high_records 时新 saga 被拒（saga.ErrBackpressure，启动 effect 自动重试），在途的照常推进。量大时按 sid 分片多进程，并给原生步骤加 kitsaga.WithAdmit 准入（命令只在拥有该实体的进程执行，见 game-demo 送礼 saga）。正式实现实测（macOS 单机，三节点 JetStream R3，原生步骤 pipelined 推荐配置下原生正向 128 并发约 1050 saga/s；Linux、跨机未测）：` + sagaCapacityDocURL + `；指南：` + sagaGuideURL + `。`,
+容量：步骤的 durable 由服务的全部副本共用，每个副本同时处理至多 32 条命令；原生步骤的结果在 Nest 事务落盘（WAL fsync，WAL 放快盘）后直接发回协调器分区，发布成功才 ack 命令。参与方投影积压超过 saga.admission.high_records 时新 saga 被拒（saga.ErrBackpressure，启动 effect 自动重试），在途的照常推进。量大时按 sid 分片多进程，并给原生步骤加 kitsaga.WithAdmit 准入（命令只在拥有该实体的进程执行，见 game-demo 送礼 saga）。正式实现实测（macOS 单机，三节点 JetStream R3，原生步骤 pipelined 推荐配置下原生正向 128 并发约 1050 saga/s；Linux、跨机未测）：` + sagaCapacityDocURL + `；指南：` + sagaGuideURL + `。`,
 		Example: `roost add saga gift -service game -steps debit,credit -native debit,credit -entity Player -component Wallet
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
 roost generate`,

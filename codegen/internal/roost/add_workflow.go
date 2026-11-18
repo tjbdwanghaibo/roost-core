@@ -717,25 +717,10 @@ func viewEndpointEntity(root, module, typeName, handlerType, targetDir string) (
 		}
 		return entityAt(dir), nil
 	}
-	paths, err := filepath.Glob(filepath.Join(root, "game", "entities", "*", "*.go"))
+	dirs, err := entitiesMountingComponent(root, component)
 	if err != nil {
 		return endpointEntity{}, err
 	}
-	tag := regexp.MustCompile("\\bcomp:\"(?:[A-Za-z_][A-Za-z0-9_]*\\.)?CompType" + regexp.QuoteMeta(component) + "(?:,[^\"]*)?\"")
-	var dirs []string
-	for _, file := range paths {
-		if strings.HasSuffix(file, "_test.go") || strings.HasSuffix(file, "_gen.go") || strings.HasSuffix(file, "_gen_wire.go") {
-			continue
-		}
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			return endpointEntity{}, err
-		}
-		if dir := filepath.Base(filepath.Dir(file)); tag.Match(raw) && !slices.Contains(dirs, dir) {
-			dirs = append(dirs, dir)
-		}
-	}
-	sort.Strings(dirs)
 	if targetDir != "" {
 		if !slices.Contains(dirs, targetDir) {
 			mounted := "no entity mounts it"
@@ -755,6 +740,32 @@ func viewEndpointEntity(root, module, typeName, handlerType, targetDir string) (
 		return endpointEntity{}, fmt.Errorf("Nest handler %s: entities %s all mount component %s; an endpoint addresses one kind: write target=<entity> on its //roost:endpoint marker "+
 			"(roost add endpoint --target <entity>), or take view.<Entity>Entity of the player's entity", handlerType, strings.Join(dirs, ", "), component)
 	}
+}
+
+// entitiesMountingComponent 返回 game/entities/ 下挂了组件 component（PascalCase）的实体包目录（排序）：实体结构体上有
+// comp:"CompType<component>" 或 comp:"<包>.CompType<component>"。只读业务文件（生成的 _gen 文件不挂组件字段），不依赖
+// 已经生成的 view 文件：add handler / add endpoint 常在 roost generate 之前跑。
+func entitiesMountingComponent(root, component string) ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join(root, "game", "entities", "*", "*.go"))
+	if err != nil {
+		return nil, err
+	}
+	tag := regexp.MustCompile("\\bcomp:\"(?:[A-Za-z_][A-Za-z0-9_]*\\.)?CompType" + regexp.QuoteMeta(component) + "(?:,[^\"]*)?\"")
+	var dirs []string
+	for _, file := range paths {
+		if strings.HasSuffix(file, "_test.go") || strings.HasSuffix(file, "_gen.go") || strings.HasSuffix(file, "_gen_wire.go") {
+			continue
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		if dir := filepath.Base(filepath.Dir(file)); tag.Match(raw) && !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	sort.Strings(dirs)
+	return dirs, nil
 }
 
 func protocolFieldNames(path, typeName string) (map[string]string, error) {

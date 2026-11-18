@@ -227,7 +227,7 @@ func addTimer(root string, m Manifest, options AddOptions) ([]string, error) {
 	// 组件字段）才接受；类型常量已由别的文件声明说明那是另一个组件。
 	if declared, err := packageDeclaresConst(filepath.Dir(entityPath), "CompType"+names.CompType); err != nil {
 		return nil, err
-	} else if declared || (contains(host.Components, "CompType"+names.CompType) && !entityHasTimerField(host, names)) {
+	} else if declared || (hostMountsComponent(host.Components, names.CompType) && !entityHasTimerField(host, names)) {
 		return nil, fmt.Errorf("entity %s already has a component %s (CompType%s); choose another name with --component", names.EntityType, names.CompType, names.CompType)
 	}
 	for _, rel := range []string{names.componentFile(), names.handlersFile(), names.nodeFile(), names.tickFile(), "game/entities/" + entityName + "/" + comp + "_component.go"} {
@@ -360,6 +360,17 @@ func entityMainDao(entityName string, host entity.TimerHost, what string) (strin
 func entityHasTimerField(host entity.TimerHost, names timerNames) bool {
 	for _, comp := range host.ComponentFields {
 		if comp.CompType == "CompType"+names.CompType && strings.TrimPrefix(comp.TypeName, "*") == names.CompType+"Component" {
+			return true
+		}
+	}
+	return false
+}
+
+// hostMountsComponent 报告实体结构体是否已挂组件 component（PascalCase）：标签写 CompType<X>（实体包里的组件）或
+// <包>.CompType<X>（组件包写法，roost add component 生成的就是这种）。
+func hostMountsComponent(components []string, component string) bool {
+	for _, compType := range components {
+		if compType == "CompType"+component || strings.HasSuffix(compType, ".CompType"+component) {
 			return true
 		}
 	}
@@ -541,6 +552,7 @@ import (
 	"time"
 
 	db %[5]q
+	view %[18]q
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
@@ -575,11 +587,18 @@ type %[7]sComponent struct {
 	host  *entitytimer.Host
 }
 
-// I%[7]sEntity 是 Nest handler 使用本组件的锁安全视图。
-type I%[7]sEntity interface {
-	entity.IThreadSafeEntity
-	%[7]sComp() *%[7]sComponent
+// %[7]sOf 取回 %[3]s 的定时器组件：Nest handler 收实体总接口 view.%[3]sEntity（compose §4D，handler 的参数是 game/view 的
+// 接口），要登记 / 取消定时器或推进到期节点时经它取组件。target 不是 *%[3]s 时返回 nil。
+func %[7]sOf(target view.%[3]sEntity) *%[7]sComponent {
+	if typed, ok := target.(*%[3]s); ok {
+		return typed.%[7]sComp()
+	}
+	return nil
 }
+
+// I%[7]sEntity 是兼容别名：handler 的参数改成 view.%[3]sEntity 之前，生成的 Tick handler 收它，已装模块的测试仍按这个
+// 名字断言实体（roost module 的 activity）。新代码写 view.%[3]sEntity 与 %[7]sOf；模块改完后删除。
+type I%[7]sEntity = view.%[3]sEntity
 
 func init() {
 	entity.RegisterComponentFactory(CompType%[7]s, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
@@ -680,7 +699,8 @@ func (store %[15]sStore) PutTimer(node timer.Node) {
 	store.owner.%[16]s().Set%[13]s(node.ID, stored)
 }
 `, generatedHeader, n.Entity, n.EntityType, n.Comp, n.Module+"/db", n.ID, n.CompType, entityTimerDocURL,
-		n.HandlerFile, n.Handler, n.DriverName, n.Dao, n.MapField, n.SeedField, strings.ToLower(n.EntityType[:1])+n.EntityType[1:]+n.CompType, n.DaoGetter, n.Node)
+		n.HandlerFile, n.Handler, n.DriverName, n.Dao, n.MapField, n.SeedField, strings.ToLower(n.EntityType[:1])+n.EntityType[1:]+n.CompType, n.DaoGetter, n.Node,
+		n.Module+"/game/view")
 }
 
 func renderTimerTick(n timerNames) string {
@@ -689,19 +709,20 @@ package handler
 
 import (
 	%[2]s %[3]q
+	view %[7]q
 )
 
 // %[4]s 触发 %[5]s 已到期的定时器（roost add timer 生成，project sync 重写）。
 //
 // 由 %[2]s.%[6]sDriver 在最早期限到了时投递（只投到期的那一个实体），在实体的 Nest 锁与事务内执行：
 // 回调改的东西与被触发节点的删除 / 续期是同一条 WAL 记录，提交后驱动才看到新的最早期限。触发时刻是这条消息
-// 冻结的业务时间（fctx.Now），不是投递时刻。返回剩下的节点数。
+// 冻结的业务时间（fctx.Now），不是投递时刻。返回剩下的节点数。durability 用缺省的 async，与业务 handler 相同。
 //
-//roost:nest rollback=undo durability=strict
-func %[4]s(target %[2]s.I%[6]sEntity) (int32, error) {
-	return int32(target.%[6]sComp().Tick()), nil
+//roost:nest rollback=undo
+func %[4]s(target view.%[5]sEntity) (int32, error) {
+	return int32(%[2]s.%[6]sOf(target).Tick()), nil
 }
-`, generatedHeader, n.Entity, n.Module+"/game/entities/"+n.Entity, n.Handler, n.EntityType, n.CompType)
+`, generatedHeader, n.Entity, n.Module+"/game/entities/"+n.Entity, n.Handler, n.EntityType, n.CompType, n.Module+"/game/view")
 }
 
 func renderTimerTickTest(n timerNames) string {
@@ -749,6 +770,11 @@ func (component *%[3]sComponent) register%[3]sHandlers(handlers *entitytimer.Han
 }
 
 // on%[3]sExample 在节点到期时执行：实体的 Nest 锁与事务内，只改 DAO、记 effect，不做 I/O、不阻塞。
+//
+// 定时器组件是 %[2]s 的基础设施，回调里不写业务（compose §4D 第 1 条）：回调只有一句，把到期节点交给业务组件的导出方法，
+// 例如 return component.owner.<组件>().OnDeadline(fire)；期限与节点号的记账、到期要做的事都写在 game/components/<功能>/
+// 里。组件要建 / 删定时节点时，在 game/entities/%[1]s/<功能>.go 写宿主方法（只建 / 删节点，例如
+// func (e *%[2]s) Arm<功能>Deadline(at time.Time) int64 { return e.%[3]sComp().New%[3]sAt(at, ...) }），列进 view 的 <功能>Holder。
 //
 // 离线语义：实体不在内存期间到期的节点，加载后只触发这一次（fire.Overdue 为 true），框架不补触发错过的周期。
 // 需要补算时用 fire.Deadline（原定期限）、fire.Now（实际触发时刻）与 fire.Interval（间隔），例如

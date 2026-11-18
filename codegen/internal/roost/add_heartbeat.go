@@ -249,7 +249,7 @@ func componentSlotFree(entityDir string, host entity.TimerHost, entityType, comp
 	if err != nil {
 		return err
 	}
-	if declared || contains(host.Components, "CompType"+compType) {
+	if declared || hostMountsComponent(host.Components, compType) {
 		return fmt.Errorf("entity %s already has a component %s (CompType%s)", entityType, compType, compType)
 	}
 	return nil
@@ -674,7 +674,7 @@ func printHeartbeatNext(stdout io.Writer, kind string, withAI bool) {
 	fmt.Fprintln(stdout, "next: roost generate (the entity generator adds the component getters, the nest generator the example handler's Sender)")
 	switch kind {
 	case "heartbeat":
-		fmt.Fprintln(stdout, "next: register the entity's own beats in game/entities/<entity>/heartbeat_beats.go (onHeartbeatInit); start / stop them in Nest handlers with <Entity>.HeartbeatComp().Beat(name)")
+		fmt.Fprintln(stdout, "next: register the entity's own beats in game/entities/<entity>/heartbeat_beats.go (onHeartbeatInit); start / stop them in Nest handlers (target view.<Entity>Entity) with <entity>.HeartbeatOf(target).Beat(name); the business a beat drives lives in a component (game/components/<feature>), the callback hands the beat to it")
 		fmt.Fprintln(stdout, "init/shutdown: nothing to add; the heartbeat Mod in the generated bootstrap starts the driver after Nest and stops it before Nest")
 		fmt.Fprintln(stdout, "guide: "+heartbeatDocURL)
 	case "behavior":
@@ -685,7 +685,7 @@ func printHeartbeatNext(stdout io.Writer, kind string, withAI bool) {
 		fmt.Fprintln(stdout, "init/shutdown: nothing to add; the heartbeat Mod in the generated bootstrap starts the driver after Nest and stops it before Nest")
 		fmt.Fprintln(stdout, "guide: "+behaviorDocURL)
 	case "timedomain":
-		fmt.Fprintln(stdout, "next: change the rate in the scene's own Nest handlers with <Scene>.TimeDomainComp().Domain().SetRate(r); members read Domain().Now() and pass the domain to their behavior (behavior_actions.go timeDomain)")
+		fmt.Fprintln(stdout, "next: change the rate in the scene's own Nest handlers (target view.<Scene>Entity) with <scene>.TimeDomainOf(target).Domain().SetRate(r); members read Domain().Now() and pass the domain to their behavior (behavior_actions.go timeDomain)")
 		fmt.Fprintln(stdout, "init/shutdown: nothing to add; the domain is built when the scene loads")
 		fmt.Fprintln(stdout, "guide: "+timeDomainDocURL)
 	}

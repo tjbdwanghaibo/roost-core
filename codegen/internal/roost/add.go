@@ -449,7 +449,9 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		// the implicit "that line must run before any RegisterEntity" ordering.
 		// Other is the safe default; a scaffold must never mint a per-entity
 		// "= 1", which is the rank reserved for remote-managed kinds.
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n// category is this kind's lock rank, acquired lowest first. Other is the safe\n// default: holding it permits acquiring nothing further. Move the kind to\n// EntityCategoryWorld / PlayerScoped / Player once its ordering is known.\n//\n// To make the kind Remote-owned (remote=managed, written from several\n// processes) change three things together: category=entity.EntityCategoryRemote,\n// remote=managed on this marker, and the embedded EntityBase field below\n// becomes *entity.RemoteEntityBase. The service running Nest also needs the Remote\n// runtime: roost add mod remote_entity -service <service>.\n//roost:entity id=%d entityKind=EntityKind%s category=entity.EntityCategoryOther\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, pascal, pascal, o.ID, pascal, pascal)
+		// 实体包里不声明 I<X>Entity（compose §4D 第 5 条）：handler 的参数是 roost generate 写的 game/view 接口——
+		// 实体总接口 view.<E>Entity 与组件窄接口 view.I<X>Entity。
+		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// category is this kind's lock rank, acquired lowest first. Other is the safe\n// default: holding it permits acquiring nothing further. Move the kind to\n// EntityCategoryWorld / PlayerScoped / Player once its ordering is known.\n//\n// To make the kind Remote-owned (remote=managed, written from several\n// processes) change three things together: category=entity.EntityCategoryRemote,\n// remote=managed on this marker, and the embedded EntityBase field below\n// becomes *entity.RemoteEntityBase. The service running Nest also needs the Remote\n// runtime: roost add mod remote_entity -service <service>.\n//roost:entity id=%d entityKind=EntityKind%s category=entity.EntityCategoryOther\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, o.ID, pascal, pascal)
 	case "component":
 		return addEntityComponent(root, m, o)
 	case "handler":
@@ -462,7 +464,8 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		body = fmt.Sprintf("package handler\n\nimport %s\n\n//roost:nest rollback=undo durability=strict\nfunc handler%s(target %s) error {\n\t// TODO: validate input and call %s.\n\treturn nil\n}\n", target.importSpec, pascal, target.paramType, target.call)
+		// 缺省 durability（async，维护者 2026-11-18）：骨架不写 durability。
+		body = fmt.Sprintf("package handler\n\nimport %s\n\n// handler%s runs in one Nest transaction on the locked entity. Business rules live in the\n// component (call its methods through the view accessor); the handler validates\n// the input, calls the component and builds the reply.\n//\n//roost:nest rollback=undo%s\nfunc handler%s(target %s) error {\n\t// TODO: validate input and call %s.\n\treturn nil\n}\n", target.importSpec, pascal, target.marker, pascal, target.paramType, target.call)
 	case "lifecycle":
 		// v1.47.0 起每个实体包由 roost generate 产出 lifecycle_gen.go（core 泛型 wiring/entitylifecycle 的具名入口），
 		// 不再有一次性脚手架。
@@ -523,16 +526,14 @@ func resolveNestHandlerTarget(root string, m Manifest, entityFlag, componentFlag
 	if componentName == "" {
 		return "", "", errors.New("handler requires --component <name>")
 	}
-	componentPath := filepath.Join(root, "game", "entities", entityName, componentName+"_component.go")
-	if _, err := os.Stat(componentPath); os.IsNotExist(err) {
-		// roost add timer 的组件是生成的（<name>_component_gen.go），handler 同样可以锁它。
-		componentPath = filepath.Join(root, "game", "entities", entityName, componentName+"_component_gen.go")
-	}
-	if _, err := os.Stat(componentPath); err != nil {
-		if os.IsNotExist(err) {
-			return "", "", fmt.Errorf("component %q is not attached to Entity %q; run: roost add component %s --entity %s", componentName, entityName, componentName, entityName)
-		}
+	// 组件挂没挂在实体上看实体结构体的 comp: 标签（组件包写法 comp:"<包>.CompType<X>"、实体包里的旧写法与生成的定时器 /
+	// 心跳组件 comp:"CompType<X>"），不看实体包里的文件名：组件包写法的组件不在实体包里。
+	mounted, err := entitiesMountingComponent(root, toPascal(componentName))
+	if err != nil {
 		return "", "", err
+	}
+	if !contains(mounted, entityName) {
+		return "", "", fmt.Errorf("component %q is not attached to Entity %q; run: roost add component %s --entity %s", componentName, entityName, componentName, entityName)
 	}
 	return entityName, componentName, nil
 }
@@ -603,33 +604,47 @@ func splitWords(value string) []string {
 type handlerComponentTarget struct {
 	importSpec string // import 行（不含 import 关键字）
 	paramType  string // target 参数类型
-	component  string // 取组件的表达式（target.Profile() / target.ProfileComp()）
+	component  string // 取组件的表达式（target.Profile() / guild.TimerOf(target)）
 	call       string // TODO 里的调用说明
+	// marker 是 //roost:nest 上追加的选项（以空格开头）：组件挂在几种实体上时写 target=<实体>，Nest 归属与 endpoint
+	// 寻址都按它认 handler 锁的是哪一种（compose §4D 第 3 条）。
+	marker string
 }
 
-// componentHandlerTarget：组件在 game/view 里有 <X>Holder 时（roost add component 生成的组件、模块组件），handler 收
-// 生成的窄接口 view.I<X>Entity，经访问器 <X>() 拿组件，方法要先写进 view.<X>；没有 Holder 时（roost add timer /
-// heartbeat 生成的组件）沿用实体包里的 I<X>Entity 与 <X>Comp()。
+// componentHandlerTarget：handler 的参数一律是 game/view 的接口（compose §4D）。组件在 game/view 里有 <X>Holder 时
+// （roost add component 生成的组件、模块组件），handler 收生成的窄接口 view.I<X>Entity，经访问器 <X>() 调组件，方法要先
+// 写进 view.<X>。没有 Holder 的是实体的基础设施组件（roost add timer / heartbeat / behavior / timedomain 生成在实体包里），
+// handler 收实体总接口 view.<E>Entity，用实体包生成的 <X>Of(target) 取回组件。
 func componentHandlerTarget(root, module, entityName, componentName string) (handlerComponentTarget, error) {
 	component := toPascal(componentName)
+	entityType := toPascal(entityName)
 	holder, err := viewDeclaresHolder(root, component)
 	if err != nil {
 		return handlerComponentTarget{}, err
 	}
-	if holder {
+	viewImport := fmt.Sprintf("%q", module+"/game/view")
+	if !holder {
 		return handlerComponentTarget{
-			importSpec: fmt.Sprintf("%q", module+"/game/view"),
-			paramType:  "view.I" + component + "Entity",
-			component:  "target." + component + "()",
-			call:       "target." + component + "().<BusinessMethod>() (declare the method in view." + component + " first)",
+			importSpec: viewImport,
+			paramType:  "view." + entityType + "Entity",
+			component:  entityName + "." + component + "Of(target)",
+			call:       entityName + "." + component + "Of(target).<BusinessMethod>() (import " + module + "/game/entities/" + entityName + "; the generated timer / heartbeat / behavior / time-domain component provides " + component + "Of)",
 		}, nil
 	}
-	return handlerComponentTarget{
-		importSpec: fmt.Sprintf("%s %q", entityName, module+"/game/entities/"+entityName),
-		paramType:  entityName + ".I" + component + "Entity",
-		component:  "target." + component + "Comp()",
-		call:       "target." + component + "Comp().<BusinessMethod>()",
-	}, nil
+	target := handlerComponentTarget{
+		importSpec: viewImport,
+		paramType:  "view.I" + component + "Entity",
+		component:  "target." + component + "()",
+		call:       "target." + component + "().<BusinessMethod>() (declare the method in view." + component + " first)",
+	}
+	mounted, err := entitiesMountingComponent(root, component)
+	if err != nil {
+		return handlerComponentTarget{}, err
+	}
+	if len(mounted) > 1 {
+		target.marker = " target=" + entityType
+	}
+	return target, nil
 }
 
 // viewDeclaresHolder 报告 game/view 里是否声明了 <component>Holder。

@@ -15,7 +15,7 @@ func handlerUseItem(owner BagOwner, cmd UseItemCommand) (UseItemResult, error) {
 	return owner.Bag().Use(cmd)
 }
 
-//roost:nest targets=player,player rollback=undo durability=strict
+//roost:nest targets=player,player rollback=undo
 func handlerTransfer(from BagOwner, to BagOwner, cmd TransferCommand) error {
 	return transfer(from.Bag(), to.Bag(), cmd)
 }

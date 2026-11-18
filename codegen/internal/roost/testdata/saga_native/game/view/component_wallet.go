@@ -1,7 +1,7 @@
 package view
 
 // Wallet is what the gift saga's handlers call on the wallet component
-// (game/entities/player/wallet_logic.go): the scaffold from roost add component
+// (game/components/wallet/wallet_logic.go): the scaffold from roost add component
 // with the business methods added.
 type Wallet interface {
 	Gold() int64

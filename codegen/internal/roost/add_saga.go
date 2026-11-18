@@ -673,16 +673,16 @@ import (
 // entity lock is released once the WAL record is queued and the result still
 // leaves only after it is durable, and the framework adds this handler to the
 // Nest pipelined allowlist and turns on Nest async completion for it (only
-// for native steps; SAGA.md, 原生步骤的提交方式). durability=strict is also allowed; it keeps a Nest
-// short-pool worker for the whole WAL fsync.
+// for native steps; SAGA.md, 原生步骤的提交方式). Keep it: a native step needs a
+// durable commit before its result leaves.
 //
-//roost:nest rollback=undo durability=pipelined
+//roost:nest rollback=undo durability=pipelined%[10]s
 func handler%[3]s(target %[2]s, step saga.NativeStep) error {
 	// TODO: call %[7]s.<BusinessMethod>(); on a coded business
 	// error return step.Complete(false, reason). Until then the step refuses.
 	return step.Complete(false, %[9]q)
 }
-`, target.lock.importSpec, target.lock.paramType, handler, what, snake, target.entityPascal, target.lock.component, refusedMeans, refusal)
+`, target.lock.importSpec, target.lock.paramType, handler, what, snake, target.entityPascal, target.lock.component, refusedMeans, refusal, target.lock.marker)
 }
 
 // addSaga 是 roost add saga：校验与生成全部文件内容（planSaga）之后才写盘，再把 saga Mod 接到服务上并同步工程

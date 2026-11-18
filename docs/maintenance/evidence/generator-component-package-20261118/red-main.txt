@@ -1,0 +1,142 @@
+--- FAIL: TestGeneratedComponentFollowsTheComponentPackageRule (3.36s)
+    add_test.go:1068: game/components/roster/roster.go: open <tmp>/planet/game/components/roster/roster.go: no such file or directory
+    add_test.go:1093: game/components/roster/roster.go lacks "package roster\n":
+    add_test.go:1093: game/components/roster/roster.go lacks "//roost:component type=":
+    add_test.go:1093: game/components/roster/roster.go lacks "const CompTypeRoster entity.ComponentType = ":
+    add_test.go:1093: game/components/roster/roster.go lacks "entity.RegisterComponentFactory(CompTypeRoster, NewComponent)":
+    add_test.go:1093: game/components/roster/roster.go lacks "type Owner ":
+    add_test.go:1093: game/components/roster/roster.go lacks "type Component struct":
+    add_test.go:1093: game/components/roster/roster.go lacks "func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error)":
+    add_test.go:1068: game/components/dailyquest/dailyquest.go: open <tmp>/planet/game/components/dailyquest/dailyquest.go: no such file or directory
+    add_test.go:1068: game/view/component_dailyquest.go: open <tmp>/planet/game/view/component_dailyquest.go: no such file or directory
+    add_test.go:1103: game/entities/guild/entity.go does not mount the component package with `comp:"roster.CompTypeRoster"`:
+        package guild
+        
+        import (
+        	db "example.com/planet/db"
+        	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+        )
+        
+        const EntityKindGuild entity.EntityKind = 3
+        
+        // IGuildEntity is the lock-safe business view used by Nest handlers.
+        type IGuildEntity interface{ entity.IThreadSafeEntity }
+        
+        // category is this kind's lock rank, acquired lowest first. Other is the safe
+        // default: holding it permits acquiring nothing further. Move the kind to
+        // EntityCategoryWorld / PlayerScoped / Player once its ordering is known.
+        //
+        // To make the kind Remote-owned (remote=managed, written from several
+        // processes) change three things together: category=entity.EntityCategoryRemote,
+        // remote=managed on this marker, and the embedded EntityBase field below
+        // becomes *entity.RemoteEntityBase. The service running Nest also needs the Remote
+        // runtime: roost add mod remote_entity -service <service>.
+        //
+        //roost:entity id=3 entityKind=EntityKindGuild category=entity.EntityCategoryOther
+        type Guild struct {
+        	*entity.EntityBase
+        	entity.ComponentManager
+        	entity.DaoManager
+        	dao       *db.GuildDao        `dao:"guild"`
+        	roster    *RosterComponent    `comp:"CompTypeRoster"`
+        	timer     *TimerComponent     `comp:"CompTypeTimer"`
+        	heartbeat *HeartbeatComponent `comp:"CompTypeHeartbeat"`
+        	behavior  *BehaviorComponent  `comp:"CompTypeBehavior"`
+        }
+    add_test.go:1103: game/entities/player/entity.go does not mount the component package with `comp:"dailyquest.CompTypeDailyQuest"`:
+        package player
+        
+        import (
+        	db "example.com/planet/db"
+        	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+        )
+        
+        const EntityKindPlayer entity.EntityKind = 1
+        
+        // IPlayerEntity is the lock-safe business view used by Nest handlers.
+        type IPlayerEntity interface{ entity.IThreadSafeEntity }
+        
+        // category is this kind's lock rank, acquired lowest first. Other is the safe
+        // default: holding it permits acquiring nothing further. Move the kind to
+        // EntityCategoryWorld / PlayerScoped / Player once its ordering is known.
+        //
+        // To make the kind Remote-owned (remote=managed, written from several
+        // processes) change three things together: category=entity.EntityCategoryRemote,
+        // remote=managed on this marker, and the embedded EntityBase field below
+        // becomes *entity.RemoteEntityBase. The service running Nest also needs the Remote
+        // runtime: roost add mod remote_entity -service <service>.
+        //
+        //roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryOther
+        type Player struct {
+        	*entity.EntityBase
+        	entity.ComponentManager
+        	entity.DaoManager
+        	dao         *db.PlayerDao        `dao:"player"`
+        	daily_quest *DailyQuestComponent `comp:"CompTypeDailyQuest"`
+        }
+    add_test.go:1131: game/entities/guild/entity.go declares "type IGuildEntity"; components and their narrow interfaces belong to game/components and game/view
+    add_test.go:1120: game/entities/guild/roster_component.go: the component belongs to game/components/<package>
+    add_test.go:1120: game/entities/player/daily_quest_component.go: the component belongs to game/components/<package>
+    add_test.go:1131: game/entities/player/entity.go declares "type IPlayerEntity"; components and their narrow interfaces belong to game/components and game/view
+    add_test.go:1131: game/entities/world/entity.go declares "type IWorldEntity"; components and their narrow interfaces belong to game/components and game/view
+    add_test.go:1144: game/handler/arm_guild_timer.go does not take target view.GuildEntity:
+        package handler
+        
+        import guild "example.com/planet/game/entities/guild"
+        
+        //roost:nest rollback=undo durability=strict
+        func handlerArmGuildTimer(target guild.ITimerEntity) error {
+        	// TODO: validate input and call target.TimerComp().<BusinessMethod>().
+        	return nil
+        }
+    add_test.go:1144: game/handler/tick_guild_timer_gen.go does not take target view.GuildEntity:
+        // Code generated by roost-codegen. DO NOT EDIT.
+        package handler
+        
+        import (
+        	guild "example.com/planet/game/entities/guild"
+        )
+        
+        // handlerTickGuildTimer 触发 Guild 已到期的定时器（roost add timer 生成，project sync 重写）。
+        //
+        // 由 guild.TimerDriver 在最早期限到了时投递（只投到期的那一个实体），在实体的 Nest 锁与事务内执行：
+        // 回调改的东西与被触发节点的删除 / 续期是同一条 WAL 记录，提交后驱动才看到新的最早期限。触发时刻是这条消息
+        // 冻结的业务时间（fctx.Now），不是投递时刻。返回剩下的节点数。
+        //
+        //roost:nest rollback=undo durability=strict
+        func handlerTickGuildTimer(target guild.ITimerEntity) (int32, error) {
+        	return int32(target.TimerComp().Tick()), nil
+        }
+    add_test.go:1144: game/handler/guild_behavior.go does not take target view.GuildEntity:
+        package handler
+        
+        import (
+        	"time"
+        
+        	guild "example.com/planet/game/entities/guild"
+        )
+        
+        // 这个文件归业务：roost add behavior 只在缺失时创建，project sync 不改写。
+        
+        // handlerStartExampleGuildAction 在 Guild 上发起一个示例动作，持续 millis 毫秒，返回动作 ID（roost add behavior 生成的示例，
+        // 归业务）。动作由主组的心跳推进（100ms 一拍），到时成功结束。
+        //
+        // runner 不随事务回滚：先做完会失败的校验与修改，发起动作是 handler 的最后一步。
+        //
+        //roost:nest rollback=undo
+        func handlerStartExampleGuildAction(target guild.IBehaviorEntity, millis int64) (int64, error) {
+        	return target.BehaviorComp().Behavior().CreateAction(guild.ActionExample, guild.ExampleParam{Duration: time.Duration(millis) * time.Millisecond})
+        }
+    add_test.go:1154: game/handler/arm_guild_timer.go takes guild.ITimerEntity; a Nest handler takes a game/view interface
+    add_test.go:1154: game/handler/arm_guild_timer_nest_gen.go takes guild.ITimerEntity; a Nest handler takes a game/view interface
+    add_test.go:1154: game/handler/guild_behavior.go takes guild.IBehaviorEntity; a Nest handler takes a game/view interface
+    add_test.go:1154: game/handler/guild_behavior_nest_gen.go takes guild.IBehaviorEntity; a Nest handler takes a game/view interface
+    add_test.go:1154: game/handler/tick_guild_timer_gen.go takes guild.ITimerEntity; a Nest handler takes a game/view interface
+    add_test.go:1154: game/handler/tick_guild_timer_gen_nest_gen.go takes guild.ITimerEntity; a Nest handler takes a game/view interface
+    add_test.go:1163: game/handler/arm_guild_timer.go writes durability=strict; generated scaffolds use the default (async)
+    add_test.go:1163: game/handler/claim_daily_quest.go writes durability=strict; generated scaffolds use the default (async)
+    add_test.go:1163: game/handler/join_guild.go writes durability=strict; generated scaffolds use the default (async)
+    add_test.go:1163: game/handler/tick_guild_timer_gen.go writes durability=strict; generated scaffolds use the default (async)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	3.973s
+FAIL

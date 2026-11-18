@@ -29,7 +29,7 @@ auth.go 和 Service 文件归业务所有。
 | --- | --- | --- |
 | 协议字段 | protocol/def/*.go | roost generate |
 | 持久化/同步字段 | db/def/*.go | roost generate |
-| 玩法方法 | game/entities/*/*_component.go | make test |
+| 玩法方法 | game/components/<功能>/*.go（组件包）与 game/view/component_<功能>.go | make test |
 | Nest 业务命令 | game/handler/*.go | roost generate |
 | 协议到 Sender 映射 | game/controllers/<分组>.go（一个包，Controller 在生成的 controller.go） | make test |
 | 登录票据校验 | internal/access/player/tcp/auth.go | roost config enable player-tcp |
@@ -60,8 +60,8 @@ go.mod。next 的典型输出是 workflow、progress、next、why、check again 
     roost project next
     roost add dao Player --entity Player
 
-access 只负责已认证请求进入协议层；Entity 是锁和生命周期边界；Component 放玩法；DAO 放需要保存或
-同步的状态。不要在 Service/controller 里直接保存裸 Entity 指针。
+access 只负责已认证请求进入协议层；Entity 是锁和生命周期边界；Component 放玩法（add component 生成组件包
+game/components/profile/ 与 game/view/component_profile.go，实体包只挂字段）；DAO 放需要保存或同步的状态。不要在 Service/controller 里直接保存裸 Entity 指针。
 
 ### 3.2 声明状态
 
@@ -78,13 +78,13 @@ mutator 同时维护 dirty、undo、持久化 patch 和客户端同步标记。
 
 ### 3.3 写玩法方法
 
-编辑 game/entities/player/profile_component.go，加入：
+编辑组件包 game/components/profile/profile.go，加入（实体上的业务规则都写在组件里）：
 
-    func (component *ProfileComponent) Rename(name string) error {
+    func (component *Component) Rename(name string) error {
         name = strings.TrimSpace(name)
         if name == "" { return errors.New("name is required") }
         if len(name) > 24 { return errors.New("name is too long") }
-        component.Owner().Dao().SetName(name)
+        component.owner.Dao().SetName(name)
         return nil
     }
 
@@ -96,7 +96,7 @@ mutator 同时维护 dirty、undo、持久化 patch 和客户端同步标记。
 
 把 game/handler/rename_player.go 改为：
 
-    //roost:nest rollback=undo durability=strict
+    //roost:nest rollback=undo
     func handlerRenamePlayer(target view.IProfileEntity, name string) error {
         return target.Profile().Rename(name)
     }
@@ -106,8 +106,8 @@ view.IProfileEntity，经访问器 Profile() 调用组件。
 
 第一个参数是锁目标；其余参数名必须能与协议 Request 字段对应。业务时间例外：参数名 nowUnix / nowUnixMilli（int64）
 由生成的 Nest 分发包装在 handler 执行时填这条消息冻结的业务时间（fctx.Now），不放进 Request（放进去就是让客户端
-决定时间），Sender 也没有这个参数。handler 里要业务时间时读 fctx.Now()，不直接读时钟。关键写使用 strict；普通可恢复玩法可在
-理解 WAL 语义后选择 async。不要为了快把交易改成 memory。
+决定时间），Sender 也没有这个参数。handler 里要业务时间时读 fctx.Now()，不直接读时钟。durability 不写，用缺省的
+async（WAL 写入完成就可以回复）；不要为了快把写入改成 memory。
 
 ### 3.5 协议和 endpoint
 
@@ -138,26 +138,57 @@ endpoint 自动用已认证的 PlayerID 调生成 Sender。不要在 endpoint �
     roost project next
 
 它在 PlayerDao 里加 Timers / TimerSeed 两个字段（期限就存在玩家自己的数据里，随事务提交、回滚），生成
-TimerComponent、到期 Tick 的 Nest handler 与驱动接线；你只写 game/entities/player/timer_handlers.go：
+TimerComponent、到期 Tick 的 Nest handler 与驱动接线。定时器组件是实体的基础设施：它的回调只有一句，把到期交给
+业务组件，规则写在组件里。双倍金币卡的规则写成组件（DoubleGold 是你在 PlayerDao 里加的 bool 字段）：
 
-    const TimerTypeBuffExpire int32 = 1
+    roost add component DoubleGold --entity Player
+
+game/entities/player/timer_handlers.go 登记类型与回调：
+
+    const TimerTypeDoubleGoldExpire int32 = 1
 
     func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
-        handlers.Register(TimerTypeBuffExpire, component.onBuffExpire)
+        handlers.Register(TimerTypeDoubleGoldExpire, component.onDoubleGoldExpire)
     }
 
-    func (component *TimerComponent) onBuffExpire(fire entitytimer.Fire) time.Duration {
-        component.Owner().Dao().SetDoubleGold(false)
+    func (component *TimerComponent) onDoubleGoldExpire(fire entitytimer.Fire) time.Duration {
+        return component.Owner().DoubleGold().OnExpire(fire)
+    }
+
+组件要实体建定时节点：在 game/entities/player/doublegold.go 写宿主方法（只建节点），并列进 view 的 Holder：
+
+    func (e *Player) ArmDoubleGoldExpire(delay time.Duration) int64 {
+        return e.TimerComp().NewTimer(delay, TimerTypeDoubleGoldExpire, 0, 0, nil)
+    }
+
+    // game/view/component_doublegold.go
+    type DoubleGold interface {
+        Use() error
+        OnExpire(fire entitytimer.Fire) time.Duration
+    }
+    type DoubleGoldHolder interface {
+        DoubleGold() DoubleGold
+        ArmDoubleGoldExpire(delay time.Duration) int64
+    }
+
+规则在组件包 game/components/doublegold/doublegold.go：
+
+    func (component *Component) Use() error {
+        component.owner.Dao().SetDoubleGold(true)
+        component.owner.ArmDoubleGoldExpire(30 * time.Minute)
+        return nil
+    }
+
+    func (component *Component) OnExpire(fire entitytimer.Fire) time.Duration {
+        component.owner.Dao().SetDoubleGold(false)
         return 0
     }
 
-在使用双倍金币卡的 handler 里登记到期（DoubleGold 是你在 PlayerDao 里加的 bool 字段）：
+handler 只调组件：
 
-    //roost:nest rollback=undo durability=strict
-    func handlerUseDoubleCard(target player.ITimerEntity) error {
-        target.TimerComp().Owner().Dao().SetDoubleGold(true)
-        target.TimerComp().NewTimer(30*time.Minute, player.TimerTypeBuffExpire, 0, 0, nil)
-        return nil
+    //roost:nest rollback=undo
+    func handlerUseDoubleCard(target view.IDoubleGoldEntity) error {
+        return target.DoubleGold().Use()
     }
 
 到点时驱动只给这一个玩家投递 Tick（不是每秒扫一遍在线玩家），回调在玩家的 Nest 锁和事务里执行，只改
@@ -179,9 +210,13 @@ states.go（状态目录）与 game/handler/monster_behavior.go（发起示例�
 发起（runner 不随事务回滚），由动作组自己的心跳推进；按 ctx.Elapsed（经过的业务时间）算，不按“第几拍”：
 
     //roost:nest rollback=undo
-    func handlerStartExampleMonsterAction(target monster.IBehaviorEntity, millis int64) (int64, error) {
-        return target.BehaviorComp().Behavior().CreateAction(monster.ActionExample, monster.ExampleParam{Duration: time.Duration(millis) * time.Millisecond})
+    func handlerStartExampleMonsterAction(target view.MonsterEntity, millis int64) (int64, error) {
+        return monster.BehaviorOf(target).Behavior().CreateAction(monster.ActionExample, monster.ExampleParam{Duration: time.Duration(millis) * time.Millisecond})
     }
+
+handler 收实体总接口 view.MonsterEntity，经实体包生成的 monster.BehaviorOf(target) 取行为组件（心跳 / 行为 / 时间域组件
+是实体的基础设施，生成在实体包里；对应有 HeartbeatOf、TimeDomainOf）。动作要改实体状态时调业务组件的导出方法，
+规则写在 game/components/<功能>/。
 
 只要周期逻辑、不要动作的实体（场景的逻辑帧）用 roost add heartbeat --entity Scene，在 heartbeat_beats.go 里登记；
 场景要倍速 / 慢放 / 时停时 roost add timedomain --entity Scene（DAO 加三个 nopersist,sync 字段），成员的行为组件在
@@ -299,13 +334,13 @@ access player 是传输无关的已认证玩家接入层；它生成并发安全
 
     Name string ` + "`store:\"name\" dao:\"persist,sync\"`" + `
 
-运行一次 roost generate，然后在 game/entities/player/profile_component.go 添加：
+运行一次 roost generate，然后在组件包 game/components/profile/profile.go 添加（业务规则写在组件里）：
 
-    func (component *ProfileComponent) Rename(name string) error {
+    func (component *Component) Rename(name string) error {
         if name == "" {
             return errors.New("name is required")
         }
-        component.Owner().Dao().SetName(name)
+        component.owner.Dao().SetName(name)
         return nil
     }
 
@@ -313,7 +348,7 @@ access player 是传输无关的已认证玩家接入层；它生成并发安全
 
 把 game/handler/rename_player.go 的 handler 改为：
 
-    //roost:nest rollback=undo durability=strict
+    //roost:nest rollback=undo
     func handlerRenamePlayer(target view.IProfileEntity, name string) error {
         return target.Profile().Rename(name)
     }
