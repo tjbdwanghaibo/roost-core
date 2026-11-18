@@ -630,7 +630,7 @@ make dev-stop && make dev-down
 9. **配置表怎么读**：导出了哪些表；`ConfigTables.Load(name => 读文件)` 读取（加载时核对哈希与规则）；数据版本 `ConfigTables.DataVersion` 只记录、登录时不核对；不再保留客户端自己的一份 CSV。
 10. **不装 Go 与 roost CLI 时怎么拿到协议与 SDK**：
     - 协议与配置：`shared/` 已提交在服务端仓库里，直接拷 `shared/protocol/csharp/*.cs` 与 `shared/config/csharp/*.cs`、`shared/config/data/*.json` 进客户端工程；或把服务端仓库作为 git 子模块引进来，指向这几个目录。有 roost CLI 时用 `roost client sync --from <服务端工程> --to <C# 目录> --config-code-to <代码目录> --config-data-to <数据目录>`，它会核对哈希、报告消息号与错误码的变化。手工拷时自己核对 `manifest.json` 与上次是否一致。
-    - SDK：来自同一版本 roost-core 的 `client/`：`Roost.Client`、`Roost.Client.Codecs`（`client/dotnet/`，netstandard2.1）加 Google.Protobuf 3.31.1（游戏工程自己锁版本）。Unity 的托管路线还要 `RoostClientDriver`（`client/unity/Runtime/`）；打成 Unity 包的入口是 [client/unity/README](../../../../client/unity/README.md)“构建可导入包”，它要 CMake、C++17 编译器、.NET SDK 与 protoc，客户端一侧没有这些条件时由服务端一侧构建好包交过去。
+    - SDK：来自同一版本 roost-core 的 `client/`：`Roost.Client`、`Roost.Client.Codecs`（`client/dotnet/`，netstandard2.1）加 Google.Protobuf 3.31.1（游戏工程自己锁版本）。Unity 的托管路线还要 `RoostClientDriver`（`client/unity/Runtime/`）；打成 Unity 包的入口是 [client/unity/README](../../../../client/unity/README.md)“构建可导入包”：托管路线用 `--managed-only`，只要 .NET SDK；原生路线才要 CMake、C++17 编译器与 protoc。
     - 不要手写或复制 PB 类型，不要自己再跑 protoc。
 11. **最小 C# 接线**：对着导出的代码写，命名空间按 `client_export.csharp.namespace`（缺省协议在 `Roost.Protocol`、DAO 同步在 `Roost.Dao.Sync`、消息号与错误码在 `Roost.Generated`）。下面以只装了第 8A 步四个模块的工程为例；Player 还没有 `sync` 字段时没有 `SyncPlayerDao`，删掉第 4 步：
 

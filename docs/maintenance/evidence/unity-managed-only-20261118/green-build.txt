@@ -1,0 +1,32 @@
+$ PATH=/usr/bin:/bin:/usr/local/share/dotnet python3 scripts/client/build-unity.py --managed-only --output <scratch>/pkg
+    0 个警告
+    0 个错误
+
+已用时间 00:00:01.43
+Unity package: <scratch>/pkg/com.roost.client
+
+# files (without .meta)
+com.roost.client/Editor/NativePluginImporter.cs
+com.roost.client/Editor/Roost.Unity.Editor.asmdef
+com.roost.client/README.md
+com.roost.client/Runtime/Native/NativeClient.cs
+com.roost.client/Runtime/Native/NativeGameClient.cs
+com.roost.client/Runtime/Native/NativeLockstep.cs
+com.roost.client/Runtime/Native/NativeReconnect.cs
+com.roost.client/Runtime/Roost.Client.dll
+com.roost.client/Runtime/Roost.Unity.asmdef
+com.roost.client/Runtime/RoostClientDriver.cs
+com.roost.client/Runtime/RoostConnection.cs
+com.roost.client/Runtime/RoostNativeDriver.cs
+com.roost.client/Runtime/RoostSceneTime.cs
+com.roost.client/Runtime/link.xml
+com.roost.client/build-info.json
+com.roost.client/package.json
+
+{
+  "commit": "e4450e39af1820545b0fd2ac38550613c48405a7",
+  "target": "managed",
+  "arch": null,
+  "abi": 2,
+  "native_source_sha256": null
+}

@@ -1,0 +1,5 @@
+usage: .old-tmp.py [-h] [--target {macos,linux,windows,android,ios}] --output
+                   OUTPUT [--merge-plugins-from MERGE_PLUGINS_FROM]
+                   [--protoc PROTOC] [--arch {arm64}]
+.old-tmp.py: error: cmake required in PATH
+red-exit=2

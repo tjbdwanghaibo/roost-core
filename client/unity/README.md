@@ -14,7 +14,15 @@
 
 ## 构建可导入包
 
-在仓库根目录执行，要求 CMake、C++17 编译器、.NET SDK 和 protoc。输出目录必须是新目录，脚本不修改业务 Unity 工程。
+**托管路线**只要 .NET SDK（不要 CMake、C++ 编译器、protoc）：
+
+```bash
+python3 scripts/client/build-unity.py --managed-only --output /tmp/roost-unity-sdk
+```
+
+包里是 `Roost.Client.dll`、`RoostClientDriver` 等主线程 Driver、原生绑定的 C# 源码（`RoostNativeDriver` 引用它，没有插件时只在真用原生路线时报找不到库）、IL2CPP 保留声明与稳定 GUID；没有 native 插件和原生示例，`build-info.json` 的 `target` 是 `managed`。`Roost.Client.Codecs`、Google.Protobuf 与导出的 C# 仍按上文放进业务工程。
+
+**原生路线**在仓库根目录执行，要求 CMake、C++17 编译器、.NET SDK 和 protoc。输出目录必须是新目录，脚本不修改业务 Unity 工程。
 
 ```bash
 python3 scripts/client/build-unity.py --target macos --output /tmp/roost-unity-sdk \

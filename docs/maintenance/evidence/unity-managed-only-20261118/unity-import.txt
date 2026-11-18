@@ -1,0 +1,10 @@
+1:Unity Editor version:    6000.3.12f1 (fca03ac9b0d5)
+3060:Exiting batchmode successfully now!
+error CS count: 0
+# Library/ScriptAssemblies
+Assembly-CSharp.dll
+Assembly-CSharp.pdb
+Roost.Unity.Editor.dll
+Roost.Unity.Editor.pdb
+Roost.Unity.dll
+Roost.Unity.pdb
