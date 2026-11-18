@@ -149,7 +149,7 @@ client_export:
 | `csharp/Protocol.cs`、`csharp/DaoSync.cs` | protoc `--csharp_out`，输入是上面两份副本 |
 | `csharp/DaoSyncApply.cs` | `db/dao_sync_apply.cs`（配了 namespace 时换掉命名空间行） |
 | `csharp/MessageIds.cs` | 与 `codegen/cmd/protocol -csharp` 同一个生成函数 |
-| `csharp/ErrorCodes.cs` | 工程里全部 `errcode.Define`：PascalCase 常量、`Name(code)`、`Message(code)` |
+| `csharp/ErrorCodes.cs` | 工程里全部 `errcode.Define`：PascalCase 常量、`Name(code)`、`Message(code)`；常量撞上类里已有的名字（`ErrorCodes`、`Name`、`Message` 与 object 继承的 `Equals` / `GetHashCode` / `ToString` / `GetType` / `ReferenceEquals` / `MemberwiseClone`）时加后缀 `_`（`name` → `Name_`），`Name(code)` 仍答原名 |
 | `manifest.json` | 见下 |
 
 目录里归生成器所有的只有上表这些文件名：本轮不产出的（例如去掉 `csharp` 后的 `.cs`）删掉，别的文件不动。目录不能在 `protocol/`、`db/`、`game/` 等服务端源码目录下，也不能用 `bin`、`dist`、`log`、`.roost-*` 这些生成时跳过的名字。

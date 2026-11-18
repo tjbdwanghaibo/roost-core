@@ -16,17 +16,34 @@ func Definitions(root string) ([]Definition, error) {
 	return extractDefinitions(root)
 }
 
+// csharpOwnSymbols 是 ErrorCodes 类里已经有的名字：类名本身、生成的 Name / Message 方法，以及静态类从 object
+// 继承的公开 / 受保护成员。常量与它们同名时 C# 编译失败（CS0542 成员与类同名、CS0102 重复定义；隐藏继承成员是
+// CS0108 警告，客户端警告即错误时同样失败），而这些都是服务端合法的 errcode 名（name、message、error_codes、equals……），
+// 所以撞上的常量在名字后加 _（RV-20261117-02）。改动这张表或生成的方法时两边一起改。
+var csharpOwnSymbols = map[string]bool{
+	"ErrorCodes": true, "Name": true, "Message": true,
+	"Equals": true, "GetHashCode": true, "ToString": true, "GetType": true, "ReferenceEquals": true, "MemberwiseClone": true,
+}
+
 // GenerateCSharp 产出客户端错误码表 ErrorCodes.cs：每个码一个 int 常量（名字是 errcode 名的 PascalCase，
 // 说明写在 summary 里），另有按码查名字与说明的 Name / Message。两个名字转成同一个 C# 标识符时报错。
+//
+// 常量名撞上类里已有的名字（csharpOwnSymbols）时加后缀 _：name → Name_、error_codes → ErrorCodes_。PascalCase 转出的
+// 标识符只含字母数字（数字开头时前面补 _），不会以 _ 结尾，所以加了后缀的名字不会再和别的常量撞。Name(int) 照样
+// 答原来的 errcode 名，按名字对照服务端的客户端不受影响。
 func GenerateCSharp(defs []Definition, namespace string) ([]byte, error) {
 	idents := make(map[string]string, len(defs))
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "%s\n#nullable disable\nnamespace %s\n{\n    public static class ErrorCodes\n    {\n", CSharpGeneratedHeader, namespace)
+	// 类也带 summary：客户端开 XML 文档且警告即错误时，缺注释的公开类型是 CS1591。
+	fmt.Fprintf(&b, "%s\n#nullable disable\nnamespace %s\n{\n    /// <summary>服务端 errcode.Define 的错误码（按码查名字与说明用 Name / Message）。</summary>\n    public static class ErrorCodes\n    {\n", CSharpGeneratedHeader, namespace)
 	names := make([]string, len(defs))
 	for i, def := range defs {
 		ident, err := csharpIdentifier(def.Name)
 		if err != nil {
 			return nil, fmt.Errorf("errcode %d (%s): %w", def.Code, def.File, err)
+		}
+		if csharpOwnSymbols[ident] {
+			ident += "_"
 		}
 		if other, exists := idents[ident]; exists {
 			return nil, fmt.Errorf("errcode names %q and %q both become C# identifier %s; rename one", other, def.Name, ident)

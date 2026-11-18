@@ -156,7 +156,7 @@ client_export:
 
 - **protoc版本**：导出C#时要求`protoc --version`与`Roost.Client.Codecs`锁定的Google.Protobuf同版本（3.31.1对应protoc 31.1），版本不对或找不到时`roost generate`报错并写明需要的版本与下载地址。查找顺序：`client_export.csharp.protoc`（相对路径按工程根）、环境变量`ROOST_PROTOC`、PATH。生成器不下载protoc。
 - **命名空间**：缺省协议在`Roost.Protocol`、DAO同步在`Roost.Dao.Sync`、消息号与错误码在`Roost.Generated`（与`-csharp`相同）；配了`csharp.namespace`时协议、消息号、错误码都在`<namespace>`，DAO同步在`<namespace>.DaoSync`。
-- **错误码**：`ErrorCodes.cs`列工程里全部`errcode.Define`（名字转PascalCase常量，说明写在summary里），另有按码查名字与说明的`ErrorCodes.Name(code)` / `ErrorCodes.Message(code)`。框架段（1–999）的码不在其中。
+- **错误码**：`ErrorCodes.cs`列工程里全部`errcode.Define`（名字转PascalCase常量，说明写在summary里；常量撞上类名`ErrorCodes`、方法`Name`/`Message`或object继承成员`Equals`/`GetHashCode`/`ToString`/`GetType`/`ReferenceEquals`/`MemberwiseClone`时加后缀`_`，如`name`→`Name_`），另有按码查名字与说明的`ErrorCodes.Name(code)` / `ErrorCodes.Message(code)`。框架段（1–999）的码不在其中。
 - **同步到客户端仓库**：`roost client sync --from <服务端工程> --to <客户端目录>`先核对服务端导出目录的哈希，再把`csharp/`平铺拷进客户端目录、另存一份`manifest.json`，对比上次同步的manifest报告新增、变化与删除的消息号和错误码；上次同步写过、这次没有的文件删掉，目录里不是上次同步写的同名文件拒绝覆盖。`--dry-run`只报告。不生成Unity的`.meta`（Unity导入时自己生成）。
 - **编译**：导出的`csharp/`放进netstandard2.1工程，与`Roost.Client`、`Roost.Client.Codecs`（Google.Protobuf 3.31.1）一起编译。
 
