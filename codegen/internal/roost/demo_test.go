@@ -781,11 +781,12 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// ledger's memory is bounded by the MAIL's own expiry, which the mail
 	// service hands over with the reservation — not by a retention this game
 	// invented against another service's configuration (RR-20260918-05).
-	// All three are the module's files, as the module ships them.
+	// All three are the module's files, as the module ships them. The grant
+	// keeps rollback=undo; modules never declare durability=strict (2026-11-18).
 	if claim := read("game/controllers/mailbox.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_MailboxClaimReward(") || !strings.Contains(claim, ".CommitClaim(") || !strings.Contains(claim, "claim.ExpiresAtUnix") {
 		t.Errorf("the mailbox claim endpoint does not run the reserve → ledgered grant → commit sequence with the mail's own expiry:\n%s", claim)
 	}
-	if claim := read("game/handler/mailbox_claim_reward.go"); !strings.Contains(claim, "target.Mailbox().Claim(mailID, attachment, expiresAtUnix,") || !strings.Contains(claim, "rollback=undo durability=strict") {
+	if claim := read("game/handler/mailbox_claim_reward.go"); !strings.Contains(claim, "target.Mailbox().Claim(mailID, attachment, expiresAtUnix,") || !strings.Contains(claim, "//roost:nest rollback=undo") || strings.Contains(claim, "durability=strict") {
 		t.Errorf("the mail claim handler does not record the mail id in the granting transaction:\n%s", claim)
 	}
 	if component := read("game/components/mailbox/mailbox.go"); !strings.Contains(component, "ledger.SetClaimsKey(mailID, expiresAtUnix)") || !strings.Contains(component, "gamemailbox.LedgerMayForget(recordedExpiry, nowUnix)") {

@@ -290,11 +290,14 @@ func TestNestedStepsAccumulateIntoEveryEnclosingStep(t *testing.T) {
 	if len(steps) != 2 || steps[0].Name != "inner" || steps[1].Name != "outer" {
 		t.Fatalf("steps = %+v", steps)
 	}
-	if inner := steps[0]; inner.RetryAttemptsMax != 1 || inner.WaitMeanMS < 3 || inner.WaitMeanMS >= 5 {
+	// 只断言下限与内外层的差：计时的上限在机器负载高时不可靠（2026-11-18 负载 15 时内层 3ms 量出 5.03ms）。
+	// 外层包含内层，所以外层至少比内层多出自己那 2ms。
+	inner, outer := steps[0], steps[1]
+	if inner.RetryAttemptsMax != 1 || inner.WaitMeanMS < 3 {
 		t.Fatalf("inner = %+v", inner)
 	}
-	if outer := steps[1]; outer.RetryAttemptsMax != 1 || outer.WaitMeanMS < 5 || outer.MaxMS < outer.WaitMeanMS {
-		t.Fatalf("outer = %+v", outer)
+	if outer.RetryAttemptsMax != 1 || outer.WaitMeanMS < inner.WaitMeanMS+2 || outer.MaxMS < outer.WaitMeanMS {
+		t.Fatalf("outer = %+v, inner = %+v", outer, inner)
 	}
 	rb.Recorder = nil
 	if err := tree.Run(context.Background(), rb); err != nil {
