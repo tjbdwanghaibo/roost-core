@@ -62,6 +62,11 @@ func (c *client) ready(epoch uint64) {
 	c.send(wire.FlagRelayControl, wire.RelayOpHostReady, 0, wire.EncodeRelayEpoch(epoch))
 }
 
+// transfer 发主动转交：epoch 是发起时的房主任期，relay 只在它等于此刻的 epoch 时执行。
+func (c *client) transfer(target uint32, epoch uint64, handoff []byte) {
+	c.send(wire.FlagRelayControl, wire.RelayOpTransfer, target, wire.EncodeRelayTransfer(wire.RelayTransfer{Epoch: epoch, Data: handoff}))
+}
+
 func (c *client) snapshot(seq uint64, data []byte) {
 	c.send(wire.FlagRelayControl, wire.RelayOpSnapshot, 0, wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: seq, Data: data}))
 }
@@ -91,7 +96,7 @@ func TestTransferHandsTheRoomToTheTarget(t *testing.T) {
 	h := newHarness(t, false, nil)
 	host, a, b := h.room3("room-transfer")
 
-	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 3, []byte("handoff-state"))
+	host.transfer(3, 0, []byte("handoff-state"))
 	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
 	offer := b.expectYouAreHost(1)
 	if offer.Source != wire.RelayStateHandoff || string(offer.State) != "handoff-state" || offer.SnapshotSeq != 0 ||
@@ -158,7 +163,7 @@ func TestTransferCarriesTheStoredSnapshotSeq(t *testing.T) {
 	host, _, b := h.room3("room-transfer-seq")
 
 	host.snapshot(7, []byte("snap-7"))
-	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 3, []byte("handoff"))
+	host.transfer(3, 0, []byte("handoff"))
 	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
 	offer := b.expectYouAreHost(1)
 	if offer.Source != wire.RelayStateHandoff || string(offer.State) != "handoff" || offer.SnapshotSeq != 7 {
@@ -170,14 +175,49 @@ func TestTransferCarriesTheStoredSnapshotSeq(t *testing.T) {
 	b.expectRejected(wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectStaleSeq, Seq: 7})
 }
 
+// 旧任期发起的转交不在新任期生效（v1.55.0 审查 RV-20261118-07）：房主在 epoch 0 准备转交给 b，没发出时房间转给 a、
+// a 又转回房主（epoch 2）。那份转交带着 epoch 0 到达：relay 回 Rejected{stale_epoch}，房间不变，b 收不到旧交接数据；
+// 带当前 epoch 的转交照常执行。
+func TestTransferFromAnEarlierHostTermIsRejected(t *testing.T) {
+	h := newHarness(t, false, nil)
+	host, a, b := h.room3("room-transfer-epoch")
+
+	host.transfer(2, 0, []byte("first"))
+	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
+	a.expectYouAreHost(1)
+	a.ready(1)
+	for _, c := range []*client{host, a, b} {
+		c.expectHostChanged(1, 2, "acc-a")
+	}
+	a.transfer(1, 1, []byte("latest"))
+	a.expectEpoch(wire.RelayOpYouAreMember, 2, 2)
+	host.expectYouAreHost(2)
+	host.ready(2)
+	for _, c := range []*client{host, a, b} {
+		c.expectHostChanged(2, 1, "host")
+	}
+
+	host.transfer(3, 0, []byte("old"))
+	host.expectRejected(wire.RelayRejected{Op: wire.RelayOpTransfer, Code: wire.RelayRejectStaleEpoch})
+	b.expectSilence(quiet)
+	a.send(wire.FlagRelayGame, 1, 0, []byte("still host"))
+	host.expect(wire.RelayGame, 1, 2, "still host")
+
+	host.transfer(3, 2, []byte("current"))
+	host.expectEpoch(wire.RelayOpYouAreMember, 1, 3)
+	if offer := b.expectYouAreHost(3); offer.Source != wire.RelayStateHandoff || string(offer.State) != "current" {
+		t.Fatalf("offer %+v", offer)
+	}
+}
+
 func TestTransferRejections(t *testing.T) {
 	h := newHarness(t, false, nil)
 	host, a, _ := h.room3("room-transfer-bad")
-	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 9, nil)
+	host.transfer(9, 0, nil)
 	host.expectRejected(wire.RelayRejected{Op: wire.RelayOpTransfer, Code: wire.RelayRejectBadTarget})
-	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 1, nil)
+	host.transfer(1, 0, nil)
 	host.expectRejected(wire.RelayRejected{Op: wire.RelayOpTransfer, Code: wire.RelayRejectBadTarget})
-	a.send(wire.FlagRelayControl, wire.RelayOpTransfer, 3, nil)
+	a.transfer(3, 0, nil)
 	a.expectRejected(wire.RelayRejected{Op: wire.RelayOpTransfer, Code: wire.RelayRejectNotHost})
 	a.send(wire.FlagRelayGame, 1, 0, []byte("still host"))
 	host.expect(wire.RelayGame, 1, 2, "still host")
@@ -358,6 +398,21 @@ func TestHostHeartbeatTimeoutStartsTheGrace(t *testing.T) {
 	a.expectEpoch(wire.RelayOpHostChanging, 0, 0)
 }
 
+// 转交的上限只管交接数据：正好 SnapshotMaxBytes 的交接数据加上 8 字节 epoch 照样收下。
+func TestTransferAtTheSizeLimitIsAccepted(t *testing.T) {
+	h := newHarness(t, false, func(c *relay.Config) {
+		c.SnapshotMaxBytes = 1024
+		c.MaxPayloadBytes = 512
+	})
+	host, a, _ := h.room3("room-transfer-limit")
+	full := bytes.Repeat([]byte{9}, 1024)
+	host.transfer(2, 0, full)
+	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
+	if offer := a.expectYouAreHost(1); !bytes.Equal(offer.State, full) {
+		t.Fatalf("offer carries %d bytes, want the full 1024", len(offer.State))
+	}
+}
+
 // 快照：只认房主的；seq 必须递增；同一房主两份之间不少于最小间隔；超过上限拒收、连接保留，超过两倍按超大帧断开；
 // 只留最新一份，换 host 时交出去。转交的交接数据同样受上限。
 func TestSnapshotLimits(t *testing.T) {
@@ -378,7 +433,7 @@ func TestSnapshotLimits(t *testing.T) {
 	host.expectRejected(wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectStaleSeq, Seq: 1})
 	host.snapshot(3, bytes.Repeat([]byte{7}, 1025)) // 大于 MaxPayloadBytes 也能发；超过 SnapshotMaxBytes 拒收
 	host.expectRejected(wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectTooBig, Seq: 3})
-	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 2, bytes.Repeat([]byte{7}, 1025))
+	host.transfer(2, 0, bytes.Repeat([]byte{7}, 1025))
 	host.expectRejected(wire.RelayRejected{Op: wire.RelayOpTransfer, Code: wire.RelayRejectTooBig})
 	full := bytes.Repeat([]byte{9}, 1024)
 	host.snapshot(4, full) // 正好上限：收下
@@ -400,7 +455,7 @@ func TestSnapshotLimits(t *testing.T) {
 func TestCandidateReconnectGetsTheOfferAgain(t *testing.T) {
 	h := newHarness(t, false, func(c *relay.Config) { c.HostReadyTimeout = time.Hour })
 	host, a, _ := h.room3("room-candidate-replace")
-	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 2, []byte("h"))
+	host.transfer(2, 0, []byte("h"))
 	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
 	a.expectYouAreHost(1)
 	a2, welcome := h.connect("room-candidate-replace", "acc-a", token.RoleMember, 8)
@@ -428,14 +483,14 @@ func TestWelcomeCarriesTheRoomEpoch(t *testing.T) {
 	host.expectMember(wire.RelayOpMemberJoined, 4, wire.RelayReasonNone, "acc-early")
 
 	// 第一次换 host：房主转交给 b（epoch 1）；第二次：b 转交给 a（epoch 2）。
-	host.send(wire.FlagRelayControl, wire.RelayOpTransfer, 3, nil)
+	host.transfer(3, 0, nil)
 	host.expectEpoch(wire.RelayOpYouAreMember, 1, 1)
 	b.expectYouAreHost(1)
 	b.ready(1)
 	for _, c := range []*client{host, a, b, early} {
 		c.expectHostChanged(1, 3, "acc-b")
 	}
-	b.send(wire.FlagRelayControl, wire.RelayOpTransfer, 2, nil)
+	b.transfer(2, 1, nil)
 	b.expectEpoch(wire.RelayOpYouAreMember, 3, 2)
 	a.expectYouAreHost(2)
 	a.ready(2)

@@ -406,6 +406,85 @@ func TestASnapshotPreparedOnAnEarlierConnectionIsDropped(t *testing.T) {
 	}
 }
 
+// 旧任期的转交不开启新任期（v1.55.0 审查 RV-20261118-07，三份 SDK 一致）：A 在 epoch 0 发起转交给 C，卡在压缩交接数据里；
+// 期间 A 正常转给 B、B 带新状态转回 A（epoch 2）。旧的那次这时才压缩完：它属于 epoch 0，返回 ErrTransferStale、不发出，
+// A 仍是房主。之后 A 在 epoch 2 转给 C，C 收到的第一份 YouAreHost 是 epoch 3 的 current（旧的若被发出，C 先收到的是 old，
+// 这次转交也会因 A 已不是房主被拒）。修前旧的那次返回 nil，relay 开启 epoch 3，C 收到 old。relay 一侧的核对见
+// service/relay 的 TestTransferFromAnEarlierHostTermIsRejected。
+func TestATransferPreparedInAnEarlierHostTermIsDropped(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	hold := func(state []byte) {
+		if string(state) == "old" {
+			close(entered)
+			<-release
+		}
+	}
+	a, members, _ := openRoom(t, peer, "transfer-term", relay.Options{AutoHostReady: true, Compressor: gatedCompressor{hold}},
+		[]relay.Options{{AutoHostReady: true}, {AutoHostReady: true}})
+	b, c := members[0], members[1]
+	stale := make(chan error, 1)
+	go func() { stale <- a.client.Transfer(3, []byte("old")) }()
+	recv(t, entered, "the epoch-0 transfer is being compressed")
+
+	if err := a.client.Transfer(2, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, b.hostChanged, "B host")
+	if err := b.client.Transfer(1, []byte("latest")); err != nil {
+		t.Fatal(err)
+	}
+	if offer := recv(t, a.youAreHost, "A chosen again"); string(offer.State) != "latest" {
+		t.Fatalf("A recovered %q, want latest", offer.State)
+	}
+	recv(t, a.hostChanged, "A saw B as host")
+	recv(t, a.hostChanged, "A host again")
+	mustRole(t, a, relay.Role{Slot: 1, Host: true, HostSlot: 1, Epoch: 2})
+	close(release)
+	if err := <-stale; !errors.Is(err, relay.ErrTransferStale) {
+		t.Fatalf("the epoch-0 transfer returned %v, want ErrTransferStale", err)
+	}
+	mustRole(t, a, relay.Role{Slot: 1, Host: true, HostSlot: 1, Epoch: 2})
+
+	if err := a.client.Transfer(3, []byte("current")); err != nil {
+		t.Fatal(err)
+	}
+	offer := recv(t, c.youAreHost, "C chosen")
+	if offer.Epoch != 3 || offer.Source != relay.StateHandoff || string(offer.State) != "current" {
+		t.Fatalf("C was offered epoch %d state %q (source %d), want epoch 3 current", offer.Epoch, offer.State, offer.Source)
+	}
+	none(t, a.rejected, "a rejected transfer")
+}
+
+// 连接也绑定：压缩交接数据时房主断线、宽限期内自动重连回来（同一任期仍是房主），旧连接上准备的那次转交不在新连接上发出
+// （ErrTransferStale），房主不变。
+func TestATransferPreparedOnAnEarlierConnectionIsDropped(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{HostGrace: 5 * time.Second})
+	entered, release := make(chan struct{}), make(chan struct{})
+	hold := func(state []byte) {
+		if string(state) == "old-connection-handoff" {
+			close(entered)
+			<-release
+		}
+	}
+	reconnect := relay.ReconnectPolicy{MaxAttempts: 5, MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond}
+	host, members, _ := openRoom(t, peer, "transfer-conn", relay.Options{Reconnect: reconnect, Compressor: gatedCompressor{hold}},
+		[]relay.Options{{AutoHostReady: true}})
+	stale := make(chan error, 1)
+	go func() { stale <- host.client.Transfer(2, []byte("old-connection-handoff")) }()
+	recv(t, entered, "the transfer is being compressed")
+	_ = host.lastConn().Close()
+	recv(t, host.reconnected, "host reconnected")
+	recv(t, members[0].hostResumed, "host resumed")
+	close(release)
+	if err := <-stale; !errors.Is(err, relay.ErrTransferStale) {
+		t.Fatalf("the transfer from the old connection returned %v, want ErrTransferStale", err)
+	}
+	waitPong(t, host)
+	mustRole(t, host, relay.Role{Slot: 1, Host: true, HostSlot: 1})
+	none(t, members[0].youAreHost, "an offer from the dropped transfer")
+}
+
 // 同一任期内并发推快照，以发起顺序为准（维护者 2026-11-18 定 A，三份 SDK 一致）：A 先发起一份 older-state（Snapshot
 // 卡在压缩里，或定时快照卡在 SnapshotState 里），没准备完时后发起的 newer-state 已经发出（seq 1）。较早发起的那份这时才
 // 准备好：它落后于已发出的一份，返回 ErrSnapshotStale，不发、不占 seq；A 离开后 B 恢复的是 seq 1 的 newer-state。

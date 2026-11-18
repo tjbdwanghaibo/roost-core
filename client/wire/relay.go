@@ -205,8 +205,9 @@ const (
 	// Seq=该成员的槽位；载荷同 RelayOpPresence（1 字节：1 前台、0 后台）。房主据此排候选顺序（successors）。
 	RelayOpMemberPresence uint32 = 70
 
-	// RelayOpTransfer：房主 → relay，主动把房主转交给槽位 Seq 上的在线成员。载荷是交接数据（不透明，
-	// 不超过 snapshot_max_bytes），relay 原样放进新房主的 RelayOpYouAreHost。
+	// RelayOpTransfer：房主 → relay，主动把房主转交给槽位 Seq 上的在线成员。载荷见 RelayTransfer：[epoch 8B][交接数据]，
+	// epoch 是房主发起转交时所在的任期，relay 只在它等于此刻的 epoch 时执行（否则 Rejected{stale_epoch}）；交接数据不透明、
+	// 不超过 snapshot_max_bytes，relay 原样放进新房主的 RelayOpYouAreHost。
 	RelayOpTransfer uint32 = 80
 	// RelayOpLeave：任何人 → relay，离开房间（等同于经 lobby 的 leave）。Seq=0、无载荷。房主离开不等宽限期，
 	// 立即用 relay 存的快照换 host。relay 回 Closed{left} 后断开。
@@ -352,6 +353,26 @@ func DecodeRelayYouAreHost(payload []byte) (RelayYouAreHost, error) {
 	return host, nil
 }
 
+// RelayTransfer 是 RelayOpTransfer 的载荷：[epoch 8B][交接数据]。epoch 把这次转交绑定到发起时的房主任期：交接数据
+// 由房主准备（SDK 还要压缩），期间房主可能转出去又转回来（A→B→A，epoch 0→2），旧任期的交接数据不能在新任期生效
+// （v1.55.0 审查 RV-20261118-07）。relay 在应用时核对 epoch，与 SDK 发出前的核对互为补充：SDK 核对之后、帧到达 relay
+// 之前任期仍可能变化。交接数据的格式同 RelaySnapshot.Data（压缩方式标识开头，relay 不看）。
+type RelayTransfer struct {
+	Epoch uint64
+	Data  []byte
+}
+
+func EncodeRelayTransfer(transfer RelayTransfer) []byte {
+	return append(binary.BigEndian.AppendUint64(make([]byte, 0, 8+len(transfer.Data)), transfer.Epoch), transfer.Data...)
+}
+
+func DecodeRelayTransfer(payload []byte) (RelayTransfer, error) {
+	if len(payload) < 8 {
+		return RelayTransfer{}, fmt.Errorf("%w: relay transfer", ErrInvalidPacket)
+	}
+	return RelayTransfer{Epoch: binary.BigEndian.Uint64(payload), Data: payload[8:]}, nil
+}
+
 // RelaySnapshot 是 RelayOpSnapshot 的载荷：[seq 8B][快照字节]。seq 在房间内必须递增（跨房主：新房主从
 // RelayYouAreHost.SnapshotSeq 往上接）；快照字节由房主客户端压缩，relay 不压缩、不解压、不解析。三份 SDK 之间另有约定：
 // 非空的快照字节（与交接数据）以 1 字节压缩方式标识开头（0 不压缩、1 原始 deflate，见 docs/framework/RELAY.md §2.3），
@@ -401,6 +422,8 @@ const (
 	RelayRejectStaleSeq  RelayRejectCode = 3 // 快照 seq 不大于 relay 存着的那一份
 	RelayRejectBadTarget RelayRejectCode = 4 // 转交的目标不在线，或是房主自己
 	RelayRejectNotHost   RelayRejectCode = 5 // 发送者此刻不是房主（已被换下，或正在换 host）
+	// RelayRejectStaleEpoch：转交带的 epoch 不是此刻的房主任期（在旧任期发起，期间房主换过，例如转出去又转回来）。
+	RelayRejectStaleEpoch RelayRejectCode = 6
 )
 
 // RelayRejected 是 RelayOpRejected 的载荷：[被拒的操作码 1B][原因 1B][seq 8B]。seq 是被拒快照的 seq，转交为 0。

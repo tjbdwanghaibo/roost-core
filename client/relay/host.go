@@ -69,7 +69,7 @@ type HostEvent struct {
 	Account  string
 }
 
-// RejectCode 是 Rejected 的原因：wire.RelayRejectTooBig、TooSoon、StaleSeq、BadTarget、NotHost。
+// RejectCode 是 Rejected 的原因：wire.RelayRejectTooBig、TooSoon、StaleSeq、BadTarget、NotHost、StaleEpoch。
 type RejectCode = wire.RelayRejectCode
 
 // Rejected 是 relay 拒收了自己发的快照或转交（连接保留）。Op 是被拒的操作码（wire.RelayOpSnapshot 或
@@ -107,6 +107,8 @@ var (
 	// ErrSnapshotStale：这一份的状态已经过时，没有发出，也没占用 seq。两种情况：准备这一份（取状态、压缩）期间换了连接
 	// 或房主任期（例如转出去又转回来）；或者同一任期里比它晚发起的一份已经先发出了（并发推送以发起顺序为准）。
 	ErrSnapshotStale = errors.New("relay: snapshot dropped: a newer snapshot was sent, or the connection or host term changed, while it was being prepared")
+	// ErrTransferStale：这次转交已经过时，没有发出：压缩交接数据期间换了连接或房主任期（例如转出去又转回来）。
+	ErrTransferStale = errors.New("relay: transfer dropped: the connection or host term changed while the handoff was being prepared")
 	// ErrStateTooBig：压缩后的快照或交接数据超过 Options.SnapshotMaxBytes，没有发出。
 	ErrStateTooBig = errors.New("relay: snapshot or handoff exceeds SnapshotMaxBytes after compression")
 	// ErrTooManySuccessors：候选顺序超过 wire.RelayMaxSuccessors 个槽位。
@@ -329,15 +331,37 @@ func (c *Client) HostReady(epoch uint64) error {
 
 // Transfer 把房主主动转交给槽位 slot 上的在线成员（只有房主能发）。handoff 是交接数据（经 Options.Compressor 压缩后
 // 不超过 SnapshotMaxBytes），relay 原样放进新房主的 YouAreHost。目标不在线或是自己时 relay 回 Rejected{bad_target}。
+//
+// 这次转交属于调用时的连接与房主任期（同 Snapshot，见 hostTerm）：压缩在锁外，期间房主转出去又转回来（A→B→A）或断线重连的，
+// 返回 ErrTransferStale，不发出——旧任期的交接数据不能开启新任期（v1.55.0 审查 RV-20261118-07）。核对通过后帧带着这一任期的
+// epoch 发出，到达 relay 之前任期又变了的，relay 回 Rejected{stale_epoch}（经 OnRejected 通知），房间不变。
 func (c *Client) Transfer(slot uint32, handoff []byte) error {
-	if !c.IsHost() {
-		return ErrNotRoomHost
+	c.mu.Lock()
+	sess, epoch, err := c.currentTermLocked()
+	c.mu.Unlock()
+	if err != nil {
+		return err
 	}
 	data, err := c.compressState(handoff)
 	if err != nil {
 		return err
 	}
-	return c.SendControl(wire.RelayOpTransfer, slot, data)
+	c.mu.Lock()
+	switch {
+	case !c.role.Host:
+		c.mu.Unlock()
+		return ErrNotRoomHost
+	case c.current != sess || c.role.Epoch != epoch:
+		c.mu.Unlock()
+		return ErrTransferStale
+	}
+	c.mu.Unlock()
+	frame, err := encodeFrame(Frame{Channel: wire.RelayControl, MsgID: wire.RelayOpTransfer, Slot: slot,
+		Payload: wire.EncodeRelayTransfer(wire.RelayTransfer{Epoch: epoch, Data: data})}, c.frameLimit)
+	if err != nil {
+		return err
+	}
+	return c.write(sess, frame)
 }
 
 // SetSuccessors 声明候选顺序（只有房主能发）：房主离开或断线时 relay 按这个顺序取第一个在线的成员当新房主。
@@ -384,14 +408,24 @@ type hostTerm struct {
 func (c *Client) hostTerm() (hostTerm, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	switch {
-	case !c.role.Host:
-		return hostTerm{}, ErrNotRoomHost
-	case c.current == nil:
-		return hostTerm{}, ErrNotConnected
+	sess, epoch, err := c.currentTermLocked()
+	if err != nil {
+		return hostTerm{}, err
 	}
 	c.host.snapStarted++
-	return hostTerm{sess: c.current, epoch: c.role.Epoch, ticket: c.host.snapStarted}, nil
+	return hostTerm{sess: sess, epoch: epoch, ticket: c.host.snapStarted}, nil
+}
+
+// currentTermLocked 返回此刻的连接与房主任期（Snapshot 与 Transfer 都绑定到它）：不是已就绪的房主时 ErrNotRoomHost，
+// 没有连接时 ErrNotConnected。调用方持有 c.mu。
+func (c *Client) currentTermLocked() (*session, uint64, error) {
+	switch {
+	case !c.role.Host:
+		return nil, 0, ErrNotRoomHost
+	case c.current == nil:
+		return nil, 0, ErrNotConnected
+	}
+	return c.current, c.role.Epoch, nil
 }
 
 // snapshotIn 压缩 state，核对它仍属于 term，分配 seq 后在 term 的连接上发出。

@@ -400,8 +400,12 @@ func (r *room) hostReady(c *conn, epoch uint64) {
 }
 
 // transfer 是房主的主动转交（§4.6.1）：不等，旧房主降为成员，交接数据原样交给目标。目标不在线、是自己、
-// 发送者此刻不是房主时拒收（RelayOpRejected），房间不变。交接数据的大小在读帧时已检查过。
-func (r *room) transfer(from *conn, target uint32, handoff []byte) {
+// 发送者此刻不是房主、转交带的 epoch 不是此刻的房主任期时拒收（RelayOpRejected），房间不变。交接数据的大小在读帧时已检查过。
+//
+// epoch 核对（v1.55.0 审查 RV-20261118-07）：SDK 准备交接数据（压缩）在发帧之前，期间房主可能转出去又转回来
+// （A→B→A，epoch 0→2）。那份转交仍从房主的连接发来，只看“发送者是不是房主”会让旧任期的交接数据开启新任期；
+// SDK 发出前也核对任期，但核对之后、帧到达之前任期仍可能变化，所以以这里为准。稳定阶段 r.epoch 就是当前房主的任期。
+func (r *room) transfer(from *conn, target uint32, t wire.RelayTransfer) {
 	r.do(func(eff *effects) {
 		if r.closed || r.members[from.slot] != from {
 			return
@@ -410,6 +414,8 @@ func (r *room) transfer(from *conn, target uint32, handoff []byte) {
 		switch {
 		case r.phase != phaseStable || from != r.host:
 			code = wire.RelayRejectNotHost
+		case t.Epoch != r.epoch:
+			code = wire.RelayRejectStaleEpoch
 		case target == from.slot || r.members[target] == nil:
 			code = wire.RelayRejectBadTarget
 		}
@@ -417,7 +423,7 @@ func (r *room) transfer(from *conn, target uint32, handoff []byte) {
 			from.enqueueControl(wire.RelayOpRejected, 0, wire.EncodeRelayRejected(wire.RelayRejected{Op: wire.RelayOpTransfer, Code: code}))
 			return
 		}
-		r.startMigrationLocked(from, target, handoff, true, r.server.now(), eff)
+		r.startMigrationLocked(from, target, t.Data, true, r.server.now(), eff)
 	})
 }
 

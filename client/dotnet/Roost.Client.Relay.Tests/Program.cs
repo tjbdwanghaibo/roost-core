@@ -94,6 +94,7 @@ internal static partial class Program
             ("automatic snapshots", AutoSnapshot),
             ("a snapshot prepared in an earlier host term or connection is dropped", StaleSnapshot),
             ("an earlier-started snapshot is dropped once a later one is sent", SnapshotStartOrder),
+            ("a transfer prepared in an earlier host term or connection is dropped", StaleTransfer),
             ("host heartbeat under host_idle_timeout", HostHeartbeat),
             ("reconnect vs lobby_unavailable / lobby_rejected", ReconnectAdmission),
             ("started room: reconnect, rejoin, kick an offline seat", StartedRoom),
@@ -170,7 +171,7 @@ internal static partial class Program
             ["relay_host_changed"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.HostChanged, RelayCodec.EncodeHostChanged(2, "a3")),
             ["relay_host_resumed"] = new RelayFrame(RelayChannel.Control, 1, RelayOps.HostResumed, RelayCodec.EncodeEpoch(0)),
             ["relay_rejected_snapshot_too_soon"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Rejected, RelayCodec.EncodeRejected(new RelayRejected(RelayOps.Snapshot, RelayRejectCode.TooSoon, 8))),
-            ["relay_transfer"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.Transfer, new byte[] { 0 }.Concat(Encoding.ASCII.GetBytes("handoff")).ToArray()),
+            ["relay_transfer"] = new RelayFrame(RelayChannel.Control, 3, RelayOps.Transfer, RelayCodec.EncodeTransfer(2, new byte[] { 0 }.Concat(Encoding.ASCII.GetBytes("handoff")).ToArray())),
             ["relay_leave"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Leave, ReadOnlyMemory<byte>.Empty),
             ["relay_successors"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Successors, RelayCodec.EncodeSuccessors(new uint[] { 3, 2 })),
             ["relay_snapshot"] = new RelayFrame(RelayChannel.Control, 0, RelayOps.Snapshot, RelayCodec.EncodeSnapshot(7, new byte[] { 0, 0xAB, 0xCD })),
@@ -231,6 +232,9 @@ internal static partial class Program
         Check(RelayCodec.DecodeEpoch(RelayCodec.Decode(Convert.FromHexString(golden["relay_you_are_member"])).Payload.Span) == 2, "you_are_member payload");
         Refuses(() => RelayCodec.DecodeYouAreHost(new byte[22]), "short you_are_host");
         Refuses(() => RelayCodec.DecodeEpoch(new byte[7]), "short epoch");
+        var transfer = RelayCodec.DecodeTransfer(RelayCodec.Decode(Convert.FromHexString(golden["relay_transfer"])).Payload.Span);
+        Check(transfer.Epoch == 2 && Encoding.ASCII.GetString(transfer.Data) == "\0handoff", "transfer payload carries epoch 2 and the handoff");
+        Refuses(() => RelayCodec.DecodeTransfer(new byte[7]), "transfer without an epoch");
 
         // 与 Go 的 ValidateRelay 相同的拒绝规则。
         Refuses(() => RelayCodec.Decode(Convert.FromHexString("52530238000000010000000000000000")), "reserved bit 5");
@@ -467,7 +471,8 @@ internal static partial class Program
             var promote = RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 3, RelayOps.Welcome, RelayCodec.EncodeWelcome(new RelayWelcome(3, false, 1))))
                 .Concat(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 3, RelayOps.YouAreHost,
                     RelayCodec.EncodeYouAreHost(new RelayYouAreHost(0, RelayStateSource.Snapshot, 6, TimeSpan.Zero, Array.Empty<RelaySeat>(), new byte[] { 1 })))))
-                .Concat(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 3, RelayOps.HostChanged, RelayCodec.EncodeHostChanged(0, "a3")))).ToArray();
+                // HostChanged 带 epoch 2：金样的转交带 epoch 2（房主此刻的任期）；快照 seq 只按 YouAreHost 接续（epoch 0、seq 6），下一份仍是 7。
+                .Concat(RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 3, RelayOps.HostChanged, RelayCodec.EncodeHostChanged(2, "a3")))).ToArray();
             await stream.WriteAsync(promote);
             var got = new List<string>();
             while (got.Count < sentNames.Length)
@@ -484,8 +489,8 @@ internal static partial class Program
         await client.ConnectAsync(new RoomTicket(new RoomInfo(), "127.0.0.1:" + port, "rt1.fake", 0));
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (promoted == null && DateTime.UtcNow < deadline) { client.Pump(); await Task.Delay(5); }
-        Check(client.Role.Equals(new RelayRole(3, true, false, 3, 0)) && client.IsHost, "fake relay made the client host: " + client.Role);
-        Check(client.Transfer(3, Encoding.ASCII.GetBytes("handoff")), "transfer sent");
+        Check(client.Role.Equals(new RelayRole(3, true, false, 3, 2)) && client.IsHost, "fake relay made the client host: " + client.Role);
+        Check(client.Transfer(3, Encoding.ASCII.GetBytes("handoff")) == RelayTransferResult.Sent, "transfer sent");
         Check(client.SetSuccessors(new uint[] { 3, 2 }), "successors sent");
         Check(client.Snapshot(new byte[] { 0xAB, 0xCD }) == RelaySnapshotResult.Sent, "snapshot sent");
         Check(client.HostReady(2), "host ready sent");
@@ -815,7 +820,7 @@ internal static partial class Program
         Check(host.Client.Snapshot(Encoding.UTF8.GetBytes("old-host-state")) == RelaySnapshotResult.Sent, "old host snapshot");
         await Throws<InvalidOperationException>(() => { a.Client.Transfer(3, new byte[] { 1 }); return Task.CompletedTask; });
         var handoff = Encoding.UTF8.GetBytes("handoff: seed=42, deck=[7,1,9]");
-        Check(host.Client.Transfer(3, handoff), "transfer");
+        Check(host.Client.Transfer(3, handoff) == RelayTransferResult.Sent, "transfer");
         Check(await host.Next(host.YouAreMember, "old host demoted") == 1, "old host: you are member 1");
         Check(host.Client.Role.Equals(new RelayRole(1, false, false, 0, 1)), "old host role " + host.Client.Role);
         var offer = await b.Next(b.YouAreHost, "you are host");
@@ -943,7 +948,7 @@ internal static partial class Program
         Check(host.Client.Snapshot(new byte[] { 1 }) == RelaySnapshotResult.Sent, "first snapshot");
         Check(host.Client.Snapshot(new byte[] { 2 }) == RelaySnapshotResult.TooSoon, "second snapshot within a second → TooSoon");
         await Throws<InvalidOperationException>(() => { members[0].Client.Snapshot(new byte[] { 3 }); return Task.CompletedTask; });
-        Check(host.Client.Transfer(9, new byte[] { 4 }), "transfer to nobody");
+        Check(host.Client.Transfer(9, new byte[] { 4 }) == RelayTransferResult.Sent, "transfer to nobody");
         Check((await host.Next(host.Rejected, "bad target")).Equals(new RelayRejected(RelayOps.Transfer, RelayRejectCode.BadTarget, 0)), "rejected bad target");
         var big = new byte[300 << 10];
         new Random(7).NextBytes(big);
@@ -1002,10 +1007,10 @@ internal static partial class Program
         var b = members[0];
         var stale = Task.Run(() => a.Client.Snapshot(Encoding.UTF8.GetBytes("epoch-zero-state")));
         Check(entered.Wait(TimeSpan.FromSeconds(5)), "the epoch-0 snapshot is being compressed");
-        Check(a.Client.Transfer(2, Encoding.UTF8.GetBytes("first transfer")), "A transfers to B");
+        Check(a.Client.Transfer(2, Encoding.UTF8.GetBytes("first transfer")) == RelayTransferResult.Sent, "A transfers to B");
         await b.Next(b.YouAreHost, "B chosen");
         await b.Next(b.HostChanged, "B host");
-        Check(b.Client.Transfer(1, Encoding.UTF8.GetBytes("back to A")), "B transfers back to A");
+        Check(b.Client.Transfer(1, Encoding.UTF8.GetBytes("back to A")) == RelayTransferResult.Sent, "B transfers back to A");
         await a.Next(a.YouAreHost, "A chosen again");
         await a.Next(a.HostChanged, "A saw B as host");
         Check((await a.Next(a.HostChanged, "A host again")).Equals(new RelayHostEvent(2, 1, "cs-term-host")), "A is host again in epoch 2");
@@ -1046,6 +1051,63 @@ internal static partial class Program
         offer = await others[0].Next(others[0].YouAreHost, "member recovers after the host leaves");
         Check(offer.SnapshotSeq == 1 && Encoding.UTF8.GetString(offer.State!) == "new-connection-state",
             $"recovered seq {offer.SnapshotSeq}, want seq 1 new-connection-state");
+        Dispose(host, others);
+    }
+
+    // 旧任期的转交不开启新任期（v1.55.0 审查 RV-20261118-07，三份 SDK 一致）：A 在 epoch 0 从工作线程调 Transfer 交给 C，压缩没结束时
+    // 房间转给 B、B 又转回 A（epoch 2）。旧的那次压缩完时属于 epoch 0：返回 Stale、不发出，A 仍是房主；A 在 epoch 2 转给 C，C 收到的第一份
+    // YouAreHost 是 epoch 3 的 current（旧的若被发出，C 先收到 old，这次转交也会因 A 已不是房主被拒）。修前旧的那次照样发出，relay 开启
+    // epoch 3，C 收到 old。断线重连（宽限期内回来仍是房主、同一任期）也一样：旧连接上准备的那次转交不在新连接上发出。
+    private static async Task StaleTransfer(Peer peer)
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var gated = new GatedCompressor(state =>
+        {
+            var text = Encoding.UTF8.GetString(state);
+            if (text == "old" || text == "old-connection-handoff") { entered.Set(); release.Wait(); }
+        });
+        var (a, members, _) = await OpenRoom(peer, "cs-xfer", Opts(o => { o.AutoHostReady = true; o.Compressor = gated; }),
+            Opts(o => o.AutoHostReady = true), Opts(o => o.AutoHostReady = true));
+        var (b, c) = (members[0], members[1]);
+        var stale = Task.Run(() => a.Client.Transfer(3, Encoding.UTF8.GetBytes("old")));
+        Check(entered.Wait(TimeSpan.FromSeconds(5)), "the epoch-0 transfer is being compressed");
+        Check(a.Client.Transfer(2, Encoding.UTF8.GetBytes("first")) == RelayTransferResult.Sent, "A transfers to B");
+        await b.Next(b.HostChanged, "B host");
+        Check(b.Client.Transfer(1, Encoding.UTF8.GetBytes("latest")) == RelayTransferResult.Sent, "B transfers back to A");
+        await a.Next(a.YouAreHost, "A chosen again");
+        await a.Next(a.HostChanged, "A saw B as host");
+        Check((await a.Next(a.HostChanged, "A host again")).Equals(new RelayHostEvent(2, 1, "cs-xfer-host")), "A is host again in epoch 2");
+        release.Set();
+        var result = await stale;
+        Check(result == RelayTransferResult.Stale, "the epoch-0 transfer is dropped, got " + result);
+        Check(a.Client.Role.Equals(new RelayRole(1, true, false, 1, 2)), "A is still the host in epoch 2: " + a.Client.Role);
+        Check(a.Client.Transfer(3, Encoding.UTF8.GetBytes("current")) == RelayTransferResult.Sent, "A transfers to C in epoch 2");
+        var offer = await c.Next(c.YouAreHost, "C chosen");
+        Check(offer.Epoch == 3 && offer.Source == RelayStateSource.Handoff && Encoding.UTF8.GetString(offer.State!) == "current",
+            $"C was offered epoch {offer.Epoch} state {(offer.State == null ? "null" : Encoding.UTF8.GetString(offer.State))}, want epoch 3 current");
+        Player.PumpAll();
+        Check(a.Rejected.IsEmpty, "no transfer rejected");
+        Dispose(a, members);
+
+        entered.Reset();
+        release.Reset();
+        var (host, others, _) = await OpenRoom(peer, "cs-xfer-conn", Opts(o =>
+        {
+            o.Compressor = gated;
+            o.ReconnectAttempts = 5; o.ReconnectMinBackoff = TimeSpan.FromMilliseconds(20); o.ReconnectMaxBackoff = TimeSpan.FromMilliseconds(100);
+        }), Opts(o => o.AutoHostReady = true));
+        var oldConnection = Task.Run(() => host.Client.Transfer(2, Encoding.UTF8.GetBytes("old-connection-handoff")));
+        Check(entered.Wait(TimeSpan.FromSeconds(5)), "the transfer is being compressed on the first connection");
+        host.Client.AbortTransportForTest();
+        Check((await host.Next(host.Reconnected, "host reconnected")).IsHost, "back as host in the same term");
+        await others[0].Next(others[0].HostResumed, "host resumed");
+        release.Set();
+        result = await oldConnection;
+        Check(result == RelayTransferResult.Stale, "the transfer from the old connection is dropped, got " + result);
+        await WaitPong(host);
+        Player.PumpAll();
+        Check(host.Client.IsHost && others[0].YouAreHost.IsEmpty, "the dropped transfer changed nothing");
         Dispose(host, others);
     }
 
@@ -1205,7 +1267,7 @@ internal static partial class Program
         await a.Next(a.Disconnected, "a transport lost");
         await host.Next(host.Left, "a left");
         await a.Client.Completion;
-        Check(host.Client.Transfer(3, ReadOnlySpan<byte>.Empty), "transfer to b");
+        Check(host.Client.Transfer(3, ReadOnlySpan<byte>.Empty) == RelayTransferResult.Sent, "transfer to b");
         var offer = await b.Next(b.YouAreHost, "you are host");
         Check(b.Client.HostReady(offer.Epoch), "host ready");
         await host.Next(host.HostChanged, "old host sees host changed");
@@ -1233,7 +1295,7 @@ internal static partial class Program
         Check(first.SequenceEqual(new[] { new RelayMemberPresence(2, false), new RelayMemberPresence(3, true) }), "presence at the first host: " + string.Join(", ", first));
         Player.PumpAll();
         Check(a.Presence.IsEmpty && b.Presence.IsEmpty, "members do not see each other's presence");
-        Check(host.Client.Transfer(2, ReadOnlySpan<byte>.Empty), "transfer to a");
+        Check(host.Client.Transfer(2, ReadOnlySpan<byte>.Empty) == RelayTransferResult.Sent, "transfer to a");
         var offer = await a.Next(a.YouAreHost, "you are host");
         Check(a.Client.HostReady(offer.Epoch), "host ready");
         var resent = new[] { await a.Next(a.Presence, "re-sent 1"), await a.Next(a.Presence, "re-sent 2") }.OrderBy(p => p.Slot).ToArray();

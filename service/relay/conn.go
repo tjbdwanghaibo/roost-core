@@ -128,7 +128,7 @@ func (c *conn) readFrame() (*wire.Packet, error) {
 	}
 	limit := cfg.MaxPayloadBytes
 	if h.RelayChannel() == wire.RelayControl && (h.MsgID == wire.RelayOpSnapshot || h.MsgID == wire.RelayOpTransfer) {
-		limit = stateFrameLimit(cfg, h.MsgID)
+		limit = stateFrameLimit(cfg)
 		if size := int(h.PayloadSize); size > limit && size <= hard {
 			return nil, c.discardOversizedState(h)
 		}
@@ -160,13 +160,9 @@ func (c *conn) discardOversizedState(h wire.Header) error {
 	return nil
 }
 
-// stateFrameLimit 是快照或转交帧的载荷上限；stateFrameHardLimit 是两倍于它的硬顶（超过就断开）。
-func stateFrameLimit(cfg Config, op uint32) int {
-	if op == wire.RelayOpSnapshot {
-		return cfg.SnapshotMaxBytes + 8
-	}
-	return cfg.SnapshotMaxBytes
-}
+// stateFrameLimit 是快照或转交帧的载荷上限：状态字节不超过 SnapshotMaxBytes，再加 8 字节头（快照的 seq、转交的 epoch）；
+// stateFrameHardLimit 是两倍于状态上限的硬顶（超过就断开）。
+func stateFrameLimit(cfg Config) int { return cfg.SnapshotMaxBytes + 8 }
 
 func stateFrameHardLimit(cfg Config) int { return 2*cfg.SnapshotMaxBytes + 8 }
 
@@ -187,7 +183,11 @@ func (c *conn) control(r *room, p *wire.Packet) wire.RelayReason {
 		}
 		r.mute(c, p.Seq, p.Payload[0] == 1)
 	case wire.RelayOpTransfer:
-		r.transfer(c, p.Seq, p.Payload)
+		transfer, err := wire.DecodeRelayTransfer(p.Payload)
+		if err != nil {
+			return wire.RelayReasonProtocol
+		}
+		r.transfer(c, p.Seq, transfer)
 	case wire.RelayOpLeave:
 		return wire.RelayReasonLeft
 	case wire.RelayOpSuccessors:

@@ -338,7 +338,7 @@ func TestRealRelayHostChangeKickAndVerification(t *testing.T) {
 	host.expectControl(t, wire.RelayOpMemberJoined, nil)
 
 	// 主动转交：alice 接手，lobby 收到 room.host_changed，房主改成 alice、epoch 1。
-	if err := wire.WriteRelay(host.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 2, Payload: []byte("state")}}, 0); err != nil {
+	if err := wire.WriteRelay(host.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 2, Payload: wire.EncodeRelayTransfer(wire.RelayTransfer{Epoch: 0, Data: []byte("state")})}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	alice.expectControl(t, wire.RelayOpYouAreHost, nil)

@@ -25,6 +25,7 @@ import {
   decodeRejected,
   decodeSnapshot,
   decodeSuccessors,
+  decodeTransfer,
   decodeWelcome,
   decodeYouAreHost,
   encodeEpoch,
@@ -36,6 +37,7 @@ import {
   encodeSnapshot,
   encodeSuccessors,
   encodeToken,
+  encodeTransfer,
   encodeWelcome,
   encodeYouAreHost,
   defaultCompressor,
@@ -110,7 +112,7 @@ const sent: Record<string, RelayFrame> = {
   relay_host_changed: frame(RelayChannel.Control, 3, RelayOp.HostChanged, encodeHostChanged(2n, "a3")),
   relay_host_resumed: frame(RelayChannel.Control, 1, RelayOp.HostResumed, encodeEpoch(0n)),
   relay_rejected_snapshot_too_soon: frame(RelayChannel.Control, 0, RelayOp.Rejected, encodeRejected({ op: RelayOp.Snapshot, code: RejectCode.TooSoon, seq: 8n })),
-  relay_transfer: frame(RelayChannel.Control, 3, RelayOp.Transfer, Uint8Array.of(0, ...new TextEncoder().encode("handoff"))),
+  relay_transfer: frame(RelayChannel.Control, 3, RelayOp.Transfer, encodeTransfer(2n, Uint8Array.of(0, ...new TextEncoder().encode("handoff")))),
   relay_leave: frame(RelayChannel.Control, 0, RelayOp.Leave, []),
   relay_successors: frame(RelayChannel.Control, 0, RelayOp.Successors, encodeSuccessors([3, 2])),
   relay_snapshot: frame(RelayChannel.Control, 0, RelayOp.Snapshot, encodeSnapshot(7n, Uint8Array.of(0, 0xab, 0xcd))),
@@ -175,6 +177,9 @@ test("TS decodes the host-change golden frames into the expected fields", () => 
   assert.deepEqual(decodeSuccessors(payload("relay_successors")), [3, 2]);
   const snapshot = decodeSnapshot(payload("relay_snapshot"));
   assert.deepEqual([snapshot.seq, [...snapshot.data]], [7n, [0, 0xab, 0xcd]]);
+  const transfer = decodeTransfer(payload("relay_transfer"));
+  assert.deepEqual([transfer.epoch, new TextDecoder().decode(transfer.data)], [2n, "\0handoff"]);
+  assert.throws(() => decodeTransfer(Uint8Array.of(1, 2, 3)), RelayProtocolError);
   assert.equal(decodeEpoch(payload("relay_host_ready")), 2n);
   assert.deepEqual([...payload("relay_closed_lobby_rejected")], [RelayReason.LobbyRejected]);
   // 截断的 YouAreHost、非法来源、长度不对的 epoch 都当协议错误

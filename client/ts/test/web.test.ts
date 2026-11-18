@@ -13,6 +13,7 @@ import {
   WebHost,
   WorkerRunner,
   decodeSnapshot,
+  decodeTransfer,
   encodeEpoch,
   encodeMember,
   encodePresence,
@@ -268,7 +269,7 @@ test("visibilitychange: a hidden host hands off to the first online successor wi
   await fake.waitFor("transfer", () => fake.controls(RelayOp.Transfer).length === 1);
   const transfer = fake.controls(RelayOp.Transfer)[0];
   assert.equal(transfer.slot, 3, "first online successor");
-  assert.equal(str(await unpackState(p.host.client["compressor"], transfer.payload, 1 << 20)), "fresh|1:mine", "handoff carries the rules state");
+  assert.equal(str(await unpackState(p.host.client["compressor"], decodeTransfer(transfer.payload).data, 1 << 20)), "fresh|1:mine", "handoff carries the rules state");
   await sleep(0);
   assert.deepEqual(handoffs, [3]);
 

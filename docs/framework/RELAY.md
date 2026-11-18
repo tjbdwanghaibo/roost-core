@@ -67,9 +67,9 @@
 | 66 `HostChanging` | relay → 发给房主的游戏帧被丢掉的成员 | 0 | `[epoch 8B]`；每次换 host 每个成员最多一条。宽限期内是当前 epoch，选人阶段是新 epoch |
 | 67 `HostChanged` | relay → 房间里在线的每个人（含新房主） | 新房主槽位 | `[epoch 8B][新房主账号 UTF-8]` |
 | 68 `HostResumed` | relay → 成员：房主在宽限期内回来了 | 房主槽位 | `[epoch 8B]` |
-| 69 `Rejected` | relay → 发快照 / 转交的连接，连接保留 | 0 | `[被拒的操作码 1B][原因 1B][seq 8B]`；原因 1 too_big、2 too_soon、3 stale_seq、4 bad_target、5 not_host；seq 是被拒快照的 seq，转交为 0 |
+| 69 `Rejected` | relay → 发快照 / 转交的连接，连接保留 | 0 | `[被拒的操作码 1B][原因 1B][seq 8B]`；原因 1 too_big、2 too_soon、3 stale_seq、4 bad_target、5 not_host、6 stale_epoch；seq 是被拒快照的 seq，转交为 0 |
 | 70 `MemberPresence` | relay → 当前房主 | 上报的成员的槽位 | `[1 前台 / 0 后台]`，即成员 `Presence` 的载荷 |
-| 80 `Transfer` | 房主 → relay | 目标槽位 | 交接数据（不透明，不超过 `snapshot_max_bytes`） |
+| 80 `Transfer` | 房主 → relay | 目标槽位 | `[epoch 8B][交接数据]`：epoch 是房主发起转交时的任期，不等于此刻的 epoch 时拒收（`Rejected{stale_epoch}`，见 §4A）；交接数据不透明，不超过 `snapshot_max_bytes`。2026-11-18 起带 epoch（v1.55.0 审查 RV-20261118-07），之前载荷只有交接数据 |
 | 81 `Leave` | 任何人 → relay | 0 | 无；relay 回 `Closed{left}` 后断开 |
 | 82 `Successors` | 房主 → relay | 0 | 槽位列表，每个 4B，至多 256 个 |
 | 83 `Snapshot` | 房主 → relay | 0 | `[seq 8B][快照字节]`；快照字节不超过 `snapshot_max_bytes` |
@@ -135,7 +135,7 @@
 | `admit_timeout` | 2s | 拒绝这条连接（`lobby_unavailable`） | 一次 Redis 读加两次 NATS 往返的数倍 |
 
 - `send_queue_bytes` 至少要放得下一份带满快照的 `YouAreHost` 和一个满帧（`snapshot_max_bytes + max_payload_bytes + 16 KiB` 余量），否则候选会被当成慢连接断开。
-- 快照与转交帧不受 `max_payload_bytes` 限制：读帧时先看帧头，这两种帧的上限是 `snapshot_max_bytes`；超过它但不到两倍的，载荷直接丢掉（不进内存）并回 `Rejected{too_big}`。WebSocket 单条消息的上限因此取 `max(max_payload_bytes, 2 × snapshot_max_bytes + 8) + 16`。
+- 快照与转交帧不受 `max_payload_bytes` 限制：读帧时先看帧头，这两种帧的载荷上限是 `snapshot_max_bytes + 8`（8 字节是快照的 seq、转交的 epoch）；超过它但不到两倍的，载荷直接丢掉（不进内存）并回 `Rejected{too_big}`。WebSocket 单条消息的上限因此取 `max(max_payload_bytes, 2 × snapshot_max_bytes + 8) + 16`。
 
 内存预算：每条连接最多驻留 `send_queue_bytes`；多个收件人共用同一份编码好的帧。每个房间另存最新一份快照，快照缓存的上限约为“房间数 × `snapshot_max_bytes`”（缺省 1000 个房间约 250 MiB）；换 host 期间再加一份交接数据。
 
@@ -151,13 +151,14 @@
 
 | 触发 | 宽限期 | 交给新房主的状态 |
 |---|---|---|
-| 房主发 `Transfer{slot, 交接数据}` | 不等；目标必须在线、不是自己，否则 `Rejected{bad_target}` | 交接数据（来源 1） |
+| 房主发 `Transfer{slot, epoch, 交接数据}` | 不等；epoch 必须是此刻的房主任期，否则 `Rejected{stale_epoch}`；目标必须在线、不是自己，否则 `Rejected{bad_target}` | 交接数据（来源 1） |
 | 房主发 `Leave`，或 lobby 发来 leave 命令 | 不等 | relay 存的最新快照（来源 2），没有就空（来源 0） |
 | 房主断线：读写出错、`host_idle_timeout` 内没有任何帧、超限被断开 | 等 `host_grace`；没有在线成员就直接关房 | 同上 |
 
 - 宽限期内同一账号重连回来（先向 lobby join 拿新令牌）：仍是房主，`Welcome{host}` 之后 relay 把此刻在线的成员逐个用 `MemberJoined` 再告诉它一遍；成员收到 `HostResumed`。epoch 不变，lobby 看到房主下线又上线（member_left / member_joined），不是 host_changed。浏览器刷新页面就是这条路（方案 §4.7.4）。
 - 宽限期内 lobby 发来这个房主的 leave 命令：不再等，立即换 host。
 - 宽限期内成员发给房主的游戏帧丢弃，发送者收到 `HostChanging`。
+- 主动转交绑定发起时的连接与房主任期（三份 SDK 与 relay 一致，v1.55.0 审查 RV-20261118-07）：SDK 压缩交接数据在发帧之前，期间房主可能转出去又转回来（A→B→A，epoch 0→2）或断线重连。之前那次转交仍从房主的连接发出，relay 只看“发送者是不是房主”，旧任期的交接数据会开启新任期、交给当初的目标。现在 SDK 发起时记下连接与 `epoch`，压缩完核对，变了就不发（Go `ErrTransferStale`、C# `RelayTransferResult.Stale`、TS `transfer` 返回 `false`）；核对通过后帧带着这个 `epoch` 发出，relay 应用时再核对一次（核对之后、帧到达之前任期仍可能变化），不等于此刻的 epoch 就回 `Rejected{stale_epoch}`，房间不变。宽限期内重连回来 epoch 不变，旧连接上准备的转交由 SDK 的连接核对挡下（旧连接已断，帧也到不了 relay）。
 
 **切换步骤**（方案 §4.6.4）
 

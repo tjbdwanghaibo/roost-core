@@ -125,7 +125,7 @@ internal static partial class Program
 
             // 换 host：房主转交给成员；成员回 HostReady 后两边收到 HostChanged，角色随之更新。
             var handoff = Encoding.UTF8.GetBytes("handoff on one thread");
-            Check(host.Client.Transfer(2, handoff), "transfer");
+            Check(host.Client.Transfer(2, handoff) == RelayTransferResult.Sent, "transfer");
             var offer = await loop.Next(member.YouAreHost, "you are host");
             Check(offer.Source == RelayStateSource.Handoff && offer.State != null && Encoding.UTF8.GetString(offer.State) == "handoff on one thread", "handoff reached the new host");
             Check(member.Client.HostReady(offer.Epoch), "host ready");

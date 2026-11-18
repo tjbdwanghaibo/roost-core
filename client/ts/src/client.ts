@@ -23,6 +23,7 @@ import {
   encodeSnapshot,
   encodeSuccessors,
   encodeToken,
+  encodeTransfer,
   type Member,
   type MemberPresence,
   type Rejected,
@@ -634,13 +635,20 @@ export class RelayClient {
   /**
    * 主动把房主转交给 slot 上的在线成员（只有房主能发）。handoff 是交接数据（压缩前），压缩后随 Transfer 交给新房主，
    * 不超过 snapshotMaxBytes。发出后 relay 回 YouAreMember、再广播 HostChanged；目标不对时回 Rejected{bad_target}。
+   * 返回 false 表示没有发出：没有连接，或者这次转交已过时——压缩期间已不是房主、换了连接或房主任期（例如转出去又转回来）。
    */
   async transfer(slot: number, handoff: Uint8Array = new Uint8Array(0)): Promise<boolean> {
     this.requireHost("transfer");
+    // 这次转交属于发起时的连接与房主任期（同 pushSnapshot）：压缩是异步的，期间房主可能转出去又转回来（A→B→A，epoch 0→2）
+    // 或断线重连，旧任期的交接数据不能开启新任期（v1.55.0 审查 RV-20261118-07，与 Go / C# SDK 相同）。帧里带上这一任期的
+    // epoch：发出之后、到达 relay 之前任期又变了的，relay 回 Rejected{StaleEpoch}（经 onRejected 通知）。
+    const session = this.current;
+    const epoch = this.epochValue;
+    if (!session) return false;
     const data = await packState(this.compressor, handoff); // 空的交接数据不带压缩方式标识
     this.checkStateSize(data.length);
-    if (!this.role.host) return false; // 压缩期间已不是房主
-    return this.sendBig(RelayOp.Transfer, slot, data);
+    if (!this.role.host || this.current !== session || this.epochValue !== epoch) return false;
+    return this.sendBig(RelayOp.Transfer, slot, encodeTransfer(epoch, data));
   }
 
   /**

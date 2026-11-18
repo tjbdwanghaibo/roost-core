@@ -172,6 +172,8 @@ namespace Roost.Client.Relay
         BadTarget = 4,
         /// <summary>发送者此刻不是房主。</summary>
         NotHost = 5,
+        /// <summary>转交带的 epoch 不是此刻的房主任期（在旧任期发起，期间房主换过，例如转出去又转回来）。</summary>
+        StaleEpoch = 6,
     }
 
     /// <summary>relay 拒收了自己发的快照或转交（连接保留）。Op 是被拒的操作码，Seq 是被拒快照的 seq（转交为 0）。</summary>
@@ -497,6 +499,25 @@ namespace Roost.Client.Relay
             }
             if (host.State != null) output.Write(host.State, 0, host.State.Length);
             return output.ToArray();
+        }
+
+        /// <summary>
+        /// Transfer：[epoch 8B][交接数据]。epoch 是房主发起转交时的任期，relay 只在它等于此刻的 epoch 时执行，否则回
+        /// Rejected{StaleEpoch}（旧任期的交接数据不开启新任期，见 docs/framework/RELAY.md §2.3）。
+        /// </summary>
+        public static byte[] EncodeTransfer(ulong epoch, ReadOnlySpan<byte> data)
+        {
+            var payload = new byte[8 + data.Length];
+            BinaryPrimitives.WriteUInt64BigEndian(payload, epoch);
+            data.CopyTo(payload.AsSpan(8));
+            return payload;
+        }
+
+        /// <summary>Transfer 载荷的反面：epoch 与交接数据；不到 8 字节是协议错误。</summary>
+        public static (ulong Epoch, byte[] Data) DecodeTransfer(ReadOnlySpan<byte> payload)
+        {
+            if (payload.Length < 8) throw new InvalidDataException("Invalid relay transfer.");
+            return (BinaryPrimitives.ReadUInt64BigEndian(payload), payload.Slice(8).ToArray());
         }
 
         /// <summary>Snapshot：[seq 8B][快照字节]。</summary>

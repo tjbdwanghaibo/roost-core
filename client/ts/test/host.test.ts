@@ -16,6 +16,7 @@ import {
   UnknownCompressionError,
   decodeEpoch,
   decodeSnapshot,
+  decodeTransfer,
   encodeEpoch,
   encodeFrame,
   encodeHostChanged,
@@ -148,7 +149,7 @@ test("a candidate whose callback throws does not send HostReady", async () => {
 });
 
 test("the host transfers with handoff data, declares successors, and becomes a member on YouAreMember", async () => {
-  const { client, fake } = await connect({ slot: 1, host: true });
+  const { client, fake } = await connect({ slot: 1, host: true, epoch: 2n });
   const members: bigint[] = [];
   const changes: HostChange[] = [];
   client.onYouAreMember((epoch) => members.push(epoch));
@@ -158,14 +159,14 @@ test("the host transfers with handoff data, declares successors, and becomes a m
   assert.equal(hex(encodeFrame(fake.controls(RelayOp.Successors)[0])), golden.get("relay_successors"));
   assert.deepEqual(client.successors, [3, 2]);
   assert.ok(await client.transfer(3, text("handoff")));
-  assert.equal(hex(encodeFrame(fake.controls(RelayOp.Transfer)[0])), golden.get("relay_transfer"), "Transfer to slot 3 carries the handoff bytes");
+  assert.equal(hex(encodeFrame(fake.controls(RelayOp.Transfer)[0])), golden.get("relay_transfer"), "Transfer to slot 3 carries epoch 2 and the handoff bytes");
 
-  fake.push(control(RelayOp.YouAreMember, 1, encodeEpoch(2n)));
-  assert.deepEqual([client.hostRole, client.isHost, members], ["member", false, [2n]]);
+  fake.push(control(RelayOp.YouAreMember, 1, encodeEpoch(3n)));
+  assert.deepEqual([client.hostRole, client.isHost, members], ["member", false, [3n]]);
   await assert.rejects(client.transfer(2), "a member cannot transfer");
   assert.throws(() => client.setSuccessors([2]));
-  fake.push(control(RelayOp.HostChanged, 3, encodeHostChanged(2n, "a3")));
-  assert.deepEqual(changes, [{ epoch: 2n, slot: 3, account: "a3", self: false }]);
+  fake.push(control(RelayOp.HostChanged, 3, encodeHostChanged(3n, "a3")));
+  assert.deepEqual(changes, [{ epoch: 3n, slot: 3, account: "a3", self: false }]);
   assert.deepEqual([client.welcome.hostSlot, client.successors], [3, []]);
   client.close();
 });
@@ -358,6 +359,72 @@ test("a snapshot taken on one connection is not sent on the next one", async (t)
   assert.equal(await pending, undefined, "the snapshot from the old connection is dropped");
   assert.equal(sockets[0].controls(RelayOp.Snapshot).length + sockets[1].controls(RelayOp.Snapshot).length, 0);
   assert.equal(await client.pushSnapshot(text("new-connection-state")), 1n, "the dropped one did not use up a seq");
+  client.close();
+  await client.done;
+});
+
+// 旧任期的转交不开启新任期（v1.55.0 审查 RV-20261118-07，三份 SDK 一致）：A 在 epoch 0 发起转交，卡在压缩交接数据里；期间
+// 转给 B、B 又转回 A（epoch 2）。旧的那次这时才压缩完：返回 false、不发出；A 在 epoch 2 的转交照常发出并带 epoch 2。
+// 修前它在 epoch 2 照样发出，relay 开启 epoch 3，目标收到旧的交接数据。
+const slowHandoffCompressor = (gate: Promise<void>, slow: string): Compressor => ({
+  name: "slow",
+  id: identityCompressor.id,
+  compress: async (data) => {
+    if (new TextDecoder().decode(data) === slow) await gate;
+    return identityCompressor.compress(data);
+  },
+  decompress: (data, limit) => identityCompressor.decompress(data, limit),
+});
+test("a transfer prepared in an earlier host term is not sent", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const { client, fake } = await connect({ slot: 1, host: true, compressor: slowHandoffCompressor(gate, "old") });
+  try {
+    const stale = client.transfer(3, text("old"));
+    assert.ok(await client.transfer(2, text("first")));
+    fake.push(control(RelayOp.YouAreMember, 1, encodeEpoch(1n)));
+    fake.push(control(RelayOp.HostChanged, 2, encodeHostChanged(1n, "a2")));
+    fake.push(youAreHost(1, 2n, StateSource.Handoff, 0n, Uint8Array.of(0, ...text("latest"))));
+    fake.push(control(RelayOp.HostChanged, 1, encodeHostChanged(2n, "a1")));
+    assert.deepEqual([client.isHost, client.epoch], [true, 2n], "host again in epoch 2");
+    release();
+    assert.equal(await stale, false, "the epoch-0 transfer is dropped");
+    const sent = fake.controls(RelayOp.Transfer).map((f) => decodeTransfer(f.payload));
+    assert.deepEqual(sent.map((t) => [t.epoch, new TextDecoder().decode(t.data.subarray(1))]), [[0n, "first"]], "only the epoch-0 transfer to B went out");
+    assert.ok(await client.transfer(3, text("current")));
+    const last = decodeTransfer(fake.controls(RelayOp.Transfer)[1].payload);
+    assert.deepEqual([last.epoch, new TextDecoder().decode(last.data.subarray(1))], [2n, "current"], "a transfer started in epoch 2 carries epoch 2");
+  } finally {
+    client.close();
+  }
+});
+
+// 连接也绑定：压缩交接数据时断线重连（同一任期回来仍是房主），这次转交不在新连接上发出。
+test("a transfer prepared on one connection is not sent on the next one", async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const lobby = new FakeLobby();
+  const sockets: FakeRelay[] = [];
+  const client = new RelayClient(lobby.client, {
+    game: "party",
+    compressor: slowHandoffCompressor(gate, "old-connection-handoff"),
+    reconnect: { maxAttempts: 3, minBackoffMs: 5, maxBackoffMs: 10 },
+    webSocket: () => {
+      const fake = new FakeRelay({ slot: 1, host: true, hostSlot: 1 });
+      sockets.push(fake);
+      return fake;
+    },
+  });
+  t.after(() => client.close());
+  await client.connect(TICKET);
+  const stale = client.transfer(2, text("old-connection-handoff"));
+  const back = new Promise((resolve) => client.onReconnected(resolve));
+  sockets[0].close();
+  await back;
+  assert.ok(client.isHost, "back as host in the same term");
+  release();
+  assert.equal(await stale, false, "the transfer from the old connection is dropped");
+  assert.equal(sockets[0].controls(RelayOp.Transfer).length + sockets[1].controls(RelayOp.Transfer).length, 0);
   client.close();
   await client.done;
 });

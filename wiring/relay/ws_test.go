@@ -318,7 +318,7 @@ func TestWebSocketHostChange(t *testing.T) {
 	// 浏览器再回来只是成员；TCP 新房主把房主转交给它，交接数据经 WebSocket 送达。
 	browser = dialWS(t, ctx, url, "room-ws-host", "browser", token.RoleHost)
 	member.expectControl(t, wire.RelayOpMemberJoined, nil)
-	if err := wire.WriteRelay(member.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 1, Payload: []byte("handoff")}}, 0); err != nil {
+	if err := wire.WriteRelay(member.conn, []*wire.Packet{{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 1, Payload: wire.EncodeRelayTransfer(wire.RelayTransfer{Epoch: 1, Data: []byte("handoff")})}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	member.expectControl(t, wire.RelayOpYouAreMember, wire.EncodeRelayEpoch(2))

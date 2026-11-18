@@ -341,6 +341,8 @@ export enum RejectCode {
   BadTarget = 4,
   /** 发送者此刻不是房主。 */
   NotHost = 5,
+  /** 转交带的 epoch 不是此刻的房主任期（在旧任期发起，期间房主换过，例如转出去又转回来）。 */
+  StaleEpoch = 6,
 }
 
 /** Rejected 的载荷：被拒的操作码、原因、被拒快照的 seq（转交为 0）。 */
@@ -427,6 +429,22 @@ export function decodeYouAreHost(payload: Uint8Array): YouAreHost {
     members,
     state: payload.slice(at),
   };
+}
+
+/**
+ * Transfer 的载荷：[epoch 8B][交接数据]。epoch 是房主发起转交时的任期，relay 只在它等于此刻的 epoch 时执行，
+ * 否则回 Rejected{StaleEpoch}（旧任期的交接数据不开启新任期，见 docs/framework/RELAY.md §2.3）。
+ */
+export function encodeTransfer(epoch: bigint, data: Uint8Array): Uint8Array {
+  const payload = new Uint8Array(8 + data.length);
+  view(payload).setBigUint64(0, epoch);
+  payload.set(data, 8);
+  return payload;
+}
+
+export function decodeTransfer(payload: Uint8Array): { epoch: bigint; data: Uint8Array } {
+  if (payload.length < 8) throw new RelayProtocolError("invalid transfer payload");
+  return { epoch: view(payload).getBigUint64(0), data: payload.subarray(8) };
 }
 
 /** Snapshot 的载荷：[seq 8B][快照字节]。 */

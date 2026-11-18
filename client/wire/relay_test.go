@@ -120,6 +120,13 @@ func TestRelayHostChangePayloads(t *testing.T) {
 	if got, err := wire.DecodeRelaySnapshot(wire.EncodeRelaySnapshot(snapshot)); err != nil || got.Seq != 12 || !bytes.Equal(got.Data, snapshot.Data) {
 		t.Fatalf("snapshot %+v %v", got, err)
 	}
+	transfer := wire.RelayTransfer{Epoch: 1<<33 + 2, Data: []byte{0, 'h'}}
+	if got, err := wire.DecodeRelayTransfer(wire.EncodeRelayTransfer(transfer)); err != nil || got.Epoch != transfer.Epoch || !bytes.Equal(got.Data, transfer.Data) {
+		t.Fatalf("transfer %+v %v", got, err)
+	}
+	if _, err := wire.DecodeRelayTransfer(make([]byte, 7)); !errors.Is(err, wire.ErrInvalidPacket) {
+		t.Fatalf("transfer without an epoch accepted: %v", err)
+	}
 	if got, err := wire.DecodeRelaySuccessors(wire.EncodeRelaySuccessors([]uint32{4, 2, 9})); err != nil || !slices.Equal(got, []uint32{4, 2, 9}) {
 		t.Fatalf("successors %v %v", got, err)
 	}
@@ -174,7 +181,7 @@ func TestRelayProtocolGolden(t *testing.T) {
 		{"relay_host_changed", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostChanged, Seq: 3, Payload: wire.EncodeRelayHostChanged(wire.RelayHostChanged{Epoch: 2, Account: "a3"})}},
 		{"relay_host_resumed", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpHostResumed, Seq: 1, Payload: wire.EncodeRelayEpoch(0)}},
 		{"relay_rejected_snapshot_too_soon", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpRejected, Payload: wire.EncodeRelayRejected(wire.RelayRejected{Op: wire.RelayOpSnapshot, Code: wire.RelayRejectTooSoon, Seq: 8})}},
-		{"relay_transfer", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 3, Payload: []byte("\x00handoff")}},
+		{"relay_transfer", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpTransfer, Seq: 3, Payload: wire.EncodeRelayTransfer(wire.RelayTransfer{Epoch: 2, Data: []byte("\x00handoff")})}},
 		{"relay_leave", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpLeave}},
 		{"relay_successors", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpSuccessors, Payload: wire.EncodeRelaySuccessors([]uint32{3, 2})}},
 		{"relay_snapshot", &wire.Packet{Flags: wire.FlagRelayControl, MsgID: wire.RelayOpSnapshot, Payload: wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: 7, Data: []byte{0x00, 0xAB, 0xCD}})}},

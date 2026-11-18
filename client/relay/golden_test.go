@@ -155,8 +155,9 @@ func TestSDKHostFramesMatchRelayGolden(t *testing.T) {
 	defer remote.Close()
 	sess := &session{netConn: local, stop: make(chan struct{}), wake: make(chan struct{}, 1)}
 	c.mu.Lock()
-	c.current, c.role = sess, Welcome{Slot: 1, Host: true, HostSlot: 1}
-	c.host.snapSeq = 6 // 下一份快照的 seq 是 7
+	// 金样的转交带 epoch 2（房主此刻的任期）；下一份快照的 seq 是 7。
+	c.current, c.role = sess, Welcome{Slot: 1, Host: true, HostSlot: 1, Epoch: 2}
+	c.host.snapSeq = 6
 	c.mu.Unlock()
 	expect := func(name string, send func() error) {
 		t.Helper()

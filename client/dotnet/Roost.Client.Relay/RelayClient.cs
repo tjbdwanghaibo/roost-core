@@ -142,6 +142,18 @@ namespace Roost.Client.Relay
         Stale,
     }
 
+    /// <summary>Transfer 的结果。</summary>
+    public enum RelayTransferResult
+    {
+        Sent,
+        /// <summary>没有连接，或写失败。</summary>
+        NotConnected,
+        /// <summary>
+        /// 这次转交已经过时，没有发出：压缩交接数据期间换了连接或房主任期（例如转出去又转回来）。旧任期的交接数据不能开启新任期。
+        /// </summary>
+        Stale,
+    }
+
     /// <summary>LeaveAsync 的结果（三份 SDK 一致：Go LeaveResult.RoomGone、TS LeaveResult.roomGone）。</summary>
     public sealed class RelayLeaveResult
     {
@@ -565,11 +577,29 @@ namespace Roost.Client.Relay
         /// <summary>
         /// 把房主主动转交给槽位上的在线成员（只有房主能发，否则抛 InvalidOperationException）。handoff 经 Compressor 压缩（带标识）后不超过
         /// SnapshotMaxBytes（否则抛 ArgumentException），relay 原样放进新房主的 YouAreHost；目标不在线或是自己时 relay 回 Rejected{BadTarget}。
+        /// 这次转交属于调用时的连接与房主任期（同 Snapshot，见 HostTerm）：压缩期间网络线程可能已经把房主换了一圈（A→B→A）或断线重连，
+        /// 这时返回 Stale、不发出——旧任期的交接数据不能开启新任期（v1.55.0 审查 RV-20261118-07，与 Go / TS SDK 相同）。帧里带上这一任期的
+        /// epoch：发出之后、到达 relay 之前任期又变了的，relay 回 Rejected{StaleEpoch}（经 OnRejected 通知），房间不变。
         /// </summary>
-        public bool Transfer(uint slot, ReadOnlySpan<byte> handoff)
+        public RelayTransferResult Transfer(uint slot, ReadOnlySpan<byte> handoff)
         {
-            RequireHost();
-            return SendControl(RelayOps.Transfer, slot, CompressState(handoff));
+            RelaySession? session;
+            ulong epoch;
+            lock (gate)
+            {
+                if (!role.IsHost) throw new InvalidOperationException("Only the room host may transfer the room.");
+                session = current;
+                epoch = role.Epoch;
+            }
+            if (session == null) return RelayTransferResult.NotConnected;
+            var data = CompressState(handoff);
+            lock (gate)
+            {
+                if (!role.IsHost) throw new InvalidOperationException("Only the room host may transfer the room.");
+                if (current != session || role.Epoch != epoch) return RelayTransferResult.Stale;
+            }
+            var frame = RelayCodec.Encode(new RelayFrame(RelayChannel.Control, slot, RelayOps.Transfer, RelayCodec.EncodeTransfer(epoch, data)), frameLimit);
+            return session.Write(frame) ? RelayTransferResult.Sent : RelayTransferResult.NotConnected;
         }
 
         /// <summary>声明候选顺序（只有房主能发）：房主离开或断线时 relay 按这个顺序取第一个在线的成员。relay 只记最新一份，换 host 后清空。</summary>

@@ -17,6 +17,7 @@ import {
   StateSource,
   WebHost,
   LocalRunner,
+  identityCompressor,
   type HostOutput,
   type HostRules,
   type StorageLike,
@@ -498,6 +499,56 @@ test("an earlier-started snapshot that finishes last is dropped: the next host r
   );
   assert.deepEqual(rejectedForA, []);
   b.client.close();
+});
+
+// 旧任期的转交不开启新任期（v1.55.0 审查 RV-20261118-07，三份 SDK 一致）：A 在 epoch 0 发起转交给 C，压缩交接数据很慢；
+// 期间 A 转给 B、B 带新状态转回 A（epoch 2）。旧的那次这时才压缩完：返回 false、不发出，A 仍是房主；A 在 epoch 2 转给 C，
+// C 收到的第一份 YouAreHost 是 epoch 3 的 current。修前旧的那次照样发出，relay 开启 epoch 3，C 收到 old。
+test("a transfer started in an earlier host term is dropped: the target never sees the old handoff", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => (finish = resolve));
+  const a = await Player.create("ts-xfer-a", {
+    compressor: {
+      name: "slow",
+      id: identityCompressor.id,
+      compress: async (data) => {
+        if (new TextDecoder().decode(data) === "old") await gate;
+        return identityCompressor.compress(data);
+      },
+      decompress: (data, limit) => identityCompressor.decompress(data, limit),
+    },
+  });
+  const ticket = await a.lobby.createRoom({ game: GAME, mode: "ts-xfer" });
+  await a.client.connect(ticket);
+  const b = await Player.create("ts-xfer-b");
+  await b.join(ticket.room.id);
+  await a.joined.next("B joined");
+  const c = await Player.create("ts-xfer-c");
+  await c.join(ticket.room.id);
+  await a.joined.next("C joined");
+  const rejectedForA: unknown[] = [];
+  a.client.onRejected((r) => rejectedForA.push(r));
+
+  const stale = a.client.transfer(3, text("old")); // epoch 0，压缩还没完
+  assert.ok(await a.client.transfer(2, text("first")));
+  await b.hostChanged.next("B now host");
+  assert.ok(await b.client.transfer(1, text("latest")));
+  await a.youAreHost.next("A takes over");
+  await a.hostChanged.next("A saw B as host");
+  await a.hostChanged.next("A now host again");
+  assert.equal(a.client.epoch, 2n);
+  finish();
+  assert.equal(await stale, false, "the epoch-0 transfer is dropped");
+  assert.ok(a.client.isHost, "A is still the host");
+
+  assert.ok(await a.client.transfer(3, text("current")));
+  const offer = await c.youAreHost.next("C chosen");
+  assert.deepEqual(
+    [offer.epoch, offer.source, offer.state && new TextDecoder().decode(offer.state)],
+    [3n, StateSource.Handoff, "current"],
+  );
+  assert.deepEqual(rejectedForA, []);
+  for (const p of [a, b, c]) p.client.close();
 });
 
 test("host heartbeat: an idle host is not replaced within 5s", async () => {
