@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **Remote 共享 kind，facebook 一步建立**（维护者 2026-11-18 选 A）：`//roost:entity … remote=managed ownership=shared` 声明这个 kind 的实体生来共享。首写认领（写准入与 `ClaimRemoteOwnership`）一条插入就写成共享的所有权记录，没有“先独占认领、再切共享”的中间态；两个进程同时第一次写都成功（插入输了的一方读回共享记录照常准入）；认领后崩溃留下的是共享空认领，不卡别人。这类实体不能退出共享（`LeaveRemoteSharedMode` 返回 `ErrRemoteOwnerTransition`）；非持久所有权存储（Redis marker）上认领共享 kind 返回 `ErrRemoteWriteCapabilityDisabled`。未声明的 kind 行为不变。生成的登记调 `entity.DeclareRemoteSharedKind`。框架层三条新用例与真实 Mongo / Redis 用例修前红，13 个变异（框架 5、codegen 3、生成工程 3 等）全红。
+  - **变化**：`WriteAuthority.ClaimAuthorityState` 加 `shared` 参数（自定义实现要跟着改）。facebook：实体声明 `ownership=shared`；`Ensure` 只 `GetOrCreate` 进内存，不再认领、切共享；删除 `facebook.ErrOpening`。两个 game 同时第一次投给同一个人时两份邀请都进收件箱；读守卫保留，注释改为真实理由；场景数不变（9）。`TestAllianceE2ESocialTeamInvite` 加了两个 game 同时邀请同一人的一段，通过（修前的两步写法在真实依赖下没复现出红，确定性的红在框架层）。
+  - **升级**：所有权记录格式不变；只对新生成 / 重新装 facebook 的工程生效，旧数据里“认领了还没切共享”的独占 Facebook 记录不会自动变成共享，未上线按清空处理。[证据](docs/maintenance/evidence/remote-shared-kind-20261118/README.md)
 - **修复：remoteentity——请求一个内存与权威里都不存在的 Remote 实体时，写准入不再先认领它**（2026-11-18，facebook 实施中发现，维护者定查清并修框架）：Nest 请求（含只读请求）声明一个没有所有权记录、在本进程内存与权威里都不存在的 Remote 实体时，先确认存在再认领；不存在就照旧答 `entity_not_found`、不留空认领。修前一次只读请求就会把它独占认领给本进程，别的进程之后认领不了、切不了共享，且没有时限（facebook 收件箱在真实依赖下踩到）。`remote_entity.empty_claim_total{left}` 不再计这种情形。新用例 `TestRequestOnAnEntityThatDoesNotExistClaimsNothing` 修前红，两个变异红；去掉 facebook 读守卫后 `TestAllianceE2ESocialTeamInvite` 修前红、修后绿。[证据](docs/maintenance/evidence/nest-readonly-claim-20261118/README.md)
 - **C# 开房间 SDK 支持 Unity WebGL（维护者 2026-11-18 定 A1）**：
   - `RelayClientOptions.PumpDriven`（缺省 false，其他平台不变）打开时不用线程池与计时器：读循环在主线程上起，所有等待回到调用者的上下文；
