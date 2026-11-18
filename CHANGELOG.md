@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.55.0] - 2026-11-18
+
 - **测试：nest 完成泵饱和用例在负载下挂住整个包**（2026-11-18，v1.55.0 第一次 pretag 发现）：`TestAsyncCompletionKeepsOrderWhenPumpIsSaturated` 原来先等 3 次 Enqueue 再确认降级；泵还没取走第 1 条时是第 2 个事务降级、在本 worker 等票据，第 3 个进不了 Enqueue，用例失败后又没落定票据，`StopNest` 永远等。改为直接等降级、之后票据一律落定，失败路径也先落定票据。只改测试。并行 6 进程各 600 轮：旧版全部挂住，新版全部通过。同类写法统一修掉：测试用 `StopNest` 最多等 20s，停不下就落定本包测试提交器上的未决票据再等 20s，仍不行 panic；新增 `TestMain`，任何一次 `StopNest` 超时都判整包失败。注入失败的用例从挂到 `-timeout` 变为 20s 内 FAIL。[证据](docs/maintenance/evidence/nest-saturated-test-hang-20261118/README.md)
 - **开房间 SDK（Go / TS / C#）：同一任期内并发推快照以发起顺序为准**（接 RV-20261118-02，按推荐定 A，2026-11-18）：同一任期里两份快照并发（游戏从几处同时调，或手动推与定时推重叠；TS 定时推送在 `take` 慢于 `intervalMs` 时也会重叠）时，原来先发起、取状态或压缩更慢的那份会拿到更大的 seq，盖掉 relay 已存的较新状态，下一任房主恢复成旧状态。现在每份在开始准备时取发起号，比它晚发起的一份已经发出时这一份丢弃、不发、不占 seq，报告方式与换任期相同：Go `ErrSnapshotStale`、C# `RelaySnapshotResult.Stale`、TS `pushSnapshot` 返回 `undefined`。见 [RELAY §4A](docs/framework/RELAY.md)，[证据](docs/maintenance/evidence/snapshot-start-order-20261118/README.md)
 - **lobby：已开局房间里经 relay 主动离开的人，left 报告晚于后续心跳到达也不再留座**（RV-20261118-03）：relay 的报告可以并发发出、乱序到达；只剩房主在线的心跳先到时，原来的 lobby 把迟到的 `member_left{left}` 当成旧报告丢掉，主动离开的人被当成掉线、还能再 join 回原座。现在每个席位记 `presence_seq`，“连上过 / 主动离开”按成员自己的事实序号收敛，新旧报告都看；迟到的旧 left 仍不清掉回座又连上的人。见 [LOBBY](docs/framework/LOBBY.md)，[证据](docs/maintenance/evidence/v154-review-fixes-20261118/README.md)
