@@ -85,7 +85,7 @@ func TestVerifyRefusesTamperedForeignAndMisdirectedTokens(t *testing.T) {
 		"segment dropped":     strings.Join(parts[:7], "."),
 		"empty":               "",
 		"oversized":           signed + strings.Repeat("x", MaxBytes),
-		"account ticket":      "at1.9999999999.YWNj.c2ln",
+		"account ticket":      "at2.9999999999.party.YWNj.c2ln",
 	}
 	for name, token := range cases {
 		if _, err := Verify(testKey, token, "relay-1", now); !errors.Is(err, ErrInvalid) {

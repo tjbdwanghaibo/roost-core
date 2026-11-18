@@ -31,7 +31,10 @@ type loginWorld struct {
 	now      atomic.Int64 // Unix 毫秒；业务时钟与系统时钟共用
 	nextID   atomic.Int64
 	accounts versionstore.Store[string, svcaccount.Account]
-	roles    versionstore.Store[int64, svcaccount.Role]
+	// identities 是 account 的身份记录：账号号由 account 发、按游戏分开（维护者 2026-11-18），场景用 id 查。
+	identities versionstore.Store[string, svcaccount.IdentityRecord]
+	accountIDs *svcaccount.MemoryAccountIDs
+	roles      versionstore.Store[int64, svcaccount.Role]
 	servers  versionstore.Store[int32, svcaccount.GameServer]
 	slots    versionstore.Store[string, svcaccount.Slot]
 	names    directory.Directory
@@ -42,6 +45,19 @@ const loginTestSecret = "login-test-secret"
 
 func (w *loginWorld) clock() time.Time { return time.UnixMilli(w.now.Load()) }
 
+// id 是 identity（“渠道:open_id”，account 的身份记录键）这个人在场景唯一的游戏 main 里的账号号。没登录过答空串。
+func (w *loginWorld) id(identity string) string {
+	w.t.Helper()
+	record, found, err := w.identities.Get(context.Background(), identity)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	if !found {
+		return ""
+	}
+	return record.Value.Accounts["main"]
+}
+
 func (w *loginWorld) Allocate(context.Context, int32) (int64, error) {
 	return 100_000 + w.nextID.Add(1), nil
 }
@@ -50,7 +66,11 @@ func (w *loginWorld) Allocate(context.Context, int32) (int64, error) {
 func (w *loginWorld) serviceWith(secret string) *svcaccount.Service {
 	w.t.Helper()
 	service, err := svcaccount.New(svcaccount.Config{
-		Accounts: w.accounts,
+		Accounts:   w.accounts,
+		Identities: w.identities,
+		AccountIDs: w.accountIDs,
+		// 传统区服工程：一个游戏，它就是缺省游戏，登录不写 game（维护者 2026-11-18）。
+		Games:    []svcaccount.GameSpec{{Name: "main"}},
 		Roles:    w.roles,
 		Servers:  w.servers,
 		Names:    w.names,
@@ -75,8 +95,10 @@ func newLoginWorld(t *testing.T) *loginWorld {
 	t.Helper()
 	w := &loginWorld{
 		t:        t,
-		accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
-		roles:    svcaccount.NewMemoryRoles(), // 带在途换服索引，与生产的 Redis 角色存储一样（合服要它）
+		accounts:   versionstore.NewMemoryStore[string, svcaccount.Account](),
+		identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
+		accountIDs: svcaccount.NewMemoryAccountIDs(),
+		roles:      svcaccount.NewMemoryRoles(), // 带在途换服索引，与生产的 Redis 角色存储一样（合服要它）
 		servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
 	}
@@ -660,7 +682,7 @@ func TestLoginEnterTicketHandshakeMapsTheAccountToAPlayer(t *testing.T) {
 		t.Fatal("the account package renamed the new-role claim; every reader has to follow")
 	}
 	// account 那一侧：映射建好了，没有名字。
-	role, err := w.service.RoleOnServer(context.Background(), "store:alice", 1000)
+	role, err := w.service.RoleOnServer(context.Background(), w.id("store:alice"), 1000)
 	if err != nil || role.PlayerID != 100_001 || role.Name != "" {
 		t.Fatalf("the mapping account holds = %+v, %v; want player 100001 without a name", role, err)
 	}
@@ -680,7 +702,7 @@ func TestLoginEnterTicketHandshakeMapsTheAccountToAPlayer(t *testing.T) {
 		t.Fatalf("alice on server 1001: %+v, %v", elsewhere, err)
 	}
 	// 已经自己选好角色的那条路照旧：session 票据握手到的是同一名玩家。
-	session, err := w.service.SelectRole(context.Background(), "store:alice", 100_001)
+	session, err := w.service.SelectRole(context.Background(), w.id("store:alice"), 100_001)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -709,7 +731,7 @@ func TestLoginEnterTicketRefusesBadTicketsWithoutCreatingAnything(t *testing.T) 
 		t.Fatalf("malformed enter tickets reached account %d times", counting.asked.Load())
 	}
 	session := w.role("bob", 1000)
-	accountTicket, err := w.service.IssueAccountTicket(ctx, "store:alice")
+	accountTicket, err := w.service.IssueAccountTicket(ctx, w.id("store:alice"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +756,7 @@ func TestLoginEnterTicketRefusesBadTicketsWithoutCreatingAnything(t *testing.T) 
 	if _, err := authenticator.Authenticate(ctx, handshake); !errors.Is(err, gateway.ErrUnauthenticated) {
 		t.Fatalf("an expired enter ticket: %v", err)
 	}
-	if _, err := w.service.RoleOnServer(ctx, "store:alice", 1000); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+	if _, err := w.service.RoleOnServer(ctx, w.id("store:alice"), 1000); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
 		t.Fatalf("refused handshakes created a mapping for alice: %v", err)
 	}
 }
@@ -800,7 +822,7 @@ func TestLoginEnterTicketConcurrentHandshakesShareOnePlayer(t *testing.T) {
 	if len(sessions) < 2 {
 		t.Fatalf("the handshakes share a session id: %v", sessions)
 	}
-	if role, err := w.service.RoleOnServer(context.Background(), "store:alice", 1000); err != nil || role.PlayerID != playerID {
+	if role, err := w.service.RoleOnServer(context.Background(), w.id("store:alice"), 1000); err != nil || role.PlayerID != playerID {
 		t.Fatalf("the mapping after the concurrent handshakes = %+v, %v; want player %d", role, err, playerID)
 	}
 	// 之后再握手还是他。
@@ -901,7 +923,7 @@ func TestLoginEnterTicketFollowsTheServerAndTheBinding(t *testing.T) {
 	if _, err := authenticator.Authenticate(ctx, w.enterHandshake("newcomer", 1001)); !errors.Is(err, gateway.ErrUnauthenticated) {
 		t.Fatalf("a new account on a server in maintenance: %v, want unauthenticated", err)
 	}
-	if _, err := w.service.RoleOnServer(ctx, "store:newcomer", 1001); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+	if _, err := w.service.RoleOnServer(ctx, w.id("store:newcomer"), 1001); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
 		t.Fatalf("the refused handshake created a mapping: %v", err)
 	}
 	// 1001 并入 1000。
@@ -929,10 +951,7 @@ func TestLoginEnterTicketFollowsTheServerAndTheBinding(t *testing.T) {
 	}
 	// 封号：已经签出去的票据也握不了手。
 	issued := w.enterHandshake("veteran", 1001)
-	if _, _, err := w.accounts.Update(ctx, "store:veteran", func(current svcaccount.Account, found bool) (svcaccount.Account, bool, error) {
-		current.Banned = true
-		return current, found, nil
-	}); err != nil {
+	if _, err := w.service.SetIdentityBanned(ctx, w.id("store:veteran"), true, "login scenario"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := authenticator.Authenticate(ctx, issued); !errors.Is(err, gateway.ErrUnauthenticated) {

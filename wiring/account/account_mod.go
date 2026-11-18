@@ -3,6 +3,7 @@ package account
 import domain "github.com/tjbdwanghaibo/roost-core/service/account"
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -40,6 +41,7 @@ type Mod struct {
 	ticketTTL     time.Duration
 	claimTTL      time.Duration
 	games         []domain.GameSpec
+	defaultGame   string
 	services      []domain.ServiceSpec
 	service       *domain.Service
 }
@@ -92,8 +94,11 @@ type config struct {
 		// 不带 example：缺省值够用，不写进生成的配置文件；要改时在 account: 段里加 ticket_ttl。
 		TicketTTL time.Duration `config:"ticket_ttl" default:"10m" min:"10s" max:"24h" help:"账号票据的有效期（登录之后多久之内可以拿区服清单、要进服票据）；进服票据与角色会话令牌用 session_ttl"`
 		ClaimTTL  time.Duration `config:"claim_ttl" default:"30s" min:"1ns" example:"5m"`
-		// games 与 services 不带 example：没有它们的工程（只有 game 区服）行为不变，生成的配置文件里也不写。
-		Games    map[string]gameConfig    `config:"games" help:"游戏账号 token 服务的游戏：games.<游戏名>.token_ttl（必填，至多 24h）。不在这里的游戏不签发 token"`
+		// games 是 map，声明里写不出 example：生成器另写一个以工程名命名的游戏（codegen 的 accountServiceConfigSection）。
+		// 至少一个：登录必须落到一个游戏（维护者 2026-11-18），Init 检查。
+		Games       map[string]gameConfig `config:"games" help:"这套 account 服务的游戏：games.<游戏名>.token_ttl（必填，至多 24h）。至少一个；登录要落到其中一个，同一个人在每个游戏里是不同的账号号"`
+		DefaultGame string                `config:"default_game" help:"登录没写游戏时落到的游戏（必须在 account.games 里）；只有一个游戏时不用写，就是它"`
+		// services 不带 example：没有它的工程（只有 game 区服）行为不变，生成的配置文件里也不写。
 		Services map[string]serviceConfig `config:"services" help:"接受本账号体系的服务：services.<服务名>.kind（game | lobby | relay）。不写时按单一 game 服务处理"`
 	} `config:"account"`
 }
@@ -137,8 +142,9 @@ func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 //	  session_ttl: 30m            # optional
 //	  ticket_ttl: 10m             # optional：账号票据的有效期
 //	  claim_ttl: 30s              # optional
-//	  games:                      # optional：游戏账号 token 服务的游戏（game_token.go）
+//	  games:                      # 至少一个：这套 account 服务的游戏（identity_accounts.go、game_token.go）
 //	    party: {token_ttl: 2h}
+//	  default_game: party         # optional：登录没写游戏时落到的游戏；只有一个游戏时就是它
 //	  services:                   # optional：接受本账号体系的服务（services.go）
 //	    lobby: {kind: lobby}
 //	    relay: {kind: relay}
@@ -172,8 +178,12 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			"was absent in the implementation this replaces, and the absence looked like a default", missing)
 	}
 	m.prefix, m.sessionSecret, m.sessionTTL, m.ticketTTL, m.claimTTL = c.KeyPrefix, c.SessionSecret, c.SessionTTL, c.TicketTTL, c.ClaimTTL
-	m.games, m.services = gameSpecs(c.Games), serviceSpecs(c.Services)
-	if err := domain.CheckGamesAndServices(m.games, m.services); err != nil {
+	m.games, m.defaultGame, m.services = gameSpecs(c.Games), c.DefaultGame, serviceSpecs(c.Services)
+	if len(m.games) == 0 {
+		return errors.New("account mod: config: account.games lists no game; every login lands in one game " +
+			"(account.games.<name>.token_ttl, for example the project's own game with token_ttl: 2h)")
+	}
+	if err := domain.CheckGamesAndServices(m.games, m.defaultGame, m.services); err != nil {
 		return fmt.Errorf("account mod: %w", err)
 	}
 	return nil
@@ -196,11 +206,12 @@ func (m *Mod) Provide(r *app.Registry) error {
 		return fmt.Errorf("account mod: %w", err)
 	}
 	service, err := domain.New(domain.Config{
-		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
+		Accounts: stores.Accounts, Identities: stores.Identities, AccountIDs: stores.AccountIDs,
+		Roles: stores.Roles, Servers: stores.Servers,
 		Slots: stores.Slots, Names: stores.Names, Presence: stores.Presence,
 		Verifier: m.verifier, Allocator: m.allocator, NameRules: m.nameRules,
 		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL, AccountTicketTTL: m.ticketTTL, ClaimTTL: m.claimTTL,
-		Games: m.games, Services: m.services,
+		Games: m.games, DefaultGame: m.defaultGame, Services: m.services,
 		Metrics: m.metrics,
 		// Creation and login times are business time; session tokens and
 		// operator stamps are system time.

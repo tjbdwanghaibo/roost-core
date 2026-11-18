@@ -37,12 +37,15 @@ import "context"
 //
 //roost:rpc service_type=account capability=service.account
 type Accounts interface {
-	// Login verifies a channel identity and returns the account it maps to,
-	// creating it on first sight. The channel is asked; the account id is
-	// never read from the request.
+	// Login verifies a channel identity and returns the account it has in
+	// identity.Game, creating it on first sight. The channel is asked; the
+	// account id is never read from the request.
 	//
-	// 渠道在 Verified.CredentialVersion 里给了凭证版本、且与账号上存的不同（之前存过）时，这次登录把游戏账号
-	// token 的代数加一（与 RevokeGameTokens 同一个计数，维护者 2026-11-18）；被封的账号登录照样被拒，版本变化照样记下。
+	// 账号号按游戏分开（维护者 2026-11-18，identity_accounts.go）：同一个人在每个游戏里是不同的账号号。identity.Game
+	// 必须在 account.games 里，空时取缺省游戏，没有缺省游戏答 ErrGameInvalid。返回的账号不带身份键，别的游戏的账号号
+	// 不经任何总线接口交出。渠道在 Verified.CredentialVersion 里给了凭证版本、且与身份上存的不同（之前存过）时，这次
+	// 登录把这个人的游戏账号 token 代数加一（与 RevokeGameTokens 同一个计数，所有游戏一起）；被封的人登录照样被拒，
+	// 版本变化照样记下。
 	Login(ctx context.Context, identity Identity) (account Account, err error)
 
 	// CreateRole starts or resumes one durable role plan for an account/server.
@@ -103,11 +106,11 @@ type Accounts interface {
 	// Gate、game 都不持有密钥。账号票据在登录之后签发；进服票据在选定一个服之后签发，握手时出示。
 	// 这条“握手时按账号解析角色”的路与 CreateRole / SelectRole / ValidateSession（入口自己选角）并存。
 
-	// IssueAccountTicket 给 accountID 签一张账号票据（寿命 account.ticket_ttl）。可信调用方在 Login 之后
-	// 给出 accountID。只读；账号不存在、被封时拒绝。
+	// IssueAccountTicket 给 accountID 签一张账号票据（at2，绑定账号所属的游戏，寿命 account.ticket_ttl）。可信调用方在
+	// Login 之后给出 accountID。只读；账号不存在、被封时拒绝。
 	IssueAccountTicket(ctx context.Context, accountID string) (ticket AccountTicket, err error)
 
-	// ValidateAccountTicket 校验账号票据并返回它绑定的账号。无效的票据一律 ErrSessionInvalid；
+	// ValidateAccountTicket 校验账号票据并返回它绑定的账号（带游戏、不带身份键）。无效的票据一律 ErrSessionInvalid；
 	// 账号不在或被封时 ErrAccountMissing / ErrIdentityDenied。只读。
 	ValidateAccountTicket(ctx context.Context, ticket string) (account Account, err error)
 
@@ -126,7 +129,7 @@ type Accounts interface {
 
 	// IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt2，寿命 account.games.<game>.token_ttl）。
 	// 只读。账号只取自票据：票据无效 ErrSessionInvalid；账号不在、被封 ErrAccountMissing / ErrIdentityDenied；
-	// game 不在 account.games 里 ErrGameInvalid。
+	// game 不在 account.games 里、或不是票据的游戏 ErrGameInvalid（只给票据自己的游戏刷新，维护者 2026-11-18）。
 	IssueGameToken(ctx context.Context, accountTicket string, game string) (token GameToken, err error)
 
 	// ValidateGameToken 校验一张游戏账号 token，返回账号、游戏与过期时刻。只读。token 无效（过期、被改、
@@ -134,7 +137,7 @@ type Accounts interface {
 	// 账号不在、被封 ErrAccountMissing / ErrIdentityDenied（封号当场生效）。它不核对调用方的游戏：调用方用 GameAccount.RequireGame。
 	ValidateGameToken(ctx context.Context, token string) (account GameAccount, err error)
 
-	// RevokeGameTokens 吊销 accountID 在此之前签发的全部游戏账号 token（账号上的代数加一并落库），返回新的代数；
+	// RevokeGameTokens 吊销 accountID 所属的人在此之前签发的全部游戏账号 token（身份上的代数加一并落库，所有游戏一起），返回新的代数；
 	// 之后签发的照常可用，封号状态与别的票据不受影响。账号不存在 ErrAccountMissing。调用方是运维（accountctl）与
 	// 需要当场吊销的那一方（报告泄露、换绑；改密码由登录时的凭证版本自动加一，见 Login）；可信调用方提供 accountID，信任模型同 SelectRole。在总线上：它只会让
 	// token 失效，不会放进任何人。

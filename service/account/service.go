@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -21,10 +20,16 @@ import (
 // the constructor refuses an incomplete one — the alternative is a service
 // that starts and then behaves as if a missing piece were a policy choice.
 type Config struct {
-	// Accounts, Roles and Servers hold the durable state.
+	// Accounts, Roles and Servers hold the durable state. Accounts 按账号号存一个人在一个游戏里的账号。
 	Accounts versionstore.Store[string, Account]
 	Roles    versionstore.Store[int64, Role]
 	Servers  versionstore.Store[int32, GameServer]
+	// Identities 按身份键（渠道 + open id）存身份级记录（IdentityRecord，维护者 2026-11-18）：他在各游戏的账号号、
+	// 封号、凭证版本与 gt2 代数。必填。
+	Identities versionstore.Store[string, IdentityRecord]
+	// AccountIDs 发账号号（identity_accounts.go）：必填、没有缺省，与玩家号分配器同一个理由——号必须跨进程、跨重启
+	// 都不重复。生产用 RedisStores.AccountIDs（Redis 里一个 INCR 计数器），测试用 NewMemoryAccountIDs。
+	AccountIDs AccountIDAllocator
 
 	// Names reserves display names. Slot intents retain the reservation and
 	// role identity for recovery after uncertain writes.
@@ -53,9 +58,13 @@ type Config struct {
 	// 它与 SessionTTL 是两个量：账号票据只用来在登录之后拿清单、要进服票据，几分钟就够；
 	// 进服票据与角色会话令牌是“凭它握手”的凭证，用 SessionTTL。
 	AccountTicketTTL time.Duration
-	// Games 是这套 account 服务的游戏（account.games，game_token.go）：只给列出的游戏签发游戏账号 token。
-	// 空表示一个都没有，IssueGameToken 一律拒绝。
+	// Games 是这套 account 服务的游戏（account.games，game_token.go）：登录要落到其中一个，只给列出的游戏签发游戏账号 token。
+	// 空表示一个都没有：谁也登录不了，IssueGameToken 一律拒绝（wiring/account 的 Mod 要求至少一个；这里允许空，
+	// 是给只登记区服、不登录的运维工具用）。
 	Games []GameSpec
+	// DefaultGame 是登录没写游戏时落到的游戏（account.default_game），必须在 Games 里。空时：Games 只有一个游戏就是它，
+	// 否则没有缺省游戏，登录必须写明游戏。
+	DefaultGame string
 	// Services 是接受本账号体系的服务（account.services，services.go）。空表示单一 game 服务的工程，
 	// 区服记录不带服务名，行为与没有这一项时相同。
 	Services []ServiceSpec
@@ -106,8 +115,9 @@ type Service struct {
 	cfg      Config
 	presence PresenceStore
 	report   servicemetrics.Sink
-	// games 是 游戏名 -> token 寿命（Config.Games 检查过的）。
-	games map[string]time.Duration
+	// games 是 游戏名 -> token 寿命（Config.Games 检查过的）；defaultGame 是登录没写游戏时落到的游戏（可以为空）。
+	games       map[string]time.Duration
+	defaultGame string
 	// services 是 Config.Services 检查过、按名字排好的；defaultGameService 是没写服务名的区服归属的服务。
 	services           []ServiceSpec
 	defaultGameService string
@@ -127,6 +137,12 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.Names == nil {
 		missing = append(missing, "Names")
+	}
+	if cfg.Identities == nil {
+		missing = append(missing, "Identities")
+	}
+	if cfg.AccountIDs == nil {
+		missing = append(missing, "AccountIDs (account ids have no default: a process-local counter repeats after a restart)")
 	}
 	if cfg.Slots == nil {
 		missing = append(missing, "Slots")
@@ -180,6 +196,10 @@ func New(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	defaultGame, err := pickDefaultGame(games, cfg.DefaultGame)
+	if err != nil {
+		return nil, err
+	}
 	services, defaultGameService, err := newServiceTable(cfg.Services)
 	if err != nil {
 		return nil, err
@@ -190,93 +210,8 @@ func New(cfg Config) (*Service, error) {
 	}
 	return &Service{
 		cfg: cfg, presence: presence, report: servicemetrics.Wrap(cfg.Metrics),
-		games: games, services: services, defaultGameService: defaultGameService,
+		games: games, defaultGame: defaultGame, services: services, defaultGameService: defaultGameService,
 	}, nil
-}
-
-// Login verifies an identity with its channel and returns the account,
-// creating it on first sight.
-//
-// Verification happens before anything else and its result — not the submitted
-// identity — decides the account. A caller cannot present its own credential
-// alongside someone else's open id.
-func (s *Service) Login(ctx context.Context, identity Identity) (Account, error) {
-	if err := identity.Validate(); err != nil {
-		return Account{}, err
-	}
-	verified, err := s.cfg.Verifier.Verify(ctx, identity)
-	if err != nil {
-		if errors.Is(err, ErrVerifierUnavailable) {
-			s.report.Refused("login", "verifier_unavailable")
-			// Propagated as-is: a channel outage is not a client error, and
-			// answering "denied" would tell the player their credential is
-			// bad when it is not.
-			return Account{}, err
-		}
-		s.report.Refused("login", "denied")
-		return Account{}, fmt.Errorf("%w: %s", ErrIdentityDenied, err)
-	}
-	if err := verified.Validate(); err != nil {
-		return Account{}, err
-	}
-	accountID := Identity{Channel: verified.Channel, OpenID: verified.OpenID}.AccountID()
-	now := s.cfg.Now()
-
-	var result Account
-	// banned 由 mutate 每次调用重新设置：Update 冲突时会重读、重跑 mutate，只有最后一次的判断算数。
-	var banned bool
-	_, _, err = s.cfg.Accounts.Update(ctx, accountID, func(current Account, found bool) (Account, bool, error) {
-		banned = false
-		if found && !sameVerifiedIdentity(current, verified) {
-			return current, false, fmt.Errorf("%w: stored account identity does not match verified identity", ErrIdentityInvalid)
-		}
-		if found && current.Banned {
-			// A banned account still resolves, so an operator can see it, but
-			// login does not succeed.
-			banned = true
-			// 被封也照样记下凭证变化：封号期间改了密码，解封之后旧 token 不能复活。别的什么都不写。
-			next, changed := withCredentialVersion(current, verified.CredentialVersion)
-			return next, changed, nil
-		}
-		next := current
-		if !found {
-			next = Account{ID: accountID, Channel: verified.Channel, OpenID: verified.OpenID, CreatedAtUnix: now.Unix()}
-		}
-		next, _ = withCredentialVersion(next, verified.CredentialVersion)
-		next.LastLoginAtUnix = now.Unix()
-		result = next
-		return next, true, nil
-	})
-	if err != nil {
-		return Account{}, err
-	}
-	if banned {
-		s.report.Refused("login", "banned")
-		return Account{}, fmt.Errorf("%w: account is banned", ErrIdentityDenied)
-	}
-	s.report.Accepted("login")
-	return result, nil
-}
-
-// withCredentialVersion 把渠道这次给的凭证版本记到账号上（交接 C6 第 1 点，维护者 2026-11-18 选 B），
-// 返回新记录与它是否变了：
-//
-//   - 渠道没给（空）：不动，已存的版本不抹掉。
-//   - 账号上还没存过：只记录，不加一（第一次见到，无从比较）。
-//   - 与存的相同：不动。
-//   - 与存的不同：游戏账号 token 的代数加一（与 RevokeGameTokens 是同一个计数、同一次落库），换成新版本。
-//
-// 它在 Login 的 Accounts.Update 里调用，读改写在同一次比较后写入里：并发登录各自基于最新提交的记录判断，
-// 同一个新版本只加一次，不同的新版本各加一次，不丢别人的加一。Login 结果未知后重试时，新版本已经存下，不会再加。
-func withCredentialVersion(account Account, version string) (Account, bool) {
-	if version == "" || version == account.CredentialVersion {
-		return account, false
-	}
-	if account.CredentialVersion != "" {
-		account.GameTokenGeneration++
-	}
-	account.CredentialVersion = version
-	return account, true
 }
 
 // CreateRole creates or resumes one pending role with the same name.
@@ -296,15 +231,9 @@ func (s *Service) admitAndCreateRole(ctx context.Context, accountID string, serv
 	if err := s.cfg.NameRules.Validate(name); err != nil {
 		return Role{}, false, fmt.Errorf("%w: %s", ErrNameInvalid, err)
 	}
-	account, found, err := s.cfg.Accounts.Get(ctx, accountID)
-	if err != nil {
+	// 账号要在、它所属的身份没有被封（封号在身份级，identity_accounts.go）。
+	if _, _, err := s.accountInGoodStanding(ctx, accountID); err != nil {
 		return Role{}, false, err
-	}
-	if !found {
-		return Role{}, false, fmt.Errorf("%w: %s", ErrAccountMissing, accountID)
-	}
-	if account.Value.Banned {
-		return Role{}, false, fmt.Errorf("%w: account is banned", ErrIdentityDenied)
 	}
 	if err := s.serverAcceptsNewRoles(ctx, serverID); err != nil {
 		return Role{}, false, err
@@ -339,10 +268,6 @@ func (s *Service) serverAcceptsNewRoles(ctx context.Context, serverID int32) err
 		return fmt.Errorf("%w: server %d is %s", ErrServerClosed, serverID, server.Value.Status)
 	}
 	return nil
-}
-
-func sameVerifiedIdentity(account Account, identity Verified) bool {
-	return strings.EqualFold(strings.TrimSpace(string(account.Channel)), strings.TrimSpace(string(identity.Channel))) && strings.TrimSpace(account.OpenID) == strings.TrimSpace(identity.OpenID)
 }
 
 // slotKeyFor renders the exclusive-membership key for one account's role

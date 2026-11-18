@@ -1,0 +1,67 @@
+=== RUN   TestEveryClientModDependsOnTheNATSMod
+--- PASS: TestEveryClientModDependsOnTheNATSMod (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/integration	1.503s
+=== RUN   TestModRefusesWithoutItsRequiredCollaborators
+=== RUN   TestModRefusesWithoutItsRequiredCollaborators/no_verifier
+=== RUN   TestModRefusesWithoutItsRequiredCollaborators/no_allocator
+=== RUN   TestModRefusesWithoutItsRequiredCollaborators/no_name_rules
+=== RUN   TestModRefusesWithoutItsRequiredCollaborators/none_at_all
+--- PASS: TestModRefusesWithoutItsRequiredCollaborators (0.00s)
+    --- PASS: TestModRefusesWithoutItsRequiredCollaborators/no_verifier (0.00s)
+    --- PASS: TestModRefusesWithoutItsRequiredCollaborators/no_allocator (0.00s)
+    --- PASS: TestModRefusesWithoutItsRequiredCollaborators/no_name_rules (0.00s)
+    --- PASS: TestModRefusesWithoutItsRequiredCollaborators/none_at_all (0.00s)
+=== RUN   TestModRefusesAClusterPrefixWithoutAHashTag
+--- PASS: TestModRefusesAClusterPrefixWithoutAHashTag (0.00s)
+=== RUN   TestModRefusesAnEmptySessionSecret
+--- PASS: TestModRefusesAnEmptySessionSecret (0.00s)
+=== RUN   TestModInitAndProvideContract
+--- PASS: TestModInitAndProvideContract (0.00s)
+=== RUN   TestProvideBindsRegistryAwareCollaborators
+--- PASS: TestProvideBindsRegistryAwareCollaborators (0.00s)
+=== RUN   TestProvideReportsACollaboratorThatRefusesToBind
+--- PASS: TestProvideReportsACollaboratorThatRefusesToBind (0.00s)
+=== RUN   TestGeneratedServerInitRefusesAClientOnlyProcessAndNamesTheMissingMod
+--- PASS: TestGeneratedServerInitRefusesAClientOnlyProcessAndNamesTheMissingMod (0.00s)
+=== RUN   TestGeneratedClientModRefusesANegativeCallTimeout
+--- PASS: TestGeneratedClientModRefusesANegativeCallTimeout (0.00s)
+=== RUN   TestModReadsGamesAndServices
+=== RUN   TestModReadsGamesAndServices/game_name_with_a_dash_first
+=== RUN   TestModReadsGamesAndServices/token_ttl_missing
+=== RUN   TestModReadsGamesAndServices/token_ttl_too_long
+=== RUN   TestModReadsGamesAndServices/unknown_kind
+=== RUN   TestModReadsGamesAndServices/kind_missing
+=== RUN   TestModReadsGamesAndServices/service_name_upper
+--- PASS: TestModReadsGamesAndServices (0.00s)
+    --- PASS: TestModReadsGamesAndServices/game_name_with_a_dash_first (0.00s)
+    --- PASS: TestModReadsGamesAndServices/token_ttl_missing (0.00s)
+    --- PASS: TestModReadsGamesAndServices/token_ttl_too_long (0.00s)
+    --- PASS: TestModReadsGamesAndServices/unknown_kind (0.00s)
+    --- PASS: TestModReadsGamesAndServices/kind_missing (0.00s)
+    --- PASS: TestModReadsGamesAndServices/service_name_upper (0.00s)
+=== RUN   TestTheServingGuardRefusesAMergedServer
+2026/11/18 13:55:34 INFO account serving guard: this server is not merged sid=1001
+2026/11/18 13:55:34 INFO account serving guard: this server is not registered in account yet; nothing is merged sid=1001
+2026/11/18 13:55:34 WARN account serving guard: account service did not answer; retrying sid=1001 attempt=1 err="context deadline exceeded"
+2026/11/18 13:55:34 WARN account serving guard: account service did not answer; retrying sid=1001 attempt=2 err="context deadline exceeded"
+2026/11/18 13:55:34 WARN account serving guard: account service did not answer; retrying sid=1001 attempt=3 err="context deadline exceeded"
+2026/11/18 13:55:34 WARN account serving guard: account service did not answer; retrying sid=1001 attempt=4 err="context deadline exceeded"
+--- PASS: TestTheServingGuardRefusesAMergedServer (0.04s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/account	1.833s
+=== RUN   TestModLoadsWhatItDeclares
+--- PASS: TestModLoadsWhatItDeclares (0.00s)
+=== RUN   TestModInitRefusesMissingGamesAndKey
+--- PASS: TestModInitRefusesMissingGamesAndKey (0.00s)
+=== RUN   TestAccountTokensMapsAccountAnswers
+--- PASS: TestAccountTokensMapsAccountAnswers (0.00s)
+=== RUN   TestAccountTokensSeeOnlyTheGameAccount
+--- PASS: TestAccountTokensSeeOnlyTheGameAccount (0.00s)
+=== RUN   TestModAndServerOnRealRedis
+2026/11/18 13:55:34 INFO lobby: serving addr=127.0.0.1:51027 events=roost.test.lobby.events
+--- PASS: TestModAndServerOnRealRedis (0.02s)
+=== RUN   TestServerInitNeedsTheMod
+--- PASS: TestServerInitNeedsTheMod (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lobby	1.501s

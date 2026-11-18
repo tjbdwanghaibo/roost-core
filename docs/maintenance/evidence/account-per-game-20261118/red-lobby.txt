@@ -1,0 +1,5 @@
+--- FAIL: TestAccountTokensSeeOnlyTheGameAccount (0.00s)
+    lobby_mod_test.go:185: the party lobby sees "store:alice-open-id", which carries the channel identity
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/lobby	0.456s
+FAIL

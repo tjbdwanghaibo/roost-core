@@ -157,11 +157,11 @@ func TestBadServicesAreRefusedAtStart(t *testing.T) {
 		if _, err := New(bad); err == nil {
 			t.Fatalf("%s: New accepted account.services %+v", label, services)
 		}
-		if err := CheckGamesAndServices(nil, services); err == nil {
+		if err := CheckGamesAndServices(nil, "", services); err == nil {
 			t.Fatalf("%s: CheckGamesAndServices accepted %+v", label, services)
 		}
 	}
-	if err := CheckGamesAndServices([]GameSpec{{Name: "party"}}, []ServiceSpec{{Name: "lobby", Kind: ServiceKindLobby}}); err != nil {
+	if err := CheckGamesAndServices([]GameSpec{{Name: "party"}}, "", []ServiceSpec{{Name: "lobby", Kind: ServiceKindLobby}}); err != nil {
 		t.Fatal(err)
 	}
 }

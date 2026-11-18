@@ -238,7 +238,8 @@ func TestAccountRunsOnRedis(t *testing.T) {
 	var next int64 = 5000
 	var idMu sync.Mutex
 	service, err := account.New(account.Config{
-		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
+		Accounts: stores.Accounts, Identities: stores.Identities, AccountIDs: stores.AccountIDs, Games: []account.GameSpec{{Name: "game"}},
+		Roles: stores.Roles, Servers: stores.Servers,
 		Slots: stores.Slots, Names: stores.Names,
 		Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
 			if id.Credential != "good" {
@@ -295,7 +296,8 @@ func TestAccountSlotExcludesAnAccountRacingItselfOnRedis(t *testing.T) {
 	var next int64 = 6000
 	var idMu sync.Mutex
 	service, err := account.New(account.Config{
-		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
+		Accounts: stores.Accounts, Identities: stores.Identities, AccountIDs: stores.AccountIDs, Games: []account.GameSpec{{Name: "game"}},
+		Roles: stores.Roles, Servers: stores.Servers,
 		Slots: stores.Slots, Names: stores.Names,
 		Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
 			return account.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil
@@ -360,7 +362,8 @@ func TestAccountRoleTransferRunsOnRedis(t *testing.T) {
 	newService := func() *account.Service {
 		t.Helper()
 		service, err := account.New(account.Config{
-			Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
+			Accounts: stores.Accounts, Identities: stores.Identities, AccountIDs: stores.AccountIDs, Games: []account.GameSpec{{Name: "game"}},
+			Roles: stores.Roles, Servers: stores.Servers,
 			Slots: stores.Slots, Names: stores.Names,
 			Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
 				return account.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil
@@ -514,7 +517,8 @@ func TestAccountTransferDeadlinesAndIndexOnRedis(t *testing.T) {
 	newService := func() *account.Service {
 		t.Helper()
 		service, err := account.New(account.Config{
-			Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers,
+			Accounts: stores.Accounts, Identities: stores.Identities, AccountIDs: stores.AccountIDs, Games: []account.GameSpec{{Name: "game"}},
+			Roles: stores.Roles, Servers: stores.Servers,
 			Slots: stores.Slots, Names: stores.Names,
 			Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
 				return account.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil
@@ -1607,7 +1611,8 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 	var nextPlayer int64 = 9000
 	var playerMu sync.Mutex
 	acctSvc, err := account.New(account.Config{
-		Accounts: acctStores.Accounts, Roles: acctStores.Roles, Servers: acctStores.Servers,
+		Accounts: acctStores.Accounts, Identities: acctStores.Identities, AccountIDs: acctStores.AccountIDs, Games: []account.GameSpec{{Name: "game"}},
+		Roles: acctStores.Roles, Servers: acctStores.Servers,
 		Slots: acctStores.Slots, Names: acctStores.Names,
 		Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
 			return account.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil

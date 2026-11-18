@@ -80,13 +80,14 @@ lobby 不持有 account 的密钥，也不自己验签。
 - 返回的 `GameAccount` 经 `RequireGame(请求的 game)` 核对游戏。
 - `wiring/lobby.AccountTokens` 负责转换结果：`session_invalid`、`identity_denied`、`account_missing`、`game_invalid` 都答 401；其他错误（account 不可达）答 503。
 - `service/lobby.GameTokenValidator` 是 lobby 里的最小接口；单测用替身，也可以由 `lobby.NewMod(validator)` 注入。
-- **吊销**（交接 C6，维护者 2026-11-17）：token 是 `gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，account 校验时把代数与账号记录上的当前值比较（校验本来就要重读账号看封号，不多一次读）。account 的 `RevokeGameTokens(账号)` 把代数加一：在此之前签发的 token 一律答 `session_invalid`（401），之后签发的照常可用。触发的入口是运维的 `accountctl revoke-game-tokens -account <账号号>`（login 模块的命令）、需要当场吊销的一方经总线调用，以及改密码之后的下一次登录：渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本，account 登录时发现它与账号上存的不同就自动加一（维护者 2026-11-18）。lobby 只拿校验结果，接口不变；吊销只拦以后的大厅调用（建房、列房、加入、离开、改状态），已经发出的 relay 令牌与已经连上的 relay 连接不受影响，不能单张吊销。封号的行为不变（被封答 `identity_denied`）。
+- **账号号是这个游戏的**（维护者 2026-11-18）：一套 account 服务多个游戏，同一个人在每个游戏里是不同的账号号。lobby 拿到的、写进房间记录与 relay 令牌、relay 交给房主的，都是 token 所属游戏的账号号；别的游戏的账号号与“是同一个人”的关联不出 account。lobby 不用为此分游戏处理，房间本来就按游戏隔开。
+- **吊销**（交接 C6，维护者 2026-11-17）：token 是 `gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，account 校验时把代数与身份记录上的当前值比较（校验本来就要重读账号与身份看封号）。代数在身份级、这个人的各游戏共用（2026-11-18）：account 的 `RevokeGameTokens(账号)` 把代数加一，这个人所有游戏的 token 一起失效：在此之前签发的 token 一律答 `session_invalid`（401），之后签发的照常可用。触发的入口是运维的 `accountctl revoke-game-tokens -account <账号号>`（login 模块的命令）、需要当场吊销的一方经总线调用，以及改密码之后的下一次登录：渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本，account 在任何一个游戏登录时发现它与身份上存的不同就自动加一（维护者 2026-11-18）。lobby 只拿校验结果，接口不变；吊销只拦以后的大厅调用（建房、列房、加入、离开、改状态），已经发出的 relay 令牌与已经连上的 relay 连接不受影响，不能单张吊销。封号在身份级（被封答 `identity_denied`，一个人的所有游戏一起）。
 
 ### 3.1 客户端怎样拿到 gt2
 
 gt2 由 account 签发（`IssueGameToken`，寿命 `account.games.<游戏>.token_ttl`），account 只在内部总线上，客户端经 **portal 模块**的 HTTP 入口拿（挂在托管 account 的进程上，`web.addr`）：
 
-1. `POST /portal/login {channel, open_id, credential, game}`：渠道登录，带 `game` 时答复里一并有 `game_token`（gt2）与 `game_token_expires_at`；不带 `game` 时只有账号票据，再 `POST /portal/game-token {account_ticket, game}` 换。`game` 必须在 `account.games` 里（`roost add lobby` 写入），否则整个请求答 `560120`。
+1. `POST /portal/login {channel, open_id, credential, game}`：渠道登录到 `game` 这个游戏的账号，答复里一并有 `game_token`（gt2）与 `game_token_expires_at`。`game` 必须在 `account.games` 里（`roost add lobby` 写入），否则整个请求答 `560120`；不带 `game` 时登录到 `account.default_game`（只有一个游戏时就是它），只给账号票据。`POST /portal/game-token {account_ticket, game}` 只给票据自己的游戏重签（刷新），别的游戏答 `560120`：要玩另一个游戏，带那个游戏重新登录（2026-11-18）。
 2. 之后每个大厅请求带 `Authorization: Bearer <gt2>`；过期了重新登录或凭新的账号票据再换一张。
 
 装法：

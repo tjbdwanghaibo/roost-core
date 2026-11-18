@@ -1,5 +1,5 @@
 // Command accountctl 是 account 服务故意不放上总线的那部分运维操作里，登录要用到的最小一块：
-// 登记一个区服、改它的状态、看它的记录；另带一个按账号吊销游戏账号 token 的命令。
+// 登记一个区服、改它的状态、看它的记录；另带按账号号吊销游戏账号 token、封号与解封三个命令。
 //
 //	go run ./cmd/accountctl upsert-server -sid 1000                       # 登记并开放 1000 服（名字缺省 {{GAME_SERVICE}}-1000）
 //	go run ./cmd/accountctl upsert-server -sid 1000 -status maintenance   # 停止在这个服建角（已有角色照常登录）
@@ -7,7 +7,9 @@
 //	go run ./cmd/accountctl list-servers                                  # 登记过的全部区服，按服号升序
 //	go run ./cmd/accountctl -redis 10.0.0.5:6379 -redis-password ... -prefix roost:{{PROJECT}}:account upsert-server -sid 1001 -name 二服
 //	go run ./cmd/accountctl upsert-server -sid 2000 -service brawl         # 区服归属的 game 服务（account.services 有几个 game 时）
-//	go run ./cmd/accountctl revoke-game-tokens -account dev:alice          # 让这个账号此前签发的游戏账号 token（gt2）全部失效
+//	go run ./cmd/accountctl revoke-game-tokens -account 17                 # 让账号号 17 所属的人此前签发的游戏账号 token（gt2）全部失效（所有游戏）
+//	go run ./cmd/accountctl ban -account 17 -note "外挂，工单 123"           # 封这个人：他在所有游戏的账号都登录不了
+//	go run ./cmd/accountctl unban -account 17 -note "申诉通过"
 //
 // 为什么要有它：account 里没有状态是 open 的服，新号进不了任何服（握手时建不出账号与玩家号的映射，
 // CreateRole 也一律拒绝），登录入口的区服清单也是空的；而登记区服（UpsertServer）改的是
@@ -30,9 +32,13 @@
 // 在全部服务起来之后用它们登记本机的服（upsert-server -sid $SID）。改旗标名字会让那一步失败。
 //
 // revoke-game-tokens（交接 C6，维护者 2026-11-17）：调 account 的 RevokeGameTokens（总线接口上的同一个方法，这里在
-// 同一份存储上直接调），把账号上的 token 代数加一：在此之前签发的游戏账号 token 全部失效，之后签发的照常可用；
-// 封号、账号票据、进服票据不受影响，已经连上 relay 的房间也不断开（只拦以后的大厅调用）。-account 是 account 的
-// 账号号（“渠道:open_id”，例如开发登录的 dev:alice），不是玩家号。
+// 同一份存储上直接调），由账号号找到这个人的身份，把身份上的 token 代数加一：他在所有游戏里此前签发的游戏账号 token
+// 全部失效，之后签发的照常可用；封号、账号票据、进服票据不受影响，已经连上 relay 的房间也不断开（只拦以后的大厅调用）。
+// -account 是 account 的账号号（account 发的十进制数，一个游戏一个；维护者 2026-11-18），不是玩家号。
+//
+// ban / unban（维护者 2026-11-18）：调 account 的 Admin.SetIdentityBanned（不在总线上）。封号在身份级：由账号号找到这个人，
+// 他在所有游戏的账号一起封或解封；按游戏封号以后再加。-note 必填，记在身份记录上。打印身份记录（渠道、open id、
+// 各游戏的账号号）——这是运维面，别处拿不到。
 //
 // 合服、单个角色换服的人工兜底不在这里。工程要加自己的子命令时不用改这个文件：在这个包里另写一个文件，
 // 用 init 调 registerCommand 登记（见它的注释）。roost-core 的 game-demo 就是这样加的
@@ -60,7 +66,7 @@ import (
 
 const usage = "usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-redis-password P] [-redis-db N] [-prefix key_prefix] " +
 	"upsert-server -sid N [-name NAME] [-status open|maintenance|full|closed] [-region R] [-service GAME_SERVICE] | show-server -sid N | list-servers | " +
-	"revoke-game-tokens -account ACCOUNT_ID"
+	"revoke-game-tokens -account ACCOUNT_ID | ban -account ACCOUNT_ID -note TEXT | unban -account ACCOUNT_ID -note TEXT"
 
 func main() {
 	target, command, err := parseConnection(os.Args[1:])
@@ -122,10 +128,11 @@ type accountRecords interface {
 	GetServer(ctx context.Context, serverID int32) (svcaccount.GameServer, error)
 	ListServers(ctx context.Context) ([]svcaccount.GameServer, error)
 	RevokeGameTokens(ctx context.Context, accountID string) (uint64, error)
+	SetIdentityBanned(ctx context.Context, accountID string, banned bool, note string) (svcaccount.IdentityRecord, error)
 }
 
 // builtinCommands 是这个文件自带的子命令的名字，按用法里的顺序。
-var builtinCommands = []string{"upsert-server", "show-server", "list-servers", "revoke-game-tokens"}
+var builtinCommands = []string{"upsert-server", "show-server", "list-servers", "revoke-game-tokens", "ban", "unban"}
 
 // operatorCommand 是工程自己登记的一个子命令。
 type operatorCommand struct {
@@ -204,6 +211,8 @@ func run(ctx context.Context, records accountRecords, args []string, out io.Writ
 		return listServers(ctx, records, args[1:], out)
 	case "revoke-game-tokens":
 		return revokeGameTokens(ctx, records, args[1:], out)
+	case "ban", "unban":
+		return setBanned(ctx, records, args[0], args[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q (commands: %s)", args[0], strings.Join(commandNames(), ", "))
 	}
@@ -319,7 +328,7 @@ type gameTokenRevocation struct {
 func revokeGameTokens(ctx context.Context, records accountRecords, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("revoke-game-tokens", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	account := flags.String("account", "", "account 的账号号（渠道:open_id，例如 dev:alice），不是玩家号")
+	account := flags.String("account", "", "account 的账号号（account 发的十进制数，任何一个游戏的都行），不是玩家号")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("revoke-game-tokens: %w", err)
 	}
@@ -328,13 +337,37 @@ func revokeGameTokens(ctx context.Context, records accountRecords, args []string
 	}
 	accountID := strings.TrimSpace(*account)
 	if accountID == "" {
-		return errors.New("revoke-game-tokens: -account is required (the account id, channel:open_id)")
+		return errors.New("revoke-game-tokens: -account is required (the account id account handed out at login)")
 	}
 	generation, err := records.RevokeGameTokens(ctx, accountID)
 	if err != nil {
 		return fmt.Errorf("revoke-game-tokens: %w", err)
 	}
 	return printJSON(out, gameTokenRevocation{AccountID: accountID, GameTokenGeneration: generation})
+}
+
+// setBanned 是 ban / unban：由账号号找到这个人的身份，封号或解封（account 的 Admin.SetIdentityBanned），打印身份记录。
+// -account 与 -note 必填；账号不存在、备注为空或超长时 account 拒绝，什么都不写。
+func setBanned(ctx context.Context, records accountRecords, command string, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	account := flags.String("account", "", "account 的账号号（任何一个游戏的都行），不是玩家号")
+	note := flags.String("note", "", "为什么封 / 解封（必填，记在身份记录上）")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("%s: %w", command, err)
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("%s: unexpected arguments %q", command, strings.Join(flags.Args(), " "))
+	}
+	accountID := strings.TrimSpace(*account)
+	if accountID == "" {
+		return fmt.Errorf("%s: -account is required (the account id account handed out at login)", command)
+	}
+	record, err := records.SetIdentityBanned(ctx, accountID, command == "ban", *note)
+	if err != nil {
+		return fmt.Errorf("%s: %w", command, err)
+	}
+	return printJSON(out, record)
 }
 
 func printJSON(out io.Writer, value any) error {
@@ -368,10 +401,11 @@ func openService(cfg *fredis.Config, prefix, gameService string) (*svcaccount.Se
 		return nil, nil, fmt.Errorf("account stores: %w", err)
 	}
 	service, err := svcaccount.New(svcaccount.Config{
-		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names,
+		Accounts: stores.Accounts, Identities: stores.Identities, AccountIDs: stores.AccountIDs,
+		Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names,
 		Verifier: accountcollaborators.Verifier(), Allocator: accountcollaborators.Allocator(), NameRules: accountcollaborators.NameRules(),
-		// 构造服务必须给一把会话密钥；这个工具从不签发也不校验会话与票据（吊销只改账号上的代数），值无所谓，
-		// 而且不能是真的那一把。
+		// 构造服务必须给一把会话密钥；这个工具从不签发也不校验会话与票据（吊销与封号只改身份记录），值无所谓，
+		// 而且不能是真的那一把。不给 account.games：这个工具不登录。
 		SessionSecret: "accountctl-does-not-mint-sessions",
 		Services:      services,
 	})

@@ -539,6 +539,7 @@ func createRoleService(t *testing.T, mutate ...func(*Config)) (*Service, *clock,
 	}
 	base := func(c *Config) {
 		c.Accounts = stores.Accounts
+		c.Identities, c.AccountIDs = stores.Identities, stores.AccountIDs
 		c.Roles = stores.Roles
 		c.Servers = stores.Servers
 		c.Slots = stores.Slots
@@ -915,10 +916,10 @@ func TestUnknownSlotOutcomePreservesRoleAndName(t *testing.T) {
 	}
 }
 
-// 账号 ID 由转义后的渠道与 open id 组成（Identity.AccountID）。旧版本未转义渠道里的 ':' 时写下的账号
-// 不再被沿用：同一身份登录得到新的转义 ID；占着某个 ID 的存量账号身份与验证结果不符时登录被拒绝，不合并。
-// 历史：旧 ID 形态曾在登录时回查沿用；维护者 2026-10-13 决定不兼容旧数据。
-func TestLoginUsesTheEscapedAccountIDAndRefusesAMismatchedStoredIdentity(t *testing.T) {
+// 身份记录的键由转义后的渠道与 open id 组成（identityKey）：("vendor:a", "b") 的键是 vendor%3Aa:b，不是未转义的
+// vendor:a:b。占着某个键的存量身份记录与验证结果不符时登录被拒绝，不合并。
+// 历史：账号号曾经就是这个键（2026-11-18 改为按游戏发号）；旧 ID 形态曾在登录时回查沿用，维护者 2026-10-13 决定不兼容旧数据。
+func TestLoginUsesTheEscapedIdentityKeyAndRefusesAMismatchedStoredIdentity(t *testing.T) {
 	s, _, cfg := newService(t, func(c *Config) {
 		c.Verifier = VerifierFunc(func(_ context.Context, i Identity) (Verified, error) {
 			if i.Credential == "first" {
@@ -928,13 +929,17 @@ func TestLoginUsesTheEscapedAccountIDAndRefusesAMismatchedStoredIdentity(t *test
 		})
 	})
 	ctx := context.Background()
-	unescaped := Account{ID: "vendor:a:b", Channel: "vendor:a", OpenID: "b"}
-	if _, _, err := cfg.Accounts.Create(ctx, unescaped.ID, unescaped); err != nil {
+	unescaped := IdentityRecord{Key: "vendor:a:b", Channel: "vendor:a", OpenID: "b"}
+	if _, _, err := cfg.Identities.Create(ctx, unescaped.Key, unescaped); err != nil {
 		t.Fatal(err)
 	}
 	first, err := s.Login(ctx, Identity{Channel: "test", OpenID: "first", Credential: "first"})
-	if err != nil || first.ID != "vendor%3Aa:b" {
-		t.Fatalf("login = %+v, %v; want the escaped account id, not the unescaped record", first, err)
+	if err != nil {
+		t.Fatalf("login as vendor:a / b: %v", err)
+	}
+	escaped, found, err := cfg.Identities.Get(ctx, "vendor%3Aa:b")
+	if err != nil || !found || escaped.Value.Accounts["main"] != first.ID {
+		t.Fatalf("the escaped identity record = %+v, found %v, %v; want it to hold account %s, not the unescaped record", escaped.Value, found, err, first.ID)
 	}
 	if _, err := s.Login(ctx, Identity{Channel: "test", OpenID: "second", Credential: "second"}); !errors.Is(err, ErrIdentityInvalid) {
 		t.Fatalf("a stored account with another identity was merged: %v", err)

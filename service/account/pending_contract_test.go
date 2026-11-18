@@ -68,6 +68,7 @@ func pendingContractService(t *testing.T, mutate ...func(*Config)) (*Service, *c
 	}
 	base := func(c *Config) {
 		c.Accounts, c.Roles, c.Servers, c.Slots, c.Names = stores.Accounts, stores.Roles, stores.Servers, stores.Slots, stores.Names
+		c.Identities, c.AccountIDs = stores.Identities, stores.AccountIDs
 		c.Presence = stores.Presence
 		c.ClaimTTL = time.Second
 	}
@@ -665,7 +666,7 @@ func TestVerifiedIdentityEncodingIsInjective(t *testing.T) {
 		t.Fatal(err)
 	}
 	if first.ID == second.ID {
-		t.Fatalf("distinct verified identities merged: first=%s/%s second returned=%s/%s account=%s", first.Channel, first.OpenID, second.Channel, second.OpenID, first.ID)
+		t.Fatalf("distinct verified identities merged into account %s", first.ID)
 	}
 }
 

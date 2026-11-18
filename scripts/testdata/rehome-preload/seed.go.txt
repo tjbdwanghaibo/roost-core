@@ -71,7 +71,7 @@ func run(cluster, prefix string, home, away, never int32, ttl, show int64) error
 	}
 	next := time.Now().UnixMilli() % 100_000_000
 	service, err := svcaccount.New(svcaccount.Config{
-		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names, Presence: stores.Presence,
+		Accounts: stores.Accounts, Identities: stores.Identities, AccountIDs: stores.AccountIDs, Games: []svcaccount.GameSpec{{Name: "main"}}, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names, Presence: stores.Presence,
 		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
 			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
 		}),

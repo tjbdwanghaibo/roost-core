@@ -72,7 +72,11 @@ func newService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config
 		t.Fatal(err)
 	}
 	cfg := Config{
-		Accounts: versionstore.NewMemoryStore[string, Account](),
+		Accounts:   versionstore.NewMemoryStore[string, Account](),
+		Identities: versionstore.NewMemoryStore[string, IdentityRecord](),
+		AccountIDs: NewMemoryAccountIDs(),
+		// 传统区服工程：account.games 里一个游戏，它就是缺省游戏，登录不用写游戏（维护者 2026-11-18）。
+		Games: []GameSpec{{Name: "main"}},
 		// 与生产的 Redis 角色存储一样带在途换服的索引（合服、列举、清扫都要它）；要“没有索引”的用例自己换成普通存储。
 		Roles:         NewMemoryRoles(),
 		Servers:       versionstore.NewMemoryStore[int32, GameServer](),
@@ -106,10 +110,11 @@ func TestNewRefusesAConfigThatCannotAuthenticate(t *testing.T) {
 		names, _ := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{
 			Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: c.Now})
 		return Config{
-			Accounts: versionstore.NewMemoryStore[string, Account](),
-			Roles:    versionstore.NewMemoryStore[int64, Role](),
-			Servers:  versionstore.NewMemoryStore[int32, GameServer](),
-			Names:    names, Slots: versionstore.NewMemoryStore[string, Slot](),
+			Accounts: versionstore.NewMemoryStore[string, Account](), Identities: versionstore.NewMemoryStore[string, IdentityRecord](),
+			AccountIDs: NewMemoryAccountIDs(),
+			Roles:      versionstore.NewMemoryStore[int64, Role](),
+			Servers:    versionstore.NewMemoryStore[int32, GameServer](),
+			Names:      names, Slots: versionstore.NewMemoryStore[string, Slot](),
 			Verifier: acceptingVerifier(), Allocator: &durableAllocator{},
 			NameRules: simpleNameRules(), SessionSecret: "secret",
 		}
@@ -126,6 +131,8 @@ func TestNewRefusesAConfigThatCannotAuthenticate(t *testing.T) {
 		{"no name directory", func(c *Config) { c.Names = nil }, "Names"},
 		{"no slot directory", func(c *Config) { c.Slots = nil }, "Slots"},
 		{"no role store", func(c *Config) { c.Roles = nil }, "Roles"},
+		{"no identity store", func(c *Config) { c.Identities = nil }, "Identities"},
+		{"no account id allocator", func(c *Config) { c.AccountIDs = nil }, "AccountIDs"},
 	} {
 		cfg := base()
 		testCase.mutate(&cfg)
@@ -161,8 +168,8 @@ func TestLoginRequiresAVerifiedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account.ID != "store:u1" {
-		t.Fatalf("account id = %q", account.ID)
+	if account.ID == "" || account.Game != "main" {
+		t.Fatalf("account = %+v; want an id in the default game", account)
 	}
 	// Repeat login is idempotent and does not create a second account.
 	again, err := service.Login(ctx, Identity{Channel: "store", OpenID: "u1", Credential: "good"})
@@ -188,7 +195,7 @@ func TestLoginRequiresAVerifiedIdentity(t *testing.T) {
 // caller submitted, so a caller cannot claim another player's identifier by
 // presenting its own credential.
 func TestAccountIsDerivedFromTheVerifiedIdentity(t *testing.T) {
-	service, _, _ := newService(t, func(cfg *Config) {
+	service, _, cfg := newService(t, func(cfg *Config) {
 		cfg.Verifier = VerifierFunc(func(_ context.Context, identity Identity) (Verified, error) {
 			// The channel says this credential belongs to someone else.
 			return Verified{Channel: identity.Channel, OpenID: "the-real-owner"}, nil
@@ -198,8 +205,13 @@ func TestAccountIsDerivedFromTheVerifiedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account.ID != "store:the-real-owner" {
-		t.Fatalf("account id = %q; the submitted open id must not decide the account", account.ID)
+	// 账号号是计数器发的，看不出是谁；决定“是谁”的是身份记录：它记在渠道确认的那个 open id 名下。
+	owner, found, err := cfg.Identities.Get(context.Background(), identityKey("store", "the-real-owner"))
+	if err != nil || !found || owner.Value.Accounts["main"] != account.ID {
+		t.Fatalf("the account %q is not recorded under the verified identity: %+v, found %v, %v", account.ID, owner.Value, found, err)
+	}
+	if _, found, _ := cfg.Identities.Get(context.Background(), identityKey("store", "impersonated")); found {
+		t.Fatal("the submitted open id got an identity record; it must not decide the account")
 	}
 }
 
@@ -565,12 +577,7 @@ func TestBannedAccountsAreRefused(t *testing.T) {
 	ctx := context.Background()
 	account := login(t, service, "u1")
 
-	if _, _, err := cfg.Accounts.Update(ctx, account.ID, func(current Account, _ bool) (Account, bool, error) {
-		current.Banned = true
-		return current, true, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	banAccount(t, cfg, account.ID)
 	if _, err := service.Login(ctx, Identity{Channel: "store", OpenID: "u1", Credential: "good"}); !errors.Is(err, ErrIdentityDenied) {
 		t.Fatalf("a banned account logged in: %v", err)
 	}

@@ -1,0 +1,20 @@
+=== RUN   TestAnIdentityHasADifferentAccountInEachGame
+    identity_accounts_test.go:42: local: one identity got account "store:alice-local" in party and "store:alice-local" in brawl; want two different ids
+--- FAIL: TestAnIdentityHasADifferentAccountInEachGame (0.00s)
+=== RUN   TestConcurrentFirstLoginsOfOneGameShareOneAccount
+--- PASS: TestConcurrentFirstLoginsOfOneGameShareOneAccount (0.01s)
+=== RUN   TestTicketsOfOneGameOpenNothingInAnother
+    identity_accounts_test.go:107: local: party's account ticket asked for a brawl token: {Token:gt2.1700005400.brawl.c3RvcmU6YWxpY2U.0.ic1Rc0YNDXJ6ylR78QY1awsLFLSyGMkSEFXa23a2WQc Game:brawl ExpiresAtUnix:1700005400}, <nil>; want ErrGameInvalid
+--- FAIL: TestTicketsOfOneGameOpenNothingInAnother (0.00s)
+=== RUN   TestAnIdentityBanBlocksEveryGame
+    identity_accounts_test.go:145: one account "store:alice" serves both games; the ban below would prove nothing
+--- FAIL: TestAnIdentityBanBlocksEveryGame (0.00s)
+=== RUN   TestACredentialChangeInOneGameRevokesTheOthers
+    identity_accounts_test.go:196: one account "store:alice" serves both games; the revocation below would prove nothing
+--- FAIL: TestACredentialChangeInOneGameRevokesTheOthers (0.00s)
+=== RUN   TestLoginNeedsAGame
+    identity_accounts_test.go:225: no game with two games and no default: {ID:store:alice Game: Identity: Channel:store OpenID:alice Banned:false CreatedAtUnix:1700000000 LastLoginAtUnix:1700000000 AdminNote: AdminActionAtUnix:0 GameTokenGeneration:0 CredentialVersion:}, <nil>; want ErrGameInvalid
+--- FAIL: TestLoginNeedsAGame (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.354s
+FAIL

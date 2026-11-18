@@ -57,12 +57,35 @@ type portalWorld struct {
 	accounts *portalRecordingAccounts
 	portal   *Portal
 	engine   http.Handler
+	// game 是不写游戏的登录落到的游戏（account.default_game，只有一个游戏时就是它）。
+	game string
 }
 
 type portalStores struct {
-	accounts versionstore.Store[string, svcaccount.Account]
-	roles    versionstore.Store[int64, svcaccount.Role]
-	slots    versionstore.Store[string, svcaccount.Slot]
+	accounts   versionstore.Store[string, svcaccount.Account]
+	identities versionstore.Store[string, svcaccount.IdentityRecord]
+	roles      versionstore.Store[int64, svcaccount.Role]
+	slots      versionstore.Store[string, svcaccount.Slot]
+}
+
+// id 是 identity（“渠道:open_id”，account 的身份记录键）这个人在场景缺省游戏里的账号号：账号号由 account 发、
+// 按游戏分开（维护者 2026-11-18），场景里要从 account 的身份记录查。没登录过答空串。
+func (w *portalWorld) id(identity string) string {
+	w.t.Helper()
+	return w.idIn(identity, w.game)
+}
+
+// idIn 同 id，指定游戏。
+func (w *portalWorld) idIn(identity, game string) string {
+	w.t.Helper()
+	record, found, err := w.stores.identities.Get(context.Background(), identity)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	if !found {
+		return ""
+	}
+	return record.Value.Accounts[game]
 }
 
 func (w *portalWorld) clock() time.Time { return time.UnixMilli(w.now.Load()) }
@@ -277,9 +300,10 @@ func newPortalWorld(t *testing.T, mutate ...func(*Options)) *portalWorld {
 func newPortalWorldWith(t *testing.T, account func(*svcaccount.Config), mutate ...func(*Options)) *portalWorld {
 	t.Helper()
 	w := &portalWorld{t: t, stores: portalStores{
-		accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
-		roles:    svcaccount.NewMemoryRoles(), // 带在途换服索引，与生产的 Redis 角色存储一样（合服要它）
-		slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		accounts:   versionstore.NewMemoryStore[string, svcaccount.Account](),
+		identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
+		roles:      svcaccount.NewMemoryRoles(), // 带在途换服索引，与生产的 Redis 角色存储一样（合服要它）
+		slots:      versionstore.NewMemoryStore[string, svcaccount.Slot](),
 	}}
 	w.now.Store(time.Unix(1_800_000_000, 0).UnixMilli())
 	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{
@@ -289,7 +313,11 @@ func newPortalWorldWith(t *testing.T, account func(*svcaccount.Config), mutate .
 		t.Fatal(err)
 	}
 	accountConfig := svcaccount.Config{
-		Accounts:      w.stores.accounts,
+		Accounts:   w.stores.accounts,
+		Identities: w.stores.identities,
+		AccountIDs: svcaccount.NewMemoryAccountIDs(),
+		// 传统区服工程：一个游戏，它就是缺省游戏（维护者 2026-11-18），客户端登录不写 game。
+		Games:         []svcaccount.GameSpec{{Name: "main"}},
 		Roles:         w.stores.roles,
 		Servers:       versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		Names:         names,
@@ -308,6 +336,9 @@ func newPortalWorldWith(t *testing.T, account func(*svcaccount.Config), mutate .
 	w.service, err = svcaccount.New(accountConfig)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if w.game = accountConfig.DefaultGame; w.game == "" && len(accountConfig.Games) == 1 {
+		w.game = accountConfig.Games[0].Name
 	}
 	firstGame := ""
 	for _, service := range accountConfig.Services {
@@ -485,12 +516,10 @@ func (w *portalWorld) serverEntry(handshake string) (svcaccount.ServerEntry, err
 	return w.service.EnterServer(context.Background(), ticket)
 }
 
-func (w *portalWorld) ban(accountID string) {
+// ban 封 identity（“渠道:open_id”）这个人：封号在身份级（维护者 2026-11-18），经 account 的运维入口。
+func (w *portalWorld) ban(identity string) {
 	w.t.Helper()
-	if _, _, err := w.stores.accounts.Update(context.Background(), accountID, func(current svcaccount.Account, found bool) (svcaccount.Account, bool, error) {
-		current.Banned = true
-		return current, found, nil
-	}); err != nil {
+	if _, err := w.service.SetIdentityBanned(context.Background(), w.id(identity), true, "portal scenario"); err != nil {
 		w.t.Fatal(err)
 	}
 }
@@ -505,7 +534,7 @@ func TestPortalWalksFromAChannelIdentityToAnAuthenticatedHandshake(t *testing.T)
 		t.Fatalf("login answered %s; want exactly ok, account_ticket and account_ticket_expires_at", reply.raw)
 	}
 	ticket := reply.text("account_ticket")
-	if !strings.HasPrefix(ticket, "at1.1800000600.") || reply.number("account_ticket_expires_at") != 1_800_000_600 {
+	if !strings.HasPrefix(ticket, "at2.1800000600."+w.game+".") || reply.number("account_ticket_expires_at") != 1_800_000_600 {
 		t.Fatalf("account ticket = %q expiring at %d, want one of account's tickets living 10 minutes", ticket, reply.number("account_ticket_expires_at"))
 	}
 
@@ -534,7 +563,7 @@ func TestPortalWalksFromAChannelIdentityToAnAuthenticatedHandshake(t *testing.T)
 		entered.text("addr") != "" || entered.text("addr_source") != "none" {
 		t.Fatalf("enter answered %s; want a ticket for 1000 living 30 minutes, without an address", entered.raw)
 	}
-	if _, err := w.service.RoleOnServer(context.Background(), "dev:alice", 1000); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+	if _, err := w.service.RoleOnServer(context.Background(), w.id("dev:alice"), 1000); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
 		t.Fatalf("/portal/enter created the mapping; that is the handshake's job: %v", err)
 	}
 	// 握手：向同一个 account 出示这张票据（认证器做的就是这件事）。
@@ -578,7 +607,7 @@ func TestPortalTakesTheAccountOnlyFromTheAccountTicket(t *testing.T) {
 	alice, bob := w.login("alice"), w.login("bob")
 	bobPlayer, _ := w.handshake(w.enter(bob, 1000).text("ticket"))
 	enterTicket := strings.TrimPrefix(w.enter(alice, 1001).text("ticket"), "enter:")
-	session, err := w.service.SelectRole(context.Background(), "dev:bob", bobPlayer)
+	session, err := w.service.SelectRole(context.Background(), w.id("dev:bob"), bobPlayer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +674,7 @@ func TestPortalTakesTheAccountOnlyFromTheAccountTicket(t *testing.T) {
 	w.accounts.mu.Lock()
 	w.accounts.asAccount = nil
 	w.accounts.mu.Unlock()
-	smuggled := map[string]any{"account_ticket": fresh, "account_id": "dev:bob", "accountID": "dev:bob", "AccountID": "dev:bob", "account": "dev:bob", "open_id": "bob", "player_id": bobPlayer}
+	smuggled := map[string]any{"account_ticket": fresh, "account_id": w.id("dev:bob"), "accountID": w.id("dev:bob"), "AccountID": w.id("dev:bob"), "account": w.id("dev:bob"), "open_id": "bob", "player_id": bobPlayer}
 	listed := w.post("/portal/servers", smuggled)
 	if listed.status != http.StatusOK || strings.Contains(listed.raw, strconv.FormatInt(bobPlayer, 10)) {
 		t.Fatalf("a list asked with account_id=dev:bob shows bob's role: %d %s", listed.status, listed.raw)
@@ -658,7 +687,7 @@ func TestPortalTakesTheAccountOnlyFromTheAccountTicket(t *testing.T) {
 	if playerID, isNew := w.handshake(entered.text("ticket")); playerID == bobPlayer || !isNew {
 		t.Fatalf("alice's ticket with account_id=dev:bob entered as player %d (new %v); want a new player of alice's own", playerID, isNew)
 	}
-	if seen := w.accounts.seen(); seen != "dev:alice" {
+	if seen := w.accounts.seen(); seen != w.id("dev:alice") {
 		t.Fatalf("account was asked as %q; want dev:alice only", seen)
 	}
 
@@ -667,10 +696,10 @@ func TestPortalTakesTheAccountOnlyFromTheAccountTicket(t *testing.T) {
 	if mixed.status != http.StatusOK || strings.Contains(mixed.raw, "receipt-of-carol") {
 		t.Fatalf("store login: %d %s", mixed.status, mixed.raw)
 	}
-	if account, err := w.service.ValidateAccountTicket(context.Background(), mixed.text("account_ticket")); err != nil || account.ID != "store:carol" {
+	if account, err := w.service.ValidateAccountTicket(context.Background(), mixed.text("account_ticket")); err != nil || account.ID != w.id("store:carol") {
 		t.Fatalf("the ticket issued for carol's receipt belongs to %q, %v", account.ID, err)
 	}
-	if _, found, _ := w.stores.accounts.Get(context.Background(), "store:dave"); found {
+	if _, found, _ := w.stores.identities.Get(context.Background(), "store:dave"); found {
 		t.Fatal("an account was created for the open id in the request")
 	}
 }
@@ -820,7 +849,7 @@ func TestPortalSeparatesAccountRefusalsFromOutages(t *testing.T) {
 		if reply.status != http.StatusInternalServerError || reply.code() != 1 || reply.body["ok"] != false {
 			t.Fatalf("%s: %d %s; want 500 with the internal code 1", label, reply.status, reply.raw)
 		}
-		for _, leak := range []string{"10.9.8.", "redis", "etcd", "no responders", "at1.", "et1.", "enter:", "dev:alice", "203.0.113"} {
+		for _, leak := range []string{"10.9.8.", "redis", "etcd", "no responders", "at2.", "et1.", "enter:", "dev:alice", "203.0.113"} {
 			if strings.Contains(reply.raw, leak) {
 				t.Fatalf("%s: the 500 response leaks %q: %s", label, leak, reply.raw)
 			}
@@ -874,7 +903,7 @@ func TestPortalDoesNotPassOnAnAccountAnswerThatDoesNotMatchTheQuestion(t *testin
 		if reply.status != http.StatusInternalServerError || reply.code() != 1 {
 			t.Fatalf("%s: %d %s; want 500", label, reply.status, reply.raw)
 		}
-		for _, leak := range []string{"at1.", "et1.", "enter:", strconv.FormatInt(bobPlayer, 10), "dev:bob"} {
+		for _, leak := range []string{"at2.", "et1.", "enter:", strconv.FormatInt(bobPlayer, 10), "dev:bob"} {
 			if strings.Contains(reply.raw, leak) {
 				t.Fatalf("%s: the 500 response carries %q: %s", label, leak, reply.raw)
 			}
@@ -902,12 +931,12 @@ func TestPortalDoesNotPassOnAnAccountAnswerThatDoesNotMatchTheQuestion(t *testin
 	}
 	serverError("a listed server without an id", w.post("/portal/servers", serversPayload))
 	reset()
-	real, err := w.service.RoleOnServer(ctx, "dev:alice", 1000)
+	real, err := w.service.RoleOnServer(ctx, w.id("dev:alice"), 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for label, twist := range map[string]func(*svcaccount.Role){
-		"another account's role":         func(role *svcaccount.Role) { *role, _ = w.service.RoleOnServer(ctx, "dev:bob", 1000) },
+		"another account's role":         func(role *svcaccount.Role) { *role, _ = w.service.RoleOnServer(ctx, w.id("dev:bob"), 1000) },
 		"a role without a player id":     func(role *svcaccount.Role) { role.PlayerID = 0 },
 		"a role bound to another server": func(role *svcaccount.Role) { role.ServerID = 1001 },
 	} {
@@ -922,7 +951,7 @@ func TestPortalDoesNotPassOnAnAccountAnswerThatDoesNotMatchTheQuestion(t *testin
 		serverError(label+" in the list", w.post("/portal/servers", serversPayload))
 	}
 	reset()
-	issued, err := w.service.IssueEnterTicket(ctx, "dev:alice", 1000)
+	issued, err := w.service.IssueEnterTicket(ctx, w.id("dev:alice"), 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1182,7 +1211,7 @@ func TestPortalEnterHandsOutATicketAndTheServingAddress(t *testing.T) {
 	if _, err := w.serverEntry(maintenance.text("ticket")); err == nil {
 		t.Fatal("a new account's handshake on a server in maintenance was accepted")
 	}
-	if _, err := w.service.RoleOnServer(ctx, "dev:alice", 1002); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
+	if _, err := w.service.RoleOnServer(ctx, w.id("dev:alice"), 1002); svcaccount.Code(err) != svcaccount.CodeRoleMissing {
 		t.Fatalf("a mapping exists on the server in maintenance: %v", err)
 	}
 	if got := w.accounts.roleWrites(); got != 0 {
@@ -1526,14 +1555,16 @@ func TestPortalNewRefusesIncompleteOptions(t *testing.T) {
 
 // ---- 游戏账号 token 与多个服务（方案 2026-11-16 §4.1）----
 
-// portalGames 是场景里的 account.games：party 两小时、brawl 九十分钟。
+// portalGames 是场景里的 account.games：party 两小时、brawl 九十分钟；不写游戏的登录落到 party。
 func portalGames(c *svcaccount.Config) {
 	c.Games = []svcaccount.GameSpec{{Name: "party", TokenTTL: 2 * time.Hour}, {Name: "brawl", TokenTTL: 90 * time.Minute}}
+	c.DefaultGame = "party"
 }
 
-// 游戏账号 token 的两条拿法：已登录的客户端凭账号票据调 /portal/game-token；登录时带上 game，登录的答复里多一张。
-// 两张都是 account 签的、account 认的，绑定的是票据（登录时是渠道确认）的账号，不是请求里写的；不带 game 的登录
-// 与以前一样没有 token。时钟在 Unix 1800000000。
+// 游戏账号 token 的两条拿法：已登录的客户端凭账号票据调 /portal/game-token（只给票据自己的游戏刷新）；登录时带上 game，
+// 登录的答复里多一张。两张都是 account 签的、account 认的，绑定的是票据（登录时是渠道确认）的账号，不是请求里写的；
+// 不带 game 的登录落到缺省游戏、没有 token。同一个人在 party 与 brawl 是两个账号号（维护者 2026-11-18），party 的票据
+// 换不到 brawl 的 token。时钟在 Unix 1800000000。
 func TestPortalHandsOutGameTokensByEndpointAndAtLogin(t *testing.T) {
 	w := newPortalWorldWith(t, portalGames)
 	ctx := context.Background()
@@ -1550,12 +1581,19 @@ func TestPortalHandsOutGameTokensByEndpointAndAtLogin(t *testing.T) {
 		t.Fatalf("/portal/game-token: %d %s", reply.status, reply.raw)
 	}
 	got, err := w.service.ValidateGameToken(ctx, reply.text("game_token"))
-	if err != nil || got != (svcaccount.GameAccount{AccountID: "dev:alice", Game: "party", ExpiresAtUnix: 1_800_007_200}) {
+	if err != nil || got != (svcaccount.GameAccount{AccountID: w.id("dev:alice"), Game: "party", ExpiresAtUnix: 1_800_007_200}) {
 		t.Fatalf("account on the token from /portal/game-token: %+v, %v", got, err)
 	}
-	brawl := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "brawl"})
-	if brawl.status != http.StatusOK || brawl.number("expires_at") != 1_800_005_400 {
+	// party 的票据换不到 brawl 的 token：要玩 brawl 就带 brawl 登录，那是另一个账号号。
+	if crossed := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "brawl"}); crossed.status != http.StatusBadRequest || crossed.code() != 560120 {
+		t.Fatalf("party's ticket asked for a brawl token: %d %s; want 560120", crossed.status, crossed.raw)
+	}
+	brawl := w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": "brawl"})
+	if brawl.status != http.StatusOK || brawl.number("game_token_expires_at") != 1_800_005_400 {
 		t.Fatalf("the brawl token (90 minutes): %d %s", brawl.status, brawl.raw)
+	}
+	if partyID, brawlID := w.idIn("dev:alice", "party"), w.idIn("dev:alice", "brawl"); partyID == "" || brawlID == "" || partyID == brawlID {
+		t.Fatalf("alice's accounts in party and brawl are %q and %q; want two different ids", partyID, brawlID)
 	}
 
 	// 第二条路：登录时带 game。账号以渠道确认的为准：store 渠道的凭据是 bob 的，请求里写的 open_id 是 alice。
@@ -1564,17 +1602,17 @@ func TestPortalHandsOutGameTokensByEndpointAndAtLogin(t *testing.T) {
 		t.Fatalf("a login with game: %d %s", login.status, login.raw)
 	}
 	got, err = w.service.ValidateGameToken(ctx, login.text("game_token"))
-	if err != nil || got.AccountID != "store:bob" || got.Game != "brawl" {
-		t.Fatalf("account on the token from the login: %+v, %v; want store:bob in brawl", got, err)
+	if err != nil || got.AccountID != w.idIn("store:bob", "brawl") || got.Game != "brawl" {
+		t.Fatalf("account on the token from the login: %+v, %v; want store:bob's brawl account", got, err)
 	}
 	if err := got.RequireGame("party"); err == nil {
 		t.Fatal("the brawl token passed as a party token")
 	}
-	if account, err := w.service.ValidateAccountTicket(ctx, login.text("account_ticket")); err != nil || account.ID != "store:bob" {
+	if account, err := w.service.ValidateAccountTicket(ctx, login.text("account_ticket")); err != nil || account.ID != w.idIn("store:bob", "brawl") || account.Game != "brawl" {
 		t.Fatalf("the account ticket from the same login: %+v, %v", account, err)
 	}
-	if got := w.accounts.count("IssueGameToken"); got != 3 {
-		t.Fatalf("IssueGameToken was asked %d times, want 3", got)
+	if got := w.accounts.count("IssueGameToken"); got != 4 {
+		t.Fatalf("IssueGameToken was asked %d times, want 4", got)
 	}
 	if got := w.accounts.roleWrites(); got != 0 {
 		t.Fatalf("the portal reached CreateRole / SelectRole / EnterServer %d times", got)
@@ -1592,21 +1630,22 @@ func TestPortalRefusesGameTokensItCannotStandBehind(t *testing.T) {
 		if reply.status != status || reply.code() != code || reply.body["ok"] != false {
 			t.Fatalf("%s: %d %s; want %d with code %d", label, reply.status, reply.raw, status, code)
 		}
-		for _, leak := range []string{"gt2.", "at1.", "10.9.8."} {
+		for _, leak := range []string{"gt2.", "at2.", "10.9.8."} {
 			if strings.Contains(reply.raw, leak) {
 				t.Fatalf("%s: the refusal carries %q: %s", label, leak, reply.raw)
 			}
 		}
 	}
 	refused("a game account does not serve", w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "chess"}), http.StatusBadRequest, 560120)
+	refused("a game other than the ticket's", w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "brawl"}), http.StatusBadRequest, 560120)
 	refused("a login asking for a game account does not serve", w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": "chess"}), http.StatusBadRequest, 560120)
 	gameToken := w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party"}).text("game_token")
 	for label, other := range map[string]string{
 		"a game token in place of the account ticket": gameToken,
 		"an enter ticket":         w.enter(ticket, 1000).text("ticket")[len("enter:"):],
-		"a forged ticket":         "at1.9999999999.ZGV2OmFsaWNl.AAAA",
+		"a forged ticket":         "at2.9999999999.party.MQ.AAAA",
 		"an empty ticket":         "",
-		"a ticket over the limit": "at1." + strings.Repeat("x", 1024),
+		"a ticket over the limit": "at2." + strings.Repeat("x", 1024),
 	} {
 		refused(label, w.post("/portal/game-token", map[string]any{"account_ticket": other, "game": "party"}), http.StatusBadRequest, 560111)
 	}
@@ -1641,8 +1680,9 @@ func TestPortalRefusesGameTokensItCannotStandBehind(t *testing.T) {
 	refused("IssueGameToken is down", w.post("/portal/game-token", map[string]any{"account_ticket": ticket, "game": "party"}), http.StatusInternalServerError, 1)
 	refused("IssueGameToken is down at login", w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": "party"}), http.StatusInternalServerError, 1)
 	w.accounts.fail()
-	// account 答非所问：成功却是别的游戏的 token、或者没有 token。
-	real, err := w.service.IssueGameToken(context.Background(), ticket, "brawl")
+	// account 答非所问：成功却是别的游戏的 token、或者没有 token。别的游戏的 token 是 alice 在 brawl 的账号签的。
+	brawlLogin := w.post("/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken, "game": "brawl"})
+	real, err := w.service.IssueGameToken(context.Background(), brawlLogin.text("account_ticket"), "brawl")
 	if err != nil {
 		t.Fatal(err)
 	}

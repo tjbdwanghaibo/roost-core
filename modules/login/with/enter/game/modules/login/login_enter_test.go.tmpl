@@ -219,7 +219,7 @@ func TestWithLoginEnterANewAccountIsToldToCreateThenCreatesAndEnters(t *testing.
 		t.Fatalf("after create: %+v, want built, named by the game server, one grant", record)
 	}
 	// account 那一侧只有映射，没有名字。
-	if role, err := w.service.RoleOnServer(context.Background(), "store:alice", 1000); err != nil || role.PlayerID != 100_001 || role.Name != "" {
+	if role, err := w.service.RoleOnServer(context.Background(), w.id("store:alice"), 1000); err != nil || role.PlayerID != 100_001 || role.Name != "" {
 		t.Fatalf("account holds %+v, %v; want the mapping without a name", role, err)
 	}
 	entered, err := EnterSession(context.Background(), registry, entering, records.loads(100_001))

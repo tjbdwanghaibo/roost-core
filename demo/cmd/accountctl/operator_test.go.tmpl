@@ -27,7 +27,8 @@ func accountWithRole(t *testing.T) (*svcaccount.Service, svcaccount.Role) {
 		t.Fatal(err)
 	}
 	service, err := svcaccount.New(svcaccount.Config{
-		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Roles: svcaccount.NewMemoryRoles(),
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
+		AccountIDs: svcaccount.NewMemoryAccountIDs(), Games: []svcaccount.GameSpec{{Name: "main"}}, Roles: svcaccount.NewMemoryRoles(),
 		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](), Slots: versionstore.NewMemoryStore[string, svcaccount.Slot](), Names: names,
 		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
 			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil

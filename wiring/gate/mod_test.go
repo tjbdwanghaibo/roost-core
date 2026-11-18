@@ -121,7 +121,8 @@ func TestAccountAuthenticatorRoutesAMergedServersRoleToItsServingServer(t *testi
 	}
 	var nextID atomic.Int64
 	service, err := account.New(account.Config{
-		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: account.NewMemoryRoles(),
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Identities: versionstore.NewMemoryStore[string, account.IdentityRecord](),
+		AccountIDs: account.NewMemoryAccountIDs(), Games: []account.GameSpec{{Name: "game"}}, Roles: account.NewMemoryRoles(),
 		Servers: versionstore.NewMemoryStore[int32, account.GameServer](), Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
 		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
 			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
@@ -197,7 +198,8 @@ func TestAccountAuthenticatorRecordsTheBindEpochAndATransferInFlight(t *testing.
 		t.Fatal(err)
 	}
 	service, err := account.New(account.Config{
-		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: versionstore.NewMemoryStore[int64, account.Role](),
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Identities: versionstore.NewMemoryStore[string, account.IdentityRecord](),
+		AccountIDs: account.NewMemoryAccountIDs(), Games: []account.GameSpec{{Name: "game"}}, Roles: versionstore.NewMemoryStore[int64, account.Role](),
 		Servers: versionstore.NewMemoryStore[int32, account.GameServer](), Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
 		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
 			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
@@ -320,7 +322,8 @@ func TestAccountAuthenticatorAcceptsAnEnterTicket(t *testing.T) {
 	}
 	var nextID atomic.Int64
 	service, err := account.New(account.Config{
-		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: versionstore.NewMemoryStore[int64, account.Role](),
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Identities: versionstore.NewMemoryStore[string, account.IdentityRecord](),
+		AccountIDs: account.NewMemoryAccountIDs(), Games: []account.GameSpec{{Name: "game"}}, Roles: versionstore.NewMemoryStore[int64, account.Role](),
 		Servers: versionstore.NewMemoryStore[int32, account.GameServer](), Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
 		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
 			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil

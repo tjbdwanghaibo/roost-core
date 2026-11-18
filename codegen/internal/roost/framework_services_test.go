@@ -144,6 +144,27 @@ func TestProjectNewGameTemplateHostsOnlyTheFrameworksAskedFor(t *testing.T) {
 	}
 }
 
+// 一套 account 服务多个游戏、登录必须落到一个游戏（维护者 2026-11-18）：传统区服工程就是 account.games 里的一个游戏。
+// 新工程托管 account 时，开发配置与生产示例都写好一个以工程名命名的游戏（token_ttl 2h），只有一个游戏就是缺省游戏，
+// 客户端登录不用带 game；配置按 account Mod 的声明检查通过（Mod 的 Init 要求至少一个游戏）。
+func TestNewProjectAccountConfigListsTheProjectGame(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	var out strings.Builder
+	if err := Run([]string{"project", "new", "planet", "-module", "example.com/planet", "-out", target, "-skip-deps", "-template", "game", "-framework", "account"}, &out, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	for _, rel := range []string{"configs/service/config.account.yaml", "configs/service/config.account.prod.example.yaml"} {
+		body := readProjectFile(t, target, rel)
+		if !strings.Contains(body, "\n  games:\n    planet:\n      token_ttl: 2h\n") {
+			t.Fatalf("%s does not list the project's game under account.games:\n%s", rel, body)
+		}
+	}
+	out.Reset()
+	if err := Run([]string{"config", "check", "--root", target, "--service", "account", "--keys-only"}, &out, &out); err != nil {
+		t.Fatalf("config check --service account: %v\n%s", err, out.String())
+	}
+}
+
 // framework and uses are validated against the catalog and against each other.
 func TestFrameworkServiceManifestValidation(t *testing.T) {
 	base := func() Manifest {

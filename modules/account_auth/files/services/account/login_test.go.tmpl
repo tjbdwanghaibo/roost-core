@@ -78,8 +78,16 @@ func loginBind(t *testing.T, collaborator any, registry *app.Registry) error {
 	return bound.BindRegistry(registry)
 }
 
-// loginAccounts 用这个包的协作者建一个真实的 account（内存存储，服 1000 开放），时间停在 Unix 1800000000。
+// loginAccounts 用这个包的协作者建一个真实的 account（内存存储，服 1000 开放，游戏 party），时间停在 Unix 1800000000。
 func loginAccounts(t *testing.T, registry *app.Registry) *svcaccount.Service {
+	t.Helper()
+	service, _ := loginAccountsWithIdentities(t, registry)
+	return service
+}
+
+// loginAccountsWithIdentities 同 loginAccounts，另交出 account 的身份记录（键是“渠道:open_id”）：凭证版本与 token 代数
+// 记在身份上（维护者 2026-11-18），交给调用方的账号里没有。
+func loginAccountsWithIdentities(t *testing.T, registry *app.Registry) (*svcaccount.Service, versionstore.Store[string, svcaccount.IdentityRecord]) {
 	t.Helper()
 	verifier, allocator := Verifier(), Allocator()
 	if err := loginBind(t, verifier, registry); err != nil {
@@ -95,8 +103,11 @@ func loginAccounts(t *testing.T, registry *app.Registry) *svcaccount.Service {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identities := versionstore.NewMemoryStore[string, svcaccount.IdentityRecord]()
 	service, err := svcaccount.New(svcaccount.Config{
 		Accounts:      versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Identities:    identities,
+		AccountIDs:    svcaccount.NewMemoryAccountIDs(),
 		Roles:         versionstore.NewMemoryStore[int64, svcaccount.Role](),
 		Servers:       versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		Names:         names,
@@ -115,7 +126,7 @@ func loginAccounts(t *testing.T, registry *app.Registry) *svcaccount.Service {
 	if _, err := service.UpsertServer(context.Background(), svcaccount.GameServer{ID: 1000, Name: "s1000", Status: svcaccount.ServerOpen}); err != nil {
 		t.Fatal(err)
 	}
-	return service
+	return service, identities
 }
 
 // 开发环境：配置里写了开发令牌，用渠道 dev 加这个令牌登录，建角、选角拿到的会话令牌 account 自己认。
@@ -129,8 +140,9 @@ func TestLoginDevTokenLogsInAndGetsASession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("development login: %v", err)
 	}
-	if account.ID != "dev:alice" || account.Channel != "dev" {
-		t.Fatalf("account = %+v, want dev:alice on channel dev", account)
+	// 账号号由 account 发、按游戏分开（维护者 2026-11-18）：看不出渠道与 open id，交出来的账号不带身份键。
+	if account.ID == "" || account.Game != "party" || account.Identity != "" {
+		t.Fatalf("account = %+v, want an account in party without its identity key", account)
 	}
 	role, err := accounts.CreateRole(ctx, account.ID, 1000, "alice")
 	if err != nil {
@@ -149,11 +161,11 @@ func TestLoginDevTokenLogsInAndGetsASession(t *testing.T) {
 	}
 	// 同一个账号名再登录是同一个账号；另一个账号名是另一个账号、另一个玩家号。
 	again, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "dev-local"})
-	if err != nil || again.ID != "dev:alice" {
+	if err != nil || again.ID != account.ID {
 		t.Fatalf("logging in again: %+v, %v", again, err)
 	}
 	other, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "bob", Credential: "dev-local"})
-	if err != nil || other.ID != "dev:bob" {
+	if err != nil || other.ID == "" || other.ID == account.ID {
 		t.Fatalf("a second developer: %+v, %v", other, err)
 	}
 	second, err := accounts.CreateRole(ctx, other.ID, 1000, "bob")
@@ -267,8 +279,18 @@ func TestLoginDevTokenIsRefusedByAProductionConfig(t *testing.T) {
 // 版本不变、不带版本都不动；版本变了，这个账号此前签发的游戏账号 token 被拒，之后签发的可用。账号上的代数与
 // 手动吊销（RevokeGameTokens、accountctl revoke-game-tokens）是同一个。
 func TestLoginDevCredentialVersionRevokesGameTokens(t *testing.T) {
-	accounts := loginAccounts(t, loginRegistry(t, &loginCounterRedis{}, "account.key_prefix", "roost:test:account", "login.dev_token", "dev-local"))
+	accounts, identities := loginAccountsWithIdentities(t, loginRegistry(t, &loginCounterRedis{}, "account.key_prefix", "roost:test:account", "login.dev_token", "dev-local"))
 	ctx := context.Background()
+	// identity 是 alice 的身份记录：凭证版本与 token 代数记在那里，她在所有游戏的账号共用。
+	identity := func() svcaccount.IdentityRecord {
+		t.Helper()
+		record, found, err := identities.Get(ctx, "dev:alice")
+		if err != nil || !found {
+			t.Fatalf("alice's identity record: found %v, %v", found, err)
+		}
+		return record.Value
+	}
+	var aliceID string
 	login := func(credential string) svcaccount.Account {
 		t.Helper()
 		account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: credential})
@@ -291,22 +313,26 @@ func TestLoginDevCredentialVersionRevokesGameTokens(t *testing.T) {
 	}
 	valid := func(what, token string) {
 		t.Helper()
-		if got, err := accounts.ValidateGameToken(ctx, token); err != nil || got.AccountID != "dev:alice" {
+		if got, err := accounts.ValidateGameToken(ctx, token); err != nil || got.AccountID != aliceID {
 			t.Fatalf("%s: %+v, %v; want the token to validate", what, got, err)
 		}
 	}
 
 	alice := login("dev-local#1")
-	if alice.CredentialVersion != "1" || alice.GameTokenGeneration != 0 {
-		t.Fatalf("the first login with a version: %+v; want version 1 recorded, generation 0", alice)
+	aliceID = alice.ID
+	if record := identity(); record.CredentialVersion != "1" || record.GameTokenGeneration != 0 {
+		t.Fatalf("the first login with a version: %+v; want version 1 recorded, generation 0", record)
 	}
 	before := gameToken(alice.ID)
 	login("dev-local#1")
 	login("dev-local")
 	valid("the same version, then no version", before)
 
-	if changed := login("dev-local#2"); changed.CredentialVersion != "2" || changed.GameTokenGeneration != 1 {
-		t.Fatalf("a login after the password changed: %+v; want version 2, generation 1", changed)
+	if changed := login("dev-local#2"); changed.ID != aliceID {
+		t.Fatalf("a login after the password changed is another account: %+v", changed)
+	}
+	if record := identity(); record.CredentialVersion != "2" || record.GameTokenGeneration != 1 {
+		t.Fatalf("a login after the password changed: %+v; want version 2, generation 1", record)
 	}
 	if got, err := accounts.ValidateGameToken(ctx, before); !errors.Is(err, svcaccount.ErrSessionInvalid) || got.AccountID != "" {
 		t.Fatalf("a game token from before the password changed: %+v, %v; want session_invalid", got, err)

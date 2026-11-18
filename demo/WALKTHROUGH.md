@@ -868,14 +868,14 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
 ```bash
 curl -s -X POST http://127.0.0.1:8081/portal/login -H 'Content-Type: application/json' \
   -d '{"channel":"demo","open_id":"alice","credential":"demo:alice"}'
-# {"ok":true,"account_ticket":"at1.…","account_ticket_expires_at":…}
+# {"ok":true,"account_ticket":"at2.…","account_ticket_expires_at":…}
 
 curl -s -X POST http://127.0.0.1:8081/portal/servers -H 'Content-Type: application/json' \
-  -d '{"account_ticket":"at1.…"}'
+  -d '{"account_ticket":"at2.…"}'
 # {"ok":true,"recommended_server_id":1000,"servers":[{"server_id":1000,…,"status":"open","addr":"127.0.0.1:7000","addr_source":"directory","role":null}]}
 
 curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application/json' \
-  -d '{"account_ticket":"at1.…","server_id":1000}'
+  -d '{"account_ticket":"at2.…","server_id":1000}'
 # {"ok":true,"ticket":"enter:et1.…","server_id":1000,"serving_server_id":1000,"expires_at":…,"addr":"127.0.0.1:7000","addr_source":"directory"}
 ```
 

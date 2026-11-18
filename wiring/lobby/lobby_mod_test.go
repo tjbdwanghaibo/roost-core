@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,8 +23,10 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 	"github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	"github.com/tjbdwanghaibo/roost-core/service/relay/token"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -132,6 +135,63 @@ func TestAccountTokensMapsAccountAnswers(t *testing.T) {
 	outage := errors.New("nats: no responders")
 	if _, err := (AccountTokens{Accounts: fakeAccounts{err: outage}}).ValidateGameToken(context.Background(), "gt-a", "party"); !errors.Is(err, outage) || errors.Is(err, domain.ErrUnauthorized) {
 		t.Fatalf("account outage: %v", err)
+	}
+}
+
+// 一套 account 服务多个游戏（维护者 2026-11-18）：同一个人登录 party 与 brawl，大厅经真实的 account 认到的是两个不同的
+// 账号号——房间记录、relay 令牌、relay 交给房主的都是它，别的游戏的账号号与“是同一个人”不出 account；party 的 token
+// 进不了 brawl 的大厅。account 用内存存储。
+func TestAccountTokensSeeOnlyTheGameAccount(t *testing.T) {
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var next atomic.Int64
+	accounts, err := account.New(account.Config{
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Identities: versionstore.NewMemoryStore[string, account.IdentityRecord](),
+		AccountIDs: account.NewMemoryAccountIDs(), Roles: account.NewMemoryRoles(), Servers: versionstore.NewMemoryStore[int32, account.GameServer](),
+		Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
+		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
+			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator: account.AllocatorFunc(func(context.Context, int32) (int64, error) { return next.Add(1), nil }),
+		NameRules: account.NameValidatorFunc(func(string) error { return nil }), SessionSecret: "lobby-wiring-test",
+		Games: []account.GameSpec{{Name: "party"}, {Name: "brawl"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	tokens := AccountTokens{Accounts: accounts}
+	seen := map[string]string{}
+	for _, game := range []string{"party", "brawl"} {
+		got, err := accounts.Login(ctx, account.Identity{Channel: "store", OpenID: "alice-open-id", Credential: "x", Game: game})
+		if err != nil {
+			t.Fatalf("login to %s: %v", game, err)
+		}
+		ticket, err := accounts.IssueAccountTicket(ctx, got.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gameToken, err := accounts.IssueGameToken(ctx, ticket.Ticket, game)
+		if err != nil {
+			t.Fatalf("game token for %s: %v", game, err)
+		}
+		lobbySees, err := tokens.ValidateGameToken(ctx, gameToken.Token, game)
+		if err != nil || lobbySees != got.ID {
+			t.Fatalf("the %s lobby sees %q, %v; want the %s account %q", game, lobbySees, err, game, got.ID)
+		}
+		if strings.Contains(lobbySees, "alice-open-id") {
+			t.Fatalf("the %s lobby sees %q, which carries the channel identity", game, lobbySees)
+		}
+		other := map[string]string{"party": "brawl", "brawl": "party"}[game]
+		if _, err := tokens.ValidateGameToken(ctx, gameToken.Token, other); !errors.Is(err, domain.ErrUnauthorized) {
+			t.Fatalf("the %s token in the %s lobby: %v; want ErrUnauthorized", game, other, err)
+		}
+		seen[game] = lobbySees
+	}
+	if seen["party"] == seen["brawl"] {
+		t.Fatalf("the party and brawl lobbies both see account %q for one person; want a different account per game", seen["party"])
 	}
 }
 

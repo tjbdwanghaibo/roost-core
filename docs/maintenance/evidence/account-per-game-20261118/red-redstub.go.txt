@@ -1,0 +1,41 @@
+package account
+
+import (
+	"context"
+	"sync/atomic"
+)
+
+// 红测桩：只给新用例一个能编译的接口面，行为保持 main（封号写在账号记录上）。
+type IdentityRecord struct {
+	Banned              bool
+	Accounts            map[string]string
+	GameTokenGeneration uint64
+	CredentialVersion   string
+}
+
+type AccountIDAllocator interface {
+	NextAccountID(ctx context.Context) (int64, error)
+}
+
+type memoryAccountIDs struct{ next atomic.Int64 }
+
+func (m *memoryAccountIDs) NextAccountID(context.Context) (int64, error) { return m.next.Add(1), nil }
+
+func NewMemoryAccountIDs() AccountIDAllocator { return &memoryAccountIDs{} }
+
+func (s *Service) SetIdentityBanned(ctx context.Context, accountID string, banned bool, note string) (IdentityRecord, error) {
+	if _, err := validateAdminNote(note); err != nil {
+		return IdentityRecord{}, err
+	}
+	written, _, err := s.cfg.Accounts.Update(ctx, accountID, func(current Account, found bool) (Account, bool, error) {
+		if !found {
+			return current, false, ErrAccountMissing
+		}
+		current.Banned = banned
+		return current, true, nil
+	})
+	if err != nil {
+		return IdentityRecord{}, err
+	}
+	return IdentityRecord{Banned: written.Value.Banned, Accounts: map[string]string{}}, nil
+}

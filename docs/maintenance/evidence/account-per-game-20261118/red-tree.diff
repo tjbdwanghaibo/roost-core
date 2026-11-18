@@ -1,0 +1,157 @@
+diff --git a/codegen/internal/roost/framework_services_test.go b/codegen/internal/roost/framework_services_test.go
+index 2817f63c..3956d4ce 100644
+--- a/codegen/internal/roost/framework_services_test.go
++++ b/codegen/internal/roost/framework_services_test.go
+@@ -144,6 +144,27 @@ func TestProjectNewGameTemplateHostsOnlyTheFrameworksAskedFor(t *testing.T) {
+ 	}
+ }
+ 
++// 一套 account 服务多个游戏、登录必须落到一个游戏（维护者 2026-11-18）：传统区服工程就是 account.games 里的一个游戏。
++// 新工程托管 account 时，开发配置与生产示例都写好一个以工程名命名的游戏（token_ttl 2h），只有一个游戏就是缺省游戏，
++// 客户端登录不用带 game；配置按 account Mod 的声明检查通过（Mod 的 Init 要求至少一个游戏）。
++func TestNewProjectAccountConfigListsTheProjectGame(t *testing.T) {
++	target := filepath.Join(t.TempDir(), "planet")
++	var out strings.Builder
++	if err := Run([]string{"project", "new", "planet", "-module", "example.com/planet", "-out", target, "-skip-deps", "-template", "game", "-framework", "account"}, &out, &out); err != nil {
++		t.Fatalf("%v\n%s", err, out.String())
++	}
++	for _, rel := range []string{"configs/service/config.account.yaml", "configs/service/config.account.prod.example.yaml"} {
++		body := readProjectFile(t, target, rel)
++		if !strings.Contains(body, "\n  games:\n    planet:\n      token_ttl: 2h\n") {
++			t.Fatalf("%s does not list the project's game under account.games:\n%s", rel, body)
++		}
++	}
++	out.Reset()
++	if err := Run([]string{"config", "check", "--root", target, "--service", "account"}, &out, &out); err != nil {
++		t.Fatalf("config check --service account: %v\n%s", err, out.String())
++	}
++}
++
+ // framework and uses are validated against the catalog and against each other.
+ func TestFrameworkServiceManifestValidation(t *testing.T) {
+ 	base := func() Manifest {
+diff --git a/service/account/service.go b/service/account/service.go
+index 050e541f..882752df 100644
+--- a/service/account/service.go
++++ b/service/account/service.go
+@@ -56,6 +56,10 @@ type Config struct {
+ 	// Games 是这套 account 服务的游戏（account.games，game_token.go）：只给列出的游戏签发游戏账号 token。
+ 	// 空表示一个都没有，IssueGameToken 一律拒绝。
+ 	Games []GameSpec
++	// 红测桩：main 不读下面三项。
++	DefaultGame string
++	Identities  versionstore.Store[string, IdentityRecord]
++	AccountIDs  AccountIDAllocator
+ 	// Services 是接受本账号体系的服务（account.services，services.go）。空表示单一 game 服务的工程，
+ 	// 区服记录不带服务名，行为与没有这一项时相同。
+ 	Services []ServiceSpec
+diff --git a/service/account/types.go b/service/account/types.go
+index 61a2f764..dc74681a 100644
+--- a/service/account/types.go
++++ b/service/account/types.go
+@@ -212,6 +212,7 @@ type Identity struct {
+ 	// a signature. This service never interprets it; it hands it to the
+ 	// IdentityVerifier. It is never logged and never stored.
+ 	Credential string `json:"credential"`
++	Game       string `json:"game,omitempty"` // 红测桩：main 不读它
+ }
+ 
+ func (i Identity) Validate() error {
+@@ -234,7 +235,9 @@ func (i Identity) AccountID() string {
+ 
+ // Account is one player's account across servers.
+ type Account struct {
+-	ID      string  `json:"id"`
++	ID       string  `json:"id"`
++	Game     string  `json:"game,omitempty"`     // 红测桩：main 不写它
++	Identity string  `json:"identity,omitempty"` // 红测桩
+ 	Channel Channel `json:"channel"`
+ 	OpenID  string  `json:"open_id"`
+ 	// Banned blocks login and role creation. It is here rather than in a
+diff --git a/wiring/lobby/lobby_mod_test.go b/wiring/lobby/lobby_mod_test.go
+index ad7a652f..3aed70bc 100644
+--- a/wiring/lobby/lobby_mod_test.go
++++ b/wiring/lobby/lobby_mod_test.go
+@@ -12,6 +12,7 @@ import (
+ 	"os"
+ 	"strings"
+ 	"sync"
++	"sync/atomic"
+ 	"testing"
+ 	"time"
+ 
+@@ -22,8 +23,10 @@ import (
+ 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+ 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+ 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
++	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+ 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
+ 	"github.com/tjbdwanghaibo/roost-core/service/account"
++	"github.com/tjbdwanghaibo/roost-core/service/directory"
+ 	"github.com/tjbdwanghaibo/roost-core/service/relay/token"
+ 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+ )
+@@ -135,6 +138,63 @@ func TestAccountTokensMapsAccountAnswers(t *testing.T) {
+ 	}
+ }
+ 
++// 一套 account 服务多个游戏（维护者 2026-11-18）：同一个人登录 party 与 brawl，大厅经真实的 account 认到的是两个不同的
++// 账号号——房间记录、relay 令牌、relay 交给房主的都是它，别的游戏的账号号与“是同一个人”不出 account；party 的 token
++// 进不了 brawl 的大厅。account 用内存存储。
++func TestAccountTokensSeeOnlyTheGameAccount(t *testing.T) {
++	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
++	if err != nil {
++		t.Fatal(err)
++	}
++	var next atomic.Int64
++	accounts, err := account.New(account.Config{
++		Accounts: versionstore.NewMemoryStore[string, account.Account](), Identities: versionstore.NewMemoryStore[string, account.IdentityRecord](),
++		AccountIDs: account.NewMemoryAccountIDs(), Roles: account.NewMemoryRoles(), Servers: versionstore.NewMemoryStore[int32, account.GameServer](),
++		Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
++		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
++			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
++		}),
++		Allocator: account.AllocatorFunc(func(context.Context, int32) (int64, error) { return next.Add(1), nil }),
++		NameRules: account.NameValidatorFunc(func(string) error { return nil }), SessionSecret: "lobby-wiring-test",
++		Games: []account.GameSpec{{Name: "party"}, {Name: "brawl"}},
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	ctx := context.Background()
++	tokens := AccountTokens{Accounts: accounts}
++	seen := map[string]string{}
++	for _, game := range []string{"party", "brawl"} {
++		got, err := accounts.Login(ctx, account.Identity{Channel: "store", OpenID: "alice-open-id", Credential: "x", Game: game})
++		if err != nil {
++			t.Fatalf("login to %s: %v", game, err)
++		}
++		ticket, err := accounts.IssueAccountTicket(ctx, got.ID)
++		if err != nil {
++			t.Fatal(err)
++		}
++		gameToken, err := accounts.IssueGameToken(ctx, ticket.Ticket, game)
++		if err != nil {
++			t.Fatalf("game token for %s: %v", game, err)
++		}
++		lobbySees, err := tokens.ValidateGameToken(ctx, gameToken.Token, game)
++		if err != nil || lobbySees != got.ID {
++			t.Fatalf("the %s lobby sees %q, %v; want the %s account %q", game, lobbySees, err, game, got.ID)
++		}
++		if strings.Contains(lobbySees, "alice-open-id") {
++			t.Fatalf("the %s lobby sees %q, which carries the channel identity", game, lobbySees)
++		}
++		other := map[string]string{"party": "brawl", "brawl": "party"}[game]
++		if _, err := tokens.ValidateGameToken(ctx, gameToken.Token, other); !errors.Is(err, domain.ErrUnauthorized) {
++			t.Fatalf("the %s token in the %s lobby: %v; want ErrUnauthorized", game, other, err)
++		}
++		seen[game] = lobbySees
++	}
++	if seen["party"] == seen["brawl"] {
++		t.Fatalf("the party and brawl lobbies both see account %q for one person; want a different account per game", seen["party"])
++	}
++}
++
+ // fakeNATS 记下队列订阅的处理函数与发出的命令。
+ type fakeNATS struct {
+ 	mu        sync.Mutex

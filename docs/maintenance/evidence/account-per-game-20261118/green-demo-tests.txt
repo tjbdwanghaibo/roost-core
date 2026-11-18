@@ -1,0 +1,10 @@
+ok  	example.com/planet/cmd/loadtest	2.869s
+ok  	example.com/planet/cmd/accountctl	1.047s
+ok  	example.com/planet/services/account	2.093s
+ok  	example.com/planet/services/account/portal	1.616s
+ok  	example.com/planet/internal/service/game	81.876s
+ok  	example.com/planet/game/controllers	11.482s
+ok  	example.com/planet/internal/access/player	3.881s
+ok  	example.com/planet/internal/access/player/tcp	3.040s
+ok  	example.com/planet/game/modules/login	3.311s
+ok  	example.com/planet/game/managers	5.055s

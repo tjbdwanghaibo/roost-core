@@ -1,0 +1,306 @@
+=== RUN   TestHTTPRoomLifecycle
+--- PASS: TestHTTPRoomLifecycle (0.01s)
+=== RUN   TestHTTPRefusesMissingOrForeignTokensAndBadBodies
+--- PASS: TestHTTPRefusesMissingOrForeignTokensAndBadBodies (0.51s)
+=== RUN   TestHTTPCORSAllowsOnlyConfiguredOrigins
+--- PASS: TestHTTPCORSAllowsOnlyConfiguredOrigins (0.00s)
+=== RUN   TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken
+=== RUN   TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken/memory
+=== RUN   TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken/redis
+--- PASS: TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken (0.01s)
+    --- PASS: TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken/memory (0.00s)
+    --- PASS: TestCreateRoomPicksLeastLoadedRelayAndSignsHostToken/redis (0.00s)
+=== RUN   TestCreateRoomWithoutAnyRelayForTheTransport
+--- PASS: TestCreateRoomWithoutAnyRelayForTheTransport (0.00s)
+=== RUN   TestRequestsNeedAGameTokenForTheRequestedGame
+=== RUN   TestRequestsNeedAGameTokenForTheRequestedGame/memory
+=== RUN   TestRequestsNeedAGameTokenForTheRequestedGame/redis
+--- PASS: TestRequestsNeedAGameTokenForTheRequestedGame (0.01s)
+    --- PASS: TestRequestsNeedAGameTokenForTheRequestedGame/memory (0.00s)
+    --- PASS: TestRequestsNeedAGameTokenForTheRequestedGame/redis (0.00s)
+=== RUN   TestJoinRefusesWhenFullAndIsIdempotentForMembers
+=== RUN   TestJoinRefusesWhenFullAndIsIdempotentForMembers/memory
+=== RUN   TestJoinRefusesWhenFullAndIsIdempotentForMembers/redis
+--- PASS: TestJoinRefusesWhenFullAndIsIdempotentForMembers (0.01s)
+    --- PASS: TestJoinRefusesWhenFullAndIsIdempotentForMembers/memory (0.00s)
+    --- PASS: TestJoinRefusesWhenFullAndIsIdempotentForMembers/redis (0.01s)
+=== RUN   TestJoinChecksThePassword
+=== RUN   TestJoinChecksThePassword/memory
+=== RUN   TestJoinChecksThePassword/redis
+--- PASS: TestJoinChecksThePassword (0.01s)
+    --- PASS: TestJoinChecksThePassword/memory (0.00s)
+    --- PASS: TestJoinChecksThePassword/redis (0.01s)
+=== RUN   TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers
+=== RUN   TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers/memory
+=== RUN   TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers/redis
+--- PASS: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers (0.01s)
+    --- PASS: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers/memory (0.00s)
+    --- PASS: TestOnlyTheHostChangesStateAndStartedRoomsAreClosedToNewcomers/redis (0.01s)
+=== RUN   TestListShowsOnlyJoinableConfirmedRoomsOfTheMode
+=== RUN   TestListShowsOnlyJoinableConfirmedRoomsOfTheMode/memory
+=== RUN   TestListShowsOnlyJoinableConfirmedRoomsOfTheMode/redis
+--- PASS: TestListShowsOnlyJoinableConfirmedRoomsOfTheMode (0.01s)
+    --- PASS: TestListShowsOnlyJoinableConfirmedRoomsOfTheMode/memory (0.00s)
+    --- PASS: TestListShowsOnlyJoinableConfirmedRoomsOfTheMode/redis (0.01s)
+=== RUN   TestHostChangedAcceptsOnlyLargerEpochs
+=== RUN   TestHostChangedAcceptsOnlyLargerEpochs/memory
+=== RUN   TestHostChangedAcceptsOnlyLargerEpochs/redis
+--- PASS: TestHostChangedAcceptsOnlyLargerEpochs (0.01s)
+    --- PASS: TestHostChangedAcceptsOnlyLargerEpochs/memory (0.00s)
+    --- PASS: TestHostChangedAcceptsOnlyLargerEpochs/redis (0.01s)
+=== RUN   TestTokenRoleFollowsTheHostAfterAHostChange
+=== RUN   TestTokenRoleFollowsTheHostAfterAHostChange/memory
+=== RUN   TestTokenRoleFollowsTheHostAfterAHostChange/redis
+--- PASS: TestTokenRoleFollowsTheHostAfterAHostChange (0.01s)
+    --- PASS: TestTokenRoleFollowsTheHostAfterAHostChange/memory (0.00s)
+    --- PASS: TestTokenRoleFollowsTheHostAfterAHostChange/redis (0.01s)
+=== RUN   TestRelayReportsMaintainSeats
+=== RUN   TestRelayReportsMaintainSeats/memory
+=== RUN   TestRelayReportsMaintainSeats/redis
+--- PASS: TestRelayReportsMaintainSeats (0.01s)
+    --- PASS: TestRelayReportsMaintainSeats/memory (0.00s)
+    --- PASS: TestRelayReportsMaintainSeats/redis (0.01s)
+=== RUN   TestKickedAccountsAreRecordedAndRefused
+=== RUN   TestKickedAccountsAreRecordedAndRefused/memory
+=== RUN   TestKickedAccountsAreRecordedAndRefused/redis
+--- PASS: TestKickedAccountsAreRecordedAndRefused (0.01s)
+    --- PASS: TestKickedAccountsAreRecordedAndRefused/memory (0.00s)
+    --- PASS: TestKickedAccountsAreRecordedAndRefused/redis (0.01s)
+=== RUN   TestRelayVerification
+=== RUN   TestRelayVerification/memory
+=== RUN   TestRelayVerification/redis
+--- PASS: TestRelayVerification (0.01s)
+    --- PASS: TestRelayVerification/memory (0.00s)
+    --- PASS: TestRelayVerification/redis (0.01s)
+=== RUN   TestARoomTheRelayHasReportedCannotBeCreatedAgain
+=== RUN   TestARoomTheRelayHasReportedCannotBeCreatedAgain/memory
+=== RUN   TestARoomTheRelayHasReportedCannotBeCreatedAgain/redis
+--- PASS: TestARoomTheRelayHasReportedCannotBeCreatedAgain (0.00s)
+    --- PASS: TestARoomTheRelayHasReportedCannotBeCreatedAgain/memory (0.00s)
+    --- PASS: TestARoomTheRelayHasReportedCannotBeCreatedAgain/redis (0.00s)
+=== RUN   TestLeave
+=== RUN   TestLeave/memory
+=== RUN   TestLeave/redis
+--- PASS: TestLeave (0.01s)
+    --- PASS: TestLeave/memory (0.00s)
+    --- PASS: TestLeave/redis (0.01s)
+=== RUN   TestStartedRoomsKeepDroppedMembersSeats
+=== RUN   TestStartedRoomsKeepDroppedMembersSeats/memory
+=== RUN   TestStartedRoomsKeepDroppedMembersSeats/redis
+--- PASS: TestStartedRoomsKeepDroppedMembersSeats (0.01s)
+    --- PASS: TestStartedRoomsKeepDroppedMembersSeats/memory (0.00s)
+    --- PASS: TestStartedRoomsKeepDroppedMembersSeats/redis (0.01s)
+=== RUN   TestOpenRoomsReleaseDroppedMembersSeats
+=== RUN   TestOpenRoomsReleaseDroppedMembersSeats/memory
+=== RUN   TestOpenRoomsReleaseDroppedMembersSeats/redis
+--- PASS: TestOpenRoomsReleaseDroppedMembersSeats (0.01s)
+    --- PASS: TestOpenRoomsReleaseDroppedMembersSeats/memory (0.00s)
+    --- PASS: TestOpenRoomsReleaseDroppedMembersSeats/redis (0.01s)
+=== RUN   TestStartingARoomDoesNotKeepSeatsNeverConnected
+=== RUN   TestStartingARoomDoesNotKeepSeatsNeverConnected/memory
+=== RUN   TestStartingARoomDoesNotKeepSeatsNeverConnected/redis
+--- PASS: TestStartingARoomDoesNotKeepSeatsNeverConnected (0.00s)
+    --- PASS: TestStartingARoomDoesNotKeepSeatsNeverConnected/memory (0.00s)
+    --- PASS: TestStartingARoomDoesNotKeepSeatsNeverConnected/redis (0.00s)
+=== RUN   TestStartedRoomsReleaseSeatsOnKickLeaveAndClose
+=== RUN   TestStartedRoomsReleaseSeatsOnKickLeaveAndClose/memory
+=== RUN   TestStartedRoomsReleaseSeatsOnKickLeaveAndClose/redis
+--- PASS: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose (0.01s)
+    --- PASS: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose/memory (0.00s)
+    --- PASS: TestStartedRoomsReleaseSeatsOnKickLeaveAndClose/redis (0.01s)
+=== RUN   TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder
+=== RUN   TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/left_first
+=== RUN   TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/left_first/memory
+=== RUN   TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/left_first/redis
+=== RUN   TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/heartbeat_first
+=== RUN   TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/heartbeat_first/memory
+=== RUN   TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/heartbeat_first/redis
+--- PASS: TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder (0.01s)
+    --- PASS: TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/left_first (0.01s)
+        --- PASS: TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/left_first/memory (0.00s)
+        --- PASS: TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/left_first/redis (0.01s)
+    --- PASS: TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/heartbeat_first (0.00s)
+        --- PASS: TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/heartbeat_first/memory (0.00s)
+        --- PASS: TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder/heartbeat_first/redis (0.00s)
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis
+--- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave (0.01s)
+    --- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory (0.00s)
+    --- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis (0.00s)
+=== RUN   TestRoomsExpireWithoutRelayReports
+=== RUN   TestRoomsExpireWithoutRelayReports/memory
+=== RUN   TestRoomsExpireWithoutRelayReports/redis
+--- PASS: TestRoomsExpireWithoutRelayReports (3.96s)
+    --- PASS: TestRoomsExpireWithoutRelayReports/memory (0.00s)
+    --- PASS: TestRoomsExpireWithoutRelayReports/redis (3.96s)
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/memory
+=== RUN   TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/redis
+--- PASS: TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports (1.61s)
+    --- PASS: TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/memory (0.00s)
+    --- PASS: TestRejoiningDoesNotKeepARoomAliveWithoutRelayReports/redis (1.61s)
+=== RUN   TestNewRefusesIncompleteConfig
+--- PASS: TestNewRefusesIncompleteConfig (0.00s)
+=== RUN   TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack
+=== RUN   TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_then_start
+=== RUN   TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_then_start/memory
+    lobby_test.go:1188: seats right after bob's leave:            "acc-host:online"
+    lobby_test.go:1193: seats after the in-flight report (seq 3):  "acc-host:online"
+    lobby_test.go:1199: bob joins the started room:                err = lobby: room has started
+    lobby_test.go:1204: seats after relay's member_left (seq 4):   "acc-host:online"
+=== RUN   TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_then_start/redis
+    lobby_test.go:1188: seats right after bob's leave:            "acc-host:online"
+    lobby_test.go:1193: seats after the in-flight report (seq 3):  "acc-host:online"
+    lobby_test.go:1199: bob joins the started room:                err = lobby: room has started
+    lobby_test.go:1204: seats after relay's member_left (seq 4):   "acc-host:online"
+=== RUN   TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_a_started_room
+=== RUN   TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_a_started_room/memory
+    lobby_test.go:1235: seats after the in-flight report (seq 3):  "acc-host:online"
+    lobby_test.go:1237: bob joins again:                           err = lobby: room has started
+    lobby_test.go:1242: seats after member_left, lapse, heartbeat: "acc-host:online"
+=== RUN   TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_a_started_room/redis
+    lobby_test.go:1235: seats after the in-flight report (seq 3):  "acc-host:online"
+    lobby_test.go:1237: bob joins again:                           err = lobby: room has started
+    lobby_test.go:1242: seats after member_left, lapse, heartbeat: "acc-host:online"
+--- PASS: TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack (0.01s)
+    --- PASS: TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_then_start (0.01s)
+        --- PASS: TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_then_start/memory (0.00s)
+        --- PASS: TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_then_start/redis (0.01s)
+    --- PASS: TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_a_started_room (0.01s)
+        --- PASS: TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_a_started_room/memory (0.00s)
+        --- PASS: TestAStaleOnlineReportAfterALeaveDoesNotBringTheLeaverBack/leave_a_started_room/redis (0.01s)
+=== RUN   TestLeavingRecordIsResentAndCleared
+=== RUN   TestLeavingRecordIsResentAndCleared/memory
+=== RUN   TestLeavingRecordIsResentAndCleared/redis
+--- PASS: TestLeavingRecordIsResentAndCleared (0.01s)
+    --- PASS: TestLeavingRecordIsResentAndCleared/memory (0.00s)
+    --- PASS: TestLeavingRecordIsResentAndCleared/redis (0.01s)
+=== RUN   TestEtcdRelaysReadsTheRegistryAndSkipsBadEntries
+2026/11/18 13:56:07 WARN lobby: skipping unreadable relay registration key=/party/relays/relay-3 err="invalid character 'o' in literal null (expecting 'u')"
+2026/11/18 13:56:07 WARN lobby: skipping unreadable relay registration key=/party/relays/relay-4 err=<nil>
+2026/11/18 13:56:07 WARN lobby: skipping unreadable relay registration key=/party/relays/a.b err=<nil>
+--- PASS: TestEtcdRelaysReadsTheRegistryAndSkipsBadEntries (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	7.570s
+=== RUN   TestModLoadsWhatItDeclares
+--- PASS: TestModLoadsWhatItDeclares (0.00s)
+=== RUN   TestModInitRefusesMissingGamesAndKey
+--- PASS: TestModInitRefusesMissingGamesAndKey (0.00s)
+=== RUN   TestAccountTokensMapsAccountAnswers
+--- PASS: TestAccountTokensMapsAccountAnswers (0.00s)
+=== RUN   TestAccountTokensSeeOnlyTheGameAccount
+--- PASS: TestAccountTokensSeeOnlyTheGameAccount (0.00s)
+=== RUN   TestModAndServerOnRealRedis
+2026/11/18 13:56:01 INFO lobby: serving addr=127.0.0.1:51317 events=roost.test.lobby.events
+--- PASS: TestModAndServerOnRealRedis (0.02s)
+=== RUN   TestServerInitNeedsTheMod
+--- PASS: TestServerInitNeedsTheMod (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lobby	2.091s
+=== RUN   TestRelayMatchesTheLobbyContract
+--- PASS: TestRelayMatchesTheLobbyContract (0.00s)
+=== RUN   TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection
+--- PASS: TestKickIsRecordedInTheLobbyAndEnforcedOnEveryConnection (0.01s)
+=== RUN   TestModInitReadsConfigAndKey
+--- PASS: TestModInitReadsConfigAndKey (0.00s)
+=== RUN   TestModLoadsWhatItDeclares
+--- PASS: TestModLoadsWhatItDeclares (0.01s)
+=== RUN   TestServerReportsAdvertisesAndTakesLobbyCommands
+2026/11/18 13:56:02 WARN relay: unreadable lobby command err="invalid character 'o' in literal null (expecting 'u')"
+2026/11/18 13:56:02 WARN relay: etcd advertisement lease lost; re-registering key=/t/relays/relay-3
+--- PASS: TestServerReportsAdvertisesAndTakesLobbyCommands (1.07s)
+=== RUN   TestWebSocketMembersShareRoomsWithTCP
+--- PASS: TestWebSocketMembersShareRoomsWithTCP (0.01s)
+=== RUN   TestWebSocketConfigIsChecked
+--- PASS: TestWebSocketConfigIsChecked (0.00s)
+=== RUN   TestWebSocketLimitsMatchTCP
+--- PASS: TestWebSocketLimitsMatchTCP (0.30s)
+=== RUN   TestWebSocketHostChange
+--- PASS: TestWebSocketHostChange (0.41s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.608s
+=== RUN   TestSDKFramesMatchRelayGolden
+--- PASS: TestSDKFramesMatchRelayGolden (0.00s)
+=== RUN   TestUnknownControlOpIsDroppedOrHandedToOnControl
+--- PASS: TestUnknownControlOpIsDroppedOrHandedToOnControl (0.00s)
+=== RUN   TestSDKHostFramesMatchRelayGolden
+--- PASS: TestSDKHostFramesMatchRelayGolden (0.00s)
+=== RUN   TestSnapshotSeqContinuesAcrossHosts
+--- PASS: TestSnapshotSeqContinuesAcrossHosts (0.00s)
+=== RUN   TestStateCarriesTheCompressionMarker
+--- PASS: TestStateCarriesTheCompressionMarker (0.00s)
+=== RUN   TestCompressors
+--- PASS: TestCompressors (0.00s)
+=== RUN   TestDeflateReuse
+--- PASS: TestDeflateReuse (0.39s)
+=== RUN   TestRoomLifecycleAgainstRealRelayAndLobby
+    client_test.go:192: peer: lobby http://127.0.0.1:51274, relay 127.0.0.1:51273, room directory redis
+--- PASS: TestRoomLifecycleAgainstRealRelayAndLobby (0.02s)
+=== RUN   TestLeaveByTheLastMemberSucceedsAfterTheRoomCloses
+    client_test.go:337: peer: lobby http://127.0.0.1:51289, relay 127.0.0.1:51286, room directory redis
+--- PASS: TestLeaveByTheLastMemberSucceedsAfterTheRoomCloses (0.03s)
+=== RUN   TestReconnectAsksTheLobbyForAFreshToken
+    client_test.go:390: peer: lobby http://127.0.0.1:51305, relay 127.0.0.1:51301, room directory redis
+--- PASS: TestReconnectAsksTheLobbyForAFreshToken (0.55s)
+=== RUN   TestHeartbeatKeepsTheConnectionAlive
+    client_test.go:458: peer: lobby http://127.0.0.1:51328, relay 127.0.0.1:51327, room directory redis
+--- PASS: TestHeartbeatKeepsTheConnectionAlive (1.43s)
+=== RUN   TestLobbyErrorsMapToSentinels
+    client_test.go:487: peer: lobby http://127.0.0.1:51366, relay 127.0.0.1:51365, room directory redis
+2026/11/18 13:56:03 WARN lobby: request failed method=POST path=/rooms err="lobby: no relay instance is available for transport ws"
+--- PASS: TestLobbyErrorsMapToSentinels (0.01s)
+=== RUN   TestTransferHandsTheHandoffToTheNewHost
+    host_test.go:50: peer: lobby http://127.0.0.1:51377, relay 127.0.0.1:51373, room directory redis
+--- PASS: TestTransferHandsTheHandoffToTheNewHost (0.01s)
+=== RUN   TestHostLossHandsTheSnapshotToTheDeclaredSuccessor
+    host_test.go:120: peer: lobby http://127.0.0.1:51391, relay 127.0.0.1:51390, room directory redis
+--- PASS: TestHostLossHandsTheSnapshotToTheDeclaredSuccessor (0.31s)
+=== RUN   TestHostLeaveUsesTheSuccessorOrder
+    host_test.go:167: peer: lobby http://127.0.0.1:51405, relay 127.0.0.1:51401, room directory redis
+--- PASS: TestHostLeaveUsesTheSuccessorOrder (0.01s)
+=== RUN   TestHostResumesWithinTheGracePeriod
+    host_test.go:188: peer: lobby http://127.0.0.1:51421, relay 127.0.0.1:51415, room directory redis
+--- PASS: TestHostResumesWithinTheGracePeriod (0.03s)
+=== RUN   TestSnapshotPacingAndRejections
+    host_test.go:217: peer: lobby http://127.0.0.1:51435, relay 127.0.0.1:51434, room directory redis
+--- PASS: TestSnapshotPacingAndRejections (0.02s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:260: peer: lobby http://127.0.0.1:51449, relay 127.0.0.1:51445, room directory redis
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.54s)
+=== RUN   TestASnapshotPreparedInAnEarlierHostTermIsDropped
+=== RUN   TestASnapshotPreparedInAnEarlierHostTermIsDropped/Snapshot
+    host_test.go:294: peer: lobby http://127.0.0.1:51464, relay 127.0.0.1:51462, room directory redis
+=== RUN   TestASnapshotPreparedInAnEarlierHostTermIsDropped/SnapshotState
+    host_test.go:294: peer: lobby http://127.0.0.1:51477, relay 127.0.0.1:51474, room directory redis
+--- PASS: TestASnapshotPreparedInAnEarlierHostTermIsDropped (0.08s)
+    --- PASS: TestASnapshotPreparedInAnEarlierHostTermIsDropped/Snapshot (0.04s)
+    --- PASS: TestASnapshotPreparedInAnEarlierHostTermIsDropped/SnapshotState (0.04s)
+=== RUN   TestASnapshotPreparedOnAnEarlierConnectionIsDropped
+    host_test.go:373: peer: lobby http://127.0.0.1:51490, relay 127.0.0.1:51488, room directory redis
+--- PASS: TestASnapshotPreparedOnAnEarlierConnectionIsDropped (0.03s)
+=== RUN   TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne
+=== RUN   TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne/Snapshot
+    host_test.go:416: peer: lobby http://127.0.0.1:51504, relay 127.0.0.1:51501, room directory redis
+=== RUN   TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne/SnapshotState
+    host_test.go:416: peer: lobby http://127.0.0.1:51517, relay 127.0.0.1:51515, room directory redis
+--- PASS: TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne (0.09s)
+    --- PASS: TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne/Snapshot (0.04s)
+    --- PASS: TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne/SnapshotState (0.04s)
+=== RUN   TestHostHeartbeatKeepsTheHostAliveUnderTheHostIdleTimeout
+    host_test.go:490: peer: lobby http://127.0.0.1:51530, relay 127.0.0.1:51526, room directory redis
+--- PASS: TestHostHeartbeatKeepsTheHostAliveUnderTheHostIdleTimeout (5.51s)
+=== RUN   TestReconnectRetriesWhenTheLobbyIsDownAndStopsWhenItRejects
+    host_test.go:512: peer: lobby http://127.0.0.1:51575, relay 127.0.0.1:51572, room directory redis
+--- PASS: TestReconnectRetriesWhenTheLobbyIsDownAndStopsWhenItRejects (0.19s)
+=== RUN   TestLateJoinerAndRejoinSeeTheRoomEpoch
+    host_test.go:555: peer: lobby http://127.0.0.1:51593, relay 127.0.0.1:51591, room directory redis
+--- PASS: TestLateJoinerAndRejoinSeeTheRoomEpoch (0.02s)
+=== RUN   TestPresenceIsResentAfterHostChangedAndReconnect
+    host_test.go:588: peer: lobby http://127.0.0.1:51609, relay 127.0.0.1:51608, room directory redis
+--- PASS: TestPresenceIsResentAfterHostChangedAndReconnect (0.03s)
+=== RUN   TestReconnectAfterTheRoomStartedAndKickingAnOfflineSeat
+    host_test.go:658: peer: lobby http://127.0.0.1:51624, relay 127.0.0.1:51623, room directory redis
+--- PASS: TestReconnectAfterTheRoomStartedAndKickingAnOfflineSeat (0.08s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	10.954s

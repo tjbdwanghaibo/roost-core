@@ -39,6 +39,7 @@ package account
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -93,8 +94,8 @@ const (
 	// 要调用方先重读绑定（RoleBinding）再决定。
 	CodeTransferStale      int32 = 560118
 	CodeTransferInProgress int32 = 560119
-	// CodeGameInvalid 属于游戏账号 token（game_token.go）：要签发或校验的游戏不在 account.games 里。
-	// token 本身无效仍是 CodeSessionInvalid。
+	// CodeGameInvalid 说游戏不对：要登录、签发或校验的游戏不在 account.games 里；登录没写游戏而 account 没有缺省游戏；
+	// 拿一个游戏的账号票据要另一个游戏的 token（维护者 2026-11-18）。token 本身无效仍是 CodeSessionInvalid。
 	CodeGameInvalid int32 = 560120
 )
 
@@ -139,8 +140,8 @@ var (
 	ErrTransferStale = errcode.Define(CodeTransferStale, "account: role binding or transfer id is stale", "")
 	// ErrTransferInProgress：这个角色正有另一次换服在途（另一个 ID，或同一个 ID 但目标不同）。
 	ErrTransferInProgress = errcode.Define(CodeTransferInProgress, "account: another role transfer is in progress", "")
-	// ErrGameInvalid：游戏不在 account.games 里——IssueGameToken 不签发；ValidateGameToken 遇到配置里已经去掉的
-	// 游戏的 token 也这样答。
+	// ErrGameInvalid：游戏不对（CodeGameInvalid）——不在 account.games 里（Login 不登录、IssueGameToken 不签发、
+	// ValidateGameToken 遇到配置里已经去掉的游戏的 token）；登录没写游戏也没有缺省游戏；票据的游戏不是要的游戏。
 	ErrGameInvalid = errcode.Define(CodeGameInvalid, "account: game is not served by this account service", "")
 )
 
@@ -212,6 +213,10 @@ type Identity struct {
 	// a signature. This service never interprets it; it hands it to the
 	// IdentityVerifier. It is never logged and never stored.
 	Credential string `json:"credential"`
+	// Game 是这次登录要落到的游戏（account.games 里的，维护者 2026-11-18）：同一个人在每个游戏里是不同的账号号。
+	// 空表示缺省游戏（Config.DefaultGame；account.games 只有一个游戏时就是它），没有缺省游戏时登录答 ErrGameInvalid。
+	// Login 交给验证器的 Identity 上它已经补成实际的游戏：同一渠道在不同游戏用不同应用号时验证器按它分支。
+	Game string `json:"game,omitempty"`
 }
 
 func (i Identity) Validate() error {
@@ -224,38 +229,79 @@ func (i Identity) Validate() error {
 	return nil
 }
 
-// AccountID is the stable account key, derived from the verified identity.
-// Derivation is deterministic so the same verified identity always maps to the
-// same account without a lookup table.
-func (i Identity) AccountID() string {
-	channel := strings.ToLower(strings.TrimSpace(string(i.Channel)))
-	return strings.NewReplacer("%", "%25", ":", "%3A").Replace(channel) + ":" + strings.TrimSpace(i.OpenID)
+// identityKey 是身份记录（IdentityRecord）的键：渠道确认的 (渠道, open id)，渠道转小写、去掉首尾空白并转义 % 与 :，
+// 所以 ("vendor:a", "b") 与 ("vendor", "a:b") 是两个键。它只在 account 内部：账号号不由它派生（账号号是计数器发的，
+// 看不出是谁），交出去的账号记录上也不带它。
+func identityKey(channel Channel, openID string) string {
+	normalized := strings.ToLower(strings.TrimSpace(string(channel)))
+	return strings.NewReplacer("%", "%25", ":", "%3A").Replace(normalized) + ":" + strings.TrimSpace(openID)
 }
 
-// Account is one player's account across servers.
+// Account 是一个人在一个游戏里的账号（维护者 2026-11-18：一套 account 服务多个游戏，同一个人在每个游戏里是
+// 不同的账号号）。lobby、relay、game 与客户端看到的账号号就是它的 ID；角色、slot、进服票据都挂在它上面。
+// 封号、凭证版本、gt2 代数不在这里，在这个人的身份记录上（IdentityRecord），各游戏共用。
 type Account struct {
-	ID      string  `json:"id"`
-	Channel Channel `json:"channel"`
-	OpenID  string  `json:"open_id"`
-	// Banned blocks login and role creation. It is here rather than in a
-	// separate service because login is the only place it can be enforced
-	// cheaply.
-	Banned          bool  `json:"banned"`
-	CreatedAtUnix   int64 `json:"created_at_unix"`
-	LastLoginAtUnix int64 `json:"last_login_at_unix"`
+	// ID 是账号号：account 的全局计数器发的十进制数（Config.AccountIDs），各游戏不重复，看不出渠道与 open id。
+	ID string `json:"id"`
+	// Game 是这个账号所属的游戏（account.games 里的）。
+	Game string `json:"game"`
+	// Identity 是所属身份记录的键（identityKey）。只在存储里：Login、ValidateAccountTicket 交出去的账号上它是空的
+	// （public）——键里有渠道的 open id，交出去就把这个人在各个游戏里的账号连了起来。
+	Identity        string `json:"identity,omitempty"`
+	CreatedAtUnix   int64  `json:"created_at_unix"`
+	LastLoginAtUnix int64  `json:"last_login_at_unix"`
 	// AdminNote and AdminActionAtUnix record the last operator intervention
 	// on this account (Admin.ResolvePendingCreation). They live here rather
 	// than on the slot because the intervention removes the slot; the account
 	// is the record that remains for the next reader.
 	AdminNote         string `json:"admin_note,omitempty"`
 	AdminActionAtUnix int64  `json:"admin_action_at_unix,omitempty"`
-	// GameTokenGeneration 是这个账号的游戏账号 token 代数（game_token.go）：签发时写进 token，校验时与这里比较，
-	// 不相等的拒绝。RevokeGameTokens 把它加一，在此之前签发的 token 随之全部失效。只增不减；零是从未吊销过。
+}
+
+// public 是交给 account 之外的那份账号：去掉身份键。
+func (a Account) public() Account {
+	a.Identity = ""
+	return a
+}
+
+// IdentityRecord 是一个人（渠道确认的 渠道 + open id）在 account 里的身份级记录（维护者 2026-11-18）：他在各个游戏里的
+// 账号号，以及各游戏共用的封号、凭证版本与 gt2 代数。只在 account 内部与运维面（Admin.SetIdentityBanned）：没有任何
+// 总线接口返回它，客户端与游戏代码拿不到别的游戏的账号号，也看不出两个账号号是同一个人。
+type IdentityRecord struct {
+	Key     string  `json:"key"`
+	Channel Channel `json:"channel"`
+	OpenID  string  `json:"open_id"`
+	// Accounts 是 游戏 -> 这个人在那个游戏里的账号号。一个游戏一旦写下就不再改（Login 只在没有时写）。
+	Accounts map[string]string `json:"accounts,omitempty"`
+	// Banned 挡住这个人在所有游戏的登录、票据、游戏账号 token、建角与进服（按游戏封号以后再加）。
+	Banned bool `json:"banned"`
+	// GameTokenGeneration 是这个人的游戏账号 token 代数（game_token.go）：签发时写进 token，校验时与这里比较，不相等的拒绝。
+	// RevokeGameTokens 与凭证版本变化把它加一，这个人所有游戏在此之前签发的 token 随之全部失效。只增不减；零是从未吊销过。
 	GameTokenGeneration uint64 `json:"game_token_generation,omitempty"`
-	// CredentialVersion 是上一次经渠道确认身份时渠道给的凭证版本（Verified.CredentialVersion，维护者 2026-11-18）。
-	// 空表示渠道从没给过。Login 发现渠道这次给的与它不同（且它不空）时把 GameTokenGeneration 加一，再换成新值；
+	// CredentialVersion 是上一次经渠道确认身份时渠道给的凭证版本（Verified.CredentialVersion，维护者 2026-11-18 选 B）。
+	// 空表示渠道从没给过。任何一个游戏的 Login 发现渠道这次给的与它不同（且它不空）时把 GameTokenGeneration 加一，再换成新值；
 	// 渠道这次没给时不动它。
 	CredentialVersion string `json:"credential_version,omitempty"`
+	CreatedAtUnix     int64  `json:"created_at_unix"`
+	// AdminNote 与 AdminActionAtUnix 记最近一次运维对这个身份的操作（封号、解封），时间是系统时间。
+	AdminNote         string `json:"admin_note,omitempty"`
+	AdminActionAtUnix int64  `json:"admin_action_at_unix,omitempty"`
+}
+
+// withAccount 返回记下 game -> accountID 的副本。映射表复制一份再改：存储交出来的值（内存存储）与这份记录共用底层 map。
+func (r IdentityRecord) withAccount(game, accountID string) IdentityRecord {
+	r.Accounts = maps.Clone(r.Accounts)
+	if r.Accounts == nil {
+		r.Accounts = map[string]string{}
+	}
+	r.Accounts[game] = accountID
+	return r
+}
+
+// clone 复制映射表，交给调用方的记录不与存储共用。
+func (r IdentityRecord) clone() IdentityRecord {
+	r.Accounts = maps.Clone(r.Accounts)
+	return r
 }
 
 // ServerStatus says whether a server accepts new roles.

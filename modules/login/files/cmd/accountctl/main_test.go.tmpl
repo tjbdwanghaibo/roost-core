@@ -33,11 +33,14 @@ func loginCtlAccountOn(t *testing.T, servers versionstore.Store[int32, svcaccoun
 		t.Fatal(err)
 	}
 	cfg := svcaccount.Config{
-		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
-		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
-		Servers:  servers,
-		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
-		Names:    names,
+		Accounts:   versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
+		AccountIDs: svcaccount.NewMemoryAccountIDs(),
+		Roles:      versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:    servers,
+		Slots:      versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Names:      names,
+		Games:      []svcaccount.GameSpec{{Name: "main"}},
 		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
 			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
 		}),
@@ -149,9 +152,13 @@ func TestLoginAccountctlRefusesBadArgumentsWithoutWriting(t *testing.T) {
 		"show with a bad flag":    {[]string{"show-server", "-id", "1000"}, "show-server: flag provided but not defined"},
 		"revoke without -account": {[]string{"revoke-game-tokens"}, "-account is required"},
 		"revoke with a blank one": {[]string{"revoke-game-tokens", "-account", "  "}, "-account is required"},
-		"revoke with an argument": {[]string{"revoke-game-tokens", "-account", "dev:alice", "now"}, "unexpected arguments"},
+		"revoke with an argument": {[]string{"revoke-game-tokens", "-account", "17", "now"}, "unexpected arguments"},
 		"revoke with a bad flag":  {[]string{"revoke-game-tokens", "-player", "100001"}, "revoke-game-tokens: flag provided but not defined"},
-		"revoke a missing one":    {[]string{"revoke-game-tokens", "-account", "dev:nobody"}, "account not found"},
+		"revoke a missing one":    {[]string{"revoke-game-tokens", "-account", "999999"}, "account not found"},
+		"ban without -account":    {[]string{"ban", "-note", "cheating"}, "ban: -account is required"},
+		"ban without a note":      {[]string{"ban", "-account", "999999"}, "note"},
+		"unban a missing one":     {[]string{"unban", "-account", "999999", "-note", "appeal"}, "account not found"},
+		"ban with an argument":    {[]string{"ban", "-account", "17", "-note", "x", "now"}, "unexpected arguments"},
 	} {
 		_, printed, err := loginCtlRun(t, service, test.args...)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -423,5 +430,54 @@ func TestLoginAccountctlRevokesAnAccountsGameTokens(t *testing.T) {
 	}
 	if _, err := service.ValidateGameToken(ctx, after); !errors.Is(err, svcaccount.ErrSessionInvalid) {
 		t.Fatalf("the generation-1 token after the second revocation: %v", err)
+	}
+}
+
+// ban / unban（维护者 2026-11-18）：封号在身份级。用这个人在 party 的账号号封，他在 brawl 的账号也登录不了；打印的身份
+// 记录列出他在两个游戏的账号号（运维面）。解封之后两个游戏都能登录。
+func TestLoginAccountctlBansThePersonInEveryGame(t *testing.T) {
+	service := loginCtlAccountOn(t, versionstore.NewMemoryStore[int32, svcaccount.GameServer](), nil, func(c *svcaccount.Config) {
+		c.Games, c.DefaultGame = []svcaccount.GameSpec{{Name: "party"}, {Name: "brawl"}}, "party"
+	})
+	ctx := context.Background()
+	login := func(game string) (svcaccount.Account, error) {
+		return service.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Game: game})
+	}
+	party, err := login("party")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brawl, err := login("brawl")
+	if err != nil || brawl.ID == party.ID {
+		t.Fatalf("alice in brawl = %+v, %v; want an account other than party's %s", brawl, err, party.ID)
+	}
+	command := func(args ...string) svcaccount.IdentityRecord {
+		t.Helper()
+		var out bytes.Buffer
+		if err := dispatch(ctx, service, args, &out); err != nil {
+			t.Fatalf("accountctl %s: %v", strings.Join(args, " "), err)
+		}
+		var printed svcaccount.IdentityRecord
+		if err := json.Unmarshal(out.Bytes(), &printed); err != nil {
+			t.Fatalf("accountctl %s printed %q: %v", strings.Join(args, " "), out.String(), err)
+		}
+		return printed
+	}
+	banned := command("ban", "-account", party.ID, "-note", "cheating, ticket 123")
+	if !banned.Banned || banned.Accounts["party"] != party.ID || banned.Accounts["brawl"] != brawl.ID || banned.AdminNote != "cheating, ticket 123" {
+		t.Fatalf("ban printed %+v", banned)
+	}
+	for _, game := range []string{"party", "brawl"} {
+		if _, err := login(game); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+			t.Fatalf("a banned person logged into %s: %v", game, err)
+		}
+	}
+	if unbanned := command("unban", "-account", brawl.ID, "-note", "appeal accepted"); unbanned.Banned {
+		t.Fatalf("unban printed %+v", unbanned)
+	}
+	for _, game := range []string{"party", "brawl"} {
+		if _, err := login(game); err != nil {
+			t.Fatalf("logging into %s after the unban: %v", game, err)
+		}
 	}
 }

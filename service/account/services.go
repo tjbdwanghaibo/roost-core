@@ -65,13 +65,17 @@ func newServiceTable(services []ServiceSpec) ([]ServiceSpec, string, error) {
 	return table, defaultGame, nil
 }
 
-// CheckGamesAndServices 检查 account.games 与 account.services 的写法（名字、重复、寿命、类型），与 New 的检查
+// CheckGamesAndServices 检查 account.games、account.default_game 与 account.services 的写法（名字、重复、寿命、缺省游戏、类型），与 New 的检查
 // 是同一处。wiring 在读配置时调它，写错的配置在进程启动的配置阶段就报出来。
-func CheckGamesAndServices(games []GameSpec, services []ServiceSpec) error {
-	if _, err := newGameTable(games); err != nil {
+func CheckGamesAndServices(games []GameSpec, defaultGame string, services []ServiceSpec) error {
+	table, err := newGameTable(games)
+	if err != nil {
 		return err
 	}
-	_, _, err := newServiceTable(services)
+	if _, err := pickDefaultGame(table, defaultGame); err != nil {
+		return err
+	}
+	_, _, err = newServiceTable(services)
 	return err
 }
 

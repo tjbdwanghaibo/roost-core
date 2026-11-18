@@ -1,0 +1,86 @@
+{
+  "modules": [
+    {
+      "name": "account_auth",
+      "want": 7,
+      "passed": 7,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "enter",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login",
+      "want": 34,
+      "passed": 34,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login+enter",
+      "want": 6,
+      "passed": 6,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal",
+      "want": 15,
+      "passed": 15,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal+login",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 62,
+      "passed": 62,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}

@@ -833,12 +833,15 @@ func (c *BusClient) call(ctx context.Context, method string, req any, resp any) 
 	return c.rpc.CallChecked(ctx, 0, method, req, resp, "account call failed")
 }
 
-// Login verifies a channel identity and returns the account it maps to,
-// creating it on first sight. The channel is asked; the account id is
-// never read from the request.
+// Login verifies a channel identity and returns the account it has in
+// identity.Game, creating it on first sight. The channel is asked; the
+// account id is never read from the request.
 //
-// 渠道在 Verified.CredentialVersion 里给了凭证版本、且与账号上存的不同（之前存过）时，这次登录把游戏账号
-// token 的代数加一（与 RevokeGameTokens 同一个计数，维护者 2026-11-18）；被封的账号登录照样被拒，版本变化照样记下。
+// 账号号按游戏分开（维护者 2026-11-18，identity_accounts.go）：同一个人在每个游戏里是不同的账号号。identity.Game
+// 必须在 account.games 里，空时取缺省游戏，没有缺省游戏答 ErrGameInvalid。返回的账号不带身份键，别的游戏的账号号
+// 不经任何总线接口交出。渠道在 Verified.CredentialVersion 里给了凭证版本、且与身份上存的不同（之前存过）时，这次
+// 登录把这个人的游戏账号 token 代数加一（与 RevokeGameTokens 同一个计数，所有游戏一起）；被封的人登录照样被拒，
+// 版本变化照样记下。
 // Login implements Accounts.
 func (c *BusClient) Login(ctx context.Context, identity Identity) (Account, error) {
 	var resp rpcLoginResponse
@@ -981,8 +984,8 @@ func (c *BusClient) ListServerPresence(ctx context.Context) ([]ServerPresence, e
 	return resp.Presences, err
 }
 
-// IssueAccountTicket 给 accountID 签一张账号票据（寿命 account.ticket_ttl）。可信调用方在 Login 之后
-// 给出 accountID。只读；账号不存在、被封时拒绝。
+// IssueAccountTicket 给 accountID 签一张账号票据（at2，绑定账号所属的游戏，寿命 account.ticket_ttl）。可信调用方在
+// Login 之后给出 accountID。只读；账号不存在、被封时拒绝。
 // IssueAccountTicket implements Accounts.
 func (c *BusClient) IssueAccountTicket(ctx context.Context, accountID string) (AccountTicket, error) {
 	var resp rpcIssueAccountTicketResponse
@@ -992,7 +995,7 @@ func (c *BusClient) IssueAccountTicket(ctx context.Context, accountID string) (A
 	return resp.Ticket, err
 }
 
-// ValidateAccountTicket 校验账号票据并返回它绑定的账号。无效的票据一律 ErrSessionInvalid；
+// ValidateAccountTicket 校验账号票据并返回它绑定的账号（带游戏、不带身份键）。无效的票据一律 ErrSessionInvalid；
 // 账号不在或被封时 ErrAccountMissing / ErrIdentityDenied。只读。
 // ValidateAccountTicket implements Accounts.
 func (c *BusClient) ValidateAccountTicket(ctx context.Context, ticket string) (Account, error) {
@@ -1030,7 +1033,7 @@ func (c *BusClient) EnterServer(ctx context.Context, ticket string) (ServerEntry
 
 // IssueGameToken 凭账号票据给它的账号签一张 game 的游戏账号 token（gt2，寿命 account.games.<game>.token_ttl）。
 // 只读。账号只取自票据：票据无效 ErrSessionInvalid；账号不在、被封 ErrAccountMissing / ErrIdentityDenied；
-// game 不在 account.games 里 ErrGameInvalid。
+// game 不在 account.games 里、或不是票据的游戏 ErrGameInvalid（只给票据自己的游戏刷新，维护者 2026-11-18）。
 // IssueGameToken implements Accounts.
 func (c *BusClient) IssueGameToken(ctx context.Context, accountTicket string, game string) (GameToken, error) {
 	var resp rpcIssueGameTokenResponse
@@ -1053,7 +1056,7 @@ func (c *BusClient) ValidateGameToken(ctx context.Context, token string) (GameAc
 	return resp.Account, err
 }
 
-// RevokeGameTokens 吊销 accountID 在此之前签发的全部游戏账号 token（账号上的代数加一并落库），返回新的代数；
+// RevokeGameTokens 吊销 accountID 所属的人在此之前签发的全部游戏账号 token（身份上的代数加一并落库，所有游戏一起），返回新的代数；
 // 之后签发的照常可用，封号状态与别的票据不受影响。账号不存在 ErrAccountMissing。调用方是运维（accountctl）与
 // 需要当场吊销的那一方（报告泄露、换绑；改密码由登录时的凭证版本自动加一，见 Login）；可信调用方提供 accountID，信任模型同 SelectRole。在总线上：它只会让
 // token 失效，不会放进任何人。

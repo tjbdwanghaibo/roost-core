@@ -41,7 +41,8 @@ func newRehomeAccounts(t *testing.T) *svcaccount.Service {
 		t.Fatal(err)
 	}
 	accounts, err := svcaccount.New(svcaccount.Config{
-		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
+		AccountIDs: svcaccount.NewMemoryAccountIDs(), Games: []svcaccount.GameSpec{{Name: "main"}},
 		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
 		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),

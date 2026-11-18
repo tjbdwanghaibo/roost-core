@@ -65,7 +65,8 @@ func newLoginPresenceWorld(t *testing.T) *loginPresenceWorld {
 		t.Fatal(err)
 	}
 	service, err := svcaccount.New(svcaccount.Config{
-		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Roles: versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
+		AccountIDs: svcaccount.NewMemoryAccountIDs(), Games: []svcaccount.GameSpec{{Name: "main"}}, Roles: versionstore.NewMemoryStore[int64, svcaccount.Role](),
 		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](), Slots: versionstore.NewMemoryStore[string, svcaccount.Slot](), Names: names,
 		Verifier: svcaccount.VerifierFunc(func(context.Context, svcaccount.Identity) (svcaccount.Verified, error) {
 			return svcaccount.Verified{}, errors.New("no logins here")

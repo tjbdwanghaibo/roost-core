@@ -16,6 +16,8 @@ func modConfig() *viper.Viper {
 	cfg := viper.New()
 	cfg.Set("account.key_prefix", "roost:account")
 	cfg.Set("account.session_secret", "s3cret")
+	// 登录必须落到一个游戏（维护者 2026-11-18）：account.games 至少一个，生成器给新工程写一个以工程名命名的。
+	cfg.Set("account.games", map[string]any{"main": map[string]any{"token_ttl": "2h"}})
 	return cfg
 }
 
@@ -196,8 +198,9 @@ func TestGeneratedClientModRefusesANegativeCallTimeout(t *testing.T) {
 	}
 }
 
-// account.games 与 account.services（方案 2026-11-16 §4.1）：配置里的 map 原样交给领域层；写错的名字、类型与寿命在
-// Init 就拒绝，点名是哪一项；都不写时两者为空，行为与只有 game 区服的工程相同。
+// account.games、account.default_game 与 account.services（方案 2026-11-16 §4.1，2026-11-18 改定）：配置里的 map 原样交给
+// 领域层；写错的名字、类型、寿命与缺省游戏在 Init 就拒绝，点名是哪一项。account.games 至少一个（登录必须落到一个游戏）；
+// 不写 services 时为空，行为与只有 game 区服的工程相同。
 func TestModReadsGamesAndServices(t *testing.T) {
 	newMod := func() *Mod { return NewMod(acceptingVerifier(), &durableAllocator{}, simpleNameRules(), nil) }
 
@@ -205,8 +208,24 @@ func TestModReadsGamesAndServices(t *testing.T) {
 	if err := plain.Init(modConfig()); err != nil {
 		t.Fatal(err)
 	}
-	if len(plain.games) != 0 || len(plain.services) != 0 {
-		t.Fatalf("a config without games and services read games %v, services %v", plain.games, plain.services)
+	if len(plain.games) != 1 || plain.games[0].Name != "main" || plain.defaultGame != "" || len(plain.services) != 0 {
+		t.Fatalf("a single-game config read games %v, default %q, services %v", plain.games, plain.defaultGame, plain.services)
+	}
+	noGames := modConfig()
+	noGames.Set("account.games", map[string]any{})
+	if err := newMod().Init(noGames); err == nil || !strings.Contains(err.Error(), "account.games lists no game") {
+		t.Fatalf("Init without any game = %v; want a refusal naming account.games", err)
+	}
+	defaulted := modConfig()
+	defaulted.Set("account.games", map[string]any{"party": map[string]any{"token_ttl": "1h"}, "brawl": map[string]any{"token_ttl": "1h"}})
+	defaulted.Set("account.default_game", "brawl")
+	withDefault := newMod()
+	if err := withDefault.Init(defaulted); err != nil || withDefault.defaultGame != "brawl" {
+		t.Fatalf("default_game brawl: %v, read %q", err, withDefault.defaultGame)
+	}
+	defaulted.Set("account.default_game", "chess")
+	if err := newMod().Init(defaulted); err == nil || !strings.Contains(err.Error(), "chess") {
+		t.Fatalf("a default_game outside account.games: %v; want a refusal naming it", err)
 	}
 
 	cfg := modConfig()

@@ -234,20 +234,22 @@ func (portal *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
 	webroute.WriteResult(w, http.StatusOK, response, err)
 }
 
-// login 向 account 确认身份，再向它要一张账号票据。
+// login 向 account 确认身份并落到一个游戏的账号，再向它要一张账号票据。
 //
 // 票据绑定的是 account 返回的账号（渠道确认过的身份），不是请求里的 open_id：拿自己的凭据配上别人的
-// open_id，得到的仍是自己的账号。account 拒绝登录（凭据不对、账号被封、渠道没接）时原样带着它的码答回去。
+// open_id，得到的仍是自己的账号。account 拒绝登录（凭据不对、账号被封、渠道没接、游戏不对）时原样带着它的码答回去。
 //
-// 带了 game 时，账号票据签好之后再凭它向 account 要一张这个游戏的游戏账号 token；要不到（游戏不在 account.games 里）
-// 整个登录失败，不交出一个缺了 token 的“成功”。
+// 账号号按游戏分开（维护者 2026-11-18）：game 原样交给 account（Identity.Game），同一个人在每个游戏里是不同的账号号；
+// 不带 game 时 account 落到它的缺省游戏（account.default_game，只有一个游戏时就是它），没有缺省游戏答 560120。
+// 带了 game 时，账号票据签好之后再凭它向 account 要一张这个游戏的游戏账号 token；要不到整个登录失败，不交出一个缺了
+// token 的“成功”。
 func (portal *Portal) login(ctx context.Context, request loginRequest) (loginResponse, error) {
 	channel, openID := strings.TrimSpace(request.Channel), strings.TrimSpace(request.OpenID)
 	if channel == "" || len(channel) > MaxChannelBytes || openID == "" || len(openID) > MaxOpenIDBytes || len(request.Credential) > MaxCredentialBytes ||
 		len(request.Game) > MaxNameBytes {
 		return loginResponse{}, invalidRequest()
 	}
-	account, err := portal.accounts.Login(ctx, svcaccount.Identity{Channel: svcaccount.Channel(channel), OpenID: openID, Credential: request.Credential})
+	account, err := portal.accounts.Login(ctx, svcaccount.Identity{Channel: svcaccount.Channel(channel), OpenID: openID, Credential: request.Credential, Game: request.Game})
 	if err != nil {
 		if svcaccount.Code(err) == svcaccount.CodeIdentityDenied {
 			slog.InfoContext(ctx, "portal: channel login refused", "channel", channel, "code", svcaccount.Code(err))
@@ -272,7 +274,7 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 		}
 		response.GameToken, response.GameTokenExpiresAt = token.Token, token.ExpiresAtUnix
 	}
-	slog.InfoContext(ctx, "portal: login completed", "account_id", account.ID, "channel", channel, "game", request.Game)
+	slog.InfoContext(ctx, "portal: login completed", "account_id", account.ID, "channel", channel, "game", account.Game)
 	return response, nil
 }
 
@@ -546,8 +548,9 @@ func (portal *Portal) handleGameToken(w http.ResponseWriter, r *http.Request) {
 	webroute.WriteResult(w, http.StatusOK, response, err)
 }
 
-// issueGameToken 把账号票据与游戏名交给 account 换一张游戏账号 token。账号只取自票据（account 自己校验它），
-// 游戏不在 account.games 里时带着 account 的码（560120）拒绝。
+// issueGameToken 把账号票据与游戏名交给 account 换一张游戏账号 token。账号只取自票据（account 自己校验它）。
+// 只能换票据自己那个游戏的（刷新）：游戏不在 account.games 里、或不是票据的游戏时带着 account 的码（560120）拒绝；
+// 要玩另一个游戏，带那个游戏重新登录（维护者 2026-11-18）。
 func (portal *Portal) issueGameToken(ctx context.Context, request gameTokenRequest) (gameTokenResponse, error) {
 	if request.Game == "" || len(request.Game) > MaxNameBytes {
 		return gameTokenResponse{}, invalidRequest()

@@ -158,6 +158,25 @@ func directServiceConfigSection(m Manifest, service string) string {
 	return schema.StarterYAML(vars)
 }
 
+// accountServiceConfigSection 是托管 account 的服务配置里的 account: 段：kitConfigSchemas 的起始段，另写一个以工程名命名的
+// 游戏（account.games 是 map，起始段写不出来）。登录必须落到 account.games 里的一个游戏（维护者 2026-11-18），只有一个游戏时
+// 它就是缺省游戏，客户端登录不用带 game；传统区服工程就是这一个游戏。名字与 lobby.games 的同一处派生（lobbyGameName），
+// 之后 roost add lobby 写的是同一个游戏。
+func accountServiceConfigSection(m Manifest) string {
+	var schema configschema.Schema
+	for _, key := range kitConfigSchemas["account"].Keys {
+		schema.Keys = append(schema.Keys, key)
+		if key.Name == "account.games" {
+			schema.Keys = append(schema.Keys, configschema.Key{
+				Name: "account.games." + lobbyGameName(m.Project.Name) + ".token_ttl", Kind: configschema.KindDuration,
+				// 不带 help：与 roost add lobby 补写的游戏条目同一个样子（configureAccountForLobbyRelay）。
+				Starter: true, Example: accountDefaultGameTokenTTL,
+			})
+		}
+	}
+	return schema.StarterYAML(projectNameVars(m.Project.Name))
+}
+
 // devRunRelayTokenKey 是 deploy/dev/run.sh 给托管 lobby / relay、或声明了 websocket 的工程加的一段：客户端端口的说明
 // （本机进程直接监听，不需要映射），以及 relay 令牌密钥变量没设时用的开发密钥。
 func devRunRelayTokenKey(m Manifest) string {

@@ -1,0 +1,6 @@
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	3.624s
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	3.661s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lobby	2.093s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/relay	3.354s
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	11.827s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/account	3.925s

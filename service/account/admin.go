@@ -80,6 +80,13 @@ type Admin interface {
 	// variant: Accounts.BeginRoleTransfer and AbortRoleTransfer already take
 	// a note.
 	CommitRoleTransferWithNote(ctx context.Context, playerID int64, transferID, note string) (RoleBinding, error)
+
+	// SetIdentityBanned bans or unbans the person an account belongs to
+	// (identity_accounts.go, maintainer 2026-11-18): the ban is identity-level,
+	// so every game account of that person is refused at once. It returns the
+	// identity record — the person's account in every game — which is why it is
+	// an operator method and not on the bus. The note is required.
+	SetIdentityBanned(ctx context.Context, accountID string, banned bool, note string) (IdentityRecord, error)
 }
 
 // MaxAdminNoteBytes bounds an operator note. It is stored on the account and

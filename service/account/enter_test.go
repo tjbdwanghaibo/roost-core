@@ -54,20 +54,35 @@ func mustAccountTicket(t *testing.T, s *Service, accountID string) string {
 	return ticket.Ticket
 }
 
+// banAccount 与 unbanAccount 直接改账号所属的身份记录（封号在身份级）；运维的入口 Admin.SetIdentityBanned 另有用例。
 func banAccount(t *testing.T, cfg Config, accountID string) {
 	t.Helper()
-	if _, _, err := cfg.Accounts.Update(context.Background(), accountID, func(current Account, found bool) (Account, bool, error) {
+	setBanned(t, cfg, accountID, true)
+}
+
+func unbanAccount(t *testing.T, cfg Config, accountID string) {
+	t.Helper()
+	setBanned(t, cfg, accountID, false)
+}
+
+func setBanned(t *testing.T, cfg Config, accountID string, banned bool) {
+	t.Helper()
+	account, found, err := cfg.Accounts.Get(context.Background(), accountID)
+	if err != nil || !found {
+		t.Fatalf("read account %s: found %v, %v", accountID, found, err)
+	}
+	if _, _, err := cfg.Identities.Update(context.Background(), account.Value.Identity, func(current IdentityRecord, found bool) (IdentityRecord, bool, error) {
 		if !found {
-			return current, false, errors.New("no such account")
+			return current, false, errors.New("no such identity")
 		}
-		current.Banned = true
+		current.Banned = banned
 		return current, true, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// 账号票据：account 签、account 验。形状 at1.<过期秒>.<账号>.<签名>，缺省 10 分钟；校验返回它绑定的账号；
+// 账号票据：account 签、account 验。形状 at2.<过期秒>.<游戏>.<账号>.<签名>，缺省 10 分钟；校验返回它绑定的账号；
 // 签发只读；不存在或被封的账号签不出来。有效期可以另配，与会话的有效期是两个量。
 func TestAccountTicketsAreIssuedAndValidatedByAccount(t *testing.T) {
 	s, _, cfg := pendingContractService(t)
@@ -82,17 +97,17 @@ func TestAccountTicketsAreIssuedAndValidatedByAccount(t *testing.T) {
 		}
 		parts := strings.Split(issued.Ticket, ".")
 		// 时钟在 Unix 1700000000。
-		if len(parts) != 4 || parts[0] != "at1" || parts[1] != "1700000600" || issued.ExpiresAtUnix != 1_700_000_600 {
-			t.Fatalf("%s: ticket = %q (expires %d), want at1.1700000600.<account>.<signature>", transport, issued.Ticket, issued.ExpiresAtUnix)
+		if len(parts) != 5 || parts[0] != "at2" || parts[1] != "1700000600" || parts[2] != "main" || issued.ExpiresAtUnix != 1_700_000_600 {
+			t.Fatalf("%s: ticket = %q (expires %d), want at2.1700000600.main.<account>.<signature>", transport, issued.Ticket, issued.ExpiresAtUnix)
 		}
-		if decoded, err := base64.RawURLEncoding.DecodeString(parts[2]); err != nil || string(decoded) != account.ID {
+		if decoded, err := base64.RawURLEncoding.DecodeString(parts[3]); err != nil || string(decoded) != account.ID {
 			t.Fatalf("%s: the account segment decodes to %q, %v", transport, decoded, err)
 		}
-		if signature, err := base64.RawURLEncoding.DecodeString(parts[3]); err != nil || len(signature) != 32 {
+		if signature, err := base64.RawURLEncoding.DecodeString(parts[4]); err != nil || len(signature) != 32 {
 			t.Fatalf("%s: the signature is %d bytes, %v", transport, len(signature), err)
 		}
 		validated, err := accounts.ValidateAccountTicket(ctx, issued.Ticket)
-		if err != nil || validated.ID != account.ID || validated.OpenID != "alice" {
+		if err != nil || validated.ID != account.ID || validated.Game != "main" || validated.Identity != "" {
 			t.Fatalf("%s: ValidateAccountTicket = %+v, %v", transport, validated, err)
 		}
 		// 各认各的。
@@ -174,7 +189,7 @@ func TestEveryBadTicketIsRefusedTheSameWay(t *testing.T) {
 	}
 	kinds := []kind{
 		{
-			name: "account ticket", ticket: accountTicket, version: "at1", domain: "roost.account.account-ticket\n", otherDomain: "roost.account.enter-ticket\n",
+			name: "account ticket", ticket: accountTicket, version: "at2", domain: "roost.account.account-ticket\n", otherDomain: "roost.account.enter-ticket\n",
 			foreign: mustAccountTicket(t, other, otherAccount.ID),
 			present: func(ticket string) error {
 				got, err := s.ValidateAccountTicket(ctx, ticket)
@@ -234,7 +249,7 @@ func TestEveryBadTicketIsRefusedTheSameWay(t *testing.T) {
 		later[1] = "1900000000"
 		refused("a later expiry under the same signature", strings.Join(later, "."))
 		body := strings.Join(parts[:last], ".")
-		nextVersion := strings.Replace(body, k.version, k.version[:2]+"2", 1)
+		nextVersion := strings.Replace(body, k.version, k.version[:2]+"9", 1)
 		refused("a correctly signed ticket of another version", sign(k.domain, nextVersion))
 		refused("signed without the domain prefix", sign("", body))
 		refused("signed under the other ticket's domain", sign(k.otherDomain, body))

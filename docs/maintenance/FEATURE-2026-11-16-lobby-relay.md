@@ -34,8 +34,8 @@
 ## 3. 总体结构
 
 ```
-客户端 ──HTTP──▶ account/portal：登录，拿账号票据 at1
-客户端 ──HTTP──▶ account/portal：凭 at1 + game 换游戏账号 token gt2（新增）
+客户端 ──HTTP──▶ account/portal：登录，拿账号票据 at2（2026-11-18 起带游戏）
+客户端 ──HTTP──▶ account/portal：凭 at2 换它自己那个游戏的游戏账号 token gt2（新增；2026-11-18 起只刷新票据自己的游戏）
 客户端 ──HTTP──▶ lobby：凭 gt2 建房 / 列房 / 加入
                    └─ 返回 relay 地址 + 短期 relay 令牌
 客户端 ──TCP / WebSocket──▶ relay：凭令牌接入房间
@@ -57,7 +57,7 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
 在现有能力之上**另加**，不改已有的三种票据和登录流程。
 
 - **是什么**：一张带游戏名的短期账号凭证，回答"这是哪个账号、要玩哪个游戏"。不带区服、不带角色：开房间场景没有区服和角色。
-- **格式**：`gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，与现有票据同一把会话密钥、独立的域前缀 `roost.account.game-token\n`。和 at1、et1 互相不能冒充，长度上限同为 `MaxTicketBytes`。
+- **格式**：`gt2.<过期秒>.<游戏>.<账号>.<代数>.<签名>`，与现有票据同一把会话密钥、独立的域前缀 `roost.account.game-token\n`。和 at2、et1 互相不能冒充，长度上限同为 `MaxTicketBytes`。
 - **配置**：`account.games` 列出这套 account 服务的游戏；不在列表里的游戏不签发。
   ```yaml
   account:
@@ -69,12 +69,21 @@ relay ──NATS───▶ lobby：房间心跳、成员进出、换 host、�
   - 已登录的客户端：portal 新增 `POST /portal/game-token`（实施后：请求体 `{account_ticket, game}`，答 `{ok, game, game_token, expires_at}`，见 `modules/portal/README.md`）；
   - 一步到位：登录接口新增可选参数 `game`，登录成功时在原有答复里多带一张 `gt2`。
 - **account 新增 RPC**：
-  - `IssueGameToken(ctx, accountTicket, game) (GameToken, error)`：校验 at1、检查账号状态与 `game` 在 `account.games` 里，再签发；
+  - `IssueGameToken(ctx, accountTicket, game) (GameToken, error)`：校验 at2（2026-11-18 起 `game` 必须是票据自己的游戏）、检查账号状态与 `game` 在 `account.games` 里，再签发；
   - `ValidateGameToken(ctx, token, game) (Account, error)`：验签、看过期、核对 token 里的游戏等于 `game`，再读一次账号状态，被封的当场拒绝。错误码与 `ValidateAccountTicket` 同一套（`ErrSessionInvalid` / `ErrIdentityDenied`）。
 - **谁用**：lobby。每个 lobby 配置自己服务的游戏列表 `lobby.games`，收到请求时调用 `ValidateGameToken(token, 请求里的 game)`；拿别的游戏的 token 来，当场拒绝。lobby 不持有密钥，也不自己验签。
-- **多个游戏共用一套账号**：账号是全局的，同一个人在各个游戏里是同一个账号号；封号仍是全局的（按游戏封号以后需要再加，不在本期）。token 里带了游戏名，大厅和 relay 的房间都按游戏隔开。
-- **为什么不直接用 at1**：at1 不带游戏，一个游戏的客户端拿它可以去另一个游戏的大厅。gt2 把游戏写进签名，lobby 只认自己的游戏；寿命也可以按游戏单独配置。
-- **吊销（交接 C6，维护者 2026-11-17 选“代数”，已实施）**：账号记录多一个 token 代数（`Account.GameTokenGeneration`，只增不减），签发时写进 token 的“代数”段（签名覆盖它；格式因此从 `gt1.<过期秒>.<游戏>.<账号>.<签名>` 改成六段的 `gt2`，与 at1 四段、et1 五段、角色会话令牌两段都不同，旧 gt1 不再认），`ValidateGameToken` 把它与重读到的账号比较（校验本来就为封号重读账号，不多一次读），不等答 `ErrSessionInvalid`。`RevokeGameTokens(ctx, accountID)`（总线接口）把代数加一并落库：在此之前签发的全部失效，之后签发的照常可用；封号行为不变。触发：运维用 `accountctl revoke-game-tokens -account <账号号>`；改密码自动加一——account 没有改密码 / 改凭证的路径（身份由渠道确认，`Verifier`）；维护者 2026-11-18 选 B：渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本，`Login` 发现它与账号记录上存的（`Account.CredentialVersion`）不同就在同一次落库里把代数加一，第一次见到只记录、渠道不提供不动；手动的 `RevokeGameTokens` 仍在，用于当场吊销。不做：单张吊销、吊销时把人从正在进行的房间断开、portal 登出接口。
+- **多个游戏共用一套账号服务**（2026-11-18 维护者改定，替换原来的“账号是全局的，同一个人在各个游戏里是同一个账号号”；也替换接入说明里“按游戏另给玩家号”的设想）：一套 account **服务**多个游戏，不是一个账号号走遍各个游戏。
+  - 同一个人（同一渠道 + open id）在每个游戏里拿到**不同的账号号**；账号号只属于那个游戏。映射键是（游戏, 渠道, open id）→ 账号号。
+  - lobby、relay、game 和客户端看到的都是这个游戏的账号号；别的游戏的账号号、以及“它们是同一个人”这层关联，不交给客户端，也不交给工程自己写的游戏代码。account 内部留一条身份级记录（渠道, open id）→ {游戏: 账号号}，只给运维与封号用，任何总线接口都不返回它。
+  - 账号号仍由一个全局计数器发（各游戏不重复），是递增的十进制数；本期不做随机化（随机化可以防按号推算注册先后，留作可选）。
+  - 登录必须落到一个游戏：`Login` / `/portal/login` 带 `game`，必须在 `account.games` 里；`account.default_game`（或 `account.games` 只有一个游戏时就是它）让单游戏工程的客户端可以不带。传统区服工程就是 `account.games` 里的一个游戏，新生成的工程在 `config.account.yaml` 里写好这一个。
+  - 账号票据（at2）绑定游戏：`/portal/servers`、`/portal/enter` 都在这个游戏的账号上做；`/portal/game-token` 只给票据自己的游戏重签 gt2（刷新），不再能拿 A 游戏的票据换 B 游戏的 token。进服票据、角色绑定随之按游戏账号分开。
+  - 封号本期只有一种，在身份级：封一个人就是封他在所有游戏里的账号。`accountctl ban -account <账号号>` 由账号号找到身份再封。按游戏封号以后再加。
+  - 凭证版本与 gt2 代数也在身份级、各游戏共用：在任何一个游戏登录时发现密码变了，所有游戏的 gt2 一起失效；`RevokeGameTokens(账号号)` 吊销这个人在所有游戏的 gt2。C6 B 的其余语义不变（第一次见到只记录、空不动、不同加一、被封的登录照样记下版本）。
+  - 不变：lobby、relay、换服、合服、被踢名单、角色都按账号号工作，现在它就是游戏账号号。
+  - token 里带了游戏名，大厅和 relay 的房间都按游戏隔开。
+- **为什么不直接用 at1**：at1 不带游戏，一个游戏的客户端拿它可以去另一个游戏的大厅（2026-11-18 起账号票据是带游戏的 at2，gt2 仍是大厅认的那张：寿命按游戏配、可整代吊销）。gt2 把游戏写进签名，lobby 只认自己的游戏；寿命也可以按游戏单独配置。
+- **吊销（交接 C6，维护者 2026-11-17 选“代数”，已实施）**：账号记录多一个 token 代数（`Account.GameTokenGeneration`，只增不减），签发时写进 token 的“代数”段（签名覆盖它；格式因此从 `gt1.<过期秒>.<游戏>.<账号>.<签名>` 改成六段的 `gt2`，与 at1 四段、et1 五段、角色会话令牌两段都不同（2026-11-18 起账号票据是五段的 at2，与 et1 段数相同，靠版本前缀与签名域前缀区分），旧 gt1 不再认），`ValidateGameToken` 把它与重读到的账号比较（校验本来就为封号重读账号，不多一次读），不等答 `ErrSessionInvalid`。`RevokeGameTokens(ctx, accountID)`（总线接口）把代数加一并落库：在此之前签发的全部失效，之后签发的照常可用；封号行为不变。触发：运维用 `accountctl revoke-game-tokens -account <账号号>`；改密码自动加一——account 没有改密码 / 改凭证的路径（身份由渠道确认，`Verifier`）；维护者 2026-11-18 选 B：渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本，`Login` 发现它与账号记录上存的（`Account.CredentialVersion`）不同就在同一次落库里把代数加一，第一次见到只记录、渠道不提供不动；手动的 `RevokeGameTokens` 仍在，用于当场吊销。不做：单张吊销、吊销时把人从正在进行的房间断开、portal 登出接口。2026-11-18 起代数与凭证版本从账号记录移到身份级记录（`IdentityRecord.GameTokenGeneration` / `CredentialVersion`），各游戏共用，见上面“多个游戏共用一套账号服务”。
 
 #### 4.1.2 多个服务
 
@@ -307,7 +316,7 @@ relay 只负责：存最新一份、限间隔与大小、换 host 时交出去�
 ## 5. 验证计划
 
 - **单测**：
-  - 游戏账号 token：签发与校验、过期、篡改、拿 at1 / et1 冒充、游戏不在 `account.games`、拿 A 游戏的 token 进 B 游戏的大厅、封号后当场拒绝；
+  - 游戏账号 token：签发与校验、过期、篡改、拿 at2 / et1 冒充、游戏不在 `account.games`、拿 A 游戏的 token 进 B 游戏的大厅、封号后当场拒绝；
   - relay 令牌：签发与校验、过期、篡改、角色；
   - lobby：建房、满员、密码、房主改状态、Redis 过期；
   - relay：

@@ -75,7 +75,7 @@ func (s *Service) IssueEnterTicket(ctx context.Context, accountID string, server
 	if serverID <= 0 {
 		return EnterTicket{}, fmt.Errorf("%w: server id %d is not positive", ErrServerInvalid, serverID)
 	}
-	if _, err := s.accountInGoodStanding(ctx, accountID); err != nil {
+	if _, _, err := s.accountInGoodStanding(ctx, accountID); err != nil {
 		return EnterTicket{}, err
 	}
 	if _, err := s.mustServer(ctx, serverID); err != nil {
@@ -113,7 +113,7 @@ func (s *Service) EnterServer(ctx context.Context, ticket string) (ServerEntry, 
 		s.report.Refused("enter_server", "bad_ticket")
 		return ServerEntry{}, errTicketInvalid()
 	}
-	if _, err := s.accountInGoodStanding(ctx, accountID); err != nil {
+	if _, _, err := s.accountInGoodStanding(ctx, accountID); err != nil {
 		s.report.Refused("enter_server", "account")
 		return ServerEntry{}, err
 	}

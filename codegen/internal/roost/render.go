@@ -918,6 +918,8 @@ func serviceConfigSections(m Manifest, service string) []string {
 	}
 	if spec, hosted := frameworkCatalog[m.Services[service].Framework]; hosted && spec.Direct {
 		add(directServiceConfigSection(m, service))
+	} else if hosted && m.Services[service].Framework == "account" {
+		add(accountServiceConfigSection(m))
 	} else if hosted {
 		add(frameworkConfigSection(m.Services[service].Framework, m.Project.Name))
 	}

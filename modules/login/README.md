@@ -74,12 +74,16 @@ go run ./cmd/accountctl upsert-server -sid 1000        # 登记并开放，名�
 go run ./cmd/accountctl show-server -sid 1000
 go run ./cmd/accountctl list-servers                    # 已登记的全部区服
 go run ./cmd/accountctl upsert-server -sid 1000 -name 一服 -status maintenance   # 整条覆盖：只改状态也要带上名字
-go run ./cmd/accountctl revoke-game-tokens -account dev:alice   # 这个账号此前签发的游戏账号 token（gt2）全部失效
+go run ./cmd/accountctl revoke-game-tokens -account 17   # 这个人（账号号 17 所属的身份）此前签发的游戏账号 token（gt2）全部失效，所有游戏
+go run ./cmd/accountctl ban -account 17 -note "外挂，工单 123"     # 封这个人：他在所有游戏的账号都登录不了
+go run ./cmd/accountctl unban -account 17 -note "申诉通过"
 ```
 
 它用 account 的存储配置直连 Redis（登记区服不上总线）：`-redis` / `-redis-password` / `-redis-db` / `-redis-cluster` 对应 `config.account.yaml` 的 `redis.*`，`-prefix` 对应 `account.key_prefix`，缺省值就是生成的开发配置里的值。`-status` 取 `open`、`maintenance`、`full`、`closed`，只有 open 的服能建新角色。要加自己的子命令不用改 `main.go`：在 `cmd/accountctl` 里另写一个文件，用 `init` 调 `registerCommand(名字, 用法, 函数)`，函数拿到的是 account 服务本身。
 
-`revoke-game-tokens`（交接 C6，维护者 2026-11-17）调 account 的 `RevokeGameTokens`（总线接口上的同一个方法；这里在同一份存储上直接调）：账号上的 token 代数加一，在此之前签发的游戏账号 token 全部失效，之后签发的照常可用，打印 `{"account_id", "game_token_generation"}`。`-account` 是账号号（“渠道:open_id”，开发登录是 `dev:<open_id>`），不是玩家号。封号、账号票据、进服票据不受影响；已经连上 relay 的房间不断开，只拦以后的大厅调用。改密码不用调它：渠道在登录验证时返回凭证版本（`Verified.CredentialVersion`），版本变了的那次登录自动加一（account_auth README“装完要自己做的”第 4 条，维护者 2026-11-18）；这个命令留给运维当场吊销（报告泄露、改密之后玩家还没再登录）。不带 game 的工程（`-template lobby`）装不了 login，也就没有 accountctl：那种工程要吊销时经总线调 `RevokeGameTokens`。
+`revoke-game-tokens`（交接 C6，维护者 2026-11-17）调 account 的 `RevokeGameTokens`（总线接口上的同一个方法；这里在同一份存储上直接调）：由账号号找到这个人的身份，把身份上的 token 代数加一：他在所有游戏里此前签发的游戏账号 token 全部失效，之后签发的照常可用，打印 `{"account_id", "game_token_generation"}`。`-account` 是账号号（account 发的十进制数，一个游戏一个，`/portal/login` 之后客户端与游戏服看到的那个），不是玩家号。封号、账号票据、进服票据不受影响；已经连上 relay 的房间不断开，只拦以后的大厅调用。改密码不用调它：渠道在登录验证时返回凭证版本（`Verified.CredentialVersion`），版本变了的那次登录自动加一（account_auth README“装完要自己做的”第 4 条，维护者 2026-11-18）；这个命令留给运维当场吊销（报告泄露、改密之后玩家还没再登录）。不带 game 的工程（`-template lobby`）装不了 login，也就没有 accountctl：那种工程要吊销时经总线调 `RevokeGameTokens`。
+
+`ban` / `unban`（维护者 2026-11-18）调 account 的 `Admin.SetIdentityBanned`（不在总线上）：由账号号找到这个人的身份，封号或解封；封号在身份级，他在所有游戏的账号一起，按游戏封号以后再加。`-note` 必填（至多 512 字节），记在身份记录上。打印身份记录（渠道、open id、各游戏的账号号、是否被封）：这是运维面，不经总线、不给客户端。封号对已经签出去的账号票据、进服票据与 gt2 当场生效（校验时都读身份记录），对已签发的角色会话令牌不生效；要立刻踢人用 `entity.kick`。
 
 ### 状态、配置、错误码
 
@@ -95,7 +99,7 @@ go run ./cmd/accountctl revoke-game-tokens -account dev:alice   # 这个账号�
 - **开发令牌不是身份验证。** 知道 `login.dev_token` 的人可以用任何账号名登录。生产拒绝靠配置的环境键（`env: prod` 等）加 `dev-` 前缀；没写环境键的预发环境带着它就是全员可冒充。
 - **不给客户端登录入口。** account 只在内部总线上，客户端够不着；要装 portal 模块，或者由工程自己的入口代客户端调 account。
 - **不建玩家数据、不管角色名。** 进服票据握手只在 account 里建“账号 ↔ 玩家号”的映射。新号握手就占了这个账号在这个服的名额、用掉一个玩家号，不等游戏服建成；握手之后不新建就离开的账号，下次来还是那个玩家号。
-- **票据不能单张吊销。** 进服票据与会话令牌的有效期都是 `account.session_ttl`（缺省 30 分钟）。封号对进服票据立即生效（`EnterServer` 每次都再读账号），对已签发的会话令牌不生效。要立刻踢人用 `entity.kick`；要让全部在外的票据作废，轮换 `account.session_secret`。
+- **票据不能单张吊销。** 进服票据与会话令牌的有效期都是 `account.session_ttl`（缺省 30 分钟）。封号对进服票据立即生效（`EnterServer` 每次都再读账号与身份记录），对已签发的会话令牌不生效。要立刻踢人用 `entity.kick`；要让全部在外的票据作废，轮换 `account.session_secret`。
 - **claims 是快照。** 握手之后才合服、换服的，要等下一次握手才看得见。没装 rehome 时换服在途的角色不被源服拒绝。
 - **告知是尽力而为。** 同时至多 256 条会话、超过的丢弃、每条会话的全部告知合计至多 5 秒、进程退出不等。
 - **玩家号计数器与 account 的数据同生共死。** Redis 被清、或者换了 `account.key_prefix` 却没搬数据，会从头再数、发出重复的号。Redis 出错时不发号（建角失败可以重试）。
@@ -163,7 +167,7 @@ go run ./cmd/accountctl revoke-game-tokens -account dev:alice   # 这个账号�
 
 ## 验证范围
 
-`roost module verify` 跑 33 条场景（`^TestLogin`：`game/modules/login` 21 条、`internal/access/player/tcp` 2 条、`cmd/accountctl` 6 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）；account 一侧的 7 条（`services/account`）随 account_auth 计。全部是离线的：
+`roost module verify` 跑 34 条场景（`^TestLogin`：`game/modules/login` 21 条、`internal/access/player/tcp` 2 条、`cmd/accountctl` 7 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）；account 一侧的 7 条（`services/account`）随 account_auth 计。全部是离线的：
 
 - 认证器的场景用真实的 `account.Service` 加内存存储：两种票据的通过与拒绝、过期、伪造、合服后的承载服、换服在途、并发握手只建一个映射、“拒绝”与“判断不了”的区分。
 - 告知的场景验证后台执行、上限（含丢弃计数）、停机后到达的会话不告知（含丢弃计数）与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。

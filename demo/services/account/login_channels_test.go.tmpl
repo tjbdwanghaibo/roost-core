@@ -23,8 +23,9 @@ func TestDemoChannelLogsInWithTheOpenIDAsCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("demo login: %v", err)
 	}
-	if account.ID != "demo:robot-7" || account.Channel != DemoChannel {
-		t.Fatalf("account = %+v, want demo:robot-7 on channel demo", account)
+	// 账号号由 account 发、按游戏分开（维护者 2026-11-18），看不出渠道与 open id。
+	if account.ID == "" || account.Game != "party" || account.Identity != "" {
+		t.Fatalf("account = %+v, want an account in the configured game without its identity key", account)
 	}
 	role, err := accounts.CreateRole(ctx, account.ID, 1000, "robot_7")
 	if err != nil || role.PlayerID != 100_001 {
@@ -87,8 +88,12 @@ func TestDemoChannelRefusesACredentialThatIsNotTheOpenID(t *testing.T) {
 	if _, err := accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "alice", Credential: "demo:mallory"}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
 		t.Fatalf("login with another open id's credential: %v, want identity_denied", err)
 	}
-	if _, err := accounts.IssueAccountTicket(ctx, "demo:alice"); !errors.Is(err, svcaccount.ErrAccountMissing) {
+	// 被拒的登录什么也不建：账号号是计数器发的，下一次成功的登录拿到的是第一个号。
+	if _, err := accounts.IssueAccountTicket(ctx, "1"); !errors.Is(err, svcaccount.ErrAccountMissing) {
 		t.Fatalf("a refused login left an account behind: %v", err)
+	}
+	if account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: "alice", Credential: "demo:alice"}); err != nil || account.ID != "1" {
+		t.Fatalf("the first accepted login: %+v, %v; want account 1 (the refused one took no number)", account, err)
 	}
 }
 

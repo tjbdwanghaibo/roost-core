@@ -1,0 +1,102 @@
+## M1 封号不在身份级生效：校验路径不看身份的封号
+文件 service/account/identity_accounts.go；-run TestAnIdentityBanBlocksEveryGame|TestBannedAccountsAreRefused
+结果：RED
+--- FAIL: TestBannedAccountsAreRefused (0.00s)
+    account_test.go:585: a banned account created a role: <nil>
+--- FAIL: TestAnIdentityBanBlocksEveryGame (0.00s)
+    identity_accounts_test.go:176: brawl's account ticket after a ban through party: <nil>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.587s
+FAIL
+
+## M2 去掉 IssueGameToken 的跨游戏检查
+文件 service/account/game_token.go；-run TestTicketsOfOneGameOpenNothingInAnother
+结果：RED
+--- FAIL: TestTicketsOfOneGameOpenNothingInAnother (0.00s)
+    identity_accounts_test.go:110: local: party's account ticket asked for a brawl token: {Token:gt2.1700005400.brawl.MQ.0.U09mz2crRyo87WfPQzMFD_GZGXkyV5mGv2Hkzkf7_Qw Game:brawl ExpiresAtUnix:1700005400}, <nil>; want ErrGameInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.587s
+FAIL
+
+## M3（第一遍）幸存：8 个并发首登在内存存储上实际是串行完成的，竞争没发生。测试改为在领号处汇合（rendezvousAccountIDs）后重跑：
+文件 service/account/identity_accounts.go；-run TestConcurrentFirstLoginsOfOneGameShareOneAccount
+结果：RED
+--- FAIL: TestConcurrentFirstLoginsOfOneGameShareOneAccount (0.00s)
+    identity_accounts_test.go:118: concurrent first logins got accounts [8 7 6 5 4 1 2 3]; want one
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.580s
+FAIL
+
+## M4 不按游戏取号：已有任何游戏的号就沿用
+文件 service/account/identity_accounts.go；-run TestAnIdentityHasADifferentAccountInEachGame
+结果：RED
+--- FAIL: TestAnIdentityHasADifferentAccountInEachGame (0.00s)
+    identity_accounts_test.go:43: login alice-bus to brawl: remote.560113: account: conflict
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.592s
+FAIL
+
+## M5 账号票据不核对账号的游戏
+文件 service/account/tickets.go；-run TestTicketsOfOneGameOpenNothingInAnother
+结果：RED
+--- FAIL: TestTicketsOfOneGameOpenNothingInAnother (0.00s)
+    identity_accounts_test.go:129: an account ticket naming brawl for party's account: {ID:1 Game:party Identity: CreatedAtUnix:1700000000 LastLoginAtUnix:1700000000 AdminNote: AdminActionAtUnix:0}, <nil>; want ErrSessionInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.592s
+FAIL
+
+## M6 gt2 不核对账号的游戏
+文件 service/account/game_token.go；-run TestTicketsOfOneGameOpenNothingInAnother
+结果：RED
+--- FAIL: TestTicketsOfOneGameOpenNothingInAnother (0.00s)
+    identity_accounts_test.go:132: a game token naming brawl for party's account: {AccountID:1 Game:brawl ExpiresAtUnix:1700000060}, <nil>; want ErrSessionInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.591s
+FAIL
+
+## M7 凭证变化不加代数（身份级代数失效）
+文件 service/account/identity_accounts.go；-run TestACredentialChangeInOneGameRevokesTheOthers
+结果：RED
+--- FAIL: TestACredentialChangeInOneGameRevokesTheOthers (0.00s)
+    identity_accounts_test.go:214: brawl's token after the credential changed on a party login: <nil>; want ErrSessionInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.593s
+FAIL
+
+## M8 没写游戏也没有缺省游戏时照样登录
+文件 service/account/identity_accounts.go；-run TestLoginNeedsAGame
+结果：RED
+--- FAIL: TestLoginNeedsAGame (0.00s)
+    identity_accounts_test.go:238: no game with two games and no default: {ID:1 Game: Identity: CreatedAtUnix:1700000000 LastLoginAtUnix:1700000000 AdminNote: AdminActionAtUnix:0}, <nil>; want ErrGameInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.678s
+FAIL
+
+## M9 交出去的账号带身份键（public 不剥）
+文件 service/account/types.go；-run TestAnIdentityHasADifferentAccountInEachGame|TestAccountTokensSeeOnlyTheGameAccount
+结果：RED
+--- FAIL: TestAnIdentityHasADifferentAccountInEachGame (0.00s)
+    identity_accounts_test.go:52: local: the account handed out links back to the identity: {ID:1 Game:party Identity:store:alice-local CreatedAtUnix:1700000000 LastLoginAtUnix:1700000000 AdminNote: AdminActionAtUnix:0}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	1.101s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lobby	0.541s
+FAIL
+
+## M10 签名宽松解码
+文件 service/account/tickets.go；-run TestEveryBadTicketIsRefusedTheSameWay
+结果：RED
+--- FAIL: TestEveryBadTicketIsRefusedTheSameWay (0.00s)
+    enter_test.go:241: account ticket, changed at byte 65: an account was returned: {ID:1 Game:main Identity: CreatedAtUnix:1700000000 LastLoginAtUnix:1700000000 AdminNote: AdminActionAtUnix:0}; want ErrSessionInvalid
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.583s
+FAIL
+
+## M11 Mod 不要求 account.games
+文件 wiring/account/account_mod.go；-run TestModReadsGamesAndServices
+结果：RED
+--- FAIL: TestModReadsGamesAndServices (0.00s)
+    account_mod_test.go:217: Init without any game = <nil>; want a refusal naming account.games
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/account	0.569s
+FAIL
+

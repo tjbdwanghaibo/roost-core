@@ -14,9 +14,11 @@ import (
 // 游戏账号 token（game_token.go，方案 2026-11-16 §4.1.1 与 §5）：凭账号票据换、按游戏签、account 自己验。
 // 需求里的数（2h、90 分钟、24h）写死；时钟在 Unix 1700000000。
 
-// gameTokenGames 是场景里的 account.games：party 缺省寿命（2h），brawl 90 分钟。
+// gameTokenGames 是场景里的 account.games：party 缺省寿命（2h），brawl 90 分钟；不写游戏的登录落到 party。
+// 同一个人在两个游戏里是两个账号号（维护者 2026-11-18），brawl 的 token 要用他在 brawl 的账号换（loginGame）。
 func gameTokenGames(c *Config) {
 	c.Games = []GameSpec{{Name: "party"}, {Name: "brawl", TokenTTL: 90 * time.Minute}}
+	c.DefaultGame = "party"
 }
 
 func mustGameToken(t *testing.T, s *Service, accountID, game string) GameToken {
@@ -34,6 +36,7 @@ func TestGameTokensAreIssuedPerGameAndValidatedByAccount(t *testing.T) {
 	s, _, cfg := pendingContractService(t, gameTokenGames)
 	ctx := context.Background()
 	alice := login(t, s, "alice")
+	aliceBrawl := loginGame(t, s, "alice", "brawl")
 	bob := login(t, s, "bob")
 	before, _, _ := cfg.Accounts.Get(ctx, alice.ID)
 	for transport, accounts := range enterClients(t, s) {
@@ -59,7 +62,7 @@ func TestGameTokensAreIssuedPerGameAndValidatedByAccount(t *testing.T) {
 		if err := got.RequireGame("party"); err != nil {
 			t.Fatalf("%s: the party token for the party lobby: %v", transport, err)
 		}
-		brawl, err := accounts.IssueGameToken(ctx, ticket, "brawl")
+		brawl, err := accounts.IssueGameToken(ctx, mustAccountTicket(t, s, aliceBrawl.ID), "brawl")
 		if err != nil || brawl.ExpiresAtUnix != 1_700_005_400 || !strings.HasPrefix(brawl.Token, "gt2.1700005400.brawl.") {
 			t.Fatalf("%s: brawl (90 minutes) = %+v, %v", transport, brawl, err)
 		}
@@ -77,7 +80,7 @@ func TestGameTokensAreIssuedPerGameAndValidatedByAccount(t *testing.T) {
 func TestAGameTokenExpiresOnTheSystemClock(t *testing.T) {
 	s, clock, _ := newService(t, gameTokenGames)
 	ctx := context.Background()
-	alice := login(t, s, "alice")
+	alice := loginGame(t, s, "alice", "brawl")
 	token := mustGameToken(t, s, alice.ID, "brawl").Token
 	clock.advance(90*time.Minute - time.Second)
 	if _, err := s.ValidateGameToken(ctx, token); err != nil {
@@ -136,7 +139,7 @@ func TestATamperedGameTokenIsRefused(t *testing.T) {
 	}
 }
 
-// 冒充：账号票据（at1）、进服票据（et1）、角色会话令牌都不能当游戏账号 token 用；反过来游戏账号 token 也不能当账号票据
+// 冒充：账号票据（at2）、进服票据（et1）、角色会话令牌都不能当游戏账号 token 用；反过来游戏账号 token 也不能当账号票据
 // 换别的游戏的 token、拿清单或进服票据。
 func TestOtherTicketsCannotPassAsGameTokens(t *testing.T) {
 	s, _, _ := newService(t, gameTokenGames)
@@ -162,7 +165,7 @@ func TestOtherTicketsCannotPassAsGameTokens(t *testing.T) {
 	}
 	// 同一把密钥、同样的内容，换个版本号也不行：签名的域不同。
 	body := strings.Split(accountTicket, ".")
-	if got, err := s.ValidateGameToken(ctx, "gt2."+body[1]+".party."+body[2]+".0."+body[3]); !errors.Is(err, ErrSessionInvalid) {
+	if got, err := s.ValidateGameToken(ctx, "gt2."+body[1]+".party."+body[3]+".0."+body[4]); !errors.Is(err, ErrSessionInvalid) {
 		t.Fatalf("an account ticket's signature on a game token body: %+v, %v", got, err)
 	}
 	game := mustGameToken(t, s, alice.ID, "party").Token
@@ -191,7 +194,7 @@ func TestOnlyTheConfiguredGamesGetTokens(t *testing.T) {
 	}
 	party := mustGameToken(t, s, alice.ID, "party").Token
 	// 同一套存储、同一把密钥，配置里只剩 brawl：party 的 token 不再认。
-	cfg.Games = []GameSpec{{Name: "brawl"}}
+	cfg.Games, cfg.DefaultGame = []GameSpec{{Name: "brawl"}}, ""
 	narrowed, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -202,10 +205,11 @@ func TestOnlyTheConfiguredGamesGetTokens(t *testing.T) {
 	if got := narrowed.Games(); strings.Join(got, ",") != "brawl" {
 		t.Fatalf("Games() = %v", got)
 	}
+	// 只服务 main 的 account（缺省夹具）：party 不在 account.games 里，不签。
 	none, _, _ := newService(t)
 	noneAlice := login(t, none, "alice")
 	if got, err := none.IssueGameToken(ctx, mustAccountTicket(t, none, noneAlice.ID), "party"); !errors.Is(err, ErrGameInvalid) || got.Token != "" {
-		t.Fatalf("an account service without games: %+v, %v", got, err)
+		t.Fatalf("an account service without party: %+v, %v", got, err)
 	}
 	for label, games := range map[string][]GameSpec{
 		"a dot in the name":  {{Name: "party.v2"}},
@@ -223,6 +227,7 @@ func TestOnlyTheConfiguredGamesGetTokens(t *testing.T) {
 	}
 	edge := cfg
 	edge.Games = []GameSpec{{Name: "p" + strings.Repeat("a", 31), TokenTTL: 24 * time.Hour}}
+	edge.DefaultGame = ""
 	if _, err := New(edge); err != nil {
 		t.Fatalf("a 32-byte name with a 24h ttl is within the limits: %v", err)
 	}
@@ -290,7 +295,8 @@ func TestRevokingGameTokensRefusesTheOnesIssuedBefore(t *testing.T) {
 		alice := login(t, s, "alice-"+transport)
 		bob := login(t, s, "bob-"+transport)
 		before := mustGameToken(t, s, alice.ID, "party").Token
-		brawlBefore := mustGameToken(t, s, alice.ID, "brawl").Token
+		// 代数在身份级：用 party 的账号号吊销，同一个人在 brawl 的 token 也失效。
+		brawlBefore := mustGameToken(t, s, loginGame(t, s, "alice-"+transport, "brawl").ID, "brawl").Token
 		bobs := mustGameToken(t, s, bob.ID, "party").Token
 		if _, err := accounts.ValidateGameToken(ctx, before); err != nil {
 			t.Fatalf("%s: before revoking: %v", transport, err)
@@ -320,10 +326,9 @@ func TestRevokingGameTokensRefusesTheOnesIssuedBefore(t *testing.T) {
 		if got, err := accounts.ValidateGameToken(ctx, after.Token); err != nil || got.AccountID != alice.ID {
 			t.Fatalf("%s: a token issued after the revocation: %+v, %v", transport, got, err)
 		}
-		// 代数在账号记录上，不在这个进程里。
-		record, _, err := cfg.Accounts.Get(ctx, alice.ID)
-		if err != nil || record.Value.GameTokenGeneration != 1 {
-			t.Fatalf("%s: the stored generation is %d, %v; want 1", transport, record.Value.GameTokenGeneration, err)
+		// 代数在身份记录上，不在这个进程里。
+		if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 1 {
+			t.Fatalf("%s: the stored generation is %d; want 1", transport, got.GameTokenGeneration)
 		}
 		restarted, err := New(cfg)
 		if err != nil {
@@ -359,12 +364,7 @@ func TestRevokingGameTokensLeavesBansAndTicketsAlone(t *testing.T) {
 	if _, err := s.ValidateGameToken(ctx, before); !errors.Is(err, ErrIdentityDenied) {
 		t.Fatalf("a banned account's revoked token: %v; want the ban's ErrIdentityDenied", err)
 	}
-	if _, _, err := cfg.Accounts.Update(ctx, alice.ID, func(current Account, found bool) (Account, bool, error) {
-		current.Banned = false
-		return current, found, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	unbanAccount(t, cfg, alice.ID)
 	if _, err := s.ValidateGameToken(ctx, before); !errors.Is(err, ErrSessionInvalid) {
 		t.Fatalf("a token revoked while banned came back after the unban: %v", err)
 	}
@@ -415,6 +415,16 @@ func storedAccount(t *testing.T, cfg Config, accountID string) Account {
 	return record.Value
 }
 
+// storedIdentity 是账号所属的身份记录：凭证版本与 token 代数在身份级（维护者 2026-11-18）。
+func storedIdentity(t *testing.T, cfg Config, accountID string) IdentityRecord {
+	t.Helper()
+	record, found, err := cfg.Identities.Get(context.Background(), storedAccount(t, cfg, accountID).Identity)
+	if err != nil || !found {
+		t.Fatalf("read the identity of account %s: found %v, %v", accountID, found, err)
+	}
+	return record.Value
+}
+
 // 渠道在 Verified 里返回凭证版本：版本与账号上存的不同（且之前存过）时，登录把游戏账号 token 的代数加一——
 // 之前签发的 gt2 被拒、之后签发的可用；版本不变不加；第一次见到版本只记录不加；渠道不提供版本（空）不加，
 // 也不抹掉已存的版本。本地与经总线相同；代数落在账号记录上，与 RevokeGameTokens 是同一个计数。
@@ -425,13 +435,13 @@ func TestALoginWithANewCredentialVersionRevokesGameTokens(t *testing.T) {
 		openID := "alice-" + transport
 		// 先不带版本登录（渠道不提供）：建账号，代数 0，没有版本。
 		alice := loginWith(t, accounts, openID, "good")
-		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "" {
+		if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "" {
 			t.Fatalf("%s: a login without a version stored generation %d, version %q", transport, got.GameTokenGeneration, got.CredentialVersion)
 		}
 		first := mustGameToken(t, s, alice.ID, "party").Token
 		// 第一次见到版本：只记录，不加一，之前的 token 照常可用。
 		loginWith(t, accounts, openID, "good#p1")
-		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
+		if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
 			t.Fatalf("%s: the first version seen: generation %d, version %q; want 0 and p1", transport, got.GameTokenGeneration, got.CredentialVersion)
 		}
 		if _, err := accounts.ValidateGameToken(ctx, first); err != nil {
@@ -441,7 +451,7 @@ func TestALoginWithANewCredentialVersionRevokesGameTokens(t *testing.T) {
 		loginWith(t, accounts, openID, "good#p1")
 		// 渠道这次不提供版本：不加，也不抹掉已存的版本。
 		loginWith(t, accounts, openID, "good")
-		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
+		if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
 			t.Fatalf("%s: the same version / no version: generation %d, version %q; want 0 and p1", transport, got.GameTokenGeneration, got.CredentialVersion)
 		}
 		if _, err := accounts.ValidateGameToken(ctx, first); err != nil {
@@ -452,7 +462,7 @@ func TestALoginWithANewCredentialVersionRevokesGameTokens(t *testing.T) {
 		if got, err := accounts.ValidateGameToken(ctx, first); !errors.Is(err, ErrSessionInvalid) || Code(err) != 560111 || got.AccountID != "" {
 			t.Fatalf("%s: a token issued before the credential changed: %+v, %v; want ErrSessionInvalid", transport, got, err)
 		}
-		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" {
+		if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" {
 			t.Fatalf("%s: a new credential version: generation %d, version %q; want 1 and p2", transport, got.GameTokenGeneration, got.CredentialVersion)
 		}
 		after := mustGameToken(t, s, alice.ID, "party")
@@ -464,7 +474,7 @@ func TestALoginWithANewCredentialVersionRevokesGameTokens(t *testing.T) {
 		}
 		// 新版本再登录（另一台设备、重试）：不再加。
 		loginWith(t, accounts, openID, "good#p2")
-		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 1 {
+		if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 1 {
 			t.Fatalf("%s: logging in again with the new version: generation %d; want 1", transport, got.GameTokenGeneration)
 		}
 		if _, err := accounts.ValidateGameToken(ctx, after.Token); err != nil {
@@ -475,20 +485,20 @@ func TestALoginWithANewCredentialVersionRevokesGameTokens(t *testing.T) {
 			t.Fatalf("%s: RevokeGameTokens = %d, %v; want 2", transport, generation, err)
 		}
 		loginWith(t, accounts, openID, "good#p3")
-		if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 3 || got.CredentialVersion != "p3" {
+		if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 3 || got.CredentialVersion != "p3" {
 			t.Fatalf("%s: a new version after a manual revocation: generation %d, version %q; want 3 and p3", transport, got.GameTokenGeneration, got.CredentialVersion)
 		}
 	}
 	// 一开始就带版本登录的新账号：第一次见到，只记录。
 	bob := loginWith(t, s, "bob", "good#b1")
-	if got := storedAccount(t, cfg, bob.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "b1" {
+	if got := storedIdentity(t, cfg, bob.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "b1" {
 		t.Fatalf("a new account with a version: generation %d, version %q; want 0 and b1", got.GameTokenGeneration, got.CredentialVersion)
 	}
 	// 被拒的登录（凭据不对）不动版本与代数。
 	if _, err := s.Login(ctx, Identity{Channel: "store", OpenID: "bob", Credential: "bad#b2"}); !errors.Is(err, ErrIdentityDenied) {
 		t.Fatalf("a refused login: %v", err)
 	}
-	if got := storedAccount(t, cfg, bob.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "b1" {
+	if got := storedIdentity(t, cfg, bob.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "b1" {
 		t.Fatalf("a refused login changed the account: generation %d, version %q", got.GameTokenGeneration, got.CredentialVersion)
 	}
 }
@@ -507,17 +517,12 @@ func TestABannedLoginWithANewCredentialVersionStillRevokes(t *testing.T) {
 			t.Fatalf("a banned login with %q: %v; want ErrIdentityDenied", credential, err)
 		}
 	}
-	if _, _, err := cfg.Accounts.Update(ctx, alice.ID, func(current Account, found bool) (Account, bool, error) {
-		current.Banned = false
-		return current, found, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	unbanAccount(t, cfg, alice.ID)
 	if _, err := s.ValidateGameToken(ctx, before); !errors.Is(err, ErrSessionInvalid) {
 		t.Fatalf("a token from before the credential changed came back after the unban: %v", err)
 	}
-	got := storedAccount(t, cfg, alice.ID)
-	if got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" || got.LastLoginAtUnix != lastLogin {
+	got := storedIdentity(t, cfg, alice.ID)
+	if got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" || storedAccount(t, cfg, alice.ID).LastLoginAtUnix != lastLogin {
 		t.Fatalf("after banned logins and the unban: %+v; want generation 1, version p2, last login unchanged", got)
 	}
 }
@@ -557,13 +562,13 @@ func TestConcurrentLoginsCountCredentialChangesOnce(t *testing.T) {
 		same[i] = loginCall("alice", "good#p2")
 	}
 	concurrently(same...)
-	if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" {
+	if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 1 || got.CredentialVersion != "p2" {
 		t.Fatalf("%d concurrent logins with one new version: generation %d, version %q; want 1 and p2", len(same), got.GameTokenGeneration, got.CredentialVersion)
 	}
 
 	bob := loginWith(t, s, "bob", "good#p1")
 	concurrently(loginCall("bob", "good#a"), loginCall("bob", "good#b"))
-	if got := storedAccount(t, cfg, bob.ID); got.GameTokenGeneration != 2 || (got.CredentialVersion != "a" && got.CredentialVersion != "b") {
+	if got := storedIdentity(t, cfg, bob.ID); got.GameTokenGeneration != 2 || (got.CredentialVersion != "a" && got.CredentialVersion != "b") {
 		t.Fatalf("two concurrent logins with different new versions: generation %d, version %q; want 2 and a or b", got.GameTokenGeneration, got.CredentialVersion)
 	}
 
@@ -572,7 +577,7 @@ func TestConcurrentLoginsCountCredentialChangesOnce(t *testing.T) {
 		_, err := s.RevokeGameTokens(ctx, carol.ID)
 		return err
 	})
-	if got := storedAccount(t, cfg, carol.ID); got.GameTokenGeneration != 2 || got.CredentialVersion != "p2" {
+	if got := storedIdentity(t, cfg, carol.ID); got.GameTokenGeneration != 2 || got.CredentialVersion != "p2" {
 		t.Fatalf("a new-version login racing a manual revocation: generation %d, version %q; want 2 and p2", got.GameTokenGeneration, got.CredentialVersion)
 	}
 }
@@ -585,7 +590,7 @@ func TestAnOversizedCredentialVersionIsRefused(t *testing.T) {
 	if _, err := s.Login(context.Background(), Identity{Channel: "store", OpenID: "alice", Credential: "good#" + long}); !errors.Is(err, ErrIdentityInvalid) {
 		t.Fatalf("an oversized credential version: %v; want ErrIdentityInvalid", err)
 	}
-	if got := storedAccount(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
+	if got := storedIdentity(t, cfg, alice.ID); got.GameTokenGeneration != 0 || got.CredentialVersion != "p1" {
 		t.Fatalf("an oversized version changed the account: generation %d, version %q", got.GameTokenGeneration, got.CredentialVersion)
 	}
 	loginWith(t, s, "alice", "good#"+long[:MaxCredentialVersionBytes])

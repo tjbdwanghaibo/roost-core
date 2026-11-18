@@ -1,0 +1,693 @@
+=== RUN   TestNewRefusesAConfigThatCannotAuthenticate
+--- PASS: TestNewRefusesAConfigThatCannotAuthenticate (0.00s)
+=== RUN   TestLoginRequiresAVerifiedIdentity
+--- PASS: TestLoginRequiresAVerifiedIdentity (0.00s)
+=== RUN   TestAccountIsDerivedFromTheVerifiedIdentity
+--- PASS: TestAccountIsDerivedFromTheVerifiedIdentity (0.00s)
+=== RUN   TestChannelOutageIsDistinctFromDenial
+--- PASS: TestChannelOutageIsDistinctFromDenial (0.00s)
+=== RUN   TestOneRolePerAccountPerServer
+--- PASS: TestOneRolePerAccountPerServer (0.00s)
+=== RUN   TestRoleNamesAreUniqueCaseInsensitively
+--- PASS: TestRoleNamesAreUniqueCaseInsensitively (0.00s)
+=== RUN   TestCreateRoleNeverOverwritesAnExistingPlayer
+--- PASS: TestCreateRoleNeverOverwritesAnExistingPlayer (0.00s)
+=== RUN   TestAFailedCreateReleasesItsClaims
+--- PASS: TestAFailedCreateReleasesItsClaims (0.00s)
+=== RUN   TestAnUnreleasedClaimLapsesInsteadOfBurningTheName
+--- PASS: TestAnUnreleasedClaimLapsesInsteadOfBurningTheName (0.00s)
+=== RUN   TestSelectRoleIssuesAVerifiableTokenForOwnedRolesOnly
+--- PASS: TestSelectRoleIssuesAVerifiableTokenForOwnedRolesOnly (0.00s)
+=== RUN   TestSelectRoleDoesNotPersistWhenSigningFails
+--- PASS: TestSelectRoleDoesNotPersistWhenSigningFails (0.00s)
+=== RUN   TestValidateSessionRejectsForgedAndExpiredTokens
+--- PASS: TestValidateSessionRejectsForgedAndExpiredTokens (0.00s)
+=== RUN   TestUpdateProfileCannotChangeIdentityOrName
+--- PASS: TestUpdateProfileCannotChangeIdentityOrName (0.00s)
+=== RUN   TestCreateRoleRequiresAnOpenServerAndAKnownAccount
+--- PASS: TestCreateRoleRequiresAnOpenServerAndAKnownAccount (0.00s)
+=== RUN   TestBannedAccountsAreRefused
+--- PASS: TestBannedAccountsAreRefused (0.00s)
+=== RUN   TestConcurrentCreatesProduceOneRolePerSlot
+--- PASS: TestConcurrentCreatesProduceOneRolePerSlot (0.00s)
+=== RUN   TestConcurrentCreatesRacingOneNameHaveOneWinner
+--- PASS: TestConcurrentCreatesRacingOneNameHaveOneWinner (0.00s)
+=== RUN   TestMarkLogoutRequiresOwnership
+--- PASS: TestMarkLogoutRequiresOwnership (0.00s)
+=== RUN   TestAuthorityRefusalsAndAcceptancesAreReported
+--- PASS: TestAuthorityRefusalsAndAcceptancesAreReported (0.00s)
+=== RUN   TestANilReporterChangesNothing
+--- PASS: TestANilReporterChangesNothing (0.00s)
+=== RUN   TestAccountTimesAreBusinessTimeAndSessionsAreSystemTime
+--- PASS: TestAccountTimesAreBusinessTimeAndSessionsAreSystemTime (0.00s)
+=== RUN   TestMissingBusinessClockUsesProcessOffset
+--- PASS: TestMissingBusinessClockUsesProcessOffset (0.00s)
+=== RUN   TestMissingSystemClockDoesNotFollowBusinessClock
+--- PASS: TestMissingSystemClockDoesNotFollowBusinessClock (0.00s)
+=== RUN   TestCreateRoleRefusesEachCommitTailAnomalyAndLeavesNothingBehind
+=== RUN   TestCreateRoleRefusesEachCommitTailAnomalyAndLeavesNothingBehind/slot_vanished_before_the_final_write
+=== RUN   TestCreateRoleRefusesEachCommitTailAnomalyAndLeavesNothingBehind/player_id_already_in_use
+--- PASS: TestCreateRoleRefusesEachCommitTailAnomalyAndLeavesNothingBehind (0.00s)
+    --- PASS: TestCreateRoleRefusesEachCommitTailAnomalyAndLeavesNothingBehind/slot_vanished_before_the_final_write (0.00s)
+    --- PASS: TestCreateRoleRefusesEachCommitTailAnomalyAndLeavesNothingBehind/player_id_already_in_use (0.00s)
+=== RUN   TestCreateRoleRefusesAZeroPlayerIDAndRollsBack
+--- PASS: TestCreateRoleRefusesAZeroPlayerIDAndRollsBack (0.00s)
+=== RUN   TestACreateWithAnUnknownWriteRetainsOneRecoverablePlan
+=== RUN   TestACreateWithAnUnknownWriteRetainsOneRecoverablePlan/name_commit_lost
+=== RUN   TestACreateWithAnUnknownWriteRetainsOneRecoverablePlan/slot_write_lost
+--- PASS: TestACreateWithAnUnknownWriteRetainsOneRecoverablePlan (0.00s)
+    --- PASS: TestACreateWithAnUnknownWriteRetainsOneRecoverablePlan/name_commit_lost (0.00s)
+    --- PASS: TestACreateWithAnUnknownWriteRetainsOneRecoverablePlan/slot_write_lost (0.00s)
+=== RUN   TestCreationTableEveryCell
+--- PASS: TestCreationTableEveryCell (0.00s)
+=== RUN   TestCreationTableClassifiers
+--- PASS: TestCreationTableClassifiers (0.00s)
+=== RUN   TestCrossServerRoleRollbackKeepsExistingName
+--- PASS: TestCrossServerRoleRollbackKeepsExistingName (0.00s)
+=== RUN   TestBeforeWriteFailuresRemainRetryable
+=== RUN   TestBeforeWriteFailuresRemainRetryable/slot
+=== RUN   TestBeforeWriteFailuresRemainRetryable/role
+=== RUN   TestBeforeWriteFailuresRemainRetryable/name
+--- PASS: TestBeforeWriteFailuresRemainRetryable (0.02s)
+    --- PASS: TestBeforeWriteFailuresRemainRetryable/slot (0.01s)
+    --- PASS: TestBeforeWriteFailuresRemainRetryable/role (0.01s)
+    --- PASS: TestBeforeWriteFailuresRemainRetryable/name (0.01s)
+=== RUN   TestNameCommitLostReplyCannotBurnName
+--- PASS: TestNameCommitLostReplyCannotBurnName (0.01s)
+=== RUN   TestRoleCreateLostReplyCannotLeaveDuplicateNames
+--- PASS: TestRoleCreateLostReplyCannotLeaveDuplicateNames (0.01s)
+=== RUN   TestInitialSlotUnknownCannotPermanentlyBlockCreate
+--- PASS: TestInitialSlotUnknownCannotPermanentlyBlockCreate (0.01s)
+=== RUN   TestProfileOutputCannotMutateRoleWithoutCAS
+=== RUN   TestProfileOutputCannotMutateRoleWithoutCAS/update
+=== RUN   TestProfileOutputCannotMutateRoleWithoutCAS/validate
+=== RUN   TestProfileOutputCannotMutateRoleWithoutCAS/create_retry
+--- PASS: TestProfileOutputCannotMutateRoleWithoutCAS (0.02s)
+    --- PASS: TestProfileOutputCannotMutateRoleWithoutCAS/update (0.01s)
+    --- PASS: TestProfileOutputCannotMutateRoleWithoutCAS/validate (0.01s)
+    --- PASS: TestProfileOutputCannotMutateRoleWithoutCAS/create_retry (0.01s)
+=== RUN   TestPendingRoleRecoversAcrossServiceRestart
+--- PASS: TestPendingRoleRecoversAcrossServiceRestart (0.01s)
+=== RUN   TestConcurrentCreationRetriesShareOneDurablePlan
+--- PASS: TestConcurrentCreationRetriesShareOneDurablePlan (0.01s)
+=== RUN   TestSlotWithoutCreationPlanRequiresOfflineReconciliation
+--- PASS: TestSlotWithoutCreationPlanRequiresOfflineReconciliation (0.00s)
+=== RUN   TestAccountRequiresIdentityCheckedSlotCleanup
+--- PASS: TestAccountRequiresIdentityCheckedSlotCleanup (0.00s)
+=== RUN   TestPendingRoleNameConflictReleasesSlotButNotTheOrphanRole
+--- PASS: TestPendingRoleNameConflictReleasesSlotButNotTheOrphanRole (0.00s)
+=== RUN   TestANameCommittedToAnotherOwnerIsNeverCompensated
+--- PASS: TestANameCommittedToAnotherOwnerIsNeverCompensated (0.00s)
+=== RUN   TestUnknownSlotOutcomePreservesRoleAndName
+--- PASS: TestUnknownSlotOutcomePreservesRoleAndName (0.00s)
+=== RUN   TestLoginUsesTheEscapedIdentityKeyAndRefusesAMismatchedStoredIdentity
+--- PASS: TestLoginUsesTheEscapedIdentityKeyAndRefusesAMismatchedStoredIdentity (0.00s)
+=== RUN   TestARoleWithoutCreationIdentityIsRefused
+--- PASS: TestARoleWithoutCreationIdentityIsRefused (0.00s)
+=== RUN   TestConcurrentReleasesOfOneDeadPlanCountOnce
+--- PASS: TestConcurrentReleasesOfOneDeadPlanCountOnce (1.60s)
+=== RUN   TestAccountTicketsAreIssuedAndValidatedByAccount
+--- PASS: TestAccountTicketsAreIssuedAndValidatedByAccount (0.01s)
+=== RUN   TestABanTakesEffectOnTicketsAlreadyIssued
+--- PASS: TestABanTakesEffectOnTicketsAlreadyIssued (0.01s)
+=== RUN   TestEveryBadTicketIsRefusedTheSameWay
+--- PASS: TestEveryBadTicketIsRefusedTheSameWay (0.01s)
+=== RUN   TestIssueEnterTicketBindsTheAccountTheServerAndTheSessionLifetime
+2026/11/18 13:55:08 INFO account: server merged from=3 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestIssueEnterTicketBindsTheAccountTheServerAndTheSessionLifetime (0.01s)
+=== RUN   TestEnterServerCreatesTheMappingOnceThenFindsIt
+--- PASS: TestEnterServerCreatesTheMappingOnceThenFindsIt (0.02s)
+=== RUN   TestConcurrentEntriesWithOneTicketCreateOneMapping
+--- PASS: TestConcurrentEntriesWithOneTicketCreateOneMapping (0.02s)
+=== RUN   TestEnterServerFinishesAMappingThatStoppedHalfway
+--- PASS: TestEnterServerFinishesAMappingThatStoppedHalfway (0.01s)
+=== RUN   TestEnterServerDrivesANamedPlanLeftByCreateRole
+--- PASS: TestEnterServerDrivesANamedPlanLeftByCreateRole (1.91s)
+=== RUN   TestAnEntryThatLosesThePublishRaceDoesNotReportCreated
+--- PASS: TestAnEntryThatLosesThePublishRaceDoesNotReportCreated (0.00s)
+=== RUN   TestEnterServerCreatesUnderTheServerRulesOfCreateRole
+2026/11/18 13:55:10 INFO account: server merged from=3 into=1 repointed=[] note="merge window 2026-10-20"
+2026/11/18 13:55:10 INFO account: role transfer begun player_id=1000004 transfer_id=t-1 from=1 to=4 epoch=0 transfer_seq=1
+2026/11/18 13:55:10 INFO account: role transfer committed player_id=1000004 transfer_id=t-1 from=1 to=4 bind_epoch=1 note=""
+2026/11/18 13:55:10 INFO account: role transfer begun player_id=1000005 transfer_id=t-stray from=1 to=4 epoch=0 transfer_seq=1
+2026/11/18 13:55:10 INFO account: role transfer aborted player_id=1000005 transfer_id=t-stray from=1 to=4 reason="changed my mind"
+2026/11/18 13:55:10 INFO account: released a transfer hold no role record stands behind player_id=1000005 transfer_id=t-stray server_id=4
+2026/11/18 13:55:10 INFO account: released a transfer hold no role record stands behind player_id=1000005 transfer_id=t-stray server_id=4
+--- PASS: TestEnterServerCreatesUnderTheServerRulesOfCreateRole (0.04s)
+=== RUN   TestTicketsLiveOnTheSystemClockAndLoginsOnTheBusinessClock
+--- PASS: TestTicketsLiveOnTheSystemClockAndLoginsOnTheBusinessClock (0.00s)
+=== RUN   TestEverySentinelCarriesItsOwnCode
+--- PASS: TestEverySentinelCarriesItsOwnCode (0.00s)
+=== RUN   TestTheCodeSegmentIsExactlyAsAllocated
+--- PASS: TestTheCodeSegmentIsExactlyAsAllocated (0.00s)
+=== RUN   TestTheCodeSurvivesWrapping
+--- PASS: TestTheCodeSurvivesWrapping (0.00s)
+=== RUN   TestAnUnclassifiedFailureReadsAsInternal
+--- PASS: TestAnUnclassifiedFailureReadsAsInternal (0.00s)
+=== RUN   TestAForeignSentinelIsMappedIntoThisSegment
+--- PASS: TestAForeignSentinelIsMappedIntoThisSegment (0.00s)
+=== RUN   TestGameTokensAreIssuedPerGameAndValidatedByAccount
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.01s)
+=== RUN   TestAGameTokenExpiresOnTheSystemClock
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+=== RUN   TestATamperedGameTokenIsRefused
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+=== RUN   TestOtherTicketsCannotPassAsGameTokens
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+=== RUN   TestOnlyTheConfiguredGamesGetTokens
+--- PASS: TestOnlyTheConfiguredGamesGetTokens (0.00s)
+=== RUN   TestAGameTokenOnlyOpensItsOwnGame
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+=== RUN   TestABanRefusesGameTokensAtOnce
+--- PASS: TestABanRefusesGameTokensAtOnce (0.01s)
+=== RUN   TestRevokingGameTokensRefusesTheOnesIssuedBefore
+--- PASS: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.02s)
+=== RUN   TestRevokingGameTokensLeavesBansAndTicketsAlone
+--- PASS: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+=== RUN   TestALoginWithANewCredentialVersionRevokesGameTokens
+--- PASS: TestALoginWithANewCredentialVersionRevokesGameTokens (0.01s)
+=== RUN   TestABannedLoginWithANewCredentialVersionStillRevokes
+--- PASS: TestABannedLoginWithANewCredentialVersionStillRevokes (0.00s)
+=== RUN   TestConcurrentLoginsCountCredentialChangesOnce
+--- PASS: TestConcurrentLoginsCountCredentialChangesOnce (0.01s)
+=== RUN   TestAnOversizedCredentialVersionIsRefused
+--- PASS: TestAnOversizedCredentialVersionIsRefused (0.00s)
+=== RUN   TestSelectRoleRefusesARoleThatVanishedOrChangedOwnerBeforeTheWrite
+--- PASS: TestSelectRoleRefusesARoleThatVanishedOrChangedOwnerBeforeTheWrite (0.00s)
+=== RUN   TestSessionAndProfileOperationsRefuseAMissingRole
+--- PASS: TestSessionAndProfileOperationsRefuseAMissingRole (0.00s)
+=== RUN   TestEntryPointsRefuseBlankIdentifiers
+--- PASS: TestEntryPointsRefuseBlankIdentifiers (0.00s)
+=== RUN   TestUpsertServerRejectsNegativeIDAndUnknownStatus
+--- PASS: TestUpsertServerRejectsNegativeIDAndUnknownStatus (0.00s)
+=== RUN   TestMethodsCoverTheAccountsInterfaceExactly
+--- PASS: TestMethodsCoverTheAccountsInterfaceExactly (0.00s)
+=== RUN   TestTheTransferInterfacesBehaveTheSameOverTheBus
+=== RUN   TestTheTransferInterfacesBehaveTheSameOverTheBus/local
+2026/11/18 13:55:10 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:10 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note="over the bus"
+=== RUN   TestTheTransferInterfacesBehaveTheSameOverTheBus/bus
+2026/11/18 13:55:10 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:10 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note="over the bus"
+--- PASS: TestTheTransferInterfacesBehaveTheSameOverTheBus (0.02s)
+    --- PASS: TestTheTransferInterfacesBehaveTheSameOverTheBus/local (0.01s)
+    --- PASS: TestTheTransferInterfacesBehaveTheSameOverTheBus/bus (0.01s)
+=== RUN   TestAnIdentityHasADifferentAccountInEachGame
+--- PASS: TestAnIdentityHasADifferentAccountInEachGame (0.01s)
+=== RUN   TestConcurrentFirstLoginsOfOneGameShareOneAccount
+--- PASS: TestConcurrentFirstLoginsOfOneGameShareOneAccount (0.01s)
+=== RUN   TestTicketsOfOneGameOpenNothingInAnother
+--- PASS: TestTicketsOfOneGameOpenNothingInAnother (0.01s)
+=== RUN   TestAnIdentityBanBlocksEveryGame
+--- PASS: TestAnIdentityBanBlocksEveryGame (0.01s)
+=== RUN   TestACredentialChangeInOneGameRevokesTheOthers
+--- PASS: TestACredentialChangeInOneGameRevokesTheOthers (0.00s)
+=== RUN   TestLoginNeedsAGame
+--- PASS: TestLoginNeedsAGame (0.00s)
+=== RUN   TestEveryRoleExitCarriesTheServingServer
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestEveryRoleExitCarriesTheServingServer (0.01s)
+=== RUN   TestTheServingServerIsNeverStored
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestTheServingServerIsNeverStored (0.01s)
+=== RUN   TestRepeatedMergesAreFlattenedToOneHop
+2026/11/18 13:55:10 INFO account: server merged from=3 into=2 repointed=[] note="merge window 2026-10-20"
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[3] note="merge window 2026-10-20"
+--- PASS: TestRepeatedMergesAreFlattenedToOneHop (0.01s)
+=== RUN   TestResolutionRefusesAMissingOrChainedServingServer
+2026/11/18 13:55:10 ERROR account: a merge alias has two hops; roles of the origin are refused until it is repaired origin=2 into=3 into_merged_into=1
+2026/11/18 13:55:10 ERROR account: a merge alias has two hops; roles of the origin are refused until it is repaired origin=2 into=3 into_merged_into=1
+--- PASS: TestResolutionRefusesAMissingOrChainedServingServer (0.01s)
+=== RUN   TestAMergedServerRefusesNewRoles
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestAMergedServerRefusesNewRoles (0.01s)
+=== RUN   TestAnAccountWithRolesOnBothServersKeepsBoth
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestAnAccountWithRolesOnBothServersKeepsBoth (0.01s)
+=== RUN   TestMergeServerValidatesBeforeWriting
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestMergeServerValidatesBeforeWriting (0.01s)
+=== RUN   TestADryRunMergeWritesNothing
+2026/11/18 13:55:10 INFO account: server merged from=3 into=2 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestADryRunMergeWritesNothing (0.00s)
+=== RUN   TestUnmergeServerRestoresTheOrigin
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+2026/11/18 13:55:10 INFO account: server unmerged from=2 was_into=1 note="rollback after the merge check failed"
+--- PASS: TestUnmergeServerRestoresTheOrigin (0.01s)
+=== RUN   TestUpsertServerKeepsTheMergeFields
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestUpsertServerKeepsTheMergeFields (0.00s)
+=== RUN   TestConcurrentMergesThatChainAreReported
+2026/11/18 13:55:10 INFO account: server merged from=1 into=3 repointed=[] note="the other operator"
+2026/11/18 13:55:10 ERROR account: server merge left a two-hop alias from=2 into=1 into_merged_into=3
+--- PASS: TestConcurrentMergesThatChainAreReported (0.00s)
+=== RUN   TestAMergeIsRefusedWhileATransferInvolvesTheMergedServer
+2026/11/18 13:55:10 INFO account: role transfer begun player_id=1000001 transfer_id=out from=2 to=3 epoch=0 transfer_seq=1
+2026/11/18 13:55:10 INFO account: role transfer begun player_id=1000002 transfer_id=in from=3 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:10 INFO account: role transfer begun player_id=1000003 transfer_id=unrelated from=3 to=1 epoch=0 transfer_seq=1
+2026/11/18 13:55:10 INFO account: role transfer aborted player_id=1000001 transfer_id=out from=2 to=3 reason="merge window"
+2026/11/18 13:55:10 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=out server_id=3
+2026/11/18 13:55:10 INFO account: role transfer committed player_id=1000002 transfer_id=in from=3 to=2 bind_epoch=1 note=""
+2026/11/18 13:55:10 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestAMergeIsRefusedWhileATransferInvolvesTheMergedServer (0.02s)
+=== RUN   TestADifferentNameReleasesAPlanWhoseNameWasCommittedElsewhere
+--- PASS: TestADifferentNameReleasesAPlanWhoseNameWasCommittedElsewhere (1.81s)
+=== RUN   TestADifferentNameKeepsAPlanThatCanStillComplete
+=== RUN   TestADifferentNameKeepsAPlanThatCanStillComplete/own_live_reservation
+=== RUN   TestADifferentNameKeepsAPlanThatCanStillComplete/own_committed_name
+=== RUN   TestADifferentNameKeepsAPlanThatCanStillComplete/foreign_reservation_only
+--- PASS: TestADifferentNameKeepsAPlanThatCanStillComplete (1.96s)
+    --- PASS: TestADifferentNameKeepsAPlanThatCanStillComplete/own_live_reservation (0.01s)
+    --- PASS: TestADifferentNameKeepsAPlanThatCanStillComplete/own_committed_name (0.01s)
+    --- PASS: TestADifferentNameKeepsAPlanThatCanStillComplete/foreign_reservation_only (1.95s)
+=== RUN   TestAFailedReleaseOfADeadPlanIsCountedAndRetriedByTheNextName
+--- PASS: TestAFailedReleaseOfADeadPlanIsCountedAndRetriedByTheNextName (2.01s)
+=== RUN   TestAFailedReleaseOnTheSameNamePathIsCounted
+--- PASS: TestAFailedReleaseOnTheSameNamePathIsCounted (2.01s)
+=== RUN   TestNameCommittedElsewhereReleasesThePendingSlot
+--- PASS: TestNameCommittedElsewhereReleasesThePendingSlot (2.01s)
+=== RUN   TestNameReservedElsewhereKeepsThePendingSlot
+--- PASS: TestNameReservedElsewhereKeepsThePendingSlot (1.96s)
+=== RUN   TestResolvePendingCreationFreesTheSlotAndRecordsTheNote
+--- PASS: TestResolvePendingCreationFreesTheSlotAndRecordsTheNote (2.01s)
+=== RUN   TestResolvePendingCreationRefusesWhatItCannotProve
+=== RUN   TestResolvePendingCreationRefusesWhatItCannotProve/no_slot
+=== RUN   TestResolvePendingCreationRefusesWhatItCannotProve/slot_without_creation_plan
+=== RUN   TestResolvePendingCreationRefusesWhatItCannotProve/live_own_reservation
+=== RUN   TestResolvePendingCreationRefusesWhatItCannotProve/own_committed_name
+=== RUN   TestResolvePendingCreationRefusesWhatItCannotProve/slot_moved_after_the_decision
+--- PASS: TestResolvePendingCreationRefusesWhatItCannotProve (0.00s)
+    --- PASS: TestResolvePendingCreationRefusesWhatItCannotProve/no_slot (0.00s)
+    --- PASS: TestResolvePendingCreationRefusesWhatItCannotProve/slot_without_creation_plan (0.00s)
+    --- PASS: TestResolvePendingCreationRefusesWhatItCannotProve/live_own_reservation (0.00s)
+    --- PASS: TestResolvePendingCreationRefusesWhatItCannotProve/own_committed_name (0.00s)
+    --- PASS: TestResolvePendingCreationRefusesWhatItCannotProve/slot_moved_after_the_decision (0.00s)
+=== RUN   TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsReservedElsewhere
+--- PASS: TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsReservedElsewhere (2.01s)
+=== RUN   TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree
+--- PASS: TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree (2.01s)
+=== RUN   TestVerifiedIdentityEncodingIsInjective
+--- PASS: TestVerifiedIdentityEncodingIsInjective (0.00s)
+=== RUN   TestLostSlotReplyCannotDeleteCommittedRole
+--- PASS: TestLostSlotReplyCannotDeleteCommittedRole (0.00s)
+=== RUN   TestServerPresenceExpiresWhenTheReporterStops
+--- PASS: TestServerPresenceExpiresWhenTheReporterStops (1.21s)
+=== RUN   TestServerPresenceRefusesBadReports
+--- PASS: TestServerPresenceRefusesBadReports (0.00s)
+=== RUN   TestServerPresenceHoldsAtMostMaxServers
+--- PASS: TestServerPresenceHoldsAtMostMaxServers (1.48s)
+=== RUN   TestRoleOnServerReturnsTheAccountsRoleOnThatServer
+--- PASS: TestRoleOnServerReturnsTheAccountsRoleOnThatServer (0.01s)
+=== RUN   TestRoleOnServerCarriesTheServingServerAfterAMerge
+2026/11/18 13:55:30 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+2026/11/18 13:55:30 ERROR account: a merge alias has two hops; roles of the origin are refused until it is repaired origin=2 into=3 into_merged_into=1
+--- PASS: TestRoleOnServerCarriesTheServingServerAfterAMerge (0.01s)
+=== RUN   TestRoleOnServerFollowsTheBindingThroughATransfer
+2026/11/18 13:55:30 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:30 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="changed my mind"
+2026/11/18 13:55:30 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:30 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:30 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:30 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestRoleOnServerFollowsTheBindingThroughATransfer (0.02s)
+=== RUN   TestRoleOnServerDoesNotAnswerForAnUnpublishedPlan
+--- PASS: TestRoleOnServerDoesNotAnswerForAnUnpublishedPlan (0.01s)
+=== RUN   TestRoleOnServerRefusesASlotThatDoesNotMatchItsRole
+--- PASS: TestRoleOnServerRefusesASlotThatDoesNotMatchItsRole (0.06s)
+=== RUN   TestListServersReturnsEveryRegisteredServerInOrder
+--- PASS: TestListServersReturnsEveryRegisteredServerInOrder (0.01s)
+=== RUN   TestListServersOfAnEmptyDirectoryIsEmpty
+--- PASS: TestListServersOfAnEmptyDirectoryIsEmpty (0.00s)
+=== RUN   TestListServersCarriesTheMergeFields
+2026/11/18 13:55:30 INFO account: server merged from=2 into=1 repointed=[] note="merge window 2026-10-20"
+2026/11/18 13:55:30 INFO account: server unmerged from=2 was_into=1 note=revert
+--- PASS: TestListServersCarriesTheMergeFields (0.01s)
+=== RUN   TestConcurrentFirstRegistrationsAllLandInTheList
+--- PASS: TestConcurrentFirstRegistrationsAllLandInTheList (0.11s)
+=== RUN   TestListServersWhenTheIndexAndTheRecordsDisagree
+2026/11/18 13:55:30 INFO account: server merged from=21 into=20 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestListServersWhenTheIndexAndTheRecordsDisagree (0.01s)
+=== RUN   TestTheServerIndexRefusesNewServersWhenFull
+--- PASS: TestTheServerIndexRefusesNewServersWhenFull (0.06s)
+=== RUN   TestWithoutServicesTheServerListIsUnchanged
+--- PASS: TestWithoutServicesTheServerListIsUnchanged (0.00s)
+=== RUN   TestServersBelongToTheOnlyGameService
+--- PASS: TestServersBelongToTheOnlyGameService (0.00s)
+=== RUN   TestTwoGameServicesShareOneServerNumbering
+2026/11/18 13:55:31 INFO account: server merged from=21 into=20 repointed=[] note="merge window 2026-10-20"
+--- PASS: TestTwoGameServicesShareOneServerNumbering (0.01s)
+=== RUN   TestBadServicesAreRefusedAtStart
+--- PASS: TestBadServicesAreRefusedAtStart (0.00s)
+=== RUN   TestBeginRoleTransferRecordsTheTransferAndHoldsTheTargetSlot
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+--- PASS: TestBeginRoleTransferRecordsTheTransferAndHoldsTheTargetSlot (0.01s)
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/stale_epoch
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/stale_transfer_seq
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/wrong_source
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/unknown_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/non-positive_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_is_the_current_server
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_merged_into_another_server
+2026/11/18 13:55:31 INFO account: server merged from=3 into=2 repointed=[] note="merge window 2026-10-20"
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_closed
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_in_maintenance
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/account_already_has_a_role_on_the_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/account_has_a_pending_creation_plan_on_the_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/empty_transfer_id
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/negative_ttl
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/ttl_above_the_bound
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/oversized_note
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/missing_role
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/role_whose_creation_is_not_published
+--- PASS: TestBeginRoleTransferRefusesWithoutWriting (0.11s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/stale_epoch (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/stale_transfer_seq (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/wrong_source (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/unknown_target (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/non-positive_target (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_is_the_current_server (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_merged_into_another_server (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_closed (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_in_maintenance (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/account_already_has_a_role_on_the_target (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/account_has_a_pending_creation_plan_on_the_target (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/empty_transfer_id (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/negative_ttl (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/ttl_above_the_bound (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/oversized_note (0.01s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/missing_role (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/role_whose_creation_is_not_published (0.01s)
+=== RUN   TestARoleInTransferStaysPlayableOnTheSourceAndHoldsTheTarget
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+--- PASS: TestARoleInTransferStaysPlayableOnTheSourceAndHoldsTheTarget (0.01s)
+=== RUN   TestCommitRoleTransferRebindsTheRole
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note="player asked"
+--- PASS: TestCommitRoleTransferRebindsTheRole (0.01s)
+=== RUN   TestAbortRoleTransferKeepsTheRoleOnTheSource
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestAbortRoleTransferKeepsTheRoleOnTheSource (0.01s)
+=== RUN   TestAbortAfterCommitReportsTheCommittedBinding
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestAbortAfterCommitReportsTheCommittedBinding (0.01s)
+=== RUN   TestAbortOfAnUnknownTransferFencesALateBegin
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=never-began from=1 to=0 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=2
+--- PASS: TestAbortOfAnUnknownTransferFencesALateBegin (0.01s)
+=== RUN   TestBeginInterruptedBeforeTheHoldIsFinishedByResending
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestBeginInterruptedBeforeTheHoldIsFinishedByResending (0.01s)
+=== RUN   TestCommitRecreatesAMissingHoldBeforeRebinding
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestCommitRecreatesAMissingHoldBeforeRebinding (0.01s)
+=== RUN   TestCommitInterruptedBeforeTheRoleWriteChangesNothing
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestCommitInterruptedBeforeTheRoleWriteChangesNothing (0.01s)
+=== RUN   TestCommitInterruptedAfterTheRoleWriteIsFinishedByResending
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestCommitInterruptedAfterTheRoleWriteIsFinishedByResending (0.01s)
+=== RUN   TestAnOpenCommitTailIsFinishedByTheNextSelectRoleOrBegin
+=== RUN   TestAnOpenCommitTailIsFinishedByTheNextSelectRoleOrBegin/SelectRole
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestAnOpenCommitTailIsFinishedByTheNextSelectRoleOrBegin/Begin_back_to_the_source
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=2 to=1 epoch=1 transfer_seq=2
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=2 to=1 bind_epoch=2 note=""
+--- PASS: TestAnOpenCommitTailIsFinishedByTheNextSelectRoleOrBegin (0.02s)
+    --- PASS: TestAnOpenCommitTailIsFinishedByTheNextSelectRoleOrBegin/SelectRole (0.01s)
+    --- PASS: TestAnOpenCommitTailIsFinishedByTheNextSelectRoleOrBegin/Begin_back_to_the_source (0.01s)
+=== RUN   TestAbortInterruptedAfterTheRoleWriteIsFinishedByResending
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="hook vetoed"
+2026/11/18 13:55:31 WARN account: finishing a settled role transfer failed; the next SelectRole, Begin or re-sent Commit/Abort retries it player_id=1000001 transfer_id=t-1 err="injected store failure"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+--- PASS: TestAbortInterruptedAfterTheRoleWriteIsFinishedByResending (0.01s)
+=== RUN   TestAnOpenAbortTailIsFinishedByTheNextBegin
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="hook vetoed"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestAnOpenAbortTailIsFinishedByTheNextBegin (0.01s)
+=== RUN   TestALateCommitTailNeverDeletesTheSlotTheRoleCameBackTo
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=2 to=1 epoch=1 transfer_seq=2
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=2 to=1 bind_epoch=2 note=""
+--- PASS: TestALateCommitTailNeverDeletesTheSlotTheRoleCameBackTo (0.01s)
+=== RUN   TestASlotOfAnotherBindGenerationIsNotUsable
+--- PASS: TestASlotOfAnotherBindGenerationIsNotUsable (0.01s)
+=== RUN   TestATransferredRoleKeepsItsNameUnderTheCreationOwner
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestATransferredRoleKeepsItsNameUnderTheCreationOwner (0.01s)
+=== RUN   TestTransfersInvolvingAMergedAwayServerAreRefused
+=== RUN   TestTransfersInvolvingAMergedAwayServerAreRefused/source_merged_away
+2026/11/18 13:55:31 INFO account: server merged from=1 into=2 repointed=[] note="merge window 2026-10-20"
+=== RUN   TestTransfersInvolvingAMergedAwayServerAreRefused/target_merged_away_while_the_transfer_is_in_flight
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=3 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=3 reason="target was merged"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=3
+=== RUN   TestTransfersInvolvingAMergedAwayServerAreRefused/source_merged_away_while_the_transfer_is_in_flight
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=3 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=3 bind_epoch=1 note=""
+=== RUN   TestTransfersInvolvingAMergedAwayServerAreRefused/a_server_that_hosts_merged_servers_is_an_ordinary_source_and_target
+2026/11/18 13:55:31 INFO account: server merged from=3 into=2 repointed=[] note="merge window 2026-10-20"
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=2 to=4 epoch=1 transfer_seq=2
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=2 to=4 bind_epoch=2 note=""
+--- PASS: TestTransfersInvolvingAMergedAwayServerAreRefused (0.04s)
+    --- PASS: TestTransfersInvolvingAMergedAwayServerAreRefused/source_merged_away (0.01s)
+    --- PASS: TestTransfersInvolvingAMergedAwayServerAreRefused/target_merged_away_while_the_transfer_is_in_flight (0.01s)
+    --- PASS: TestTransfersInvolvingAMergedAwayServerAreRefused/source_merged_away_while_the_transfer_is_in_flight (0.01s)
+    --- PASS: TestTransfersInvolvingAMergedAwayServerAreRefused/a_server_that_hosts_merged_servers_is_an_ordinary_source_and_target (0.01s)
+=== RUN   TestCommitRoleTransferWithNoteRecordsTheOperatorsNote
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note="source 1 exited; wal-drained ok"
+--- PASS: TestCommitRoleTransferWithNoteRecordsTheOperatorsNote (0.01s)
+=== RUN   TestTransferClaimValueRoundTrips
+--- PASS: TestTransferClaimValueRoundTrips (0.00s)
+=== RUN   TestConcurrentTransferRequestsHaveOneWinner
+=== RUN   TestConcurrentTransferRequestsHaveOneWinner/begins
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-0 from=1 to=2 epoch=0 transfer_seq=1
+=== RUN   TestConcurrentTransferRequestsHaveOneWinner/begin_against_a_create_on_the_target
+=== RUN   TestConcurrentTransferRequestsHaveOneWinner/commit_against_abort
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000002 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000002 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000002 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000003 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000003 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000003 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000004 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000004 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000004 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000005 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000005 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000005 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000006 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000006 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000006 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000007 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000007 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000007 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000008 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000008 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000008 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000009 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000009 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000009 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000010 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000010 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000010 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000011 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000011 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000011 transfer_id=t server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000012 transfer_id=t from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000012 transfer_id=t from=1 to=2 reason=race
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000012 transfer_id=t server_id=2
+--- PASS: TestConcurrentTransferRequestsHaveOneWinner (0.14s)
+    --- PASS: TestConcurrentTransferRequestsHaveOneWinner/begins (0.01s)
+    --- PASS: TestConcurrentTransferRequestsHaveOneWinner/begin_against_a_create_on_the_target (0.06s)
+    --- PASS: TestConcurrentTransferRequestsHaveOneWinner/commit_against_abort (0.07s)
+=== RUN   TestABeginOvertakenByAnAbortLeavesNoHold
+=== RUN   TestABeginOvertakenByAnAbortLeavesNoHold/stalled_before_the_hold_write
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestABeginOvertakenByAnAbortLeavesNoHold/stalled_after_the_hold_write
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestABeginOvertakenByAnAbortLeavesNoHold (0.02s)
+    --- PASS: TestABeginOvertakenByAnAbortLeavesNoHold/stalled_before_the_hold_write (0.01s)
+    --- PASS: TestABeginOvertakenByAnAbortLeavesNoHold/stalled_after_the_hold_write (0.01s)
+=== RUN   TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry
+=== RUN   TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/resent_Abort
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+=== RUN   TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/SelectRole
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+=== RUN   TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/next_Begin_to_the_same_target
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/CreateRole_on_the_target
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+=== RUN   TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/after_the_record_of_the_abort_was_overwritten
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=never-began from=1 to=0 reason="another caller"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=4
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=never-began from=1 to=0 reason="another caller"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+=== RUN   TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/the_release_fails_and_the_next_entry_retries
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 WARN account: finishing a settled role transfer failed; the next SelectRole, Begin or re-sent Commit/Abort retries it player_id=1000001 transfer_id=t-1 err="injected store failure"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+--- PASS: TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry (0.07s)
+    --- PASS: TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/resent_Abort (0.01s)
+    --- PASS: TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/SelectRole (0.01s)
+    --- PASS: TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/next_Begin_to_the_same_target (0.01s)
+    --- PASS: TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/CreateRole_on_the_target (0.01s)
+    --- PASS: TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/after_the_record_of_the_abort_was_overwritten (0.02s)
+    --- PASS: TestAHoldWrittenAfterItsAbortIsReleasedByTheNextEntry/the_release_fails_and_the_next_entry_retries (0.01s)
+=== RUN   TestABeginOvertakenByACommitKeepsTheCommittedSlot
+=== RUN   TestABeginOvertakenByACommitKeepsTheCommittedSlot/stalled_before_the_hold_write
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestABeginOvertakenByACommitKeepsTheCommittedSlot/stalled_after_the_hold_write
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestABeginOvertakenByACommitKeepsTheCommittedSlot/stalled_after_the_hold_write,_commit_tail_open
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestABeginOvertakenByACommitKeepsTheCommittedSlot (0.03s)
+    --- PASS: TestABeginOvertakenByACommitKeepsTheCommittedSlot/stalled_before_the_hold_write (0.01s)
+    --- PASS: TestABeginOvertakenByACommitKeepsTheCommittedSlot/stalled_after_the_hold_write (0.01s)
+    --- PASS: TestABeginOvertakenByACommitKeepsTheCommittedSlot/stalled_after_the_hold_write,_commit_tail_open (0.01s)
+=== RUN   TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated
+=== RUN   TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated/stalled_before_the_hold_write
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated/stalled_after_the_hold_write
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated/the_hold_reply_is_lost
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated (0.04s)
+    --- PASS: TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated/stalled_before_the_hold_write (0.01s)
+    --- PASS: TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated/stalled_after_the_hold_write (0.01s)
+    --- PASS: TestACommitOvertakenByAnAbortReleasesTheHoldItRecreated/the_hold_reply_is_lost (0.01s)
+=== RUN   TestABeginOvertakenByAnotherTransferKeepsItsHold
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestABeginOvertakenByAnotherTransferKeepsItsHold (0.01s)
+=== RUN   TestAnAbortedTransferCannotBeRevivedAfterLaterAborts
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=old from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=old from=1 to=2 reason=cancel
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=old server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=new-0 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=new-0 from=1 to=2 reason=cancel
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=new-0 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=never-began from=1 to=0 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=new-2 from=1 to=2 epoch=0 transfer_seq=6
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=new-2 from=1 to=2 reason=cancel
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=new-2 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=current from=1 to=2 epoch=0 transfer_seq=8
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=current from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestAnAbortedTransferCannotBeRevivedAfterLaterAborts (0.02s)
+=== RUN   TestAbortOfAnUnknownTransferFencesALateBeginAcrossLaterAborts
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=lost-1 from=1 to=0 reason="the outcome of begin is unknown"
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=lost-2 from=1 to=0 reason="the outcome of begin is unknown"
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=retry from=1 to=3 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=retry from=1 to=3 reason="leave hook refused"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=retry server_id=3
+--- PASS: TestAbortOfAnUnknownTransferFencesALateBeginAcrossLaterAborts (0.01s)
+=== RUN   TestTransferSeqAdvancesOnEveryAcceptedBeginAndRecordedAbort
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason=cancel
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=never-began from=1 to=0 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=4
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestTransferSeqAdvancesOnEveryAcceptedBeginAndRecordedAbort (0.02s)
+=== RUN   TestAWithdrawnBeginKeepsItsTransferSeq
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=3 epoch=0 transfer_seq=2
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=3 bind_epoch=1 note=""
+--- PASS: TestAWithdrawnBeginKeepsItsTransferSeq (0.01s)
+=== RUN   TestAStrayHoldDoesNotDisplaceTheTransferInFlight
+=== RUN   TestAStrayHoldDoesNotDisplaceTheTransferInFlight/resent_Begin
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+=== RUN   TestAStrayHoldDoesNotDisplaceTheTransferInFlight/Commit
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="begin timed out"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestAStrayHoldDoesNotDisplaceTheTransferInFlight (0.02s)
+    --- PASS: TestAStrayHoldDoesNotDisplaceTheTransferInFlight/resent_Begin (0.01s)
+    --- PASS: TestAStrayHoldDoesNotDisplaceTheTransferInFlight/Commit (0.01s)
+=== RUN   TestAHoldOfAnotherBindGenerationIsReplaced
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestAHoldOfAnotherBindGenerationIsReplaced (0.01s)
+=== RUN   TestACommitAfterTheDeadlineIsRefusedAndAbortsTheTransfer
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=late-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=late-1 from=1 to=2 reason="expired: the deadline 1700000060 passed before the transfer was committed"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=late-1 server_id=2
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=late-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=late-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestACommitAfterTheDeadlineIsRefusedAndAbortsTheTransfer (0.01s)
+=== RUN   TestAnExpiredTransferNobodyCommitsIsAbortedBySweep
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=stuck-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=stuck-1 from=1 to=2 reason="expired: the deadline 1700000060 passed before the transfer was committed"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=stuck-1 server_id=2
+2026/11/18 13:55:31 WARN account: aborted a role transfer past its deadline player_id=1000001 transfer_id=stuck-1 from=1 to=2 deadline_unix=1700000060
+--- PASS: TestAnExpiredTransferNobodyCommitsIsAbortedBySweep (0.01s)
+=== RUN   TestTheAccountServerSweepsExpiredTransfers
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=served-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer aborted player_id=1000001 transfer_id=served-1 from=1 to=2 reason="expired: the deadline 1700000001 passed before the transfer was committed"
+2026/11/18 13:55:31 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=served-1 server_id=2
+2026/11/18 13:55:31 WARN account: aborted a role transfer past its deadline player_id=1000001 transfer_id=served-1 from=1 to=2 deadline_unix=1700000001
+2026/11/18 13:55:31 INFO account server: aborted transfers past their deadline count=1
+--- PASS: TestTheAccountServerSweepsExpiredTransfers (0.03s)
+=== RUN   TestListRoleTransfersListsTransfersInFlightByDeadline
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=a from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000002 transfer_id=b from=2 to=3 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=a from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestListRoleTransfersListsTransfersInFlightByDeadline (0.01s)
+=== RUN   TestListingTransfersNeedsTheIndex
+--- PASS: TestListingTransfersNeedsTheIndex (0.00s)
+=== RUN   TestRoleBindingsAwayNamesOnlyRolesServedElsewhere
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000001 transfer_id=m from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 13:55:31 INFO account: role transfer committed player_id=1000001 transfer_id=m from=1 to=2 bind_epoch=1 note=""
+2026/11/18 13:55:31 INFO account: role transfer begun player_id=1000003 transfer_id=n from=1 to=2 epoch=0 transfer_seq=1
+--- PASS: TestRoleBindingsAwayNamesOnlyRolesServedElsewhere (0.01s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	26.911s

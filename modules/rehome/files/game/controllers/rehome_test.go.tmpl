@@ -196,7 +196,8 @@ func newRehomeWorld(t *testing.T, servers ...int32) *rehomeWorld {
 		t.Fatal(err)
 	}
 	w.accounts, err = svcaccount.New(svcaccount.Config{
-		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
+		AccountIDs: svcaccount.NewMemoryAccountIDs(), Games: []svcaccount.GameSpec{{Name: "main"}},
 		Roles:    svcaccount.NewMemoryRoles(),
 		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		Names:    names,

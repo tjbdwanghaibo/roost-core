@@ -107,7 +107,8 @@ func newRecipeNetwork(t *testing.T, registers ...func(*nest.NestMgr) error) *rec
 	var nextID atomic.Int64 // 握手在连接的协程里分配玩家号
 	nextID.Store(41)
 	f.accounts, err = account.New(account.Config{
-		Accounts: versionstore.NewMemoryStore[string, account.Account](),
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Identities: versionstore.NewMemoryStore[string, account.IdentityRecord](),
+		AccountIDs: account.NewMemoryAccountIDs(), Games: []account.GameSpec{{Name: "main"}},
 		Roles:    f.roles,
 		Servers:  versionstore.NewMemoryStore[int32, account.GameServer](),
 		Slots:    versionstore.NewMemoryStore[string, account.Slot](),

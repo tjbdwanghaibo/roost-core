@@ -37,7 +37,8 @@ import (
 // 对端跑（离线）；真实进程上由 scripts/test-demo-login.sh 跑。
 
 // portalFrontDoor 起一个登录入口：account 里只有 1000 服是开放的。
-func portalFrontDoor(t *testing.T) (*svcaccount.Service, string, versionstore.Store[string, svcaccount.Account]) {
+// portalFrontDoor 返回 account、入口的地址与 account 的身份记录（账号号由 account 发、按游戏分开，场景按身份查）。
+func portalFrontDoor(t *testing.T) (*svcaccount.Service, string, versionstore.Store[string, svcaccount.IdentityRecord]) {
 	t.Helper()
 	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
 	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: now})
@@ -45,9 +46,12 @@ func portalFrontDoor(t *testing.T) (*svcaccount.Service, string, versionstore.St
 		t.Fatal(err)
 	}
 	next := int64(100_000)
-	stored := versionstore.NewMemoryStore[string, svcaccount.Account]()
+	stored := versionstore.NewMemoryStore[string, svcaccount.IdentityRecord]()
 	accounts, err := svcaccount.New(svcaccount.Config{
-		Accounts:      stored,
+		Accounts:      versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Identities:    stored,
+		AccountIDs:    svcaccount.NewMemoryAccountIDs(),
+		Games:         []svcaccount.GameSpec{{Name: "main"}},
 		Roles:         versionstore.NewMemoryStore[int64, svcaccount.Role](),
 		Servers:       versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
 		Slots:         versionstore.NewMemoryStore[string, svcaccount.Slot](),
@@ -148,7 +152,7 @@ func TestPortalLoginHandsTheRobotAnEnterTicketTheHandshakeTakes(t *testing.T) {
 
 // 走不通的三种：要进的服不在清单里（没登记）、入口拒绝（被封的账号）、入口不可达。每一种都是错误，没有握手帧。
 func TestPortalLoginFailsWithoutATicket(t *testing.T) {
-	_, url, stored := portalFrontDoor(t)
+	accounts, url, stored := portalFrontDoor(t)
 	rb := robot.NewContext(robot.Config{ID: 1})
 
 	if packet, err := newPortalLogin(url, 1001).authPacket(rb); err == nil || packet != nil || !strings.Contains(err.Error(), "server 1001 is not in the list") {
@@ -163,11 +167,11 @@ func TestPortalLoginFailsWithoutATicket(t *testing.T) {
 	if _, err := login.authPacket(rb); err != nil {
 		t.Fatal(err)
 	}
-	accountID := svcaccount.Identity{Channel: "demo", OpenID: "robot-" + login.nonce + "-1"}.AccountID()
-	if _, _, err := stored.Update(context.Background(), accountID, func(current svcaccount.Account, found bool) (svcaccount.Account, bool, error) {
-		current.Banned = true
-		return current, found, nil
-	}); err != nil {
+	identity, found, err := stored.Get(context.Background(), "demo:robot-"+login.nonce+"-1")
+	if err != nil || !found {
+		t.Fatalf("the robot's identity record: found %v, %v", found, err)
+	}
+	if _, err := accounts.SetIdentityBanned(context.Background(), identity.Value.Accounts["main"], true, "loadtest scenario"); err != nil {
 		t.Fatal(err)
 	}
 	if packet, err := login.authPacket(rb); err == nil || packet != nil || !strings.Contains(err.Error(), "portal /portal/") {

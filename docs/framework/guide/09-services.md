@@ -117,7 +117,7 @@ versionstore 写结果未知仍需调用方保留不确定状态，不能假设�
 
 ## 4. 关键业务边界
 
-account 的身份验证、玩家号分配、名字校验由接入方提供，不能用默认信任身份或进程内计数器替代。一个账号一区服一角色由 slot insert-only/建角计划约束；每个 slot 与角色都带建角身份（计划 ID / `CreationID`），缺计划的 slot、缺 `CreationID` 的角色不被推断，分别以 `ErrConflict` / `ErrNotResolvable` 拒绝并交线下处理；账号 ID 只用转义渠道后的形态（`Identity.AccountID`）。SelectRole 的 accountID 属可信服务边界，外部请求必须先绑定已认证身份。
+account 的身份验证、玩家号分配、名字校验由接入方提供，不能用默认信任身份或进程内计数器替代。一个账号一区服一角色由 slot insert-only/建角计划约束；每个 slot 与角色都带建角身份（计划 ID / `CreationID`），缺计划的 slot、缺 `CreationID` 的角色不被推断，分别以 `ErrConflict` / `ErrNotResolvable` 拒绝并交线下处理；SelectRole 的 accountID 属可信服务边界，外部请求必须先绑定已认证身份。
 
 `Accounts.RoleOnServer(accountID, serverID)` 只读地返回账号在某个服上的角色（登录入口用它让换了设备的客户端认回自己的角色，模块 portal）：按 slot 读，带承载服与在途的换服；没有角色、建角计划还没发布、换服在目标服的占位都答 `ErrRoleMissing`，slot 与角色对不上答 `ErrConflict`；以绑定服为准，并入别的服的角色要用原服号问。没有“列出账号的全部角色”——存储是键值的；登录入口对 `ListServers` 给出的每个服各问一次。
 
@@ -125,15 +125,24 @@ account 的身份验证、玩家号分配、名字校验由接入方提供，不
 
 **区服入口登记**（维护者 D23，[service/account/presence.go](../../../service/account/presence.go)）：客户端连哪里、现在多忙不是区服记录，是 game 进程定期上报的**易失**事实。`Accounts.ReportServerPresence(ServerPresence{ServerID, Addr, Load, Tags}, ttlSeconds)` 登记或续期（期限 1～`MaxPresenceTTLSeconds` = 600 秒，地址必须是带主机的 `host:port`，标签至多 8 个），`WithdrawServerPresence(serverID)` 立刻撤销，`ListServerPresence()` 只读地给出没过期的条目（按服号升序；至多 256 个没过期的服，满了之后新的服号答 `ErrRangeInvalid`、已登记的照常续期）。生产存储是 Redis 里一个哈希（`<prefix>:presence`，`RedisPresenceStore`）：到期由脚本里的 Redis `TIME` 判断，多个 account 副本写读同一张表、不比较各自的时钟；一个键，Cluster 下也是一个槽。登记表有、`ListServers` 没有的服不会出现在任何清单里；account 不核对上报者是不是那个服（总线只在内网，调用方可信）。上报方是模块 login 的 manager（`login.presence.addr`），读方是模块 portal 的缺省区服目录（叠在静态 `portal.servers` 上，上报的优先）。`Config.Presence` 为 nil 时用进程内的 `MemoryPresenceStore`（单进程、测试），`wiring/account` 的 Mod 总是传 Redis 的那一种。
 
+**一套 account 服务多个游戏，账号号按游戏分开**（维护者 2026-11-18，[FEATURE-2026-11-16 §4.1](../../maintenance/FEATURE-2026-11-16-lobby-relay.md)）：
+
+- **账号号属于一个游戏。** 映射键是（游戏, 渠道, open id）→ 账号号：同一个人在两个游戏里是两个账号号。`Account{ID, Game, …}` 是一个游戏里的账号；lobby、relay、game、客户端看到的都是它。账号号由 account 自己的全局计数器发（`Config.AccountIDs`，生产是 Redis 的 `<prefix>:account_id`，`RedisStores.AccountIDs`），各游戏不重复、递增、十进制；不随机化（随机化防按号推算注册先后，可选，未做）。
+- **身份级记录只在 account 内部。** `IdentityRecord`（键是渠道与 open id，`Config.Identities`，Redis `<prefix>:ident:`）记 {游戏: 账号号}、封号、凭证版本与 gt2 代数。账号记录上的身份键（`Account.Identity`）只在存储里：`Login`、`ValidateAccountTicket` 交出去的记录上它是空的。没有任何总线接口返回身份记录或别的游戏的账号号；运维面（`Admin.SetIdentityBanned`）返回它。
+- **登录必须落到一个游戏。** `Identity.Game` 必须在 `account.games` 里；为空时取 `account.default_game`，没写而 `account.games` 只有一个游戏时取它，否则答 `ErrGameInvalid`（560120）。渠道验证器看得到 `Identity.Game`（同一渠道在不同游戏可以是不同的应用）。新身份或新游戏第一次登录时：先发号、insert-only 建账号记录（号被占用答 `ErrConflict`，说明计数器被重置过），再把号写进身份记录；与同一身份同一游戏的并发登录争，以先写进身份记录的为准，输家建的那条账号记录没人引用、留着不删。`wiring/account` 的 Mod 要求 `account.games` 至少一个游戏；生成器给新工程写一个以工程名命名的游戏。
+- **封号、凭证版本、gt2 代数在身份级，各游戏共用。** 封一个人就是封他在所有游戏的账号（校验票据、换 token、建角、进服都读身份记录）；按游戏封号以后再加。凭证版本在任何一个游戏登录时比较，变了就让所有游戏的 gt2 失效；`RevokeGameTokens(accountID)` 由账号号找到身份，吊销所有游戏。
+- **不变：** 角色、slot、进服票据、换服、合服、lobby 房间与被踢名单都按账号号工作，现在它就是游戏账号号，代码不用分游戏。
+- 源码 [identity_accounts.go](../../../service/account/identity_accounts.go)，测试 `identity_accounts_test.go`。
+
 **票据统一由 account 签发和校验**（维护者 2026-11-12）。同一把 `account.session_secret`、三个互不相通的域，都是无状态的 HMAC-SHA256，至多 `MaxTicketBytes` = 1024 字节，任何一种无效（格式、签名、过期、拿别的域的票据冒充）都答同一个 `ErrSessionInvalid`：
 
 | 票据 | 签发 | 校验 | 有效期 |
 | --- | --- | --- | --- |
-| 账号票据 `at1.…` | `IssueAccountTicket(accountID)`（`Login` 之后） | `ValidateAccountTicket(ticket)` → 账号 | `account.ticket_ttl`，缺省 10 分钟 |
+| 账号票据 `at2.<过期秒>.<游戏>.<账号>.…`（绑定账号与游戏） | `IssueAccountTicket(accountID)`（`Login` 之后） | `ValidateAccountTicket(ticket)` → 账号（票据的游戏必须是账号的游戏） | `account.ticket_ttl`，缺省 10 分钟 |
 | 进服票据 `et1.…`（绑定账号与服） | `IssueEnterTicket(accountID, serverID)` | `EnterServer(ticket)` → `ServerEntry{Role, Created}` | `account.session_ttl` |
 | 角色会话令牌 | `SelectRole` | `ValidateSession` | `account.session_ttl` |
 
-校验账号票据与凭票进服时都会再读一次账号：封号对已经发出去的这两种票据立即生效。`PeekEnterTicket` 只读出进服票据写着的服号、不验证，给认证器核对 account 的回答用。
+校验账号票据与凭票进服时都会再读一次账号与它的身份记录：封号对已经发出去的这两种票据立即生效。`PeekEnterTicket` 只读出进服票据写着的服号、不验证，给认证器核对 account 的回答用。
 
 **account 映射的是账号 id ↔ 角色 id，不带名字**（同上）。`EnterServer(ticket)` 验进服票据，返回账号在那个服上的角色；没有映射就新建——分配玩家号、占住这个账号在这个服的名额——`Created` 为 true。它不接触角色名：建角判定表多一种“无名计划”（slot 的建角计划里名字为空，不走名字目录的两阶段占用），应答丢失后的重试凭 slot 里的计划续完；带名字的 `CreateRole` 遇到无名计划答 `ErrRoleLimit`，运维的 `ResolvePendingCreation` 不释放它（它没有可以被别人占走的东西，总能做完）。新映射只在状态是 open、没有并入别的服的服上建；已有映射的在任何状态下都能进。角色名与玩家数据由游戏服建（模块 enter 的 `EnterCreate`）。`CreateRole(accountID, serverID, name)` / `SelectRole` 这条带名字的老路保留，game-demo 与配方在用。
 
@@ -143,8 +152,8 @@ account 的身份验证、玩家号分配、名字校验由接入方提供，不
 
 **account 的游戏账号 token 与多个服务**（方案 [FEATURE-2026-11-16 §4.1](../../maintenance/FEATURE-2026-11-16-lobby-relay.md)，2026-11-17 实施）：一套 account 同时服务多个服务、多个游戏。
 
-- **游戏账号 token** `gt2.<过期秒>.<游戏>.<账号 base64url>.<代数>.<签名>`：回答“哪个账号、玩哪个游戏”，不带区服与角色，给开房间类游戏的大厅（lobby）认人。与账号票据 at1、进服票据 et1 同一把 `account.session_secret`，独立的域前缀 `roost.account.game-token\n`、不同的段数，互相不能冒充；游戏名写在签名里，改了游戏段签名就对不上。`account.games.<游戏>.token_ttl` 列出服务的游戏与各自的寿命（必填，至多 24h；配置加载器看不见没有键的空条目，所以寿命必填）；游戏名小写字母开头、小写字母 / 数字 / `_` / `-`、至多 32 字节。
-- **两个总线接口**：`IssueGameToken(ctx, accountTicket, game) (GameToken, error)` 先校验 at1（账号只取自票据，被封的当场拒绝）再检查游戏，不在 `account.games` 里答 `ErrGameInvalid`（560120）。`ValidateGameToken(ctx, token) (GameAccount{AccountID, Game, ExpiresAtUnix}, error)`：token 无效（过期、被改、拿 at1 / et1 / 角色会话令牌冒充）一律 `ErrSessionInvalid`（560111），游戏已经从配置里去掉答 `ErrGameInvalid`，再读一次账号，不在 `ErrAccountMissing`（560103）、被封 `ErrIdentityDenied`（560102）。它不核对调用方的游戏：大厅用 `GameAccount.RequireGame(自己的游戏)` 比较，不一致答 `ErrSessionInvalid`——A 游戏的 token 进不了 B 游戏的大厅。只读、无状态，不能单张吊销；封号是全局的。**按账号整代吊销**（交接 C6，维护者 2026-11-17）：`Account.GameTokenGeneration` 是账号上的 token 代数，签发时写进 token（签名覆盖它），校验时与重读到的账号比较（不多一次读），不等答 `ErrSessionInvalid`；总线接口 `RevokeGameTokens(ctx, accountID) (generation, error)` 把它加一并落库，在此之前签发的全部失效、之后签发的照常可用，账号不在答 `ErrAccountMissing`，被封的账号也可以吊销。入口：运维的 `accountctl revoke-game-tokens -account <账号号>`（login 模块）；**改密码自动加一**（维护者 2026-11-18 选 B）：account 自己没有改密码的路径（身份由渠道确认），渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本（不透明字符串，至多 128 字节，只比较相等），账号记录存上一次的值（`Account.CredentialVersion`）；`Login` 在同一次 `Accounts.Update` 里比较：存过且不同就把代数加一并换成新值，第一次见到只记录，相同或渠道没给（空）不动；被封的账号登录照样被拒，但版本变化照样落库。并发登录各自基于最新提交的记录判断：同一个新版本只加一次，两个不同的新版本加两次（存下后提交的那个），与手动吊销并发两者都不丢。它在改密之后的下一次登录生效；要当场吊销由渠道、工程自己的账号中心经总线调 `RevokeGameTokens`。吊销不断开已连上 relay 的房间，不碰 at1 / et1。拿法见 portal 模块的 `/portal/game-token` 与登录时的可选 `game`。游客也走 account 的渠道拿账号，没有匿名登录。
+- **游戏账号 token** `gt2.<过期秒>.<游戏>.<账号 base64url>.<代数>.<签名>`：回答“哪个账号、玩哪个游戏”，不带区服与角色，给开房间类游戏的大厅（lobby）认人。与账号票据 at2、进服票据 et1 同一把 `account.session_secret`，独立的域前缀 `roost.account.game-token\n`、不同的段数，互相不能冒充；游戏名写在签名里，改了游戏段签名就对不上。`account.games.<游戏>.token_ttl` 列出服务的游戏与各自的寿命（必填，至多 24h；配置加载器看不见没有键的空条目，所以寿命必填）；游戏名小写字母开头、小写字母 / 数字 / `_` / `-`、至多 32 字节。
+- **两个总线接口**：`IssueGameToken(ctx, accountTicket, game) (GameToken, error)` 先校验 at2（账号只取自票据，被封的当场拒绝）再检查游戏，不在 `account.games` 里、或不是票据自己的游戏答 `ErrGameInvalid`（560120）——它只给票据的游戏重签（刷新），不能拿 A 游戏的票据换 B 游戏的 token（2026-11-18）。`ValidateGameToken(ctx, token) (GameAccount{AccountID, Game, ExpiresAtUnix}, error)`：token 无效（过期、被改、拿 at2 / et1 / 角色会话令牌冒充）一律 `ErrSessionInvalid`（560111），游戏已经从配置里去掉答 `ErrGameInvalid`，再读一次账号与身份记录，不在 `ErrAccountMissing`（560103）、被封 `ErrIdentityDenied`（560102）；token 的游戏不是账号的游戏答 `ErrSessionInvalid`。它不核对调用方的游戏：大厅用 `GameAccount.RequireGame(自己的游戏)` 比较，不一致答 `ErrSessionInvalid`——A 游戏的 token 进不了 B 游戏的大厅。只读、无状态，不能单张吊销；封号在身份级（一个人的所有游戏）。**按身份整代吊销**（交接 C6，维护者 2026-11-17；2026-11-18 移到身份级）：`IdentityRecord.GameTokenGeneration` 是这个人的 token 代数，各游戏共用，签发时写进 token（签名覆盖它），校验时与重读到的账号比较（不多一次读），不等答 `ErrSessionInvalid`；总线接口 `RevokeGameTokens(ctx, accountID) (generation, error)` 由账号号找到身份，把它加一并落库（这个人所有游戏的 gt2），在此之前签发的全部失效、之后签发的照常可用，账号不在答 `ErrAccountMissing`，被封的账号也可以吊销。入口：运维的 `accountctl revoke-game-tokens -account <账号号>`（login 模块）；**改密码自动加一**（维护者 2026-11-18 选 B）：account 自己没有改密码的路径（身份由渠道确认），渠道验证器在 `Verified.CredentialVersion` 里返回凭证版本（不透明字符串，至多 128 字节，只比较相等），身份记录存上一次的值（`IdentityRecord.CredentialVersion`）；`Login`（任何一个游戏）在同一次 `Identities.Update` 里比较：存过且不同就把代数加一并换成新值，第一次见到只记录，相同或渠道没给（空）不动；被封的账号登录照样被拒，但版本变化照样落库。并发登录各自基于最新提交的记录判断：同一个新版本只加一次，两个不同的新版本加两次（存下后提交的那个），与手动吊销并发两者都不丢。它在改密之后的下一次登录生效；要当场吊销由渠道、工程自己的账号中心经总线调 `RevokeGameTokens`。吊销不断开已连上 relay 的房间，不碰 at2 / et1。拿法见 portal 模块的 `/portal/game-token` 与登录时的可选 `game`。游客也走 account 的渠道拿账号，没有匿名登录。
 - **多个服务**：`account.services.<服务>.kind`（`game` / `lobby` / `relay`）。`ListServices` 按名字升序给出（总线接口，只读），没有配置时为空——这类工程的行为与以前完全相同：区服记录不带服务名，也写不进服务名。配置了的，区服记录多一个 `GameServer.Service`：`UpsertServer` 没写时沿用记录里已有的，再没有就归到唯一的 game 服务；game 服务不止一个时必须写明，写的必须是 kind=game 的服务，否则 `ErrServerInvalid`，索引里也不留这个服号。`ListServers` / `GetServer` 交出去的记录已经填好服务名。所有 game 服务的区服共用一个全局号段与一条区服索引，上限 `MaxServers` 由 256 放宽到 1024（区服入口登记表同一个上限）。合服只在同一个 game 服务里（跨服务答 `ErrServerInvalid`）。
 - 边界：`cmd/accountctl upsert-server` 还没有 `-service` 参数（两个以上 game 服务的工程要经代码调 `UpsertServer`）；`account.services` 是否列全了工程里的服务由生成器的 doctor 检查（生成器组）。源码 [game_token.go](../../../service/account/game_token.go)、[services.go](../../../service/account/services.go)，测试 `game_token_test.go`、`services_test.go`、`wiring/account` 的 `TestModReadsGamesAndServices`。
 
