@@ -1,0 +1,10 @@
+go version go1.27.3 darwin/arm64
+b0ff526bf6fabc9003b5948f0ee3329ddb99d9d1
+ M codegen/internal/roost/testdata/gate/load_test.go.txt
+ M scripts/perf/gate-mixed.sh
+ M wiring/physicsroom/load_native_test.go
+GOMAXPROCS=0 duration=30s target_rate=100/s
+971e6b111d40027ebddc95fb553c312c3c3b54772a94d3a231dea04c766e4af0  codegen/internal/roost/testdata/gate/consumer_test.go.txt
+088ed42d55073eca977a86c1024e7f1e4744153c9bbc94ff0ce8942b3a36c356  codegen/internal/roost/testdata/gate/load_test.go.txt
+b8ab06e56d81213b376b9895e44e37caee60770fc7464d7f7a6cc2358221200f  codegen/internal/roost/testdata/gate/real_test.go.txt
+9df3eeb5aeaa9d7d8b5a456c20fac09b79c9d2ae4bb0f51fee3f26494639a46a  robot/sync_report.go

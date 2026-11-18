@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  219102	      5439 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  115846	     10594 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  228244	      5489 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  116139	     10295 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  224360	      5557 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  116472	     10521 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  224890	      5436 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  109093	     10797 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  218716	      5500 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  111184	     10820 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  213745	      5662 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  105486	     11546 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  204308	      5910 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  113385	     14244 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  190514	      5914 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	   94807	     12548 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  201208	      5851 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  104863	     10998 ns/op	    2705 B/op	      32 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  193524	      6027 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	   89652	     13071 ns/op	    2705 B/op	      32 allocs/op
+PASS

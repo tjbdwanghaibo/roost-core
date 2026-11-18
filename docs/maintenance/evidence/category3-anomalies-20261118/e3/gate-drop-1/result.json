@@ -1,0 +1,1212 @@
+{
+  "verified": true,
+  "scope": "one real account; one Player + shared World hotspot; 100 ordinary requests/s target; 10Hz heartbeat, 5% mutation; same-process Go Robot; no Remote/Saga capacity claim",
+  "Scheduled": 3000,
+  "Dropped": 48,
+  "Completed": 2953,
+  "HeartbeatCallbacks": 300,
+  "HeartbeatChanges": 15,
+  "Seconds": 30.000969958,
+  "CompletedPerSecond": 98.3968186406195,
+  "Sync": {
+    "events": [
+      {
+        "kind": "full",
+        "expected": 2,
+        "received": 2,
+        "timed_out": 0,
+        "canceled": 0,
+        "pending": 0,
+        "p50_ms": 1.517932029328215,
+        "p95_ms": 2.887166,
+        "p99_ms": 2.887166,
+        "max_ms": 2.887166
+      },
+      {
+        "kind": "delta",
+        "expected": 2953,
+        "received": 2953,
+        "timed_out": 0,
+        "canceled": 0,
+        "pending": 0,
+        "p50_ms": 8.50711460992261,
+        "p95_ms": 14.267282855238303,
+        "p99_ms": 18.476545048736412,
+        "max_ms": 28.561125
+      },
+      {
+        "kind": "remove",
+        "expected": 1,
+        "received": 1,
+        "timed_out": 0,
+        "canceled": 0,
+        "pending": 0,
+        "p50_ms": 0.589041,
+        "p95_ms": 0.589041,
+        "p99_ms": 0.589041,
+        "max_ms": 0.589041
+      }
+    ],
+    "slowest": [
+      {
+        "connection": 1,
+        "sequence": 2331,
+        "kind": "delta",
+        "duration_ms": 28.561125
+      },
+      {
+        "connection": 1,
+        "sequence": 2329,
+        "kind": "delta",
+        "duration_ms": 28.25925
+      },
+      {
+        "connection": 1,
+        "sequence": 214,
+        "kind": "delta",
+        "duration_ms": 25.150042
+      },
+      {
+        "connection": 1,
+        "sequence": 2328,
+        "kind": "delta",
+        "duration_ms": 23.366708
+      },
+      {
+        "connection": 1,
+        "sequence": 653,
+        "kind": "delta",
+        "duration_ms": 22.901834
+      },
+      {
+        "connection": 1,
+        "sequence": 579,
+        "kind": "delta",
+        "duration_ms": 21.7235
+      },
+      {
+        "connection": 1,
+        "sequence": 2354,
+        "kind": "delta",
+        "duration_ms": 21.693916
+      },
+      {
+        "connection": 1,
+        "sequence": 1010,
+        "kind": "delta",
+        "duration_ms": 21.180792
+      },
+      {
+        "connection": 1,
+        "sequence": 1962,
+        "kind": "delta",
+        "duration_ms": 21.178041
+      },
+      {
+        "connection": 1,
+        "sequence": 1018,
+        "kind": "delta",
+        "duration_ms": 21.022125
+      },
+      {
+        "connection": 1,
+        "sequence": 2004,
+        "kind": "delta",
+        "duration_ms": 20.466333
+      },
+      {
+        "connection": 1,
+        "sequence": 1483,
+        "kind": "delta",
+        "duration_ms": 20.394208
+      },
+      {
+        "connection": 1,
+        "sequence": 1510,
+        "kind": "delta",
+        "duration_ms": 20.156791
+      },
+      {
+        "connection": 1,
+        "sequence": 2160,
+        "kind": "delta",
+        "duration_ms": 19.983416
+      },
+      {
+        "connection": 1,
+        "sequence": 441,
+        "kind": "delta",
+        "duration_ms": 19.361833
+      },
+      {
+        "connection": 1,
+        "sequence": 1028,
+        "kind": "delta",
+        "duration_ms": 19.344125
+      },
+      {
+        "connection": 1,
+        "sequence": 287,
+        "kind": "delta",
+        "duration_ms": 19.226917
+      },
+      {
+        "connection": 1,
+        "sequence": 778,
+        "kind": "delta",
+        "duration_ms": 19.07975
+      },
+      {
+        "connection": 1,
+        "sequence": 1804,
+        "kind": "delta",
+        "duration_ms": 18.9895
+      },
+      {
+        "connection": 1,
+        "sequence": 849,
+        "kind": "delta",
+        "duration_ms": 18.984375
+      },
+      {
+        "connection": 1,
+        "sequence": 241,
+        "kind": "delta",
+        "duration_ms": 18.905542
+      },
+      {
+        "connection": 1,
+        "sequence": 350,
+        "kind": "delta",
+        "duration_ms": 18.848
+      },
+      {
+        "connection": 1,
+        "sequence": 816,
+        "kind": "delta",
+        "duration_ms": 18.816708
+      },
+      {
+        "connection": 1,
+        "sequence": 2694,
+        "kind": "delta",
+        "duration_ms": 18.741208
+      },
+      {
+        "connection": 1,
+        "sequence": 2309,
+        "kind": "delta",
+        "duration_ms": 18.725125
+      },
+      {
+        "connection": 1,
+        "sequence": 324,
+        "kind": "delta",
+        "duration_ms": 18.685125
+      },
+      {
+        "connection": 1,
+        "sequence": 1003,
+        "kind": "delta",
+        "duration_ms": 18.629625
+      },
+      {
+        "connection": 1,
+        "sequence": 1822,
+        "kind": "delta",
+        "duration_ms": 18.60375
+      },
+      {
+        "connection": 1,
+        "sequence": 1097,
+        "kind": "delta",
+        "duration_ms": 18.527542
+      },
+      {
+        "connection": 1,
+        "sequence": 498,
+        "kind": "delta",
+        "duration_ms": 18.327042
+      },
+      {
+        "connection": 1,
+        "sequence": 505,
+        "kind": "delta",
+        "duration_ms": 18.300541
+      },
+      {
+        "connection": 1,
+        "sequence": 118,
+        "kind": "delta",
+        "duration_ms": 18.299208
+      }
+    ],
+    "unmatched": 0,
+    "capacity_rejected": 0
+  },
+  "Requests": {
+    "messages": [
+      {
+        "message_id": 10001,
+        "started": 2953,
+        "sent": 2953,
+        "completed": 2953,
+        "ok": 2953,
+        "rejected": 0,
+        "timeout": 0,
+        "canceled": 0,
+        "errors": 0,
+        "inflight": 0,
+        "p50_ms": 7.804692302681293,
+        "p95_ms": 14.267282855238303,
+        "p99_ms": 18.476545048736412,
+        "max_ms": 25.153125
+      }
+    ],
+    "slowest": [
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 25.153125
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 24.742959
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 22.303958
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 21.455209
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 21.427083
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 21.26775
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 20.871708
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 20.714375
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 20.264584
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 20.138334
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 19.938667
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 19.691417
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 19.482083
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.779625
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.751
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.747125
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.747083
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.742792
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.6155
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.605708
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.543584
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.280709
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.194666
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 18.030542
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.99925
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.995958
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.811333
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.779083
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.778292
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.759833
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.758458
+      },
+      {
+        "message_id": 10001,
+        "outcome": "ok",
+        "duration_ms": 17.738083
+      }
+    ]
+  },
+  "Traffic": {
+    "measured_connections": 2,
+    "socket_read_bytes": 214397,
+    "socket_written_bytes": 53424
+  },
+  "ServerAndClientProcess": {
+    "elapsed_seconds": 30.0974595,
+    "cpu_available": true,
+    "cpu_seconds": 6.00951,
+    "cpu_percent": 19.966834742314383,
+    "process_peak_rss_bytes": 132382720,
+    "sampled_peak_heap_bytes": 73898576,
+    "sampled_peak_goroutines": 787,
+    "samples": 32
+  },
+  "Nest": {
+    "Queue": {
+      "Short": {
+        "Running": 0,
+        "Ready": 0,
+        "BlockedOnPredecessor": 0,
+        "WaitingForWorker": 0,
+        "PeakWaiting": 1,
+        "Started": 3362,
+        "Rejected": 0,
+        "TryBatchJobs": 300,
+        "TryBatchConverted": 109,
+        "DependencyWait": 414531956,
+        "WorkerWait": 15684246,
+        "MaxDependencyWait": 11253959,
+        "MaxWorkerWait": 691500,
+        "OldestWaiting": 0
+      },
+      "IO": {
+        "Running": 0,
+        "Ready": 0,
+        "BlockedOnPredecessor": 0,
+        "WaitingForWorker": 0,
+        "PeakWaiting": 0,
+        "Started": 0,
+        "Rejected": 0,
+        "TryBatchJobs": 0,
+        "TryBatchConverted": 0,
+        "DependencyWait": 0,
+        "WorkerWait": 0,
+        "MaxDependencyWait": 0,
+        "MaxWorkerWait": 0,
+        "OldestWaiting": 0
+      },
+      "Long": {
+        "Running": 0,
+        "Ready": 0,
+        "BlockedOnPredecessor": 0,
+        "WaitingForWorker": 0,
+        "PeakWaiting": 0,
+        "Started": 0,
+        "Rejected": 0,
+        "TryBatchJobs": 0,
+        "TryBatchConverted": 0,
+        "DependencyWait": 0,
+        "WorkerWait": 0,
+        "MaxDependencyWait": 0,
+        "MaxWorkerWait": 0,
+        "OldestWaiting": 0
+      },
+      "LongPool": {
+        "Name": "nest_long",
+        "WorkerNum": 8,
+        "QueueCap": 4096,
+        "QueueLen": 0,
+        "Started": true,
+        "Stopped": true
+      },
+      "LongContinuations": 0,
+      "ContinuationRunning": 0
+    },
+    "Short": {
+      "Name": "nest_short",
+      "WorkerNum": 8,
+      "QueueCap": 65536,
+      "QueueLen": 0,
+      "Started": true,
+      "Stopped": true
+    },
+    "IO": {
+      "Name": "nest_io",
+      "WorkerNum": 256,
+      "QueueCap": 64,
+      "QueueLen": 0,
+      "Started": true,
+      "Stopped": true
+    },
+    "Long": {
+      "Name": "nest_long",
+      "WorkerNum": 8,
+      "QueueCap": 4096,
+      "QueueLen": 0,
+      "Started": true,
+      "Stopped": true
+    },
+    "ShortContinuations": 0,
+    "Delayed": 0,
+    "Stopped": true,
+    "Work": {
+      "ProcessedMessages": 3253,
+      "Slow200msMessages": 0
+    }
+  },
+  "Projector": {
+    "Committed": 2968,
+    "Projected": 2968,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "UnloadingEntities": 0,
+    "UnloadAdmissionRejected": 0,
+    "HandedOffEntities": 0,
+    "HandOffAdmissionRejected": 0,
+    "ParallelWindows": 0,
+    "ParallelLanes": 0
+  },
+  "WAL": {
+    "Segment": 1,
+    "Offset": 888113,
+    "Queued": 0,
+    "Admitted": 2968,
+    "Appended": 2968,
+    "Bytes": 888113,
+    "Syncs": 2968,
+    "Replayed": 2968,
+    "Acknowledged": 1083,
+    "TerminalError": "",
+    "DiskBytes": 888185,
+    "SegmentFiles": 1,
+    "OldestUnackedAge": 0
+  },
+  "ProjectionDiagnostics": {
+    "batch_calls": 1063,
+    "batch_records": 2912,
+    "single_calls": 56,
+    "store_max_ms": 121.337209,
+    "store_total_ms": 11959.263661
+  },
+  "drop_reasons": {
+    "admission_reject": 0,
+    "client_beat_lag": 0,
+    "deadline_expired": 0,
+    "heartbeat_skipped_beat": 0,
+    "slow_round_trip": 48
+  },
+  "drop_detail": {
+    "round_trip_response_dominant": 48,
+    "round_trip_sync_dominant": 0,
+    "round_trip_with_heartbeat_mutation": 4
+  },
+  "drop_events": [
+    {
+      "at_ms": 70.18,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.18,
+      "slept": false,
+      "last_response_ms": 14.776,
+      "last_sync_ms": 0.238,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 252.096,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.096,
+      "slept": false,
+      "last_response_ms": 13.649,
+      "last_sync_ms": 0.367,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 280.014,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.014,
+      "slept": false,
+      "last_response_ms": 11.391,
+      "last_sync_ms": 0.173,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 344.076,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 14.076,
+      "slept": false,
+      "last_response_ms": 15.611,
+      "last_sync_ms": 0.221,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 381.971,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 11.971,
+      "slept": false,
+      "last_response_ms": 12.087,
+      "last_sync_ms": 0.698,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 1231.404,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 11.404,
+      "slept": false,
+      "last_response_ms": 17.783,
+      "last_sync_ms": 0.518,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 1273.398,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 13.398,
+      "slept": false,
+      "last_response_ms": 15.153,
+      "last_sync_ms": 0.475,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 1980.138,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.138,
+      "slept": false,
+      "last_response_ms": 11.693,
+      "last_sync_ms": 0.23,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 2229.558,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 19.558,
+      "slept": false,
+      "last_response_ms": 25.157,
+      "last_sync_ms": 0.004,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 2376.057,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 16.057,
+      "slept": false,
+      "last_response_ms": 17.406,
+      "last_sync_ms": 0.305,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 2511.934,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 11.934,
+      "slept": false,
+      "last_response_ms": 14.681,
+      "last_sync_ms": 4.23,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 2550.937,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.937,
+      "slept": false,
+      "last_response_ms": 14.32,
+      "last_sync_ms": 0.004,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 3381.235,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 11.235,
+      "slept": false,
+      "last_response_ms": 13.394,
+      "last_sync_ms": 0.422,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 3960.88,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.88,
+      "slept": false,
+      "last_response_ms": 16.197,
+      "last_sync_ms": 0.348,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 4580.894,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.894,
+      "slept": false,
+      "last_response_ms": 13.871,
+      "last_sync_ms": 0.641,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 5570.933,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.933,
+      "slept": false,
+      "last_response_ms": 14.591,
+      "last_sync_ms": 0.274,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 5612.559,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.559,
+      "slept": false,
+      "last_response_ms": 13.834,
+      "last_sync_ms": 0.596,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 5962.167,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.167,
+      "slept": false,
+      "last_response_ms": 21.46,
+      "last_sync_ms": 0.272,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 1
+    },
+    {
+      "at_ms": 6712.942,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.942,
+      "slept": false,
+      "last_response_ms": 22.311,
+      "last_sync_ms": 0.594,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 7981.134,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 11.134,
+      "slept": false,
+      "last_response_ms": 11.293,
+      "last_sync_ms": 0.465,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 9750.998,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.998,
+      "slept": false,
+      "last_response_ms": 11.779,
+      "last_sync_ms": 0.273,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 9840.224,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.224,
+      "slept": false,
+      "last_response_ms": 11.079,
+      "last_sync_ms": 0.282,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 10252.707,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.707,
+      "slept": false,
+      "last_response_ms": 18.286,
+      "last_sync_ms": 0.349,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 10314.162,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 14.162,
+      "slept": false,
+      "last_response_ms": 14.926,
+      "last_sync_ms": 0.219,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 10345.214,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 15.214,
+      "slept": false,
+      "last_response_ms": 20.927,
+      "last_sync_ms": 0.257,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 10360.208,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.208,
+      "slept": false,
+      "last_response_ms": 14.518,
+      "last_sync_ms": 0.456,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 10433.893,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 13.893,
+      "slept": false,
+      "last_response_ms": 16.703,
+      "last_sync_ms": 0.397,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 10454.939,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 14.939,
+      "slept": false,
+      "last_response_ms": 13.878,
+      "last_sync_ms": 7.147,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 10590.912,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.912,
+      "slept": false,
+      "last_response_ms": 14.222,
+      "last_sync_ms": 0.509,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 15120.939,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.939,
+      "slept": false,
+      "last_response_ms": 20.144,
+      "last_sync_ms": 0.267,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 15220.478,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.478,
+      "slept": false,
+      "last_response_ms": 11.065,
+      "last_sync_ms": 0.462,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 15412.823,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.823,
+      "slept": false,
+      "last_response_ms": 19.696,
+      "last_sync_ms": 0.468,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 17962.148,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.148,
+      "slept": false,
+      "last_response_ms": 15.297,
+      "last_sync_ms": 0.242,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 1
+    },
+    {
+      "at_ms": 18377.186,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 17.186,
+      "slept": false,
+      "last_response_ms": 18.747,
+      "last_sync_ms": 0.246,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 18422.975,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.975,
+      "slept": false,
+      "last_response_ms": 14.754,
+      "last_sync_ms": 0.18,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 19971.487,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 11.487,
+      "slept": false,
+      "last_response_ms": 20.727,
+      "last_sync_ms": 0.457,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 1
+    },
+    {
+      "at_ms": 20400.871,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 10.871,
+      "slept": false,
+      "last_response_ms": 20.276,
+      "last_sync_ms": 0.192,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 21973.343,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 13.343,
+      "slept": false,
+      "last_response_ms": 19.486,
+      "last_sync_ms": 0.502,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 23663.543,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 13.543,
+      "slept": false,
+      "last_response_ms": 21.435,
+      "last_sync_ms": 1.934,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 23691.829,
+      "missed": 2,
+      "reason": "slow_round_trip",
+      "lag_ms": 21.829,
+      "slept": false,
+      "last_response_ms": 24.751,
+      "last_sync_ms": 3.515,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 23738.448,
+      "missed": 2,
+      "reason": "slow_round_trip",
+      "lag_ms": 28.448,
+      "slept": false,
+      "last_response_ms": 15.324,
+      "last_sync_ms": 13.241,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 23972.261,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.261,
+      "slept": false,
+      "last_response_ms": 21.273,
+      "last_sync_ms": 0.423,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 1
+    },
+    {
+      "at_ms": 26102.408,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.408,
+      "slept": false,
+      "last_response_ms": 16.728,
+      "last_sync_ms": 0.616,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 28801.585,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 11.585,
+      "slept": false,
+      "last_response_ms": 16.586,
+      "last_sync_ms": 0.253,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 29192.535,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 12.535,
+      "slept": false,
+      "last_response_ms": 15.278,
+      "last_sync_ms": 0.333,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    },
+    {
+      "at_ms": 29985.666,
+      "missed": 1,
+      "reason": "slow_round_trip",
+      "lag_ms": 15.666,
+      "slept": false,
+      "last_response_ms": 16.335,
+      "last_sync_ms": 0.851,
+      "admission_rejected": 0,
+      "request_deadline": 0,
+      "heartbeat_skipped": 0,
+      "heartbeat_mutations": 0
+    }
+  ],
+  "signals": {
+    "client_pacing_missed": 48,
+    "heartbeat": {
+      "Delivered": 300,
+      "Executed": 300,
+      "SkippedInflight": 0,
+      "SkippedQueueFull": 0,
+      "SkippedRejected": 0,
+      "Stalled": 0,
+      "DroppedRemoved": 0,
+      "DroppedStale": 0,
+      "DroppedNotLoaded": 0,
+      "DroppedStopped": 0,
+      "DroppedNotOwner": 0,
+      "DroppedDuplicate": 0,
+      "StoppedShared": 0,
+      "Registered": 1
+    },
+    "meaning": "independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss",
+    "nest_admission_rejected": 0,
+    "request_deadline": 0,
+    "request_other_error": 0,
+    "request_rejected": 0
+  },
+  "final_verification_requests": 1
+}

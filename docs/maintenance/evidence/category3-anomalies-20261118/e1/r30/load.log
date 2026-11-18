@@ -1,0 +1,181 @@
+round=1 side=base before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 6.05 7.45 7.61
+round=1 side=base after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.88 7.39 7.59
+round=1 side=head before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.88 7.39 7.59
+round=1 side=head after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.88 7.39 7.59
+round=1 side=nobr before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.88 7.39 7.59
+round=1 side=nobr after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.35 7.58
+round=2 side=head before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.35 7.58
+round=2 side=head after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.35 7.58
+round=2 side=nobr before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.35 7.58
+round=2 side=nobr after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.75 7.31 7.56
+round=2 side=base before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.75 7.31 7.56
+round=2 side=base after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.75 7.31 7.56
+round=3 side=nobr before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.75 7.31 7.56
+round=3 side=nobr after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.61 7.25 7.54
+round=3 side=base before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.61 7.25 7.54
+round=3 side=base after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.61 7.25 7.54
+round=3 side=head before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.61 7.25 7.54
+round=3 side=head after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.80 7.27 7.54
+round=4 side=base before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.80 7.27 7.54
+round=4 side=base after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.80 7.27 7.54
+round=4 side=head before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.80 7.27 7.54
+round=4 side=head after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.24 7.53
+round=4 side=nobr before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.24 7.53
+round=4 side=nobr after: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.24 7.53
+round=5 side=head before: 11:49  up 45 days, 20 hrs, 5 users, load averages: 5.81 7.24 7.53
+round=5 side=head after: 11:50  up 45 days, 20 hrs, 5 users, load averages: 5.59 7.17 7.51
+round=5 side=nobr before: 11:50  up 45 days, 20 hrs, 5 users, load averages: 5.59 7.17 7.51
+round=5 side=nobr after: 11:50  up 45 days, 20 hrs, 5 users, load averages: 5.59 7.17 7.51
+round=5 side=base before: 11:50  up 45 days, 20 hrs, 5 users, load averages: 5.59 7.17 7.51
+round=5 side=base after: 11:50  up 45 days, 20 hrs, 5 users, load averages: 6.10 7.25 7.53
+round=6 side=nobr before: 11:50  up 45 days, 20 hrs, 5 users, load averages: 6.10 7.25 7.53
+round=6 side=nobr after: 11:50  up 45 days, 20 hrs, 5 users, load averages: 6.10 7.25 7.53
+round=6 side=base before: 11:50  up 45 days, 20 hrs, 5 users, load averages: 6.10 7.25 7.53
+round=6 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.30 7.55
+round=6 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.30 7.55
+round=6 side=head after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.30 7.55
+round=7 side=base before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.30 7.55
+round=7 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.62 7.33 7.56
+round=7 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.62 7.33 7.56
+round=7 side=head after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.62 7.33 7.56
+round=7 side=nobr before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.62 7.33 7.56
+round=7 side=nobr after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.27 7.54
+round=8 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.27 7.54
+round=8 side=head after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.27 7.54
+round=8 side=nobr before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.41 7.27 7.54
+round=8 side=nobr after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.54 7.28 7.54
+round=8 side=base before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.54 7.28 7.54
+round=8 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.54 7.28 7.54
+round=9 side=nobr before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.54 7.28 7.54
+round=9 side=nobr after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.49 7.26 7.53
+round=9 side=base before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.49 7.26 7.53
+round=9 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.49 7.26 7.53
+round=9 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.49 7.26 7.53
+round=9 side=head after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.21 7.19 7.50
+round=10 side=base before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.21 7.19 7.50
+round=10 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.21 7.19 7.50
+round=10 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.21 7.19 7.50
+round=10 side=head after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.21 7.19 7.50
+round=10 side=nobr before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.21 7.19 7.50
+round=10 side=nobr after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.12 7.15 7.49
+round=11 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.12 7.15 7.49
+round=11 side=head after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.12 7.15 7.49
+round=11 side=nobr before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.12 7.15 7.49
+round=11 side=nobr after: 11:50  up 45 days, 20:01, 5 users, load averages: 5.95 7.10 7.47
+round=11 side=base before: 11:50  up 45 days, 20:01, 5 users, load averages: 5.95 7.10 7.47
+round=11 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 5.95 7.10 7.47
+round=12 side=nobr before: 11:50  up 45 days, 20:01, 5 users, load averages: 5.95 7.10 7.47
+round=12 side=nobr after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.19 7.13 7.47
+round=12 side=base before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.19 7.13 7.47
+round=12 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.19 7.13 7.47
+round=12 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.19 7.13 7.47
+round=12 side=head after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.10 7.10 7.46
+round=13 side=base before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.10 7.10 7.46
+round=13 side=base after: 11:50  up 45 days, 20:01, 5 users, load averages: 6.10 7.10 7.46
+round=13 side=head before: 11:50  up 45 days, 20:01, 5 users, load averages: 6.10 7.10 7.46
+round=13 side=head after: 11:51  up 45 days, 20:01, 5 users, load averages: 6.25 7.11 7.46
+round=13 side=nobr before: 11:51  up 45 days, 20:01, 5 users, load averages: 6.25 7.11 7.46
+round=13 side=nobr after: 11:51  up 45 days, 20:01, 5 users, load averages: 6.25 7.11 7.46
+round=14 side=head before: 11:51  up 45 days, 20:01, 5 users, load averages: 6.25 7.11 7.46
+round=14 side=head after: 11:51  up 45 days, 20:01, 5 users, load averages: 6.31 7.11 7.46
+round=14 side=nobr before: 11:51  up 45 days, 20:01, 5 users, load averages: 6.31 7.11 7.46
+round=14 side=nobr after: 11:51  up 45 days, 20:01, 5 users, load averages: 6.31 7.11 7.46
+round=14 side=base before: 11:51  up 45 days, 20:01, 5 users, load averages: 6.31 7.11 7.46
+round=14 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.20 7.07 7.45
+round=15 side=nobr before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.20 7.07 7.45
+round=15 side=nobr after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.20 7.07 7.45
+round=15 side=base before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.20 7.07 7.45
+round=15 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.19 7.06 7.44
+round=15 side=head before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.19 7.06 7.44
+round=15 side=head after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.19 7.06 7.44
+round=16 side=base before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.19 7.06 7.44
+round=16 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.93 6.99 7.41
+round=16 side=head before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.93 6.99 7.41
+round=16 side=head after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.93 6.99 7.41
+round=16 side=nobr before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.93 6.99 7.41
+round=16 side=nobr after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.70 6.92 7.38
+round=17 side=head before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.70 6.92 7.38
+round=17 side=head after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.70 6.92 7.38
+round=17 side=nobr before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.70 6.92 7.38
+round=17 side=nobr after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.56 6.87 7.36
+round=17 side=base before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.56 6.87 7.36
+round=17 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.56 6.87 7.36
+round=18 side=nobr before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.56 6.87 7.36
+round=18 side=nobr after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.43 6.83 7.34
+round=18 side=base before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.43 6.83 7.34
+round=18 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.43 6.83 7.34
+round=18 side=head before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.43 6.83 7.34
+round=18 side=head after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.48 6.81 7.34
+round=19 side=base before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.48 6.81 7.34
+round=19 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.48 6.81 7.34
+round=19 side=head before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.48 6.81 7.34
+round=19 side=head after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.16 6.93 7.37
+round=19 side=nobr before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.16 6.93 7.37
+round=19 side=nobr after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.16 6.93 7.37
+round=20 side=head before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.16 6.93 7.37
+round=20 side=head after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.15 6.92 7.37
+round=20 side=nobr before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.15 6.92 7.37
+round=20 side=nobr after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.15 6.92 7.37
+round=20 side=base before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.15 6.92 7.37
+round=20 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 6.15 6.92 7.37
+round=21 side=nobr before: 11:51  up 45 days, 20:02, 5 users, load averages: 6.15 6.92 7.37
+round=21 side=nobr after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.90 6.85 7.34
+round=21 side=base before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.90 6.85 7.34
+round=21 side=base after: 11:51  up 45 days, 20:02, 5 users, load averages: 5.90 6.85 7.34
+round=21 side=head before: 11:51  up 45 days, 20:02, 5 users, load averages: 5.90 6.85 7.34
+round=21 side=head after: 11:52  up 45 days, 20:02, 5 users, load averages: 5.90 6.84 7.33
+round=22 side=base before: 11:52  up 45 days, 20:02, 5 users, load averages: 5.90 6.84 7.33
+round=22 side=base after: 11:52  up 45 days, 20:02, 5 users, load averages: 5.90 6.84 7.33
+round=22 side=head before: 11:52  up 45 days, 20:02, 5 users, load averages: 5.90 6.84 7.33
+round=22 side=head after: 11:52  up 45 days, 20:02, 5 users, load averages: 5.59 6.76 7.30
+round=22 side=nobr before: 11:52  up 45 days, 20:02, 5 users, load averages: 5.59 6.76 7.30
+round=22 side=nobr after: 11:52  up 45 days, 20:02, 5 users, load averages: 5.59 6.76 7.30
+round=23 side=head before: 11:52  up 45 days, 20:02, 5 users, load averages: 5.59 6.76 7.30
+round=23 side=head after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.38 6.69 7.28
+round=23 side=nobr before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.38 6.69 7.28
+round=23 side=nobr after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.38 6.69 7.28
+round=23 side=base before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.38 6.69 7.28
+round=23 side=base after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.35 6.66 7.26
+round=24 side=nobr before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.35 6.66 7.26
+round=24 side=nobr after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.35 6.66 7.26
+round=24 side=base before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.35 6.66 7.26
+round=24 side=base after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.73 6.72 7.28
+round=24 side=head before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.73 6.72 7.28
+round=24 side=head after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.73 6.72 7.28
+round=25 side=base before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.73 6.72 7.28
+round=25 side=base after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.75 6.71 7.27
+round=25 side=head before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.75 6.71 7.27
+round=25 side=head after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.75 6.71 7.27
+round=25 side=nobr before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.75 6.71 7.27
+round=25 side=nobr after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.73 7.27
+round=26 side=head before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.73 7.27
+round=26 side=head after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.73 7.27
+round=26 side=nobr before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.73 7.27
+round=26 side=nobr after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.72 7.27
+round=26 side=base before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.72 7.27
+round=26 side=base after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.72 7.27
+round=27 side=nobr before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.93 6.72 7.27
+round=27 side=nobr after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.78 6.67 7.25
+round=27 side=base before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.78 6.67 7.25
+round=27 side=base after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.78 6.67 7.25
+round=27 side=head before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.78 6.67 7.25
+round=27 side=head after: 11:52  up 45 days, 20:03, 5 users, load averages: 6.04 6.71 7.26
+round=28 side=base before: 11:52  up 45 days, 20:03, 5 users, load averages: 6.04 6.71 7.26
+round=28 side=base after: 11:52  up 45 days, 20:03, 5 users, load averages: 6.04 6.71 7.26
+round=28 side=head before: 11:52  up 45 days, 20:03, 5 users, load averages: 6.04 6.71 7.26
+round=28 side=head after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.79 6.65 7.23
+round=28 side=nobr before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.79 6.65 7.23
+round=28 side=nobr after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.79 6.65 7.23
+round=29 side=head before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.79 6.65 7.23
+round=29 side=head after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.57 6.59 7.21
+round=29 side=nobr before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.57 6.59 7.21
+round=29 side=nobr after: 11:52  up 45 days, 20:03, 5 users, load averages: 5.57 6.59 7.21
+round=29 side=base before: 11:52  up 45 days, 20:03, 5 users, load averages: 5.57 6.59 7.21
+round=29 side=base after: 11:53  up 45 days, 20:03, 5 users, load averages: 5.52 6.56 7.19
+round=30 side=nobr before: 11:53  up 45 days, 20:03, 5 users, load averages: 5.52 6.56 7.19
+round=30 side=nobr after: 11:53  up 45 days, 20:03, 5 users, load averages: 5.52 6.56 7.19
+round=30 side=base before: 11:53  up 45 days, 20:03, 5 users, load averages: 5.52 6.56 7.19
+round=30 side=base after: 11:53  up 45 days, 20:03, 5 users, load averages: 5.80 6.60 7.20
+round=30 side=head before: 11:53  up 45 days, 20:03, 5 users, load averages: 5.80 6.60 7.20
+round=30 side=head after: 11:53  up 45 days, 20:03, 5 users, load averages: 5.80 6.60 7.20
+DONE

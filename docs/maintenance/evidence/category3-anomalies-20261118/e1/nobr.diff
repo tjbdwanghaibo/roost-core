@@ -1,0 +1,31 @@
+--- /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/cat3/e1/aoi.go.head	2026-11-18 11:47:26
++++ /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/cat3/aoi-nobr/framework/sync/entitysync/policy/aoi.go	2026-11-18 11:47:26
+@@ -744,9 +744,8 @@
+ 		}
+ 		return cmp.Compare(a.subject, b.subject)
+ 	})
+-	limit, bounded := m.visibleLimit(observer)
+ 	for _, candidate := range candidates {
+-		if bounded && len(observer.visible) >= limit && !m.evictFarther(observer, candidate.at) {
++		if m.config.MaxVisible > 0 && len(observer.visible) >= m.config.MaxVisible && !m.evictFarther(observer, candidate.at) {
+ 			noteRefused(observer, candidate.distance)
+ 			break
+ 		}
+@@ -787,7 +786,7 @@
+ 	slices.Sort(ids)
+ 	ids = slices.Compact(ids)
+ 	work.visible = ids
+-	if limit, bounded := m.visibleLimit(observer); bounded && observer.refused {
++	if limit := m.config.MaxVisible; limit > 0 && observer.refused {
+ 		// 本批之后（成员重评之后）可见集的人数与最远距离。没有成员移动时成员都仍在离开半径内，
+ 		// 直接用最远成员缓存；有成员移动时按新位置数一遍。
+ 		count, farthest := len(observer.visible), int64(-1)
+@@ -857,7 +856,7 @@
+ 	if !spatial.WithinDistance(observer.at, at, observer.enter) {
+ 		return
+ 	}
+-	if limit, bounded := m.visibleLimit(observer); bounded && len(observer.visible) >= limit {
++	if m.config.MaxVisible > 0 && len(observer.visible) >= m.config.MaxVisible {
+ 		if !m.evictFarther(observer, at) {
+ 			return
+ 		}

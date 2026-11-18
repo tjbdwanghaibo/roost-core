@@ -52,4 +52,4 @@ done
 
 完成后按原因与独立指标回写 KNOWN-LIMITS；当前只完成计数实现与功能验证，未把历史 19 / 15 个漏发样本的运行原因写成已确认。
 
-2026-11-18 已按上面的命令（私有依赖 `~/.roost-it`）跑五轮并加两轮带 `load_timers` 的诊断，结论与原始数据见 [category3-anomalies-20261118 §2](../../../maintenance/evidence/category3-anomalies-20261118/README.md#2e-3gate-100s-输入丢拍)。
+2026-11-18 已按上面的命令（私有依赖 `~/.roost-it`）跑五轮并加两轮带 `load_timers` 的诊断，结论与原始数据见 [category3-anomalies-20261118](../../../maintenance/evidence/category3-anomalies-20261118/README.md) §2。

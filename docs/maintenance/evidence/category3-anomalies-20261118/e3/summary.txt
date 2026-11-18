@@ -1,0 +1,38 @@
+gate-drop-1: scheduled=3000 completed=2953 dropped=48
+  reasons={'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 48}
+  detail={'round_trip_response_dominant': 48, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 4}
+  PB p50=7.80 p95=14.27 p99=18.48 max=25.15ms; drop events=46 slept=0 last_response median=15.31 min=11.06 max=25.16ms; last_sync max=13.24ms
+gate-drop-2: scheduled=3000 completed=2943 dropped=58
+  reasons={'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 58}
+  detail={'round_trip_response_dominant': 58, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 2}
+  PB p50=8.51 p95=14.27 p99=18.48 max=29.83ms; drop events=57 slept=0 last_response median=17.65 min=11.36 max=29.84ms; last_sync max=6.01ms
+gate-drop-3: scheduled=3000 completed=2952 dropped=49
+  reasons={'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 49}
+  detail={'round_trip_response_dominant': 49, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 1}
+  PB p50=7.80 p95=15.55 p99=18.48 max=23.95ms; drop events=49 slept=0 last_response median=15.72 min=11.22 max=23.96ms; last_sync max=1.15ms
+gate-drop-4: scheduled=3000 completed=2928 dropped=73
+  reasons={'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 73}
+  detail={'round_trip_response_dominant': 73, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 3}
+  PB p50=8.51 p95=15.55 p99=18.48 max=63.99ms; drop events=62 slept=0 last_response median=17.53 min=10.92 max=64.00ms; last_sync max=3.96ms
+gate-drop-5: scheduled=3000 completed=2913 dropped=88
+  reasons={'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 88}
+  detail={'round_trip_response_dominant': 88, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 1}
+  PB p50=8.51 p95=15.55 p99=18.48 max=21.22ms; drop events=88 slept=0 last_response median=16.61 min=9.79 max=21.23ms; last_sync max=1.10ms
+gate-drop-6: scheduled=2999 completed=2717 dropped=283
+  reasons={'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 283}
+  detail={'round_trip_response_dominant': 283, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 2}
+  PB p50=8.51 p95=18.48 p99=21.95 max=30.41ms; drop events=256 slept=0 last_response median=17.48 min=8.29 max=25.21ms; last_sync max=4.49ms
+  timer player_tcp_dispatch_duration  n=2716 mean=9.983 max=30.261ms
+  timer nest.dispatch.cost {'handler': 'handlerAddExp', 'result': 'ok', 'type': 'Multi'} n=2716 mean=9.000 max=21.973ms
+  timer nest.handler.lock_hold {'handler': 'handlerAddExp'} n=2716 mean=8.940 max=21.931ms
+  timer nestwal.fsync.duration  n=2731 mean=5.656 max=18.175ms
+  timer nest.dispatch.cost {'handler': 'heartbeat.beat.strict', 'result': 'ok', 'type': 'Single'} n=225 mean=0.572 max=13.949ms
+gate-drop-7: scheduled=3000 completed=2704 dropped=297
+  reasons={'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 297}
+  detail={'round_trip_response_dominant': 297, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 9}
+  PB p50=9.27 p95=18.48 p99=21.95 max=28.44ms; drop events=256 slept=0 last_response median=17.75 min=10.61 max=28.45ms; last_sync max=2.09ms
+  timer player_tcp_dispatch_duration  n=2703 mean=10.249 max=25.500ms
+  timer nest.dispatch.cost {'handler': 'handlerAddExp', 'result': 'ok', 'type': 'Multi'} n=2703 mean=9.455 max=24.988ms
+  timer nest.handler.lock_hold {'handler': 'handlerAddExp'} n=2703 mean=9.391 max=24.940ms
+  timer nestwal.fsync.duration  n=2718 mean=5.819 max=18.793ms
+  timer nest.dispatch.cost {'handler': 'heartbeat.beat.strict', 'result': 'ok', 'type': 'Single'} n=222 mean=0.333 max=8.988ms

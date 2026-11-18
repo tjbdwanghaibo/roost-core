@@ -1,0 +1,47 @@
+// fsyncprobe 量本机“追加约 300 字节 + File.Sync”的单笔耗时分布，与 Gate 负载里 strict WAL 每笔提交一次 Sync 同形
+// （一条在途、无组提交）。Go 在 darwin 上的 File.Sync 走 fcntl(F_FULLFSYNC)。
+// 用法：fsyncprobe <目录> <次数> <间隔毫秒>
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"time"
+)
+
+func main() {
+	dir := os.Args[1]
+	n, _ := strconv.Atoi(os.Args[2])
+	gap, _ := strconv.Atoi(os.Args[3])
+	f, err := os.OpenFile(filepath.Join(dir, "probe.wal"), os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_TRUNC, 0o600)
+	if err != nil {
+		panic(err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	record := make([]byte, 300)
+	d := make([]time.Duration, 0, n)
+	for range n {
+		began := time.Now()
+		if _, err := f.Write(record); err != nil {
+			panic(err)
+		}
+		if err := f.Sync(); err != nil {
+			panic(err)
+		}
+		d = append(d, time.Since(began))
+		time.Sleep(time.Duration(gap) * time.Millisecond)
+	}
+	slices.Sort(d)
+	q := func(p float64) float64 { return float64(d[int(float64(len(d)-1)*p)].Microseconds()) / 1000 }
+	over := 0
+	for _, v := range d {
+		if v > 10*time.Millisecond {
+			over++
+		}
+	}
+	fmt.Printf("n=%d p50=%.3fms p90=%.3fms p95=%.3fms p99=%.3fms max=%.3fms over10ms=%d\n", len(d), q(.5), q(.9), q(.95), q(.99), q(1), over)
+}

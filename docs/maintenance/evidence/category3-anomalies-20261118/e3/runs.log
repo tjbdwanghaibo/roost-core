@@ -1,0 +1,66 @@
+round=1 before: 11:55  up 45 days, 20:06, 5 users, load averages: 6.54 6.41 6.99 | total = 8192.00M  used = 6679.56M  free = 1512.44M  (encrypted)
+full: 2 applied, p99=2.887ms, max=2.887ms
+delta: 2953 applied, p99=18.477ms, max=28.561ms
+remove: 1 applied, p99=0.589ms, max=0.589ms
+Scheduled=3000 dropped=48 completed=2953 (includes one final drain commit)
+Drop reasons: {'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 48}; detail: {'round_trip_response_dominant': 48, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 4}; independent signals: {'client_pacing_missed': 48, 'heartbeat': {'Delivered': 300, 'Executed': 300, 'SkippedInflight': 0, 'SkippedQueueFull': 0, 'SkippedRejected': 0, 'Stalled': 0, 'DroppedRemoved': 0, 'DroppedStale': 0, 'DroppedNotLoaded': 0, 'DroppedStopped': 0, 'DroppedNotOwner': 0, 'DroppedDuplicate': 0, 'StoppedShared': 0, 'Registered': 1}, 'meaning': 'independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss', 'nest_admission_rejected': 0, 'request_deadline': 0, 'request_other_error': 0, 'request_rejected': 0}
+Functional consistency verified; capacity and latency acceptance must be evaluated separately.
+Evidence: /Users/whb/roost/roost-core/.claude/worktrees/agent-a6a633ed0fdf27401/artifacts/perf/gate/gate-drop-1
+round=1 exit=0 after: 11:57  up 45 days, 20:08, 5 users, load averages: 5.67 6.20 6.86
+ALLDONE
+round=2 before: 11:57  up 45 days, 20:08, 5 users, load averages: 6.41 6.28 6.86 | total = 8192.00M  used = 6671.56M  free = 1520.44M  (encrypted)
+full: 2 applied, p99=2.638ms, max=2.638ms
+delta: 2943 applied, p99=20.139ms, max=30.059ms
+remove: 1 applied, p99=0.110ms, max=0.110ms
+Scheduled=3000 dropped=58 completed=2943 (includes one final drain commit)
+Drop reasons: {'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 58}; detail: {'round_trip_response_dominant': 58, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 2}; independent signals: {'client_pacing_missed': 58, 'heartbeat': {'Delivered': 300, 'Executed': 300, 'SkippedInflight': 0, 'SkippedQueueFull': 0, 'SkippedRejected': 0, 'Stalled': 0, 'DroppedRemoved': 0, 'DroppedStale': 0, 'DroppedNotLoaded': 0, 'DroppedStopped': 0, 'DroppedNotOwner': 0, 'DroppedDuplicate': 0, 'StoppedShared': 0, 'Registered': 1}, 'meaning': 'independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss', 'nest_admission_rejected': 0, 'request_deadline': 0, 'request_other_error': 0, 'request_rejected': 0}
+Functional consistency verified; capacity and latency acceptance must be evaluated separately.
+Evidence: /Users/whb/roost/roost-core/.claude/worktrees/agent-a6a633ed0fdf27401/artifacts/perf/gate/gate-drop-2
+round=2 exit=0 after: 11:59  up 45 days, 20:10, 5 users, load averages: 5.30 5.95 6.68
+round=3 before: 11:59  up 45 days, 20:10, 5 users, load averages: 5.30 5.95 6.68 | total = 8192.00M  used = 6671.56M  free = 1520.44M  (encrypted)
+full: 2 applied, p99=2.741ms, max=2.741ms
+delta: 2952 applied, p99=18.477ms, max=24.149ms
+remove: 1 applied, p99=0.521ms, max=0.521ms
+Scheduled=3000 dropped=49 completed=2952 (includes one final drain commit)
+Drop reasons: {'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 49}; detail: {'round_trip_response_dominant': 49, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 1}; independent signals: {'client_pacing_missed': 49, 'heartbeat': {'Delivered': 300, 'Executed': 300, 'SkippedInflight': 0, 'SkippedQueueFull': 0, 'SkippedRejected': 0, 'Stalled': 0, 'DroppedRemoved': 0, 'DroppedStale': 0, 'DroppedNotLoaded': 0, 'DroppedStopped': 0, 'DroppedNotOwner': 0, 'DroppedDuplicate': 0, 'StoppedShared': 0, 'Registered': 1}, 'meaning': 'independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss', 'nest_admission_rejected': 0, 'request_deadline': 0, 'request_other_error': 0, 'request_rejected': 0}
+Functional consistency verified; capacity and latency acceptance must be evaluated separately.
+Evidence: /Users/whb/roost/roost-core/.claude/worktrees/agent-a6a633ed0fdf27401/artifacts/perf/gate/gate-drop-3
+round=3 exit=0 after: 12:00  up 45 days, 20:11, 5 users, load averages: 6.48 6.12 6.67
+round=4 before: 12:00  up 45 days, 20:11, 5 users, load averages: 6.48 6.12 6.67 | total = 8192.00M  used = 6671.56M  free = 1520.44M  (encrypted)
+full: 2 applied, p99=3.379ms, max=3.379ms
+delta: 2928 applied, p99=20.139ms, max=64.161ms
+remove: 1 applied, p99=0.230ms, max=0.230ms
+Scheduled=3000 dropped=73 completed=2928 (includes one final drain commit)
+Drop reasons: {'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 73}; detail: {'round_trip_response_dominant': 73, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 3}; independent signals: {'client_pacing_missed': 73, 'heartbeat': {'Delivered': 300, 'Executed': 300, 'SkippedInflight': 0, 'SkippedQueueFull': 0, 'SkippedRejected': 0, 'Stalled': 0, 'DroppedRemoved': 0, 'DroppedStale': 0, 'DroppedNotLoaded': 0, 'DroppedStopped': 0, 'DroppedNotOwner': 0, 'DroppedDuplicate': 0, 'StoppedShared': 0, 'Registered': 1}, 'meaning': 'independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss', 'nest_admission_rejected': 0, 'request_deadline': 0, 'request_other_error': 0, 'request_rejected': 0}
+Functional consistency verified; capacity and latency acceptance must be evaluated separately.
+Evidence: /Users/whb/roost/roost-core/.claude/worktrees/agent-a6a633ed0fdf27401/artifacts/perf/gate/gate-drop-4
+round=4 exit=0 after: 12:01  up 45 days, 20:12, 5 users, load averages: 6.10 6.00 6.57
+round=5 before: 12:01  up 45 days, 20:12, 5 users, load averages: 6.10 6.00 6.57 | total = 8192.00M  used = 6671.56M  free = 1520.44M  (encrypted)
+full: 2 applied, p99=2.534ms, max=2.534ms
+delta: 2913 applied, p99=20.139ms, max=21.463ms
+remove: 1 applied, p99=0.180ms, max=0.180ms
+Scheduled=3000 dropped=88 completed=2913 (includes one final drain commit)
+Drop reasons: {'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 88}; detail: {'round_trip_response_dominant': 88, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 1}; independent signals: {'client_pacing_missed': 88, 'heartbeat': {'Delivered': 300, 'Executed': 300, 'SkippedInflight': 0, 'SkippedQueueFull': 0, 'SkippedRejected': 0, 'Stalled': 0, 'DroppedRemoved': 0, 'DroppedStale': 0, 'DroppedNotLoaded': 0, 'DroppedStopped': 0, 'DroppedNotOwner': 0, 'DroppedDuplicate': 0, 'StoppedShared': 0, 'Registered': 1}, 'meaning': 'independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss', 'nest_admission_rejected': 0, 'request_deadline': 0, 'request_other_error': 0, 'request_rejected': 0}
+Functional consistency verified; capacity and latency acceptance must be evaluated separately.
+Evidence: /Users/whb/roost/roost-core/.claude/worktrees/agent-a6a633ed0fdf27401/artifacts/perf/gate/gate-drop-5
+round=5 exit=0 after: 12:03  up 45 days, 20:13, 5 users, load averages: 5.84 5.87 6.46
+ALLDONE
+round=6 before: 12:04  up 45 days, 20:15, 5 users, load averages: 4.69 5.39 6.21 | total = 8192.00M  used = 6671.56M  free = 1520.44M  (encrypted)
+full: 2 applied, p99=3.274ms, max=3.274ms
+delta: 2717 applied, p99=21.952ms, max=30.684ms
+remove: 1 applied, p99=0.369ms, max=0.369ms
+Scheduled=2999 dropped=283 completed=2717 (includes one final drain commit)
+Drop reasons: {'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 283}; detail: {'round_trip_response_dominant': 283, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 2}; independent signals: {'client_pacing_missed': 283, 'heartbeat': {'Delivered': 300, 'Executed': 300, 'SkippedInflight': 0, 'SkippedQueueFull': 0, 'SkippedRejected': 0, 'Stalled': 0, 'DroppedRemoved': 0, 'DroppedStale': 0, 'DroppedNotLoaded': 0, 'DroppedStopped': 0, 'DroppedNotOwner': 0, 'DroppedDuplicate': 0, 'StoppedShared': 0, 'Registered': 1}, 'meaning': 'independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss', 'nest_admission_rejected': 0, 'request_deadline': 0, 'request_other_error': 0, 'request_rejected': 0}
+Functional consistency verified; capacity and latency acceptance must be evaluated separately.
+Evidence: /Users/whb/roost/roost-core/.claude/worktrees/agent-a6a633ed0fdf27401/artifacts/perf/gate/gate-drop-6
+round=6 exit=0 after: 12:06  up 45 days, 20:16, 5 users, load averages: 5.36 5.39 6.13
+round=7 before: 12:06  up 45 days, 20:16, 5 users, load averages: 5.36 5.39 6.13 | total = 8192.00M  used = 6671.56M  free = 1520.44M  (encrypted)
+full: 2 applied, p99=2.841ms, max=2.841ms
+delta: 2704 applied, p99=21.952ms, max=28.628ms
+remove: 1 applied, p99=0.288ms, max=0.288ms
+Scheduled=3000 dropped=297 completed=2704 (includes one final drain commit)
+Drop reasons: {'admission_reject': 0, 'client_beat_lag': 0, 'deadline_expired': 0, 'heartbeat_skipped_beat': 0, 'slow_round_trip': 297}; detail: {'round_trip_response_dominant': 297, 'round_trip_sync_dominant': 0, 'round_trip_with_heartbeat_mutation': 9}; independent signals: {'client_pacing_missed': 297, 'heartbeat': {'Delivered': 300, 'Executed': 300, 'SkippedInflight': 0, 'SkippedQueueFull': 0, 'SkippedRejected': 0, 'Stalled': 0, 'DroppedRemoved': 0, 'DroppedStale': 0, 'DroppedNotLoaded': 0, 'DroppedStopped': 0, 'DroppedNotOwner': 0, 'DroppedDuplicate': 0, 'StoppedShared': 0, 'Registered': 1}, 'meaning': 'independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss', 'nest_admission_rejected': 0, 'request_deadline': 0, 'request_other_error': 0, 'request_rejected': 0}
+Functional consistency verified; capacity and latency acceptance must be evaluated separately.
+Evidence: /Users/whb/roost/roost-core/.claude/worktrees/agent-a6a633ed0fdf27401/artifacts/perf/gate/gate-drop-7
+round=7 exit=0 after: 12:07  up 45 days, 20:18, 5 users, load averages: 4.11 5.05 5.93
+ALLDONE

@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+                                                          │     base     │                head                 │                nobr                 │
+                                                          │    sec/op    │    sec/op     vs base               │    sec/op     vs base               │
+AOIBatchRecompute/dense=false/coverage=false/workers=1-10   5.484µ ± 17%   5.610µ ±  5%       ~ (p=0.353 n=10)   5.668µ ±  5%       ~ (p=0.853 n=10)
+AOIBatchRecompute/dense=false/coverage=false/workers=4-10   10.19µ ± 10%   10.91µ ± 20%  +7.07% (p=0.029 n=10)   10.08µ ± 10%       ~ (p=0.315 n=10)
+geomean                                                     7.475µ         7.823µ        +4.65%                  7.560µ        +1.14%

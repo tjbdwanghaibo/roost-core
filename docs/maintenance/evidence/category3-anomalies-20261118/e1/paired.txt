@@ -1,0 +1,13 @@
+w=1 head/base: slower in 7/10 rounds, median ratio 1.014
+w=1 head/nobr: slower in 5/10 rounds, median ratio 0.998
+w=1 nobr/base: slower in 5/10 rounds, median ratio 1.008
+w=4 head/base: slower in 9/10 rounds, median ratio 1.096
+w=4 head/nobr: slower in 10/10 rounds, median ratio 1.097
+w=4 nobr/base: slower in 2/10 rounds, median ratio 0.990
+
+w=1 head/base: slower in 15/30 rounds, median ratio 0.999
+w=1 head/nobr: slower in 14/30 rounds, median ratio 0.990
+w=1 nobr/base: slower in 13/30 rounds, median ratio 0.994
+w=4 head/base: slower in 25/30 rounds, median ratio 1.074
+w=4 head/nobr: slower in 26/30 rounds, median ratio 1.054
+w=4 nobr/base: slower in 14/30 rounds, median ratio 0.995

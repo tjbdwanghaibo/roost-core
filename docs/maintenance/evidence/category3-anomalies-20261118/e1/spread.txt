@@ -1,0 +1,12 @@
+r10 base w=1 n=10 median=5484 min=5410 max=10385 cv=25.4%
+r10 base w=4 n=10 median=10189 min=9648 max=11861 cv=7.0%
+r10 head w=1 n=10 median=5610 min=5436 max=6027 cv=4.0%
+r10 head w=4 n=10 median=10909 min=10295 max=14244 cv=11.4%
+r10 nobr w=1 n=10 median=5668 min=5299 max=6070 cv=4.8%
+r10 nobr w=4 n=10 median=10082 min=9586 max=11108 cv=5.9%
+r30 base w=1 n=30 median=5754 min=5410 max=6740 cv=6.0%
+r30 base w=4 n=30 median=10516 min=9680 max=14345 cv=10.0%
+r30 head w=1 n=30 median=5756 min=5407 max=6663 cv=5.1%
+r30 head w=4 n=30 median=11176 min=10662 max=13975 cv=7.0%
+r30 nobr w=1 n=30 median=5750 min=5462 max=7427 cv=7.8%
+r30 nobr w=4 n=30 median=10642 min=9855 max=12663 cv=6.8%

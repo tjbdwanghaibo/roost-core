@@ -1,0 +1,1 @@
+18:            gate_consumer_test.go:335: drop reasons do not balance: dropped=2722 labelled=0 reasons=map[admission_reject:0 client_beat_lag:0 deadline_expired:0 heartbeat_skipped_beat:0 slow_round_trip:0]
