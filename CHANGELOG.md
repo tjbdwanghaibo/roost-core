@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+- **MOBA 原服到账与 SLG 联盟到账改 `durability=pipelined`**（维护者 2026-11-18 定 B）：
+  - 改动原因：`MOBAAward` 回复后马上向权威 ackSeat，`AllianceCredit` 回复后马上在原服义务账本标完成，确认之后不再重投。用 async 时，整机掉电可能丢掉已回复的到账，奖励就丢了。
+  - 现在的做法：入队后先放 Player 锁，fsync 之后才回复。
+  - 运行要求：提交器要支持 pipelined（`Enqueue` / `DurableLSN`），DataEngine 的 Projector 已支持。工程写了非空 `nest.pipelined.allowlist` 时，要把这两个 handler 列进去；生成工程缺省是 `allowlist: []`，即全部允许。
+  - 新增两条用例，用按 WAL 语义建模的替身证明回复在持久之后，退回 async 时变红；场景数 MOBA 28→29、SLG 8→9。证据 [testdata-async-20261118 §8](docs/maintenance/evidence/testdata-async-20261118/README.md#8-两步投递改-pipelined2026-11-18)。
+  - **升级**：只影响玩法夹具与 roost-genre 生成的工程；照 MOBA / SLG 手册生成过的工程，要手工把这两个标记改成 pipelined。
 - **玩法夹具与 codegen 测试里的业务 handler 不再写 `durability=strict`**（维护者 2026-11-18；game-demo 本轮不改）：
   - `scripts/testdata` 的 80 个 `//roost:nest` 标记：
     - 64 个写 handler 取缺省 async，原来的 `rollback` 保留；
