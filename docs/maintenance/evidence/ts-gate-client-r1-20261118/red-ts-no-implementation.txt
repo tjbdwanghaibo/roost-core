@@ -1,0 +1,61 @@
+
+> @roost/client@0.2.0 test
+> tsc -p tsconfig.test.json && node --test --test-concurrency=1 dist-test/test/*.test.js
+
+test/gate-protobuf.test.ts(11,37): error TS2305: Module '"../src/gate/index.js"' has no exported member 'GameClient'.
+test/gate-protobuf.test.ts(12,50): error TS2307: Cannot find module '../src/protobuf/index.js' or its corresponding type declarations.
+test/gate-protobuf.test.ts(25,63): error TS2322: Type '(u: string) => WebSocket' is not assignable to type '(url: string) => WebSocketLike'.
+  Call signature return types 'WebSocket' and 'WebSocketLike' are incompatible.
+    The types of 'onopen' are incompatible between these types.
+      Type '((event: Event) => void) | null' is not assignable to type '((event: unknown) => void) | null'.
+        Type '(event: Event) => void' is not assignable to type '(event: unknown) => void'.
+          Types of parameters 'event' and 'event' are incompatible.
+            Type 'unknown' is not assignable to type 'Event'.
+test/gate-protobuf.test.ts(29,47): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-protobuf.test.ts(44,8): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-protobuf.test.ts(44,39): error TS7006: Parameter 'error' implicitly has an 'any' type.
+test/gate-protobuf.test.ts(59,109): error TS7006: Parameter 'error' implicitly has an 'any' type.
+test/gate-timers.test.ts(7,3): error TS2305: Module '"../src/gate/index.js"' has no exported member 'GameClient'.
+test/gate-timers.test.ts(68,51): error TS7006: Parameter 'signal' implicitly has an 'any' type.
+test/gate-timers.test.ts(108,73): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-timers.test.ts(112,13): error TS2358: The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.
+test/gate-timers.test.ts(128,29): error TS7006: Parameter 'r' implicitly has an 'any' type.
+test/gate-timers.test.ts(162,29): error TS7006: Parameter 'r' implicitly has an 'any' type.
+test/gate-timers.test.ts(186,52): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-websocket.test.ts(14,3): error TS2305: Module '"../src/gate/index.js"' has no exported member 'GameClient'.
+test/gate-websocket.test.ts(29,61): error TS2322: Type '(u: string) => WebSocket' is not assignable to type '(url: string) => WebSocketLike'.
+  Call signature return types 'WebSocket' and 'WebSocketLike' are incompatible.
+    The types of 'onopen' are incompatible between these types.
+      Type '((event: Event) => void) | null' is not assignable to type '((event: unknown) => void) | null'.
+        Type '(event: Event) => void' is not assignable to type '(event: unknown) => void'.
+          Types of parameters 'event' and 'event' are incompatible.
+            Type 'unknown' is not assignable to type 'Event'.
+test/gate-websocket.test.ts(49,32): error TS7006: Parameter 's' implicitly has an 'any' type.
+test/gate-websocket.test.ts(70,32): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-websocket.test.ts(76,50): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-websocket.test.ts(76,90): error TS7006: Parameter 'error' implicitly has an 'any' type.
+test/gate-websocket.test.ts(84,50): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-websocket.test.ts(84,90): error TS7006: Parameter 'error' implicitly has an 'any' type.
+test/gate-websocket.test.ts(92,81): error TS7006: Parameter 'packet' implicitly has an 'any' type.
+test/gate-websocket.test.ts(108,27): error TS7006: Parameter 'b' implicitly has an 'any' type.
+test/gate-websocket.test.ts(108,37): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-websocket.test.ts(122,32): error TS7006: Parameter 's' implicitly has an 'any' type.
+test/gate-websocket.test.ts(128,64): error TS7006: Parameter 'error' implicitly has an 'any' type.
+test/gate-websocket.test.ts(145,33): error TS7006: Parameter 'p' implicitly has an 'any' type.
+test/gate-websocket.test.ts(152,49): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-websocket.test.ts(152,75): error TS7006: Parameter 'error' implicitly has an 'any' type.
+test/gate-websocket.test.ts(157,49): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-websocket.test.ts(157,75): error TS7006: Parameter 'error' implicitly has an 'any' type.
+test/gate-websocket.test.ts(176,56): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-websocket.test.ts(177,56): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-websocket.test.ts(178,56): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-websocket.test.ts(188,46): error TS7006: Parameter 'v' implicitly has an 'any' type.
+test/gate-websocket.test.ts(188,62): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-websocket.test.ts(203,25): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-websocket.test.ts(204,32): error TS7006: Parameter 's' implicitly has an 'any' type.
+test/gate-websocket.test.ts(205,32): error TS7006: Parameter 'value' implicitly has an 'any' type.
+test/gate-websocket.test.ts(209,33): error TS7006: Parameter 'p' implicitly has an 'any' type.
+test/gate-websocket.test.ts(229,25): error TS7006: Parameter 'e' implicitly has an 'any' type.
+test/gate-websocket.test.ts(243,33): error TS7006: Parameter 'p' implicitly has an 'any' type.
+test/gate-websocket.test.ts(257,31): error TS7006: Parameter 'r' implicitly has an 'any' type.
+test/gate-websocket.test.ts(258,32): error TS7006: Parameter 's' implicitly has an 'any' type.

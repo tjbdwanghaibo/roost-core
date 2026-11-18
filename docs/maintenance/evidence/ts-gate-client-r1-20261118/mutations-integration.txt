@@ -1,0 +1,16 @@
+G1 RED: 连接代号不递增（每次都是同一个值）
+    --- FAIL: TestTheTSClientWorksOverWebSocket (2.70s)
+            FAIL websocket: Error: the reconnect carries a newer generation: 1 > 1
+G2 RED: 不发心跳（间隔计时器从不安排）
+    --- FAIL: TestTheTSClientWorksOverWebSocket (2.59s)
+            FAIL websocket: Error: heartbeats kept the connection past idle_timeout: state Ready, lastError undefined
+    --- FAIL: TestTheTSClientWorksOverWebSocketThroughAStandaloneGate (2.58s)
+            FAIL websocket-gate: Error: heartbeats kept the connection past idle_timeout: state Ready, lastError undefined
+G3 RED: 断线后不自动重连
+    --- FAIL: TestTheTSClientWorksOverWebSocket (7.59s)
+            FAIL websocket: Error: timed out waiting for reconnect after the server closed
+    --- FAIL: TestTheTSClientWorksOverWebSocketThroughAStandaloneGate (3.86s)
+            FAIL websocket-gate: Error: no reconnect while frozen: Disconnected, 0 result(s)
+G4 RED: 请求不计超时
+    --- FAIL: TestTheTSClientWorksOverWebSocket (6.69s)
+            FAIL websocket: Error: timed out waiting for request timeout

@@ -134,10 +134,12 @@ roost generate --force          # 强制重写生成物
 ```yaml
 client_export:
   dir: shared/protocol          # 可选，缺省 shared/protocol；相对工程根，产物提交进仓库
-  languages: [csharp]           # 目前只有 csharp；不写时只导出 proto 副本与 manifest.json
+  languages: [csharp, ts]       # csharp、ts 可任选；不写时只导出 proto 副本与 manifest.json
+  protoc: tools/protoc/bin/protoc   # 可选；相对路径按工程根（2026-11-18 起在顶层，原 csharp.protoc 报错）
   csharp:
     namespace: Game.Protocol    # 可选
-    protoc: tools/protoc/bin/protoc   # 可选；相对路径按工程根
+  ts:
+    protoc_gen_es: web/node_modules/.bin/protoc-gen-es   # 可选；相对路径按工程根
 ```
 
 `roost generate` 在全部生成器之后整份写出导出目录（同样的输入，输出逐字节相同）：
@@ -149,18 +151,22 @@ client_export:
 | `csharp/Protocol.cs`、`csharp/DaoSync.cs` | protoc `--csharp_out`，输入是上面两份副本 |
 | `csharp/DaoSyncApply.cs` | `db/dao_sync_apply.cs`（配了 namespace 时换掉命名空间行） |
 | `csharp/MessageIds.cs` | 与 `codegen/cmd/protocol -csharp` 同一个生成函数 |
+| `ts/protocol_pb.ts`、`ts/dao_sync_pb.ts` | protoc + protoc-gen-es（`--es_opt=target=ts,import_extension=js`），输入是上面两份副本；64 位整数是 `bigint`，以 int64 为键的 map 键是字符串 |
+| `ts/message_ids.ts` | `MessageIds` 常量对象（`as const`）：`Request<名字>`、`Response<名字>`、`Push<名字>`，与 `MessageIds.cs` 同一份数据 |
+| `ts/error_codes.ts` | `ErrorCodes` 常量对象（名字 PascalCase，说明写在 JSDoc；TS 里没有与类成员撞名的问题，不加后缀）与 `errorCodeName(code)`、`errorCodeMessage(code)` |
 | `csharp/ErrorCodes.cs` | 工程里全部 `errcode.Define`：PascalCase 常量、`Name(code)`、`Message(code)`；常量撞上类里已有的名字（`ErrorCodes`、`Name`、`Message` 与 object 继承的 `Equals` / `GetHashCode` / `ToString` / `GetType` / `ReferenceEquals` / `MemberwiseClone`）时加后缀 `_`（`name` → `Name_`），`Name(code)` 仍答原名 |
 | `manifest.json` | 见下 |
 
 目录里归生成器所有的只有上表这些文件名：本轮不产出的（例如去掉 `csharp` 后的 `.cs`）删掉，别的文件不动。目录不能在 `protocol/`、`db/`、`game/` 等服务端源码目录下，也不能用 `bin`、`dist`、`log`、`.roost-*` 这些生成时跳过的名字。
 
-`manifest.json`：`kind: roost-client-export`、`schema: 1`；`core`（go.mod 里 require 的 roost-core）、`generator`（与 `roost version` 相同）、`protoc` 与 `google_protobuf`；`csharp_namespaces`；`sources.protocol_def`（`protocol/def` 下全部 `.go`，路径与内容一起算 sha256）与 `sources.dao_sync`（同步字段：`db/def` 生成的 `dao_sync.proto` 的 sha256）；`files`（每个导出文件按 LF 算的 sha256）；`messages`（名字、方向 request / response / push、号、proto 消息名，按号排序）与 `error_codes`（码、名字、说明，按码排序）。生成器版本写在清单里，换了生成器版本，`--check` 会因 `manifest.json` 变化报过期，重新生成即可。
+`manifest.json`：`kind: roost-client-export`、`schema: 1`；`core`（go.mod 里 require 的 roost-core）、`generator`（与 `roost version` 相同）、`protoc` 与 `google_protobuf`（声明 csharp 时）；`protoc_gen_es` 与 `protobuf_es`（声明 ts 时）；`csharp_namespaces`；`sources.protocol_def`（`protocol/def` 下全部 `.go`，路径与内容一起算 sha256）与 `sources.dao_sync`（同步字段：`db/def` 生成的 `dao_sync.proto` 的 sha256）；`files`（每个导出文件按 LF 算的 sha256）；`messages`（名字、方向 request / response / push、号、proto 消息名，按号排序）与 `error_codes`（码、名字、说明，按码排序）。生成器版本写在清单里，换了生成器版本，`--check` 会因 `manifest.json` 变化报过期，重新生成即可。
 
-- **C# 与 protoc 版本**：维护者决定固定 protoc 版本、由生成器核对，不在生成器里实现 C# 输出，也不自动下载。导出 C# 时要求 `protoc --version` 与 C# SDK（`client/dotnet/Roost.Client.Codecs`）锁定的 Google.Protobuf 同版本：Google.Protobuf 3.31.1 对应 protoc 31.1（生成器里的副本由 `TestSDKGoogleProtobufVersionMatchesCodecs` 核对与 csproj 一致）。查找顺序 `client_export.csharp.protoc`、环境变量 `ROOST_PROTOC`、PATH；版本不对或找不到时在运行任何生成器之前报错，写明需要的版本与下载地址。`MessageIds.cs`、`ErrorCodes.cs`、`DaoSyncApply.cs` 由 Go 生成，不依赖 protoc。
+- **C# 与 protoc 版本**：维护者决定固定 protoc 版本、由生成器核对，不在生成器里实现 C# 输出，也不自动下载。导出 C# 时要求 `protoc --version` 与 C# SDK（`client/dotnet/Roost.Client.Codecs`）锁定的 Google.Protobuf 同版本：Google.Protobuf 3.31.1 对应 protoc 31.1（生成器里的副本由 `TestSDKGoogleProtobufVersionMatchesCodecs` 核对与 csproj 一致）。导出 TS 也用同一个 protoc 31.1。查找顺序 `client_export.protoc`（2026-11-18 起在顶层；原 `client_export.csharp.protoc` 读 `roost.yaml` 时报错并写明新位置，不兼容）、环境变量 `ROOST_PROTOC`、PATH；版本不对或找不到时在运行任何生成器之前报错，写明需要的版本与下载地址。`MessageIds.cs`、`ErrorCodes.cs`、`DaoSyncApply.cs`、`message_ids.ts`、`error_codes.ts` 由 Go 生成，不依赖 protoc。
+- **TS 与 protoc-gen-es 版本**（维护者 2026-11-18 D3）：TS 用 protobuf-es v2。`protoc-gen-es --version` 必须等于 TS SDK（`client/ts`）锁定的 `@bufbuild/protobuf`（现为 2.17.0，`TestSDKProtobufEsVersionMatchesClientTS` 核对 `package.json` 与生成器一致），导出的 `*_pb.ts` 在使用方工程要求同一版运行库。查找顺序 `client_export.ts.protoc_gen_es`、环境变量 `ROOST_PROTOC_GEN_ES`、PATH；同样在任何生成器之前核对。protoc-gen-es 是 npm 包 `@bufbuild/protoc-gen-es`（要 node 22 以上），所以声明 `ts` 的服务端开发机要装 node；生成器不安装它。
 - **命名空间**：缺省沿用 proto package：协议 `Roost.Protocol`、DAO 同步 `Roost.Dao.Sync`；消息号与错误码沿用 `-csharp` 的 `Roost.Generated`。配了 `csharp.namespace` 时协议、消息号、错误码都在 `<namespace>`，DAO 同步在 `<namespace>.DaoSync`。
 - **检查**：`roost generate --check` 覆盖导出目录（要 protoc）。`roost project doctor` 的 `client-export:fresh`（声明了 `client_export` 才有）不跑 protoc：核对每个导出文件的哈希与 `manifest.json` 一致、`protocol/def` 与同步字段的哈希一致（工程开了 dao 时把 `db/def` 生成到临时目录取同步 schema，不读可能过期的 `db/dao_sync.proto`）、重新扫出的错误码一致，`languages` 与 `roost.yaml` 一致；任何一项不符为 FAIL，提示重新生成并提交。
-- **同步到客户端**：`roost client sync --from <服务端工程> --to <客户端目录> [--dry-run]`。先核对服务端导出目录的哈希（手改或拷了一半拒绝），把 `csharp/` 下的文件平铺拷进客户端目录，另存服务端的 `manifest.json`；对比上次同步留下的 `manifest.json`，打印版本变化与新增、变化、删除的消息号（按方向 + 名字对比）和错误码（按名字对比）。上次同步写过、这次没有的文件删掉；目录里同名但不是上次同步写的文件拒绝覆盖；上次同步写过、之后被手改的文件照样覆盖并提示。不生成 Unity 的 `.meta`。
-- **接入**：Unity 缺省走托管路线（`GameClient` + `RoostClientDriver`），直接编译导出的 `csharp/`，见 [Unity 手册](../../client/unity/README.md)。
+- **同步到客户端**：`roost client sync --from <服务端工程> [--lang csharp|ts] --to <客户端目录> [--dry-run]`。一个客户端仓库只用一种语言（D9）：服务端只声明一种时 `--lang` 可省，两种都声明时必须写；`--lang ts` 暂不能与配置表同步（`--config-*`）一起用，配置导出只有 C#。先核对服务端导出目录的哈希（手改或拷了一半拒绝），把 `csharp/` 或 `ts/` 下的文件平铺拷进客户端目录，另存服务端的 `manifest.json`；对比上次同步留下的 `manifest.json`，打印版本变化与新增、变化、删除的消息号（按方向 + 名字对比）和错误码（按名字对比）。上次同步写过、这次没有的文件删掉；目录里同名但不是上次同步写的文件拒绝覆盖；上次同步写过、之后被手改的文件照样覆盖并提示。不生成 Unity 的 `.meta`。`--lang ts` 的报告另打印要装的 `@bufbuild/protobuf` 精确版本。
+- **接入**：Unity 缺省走托管路线（`GameClient` + `RoostClientDriver`），直接编译导出的 `csharp/`，见 [Unity 手册](../../client/unity/README.md)；网页用 `@roost/client` 的 `gate` 与 `protobuf` 子路径，直接编译导出的 `ts/`，见 [client/ts](../../client/ts/README.md)。
 
 ### 2.2 配置表导出给客户端（client_export.config）
 

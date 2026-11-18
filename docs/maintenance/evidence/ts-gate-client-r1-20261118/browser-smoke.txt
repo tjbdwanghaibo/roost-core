@@ -1,0 +1,39 @@
+浏览器冒烟 2026-11-18 20:50：Claude 内置浏览器面板（面板前台显示，标签页在前台）
+UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/5.11492.5 Chrome/156.0.8078.75 Safari/537.36
+命令: cd client/ts && npm run build && node demo/serve-gate-smoke.mjs 8791；面板打开 http://127.0.0.1:8791/
+对端: infra/network/gateway 的 TestServeAWebSocketPlayerAccessForTheBrowserSmoke（缺省配置，idle_timeout 90s，WebSocket，放行 127.0.0.1 / localhost）
+
+--- serve-gate-smoke.mjs 输出 ---
+2026/11/18 20:50:03 INFO player tcp listener started addr=127.0.0.1:56181 max_connections=10000
+2026/11/18 20:50:03 INFO player websocket listener started addr=127.0.0.1:56182 path=/ws
+peer: player access ws://127.0.0.1:56182/ws (pid 15451), idle_timeout 90000ms -> hold 100s
+smoke: http://127.0.0.1:8791/ (pid 15363)
+
+--- 页面日志（get_page_text 原样） ---
+SMOKE connected ws://127.0.0.1:56182/ws in 22ms (handshake ok, state Ready, connection version 1)
+SMOKE holding 100s (idle_timeout + 10s), heartbeat every 15s
+SMOKE t=5s state Ready heartbeats 0
+SMOKE t=10s state Ready heartbeats 0
+SMOKE t=15s state Ready heartbeats 1
+SMOKE t=20s state Ready heartbeats 1
+SMOKE t=25s state Ready heartbeats 1
+SMOKE t=30s state Ready heartbeats 2
+SMOKE t=35s state Ready heartbeats 2
+SMOKE t=40s state Ready heartbeats 2
+SMOKE t=45s state Ready heartbeats 3
+SMOKE t=50s state Ready heartbeats 3
+SMOKE t=55s state Ready heartbeats 3
+SMOKE t=60s state Ready heartbeats 4
+SMOKE t=65s state Ready heartbeats 4
+SMOKE t=70s state Ready heartbeats 4
+SMOKE t=75s state Ready heartbeats 5
+SMOKE t=80s state Ready heartbeats 5
+SMOKE t=85s state Ready heartbeats 5
+SMOKE t=90s state Ready heartbeats 6
+SMOKE t=95s state Ready heartbeats 6
+SMOKE t=100s state Ready heartbeats 6
+SMOKE PASS held 100s on one connection, 6 heartbeat round trips
+
+页面标题: "PASS Roost gate 冒烟"。PASS 的判定（demo/gate-smoke.html）：保持 100s 后状态仍是 Ready、连接代号没变、状态序列只有
+Connecting,Ready（没有断开或重连）、心跳往返 >= floor(100/15) - 1。
+只覆盖 Chromium 内核（Electron 内置面板）；Safari、Firefox、手机浏览器、后台标签页没有跑。

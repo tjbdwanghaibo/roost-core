@@ -1,0 +1,36 @@
+M1 RED: 一帧拆成两条消息发（先发包头再发载荷）
+    ✖ handshake over a split acknowledgement; auth envelope with a generation; no Origin header
+    ✖ a response and a push merged in one message, a frame split into 7-byte messages and a near-1 MiB frame all decode
+    ✖ a text message closes the connection with a protocol error
+    ✖ a request that timed out drops its late reply and keeps the connection
+    ✖ pending capacity is enforced and the heartbeat keeps its own slot
+    ✖ disposing inside a callback stops the rest of the message and every later notification
+    ✖ disconnecting inside a push callback drops the rest of that message
+    ✖ one subscriber per message id; a throwing handler reports to error and the connection stays
+    ✖ auto reconnect after the server closes: fresh ticket, newer generation, reconnected event
+    ✖ a non-empty handshake acknowledgement fails the connect
+M2 RED: 鉴权首包不带代号信封（只发票据原文）
+    ✖ handshake over a split acknowledgement; auth envelope with a generation; no Origin header
+    ✖ auto reconnect after the server closes: fresh ticket, newer generation, reconnected event
+M3 RED: 心跳不独占槽位（占业务在途名额）
+    ✖ pending capacity is enforced and the heartbeat keeps its own slot
+M4 RED: 没有等待者的晚应答当推送派发
+    ✖ a request that timed out drops its late reply and keeps the connection
+M5 RED: 应答回调推迟到微任务（不再与推送按线上顺序）
+    ✖ a response and a push merged in one message, a frame split into 7-byte messages and a near-1 MiB frame all decode
+M6 RED: 回调里断开之后仍处理同一条消息里剩下的帧（会话层不查 closed）
+    ✖ disconnecting inside a push callback drops the rest of that message
+M7 RED: Gate 包头不查 bits3..7（把 relay 的通道位当合法）
+    ✖ Gate header rules match client/wire: flag bits 3..7, kind 3, control flags, size
+M8 RED: 重连沿用第一次的票据（不重新取票）
+    ✖ reconnect backs off with jitter, fetches a fresh ticket each attempt and reports every result
+    ✖ auto reconnect after the server closes: fresh ticket, newer generation, reconnected event
+M9 RED: 重连退避不加抖动、不按 2^n 增长（固定 initial）
+    ✖ reconnect backs off with jitter, fetches a fresh ticket each attempt and reports every result
+    ✖ a successful reconnect bumps the version; disconnect during backoff stops reconnecting
+M10 RED: 心跳超时不断开连接（只当这次心跳失败，继续下一次）
+    ✖ heartbeats go every interval, the next one is timed from the previous ack
+M11 RED: 连接超时不覆盖取票（取票卡住就一直等）
+    ✖ the connect timeout covers the ticket and the handshake
+M12 RED: 文本消息当二进制处理（不断开）
+    ✖ a text message closes the connection with a protocol error

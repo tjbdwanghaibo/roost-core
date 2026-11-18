@@ -1,0 +1,66 @@
+## 环境
+node v26.7.0, npm 11.19.0, protoc libprotoc 31.1 (~/tools/protoc-31.1/bin/protoc), PATH 上 libprotoc 36.2
+
+## protobuf-es 2.17.0（@bufbuild/protobuf + @bufbuild/protoc-gen-es）
+$ node_modules/.bin/protoc-gen-es --version
+protoc-gen-es v2.17.0
+依赖树（npm ls --all，只列 @bufbuild 与其下）：
+es@1.0.0 <eval>
++-- @bufbuild/protobuf@2.17.0
++-- @bufbuild/protoc-gen-es@2.17.0
+| +-- @bufbuild/protobuf@2.17.0 deduped
+| `-- @bufbuild/protoplugin@2.17.0
+|   +-- @bufbuild/protobuf@2.17.0 deduped
+|   +-- @typescript/vfs@1.6.6
+|   | `-- typescript@5.9.3 deduped
+|   `-- typescript@5.4.5
+`-- typescript@5.9.3
+
+engines: @bufbuild/protoc-gen-es@2.17.0 {"node":">=22"}，@2.16.0 {"node":">=22"}，@2.12.0 {"node":">=20"}
+@bufbuild/protobuf@2.17.0 dependencies: （空 = 无）
+
+$ node out/check.js client/spec   # golden_dao_sync.proto 经 protoc 31.1 + protoc-gen-es target=ts,import_extension=js 生成
+ok   entityId bigint exact: 9007199254740993
+ok   exp 1<<60 bigint: 1152921504606846976
+ok   nullable nested containers (map key '4' is a string)
+ok   zero scalar presence
+ok   empty container presence
+ok   unchanged field absent
+FAIL zero_empty re-encodes byte-identical
+FAIL full re-encodes byte-identical
+ok   dao-collections 10x3 decode + re-encode equals: 30
+exit=1
+说明：两条 FAIL 是重新编码后字节顺序不同——Go 按声明顺序写（sync_format=2047 紧跟 entity_id），protobuf-es 按字段号写（f87f03 在末尾）；
+解码后逐字段相等，proto3 线上格式允许任意字段顺序，不影响互通（C# 解码 Go 的字节同理）。
+
+## protoc 版本对 protobuf-es 生成物的影响
+protoc 31.1 两次生成 dao_sync_pb.ts：逐字节相同
+protoc 36.2 与 31.1 生成 dao_sync_pb.ts：逐字节相同
+protoc 31.1 两次生成 golden_dao_sync_pb.ts：逐字节相同
+protoc 36.2 与 31.1 生成 golden_dao_sync_pb.ts：逐字节相同
+protoc 31.1 两次生成 protocol_pb.ts：逐字节相同
+protoc 36.2 与 31.1 生成 protocol_pb.ts：逐字节相同
+
+## ts-proto 2.22.0（protoc-gen-ts_proto）
+dependencies: {"ts-poet":"^6.12.0","case-anything":"^2.1.13","@bufbuild/protobuf":"^2.14.1","ts-proto-descriptors":"2.1.0"}
+default (number): decode threw: Value is larger than Number.MAX_SAFE_INTEGER
+forceLong=bigint: entityId = 9007199254740993 exp = 1152921504606846976
+presence: name true level true exp absent true equips keys []
+re-encode zero_empty: 088180808080808010f87f0312001a0032003a005a020a00
+
+## protobufjs 8.8.1 + protobufjs-cli 2.7.1（pbjs 自己解析 .proto，不经 protoc）
+protobufjs dependencies: {"long":"^5.3.2"}
+withlong entityId type object Long value 9007199254740993 exact? true
+withlong presence: name true level true exp absent true
+
+## 包体：esbuild 0.28.2 --bundle --minify --format=esm --target=es2020，再 gzip -9
+all = game-demo 的 protocol.proto + dao_sync.proto 全部消息（export *，不做 tree-shaking），rt = 只有运行库
+es rt: min 67623 字节, gzip 18057 字节
+es all: min 147895 字节, gzip 37638 字节
+tsproto rt: min 10820 字节, gzip 3584 字节
+tsproto all: min 625901 字节, gzip 60594 字节
+pbjs rt: min 44170 字节, gzip 12682 字节
+pbjs all: min 1853434 字节, gzip 123339 字节
+（ts-proto 用 forceLong=bigint 生成；pbjs 用 -t static-module -w es6，含 verify / fromObject / toObject）
+生成源：protobuf-es protocol_pb.ts 109391 + dao_sync_pb.ts 260477 字节；ts-proto 508184 + 1117583；pbjs 合一 8196764
+补注：ts-proto（forceLong=bigint）把 int64 键的 map 生成为 Map<bigint, …>（golden_dao_sync.ts 第 300 行），所以上面 Object.keys 为空；不是解码丢失。

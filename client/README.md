@@ -1,6 +1,6 @@
 # Roost 客户端协议与 C# SDK
 
-Roost 的自定义协议负责帧、路由编号与请求关联，业务载荷由包头选择 PB / Sync / Lockstep。本批提供公共 Go wire、纯 C# `netstandard2.1` 运行库（TCP 或 WebSocket，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入含-unity-webgl)）和 Unity 主线程适配。Lockstep 已接线：输入/Hash/Catchup命令、既有C7广播与C#有序消费、C9 v2恢复失败通知与CA 01快照恢复。
+Roost 的自定义协议负责帧、路由编号与请求关联，业务载荷由包头选择 PB / Sync / Lockstep。本批提供公共 Go wire、纯 C# `netstandard2.1` 运行库（TCP 或 WebSocket，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入含-unity-webgl)）和 Unity 主线程适配；浏览器另有 TS SDK `@roost/client`（经 WebSocket 连玩家接入与开房间，见[TS 经 WebSocket 连玩家接入](#ts-经-websocket-连玩家接入网页)）。Lockstep 已接线：输入/Hash/Catchup命令、既有C7广播与C#有序消费、C9 v2恢复失败通知与CA 01快照恢复。
 
 ## 标准业务入口
 
@@ -142,23 +142,27 @@ PB仍走`PushPlayer` / `PushSession`及生成ProtocolRegistry encoder。Sync使�
 
 ### 前后端公共协议目录（client_export）
 
-客户端（Unity）与服务端是两个仓库时，客户端不引用服务端路径，而是同步服务端导出的C#。服务端在`roost.yaml`声明（不默认开启；没声明的工程生成结果不变）：
+客户端（Unity 或网页）与服务端是两个仓库时，客户端不引用服务端路径，而是同步服务端导出的C#或TS。服务端在`roost.yaml`声明（不默认开启；没声明的工程生成结果不变）：
 
 ```yaml
 client_export:
   dir: shared/protocol        # 相对工程根，缺省 shared/protocol，产物提交进仓库
-  languages: [csharp]
+  languages: [csharp, ts]     # 可写 csharp、ts 或两者
+  protoc: tools/protoc-31.1/bin/protoc   # 可选；2026-11-18 起在顶层（原 csharp.protoc，旧写法报错）
   csharp:
     namespace: Game.Protocol  # 可选
+  ts:
+    protoc_gen_es: web/node_modules/.bin/protoc-gen-es   # 可选，否则 ROOST_PROTOC_GEN_ES、PATH
 ```
 
-之后每次`roost generate`都整份写出这个目录：`proto/protocol.proto`、`proto/dao_sync.proto`，`csharp/Protocol.cs`与`csharp/DaoSync.cs`（protoc生成），`csharp/DaoSyncApply.cs`、`csharp/MessageIds.cs`、`csharp/ErrorCodes.cs`（Go生成，不依赖protoc），以及`manifest.json`（core / 生成器 / protoc / Google.Protobuf版本，`protocol/def`与同步字段的哈希，每个导出文件的哈希，消息号与错误码清单）。同样的输入输出逐字节相同。`roost generate --check`覆盖这个目录，`roost project doctor`的`client-export:fresh`在不跑protoc的情况下核对它是否落后于`protocol/def`、同步字段与错误码。
+之后每次`roost generate`都整份写出这个目录：`proto/protocol.proto`、`proto/dao_sync.proto`，`csharp/Protocol.cs`与`csharp/DaoSync.cs`（protoc生成），`csharp/DaoSyncApply.cs`、`csharp/MessageIds.cs`、`csharp/ErrorCodes.cs`（Go生成，不依赖protoc），声明`ts`时另有`ts/protocol_pb.ts`与`ts/dao_sync_pb.ts`（protoc + protoc-gen-es生成，64位整数是bigint）、`ts/message_ids.ts`、`ts/error_codes.ts`（Go生成），以及`manifest.json`（core / 生成器 / protoc / Google.Protobuf / protoc-gen-es / protobuf-es版本，`protocol/def`与同步字段的哈希，每个导出文件的哈希，消息号与错误码清单）。同样的输入输出逐字节相同。`roost generate --check`覆盖这个目录，`roost project doctor`的`client-export:fresh`在不跑protoc的情况下核对它是否落后于`protocol/def`、同步字段与错误码。
 
-- **protoc版本**：导出C#时要求`protoc --version`与`Roost.Client.Codecs`锁定的Google.Protobuf同版本（3.31.1对应protoc 31.1），版本不对或找不到时`roost generate`报错并写明需要的版本与下载地址。查找顺序：`client_export.csharp.protoc`（相对路径按工程根）、环境变量`ROOST_PROTOC`、PATH。生成器不下载protoc。
+- **protoc版本**：导出C#或TS时都要求`protoc --version`与`Roost.Client.Codecs`锁定的Google.Protobuf同版本（3.31.1对应protoc 31.1），版本不对或找不到时`roost generate`报错并写明需要的版本与下载地址。查找顺序：`client_export.protoc`（相对路径按工程根）、环境变量`ROOST_PROTOC`、PATH。生成器不下载protoc。
+- **protoc-gen-es版本（ts）**：必须等于TS SDK锁定的`@bufbuild/protobuf`（2.17.0），在任何生成器之前核对；查找顺序`client_export.ts.protoc_gen_es`、`ROOST_PROTOC_GEN_ES`、PATH。它是npm包`@bufbuild/protoc-gen-es`（要node 22以上），声明`ts`的服务端开发机要装node。
 - **命名空间**：缺省协议在`Roost.Protocol`、DAO同步在`Roost.Dao.Sync`、消息号与错误码在`Roost.Generated`（与`-csharp`相同）；配了`csharp.namespace`时协议、消息号、错误码都在`<namespace>`，DAO同步在`<namespace>.DaoSync`。
 - **错误码**：`ErrorCodes.cs`列工程里全部`errcode.Define`（名字转PascalCase常量，说明写在summary里；常量撞上类名`ErrorCodes`、方法`Name`/`Message`或object继承成员`Equals`/`GetHashCode`/`ToString`/`GetType`/`ReferenceEquals`/`MemberwiseClone`时加后缀`_`，如`name`→`Name_`），另有按码查名字与说明的`ErrorCodes.Name(code)` / `ErrorCodes.Message(code)`。框架段（1–999）的码不在其中。
-- **同步到客户端仓库**：`roost client sync --from <服务端工程> --to <客户端目录>`先核对服务端导出目录的哈希，再把`csharp/`平铺拷进客户端目录、另存一份`manifest.json`，对比上次同步的manifest报告新增、变化与删除的消息号和错误码；上次同步写过、这次没有的文件删掉，目录里不是上次同步写的同名文件拒绝覆盖。`--dry-run`只报告。不生成Unity的`.meta`（Unity导入时自己生成）。
-- **编译**：导出的`csharp/`放进netstandard2.1工程，与`Roost.Client`、`Roost.Client.Codecs`（Google.Protobuf 3.31.1）一起编译。
+- **同步到客户端仓库**：`roost client sync --from <服务端工程> [--lang csharp|ts] --to <客户端目录>`先核对服务端导出目录的哈希，再把`csharp/`或`ts/`平铺拷进客户端目录（服务端只声明一种语言时`--lang`可省，两种都声明时必须写；`--lang ts`的报告提示客户端工程装同版本的`@bufbuild/protobuf`）、另存一份`manifest.json`，对比上次同步的manifest报告新增、变化与删除的消息号和错误码；上次同步写过、这次没有的文件删掉，目录里不是上次同步写的同名文件拒绝覆盖。`--dry-run`只报告。不生成Unity的`.meta`（Unity导入时自己生成）。
+- **编译**：导出的`csharp/`放进netstandard2.1工程，与`Roost.Client`、`Roost.Client.Codecs`（Google.Protobuf 3.31.1）一起编译；导出的`ts/`放进网页工程，与`@roost/client`、`@bufbuild/protobuf@2.17.0`一起编译。
 
 不用导出目录时仍可单独生成消息号（路径显式指定，现有默认产物不变；将`<core-version>`换成选定版本）：
 
@@ -229,7 +233,7 @@ RV-20261101-06 的原报告见 [review 1bf08673](https://github.com/tjbdwanghaib
 
 ## C# 经 WebSocket 连玩家接入（含 Unity WebGL）
 
-main 上未发版（CHANGELOG `[Unreleased]`；维护者 2026-11-18 要求：Unity WebGL 游戏能联机）。这是**客户端一侧**：各客户端里只有 C# `Roost.Client` 能经 WebSocket 连玩家接入（C++ 只连 TCP；TS 只有开房间 SDK；Go robot 的 `ws` 拨号器没有对玩家接入跑过）。`Roost.Client` 的连接抽成可替换的传输，形状照开房间 SDK 的 `IRelayTransport`；WebSocket 只是接入层，握手首包、连接代号、路由、请求关联、推送与心跳（MsgID=0，不用 WebSocket ping）都与 TCP 共用同一套代码。服务端要先开 WebSocket 监听：`roost add transport websocket`，写上 `player_access.{tcp,gate}.websocket.addr`（约定 7080），浏览器页面的来源写进 `allowed_origins`（[GATEWAY §6](../docs/framework/GATEWAY.md#6-websocket-接入)）。
+main 上未发版（CHANGELOG `[Unreleased]`；维护者 2026-11-18 要求：Unity WebGL 游戏能联机）。这是**客户端一侧**：各客户端里 C# `Roost.Client` 与 TS `@roost/client/gate`（见[下一节](#ts-经-websocket-连玩家接入网页)）能经 WebSocket 连玩家接入（C++ 只连 TCP；Go robot 的 `ws` 拨号器没有对玩家接入跑过）。`Roost.Client` 的连接抽成可替换的传输，形状照开房间 SDK 的 `IRelayTransport`；WebSocket 只是接入层，握手首包、连接代号、路由、请求关联、推送与心跳（MsgID=0，不用 WebSocket ping）都与 TCP 共用同一套代码。服务端要先开 WebSocket 监听：`roost add transport websocket`，写上 `player_access.{tcp,gate}.websocket.addr`（约定 7080），浏览器页面的来源写进 `allowed_origins`（[GATEWAY §6](../docs/framework/GATEWAY.md#6-websocket-接入)）。
 
 **传输**（`client/dotnet/Roost.Client/GateTransport.cs`）：
 
@@ -272,7 +276,18 @@ await client.Connection.ConnectAsync(GetFreshTicketAsync);
 - jslib 的 JS 逻辑：`node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs`。
 - Unity：`unity-webgl-smoke` 的 GateSmoke 只验“经 WebSocket 连进玩家接入、握手成功、只靠 Pump 的心跳保持连接超过 `idle_timeout`”（维护者 2026-11-18：WebSocket 之上的逻辑由 .NET 用例覆盖）。2026-11-18 用 `--managed-only` 托管包构建的 WebGL 版（Unity 6000.7.0b7）在 Claude 内置浏览器面板里握手 95ms、保持 100s（`idle_timeout` 90s）、6 次心跳往返，`SMOKE PASS`；编辑器里同样通过。Safari、Firefox、移动浏览器没测。
 
-边界见 [KNOWN-LIMITS“C# 经 WebSocket 连玩家接入”](../docs/maintenance/KNOWN-LIMITS.md#c-经-websocket-连玩家接入2026-11-18)。TS 没有连玩家接入的客户端（只有开房间 SDK）。
+边界见 [KNOWN-LIMITS“C# 经 WebSocket 连玩家接入”](../docs/maintenance/KNOWN-LIMITS.md#c-经-websocket-连玩家接入2026-11-18)。
+
+## TS 经 WebSocket 连玩家接入（网页）
+
+main 上未发版（CHANGELOG `[Unreleased]`；方案 [FEATURE-2026-11-18-ts-gate-client](../docs/maintenance/FEATURE-2026-11-18-ts-gate-client.md) 第 1 轮）。`client/ts` 合成一个包 `@roost/client`（原 `@roost/relay-client` 改名并入，不兼容旧名），`@roost/client/gate` 经 WebSocket 连玩家接入（直连 game 的 `player_access.tcp.websocket` 或独立 Gate），`@roost/client/protobuf` 用 protobuf-es 收发业务 PB。握手首包、连接代号、请求关联、推送、心跳（MsgID=0）与校时和 C# 同一套规则，用 [packets.json](spec/packets.json) 金样核对；回调在浏览器事件循环里直接分发，没有 `Pump`。地址只认调用方给的完整 `ws://` / `wss://` URL（portal 的 enter 结果在 `"transport":"ws"` 时给的就是），页面来源要写进 `allowed_origins`。用法、选项与重连语义见 [ts/README](ts/README.md)。
+
+- node 用例：金样、对假玩家接入的连接 / 握手 / 心跳 / 超时 / 重连 / 请求 / 推送 / 校时、假计时器、protobuf 子路径。
+- 真实 Go 玩家接入（`infra/network/gateway` 的 `TestTheTSClientWorksOverWebSocket`、`…ThroughAStandaloneGate`，node 进程由 Go 驱动，`scripts/test-client-ts.sh` 跑）：握手、请求应答、校时、推送、心跳撑过 `idle_timeout`、服务端断开后重连（代号更大）、请求超时与迟到应答丢弃、计时器冻结（像后台页面）被断开后重连、连接超时；独立 Gate 上跑握手、请求、心跳与冻结后的重连。
+- 浏览器：`client/ts/demo/gate-smoke.html` 只验连接、握手、心跳保持超过 `idle_timeout`。2026-11-18 在 Claude 内置浏览器面板（Chromium 156）里握手 22ms、保持 100s（`idle_timeout` 90s）、6 次心跳往返，`SMOKE PASS`。Safari、Firefox、手机浏览器、微信 / 抖音小游戏没测。
+- 还没有：自身视图同步（第 2 轮）、配置表的 TS 读取（第 3 轮）、Lockstep、小游戏传输。
+
+边界见 [KNOWN-LIMITS“TS 经 WebSocket 连玩家接入”](../docs/maintenance/KNOWN-LIMITS.md#ts-经-websocket-连玩家接入2026-11-18)。
 
 ## Lockstep接入
 
@@ -396,7 +411,7 @@ dirtyMeshes.Clear();
 |---|---|---|---|
 | Go | [client/relay](relay/README.md) | TCP | 连接的读 goroutine 上依次调用 |
 | C# | [dotnet/Roost.Client.Relay](dotnet/Roost.Client.Relay/README.md)（netstandard2.1，无第三方依赖） | TCP 或 WebSocket（`RelayClientOptions.Transport`；传输是公开接口 `IRelayTransport`，自带 TCP 与 `ClientWebSocket` 两种）。Unity WebGL 上用单线程调度 `PumpDriven`，见下 | `Pump` 的调用线程（Unity 主线程）；`PumpDriven` 时心跳、超时、重连退避也在 `Pump` 里 |
-| TS | [ts](ts/README.md)（浏览器；node 测试用 `ws` 包） | WebSocket，每条二进制消息一帧，收的时候按字节流解 | 事件循环 |
+| TS | [ts](ts/README.md)（`@roost/client/relay` 与 `/web`，浏览器；node 测试用 `ws` 包） | WebSocket，每条二进制消息一帧，收的时候按字节流解 | 事件循环 |
 
 三份共同的做法：
 

@@ -7,7 +7,7 @@
 ## RV-20261118-07：旧任期发起的转交在新任期生效
 
 **根因**：Go `Client.Transfer`（[host.go](../../../../client/relay/host.go)）先 `IsHost()`，再锁外压缩交接数据，压缩完用
-`SendControl` 在**此刻**的连接上发出；TS `transfer`（[client.ts](../../../../client/ts/src/client.ts)）压缩完只看
+`SendControl` 在**此刻**的连接上发出；TS `transfer`（[client.ts](../../../../client/ts/src/relay/client.ts)）压缩完只看
 `role.host`；C# `Transfer`（[RelayClient.cs](../../../../client/dotnet/Roost.Client.Relay/RelayClient.cs)）`RequireHost()` 后压缩、
 发出，不核对。三者都不核对“发起时的连接与任期”。relay（[room.go](../../../../service/relay/room.go) `transfer`）只看
 “发送者是不是此刻的房主”，Transfer 帧不带 epoch。A 在 epoch 0 发起、压缩期间 A→B→A（epoch 2），旧的那次照样从房主连接发出，

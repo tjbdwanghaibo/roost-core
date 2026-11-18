@@ -376,7 +376,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 服务端一侧（v1.54.0 起）：Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/websocket`），契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，方案 [FEATURE-2026-11-16-lobby-relay §4.7.1](FEATURE-2026-11-16-lobby-relay.md)，[证据](evidence/lobby-relay-ws-20261117/README.md)。
 
-客户端一侧经 WebSocket 连**玩家接入**（嵌入 TCP 或独立 Gate）的只有 C# `Roost.Client`（`ConnectionOptions.WebSocketUrl`，main 上未发版，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入2026-11-18)）。Go `robot/transport` 有 `ws` 拨号器，只对测试里的 WebSocket 回显端点跑过，没有对 game 或 Gate 的 WebSocket 接入跑过；C++ `client/cpp` 只连 TCP；TS `client/ts` 只有开房间 SDK，没有连玩家接入的客户端。连 **relay** 的 WebSocket 是另一回事，见[开房间 SDK](#开房间-sdk2026-11-17)。
+客户端一侧经 WebSocket 连**玩家接入**（嵌入 TCP 或独立 Gate）的是 C# `Roost.Client`（`ConnectionOptions.WebSocketUrl`，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入2026-11-18)）与 TS `@roost/client/gate`（浏览器，见[TS 经 WebSocket 连玩家接入](#ts-经-websocket-连玩家接入2026-11-18)），两者都在 main 上未发版。Go `robot/transport` 有 `ws` 拨号器，只对测试里的 WebSocket 回显端点跑过，没有对 game 或 Gate 的 WebSocket 接入跑过；C++ `client/cpp` 只连 TCP。连 **relay** 的 WebSocket 是另一回事，见[开房间 SDK](#开房间-sdk2026-11-17)。
 
 - **Origin 白名单为空时同源页面也拒绝**：不带 `Origin` 的请求（原生客户端、工具）总是放行；带 `Origin` 的必须匹配 `allowed_origins`（relay 是 `ws_allowed_origins`）。白名单为空时拒绝所有带 Origin 的请求，**同源页面也拒绝**（选择理由：失败即关闭；游戏页面通常与接入地址不同域，前置负载均衡还可能改写 Host，按 Host 判同源靠不住）。要让浏览器连上来，必须写白名单。
 - **七层负载均衡后要配可信代理才按客户端计数**（2026-11-17，交接 C3）：不写 `websocket.trusted_proxies` 时连接的对端是负载均衡，`max_connections_per_ip` 把经它来的全部 WebSocket 连接算作一个 IP；写上负载均衡自己的地址后按 `X-Forwarded-For` 从右往左第一个不可信的地址计数（规则见 GATEWAY §6“部署注意”）。只认 `X-Forwarded-For`（`Forwarded`、`X-Real-IP` 不读），每一项都可信时退回对端地址（不取最左项），四层负载均衡的 PROXY protocol 不支持，玩家 TCP 监听不读任何转发信息。relay 没有按 IP 的连接限额，保护靠令牌、每连接帧率与房间人数上限。没有经真实七层负载均衡与浏览器演练（尚未确认，[证据](evidence/c3-trusted-proxies-20261117/README.md)）。
@@ -755,7 +755,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 | C# `Roost.Client` / `Roost.Client.Relay`（含 Unity 托管路线与 WebGL） | TCP 或 WebSocket | TCP 或 WebSocket |
 | C++ `client/cpp`（含 Unity 原生路线、经 C ABI 的 Unreal） | 只有 TCP | 没有 SDK |
 | Go `robot`（机器人、压测） | TCP；`ws` 拨号器没有对玩家接入跑过；KCP / QUIC 拨号器给帧同步用 | `client/relay` 只有 TCP |
-| TS `client/ts`（浏览器） | 没有客户端 | 只有 WebSocket |
+| TS `@roost/client`（`client/ts`，浏览器） | 只有 WebSocket（`gate` 子路径，2026-11-18，main 上未发版；自身视图同步还没有） | 只有 WebSocket（`relay` 子路径） |
 
 #### Native 客户端（2026-11-01）
 
@@ -778,9 +778,20 @@ C# `Roost.Client` 经 WebSocket 连嵌入 TCP 或独立 Gate（main 上未发版
 - **WebSocket 地址由调用方给完整 URL**（维护者 2026-11-18 定）：WebGL 登录时在 portal 的进服请求里带 `"transport":"ws"`，用返回的 `ws(s)://host:port/path` 连（portal 一侧另行实现）。SDK 不从 TCP 地址推算。
 - **自带的 `WebSocketGateTransport` 不发 `Origin` 头**：服务端对不带 `Origin` 的请求总是放行，身份仍靠票据。浏览器总会带 `Origin`，WebGL 页面的来源必须写进 `allowed_origins`。
 
+#### TS 经 WebSocket 连玩家接入（2026-11-18）
+
+TS `@roost/client/gate`（与 `/protobuf`）经浏览器 WebSocket 连嵌入 TCP 或独立 Gate（main 上未发版，CHANGELOG `[Unreleased]`；方案 [FEATURE-2026-11-18-ts-gate-client](FEATURE-2026-11-18-ts-gate-client.md) 第 1 轮）。用法见 [client/ts](../../client/ts/README.md)，契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，[证据](evidence/ts-gate-client-r1-20261118/README.md)。没验证的部分见[客户端：遗留](#客户端遗留)。
+
+- **后台页面冻结就断线，回前台靠重连**：心跳、超时与重连靠浏览器计时器。后台标签页的计时器会被限流（按 Chromium 公开的规则最慢每分钟一次，仍在 `idle_timeout` 90s 以内，这是推断、没实测），手机浏览器冻结后台页时心跳停，超过 `idle_timeout` 被服务端断开；回前台后 `autoReconnect` 重新取票、换新的连接代号重连，没完成的请求以 `GateClosedError` 失败、不自动重发。与 C# WebGL 不 `Pump` 时相同。SDK 不提供 Worker 驱动心跳（开房间的 `pulse()` 那样）。
+- **只走 WebSocket，地址由调用方给完整 URL**（维护者 2026-11-18 D8）：SDK 不从 TCP 地址推算；portal 的 enter 在 `"transport":"ws"` 时给出这个地址。页面来源必须写进 `allowed_origins`。
+- **导出的 `*_pb.ts` 要求游戏工程装同一版 `@bufbuild/protobuf`**（D3）：版本不一致时 protobuf-es 在运行期报错。生成器锁 protoc-gen-es 2.17.0，`roost client sync --lang ts` 的报告写明要装的版本；SDK 把它声明为可选的 peer 依赖，不替游戏工程装。根路径 `@roost/client` 不导出 protobuf 子路径，免得只用 relay 的工程也要装它。
+- **声明 `ts` 的服务端开发机要装 node 22 以上**：`@bufbuild/protoc-gen-es` 2.17.0 要求 node ≥ 22（2.12.0 起是 ≥ 20）；方案原写“node 18+”，按实测改。生成器不安装插件，找不到或版本不对在任何生成器之前报错。
+- **64 位整数是 `bigint`**（D5）：业务代码与 JSON 序列化要按 bigint 处理；以 int64 为键的 map 在 protobuf-es 里键是字符串。
+- **不发 npm**（D2）：游戏工程用 `npm pack` 的 tgz 或 `file:` 引用，升级时重新打包。
+
 #### 开房间 SDK（2026-11-17）
 
-Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（v1.54.0 起；C# 的 `PumpDriven` 与 `ILobbyHttp` v1.55.0 起），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
+Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（2026-11-18 起是 `@roost/client` 的 `relay` 与 `web` 子路径，原 `@roost/relay-client` 改名并入，不兼容旧名；v1.54.0 起；C# 的 `PumpDriven` 与 `ILobbyHttp` v1.55.0 起），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
 
 - **连 relay：Go `client/relay` 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**。这一条只说连 relay；连玩家接入（嵌入 TCP / 独立 Gate）见本节开头的表。
 - **Unity WebGL 上 C# 开房间 SDK 要开 `PumpDriven`**（维护者 2026-11-18 定 A1，已实施）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行不运行（2026-11-17 实测）。打开 `PumpDriven` 后 SDK 只靠 `Pump`：游戏不调 `Pump`（加载场景卡住主线程、切后台浏览器停了循环）就不发心跳、不判超时、不重连；成员超过 relay `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）会被断开，房主宽限期 5s 内重连回来仍是房主，否则换 host；恢复 `Pump` 后按 `ReconnectAttempts` 重连。到期的计时器经同步上下文触发，比到期时刻晚约一帧。2026-11-18 在 Unity 6000.7.0b7 WebGL 构建、Claude 内置浏览器（隐藏面板）里两次通过。没测：Safari / Firefox / 移动浏览器、真实切后台、WebGL 里长时间卡帧的房主（[证据](evidence/sdk-webgl-a1-20261118/README.md)）。
@@ -985,7 +996,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 #### 客户端：遗留
 
 - **设备与引擎**：C-U1～U4 包括 Unity / IL2CPP 场景时间与地形、快照 restore、UGC 交互、Windows / Linux / Android / iOS 与 Unreal / Godot 实机，线程、移动前后台、WAN / 跨 Gate 和确定性。已有 macOS ARM64 Editor / Mono / IL2CPP 与 .NET 功能证据不能代表全矩阵。
-- **只在内置浏览器面板里演练过**：Web 端房主（`WebHost` + Worker 规则循环、主动转交、刷新恢复、隐藏让出）在 Claude 桌面应用内置的 Chromium 面板里两个标签页演练通过（[证据](evidence/lobby-relay-browser-20261117/README.md)，第一轮发现的“主动转交后新房主规则不跑”已由 f2532dba 修掉并复测）。“切到后台”是用演示页的“模拟隐藏”按钮触发的；Safari、Firefox、手机浏览器没测，真实后台标签页的计时器限流对 Worker 的影响没实测。TS SDK 的自动化用例仍只在 node 上跑（`ws` 包代替浏览器的 WebSocket，`document`、`sessionStorage` 用假的）。
+- **只在内置浏览器面板里演练过**：Web 端房主（`WebHost` + Worker 规则循环、主动转交、刷新恢复、隐藏让出）在 Claude 桌面应用内置的 Chromium 面板里两个标签页演练通过（[证据](evidence/lobby-relay-browser-20261117/README.md)，第一轮发现的“主动转交后新房主规则不跑”已由 f2532dba 修掉并复测）。“切到后台”是用演示页的“模拟隐藏”按钮触发的；Safari、Firefox、手机浏览器没测，真实后台标签页的计时器限流对 Worker 的影响没实测。TS 开房间部分（`relay`、`web` 子路径）的自动化用例仍只在 node 上跑（`ws` 包代替浏览器的 WebSocket，`document`、`sessionStorage` 用假的）。
 - **开房间 C# SDK 在 Unity 上实跑到哪**（`Roost.Client.Relay`，[unity-webgl-smoke 实测结果](../../client/dotnet/unity-webgl-smoke/README.md#实测结果)）：Unity Editor（6000.3.12f1、Mono、macOS）在 relay 写期限修复之前跑过：TCP 通过，WebSocket 13 次 8 次通过、5 次被那个服务端缺陷断开；修复之后 Editor 没有复跑。Unity WebGL（6000.7.0b7、IL2CPP、`PumpDriven`）在修复之后两次通过（停 45s / 60s 不断线）。桌面与移动 Player 没跑。
 - **配置导出的 C# 读取代码没在 Unity 里跑过**：只在 .NET 上编译和运行（netstandard2.1、`TreatWarningsAsErrors`），Unity Editor、Mono / IL2CPP Player 都没跑。
 - **C# 经 WebSocket 连玩家接入：没验证的部分**（2026-11-18，[证据](evidence/csharp-gate-ws-20261118/README.md)）：
@@ -993,6 +1004,11 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
   - **浏览器与平台**：Safari、Firefox、移动浏览器没测；真实后台标签页的限流没测；`wss://` 经真实负载均衡与 TLS 终结没测。
   - **其他**：跨机网络没测；Unity 桌面播放器、移动端（`ClientWebSocket`）没测。
   - 已验证的范围：.NET 用例与 jslib 的 node 检查覆盖握手、请求、推送、心跳、重连、超时与拼帧。Unity 只验连入、握手与靠 `Pump` 的心跳保活：6000.7.0b7 的 WebGL 构建在 Claude 内置浏览器面板（Chromium）里、编辑器 batchmode 里，各保持 100s（服务端 `idle_timeout` 90s）、6 次心跳往返，都通过。
+- **TS 经 WebSocket 连玩家接入：没验证的部分**（2026-11-18，[证据](evidence/ts-gate-client-r1-20261118/README.md)）：
+  - **浏览器与平台**：只在 Claude 内置浏览器面板（Chromium 156）里冒烟过连接、握手与心跳保持 100s（`idle_timeout` 90s）；Safari、Firefox、手机浏览器没测；真实后台标签页的限流与冻结没测（node 用例用可冻结的计时器模拟）；`wss://` 经真实负载均衡与 TLS 终结没测；跨机网络没测。
+  - **微信 / 抖音小游戏**：没有传输实现（D7 以后做，只留了 `GateTransport` 接口）；小游戏里的 `BigInt`、`wx.connectSocket` 的 1 MiB 帧没核实。
+  - **还没做的功能**：自身视图同步（第 2 轮；Sync 推送目前交给 `unhandledPush`）、配置表的 TS 读取（第 3 轮；`client sync --lang ts` 暂不同步配置表）、Lockstep（以后，D10）、Cocos Creator / Laya 工程接入。
+  - 已验证的范围：node 用例（金样、假玩家接入、假计时器、protobuf）与 Go 驱动的 node 进程对真实玩家接入（直连与独立 Gate）覆盖握手、请求、推送、校时、心跳、超时、重连与冻结后恢复；`roost generate` 的 ts 导出用真 protoc 31.1 + protoc-gen-es 2.17.0 生成并用 tsc 与 SDK 一起编译通过。
 - **同一 SessionID 跨 Gate**：C++ 独立客户端进程经真实 TCP / NATS 已验先 A 后 B 与迟到 Bind 拒绝；Gate / Game 仍同 Go 测试进程。Unity Editor / Player、IL2CPP、Unreal 与真实分机重连未验。C++ protobuf 已用 libprotoc 36.2 跑 8 / 8 CTest，不再列“没有 protoc 未跑”。见[原生验收](evidence/known-limits-remaining-20261114/native-acceptance.md)。
 
 ### 验收与运维（遗留）

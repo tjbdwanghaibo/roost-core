@@ -1,9 +1,64 @@
-# @roost/relay-client：开房间场景的 TS SDK（浏览器）
+# @roost/client：浏览器 TS SDK
 
-lobby 的 HTTP 调用（`LobbyClient`，用 `fetch`）、relay 的 WebSocket 连接（`RelayClient`，含换 host）与 Web 端房主辅助（`WebHost`）。方案 FEATURE-2026-11-16-lobby-relay §4.6、§4.7；relay 现行契约见 [RELAY](../../docs/framework/RELAY.md)；三份 SDK 的共同说明见 [client/README](../README.md#开房间-sdklobby--relay)。运行时没有依赖；`ws` 只在 node 测试里代替浏览器的全局 `WebSocket`。
+一个包、按子路径导入（维护者 2026-11-18 D1，方案 [FEATURE-2026-11-18-ts-gate-client](../../docs/maintenance/FEATURE-2026-11-18-ts-gate-client.md)）：
+
+| 子路径 | 做什么 | 运行时依赖 |
+|---|---|---|
+| `@roost/client/gate` | 连玩家接入（Gate / game 的玩家入口）：RS v2 帧、带连接代号的握手、心跳、超时、自动重连、请求 / 应答、推送、校时 | 无 |
+| `@roost/client/protobuf` | 用 protobuf-es 生成的 schema 收发业务消息（`roost generate` 的 `client_export` 声明 `ts` 时导出 `*_pb.ts`） | `@bufbuild/protobuf` 2.17.0（peer，精确版本） |
+| `@roost/client/relay` | 开房间：lobby 的 HTTP 调用（`LobbyClient`）、relay 的 WebSocket 连接（`RelayClient`，含换 host） | 无 |
+| `@roost/client/web` | Web 端房主辅助（`WebHost`、Worker 里的规则循环） | 无 |
+| `@roost/client` | 根路径：gate、relay、web 全部导出（不含 protobuf，免得只用 relay 的工程也要装 `@bufbuild/protobuf`） | 无 |
+
+三份 SDK（C#、Go、TS）的共同说明见 [client/README](../README.md)；帧格式同 [client/wire](../wire/)。只在浏览器里跑过 Chromium 内核（Claude 内置浏览器面板，见“浏览器冒烟”）；Safari、Firefox、手机浏览器与小游戏没有验证过（KNOWN-LIMITS）。
+
+**交付**：不发 npm（D2）。在仓库里 `cd client/ts && npm ci && npm run build && npm pack`，把得到的 `roost-client-<版本>.tgz` 放进游戏工程（或 `"@roost/client": "file:../roost-core/client/ts"`）；用 protobuf 子路径的工程另装 `@bufbuild/protobuf@2.17.0`（精确版本，与导出的 `*_pb.ts` 一致，`roost client sync --lang ts` 的报告会提示）。要求 node 22 以上（只在构建 / 测试时；`@bufbuild/protoc-gen-es` 2.17.0 要求 node 22）。
+
+## 连玩家接入（gate 子路径）
 
 ```ts
-import { ALL, LobbyClient, RelayClient } from "@roost/relay-client";
+import { ConnectionState, GameClient } from "@roost/client/gate";
+import { request, subscribe } from "@roost/client/protobuf";
+import { MessageIds } from "./protocol/message_ids.js";          // roost client sync --lang ts 拷来的
+import { ErrorCodes } from "./protocol/error_codes.js";
+import { PingRequestSchema, PingResponseSchema, ScoreNoticeSchema } from "./protocol/protocol_pb.js";
+
+const client = new GameClient({
+  webSocketUrl: entry.gate,                 // 完整的 ws:// / wss:// 地址，由调用方给（portal 的 enter 结果，"transport":"ws"）
+  autoReconnect: true,                      // 缺省 false
+});
+client.on("stateChanged", (state) => show(ConnectionState[state]));
+client.on("reconnected", (r) => r.error ? warn(r.error) : resync());   // 重连不重发业务请求
+client.on("error", (e) => console.error(e));                           // 回调里抛出的错误
+subscribe(client, MessageIds.PushScore, ScoreNoticeSchema, (notice) => show(notice.score));  // 每个推送号一个订阅者
+
+await client.connection.connect(async (signal) => (await portal.enter(signal)).ticket);   // 每次握手（含自动重连）取一次票
+request(client, MessageIds.RequestPing, MessageIds.ResponsePing, PingRequestSchema, { nonce: 1n }, PingResponseSchema,
+  (response) => { if (response.code === ErrorCodes.HelloBusy) retryLater(); },
+  (error) => warn(error));                 // GateTimeoutError / GateClosedError / GateAbortedError / GateProtocolError
+client.dispose();
+```
+
+- **两层**：`Connection` 管连接（`connect(ticket | 取票函数, signal?)`、`requestAsync`、`beginRequest`、`notify`、`probeClockAsync`、`disconnect`、`dispose`，状态 `state` / `lastError` / `connectionVersion` / `heartbeatRoundTrips`，事件 `stateChanged` / `reconnected` / `push` / `error`）；`GameClient` 在它上面做业务入口（`subscribe`、`request`、`probeClock`，事件 `error` / `stateChanged` / `reconnected` / `unhandledPush`）。只要原始字节时直接用 `Connection`，或 `GameClient` 的 `subscribe` / `request` 自己传解析函数。
+- **回调时机**：浏览器是单线程事件循环，帧到了就在 WebSocket 的 `message` 事件里同步分发，不需要 C# 那样的 `Pump`（D6）。同一条 WebSocket 消息里的应答与推送，回调形式（`GameClient.request`、protobuf 的 `request`）严格按线上顺序调用；Promise 形式（`requestAsync`）的后续在这条消息的推送都交出去之后才运行（微任务）。推送回调里 `disconnect()` 后，这条消息剩下的帧丢弃。
+- **握手**：第一帧是认证信封 `0x00 'G'` + 8 字节连接代号 + 票据（票据 1～8182 字节 UTF-8，不能以 NUL 开头），连接代号取 `max(上次 + 1, Date.now() × 10⁶)`（bigint），同一个 `Connection` 的每次握手严格递增，Gate 据此丢弃旧连接的迟到握手；握手应答必须是空的成功控制帧。
+- **心跳**：缺省每 15s 一次（从上一次应答算起），独占一个槽位、不占请求名额；`heartbeatTimeoutMs`（缺省 5s）内没应答就当断线。不心跳会被 `idle_timeout`（缺省 90s）断开。后台标签页的计时器被浏览器限流或冻结时心跳跟着停，回到前台靠重连（KNOWN-LIMITS）。
+- **超时与上限**：`connectTimeoutMs`（取票 + 握手，缺省 10s）、`requestTimeoutMs`（缺省 10s）、`maxPendingRequests`（缺省 64，超出直接失败）、`maxPayloadBytes`（缺省 1 MiB，收发两向，与 Gate 的 `max_payload_bytes` 一致）。
+- **重连**：`autoReconnect` 开着时，连接意外断开后按 `reconnectInitialDelayMs`（1s）起、翻倍、`reconnectMaxDelayMs`（30s）封顶、乘 0.5～1 的抖动退避，最多 `maxReconnectAttempts`（8）次；每次重新取票、换新的连接代号；每次尝试发一个 `reconnected` 事件（`attempt`、`connectionVersion`、`error`、`willRetry`）。没完成的请求在断开时以 `GateClosedError` 失败，不自动重发。
+- **校时**：`probeClockAsync` / `GameClient.probeClock` 发 `RCN1` 探测，得到 `ClockSample`（本地发出 / 收到、服务端收到 / 发出）；`NetworkClock` 与 C# 同一算法（取往返最小的样本，`ready`、`roundTrip`、`uncertainty`）。
+- **只走 WebSocket**（D8）：地址必须是 `ws://` / `wss://` 开头的完整 URL；页面来源要在 Gate 的 `allowed_origins` 里（为空时所有浏览器都被拒，[GATEWAY §6](../../docs/framework/GATEWAY.md)）。传输层是 `GateTransport` 接口（`connect` / `send` / `close` / `onData` / `onClose`），缺省 `BrowserWebSocketTransport`；微信、抖音小游戏的传输以后按这个接口加（D7），上层不变。
+- **还没有**：自身视图同步（Sync 推送目前交给 `unhandledPush`，第 2 轮）、配置表读取（第 3 轮）、Lockstep（以后，D10）。
+
+## protobuf 子路径
+
+`request(client, 请求号, 应答号, 请求 schema, 请求消息, 应答 schema, received, failed, signal?)`、`requestAsync(connection, …)`、`subscribe(client, 推送号, schema, received)`、`notify(connection, 消息号, schema, 消息)`。schema 是 protobuf-es 生成的 `XxxSchema`；请求消息可以是普通对象（`MessageInitShape`）。64 位整数是 `bigint`（D5），以 int64 为键的 map 键是字符串。导出由服务端工程的 `roost generate` 完成（`client_export.languages` 写 `ts`，见 `roost help client`），游戏工程用 `roost client sync --from <服务端> --lang ts --to <目录>` 拷进来：`protocol_pb.ts`、`dao_sync_pb.ts`、`message_ids.ts`（`MessageIds` 常量对象）、`error_codes.ts`（`ErrorCodes` 常量对象与 `errorCodeName` / `errorCodeMessage`）。
+
+## 开房间（relay 子路径）
+
+lobby 的 HTTP 调用（`LobbyClient`，用 `fetch`）、relay 的 WebSocket 连接（`RelayClient`，含换 host）；Web 端房主辅助（`WebHost`）在 `@roost/client/web`。方案 FEATURE-2026-11-16-lobby-relay §4.6、§4.7；relay 现行契约见 [RELAY](../../docs/framework/RELAY.md)；三份 SDK 的共同说明见 [client/README](../README.md#开房间-sdklobby--relay)。2026-11-18 起包名从 `@roost/relay-client` 改为 `@roost/client`，从 `@roost/client/relay` 导入（不留旧名，D1）。
+
+```ts
+import { ALL, LobbyClient, RelayClient } from "@roost/client/relay";
 
 const lobby = new LobbyClient("https://lobby.example.com", gt2);               // 跨域要 lobby.cors_origins 放行页面 Origin
 const ticket = await lobby.createRoom({ game: "party", mode: "duel" });        // transport 缺省 ws；成员用 joinRoom
@@ -27,7 +82,7 @@ await client.pushSnapshot();         // 房主：手动推一份快照（关键�
 const { roomGone } = await client.leave(); // 经 lobby 离开、close；房间已关（lobby 答 room_not_found）也算离开成功，roomGone 为 true
 ```
 
-## 帧、心跳与重连
+### relay：帧、心跳与重连
 
 - **帧**：每条 WebSocket 二进制消息发一帧；收的时候按字节流解（`FrameReader`），一条消息几帧、一帧拆在几条消息里都能读。编码与 [relay-packets.json](../spec/relay-packets.json) 逐字节相同（含换 host 的 13 条）。
 - **收帧上限**：`max(maxPayloadBytes, snapshotMaxBytes + 64 KiB)`。`YouAreHost` 可以比 relay 的 `max_payload_bytes` 大（带满快照加成员名单），`snapshotMaxBytes` 要等于 relay 的 `snapshot_max_bytes`（缺省 256 KiB）。
@@ -35,7 +90,7 @@ const { roomGone } = await client.leave(); // 经 lobby 离开、close；房间�
 - **重连**：`rejoin()` / `reconnect.maxAttempts` 先调 lobby 的 join 拿新令牌。连接自己断了、relay 判空闲超时、`token_rejected`、`lobby_unavailable`（relay 向 lobby 验权失败）按退避重试；被踢、`lobby_rejected`、房间关闭、被顶号、离开、relay 停机都不重连。被踢的人：lobby 的 join 答 403 `kicked`；拿没过期的旧令牌直连，同一个 relay 上答 `Closed{kicked}`（relay 自己的踢出记录），relay 重启后才是 `Closed{lobby_rejected}`，两种都终止自动重连。
 - **只连 WebSocket**：ticket 的地址不是 `ws://` / `wss://` 时 `connect` 报错。
 
-## 换 host
+### relay：换 host
 
 | relay 发来 | SDK 做什么 | 回调 |
 |---|---|---|
@@ -120,19 +175,23 @@ serveRules(new MyRules(), { stepMs: 50 });
 ## 测试
 
 ```sh
-source ~/.roost-it/roost-dataengine-it/env.sh
-cd client/ts && npm ci && npm test
+source ~/.roost-it/roost-dataengine-it/env.sh      # relay 真实对端的房间目录用 Redis；没有时用内存
+./scripts/test-client-ts.sh                        # 仓库根目录：npm ci（需要时）、build、npm test、Go 集成两项
+ROOST_TS_FULL=1 ROOST_PROTOC=<protoc 31.1> ./scripts/test-client-ts.sh   # 另跑真实工具链（protoc + protoc-gen-es + tsc）
 ```
 
 `npm test` 先 `tsc`，再用 node 自带的 test runner 跑：
 
-- 金样（27 条逐字节）与拒绝规则、字节流解码、压缩往返与互通；
+- gate：RS v2 金样（[packets.json](../spec/packets.json)，与 Go、C# 同一份；认证信封、校时样本）与拒绝规则；对假玩家接入（`ws` 起的 WebSocket 服务）的连接、握手（连接代号递增）、心跳与心跳超时、连接 / 请求超时、请求名额、自动重连（退避、重新取票、`reconnected` 事件）、推送顺序与推送回调里断开、迟到应答丢弃、非空握手应答失败；假计时器下的心跳节奏与超时；protobuf 子路径对 dao 生成器金样 proto 的收发（`test/gen/dao_sync_pb.ts` 由 protoc 31.1 + protoc-gen-es 2.17.0 生成，完整模式核对它没过期）；
+- relay：金样（27 条逐字节）与拒绝规则、字节流解码、压缩往返与互通；
 - 假 relay 下的换 host（`YouAreHost` → `HostReady` → `HostChanged`、转交、候选、快照间隔与 seq 接续、房主心跳、收帧上限、`lobby_rejected` / `lobby_unavailable` / 403 `kicked` 的重连）；
 - Web 辅助（补帧与上限、真实 `MessageChannel` 上的 Worker 代理、假 `document` 下的让出、假 `sessionStorage` 下的刷新恢复）；
 - 与 Go 互通：测试临时编一个只用 `compress/flate` 的小程序，TS 压的 Go 解得开、Go 压的 TS 解得开；
 - 真实对端：`go test -c ./client/relay` 并以 `ROOST_RELAYPEER_SERVE=1` 起 relay 与 lobby（`ROOST_RELAYPEER_BIN` 指向事先编好的对端时直接用它），经 `ws` 包跑 lobby 错误、房间生命周期、断线重连、心跳，以及主动转交、房主断线后按候选换 host 并交出快照、宽限期内刷新回来仍是房主、空闲房主 5s 内不被换掉、被踢与离开后的旧令牌、最后一人离开（房间已关时离开算成功）、开局后掉线重连回原座与踢离线座位、验权故障注入（`/harness/admission` 的 down 退避重试、reject 停止）。
 
-需要本机 Go 工具链。没有在真实浏览器里跑过。
+需要本机 Go 工具链。relay 与 web 子路径的自动用例只在 node 里跑，没有在真实浏览器里跑过；gate 子路径跑过浏览器冒烟（见最后一节）。
+
+Go 集成（`infra/network/gateway`，`ROOST_TS_GATE_DRIVER` 指向 `test/gate-driver.mjs`）：`TestTheTSClientWorksOverWebSocket` 连真实玩家接入，`…ThroughAStandaloneGate` 经独立 Gate；两项都核对请求 / 应答、推送、校时、页面冻结超过 `idle_timeout` 后自动重连且连接代号递增。`test/mutate.mjs`、`test/mutate-integration.sh` 是变异检查（改坏一处、用例必须变红），证据见 [evidence/ts-gate-client-r1-20261118](../../docs/maintenance/evidence/ts-gate-client-r1-20261118/README.md)。
 
 ## 浏览器演示
 
@@ -144,3 +203,13 @@ node demo/serve.mjs            # 起对端（真实 relay + lobby），发静态
 ```
 
 第一个页面“建房”，其余页面填房间号“加入”；“点一下”的计数由房主页 Worker 里的规则（`demo/rules.js`）维护并广播。页面上显示规则循环在不在跑、最近一次接手（epoch、来源、快照 seq）、最近一次快照、tick 与它多久前更新、广播者槽位。可以看：手动“转交”、把房主页切到后台 5s（让出给候选；后台页仍报 visible 的环境用“模拟隐藏”按钮）、刷新房主页（5s 内回来仍是房主，计数从 sessionStorage 恢复）、关掉房主页（5s 后成员当上新房主，计数从 relay 存的快照恢复）。
+
+## 浏览器冒烟（gate）
+
+```sh
+cd client/ts && npm ci && npm run build
+node demo/serve-gate-smoke.mjs   # 起玩家接入对端（infra/network/gateway 的 TestServeAWebSocketPlayerAccessForTheBrowserSmoke），发静态文件
+# 浏览器开 http://127.0.0.1:8791/ ，自动跳到 demo/gate-smoke.html?ws=<对端>&hold=<idle_timeout + 10s>
+```
+
+页面只做连接、握手、心跳保持超过 `idle_timeout`（缺省 90s，页面保持 100s），日志以 `SMOKE` 开头，最后一行 `SMOKE PASS held 100s on one connection, N heartbeat round trips` 或 `SMOKE FAIL …`。保持期间页面要在前台：后台标签页的计时器被浏览器限流，心跳会停。

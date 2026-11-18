@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roost gate 冒烟</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #222; --muted: #777; --line: #ddd; --pass: #15803d; --fail: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #16181d; --fg: #e6e6e6; --muted: #999; --line: #333; --pass: #4ade80; --fail: #f87171; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; max-width: 760px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  #result { font-weight: 600; }
+  #result.pass { color: var(--pass); }
+  #result.fail { color: var(--fail); }
+  #log { font: 12px/1.4 ui-monospace, monospace; border: 1px solid var(--line); padding: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<h1>@roost/client gate 浏览器冒烟</h1>
+<p>连接 → 握手 → 心跳保持超过玩家接入的 idle_timeout。结果：<span id="result">运行中…</span></p>
+<div id="log"></div>
+<script type="module">
+// 浏览器冒烟（FEATURE-2026-11-18-ts-gate-client §8.4）：页面由 demo/serve-gate-smoke.mjs 发出，对端是
+// infra/network/gateway 的 TestServeAWebSocketPlayerAccessForTheBrowserSmoke（缺省配置 + WebSocket）。
+// 参数：?ws=<玩家接入的 WebSocket 地址>&hold=<秒，idle_timeout + 10>。日志以 SMOKE 开头，最后一行 SMOKE PASS / SMOKE FAIL。
+import { Connection, ConnectionState } from "../dist/gate/index.js";
+
+const logBox = document.getElementById("log");
+const result = document.getElementById("result");
+function log(line) {
+  const text = "SMOKE " + line;
+  console.log(text);
+  logBox.textContent += text + "\n";
+}
+function finish(pass, detail) {
+  log((pass ? "PASS " : "FAIL ") + detail);
+  result.textContent = (pass ? "PASS " : "FAIL ") + detail;
+  result.className = pass ? "pass" : "fail";
+  document.title = (pass ? "PASS" : "FAIL") + " Roost gate 冒烟";
+}
+
+const params = new URLSearchParams(location.search);
+const ws = params.get("ws");
+const hold = Number(params.get("hold") ?? "0");
+if (!ws || !(hold > 0)) {
+  finish(false, "missing ?ws=<player access WebSocket url>&hold=<seconds>");
+} else {
+  const connection = new Connection({ webSocketUrl: ws });
+  const states = [];
+  connection.on("stateChanged", (state) => states.push(ConnectionState[state]));
+  connection.on("reconnected", (r) => log(`reconnected attempt=${r.attempt} error=${r.error?.message ?? "none"}`));
+  try {
+    const started = performance.now();
+    await connection.connect("browser-smoke");
+    const version = connection.connectionVersion;
+    log(`connected ${ws} in ${Math.round(performance.now() - started)}ms (handshake ok, state ${ConnectionState[connection.state]}, connection version ${version})`);
+    log(`holding ${hold}s (idle_timeout + 10s), heartbeat every 15s`);
+    for (let elapsed = 0; elapsed < hold; elapsed += 5) {
+      await new Promise((ok) => setTimeout(ok, 5000));
+      if (connection.state !== ConnectionState.Ready || connection.connectionVersion !== version) {
+        break;
+      }
+      log(`t=${elapsed + 5}s state ${ConnectionState[connection.state]} heartbeats ${connection.heartbeatRoundTrips}`);
+    }
+    const beats = connection.heartbeatRoundTrips;
+    const minimum = Math.floor((hold * 1000) / 15000) - 1;
+    const stayed = connection.state === ConnectionState.Ready && connection.connectionVersion === version && states.join(",") === "Connecting,Ready";
+    if (stayed && beats >= minimum) {
+      finish(true, `held ${hold}s on one connection, ${beats} heartbeat round trips`);
+    } else {
+      finish(false, `state ${ConnectionState[connection.state]}, states ${states.join(",")}, version ${connection.connectionVersion}/${version}, heartbeats ${beats} (want >= ${minimum}), last error ${connection.lastError?.message ?? "none"}`);
+    }
+  } catch (error) {
+    finish(false, `connect failed: ${error?.message ?? error}`);
+  } finally {
+    connection.dispose();
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+C1 RED: protoc-gen-es 版本核对放过任何版本 (codegen/internal/roost/client_export.go; go test -run 'TestClientExportProtocGenEsVersion' ./codegen/internal/roost)
+    --- FAIL: TestClientExportProtocGenEsVersion (1.62s)
+    client_export_test.go:678: wrong protoc-gen-es version: <nil>
+C2 RED: protoc 调用少了 import_extension=js（假插件） (codegen/internal/roost/client_export.go; go test -run 'TestGenerateClientExportTS' ./codegen/internal/roost)
+    --- FAIL: TestGenerateClientExportTS (1.55s)
+    client_export_test.go:605: protocol_pb.ts is not protoc-gen-es (target=ts, import_extension=js) over the exported proto:
+C3 SURVIVED（等价变异）: 同一变异在真实工具链下 (codegen/internal/roost/client_export.go; go test -run 'TestClientExportTSWithTheRealToolchain' ./codegen/internal/roost)
+C4 RED: 两种语言都声明时 sync 不要求 --lang（默认取第一种） (codegen/internal/roost/client_sync.go; go test -run 'TestClientSyncTS' ./codegen/internal/roost)
+    --- FAIL: TestClientSyncTS (0.97s)
+    client_export_test.go:730: sync without --lang while both are declared: <nil>
+C5 RED: client_export 语言表去掉 ts (codegen/internal/roost/client_export.go; go test -run 'TestGenerateClientExportTS|TestClientSyncTS|TestClientExportSpecValidation' ./codegen/internal/roost)
+    --- FAIL: TestClientExportSpecValidation (0.00s)
+    client_export_test.go:63: validate({Protocol:<nil> Dir: Languages:[typescript] Protoc: CSharp:<nil> TS:<nil> Config:<nil> projectRoot:}) = client_export.languages has unsupported language "typescript"; supported: csharp, want "unsupported language \"typescript\"; supported: csharp, ts"
+    client_export_test.go:74: validate({Protocol:<nil> Dir: Languages:[ts] Protoc: CSharp:<nil> TS:<nil> Config:<nil> projectRoot:}) = client_export.languages has unsupported language "ts"; supported: csharp
+    client_export_test.go:74: validate({Protocol:<nil> Dir: Languages:[csharp ts] Protoc:tools/protoc CSharp:<nil> TS:0x7c57813e3f0 Config:<nil> projectRoot:}) = client_export.languages has unsupported language "ts"; supported: csharp
+    --- FAIL: TestClientSyncTS (0.79s)
+    client_export_test.go:726: client_export.languages has unsupported language "ts"; supported: csharp
+C6 RED: TS 消息号去掉 as const（字面量类型变 number） (codegen/internal/protocol/client_export.go; go test -run 'TestExportClientIDs' ./codegen/internal/protocol)
+    --- FAIL: TestExportClientIDsMatchesCSharpOutput (0.04s)
+    client_export_test.go:56: message_ids.ts:
+
+C3 说明：import_extension 只影响生成文件之间的相对导入。导出的 protocol.proto 与 dao_sync.proto 互不导入，真 protoc-gen-es 2.17.0
+生成的 *_pb.ts 只导入 @bufbuild/protobuf 与 @bufbuild/protobuf/codegenv2（包导入，没有扩展名问题），所以改成 none 产物逐字节
+不变——这是等价变异，不是漏测。参数本身由 C2（假插件记录 --es_opt）守住；将来 proto 之间出现导入时，真实工具链用例的 tsc
+（NodeNext，要求相对导入带 .js）会直接看出来。
