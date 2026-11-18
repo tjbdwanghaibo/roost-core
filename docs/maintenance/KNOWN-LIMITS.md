@@ -920,6 +920,8 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
 
+- **换服演练 checkpoint 场景在负载下偶发 `CHECKPOINT_BYPASS`**（2026-11-18，尚未确认）：`scripts/test-demo-rehome.sh` 完整七场景在本机负载约 10 时，第七场景（压住 checkpoint 时交出应当等待）报“hand-off returned before checkpoint release”。account 改造前的基线 `878134b4` 同样复现一次，改造后 main 上完整七场景复跑一次通过、单跑 checkpoint 场景两次通过，与 account 改造无关；是交出确实没等 checkpoint，还是演练的压住时机在前一场景之后没有生效，尚未确认。
+
 
 #### account 多游戏：遗留
 
