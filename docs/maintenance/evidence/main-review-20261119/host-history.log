@@ -1,0 +1,8 @@
+bf68b3b8cb4e040ab09eaa6fe3a0970697a05d0d
+input=ws://[2001:db8::1]:7080/ws value="ws://[2001:db8::1]:7080/ws" err=<nil>
+input=ws://2001:db8::1:7080/ws value="ws://2001:db8::1:7080/ws" err=<nil>
+input=ws://192.0.2.300:7080/ws value="ws://192.0.2.300:7080/ws" err=<nil>
+ba1585356f39bdffc2bdecd864d1dc4aea4bd7e3
+input=ws://[2001:db8::1]:7080/ws value="ws://[2001:db8::1]:7080/ws" err=<nil>
+input=ws://2001:db8::1:7080/ws value="ws://2001:db8::1:7080/ws" err=<nil>
+input=ws://192.0.2.300:7080/ws value="" err=the websocket address: host "192.0.2.300" ends in a number, so browsers read it as an IPv4 address, and it is not one: the last part "300" is 256 or more

@@ -1,0 +1,2 @@
+cancelBefore=False status=Canceled open=1 close=1 polls=0
+cancelBefore=True status=WaitingForActivation open=1 close=0 polls=0

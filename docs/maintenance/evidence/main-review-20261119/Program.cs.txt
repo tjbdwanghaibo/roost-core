@@ -1,0 +1,38 @@
+using System.Diagnostics;
+using Roost.Client.Relay;
+using Roost.Unity;
+
+foreach (var cancelBefore in new[] { false, true })
+{
+    using var cancellation = new CancellationTokenSource();
+    var js = new CountingSocket();
+    using var relay = new RelayClient(null, new RelayClientOptions
+    {
+        Game = "party", Transport = RelayTransport.Ws, PumpDriven = true,
+        ConnectTimeout = TimeSpan.FromMilliseconds(100),
+        TransportFactory = () => new BrowserWebSocket(js)
+    });
+    var ticket = new RoomTicket(new RoomInfo(), "ws://relay.test/ws", "test", 0);
+    if (cancelBefore) cancellation.Cancel();
+    var task = relay.ConnectAsync(ticket, cancellation.Token);
+    if (!cancelBefore) cancellation.Cancel();
+    var timer = Stopwatch.StartNew();
+    while (timer.ElapsedMilliseconds < 300)
+    {
+        BrowserWebSocket.PollAll();
+        relay.Pump();
+        Thread.Sleep(2);
+    }
+    Console.WriteLine($"cancelBefore={cancelBefore} status={task.Status} open={js.Opens} close={js.Closes} polls={js.Polls}");
+}
+
+sealed class CountingSocket : BrowserWebSocket.IBrowserSocket
+{
+    public int Opens, Closes, Polls;
+    public int Open(string url) { Opens++; return 1; }
+    public int State(int id) { Polls++; return BrowserWebSocket.Open; }
+    public void Close(int id) { Closes++; }
+    public int Buffered(int id) => 0;
+    public int Send(int id, byte[] data, int length) => 1;
+    public int Receive(int id, byte[] buffer, int length) => 0;
+}

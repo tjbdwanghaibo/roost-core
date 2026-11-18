@@ -1,5 +1,9 @@
 # 当前已知限制与验证边界
 
+## 2026-11-19　main 增量复验
+
+main `ba1585356` 上，前导零 Origin 端口、TS Gate 主动断开、pretag 的 SDK 脚本选择和 portal 越界 IPv4 四项均通过原场景复验。新增确认 Unity relay 收到预先取消的连接请求仍打开浏览器连接、任务挂起（P2），以及 portal 放行缺少方括号的 IPv6 WebSocket 地址（P3）。后者在上轮基线上也存在。[审核报告与验证范围](MAIN-REVIEW-20261119.md)
+
 ## 2026-11-18　v1.56.0 与 main 复验
 
 上轮 05～09 的原场景在 v1.56.0 和 main `bf68b3b8c` 均通过，合服检查已在本机三主节点 Redis Cluster 实测。两个版本均接受带前导零的 Origin 端口，浏览器规范化后预检返回 403。main 新增三项：TS Gate 在 Connecting 回调中主动断开仍继续取票至超时，仅修改 TS SDK 验收脚本会漏选该门，portal 的 WebSocket 地址检查接受浏览器无法解析的越界 IPv4 地址。详见[本轮报告与证据](V156-MAIN-REVIEW-20261118.md)。下节保留为上轮提交的历史结果。

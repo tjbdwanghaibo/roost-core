@@ -1,0 +1,27 @@
+
+added 12 packages in 9s
+
+> @roost/client@0.2.0 build
+> tsc -p tsconfig.json
+
+✔ heartbeats go every interval, the next one is timed from the previous ack (8.077554ms)
+✔ heartbeatIntervalMs 0 sends no heartbeat (1.742002ms)
+✔ the connect timeout covers the ticket and the handshake (2.253374ms)
+✔ disconnect while connecting ends connect at once with GateClosedError, even from the Connecting listener (1.218842ms)
+✔ the request timeout fails the request and keeps the connection (1.416691ms)
+✔ reconnect backs off with jitter, fetches a fresh ticket each attempt and reports every result (4.750287ms)
+✔ a successful reconnect bumps the version; disconnect during backoff stops reconnecting (1.282979ms)
+✔ without autoReconnect a drop ends in Disconnected and the in-flight request fails (0.630152ms)
+✔ a non-empty heartbeat acknowledgement is a protocol error that closes the connection (0.687038ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 340.854625
+{"immediate":false,"time":0,"state":"Disconnected","calls":1,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":false,"time":5000,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":true,"time":0,"state":"Disconnected","calls":0,"aborted":false,"outcome":"GateClosedError"}
+{"immediate":true,"time":5000,"aborted":false,"outcome":"GateClosedError"}

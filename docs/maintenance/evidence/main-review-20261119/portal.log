@@ -1,0 +1,80 @@
+ipv4
+{
+  "files": [
+    {
+      "path": "configs/service/config.account.ipv4.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "ok"
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "ok",
+  "exit_code": 0
+}
+exit=0
+invalid-v4
+{
+  "files": [
+    {
+      "path": "configs/service/config.account.invalid-v4.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "failed",
+      "cross_mod_errors": [
+        "2026/11/18 20:16:35 ERROR server exit err=\"mod modules.account: module portal: config: portal.websocket_servers.1: the websocket address: host \\\"192.0.2.300\\\" ends in a number, so browsers read it as an IPv4 address, and it is not one: the last part \\\"300\\\" is 256 or more\""
+      ]
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "cross_mod_errors",
+  "exit_code": 3
+}
+2026/11/18 20:16:35 config check: cross_mod_errors (exit 3); details above
+exit=3
+ipv6
+{
+  "files": [
+    {
+      "path": "configs/service/config.account.ipv6.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "ok"
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "ok",
+  "exit_code": 0
+}
+exit=0
+bare-v6
+{
+  "files": [
+    {
+      "path": "configs/service/config.account.bare-v6.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "ok"
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "ok",
+  "exit_code": 0
+}
+exit=0
+ws://192.0.2.30:7080/ws ws://192.0.2.30:7080/ws
+ws://192.0.2.300:7080/ws ERR_INVALID_URL
+ws://[2001:db8::1]:7080/ws ws://[2001:db8::1]:7080/ws
+ws://2001:db8::1:7080/ws ERR_INVALID_URL

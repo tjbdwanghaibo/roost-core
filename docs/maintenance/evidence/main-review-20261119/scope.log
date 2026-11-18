@@ -1,0 +1,5 @@
+PASS pretag-scope selection
+=== RUN   TestPretagScopeSelfTest
+--- PASS: TestPretagScopeSelfTest (0.36s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core	0.365s

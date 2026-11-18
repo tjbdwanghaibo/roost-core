@@ -1,0 +1,18 @@
+PASS weak heartbeat heartbeat timeout
+PASS weak timeout
+PASS weak truncated peer closed
+PASS weak overflow event queue overflow
+PASS weak send_stall socket send timeout: result unknown
+round 1 passed
+PASS weak heartbeat heartbeat timeout
+PASS weak timeout
+PASS weak truncated peer closed
+PASS weak overflow event queue overflow
+PASS weak send_stall socket send timeout: result unknown
+round 2 passed
+PASS weak heartbeat heartbeat timeout
+PASS weak timeout
+PASS weak truncated peer closed
+PASS weak overflow event queue overflow
+PASS weak send_stall socket send timeout: result unknown
+round 3 passed

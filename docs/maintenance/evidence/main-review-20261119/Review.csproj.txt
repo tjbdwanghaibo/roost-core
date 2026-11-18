@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Roost.Client" HintPath="$(RuntimePath)/Roost.Client.dll" />
+    <Reference Include="Roost.Client.Relay" HintPath="$(RuntimePath)/Roost.Client.Relay.dll" />
+    <Compile Include="$(RuntimePath)/BrowserWebSocket.cs" Link="BrowserWebSocket.cs" />
+  </ItemGroup>
+</Project>
