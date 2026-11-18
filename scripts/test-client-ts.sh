@@ -23,8 +23,12 @@ if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
   exit 0
 fi
 
-if [[ ! -d node_modules ]]; then
+# node_modules 是按某一版 package-lock.json 装的：锁文件变了（新增或升级依赖）就重新 npm ci，
+# 只看目录在不在会拿旧依赖去编译（2026-11-18 发 v1.57.0 时缺 @bufbuild/protobuf）。
+lock_sum="$(shasum -a 256 package-lock.json | cut -d' ' -f1)"
+if [[ ! -d node_modules || "$(cat node_modules/.roost-lock-sha256 2>/dev/null)" != "$lock_sum" ]]; then
   npm ci --no-audit --no-fund
+  echo "$lock_sum" > node_modules/.roost-lock-sha256
 fi
 echo "test-client-ts: build + tests ($(node --version))"
 npm run build
