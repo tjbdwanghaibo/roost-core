@@ -565,6 +565,14 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
 - **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player_enter_game.go`、`player_enter_create.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
 
+#### account：一套服务多个游戏（2026-11-18）
+
+账号号按游戏分开（维护者 2026-11-18），契约见[服务篇 account 一节](../framework/guide/09-services.md)，[证据](evidence/account-per-game-20261118/README.md)。
+
+- **账号号顺序发号**：全局计数器十进制递增，相邻号可被猜到；号在第一次登录某个游戏时才分配，理论上能从分配时间粗略对上同一个人。需要时可改为随机化（本轮未做）。
+- **只有身份级封号**：封号作用于（渠道, open id），所有游戏一起封；按游戏封号未做。
+- **首登并发会留下没人引用的账号记录**：首登先插入账号记录、再写身份映射，并发首登的输家或首登中途停下，留下一条无人引用的账号记录，不删除（不影响登录结果）。
+
 #### 大厅 lobby 与转发 relay（2026-11-17）
 
 房主的客户端做 host 的开房间联机（未发版）：方案 [FEATURE-2026-11-16-lobby-relay](FEATURE-2026-11-16-lobby-relay.md)（§6 是维护者的 12 条决定），契约 [LOBBY](../framework/LOBBY.md)、[RELAY](../framework/RELAY.md)，用法见 roost-genre compose §1B。没做到位的部分见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
@@ -912,6 +920,10 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
 
+
+#### account 多游戏：遗留
+
+- **区服表与 `account.games` 不关联**（2026-11-18，尚未确认是否需要）：多个游戏共用一套 account 时，区服 / 角色按账号号天然分开，但“哪个服属于哪个游戏”没有声明与校验；拿 A 游戏的账号去 B 游戏的服换进服票据是否应拒绝，待定。[证据](evidence/account-per-game-20261118/README.md)
 
 #### 大厅 lobby 与转发 relay：遗留
 

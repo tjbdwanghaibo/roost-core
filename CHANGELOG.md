@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **account：一套服务多个游戏，账号号按游戏分开**（维护者 2026-11-18）：同一个人（渠道 + open id）在每个游戏里是不同的账号号，由 account 的全局计数器发（十进制、顺序，新存储键 `<key_prefix>:account_id`）；客户端、lobby、relay 与游戏代码只见到这个游戏的号，看不到别的游戏的号与“是同一个人”。身份级记录（新存储 `Config.Identities`）存各游戏的号、封号、凭证版本与 gt2 代数（各游戏共用：改密码在任一游戏登录后，所有游戏的 gt2 都失效）。`Login` 要带游戏（`Identity.Game`，portal 的 `game` 字段），不带时用 `account.default_game`，只配一个游戏时用它；`account.games` 必填。账号票据 at1 → at2（带游戏），`IssueGameToken` 只给票据自己的游戏刷新，跨游戏答 560120。封号改为身份级：`Admin.SetIdentityBanned`，login 模块的 accountctl 新增 `ban` / `unban -account <账号号> -note <备注>`（login 场景 33 → 34）。`Account` 去掉 `Channel` / `OpenID` / `Banned` / `GameTokenGeneration` / `CredentialVersion`，多 `Game`；`Identity.AccountID()` 删除。新工程的 `config.account.yaml` 写上工程名的游戏。顺带修复：票据签名改为严格 base64 解码（宽松解码时同一张票据有多种写法都能验过）。
+  - **升级**：清空 account 的存储（Redis 前缀下全部键），先停旧进程再起新进程；已生成的工程手工给 account 配置补 `account.games`，自己构造 `svcaccount.Config` 的代码补 `Identities`、`AccountIDs`（`NewRedisStores` 已带）与 `Games`。[证据](docs/maintenance/evidence/account-per-game-20261118/README.md)
 - 测试：`scripts/perf/gate-mixed.sh` 的 Gate 负载夹具把丢拍按原因分开（`drop_reasons`：`client_beat_lag` / `deadline_expired` / `admission_reject` / `heartbeat_skipped_beat` / `slow_round_trip`，合计等于 Dropped），并输出 `drop_detail`、`drop_events` 与负载区间计时 `load_timers`；`result.json` 不再有 `drop_reasons.client_pacing`，读它的脚本改为按合计校验。
 - 测试：物理房间长稳 TSV 追加 `loop_mean` / `submit_mean` / `poll_mean` / `timer_late_mean` / `loadavg1` 五列，用于把交付频率拆成客户端循环的各段。
 - **生成物要求的最低 core 提到 v1.55.0**（2026-11-18）：生成的 Remote 登记对 `ownership=shared` 的 kind 调 `entity.DeclareRemoteSharedKind`（facebook、team），game-demo 机器人场景写 `group`，mailbox+rehome 读 mail `Summary` 的 `BroadcastsBehind`。
