@@ -117,7 +117,7 @@ pretag 除 build / vet / tidy / `go test ./...` / 生成物漂移 / C# SDK 外�
 
 - Go 测试：改动所在的包加上依赖它们的包（含测试依赖）；根包（文档链接、提交引用等门禁）总是跑。文档与发版提交自己改的文件不往下传。
 - 生成工程脚本与 `codegen/internal/roost`：改了 `codegen/`、`modules/`、`demo/`、`scripts/testdata/`（Markdown 除外），或改动的非测试包是生成代码会 import 的（模板、模块、demo、夹具里出现的本仓库 import 路径的依赖闭包）时全部跑；否则只跑自己被改过的脚本。只改 `_test.go` 不影响生成工程。
-- C# / TS SDK：改了对应 SDK、`client/spec/`、`client/wire/`（C# 还有 `service/relay/`）才跑。
+- C# / TS SDK：改了对应 SDK 或它的用例连的对端才跑。共同对端是 `client/spec/`、`client/wire/`、`service/relay/`、`service/lobby/`、`infra/network/wsconn/`；C# 另有 `infra/network/gateway/`（WebSocket 与跨 Gate 用例在那里，由 `test-client-dotnet.sh` 带 DLL 跑），TS 另有 `client/relay/`。
 - 整跑：改了 `go.mod` / `go.sum` / `scripts/pretag.sh` / `scripts/release.sh` / `scripts/pretag-scope.py`，改动的包超过 40 个或文件超过 300 个，找不到上一个 tag，或设了 `ROOST_PRETAG_FULL=1`。
 
 build、vet、tidy、`go generate` 漂移检查每次都跑。pretag 输出第一行范围（`test scope = full|affected …`），跳过的阶段各打一行 `skipped`。拿不准时 `ROOST_PRETAG_FULL=1 scripts/release.sh vX.Y.Z` 整跑。生成工程脚本仍是粗粒度：改到核心包时 19 个脚本全跑（模块矩阵约 20 分钟），按脚本细分依赖是以后的事。

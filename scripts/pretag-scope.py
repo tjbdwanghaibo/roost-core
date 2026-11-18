@@ -13,7 +13,8 @@
   模板、modules、demo、scripts/testdata 里出现的本仓库 import 路径的依赖闭包。改动的非测试包落在这个闭包里，或者改了
   codegen/、modules/、demo/、scripts/testdata/，全部生成工程脚本都跑，codegen/internal/roost 也跑；否则只跑自己被改过的脚本。
   只改 _test.go 不影响生成的工程。
-- C# SDK：改了 client/dotnet/、client/spec/、client/wire/、service/relay/ 才跑；TS SDK：改了 client/ts/、client/spec/ 才跑。
+- C# SDK：改了 client/dotnet/、infra/network/gateway/ 或共同对端（client/spec/、client/wire/、service/relay/、service/lobby/、
+  infra/network/wsconn/）才跑；TS SDK：改了 client/ts/、client/relay/ 或共同对端才跑。
 """
 import json
 import os
@@ -147,8 +148,11 @@ def main():
 
     affected.add(pkgs["."])
     go_packages = sorted(affected)
-    dotnet = any(f.startswith(("client/dotnet/", "client/spec/", "client/wire/", "service/relay/")) for f in changed)
-    ts = any(f.startswith(("client/ts/", "client/spec/")) for f in changed)
+    # SDK 用例的对端也算：C# 的 WebSocket / 跨 Gate 用例在 infra/network/gateway（经 test-client-dotnet.sh 带 DLL 跑），
+    # 开房间用例连 service/relay、service/lobby；TS 的 relay 用例连 Go 的 relay、lobby 与 client/relay 夹具。
+    peers = ("client/spec/", "client/wire/", "service/relay/", "service/lobby/", "infra/network/wsconn/")
+    dotnet = any(f.startswith(("client/dotnet/", "infra/network/gateway/") + peers) for f in changed)
+    ts = any(f.startswith(("client/ts/", "client/relay/") + peers) for f in changed)
     say(f"affected run: {len(go_packages)} of {len(set(pkgs.values()))} packages, {len(genres)} of {len(GENRE_SCRIPTS)} genre scripts, "
         f"C# {'yes' if dotnet else 'no'}, TS {'yes' if ts else 'no'}")
     emit("affected", go_packages, genres, dotnet, ts)
