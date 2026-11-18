@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **发版：pretag 只跑受影响的部分**（维护者 2026-11-18）：`scripts/pretag.sh` 先用新的 `scripts/pretag-scope.py` 按上一个发布 tag 以来的改动定范围——受影响的 Go 包（含反向依赖）、生成工程脚本（只在生成器目录或生成代码会用到的包改了时跑）、C# / TS SDK（客户端改了才跑）；改了 go.mod / 发版脚本、改动很多或设了 `ROOST_PRETAG_FULL=1` 时整跑。规则见维护手册 §5。
 - **生成物要求的最低 core 提到 v1.56.0**（2026-11-18）：portal 模块模板用 `httpserver.CheckCORSOrigins`、`RouteRegistrar.Options` 与登录时顺带进服，account 配置按游戏分账号号（`Identities`、`AccountIDs`、`Games`），relay 的转交帧带房主 epoch。
 
 ## [v1.56.0] - 2026-11-18

@@ -97,30 +97,10 @@ GOWORK=off go vet ./... >/dev/null
 echo "pretag: checking go.mod / go.sum are tidy"
 GOWORK=off go mod tidy
 git diff --quiet -- go.mod go.sum || fail "go.mod / go.sum are not tidy; commit the result of go mod tidy first (the CI unit job diffs them)"
-echo "pretag: testing with GOWORK=off"
-# -timeout 60m: go test's default is 10 minutes per test binary. codegen/internal/roost
-# generates, syncs and compiles whole game-demo projects and spends almost all of that time in
-# file-system calls, so it tracks the host's I/O load more than its own work: on this 10-core
-# macOS host it took 377-784s alone on 2026-11-04 (1-minute load 10-19), and full runs panicked
-# with "test timed out after 10m0s" with no failing test. After that day's t.Parallel / fixture
-# round it took 299-444s under load 18-25 (an intermediate state of that round reached ~815s
-# while other jobs saturated the disk), so the cap sits well above the slowest package instead
-# of at the default; a real hang still fails, just later.
-# 2026-11-13: with 42 business modules the package takes 2024-2151s in full repo runs on this
-# host (each module scenario generates and compiles a project), so the v1.45.0 pretag panicked at
-# 30m with no failing test. The cap is now 60m, again well above the slowest observed run.
-# ROOST_REQUIRE_DOTNET=1：发版机器必须装 .NET 10 SDK。没有它时 TestClientConfigCSharpRuntime（导出的 C# 配置能编译、
-# Load 读回、规则违反报行与字段）只会 SKIP，go test 仍然 ok，发版就少了这条覆盖却看不出来；设了它缺 dotnet 直接失败。
-test_log="$(mktemp)"
-if ! ROOST_REQUIRE_DOTNET=1 GOWORK=off go test -timeout 60m ./... >"$test_log" 2>&1; then
-  grep -E '^(--- FAIL|FAIL|panic:)' "$test_log" >&2 || tail -50 "$test_log" >&2
-  fail "go test ./... failed (full output: $test_log)"
-fi
-rm -f "$test_log"
-
-# Generate real consumers and run offline genre and generator checks.
-# Clear REAL switches to avoid touching shared services during release checks.
-echo "pretag: genre vertical slices and offline generator scripts (generated projects, offline default mode)"
+# 测试范围（维护者 2026-11-18：改动不多时只跑有影响的）。上一个发布 tag 以来的改动交给 scripts/pretag-scope.py：
+# 受影响的 Go 包（含反向依赖）、生成工程脚本（生成器目录或生成代码会 import 的包改了才跑）、C# / TS SDK（客户端相关改了才跑）。
+# 改了 go.mod / go.sum / 发版脚本、改动超过上限、找不到上一个 tag、或设了 ROOST_PRETAG_FULL=1 时整跑。
+# 生成工程脚本的完整清单（只写在这里，根包 TestGeneratedScriptsAreInPretag 读它）；本次跑哪些由下面的范围决定。
 genre_scripts=(
   scripts/test-slg-generated.sh
   scripts/test-mmorpg-generated.sh
@@ -142,31 +122,76 @@ genre_scripts=(
   scripts/test-modules-generated.sh
   scripts/test-gate-generated.sh
 )
-genre_logs="$(mktemp -d "${TMPDIR:-/tmp}/roost-pretag-genres.XXXXXX")"
-genre_start=$SECONDS
-# The child Bash, not this shell, expands the positional parameters in its command.
-# shellcheck disable=SC2016
-if ! printf '%s\n' "${genre_scripts[@]}" | env -u ROOST_SLG_REAL -u ROOST_MMORPG_REAL -u ROOST_MOBA_REAL -u ROOST_MOBA_ROUTING \
-    -u ROOST_CARD_RPG_REAL -u ROOST_TOWER_DEFENSE_REAL -u ROOST_SURVIVAL_EXTRACTION_REAL -u ROOST_MERGE_CASUAL_REAL \
-    -u ROOST_IDLE_SIM_REAL -u ROOST_AUTO_CHESS_REAL -u ROOST_PARTY_ROOM_REAL \
-    -u ROOST_TURN_PVP_REAL -u ROOST_COOP_ROGUELIKE_REAL -u ROOST_SOCIAL_SIM_REAL \
-    xargs -P "${ROOST_PRETAG_GENRE_JOBS:-4}" -I{} bash -c '
-      name="$(basename "$1" .sh)"; start=$SECONDS
-      if "./$1" >"$2/$name.log" 2>&1; then
-        echo "pretag:   ok   $name ($((SECONDS - start))s)"
-      else
-        echo "pretag:   FAIL $name ($((SECONDS - start))s, log: $2/$name.log)" >&2
-        exit 1
-      fi' _ {} "$genre_logs"; then
-  fail "a genre vertical slice failed (logs: $genre_logs)"
+prev_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || true)"
+if [[ -z "$prev_tag" ]]; then
+  echo "pretag: no previous release tag found; full run"
+  scope=full; go_packages=(./...); run_dotnet=1; run_ts=1
+else
+  scope_out="$(python3 scripts/pretag-scope.py "$prev_tag" "${genre_scripts[@]}")" || fail "scripts/pretag-scope.py failed"
+  eval "$scope_out"
 fi
-echo "pretag: genre vertical slices passed in $((SECONDS - genre_start))s"
-rm -rf "$genre_logs"
-[[ -z "$(git status --porcelain)" ]] || { git status --short >&2; fail "a genre script left files in the checkout"; }
+echo "pretag: test scope = $scope (since ${prev_tag:-<none>}): ${#go_packages[@]} package pattern(s), ${#genre_scripts[@]} generated-project script(s), C# $run_dotnet, TS $run_ts"
+echo "pretag: testing with GOWORK=off"
+# -timeout 60m: go test's default is 10 minutes per test binary. codegen/internal/roost
+# generates, syncs and compiles whole game-demo projects and spends almost all of that time in
+# file-system calls, so it tracks the host's I/O load more than its own work: on this 10-core
+# macOS host it took 377-784s alone on 2026-11-04 (1-minute load 10-19), and full runs panicked
+# with "test timed out after 10m0s" with no failing test. After that day's t.Parallel / fixture
+# round it took 299-444s under load 18-25 (an intermediate state of that round reached ~815s
+# while other jobs saturated the disk), so the cap sits well above the slowest package instead
+# of at the default; a real hang still fails, just later.
+# 2026-11-13: with 42 business modules the package takes 2024-2151s in full repo runs on this
+# host (each module scenario generates and compiles a project), so the v1.45.0 pretag panicked at
+# 30m with no failing test. The cap is now 60m, again well above the slowest observed run.
+# ROOST_REQUIRE_DOTNET=1：发版机器必须装 .NET 10 SDK。没有它时 TestClientConfigCSharpRuntime（导出的 C# 配置能编译、
+# Load 读回、规则违反报行与字段）只会 SKIP，go test 仍然 ok，发版就少了这条覆盖却看不出来；设了它缺 dotnet 直接失败。
+test_log="$(mktemp)"
+if ! ROOST_REQUIRE_DOTNET=1 GOWORK=off go test -timeout 60m "${go_packages[@]}" >"$test_log" 2>&1; then
+  grep -E '^(--- FAIL|FAIL|panic:)' "$test_log" >&2 || tail -50 "$test_log" >&2
+  fail "go test failed (full output: $test_log)"
+fi
+rm -f "$test_log"
 
-echo "pretag: C# client SDK golden and self tests"
-ROOST_REQUIRE_DOTNET=1 ROOST_DOTNET_GOLDEN_ONLY=1 ./scripts/test-client-dotnet.sh >/dev/null || fail "C# client SDK tests failed (rerun ./scripts/test-client-dotnet.sh to see the output)"
-echo "pretag: TS client SDK tests"
-./scripts/test-client-ts.sh >/dev/null 2>&1 || fail "TS client SDK tests failed (rerun ./scripts/test-client-ts.sh to see the output)"
+if (( ${#genre_scripts[@]} == 0 )); then
+  echo "pretag: generated-project scripts skipped (nothing they depend on changed)"
+else
+  # Generate real consumers and run offline genre and generator checks.
+  # Clear REAL switches to avoid touching shared services during release checks.
+  echo "pretag: genre vertical slices and offline generator scripts (generated projects, offline default mode)"
+  genre_logs="$(mktemp -d "${TMPDIR:-/tmp}/roost-pretag-genres.XXXXXX")"
+  genre_start=$SECONDS
+  # The child Bash, not this shell, expands the positional parameters in its command.
+  # shellcheck disable=SC2016
+  if ! printf '%s\n' "${genre_scripts[@]}" | env -u ROOST_SLG_REAL -u ROOST_MMORPG_REAL -u ROOST_MOBA_REAL -u ROOST_MOBA_ROUTING \
+      -u ROOST_CARD_RPG_REAL -u ROOST_TOWER_DEFENSE_REAL -u ROOST_SURVIVAL_EXTRACTION_REAL -u ROOST_MERGE_CASUAL_REAL \
+      -u ROOST_IDLE_SIM_REAL -u ROOST_AUTO_CHESS_REAL -u ROOST_PARTY_ROOM_REAL \
+      -u ROOST_TURN_PVP_REAL -u ROOST_COOP_ROGUELIKE_REAL -u ROOST_SOCIAL_SIM_REAL \
+      xargs -P "${ROOST_PRETAG_GENRE_JOBS:-4}" -I{} bash -c '
+        name="$(basename "$1" .sh)"; start=$SECONDS
+        if "./$1" >"$2/$name.log" 2>&1; then
+          echo "pretag:   ok   $name ($((SECONDS - start))s)"
+        else
+          echo "pretag:   FAIL $name ($((SECONDS - start))s, log: $2/$name.log)" >&2
+          exit 1
+        fi' _ {} "$genre_logs"; then
+    fail "a genre vertical slice failed (logs: $genre_logs)"
+  fi
+  echo "pretag: genre vertical slices passed in $((SECONDS - genre_start))s"
+  rm -rf "$genre_logs"
+  [[ -z "$(git status --porcelain)" ]] || { git status --short >&2; fail "a genre script left files in the checkout"; }
+fi
+
+if [[ "$run_dotnet" == 1 ]]; then
+  echo "pretag: C# client SDK golden and self tests"
+  ROOST_REQUIRE_DOTNET=1 ROOST_DOTNET_GOLDEN_ONLY=1 ./scripts/test-client-dotnet.sh >/dev/null || fail "C# client SDK tests failed (rerun ./scripts/test-client-dotnet.sh to see the output)"
+else
+  echo "pretag: C# client SDK tests skipped (client SDK unchanged)"
+fi
+if [[ "$run_ts" == 1 ]]; then
+  echo "pretag: TS client SDK tests"
+  ./scripts/test-client-ts.sh >/dev/null 2>&1 || fail "TS client SDK tests failed (rerun ./scripts/test-client-ts.sh to see the output)"
+else
+  echo "pretag: TS client SDK tests skipped (client SDK unchanged)"
+fi
 
 echo "pretag: $module@$version is ready to tag"

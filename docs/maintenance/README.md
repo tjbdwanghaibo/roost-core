@@ -113,6 +113,15 @@ scripts/release.sh vX.Y.Z [--min-core]
 
 pretag 除 build / vet / tidy / `go test ./...` / 生成物漂移 / C# SDK 外，还并行跑十三个玩法纵切脚本的缺省模式（`scripts/test-<玩法>-generated.sh`，离线）、MMORPG 多地图 TCP `scripts/test-mmorpg-scenes.sh`（离线，单跑约 25 秒）与三个离线生成器专项（`test-heartbeat-generated.sh`、`test-level-generated.sh`、`test-sync-modes-generated.sh`，维护者 2026-10-31 决定纳入）；并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4；历史本机 45～125 秒来自当时的较小矩阵，不作为当前十三玩法的耗时承诺（2026-10-31 同机负载 4～6 时九个 50 秒、十二个 63 秒，三个专项单跑约 25 / 4 / 4 秒），失败时打印该脚本日志路径并保留生成工程。新增 `scripts/test-*-generated.sh`，或玩法接入手册（`docs/framework/*-INTEGRATION.md`）点名的其他 `scripts/test-*.sh`，要加进 pretag 的列表，或在根包 `TestGeneratedScriptsAreInPretag` 的豁免表里写明由谁跑。
 
+**pretag 只跑受影响的部分**（维护者 2026-11-18：改动不多时只跑有影响的）。`scripts/pretag.sh` 先用 `scripts/pretag-scope.py` 按上一个发布 tag 以来的改动定范围：
+
+- Go 测试：改动所在的包加上依赖它们的包（含测试依赖）；根包（文档链接、提交引用等门禁）总是跑。文档与发版提交自己改的文件不往下传。
+- 生成工程脚本与 `codegen/internal/roost`：改了 `codegen/`、`modules/`、`demo/`、`scripts/testdata/`（Markdown 除外），或改动的非测试包是生成代码会 import 的（模板、模块、demo、夹具里出现的本仓库 import 路径的依赖闭包）时全部跑；否则只跑自己被改过的脚本。只改 `_test.go` 不影响生成工程。
+- C# / TS SDK：改了对应 SDK、`client/spec/`、`client/wire/`（C# 还有 `service/relay/`）才跑。
+- 整跑：改了 `go.mod` / `go.sum` / `scripts/pretag.sh` / `scripts/release.sh` / `scripts/pretag-scope.py`，改动的包超过 40 个或文件超过 300 个，找不到上一个 tag，或设了 `ROOST_PRETAG_FULL=1`。
+
+build、vet、tidy、`go generate` 漂移检查每次都跑。pretag 输出第一行范围（`test scope = full|affected …`），跳过的阶段各打一行 `skipped`。拿不准时 `ROOST_PRETAG_FULL=1 scripts/release.sh vX.Y.Z` 整跑。生成工程脚本仍是粗粒度：改到核心包时 19 个脚本全跑（模块矩阵约 20 分钟），按脚本细分依赖是以后的事。
+
 pretag 的全量测试现为 `GOWORK=off go test -timeout 60m ./...`（2026-11-13 起，见 `scripts/pretag.sh`）。`go test` 缺省每个测试二进制 10 分钟；`codegen/internal/roost` 会反复生成、同步和编译工程，耗时受文件系统与并发负载影响。2026-11-04 的 299～815s 是旧规模；2026-11-13 加到 42 个业务模块后，同机全仓运行该包为 2024～2151s（约 34～36 分钟），30m 曾超时且未发现失败断言，所以复跑沿用 60m，不再推荐 30m。超时本身只说明预算耗尽：保留日志、宿主负载与进程状态，再看最后仍在运行的用例，不能直接判为实现失败或真卡住。
 
 验证只跑一次：pretag（已在脚本里）就是发版的验收线，不重复功能合并时已做过的验证（运行时专项、故障矩阵、性能样本在改动合入时按影响范围做，结果写进对应 CHANGELOG 条目或 NOTES）。不能把没跑的检查写成通过。
