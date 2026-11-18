@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.56.0] - 2026-11-18
+
 - **修复：旧任期发起的主动转交房主不再开启新任期**（RV-20261118-07）：三份 SDK 的 `Transfer` 原来压缩交接数据之后直接发出，压缩期间房主换过一圈（A→B→A）时，旧请求照样从 A 的连接发出、被 relay 当合法转交执行，新房主收到旧状态。现在 SDK 发起时记下连接与房主任期、压缩完核对，变了不发（Go `ErrTransferStale`、C# `RelayTransferResult.Stale`、TS `transfer` 返回 false）；relay 应用时也核对 epoch，过期答 `Rejected{stale_epoch}`。[证据](docs/maintenance/evidence/relay-transfer-term-20261118/README.md)
   - **协议变更（升级）**：Transfer 载荷改为 `[epoch 8B][交接数据]`，Rejected 新增原因 6 `stale_epoch`，转交帧载荷上限 `snapshot_max_bytes + 8`。relay 与三份 SDK 必须同版本一起升级，先停旧再起新。
   - **API 变更**：C# `RelayClient.Transfer` 的返回值由 `bool` 改为 `RelayTransferResult {Sent, NotConnected, Stale}`。
