@@ -126,7 +126,8 @@ drill_gate_config() {
 		-e "s#^  advertise_addr: .*#  advertise_addr: 127.0.0.1:$(drill_port 7100)#" \
 		-e 's#^sid: .*#sid: 9500#' "$target"
 	awk '/^singleton:/{s=1} s&&/^  enabled: false$/{sub(/false/, "true"); s=0} {print}' "$target" >"$target.tmp" && mv "$target.tmp" "$target"
-	grep -A8 '^singleton:' "$target" | grep -q 'enabled: true' || drill_fail "gate singleton not enabled"
+	# singleton: 段在 enabled 前有十来行注释（v1.52.0 起改存 etcd 时加的），按段读而不是数固定行数。
+	awk '/^singleton:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  enabled: true$/{f=1} END{exit !f}' "$target" || drill_fail "gate singleton not enabled"
 }
 
 # drill_start <名字> <二进制> <服务> <sid> <配置> [环境变量...]：起一个进程、等它的 ops /readyz。
