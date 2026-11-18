@@ -49,7 +49,35 @@ type pipelinedTestCommitter struct {
 }
 
 func newPipelinedTestCommitter(autoResolve bool) *pipelinedTestCommitter {
-	return &pipelinedTestCommitter{autoResolve: autoResolve, enqueued: make(chan struct{}, 16)}
+	c := &pipelinedTestCommitter{autoResolve: autoResolve, enqueued: make(chan struct{}, 16)}
+	pipelinedTestCommittersMu.Lock()
+	pipelinedTestCommitters = append(pipelinedTestCommitters, c)
+	pipelinedTestCommittersMu.Unlock()
+	return c
+}
+
+// 本包创建过、还没被 StopNest 清掉的测试提交器。StopNest 超时后靠它落定用例留下的未决票据（见 fixtures_test.go）。
+var (
+	pipelinedTestCommittersMu sync.Mutex
+	pipelinedTestCommitters   []*pipelinedTestCommitter
+)
+
+// resolvePipelinedTestCommitters 让登记的每个提交器落定全部未决票据并自动落定之后的票据，返回落定的张数。
+func resolvePipelinedTestCommitters(err error) int {
+	pipelinedTestCommittersMu.Lock()
+	committers := append([]*pipelinedTestCommitter(nil), pipelinedTestCommitters...)
+	pipelinedTestCommittersMu.Unlock()
+	resolved := 0
+	for _, c := range committers {
+		resolved += c.resolveAllFromNowOn(err)
+	}
+	return resolved
+}
+
+func forgetPipelinedTestCommitters() {
+	pipelinedTestCommittersMu.Lock()
+	pipelinedTestCommitters = nil
+	pipelinedTestCommittersMu.Unlock()
 }
 
 func (c *pipelinedTestCommitter) Commit(_ context.Context, record CommitRecord) error {
@@ -92,13 +120,14 @@ func (c *pipelinedTestCommitter) TransactionReleased(id TransactionID) {
 	c.mu.Unlock()
 }
 
-// resolveAllFromNowOn 落定所有未决票据，并让之后 Enqueue 的票据立即落定（同一个 err）。
+// resolveAllFromNowOn 落定所有未决票据，并让之后 Enqueue 的票据立即落定（同一个 err），返回这次落定的张数。
 // 用于“未决票据会挡住后继事务入队”的场景与失败路径的清理。
-func (c *pipelinedTestCommitter) resolveAllFromNowOn(err error) {
+func (c *pipelinedTestCommitter) resolveAllFromNowOn(err error) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.autoResolve = true
 	c.autoErr = err
+	resolved := 0
 	for _, ticket := range c.tickets {
 		select {
 		case <-ticket.done:
@@ -108,8 +137,10 @@ func (c *pipelinedTestCommitter) resolveAllFromNowOn(err error) {
 				c.durable.Store(ticket.lsn)
 			}
 			close(ticket.done)
+			resolved++
 		}
 	}
+	return resolved
 }
 
 // resolveFrom 只落定第 from 个及以后的票据（按 Enqueue 顺序，从 0 起），前面的保持未决。

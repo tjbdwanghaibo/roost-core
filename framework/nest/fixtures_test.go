@@ -5,7 +5,13 @@ package nest
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
 	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -22,11 +28,54 @@ func InitNest(opts ...NestOption) {
 	}
 }
 
+// stopNestTimeout 是 StopNest 等引擎停下的上限。Shutdown 要排空已接受的事务，而事务可能在等测试提交器上的票据；
+// 用例在落定票据之前失败退出（Fatal 在 defer StopNest 之前返回）时，原来的无限等待会把整个包挂到 go test -timeout
+// （2026-11-18 v1.55.0 pretag 挂了 47 分钟）。
+const stopNestTimeout = 20 * time.Second
+
+// errStopNestCleanup 是 StopNest 超时后替用例落定未决票据时用的结果。
+var errStopNestCleanup = errors.New("test cleanup: StopNest resolved a ticket the test left pending")
+
+// stopNestStuck 记录 StopNest 等不到引擎停下的次数；TestMain 据此让整个包失败，避免“用例通过、关停卡住”被替用例落定票据后掩盖。
+var stopNestStuck atomic.Int64
+
+// StopNest 关停测试引擎。等 stopNestTimeout 还停不下时，落定本包测试提交器上所有未决票据（errStopNestCleanup）再等一次，
+// 仍停不下就 panic：任何情况下都不会无限等待。
 func StopNest() {
-	if Nest != nil {
-		_ = Nest.Shutdown(context.Background())
-		Nest = nil
+	if Nest == nil {
+		return
 	}
+	mgr := Nest
+	defer func() {
+		Nest = nil
+		forgetPipelinedTestCommitters()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), stopNestTimeout)
+	err := mgr.Shutdown(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	stopNestStuck.Add(1)
+	resolved := resolvePipelinedTestCommitters(errStopNestCleanup)
+	fmt.Fprintf(os.Stderr, "StopNest: shutdown did not finish within %s; resolved %d pending test commit tickets with %q\n", stopNestTimeout, resolved, errStopNestCleanup)
+	ctx, cancel = context.WithTimeout(context.Background(), stopNestTimeout)
+	defer cancel()
+	if err := mgr.Shutdown(ctx); errors.Is(err, context.DeadlineExceeded) {
+		panic(fmt.Sprintf("StopNest: shutdown still not finished %s after resolving %d pending test commit tickets", stopNestTimeout, resolved))
+	}
+}
+
+// TestMain：任何一次 StopNest 超时都让本包失败（哪怕触发它的用例自己报了通过）。
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if n := stopNestStuck.Load(); n > 0 {
+		fmt.Fprintf(os.Stderr, "FAIL: StopNest timed out %d time(s): a test left commit tickets pending or shutdown is stuck (see the StopNest lines above)\n", n)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
 
 // 旧动态 Cast 回归继续覆盖 Guard 的锁序、销毁竞态及回滚捕获防御。

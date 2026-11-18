@@ -1,0 +1,21 @@
+# 注入失败（在等到入队后、落定票据前 t.Fatal），新 StopNest
+StopNest: shutdown did not finish within 20s; resolved 1 pending test commit tickets with "test cleanup: StopNest resolved a ticket the test left pending"
+--- FAIL: TestPipelinedCommitReleasesLocksBeforeDurable (25.00s)
+    pipelined_commit_test.go:215: injected: fail before resolving tickets
+StopNest: shutdown did not finish within 20s; resolved 1 pending test commit tickets with "test cleanup: StopNest resolved a ticket the test left pending"
+--- FAIL: TestAsyncCompletionFreesWorkerDuringDurableWait (20.00s)
+    pipelined_completion_test.go:87: injected: fail before resolving tickets
+FAIL
+FAIL: StopNest timed out 2 time(s): a test left commit tickets pending or shutdown is stuck (see the StopNest lines above)
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	45.576s
+FAIL
+
+# 同样注入，旧 StopNest（无限等待），-timeout 60s
+panic: test timed out after 1m0s
+github.com/tjbdwanghaibo/roost-core/framework/nest.StopNest()
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	60.565s
+FAIL
+
+# 恢复后：nest 整包（普通 / -race），StopNest 超时 0 次
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	5.868s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	7.874s

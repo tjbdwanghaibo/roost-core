@@ -44,6 +44,26 @@ v1.55.0 第一次全量 pretag 时，`go test ./...` 在 `framework/nest` 上停
 - 失败路径的验证：临时把降级等待的期限改成 0，用例 0.65 秒内 FAIL，没有挂住。
 - `framework/nest` 整包通过，根包通过。
 
-## 尚未确认
+## 同类用例一并修掉（维护者 2026-11-18：“这种可以直接修改掉”）
 
-- nest 包里还有几条用例也是“等 Enqueue 时超时就 Fatalf”的写法（用不自动落定票据的提交器），失败路径上可能同样会把 StopNest 挂住。这次没有逐条改，它们在压力下没有挂过。
+本包有 22 条用例用不自动落定票据的提交器（`newPipelinedTestCommitter(false)`，包括嵌入它的 `castBoundaryCommitter`、`releaseFailureCommitter`、`bestEffortPipelinedCommitter` 和 `asyncSetEngine`）。它们只要在落定票据之前失败退出，都会像上面那样把 `StopNest` 挂住。这次没有逐条改，而是在两处统一处理：
+
+- **测试提交器登记**：`newPipelinedTestCommitter` 把每个提交器记进包内名单，`StopNest` 结束时清空名单。
+- **`StopNest` 有上限**（`fixtures_test.go`）：
+  - 最多等 20 秒；
+  - 还没停下，就把名单里所有未决票据以 `errStopNestCleanup` 落定，再等 20 秒；
+  - 仍然停不下就 panic；
+  - 任何情况下都不会无限等。
+- **新增 `TestMain`**：只要有一次 `StopNest` 超时，整个包就判失败。这样“用例自己报通过，但关停卡住”的真问题不会因为票据被替它落定而被掩盖。
+
+验证见 [stopnest-bounded.txt](stopnest-bounded.txt)：
+
+| 情形 | 结果 |
+|---|---|
+| 旧 `StopNest`，在 `TestAsyncCompletionFreesWorkerDuringDurableWait` 里注入失败 | 挂在 `StopNest` 里，直到 `-timeout 60s` |
+| 新 `StopNest`，在上面这条和 `TestPipelinedCommitReleasesLocksBeforeDurable` 里注入失败 | 分别在 20s、25s 报 FAIL，打出 `StopNest: shutdown did not finish…`，`TestMain` 判整包失败 |
+| 去掉注入后跑 nest 整包（普通 / `-race`） | 都通过，`StopNest` 超时 0 次 |
+
+注入失败的做法：在等到入队之后、落定票据之前插一行 `t.Fatal`。
+
+其余自定义提交器（`blockingCommitter` 等）不在名单里，由 20 秒加 20 秒的上限兜底，到时直接 panic。
