@@ -67,6 +67,69 @@ func TestDemoEmbedCoversEveryFile(t *testing.T) {
 // Every shipped template must be written by a step, and every write step must
 // name a shipped template: a template nothing writes is dead weight, and a
 // step naming a missing file fails only at generation time.
+// demo 的机器人场景把 saga 状态轮询（gift_status / alliance_op_status）标为 saga 组，loadtest 的 p95 门槛
+// 判除去这个组的场景时间（维护者 2026-11-18：saga 只看成败、不卡延迟）。每个 saga 轮询都在组里、组里只有它们，
+// demo 场景里恰好 5 个（两个礼物、三个联盟操作）。生成器不依赖运行时，这里只按 YAML 结构查；用 robot/scenario
+// 真正加载场景的检查在生成工程的 cmd/loadtest/scenarios_test.go。
+func TestDemoScenarioGroupsEverySagaPollAndNothingElse(t *testing.T) {
+	raw, err := fs.ReadFile(demo.Files, "loadtest/scenarios/demo.yaml.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type node struct {
+		Group  string `yaml:"group"`
+		Action string `yaml:"action"`
+		Retry  *struct {
+			Node *struct {
+				Sequence []node `yaml:"sequence"`
+			} `yaml:"node"`
+		} `yaml:"retry"`
+	}
+	var spec struct {
+		Scenarios []struct {
+			Name string `yaml:"name"`
+			Node struct {
+				Sequence []node `yaml:"sequence"`
+			} `yaml:"node"`
+		} `yaml:"scenarios"`
+	}
+	if err := yaml.Unmarshal(raw, &spec); err != nil {
+		t.Fatal(err)
+	}
+	isSagaPoll := func(step node) bool {
+		if step.Retry == nil || step.Retry.Node == nil {
+			return false
+		}
+		for _, inner := range step.Retry.Node.Sequence {
+			if inner.Action == "gift_status" || inner.Action == "alliance_op_status" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, s := range spec.Scenarios {
+		grouped := 0
+		for i, step := range s.Node.Sequence {
+			if poll := isSagaPoll(step); poll != (step.Group == "saga") {
+				t.Errorf("scenario %s step %d: saga poll %v but group %q", s.Name, i+1, poll, step.Group)
+			}
+			if step.Group == "saga" {
+				grouped++
+			}
+		}
+		if s.Name == "demo" && grouped != 5 {
+			t.Errorf("demo scenario has %d saga steps grouped, want 5", grouped)
+		}
+	}
+	loadtestMain, err := fs.ReadFile(demo.Files, "cmd/loadtest/main.go.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(loadtestMain), `flag.String("p95-exclude-group", "saga"`) || !strings.Contains(string(loadtestMain), `"p95_excluding:" + group`) {
+		t.Error("cmd/loadtest no longer judges -max-p95 on the scenario without the saga group by default")
+	}
+}
+
 func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 	shipped, err := demoSourceFiles()
 	if err != nil {

@@ -300,6 +300,15 @@ func Timeout(d time.Duration, node Node) Node {
 // 嵌套的 Step 各自记一份，内层的 Retry / Wait 同时算进每一层外层。
 // YAML 场景由 ParseSpec 自动给每个顶层步骤套上 Step，代码搭的场景按需自己套。
 func Step(name string, node Node) Node {
+	return StepInGroup("", name, node)
+}
+
+// StepInGroup 同 Step，并把这一步归入 group（去首尾空白、转小写；YAML 顶层步骤写 group 时由 ParseSpec 套上）。
+// 这一步的耗时还累计到本次场景运行在该组上的时间（robot.Context.AddGroupTime），报告据此给出组内时间与
+// “除去该组”的场景时间（session.GroupReport），门槛可以只卡后者（loadtest 的 p95_excluding:<组>）。
+// 同组嵌套只按最外层算一次。
+func StepInGroup(group, name string, node Node) Node {
+	group = normalizeName(group)
 	return NodeFunc(func(ctx context.Context, rb *robot.Context) error {
 		if node == nil {
 			return nil
@@ -307,15 +316,20 @@ func Step(name string, node Node) Node {
 		if rb == nil || rb.Recorder == nil {
 			return node.Run(ctx, rb)
 		}
-		frame := &stepFrame{parent: stepFrameOf(ctx)}
+		frame := &stepFrame{parent: stepFrameOf(ctx), group: group}
 		start := time.Now()
 		err := node.Run(context.WithValue(ctx, stepFrameKey{}, frame), rb)
+		elapsed := time.Since(start)
 		rb.Recorder.FinishStep(name, session.StepSample{
-			Elapsed:       time.Since(start),
+			Group:         group,
+			Elapsed:       elapsed,
 			Waited:        time.Duration(frame.waited.Load()),
 			RetryAttempts: frame.retryAttempts.Load(),
 			OK:            err == nil,
 		})
+		if group != "" && !frame.parent.inGroup(group) {
+			rb.AddGroupTime(group, elapsed)
+		}
 		return err
 	})
 }
@@ -323,11 +337,22 @@ func Step(name string, node Node) Node {
 // stepFrame 是一次 Step 执行期间的计数；Parallel 分支会并发写，所以用原子量。
 type stepFrame struct {
 	parent        *stepFrame
+	group         string
 	waited        atomic.Int64
 	retryAttempts atomic.Int64
 }
 
 type stepFrameKey struct{}
+
+// inGroup 报告这一层或任一外层 Step 是否已属于 group（那一层会把整段时间算进组里）。
+func (f *stepFrame) inGroup(group string) bool {
+	for ; f != nil; f = f.parent {
+		if f.group == group {
+			return true
+		}
+	}
+	return false
+}
 
 func stepFrameOf(ctx context.Context) *stepFrame {
 	frame, _ := ctx.Value(stepFrameKey{}).(*stepFrame)

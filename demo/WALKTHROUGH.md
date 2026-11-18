@@ -790,7 +790,9 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1
 任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。**`-count` 要给偶数**：duel 两人一组。
 退出前最后一行点名违反的阈值、实际值、上限与样本数（例如 `threshold violated: p95 = 17.2s > max 16s (10 samples)`）。
 `p95` 由翻倍桶估计、收在最快与最慢机器人之间，10 个机器人及以下就是最慢的那个；缺省 `-max-p95 16` 约为健康运行
-（单 sid 7～8s、两个 game 同机约 10s）的两倍。
+（单 sid 7～8s、两个 game 同机约 10s）的两倍。这条门槛判的是**除去 saga 组之后**的场景时间（`-p95-exclude-group saga`，
+阈值写作 `p95_excluding:saga`）：场景里的 saga 状态轮询标了 `group: saga`，saga 只看成败（没到期望终态照样算失败），
+等它完成的时间在报告的 `groups.saga` 里列出、不卡；给 `-p95-exclude-group ''` 回到整场景 `p95`。没有 saga 组的场景两者相同。
 **`-count` 不要超过 `player_access.tcp.max_connections_per_ip`（默认 128）**：机器人全从一个 IP 来，超出的连接在握手前就被
 server 关掉，机器人报 `connect: auth send: robot session: closed`，server 侧计入 `player_tcp_connection_rejected_total{reason}`。
 600 个机器人的实跑正好 128 成功、472 这样失败——这是上限在工作，不是缺陷；要压更大就在 game 配置里调高它。

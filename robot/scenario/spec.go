@@ -46,6 +46,8 @@ type ScenarioSpec struct {
 // NodeSpec is one node in the declarative tree; exactly one field may be
 // set.
 type NodeSpec struct {
+	// Group 只能写在顶层步骤上：把这一步归入一个组（如 saga），报告按组汇总、门槛可以除去这个组。
+	Group      string          `yaml:"group"`
 	Action     string          `yaml:"action"`
 	Param      map[string]any  `yaml:"param"`
 	Wait       string          `yaml:"wait"`
@@ -129,24 +131,52 @@ func RegisterSpec(r *Registry, raw []byte) error {
 // buildTimedRoot 建出场景的根，并给每个顶层步骤套上 Step 计时：根是 sequence 时每个元素一步，
 // 否则整棵树算一步。步骤名是两位序号加子树摘要（如 "08 retry(wait 250ms,mailbox_list)"），
 // 不用在 YAML 里起名；序号让同样内容的两步分得开，也让报告按名字排序就是场景顺序。
+// 顶层步骤上的 group 在这里摘下来交给 StepInGroup；其他位置的 group 由 buildNode 报错。
 func buildTimedRoot(spec *NodeSpec, path string) (Node, error) {
-	root, err := buildNode(spec, path)
-	if err != nil {
+	if spec == nil || spec.Sequence == nil {
+		node, group, err := buildStep(spec, path)
+		if err != nil {
+			return nil, err
+		}
+		return StepInGroup(group, "01 "+describeNode(spec), node), nil
+	}
+	// 根是 sequence：根本身不能带 group（组属于步骤，不属于整个场景），按原规则校验整棵树，
+	// 只是先摘掉各元素的 group。
+	items := make([]*NodeSpec, len(spec.Sequence))
+	groups := make([]string, len(spec.Sequence))
+	for i, item := range spec.Sequence {
+		if item != nil {
+			bare := *item
+			groups[i], bare.Group = bare.Group, ""
+			items[i] = &bare
+		}
+	}
+	root := *spec
+	root.Sequence = items
+	if _, err := buildNode(&root, path); err != nil {
 		return nil, err
 	}
-	if spec.Sequence == nil {
-		return Step("01 "+describeNode(spec), root), nil
-	}
 	// 根已通过校验；这里按同样的规则再建一次各元素，好在外面各套一层 Step。
-	steps := make([]Node, 0, len(spec.Sequence))
-	for i, item := range spec.Sequence {
+	steps := make([]Node, 0, len(items))
+	for i, item := range items {
 		node, err := buildNode(item, fmt.Sprintf("%s.sequence[%d]", path, i))
 		if err != nil {
 			return nil, err
 		}
-		steps = append(steps, Step(fmt.Sprintf("%02d %s", i+1, describeNode(item)), node))
+		steps = append(steps, StepInGroup(groups[i], fmt.Sprintf("%02d %s", i+1, describeNode(item)), node))
 	}
 	return Sequence(steps...), nil
+}
+
+// buildStep 建出一个顶层步骤（不是 sequence 的根），返回它和它的 group。
+func buildStep(spec *NodeSpec, path string) (Node, string, error) {
+	if spec == nil {
+		return nil, "", fmt.Errorf("robot scenario: %s: node is required", path)
+	}
+	bare := *spec
+	bare.Group = ""
+	node, err := buildNode(&bare, path)
+	return node, spec.Group, err
 }
 
 // describeNode 给子树一个简短摘要：动作名、"wait 时长"，组合节点用 kind(子节点…) 包起来。
@@ -195,6 +225,9 @@ func describeNode(spec *NodeSpec) string {
 func buildNode(spec *NodeSpec, path string) (Node, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("robot scenario: %s: node is required", path)
+	}
+	if spec.Group != "" {
+		return nil, fmt.Errorf("robot scenario: %s: group is only allowed on a top-level step", path)
 	}
 	set := 0
 	var build func() (Node, error)

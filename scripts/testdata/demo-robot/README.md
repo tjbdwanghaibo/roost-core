@@ -13,14 +13,14 @@ DEMO_ROBOT_COUNT=100 DEMO_ROBOT_MODE=burst \
   DEMO_ROBOT_OUT=/private/tmp/demo-robot-100-burst-new bash scripts/perf/demo-robot.sh
 ```
 
-六档是 count `100` / `200` × mode `burst` / `ramp20` / `ramp10`。`burst` 一批启动全部；后两档严格使用交接口径 `-ramp-step 20|10 -ramp-interval 1s`，第一批立即启动。不是每个请求的固定速率；`count` 是每人执行一次完整场景的人数，不能写作消息 TPS。命令固定 `-executor pool -duration 0 -seed 1 -scenario demo -login bus`，保留正式 CLI 的错误率 0、drop 0、整场景 p95 16s 门槛；失败仍保留报告并返回非零，不放宽门槛换绿。
+六档是 count `100` / `200` × mode `burst` / `ramp20` / `ramp10`。`burst` 一批启动全部；后两档严格使用交接口径 `-ramp-step 20|10 -ramp-interval 1s`，第一批立即启动。不是每个请求的固定速率；`count` 是每人执行一次完整场景的人数，不能写作消息 TPS。命令固定 `-executor pool -duration 0 -seed 1 -scenario demo -login bus`，保留正式 CLI 的错误率 0、drop 0 门槛；p95 16s 门槛判的是**除去 saga 组之后**的场景时间（`-p95-exclude-group saga`，指标 `p95_excluding:saga`）。saga 组（场景里的 5 个 saga 状态轮询）只看成败：没到期望终态照样让机器人失败、计入错误率，延迟只在 `groups.saga` 里报告、不卡（维护者 2026-11-18 定，[证据](../../../docs/maintenance/evidence/robot-saga-group-20261118/README.md)）。失败仍保留报告并返回非零，不放宽门槛换绿。
 
 可选端口参数：`DEMO_ROBOT_MIRROR_OFFSET`（默认 37000，最大 38135）、`DEMO_ROBOT_PORT_SHIFT`（默认 31000）、`DEMO_ROBOT_ETCD_PORT`（默认 35479）。每档全新目录；同一组端口仅能在前档清理完成后复用。依赖工具与 `mirror-local.sh` 相同，另需 etcd、jq、curl、Python 3。正式测量不要与编译、race、索引或其他负载并行；生成和编译完成后才采集 `host-before.txt` 并启动 Robot。
 
 输出包含：
 
-- `robot.json`、`robot.log`、`loadtest-args.json`：原始正式 runner 快照和进程输出，分消息请求结果（`requests`）与逐步计时（`steps`，见 [Robot 报告解释](../../../docs/framework/ROBOT.md#按运行的请求与流量)）也在 JSON 内，`summary.json` 的 `steps_by_mean_ms` 把各步骤按平均耗时从大到小排好；`test.log` 明确 `TestDemoRobotCapacity` 恰好 1 个 PASS、零 SKIP。
-- `summary.json`、`diagnostic-matches.json`：来自正式 JSON 的成功/失败/取消人数、run 级最终错误及其分类、整场景分位数、原门槛结果，以及带源文件/行号的 Saga still/unknown/waiting 与 `nest: sync timeout` 日志匹配。正式 RunSnapshot 没有逐 Robot 错误明细；不能由日志出现次数补造事务失败数。
+- `robot.json`、`robot.log`、`loadtest-args.json`：原始正式 runner 快照和进程输出，分消息请求结果（`requests`）与逐步计时（`steps`，见 [Robot 报告解释](../../../docs/framework/ROBOT.md#按运行的请求与流量)）也在 JSON 内，`summary.json` 的 `steps_by_mean_ms` 把各步骤按平均耗时从大到小排好，`groups` 原样带出 `groups.saga` 的组内时间（`group_ms`）与除去 saga 组的场景时间（`excluding_ms`）；`test.log` 明确 `TestDemoRobotCapacity` 恰好 1 个 PASS、零 SKIP。
+- `summary.json`、`diagnostic-matches.json`：来自正式 JSON 的成功/失败/取消人数、run 级最终错误及其分类、整场景分位数、门槛结果，以及带源文件/行号的 Saga still/unknown/waiting 与 `nest: sync timeout` 日志匹配。正式 RunSnapshot 没有逐 Robot 错误明细；不能由日志出现次数补造事务失败数。
 - `logs/`、`dependency-logs/`、`etcd.log`、`game-metrics-{before,after}.txt`：服务日志、私有依赖日志与游戏指标；`environment.txt`、`host-{before,after}.txt`：源码版本/工作树、Go、实际 CPU/内存/swap/load；`project-source.tgz`：本轮生成源码与配置。
 - `mirror-up.log`、`generate.log`、`dev-run.log`、`services.txt`、`cleanup.log`：环境与启动/收尾证据。
 

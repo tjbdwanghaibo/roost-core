@@ -74,6 +74,12 @@ type Threshold struct {
 	//   drop_rate         dropped or failed launches / scheduled arrivals
 	//   error_rate        Failure / (Success+Failure), 0..1
 	//   p50/p90/p95/p99   quantile of the scenario cost histogram (ok runs)
+	//   p95_excluding:<group> (also p50/p90/p99) the same quantile of the ok
+	//                     scenarios' cost minus the time they spent in steps of
+	//                     <group> (scenario.StepInGroup / YAML `group:`), read
+	//                     from the runner's group report. One group per
+	//                     metric; a group the scenario never ran excludes
+	//                     nothing. The group's own time is only reported.
 	Metric string `json:"metric"`
 	// Max is the inclusive upper bound: seconds for quantiles (e.g. 0.2 =
 	// 200ms), a ratio for error_rate.
@@ -196,24 +202,26 @@ type RunSnapshot struct {
 	Sync     *robot.SyncReport `json:"sync,omitempty"`
 	Messages *session.Report   `json:"requests,omitempty"`
 	// Steps 是具名场景步骤的耗时汇总（名字、样本数、分位数、Retry 次数、Wait 时间），用来看整场景时间花在哪一步。
-	Steps              []session.StepReport     `json:"steps,omitempty"`
-	Traffic            *transport.TrafficReport `json:"traffic,omitempty"`
-	RequestOKPerSecond float64                  `json:"request_ok_per_second"`
-	Config             RunConfig                `json:"config"`
-	Environment        Environment              `json:"environment"`
-	Resources          Resources                `json:"robot_resources"`
-	RunID              string                   `json:"run_id"`
-	Profile            string                   `json:"profile"`
-	State              RunState                 `json:"state"`
-	StopReason         StopReason               `json:"stop_reason,omitempty"`
-	StartedAtMS        int64                    `json:"started_at_ms"`
-	EndedAtMS          int64                    `json:"ended_at_ms,omitempty"`
-	Count              int                      `json:"count"`
-	Scenario           string                   `json:"scenario"`
-	Stats              StatsSnapshot            `json:"stats"`
-	Thresholds         []ThresholdResult        `json:"thresholds,omitempty"`
-	QuantilesMS        map[string]float64       `json:"quantiles_ms,omitempty"`
-	Error              string                   `json:"error,omitempty"`
+	Steps []session.StepReport `json:"steps,omitempty"`
+	// Groups 是按步骤组的汇总（键为组名）：每个成功场景在组内步骤上的时间、除去该组之后的场景时间，见 session.GroupReport。
+	Groups             map[string]session.GroupReport `json:"groups,omitempty"`
+	Traffic            *transport.TrafficReport       `json:"traffic,omitempty"`
+	RequestOKPerSecond float64                        `json:"request_ok_per_second"`
+	Config             RunConfig                      `json:"config"`
+	Environment        Environment                    `json:"environment"`
+	Resources          Resources                      `json:"robot_resources"`
+	RunID              string                         `json:"run_id"`
+	Profile            string                         `json:"profile"`
+	State              RunState                       `json:"state"`
+	StopReason         StopReason                     `json:"stop_reason,omitempty"`
+	StartedAtMS        int64                          `json:"started_at_ms"`
+	EndedAtMS          int64                          `json:"ended_at_ms,omitempty"`
+	Count              int                            `json:"count"`
+	Scenario           string                         `json:"scenario"`
+	Stats              StatsSnapshot                  `json:"stats"`
+	Thresholds         []ThresholdResult              `json:"thresholds,omitempty"`
+	QuantilesMS        map[string]float64             `json:"quantiles_ms,omitempty"`
+	Error              string                         `json:"error,omitempty"`
 }
 
 type StatsSnapshot struct {
@@ -590,6 +598,9 @@ func (m *Manager) evaluate(rec *runRecord) (map[string]float64, []ThresholdResul
 	if m.sampleCount != nil {
 		latencySamples = min(latencySamples, m.sampleCount(rec.RunID, rec.Profile, scenarioName))
 	}
+	// 组报告来自 Runner 自己的 Recorder；门槛点名的组即使没出现也要一份（等于整场景）。
+	// Runner 不提供组报告时 groups 为空，除去组的门槛按没有样本判违反。
+	groups := runnerGroups(rec.runner, rec.Config.Thresholds)
 	results := make([]ThresholdResult, 0, len(rec.Config.Thresholds))
 	for _, threshold := range rec.Config.Thresholds {
 		metric := strings.ToLower(strings.TrimSpace(threshold.Metric))
@@ -606,6 +617,12 @@ func (m *Manager) evaluate(rec *runRecord) (map[string]float64, []ThresholdResul
 		case "p50", "p90", "p95", "p99":
 			actual, samples = float64(quantiles[metric])/1000.0, latencySamples
 		default:
+			if q, group, ok := excludingMetric(metric); ok {
+				if report, ok := groups[group]; ok {
+					actual, samples = q(report.ExcludingMS)/1000.0, report.Scenarios
+				}
+				break
+			}
 			results = append(results, ThresholdResult{Threshold: threshold, Violated: true, Reason: ThresholdReasonUnknownMetric})
 			continue
 		}
@@ -616,6 +633,43 @@ func (m *Manager) evaluate(rec *runRecord) (map[string]float64, []ThresholdResul
 		results = append(results, ThresholdResult{Threshold: threshold, Actual: actual, Violated: actual > threshold.Max, Samples: samples})
 	}
 	return quantiles, results
+}
+
+// excludingMetric 解析 "p95_excluding:<组>"（metric 已转小写）：返回取分位数的函数与组名。
+func excludingMetric(metric string) (func(session.ScenarioTimes) float64, string, bool) {
+	quantile, group, ok := strings.Cut(metric, "_excluding:")
+	group = strings.TrimSpace(group)
+	if !ok || group == "" {
+		return nil, "", false
+	}
+	switch quantile {
+	case "p50":
+		return func(t session.ScenarioTimes) float64 { return t.P50MS }, group, true
+	case "p90":
+		return func(t session.ScenarioTimes) float64 { return t.P90MS }, group, true
+	case "p95":
+		return func(t session.ScenarioTimes) float64 { return t.P95MS }, group, true
+	case "p99":
+		return func(t session.ScenarioTimes) float64 { return t.P99MS }, group, true
+	}
+	return nil, "", false
+}
+
+// runnerGroups 读 Runner 的组报告，并带上门槛点名的组；Runner 不提供组报告时返回 nil。
+func runnerGroups(r Runner, thresholds []Threshold) map[string]session.GroupReport {
+	provider, ok := r.(interface {
+		GroupReport(include ...string) map[string]session.GroupReport
+	})
+	if !ok {
+		return nil
+	}
+	var include []string
+	for _, threshold := range thresholds {
+		if _, group, ok := excludingMetric(strings.ToLower(strings.TrimSpace(threshold.Metric))); ok {
+			include = append(include, group)
+		}
+	}
+	return provider.GroupReport(include...)
 }
 
 // describeViolations names every violated threshold with its actual value,
@@ -744,13 +798,14 @@ func (r *runRecord) snapshot() RunSnapshot {
 	if provider, ok := r.runner.(interface{ StepReport() []session.StepReport }); ok {
 		steps = provider.StepReport()
 	}
+	groups := runnerGroups(r.runner, r.Config.Thresholds)
 
 	stats := StatsSnapshot{}
 	if r.runner != nil {
 		stats = statsSnapshot(r.runner.Stats())
 	}
 	return RunSnapshot{
-		Sync: syncReport, Messages: messages, Steps: steps, Traffic: traffic, RequestOKPerSecond: throughput,
+		Sync: syncReport, Messages: messages, Steps: steps, Groups: groups, Traffic: traffic, RequestOKPerSecond: throughput,
 		Config: RunConfig{
 			Executor:        r.Config.Run.Executor,
 			Rate:            r.Config.Run.Rate,
@@ -825,6 +880,7 @@ func (s RunSnapshot) clone() RunSnapshot {
 	s.Thresholds = slices.Clone(s.Thresholds)
 	s.QuantilesMS = maps.Clone(s.QuantilesMS)
 	s.Steps = slices.Clone(s.Steps)
+	s.Groups = maps.Clone(s.Groups)
 	if s.Sync != nil {
 		v := *s.Sync
 		v.Events = slices.Clone(v.Events)

@@ -1,0 +1,58 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"gopkg.in/yaml.v3"
+)
+
+// The shipped scenarios load the way the command loads them, and every saga
+// status poll (gift_status / alliance_op_status) is a top-level step in the
+// saga group — and nothing else is. A saga is judged on its outcome, not its
+// latency: -max-p95 judges each scenario minus the saga group
+// (-p95-exclude-group saga), so a poll left out of the group would put saga
+// latency back under the threshold, and a step put in by mistake would hide
+// its time from it.
+func TestShippedScenariosLoadAndGroupEverySagaPoll(t *testing.T) {
+	dir := filepath.Join("..", "..", "loadtest", "scenarios")
+	if err := loadScenarios(scenario.NewRegistry(), dir); err != nil {
+		t.Fatalf("the shipped scenarios do not load: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "demo.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec scenario.Spec
+	if err := yaml.Unmarshal(raw, &spec); err != nil {
+		t.Fatal(err)
+	}
+	isSagaPoll := func(node *scenario.NodeSpec) bool {
+		if node == nil || node.Retry == nil || node.Retry.Node == nil {
+			return false
+		}
+		for _, inner := range node.Retry.Node.Sequence {
+			if inner != nil && (inner.Action == "gift_status" || inner.Action == "alliance_op_status") {
+				return true
+			}
+		}
+		return false
+	}
+	for _, s := range spec.Scenarios {
+		grouped := 0
+		for i, step := range s.Node.Sequence {
+			if poll := isSagaPoll(step); poll != (step.Group == "saga") {
+				t.Errorf("scenario %s step %d: saga poll %v but group %q", s.Name, i+1, poll, step.Group)
+			}
+			if step.Group == "saga" {
+				grouped++
+			}
+		}
+		// demo: two gifts (to oneself, to nobody) and three alliance operations (found, donate, claim).
+		if s.Name == "demo" && grouped != 5 {
+			t.Errorf("demo scenario has %d saga steps grouped, want 5", grouped)
+		}
+	}
+}

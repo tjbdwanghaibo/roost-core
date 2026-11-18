@@ -325,6 +325,9 @@ func (*reportingRunner) MessageReport() session.Report {
 func (*reportingRunner) StepReport() []session.StepReport {
 	return []session.StepReport{{Name: "01 connect", Samples: 1, OK: 1, MaxMS: 3}}
 }
+func (*reportingRunner) GroupReport(...string) map[string]session.GroupReport {
+	return map[string]session.GroupReport{"saga": {Scenarios: 1, Steps: 1, GroupMS: session.ScenarioTimes{MaxMS: 5}}}
+}
 func (*reportingRunner) SyncReport() *robot.SyncReport {
 	return &robot.SyncReport{Events: []robot.SyncLatency{{Kind: robot.SyncDelta, Expected: 1, Received: 1, P99MS: 0.9}}, Slowest: []robot.SyncSlowSample{{Kind: robot.SyncDelta, DurationMS: 0.9}}}
 }
@@ -347,6 +350,10 @@ func TestManagerIncludesRequestAndTrafficReports(t *testing.T) {
 	if len(report.Steps) != 1 || report.Steps[0].Name != "01 connect" || report.Steps[0].MaxMS != 3 {
 		t.Fatalf("step report missing: %+v", report.Steps)
 	}
+	if report.Groups["saga"].GroupMS.MaxMS != 5 {
+		t.Fatalf("group report missing: %+v", report.Groups)
+	}
+	report.Groups["saga"] = session.GroupReport{}
 	report.Steps[0].MaxMS = 999
 	report.Sync.Events[0].P99MS = 999
 	report.Sync.Slowest[0].DurationMS = 999
@@ -356,7 +363,7 @@ func TestManagerIncludesRequestAndTrafficReports(t *testing.T) {
 	if again.Sync.Events[0].P99MS != 0.9 || again.Sync.Slowest[0].DurationMS != 0.9 {
 		t.Fatal("sync report aliases retained evidence")
 	}
-	if again.Messages.Messages[0].Rejected != 1 || again.Traffic.WrittenBytes != 80 || again.Steps[0].MaxMS != 3 {
+	if again.Messages.Messages[0].Rejected != 1 || again.Traffic.WrittenBytes != 80 || again.Steps[0].MaxMS != 3 || again.Groups["saga"].GroupMS.MaxMS != 5 {
 		t.Fatal("returned report mutated retained evidence")
 	}
 }

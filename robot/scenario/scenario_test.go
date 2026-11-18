@@ -302,6 +302,104 @@ func TestNestedStepsAccumulateIntoEveryEnclosingStep(t *testing.T) {
 	}
 }
 
+const groupedSpec = `
+scenarios:
+  - name: grouped
+    node:
+      sequence:
+        - action: connect
+        - group: saga
+          retry:
+            times: 3
+            node:
+              sequence:
+                - wait: 4ms
+                - action: poll
+        - group: " Saga "
+          wait: 3ms
+        - wait: 2ms
+  - name: single
+    node:
+      group: io
+      action: connect
+`
+
+// YAML 顶层步骤可以写 group：步骤名不变，报告里带上组名，组内步骤的耗时累计到本次场景运行
+// （robot.Context.GroupTimes），不在组里的步骤不算。group 只能写在顶层步骤上。
+func TestSpecGroupsTopLevelSteps(t *testing.T) {
+	scenarios, err := scenario.ParseSpec([]byte(groupedSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log []string
+	rb := newRecordingContext(&log, nil)
+	recorder := &session.Recorder{}
+	rb.Recorder = recorder
+	start := time.Now()
+	if err := scenarios[0].Run(context.Background(), rb); err != nil {
+		t.Fatal(err)
+	}
+	wall := time.Since(start)
+	steps := recorder.StepSnapshot()
+	var got []string
+	for _, s := range steps {
+		got = append(got, s.Name+"="+s.Group)
+	}
+	if strings.Join(got, ";") != "01 connect=;02 retry(wait 4ms,poll)=saga;03 wait 3ms=saga;04 wait 2ms=" {
+		t.Fatalf("steps = %q", got)
+	}
+	times := rb.GroupTimes()
+	if len(times) != 1 || times["saga"] < 7*time.Millisecond || times["saga"]+2*time.Millisecond > wall {
+		t.Fatalf("group times = %v (run took %v)", times, wall)
+	}
+
+	single := robot.NewContext(robot.Config{Recorder: &session.Recorder{}})
+	single.RunAction = rb.RunAction
+	if err := scenarios[1].Run(context.Background(), single); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := single.GroupTimes()["io"]; !ok {
+		t.Fatalf("single-node root group lost: %v", single.GroupTimes())
+	}
+
+	for name, spec := range map[string]string{
+		"nested":        "scenarios:\n  - name: x\n    node:\n      sequence:\n        - retry: {times: 1, node: {group: saga, action: a}}\n",
+		"sequence root": "scenarios:\n  - name: x\n    node:\n      group: saga\n      sequence:\n        - action: a\n",
+	} {
+		if _, err := scenario.ParseSpec([]byte(spec)); err == nil || !strings.Contains(err.Error(), "group") {
+			t.Errorf("%s group accepted: %v", name, err)
+		}
+	}
+}
+
+// 代码搭的场景用 StepInGroup；同组嵌套只按最外层算一次，不同组各算各的。
+func TestNestedSameGroupStepsCountOnce(t *testing.T) {
+	var log []string
+	rb := newRecordingContext(&log, nil)
+	rb.Recorder = &session.Recorder{}
+	tree := scenario.Sequence(
+		scenario.StepInGroup("saga", "outer", scenario.Sequence(
+			scenario.Wait(3*time.Millisecond),
+			scenario.StepInGroup("SAGA", "inner", scenario.Wait(10*time.Millisecond)),
+		)),
+		scenario.StepInGroup("io", "other", scenario.Wait(time.Millisecond)),
+	)
+	start := time.Now()
+	if err := tree.Run(context.Background(), rb); err != nil {
+		t.Fatal(err)
+	}
+	wall := time.Since(start)
+	times := rb.GroupTimes()
+	if times["saga"] < 13*time.Millisecond || times["saga"]+time.Millisecond > wall || times["io"] < time.Millisecond {
+		t.Fatalf("group times = %v (run took %v)", times, wall)
+	}
+	for _, s := range rb.Recorder.StepSnapshot() {
+		if want := map[string]string{"inner": "saga", "outer": "saga", "other": "io"}[s.Name]; s.Group != want {
+			t.Fatalf("step %s group = %q, want %q", s.Name, s.Group, want)
+		}
+	}
+}
+
 // nil 注册表不能注册；声明式树里的空节点报 "node is required"。
 // 历史：U-0149
 func TestRegistryAndSpecRefuseNilNodes(t *testing.T) {

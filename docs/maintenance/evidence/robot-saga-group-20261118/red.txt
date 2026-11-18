@@ -1,0 +1,118 @@
+ok  	github.com/tjbdwanghaibo/roost-core/robot	0.915s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/action	1.096s
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=finished stop_reason=completed started=3 success=3 failure=0 canceled=0 elapsed=100.394917ms err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-002 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-002 profile=smoke state=finished stop_reason=manual started=3 success=3 failure=0 canceled=0 elapsed=39.833µs err=<nil>
+2026/11/18 07:44:56 INFO admin command started command=robot.loadtest.start trace_id=KDFWNNA4GBIJQXPUDKFP4RAGC2 operator="" source=""
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO admin command finished command=robot.loadtest.start trace_id=KDFWNNA4GBIJQXPUDKFP4RAGC2 operator="" source="" outcome=ok duration_ms=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=21.045208ms err=<nil>
+2026/11/18 07:44:56 INFO admin command started command=robot.loadtest.report trace_id=LTYT7ZRWN5T6SQSUJEGFLAFPLD operator="" source=""
+2026/11/18 07:44:56 INFO admin command finished command=robot.loadtest.report trace_id=LTYT7ZRWN5T6SQSUJEGFLAFPLD operator="" source="" outcome=ok duration_ms=1
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=finished stop_reason=completed started=1 success=1 failure=0 canceled=0 elapsed=10.833µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=until-canceled count=1 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=1 rate=1 scenario=until-canceled transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=1 success=0 failure=0 canceled=1
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=finished stop_reason=duration started=1 success=0 failure=0 canceled=1 elapsed=100.314334ms err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=instant count=2 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=82.375µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=instant count=2 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=46.625µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-002 profile=smoke scenario=instant count=2 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-002 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=60.125µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-003 profile=smoke scenario=instant count=2 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-003 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=42.667µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-004 profile=smoke scenario=instant count=2 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-004 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=29.666µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-005 profile=smoke scenario=instant count=2 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-005 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=42.834µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-006 profile=smoke scenario=instant count=2 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-006 profile=smoke state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=30.667µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=1 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=finished stop_reason=completed started=1 success=1 failure=0 canceled=0 elapsed=20.882458ms err=<nil>
+--- FAIL: TestManagerIncludesRequestAndTrafficReports (0.02s)
+    loadtest_test.go:354: group report missing: map[]
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=failed stop_reason=threshold started=10 success=8 failure=2 canceled=0 elapsed=21.028125ms err=<nil> verdict="threshold violated: error_rate = 0.2 > max 0.1 (10 samples)"
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=failed stop_reason=threshold started=5 success=0 failure=0 canceled=5 elapsed=11.013667ms err=<nil> verdict="threshold violated: error_rate: no samples to judge (max 0); p95: no samples to judge (max 1s)"
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=instant count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=3 rate=1 scenario=instant transport=tcp endpoint=""
+2026/11/18 07:44:56 WARN obs: metric series limit reached, new label combinations are dropped metric=robot.runner.scenario.cost limit=1
+2026/11/18 07:44:56 INFO robot runner: stop started=3 success=3 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=failed stop_reason=threshold started=3 success=3 failure=0 canceled=0 elapsed=80.792µs err=<nil> verdict="threshold violated: p95: no samples to judge (max 10s)"
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-demo-20261118-074456-001 profile=demo scenario=demo count=10 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-demo-20261118-074456-001 profile=demo state=finished stop_reason=completed started=10 success=10 failure=0 canceled=0 elapsed=15.708µs err=<nil>
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-demo-20261118-074456-001 profile=demo scenario=demo count=10 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-demo-20261118-074456-001 profile=demo state=failed stop_reason=threshold started=10 success=10 failure=0 canceled=0 elapsed=27.25µs err=<nil> verdict="threshold violated: p95 = 9.6s > max 9s (10 samples)"
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=failed stop_reason=threshold started=1 success=1 failure=0 canceled=0 elapsed=10.166µs err=<nil> verdict="threshold violated: p99 = 0.0009s > max 0.0005s (1 samples)"
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-smoke-20261118-074456-001 profile=smoke scenario=ping count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-smoke-20261118-074456-001 profile=smoke state=failed stop_reason=threshold started=7 success=7 failure=0 canceled=0 elapsed=6.458µs err=<nil> verdict="threshold violated: drop_rate = 0.3s > max 0s (10 samples)"
+2026/11/18 07:44:56 INFO robot loadtest: run start accepted run_id=robot-grouped-20261118-074456-001 profile=grouped scenario=grouped count=3 endpoint=""
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=3 rate=1 scenario=grouped transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=3 success=3 failure=0 canceled=0
+2026/11/18 07:44:56 INFO robot loadtest: run done run_id=robot-grouped-20261118-074456-001 profile=grouped state=failed stop_reason=threshold started=3 success=3 failure=0 canceled=0 elapsed=40.801083ms err=<nil> verdict="threshold violated: \"p95_excluding:saga\": unknown metric"
+--- FAIL: TestExcludingThresholdJudgesTheScenarioWithoutTheGroup (0.04s)
+    threshold_test.go:231: saga waits 40ms but the rest is instant; p95_excluding:saga ≤ 20ms judged failed/threshold: threshold violated: "p95_excluding:saga": unknown metric thresholds=[{Threshold:{Metric:p95_excluding:saga Max:0.02} Actual:0 Violated:true Samples:0 Reason:unknown_metric} {Threshold:{Metric:error_rate Max:0} Actual:0 Violated:false Samples:3 Reason:}] groups=map[]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/loadtest	1.320s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/protocol	0.444s
+2026/11/18 07:44:56 INFO robot runner: start executor=pool count=2 rate=1 scenario=hold transport=tcp endpoint=""
+2026/11/18 07:44:56 INFO robot runner: stop started=1 success=0 failure=0 canceled=1
+2026/11/18 07:44:56 INFO robot runner: start executor=arrival-rate count=1 rate=1000 scenario=hold transport=tcp endpoint=""
+2026/11/18 07:44:57 INFO robot runner: stop started=2 success=0 failure=0 canceled=2
+2026/11/18 07:44:57 INFO robot runner: start executor=pool count=1 rate=1 scenario=cleanup transport=tcp endpoint=""
+2026/11/18 07:44:57 INFO robot runner: stop started=1 success=0 failure=0 canceled=1
+2026/11/18 07:44:57 INFO robot runner: start executor=pool count=2 rate=1 scenario=reconnect transport=tcp endpoint=127.0.0.1:56046
+2026/11/18 07:44:57 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:57 INFO robot runner: start executor=pool count=2 rate=1 scenario=reconnect transport=tcp endpoint=127.0.0.1:56046
+2026/11/18 07:44:57 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/18 07:44:57 INFO robot runner: start executor=pool count=4 rate=1 scenario=stepped transport=tcp endpoint=127.0.0.1:56055
+2026/11/18 07:44:57 INFO robot runner: stop started=4 success=4 failure=0 canceled=0
+2026/11/18 07:44:57 INFO robot runner: start executor=pool count=4 rate=1 scenario=grouped transport=tcp endpoint=127.0.0.1:56060
+2026/11/18 07:44:57 WARN robot runner: scenario failed robot=4 player=1004 scenario=grouped err="robot action: \"missing\" not found (registered: [connect ping_call wait wait_push])"
+2026/11/18 07:44:57 WARN robot runner: scenario failed robot=2 player=1002 scenario=grouped err="robot action: \"missing\" not found (registered: [connect ping_call wait wait_push])"
+2026/11/18 07:44:57 INFO robot runner: stop started=4 success=2 failure=2 canceled=0
+--- FAIL: TestRunnerReportsGroupTimeOfSuccessfulScenarios (0.05s)
+    runner_test.go:117: saga group = {Scenarios:0 Steps:0 StepsFailed:0 GroupMS:{MeanMS:0 P50MS:0 P90MS:0 P95MS:0 P99MS:0 MaxMS:0} ExcludingMS:{MeanMS:0 P50MS:0 P90MS:0 P95MS:0 P99MS:0 MaxMS:0}}
+2026/11/18 07:44:57 INFO robot runner: start executor=pool count=8 rate=1 scenario=ping transport=tcp endpoint=127.0.0.1:56065
+2026/11/18 07:44:57 INFO robot runner: stop started=8 success=8 failure=0 canceled=0
+2026/11/18 07:44:57 INFO robot runner: start executor=looping count=3 rate=1 scenario=slow transport=tcp endpoint=127.0.0.1:56074
+2026/11/18 07:44:57 INFO robot runner: stop started=3 success=0 failure=0 canceled=3
+2026/11/18 07:44:57 INFO robot runner: start executor=looping count=2 rate=1 scenario=loop transport=tcp endpoint=127.0.0.1:56080
+2026/11/18 07:44:57 INFO robot runner: stop started=6 success=98 failure=0 canceled=6
+2026/11/18 07:44:57 INFO robot runner: start executor=arrival-rate count=1 rate=100 scenario=ping transport=tcp endpoint=127.0.0.1:56185
+2026/11/18 07:44:57 INFO robot runner: stop started=15 success=14 failure=0 canceled=1
+2026/11/18 07:44:57 INFO robot runner: start executor=looping count=3 rate=1 scenario=idle transport=tcp endpoint=""
+2026/11/18 07:44:58 INFO robot runner: stop started=5 success=21 failure=0 canceled=5
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/runner	2.621s
+--- FAIL: TestSpecGroupsTopLevelSteps (0.01s)
+    scenario_test.go:349: steps = ["01 connect=" "02 retry(wait 4ms,poll)=" "03 wait 3ms=" "04 wait 2ms="]
+--- FAIL: TestNestedSameGroupStepsCountOnce (0.02s)
+    scenario_test.go:394: group times = map[] (run took 15.107041ms)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/scenario	0.764s
+--- FAIL: TestGroupReportSplitsGroupTimeFromTheRestOfTheScenario (0.00s)
+    report_test.go:142: groups = map[]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/session	1.747s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/transport	1.706s
+FAIL

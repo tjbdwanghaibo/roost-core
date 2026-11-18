@@ -118,3 +118,60 @@ func TestStepReportAggregatesTimeRetriesAndWaits(t *testing.T) {
 		t.Fatalf("unbounded or lost steps: len=%d overflow=%d total=%d", len(all), overflow, total)
 	}
 }
+
+// 组报告把“组内步骤的时间”和“其余场景时间”分开：只算成功场景，每个成功场景对每个已知组都记一个样本
+// （没跑这个组记 0）；组第一次出现时用此前的成功场景补齐，所以补出来的分位数与从头记的一样；
+// 门槛点名但从未出现的组按“组内 0、除去组 = 整场景”返回；组时间超过场景时间时除去组按 0 截底。
+func TestGroupReportSplitsGroupTimeFromTheRestOfTheScenario(t *testing.T) {
+	r := &Recorder{}
+	r.FinishScenario(time.Second, nil)
+	r.FinishScenario(2*time.Second, nil)
+	// saga 组第一次出现在一个步骤样本里（场景还没结束），之后那个场景成功。
+	r.FinishStep("15 gift", StepSample{Group: "saga", Elapsed: 7 * time.Second, OK: true})
+	r.FinishScenario(10*time.Second, map[string]time.Duration{"saga": 7 * time.Second})
+	// 失败场景里的 saga 步骤只计步骤次数，不进分位数。
+	r.FinishStep("20 gift", StepSample{Group: "saga", Elapsed: 9 * time.Second})
+	r.FinishStep("30 found", StepSample{Group: "saga", Elapsed: 5 * time.Second, OK: true})
+	r.FinishScenario(6*time.Second, map[string]time.Duration{"saga": 5 * time.Second})
+	// Parallel 里并行的同组步骤可以让组时间超过场景时间：除去组按 0 截底。
+	r.FinishScenario(time.Second, map[string]time.Duration{"saga": 2 * time.Second})
+
+	groups := r.GroupSnapshot("other")
+	saga, ok := groups["saga"]
+	if !ok {
+		t.Fatalf("groups = %+v", groups)
+	}
+	// 成功场景 5 个：组内 [0 0 7 5 2]s，除去组 [1 2 3 1 0]s。
+	if saga.Scenarios != 5 || saga.Steps != 3 || saga.StepsFailed != 1 {
+		t.Fatalf("saga counts = %+v", saga)
+	}
+	if g := saga.GroupMS; g.MeanMS != 2800 || g.MaxMS != 7000 || g.P50MS < 2000 || g.P50MS > 2000*1.09 || g.P95MS != 7000 {
+		t.Fatalf("saga group time = %+v", g)
+	}
+	if e := saga.ExcludingMS; e.MeanMS != 1400 || e.MaxMS != 3000 || e.P50MS < 1000 || e.P50MS > 1000*1.09 || e.P95MS != 3000 {
+		t.Fatalf("saga excluding = %+v", e)
+	}
+	other, ok := groups["other"]
+	if !ok || other.Scenarios != 5 || other.Steps != 0 || other.GroupMS.MaxMS != 0 || other.GroupMS.P95MS != 0 {
+		t.Fatalf("named but absent group = %+v", other)
+	}
+	if e := other.ExcludingMS; e.MeanMS != 4000 || e.MaxMS != 10000 || e.P95MS != 10000 {
+		t.Fatalf("absent group must exclude nothing: %+v", e)
+	}
+	if steps := r.StepSnapshot(); steps[0].Group != "saga" {
+		t.Fatalf("step report lost its group: %+v", steps[0])
+	}
+	if len(r.GroupSnapshot()) != 1 {
+		t.Fatal("a group named only by a snapshot call must not be kept")
+	}
+
+	// 组名有上限，超出的并进溢出项，成功场景的样本不丢。
+	bounded := &Recorder{}
+	for i := range 40 {
+		bounded.FinishScenario(time.Millisecond, map[string]time.Duration{fmt.Sprintf("g%02d", i): time.Millisecond})
+	}
+	all := bounded.GroupSnapshot()
+	if len(all) != 33 || all[overflowGroupName].Scenarios != 40 || all["g00"].Scenarios != 40 {
+		t.Fatalf("groups not bounded: %d groups, overflow %+v", len(all), all[overflowGroupName])
+	}
+}

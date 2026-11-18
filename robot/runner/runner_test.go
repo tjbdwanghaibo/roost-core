@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/action"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
@@ -92,6 +93,31 @@ func TestRunnerReportsNamedStepsOfEveryRobot(t *testing.T) {
 	steps := r.StepReport()
 	if len(steps) != 2 || steps[0].Name != "01 connect" || steps[0].Samples != 4 || steps[1].Samples != 4 || steps[1].OK != 4 || steps[1].RetryAttemptsAvg != 1 {
 		t.Fatalf("steps = %+v", steps)
+	}
+}
+
+// Runner 只把成功场景计入组报告：失败场景里的组步骤只算步骤次数。组内时间与“除去组”的时间按每人一份汇总。
+func TestRunnerReportsGroupTimeOfSuccessfulScenarios(t *testing.T) {
+	endpoint := startEcho(t)
+	evenFails := scenario.Cond(func(rb *robot.Context) bool { return rb.ID%2 == 0 }, scenario.Action("missing", nil), nil)
+	r := newRunner(t, runner.Config{Count: 4, Scenario: "grouped"}, endpoint, scenario.New("grouped", scenario.Sequence(
+		scenario.Step("01 connect", scenario.Action(action.NameConnect, nil)),
+		scenario.StepInGroup("saga", "02 poll", scenario.Wait(50*time.Millisecond)),
+		scenario.Step("03 ping", scenario.Action("ping_call", map[string]any{"nonce": 1})),
+		scenario.Step("04 maybe fail", evenFails),
+	)))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stats := r.Stats(); stats.Success != 2 || stats.Failure != 2 {
+		t.Fatalf("fixture: stats = %+v", stats)
+	}
+	saga, ok := r.GroupReport("saga")["saga"]
+	if !ok || saga.Scenarios != 2 || saga.Steps != 4 || saga.StepsFailed != 0 {
+		t.Fatalf("saga group = %+v", saga)
+	}
+	if saga.GroupMS.P50MS < 50 || saga.ExcludingMS.MaxMS >= 50 || saga.ExcludingMS.MaxMS <= 0 {
+		t.Fatalf("saga group time / excluding = %+v", saga)
 	}
 }
 

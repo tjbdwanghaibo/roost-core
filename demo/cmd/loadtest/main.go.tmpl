@@ -87,7 +87,12 @@ func main() {
 	// The scenario deliberately waits for matchmaking (poll every 250ms while
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
-	maxP95 := flag.Float64("max-p95", 16.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO. The scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and then plays a lockstep battle for its full frame budget: the slowest robot of a healthy run takes 7-10s (two game servers on one machine at the top of that range), so the bound is about twice that. The p95 is estimated from power-of-two buckets narrowed to the observed fastest and slowest robot; with 10 robots or fewer it is the slowest robot")
+	maxP95 := flag.Float64("max-p95", 16.0, "threshold: scenario cost p95, seconds, after taking out the steps of -p95-exclude-group; a regression bound, not an SLO. The scenario waits on asynchronous chains (reward mail, match) and then plays a lockstep battle for its full frame budget: the slowest robot of a healthy run takes 7-10s (two game servers on one machine at the top of that range), so the bound is about twice that. With 10 robots or fewer the p95 is the slowest robot")
+	// Sagas are judged on their outcome, not their latency: the scenario's
+	// saga status polls carry `group: saga`, a saga that does not reach the
+	// expected terminal status fails its robot (and -max-error-rate), and the
+	// time the polls take is reported under groups.saga but not gated.
+	p95ExcludeGroup := flag.String("p95-exclude-group", "saga", "the -max-p95 threshold judges each successful scenario minus the time it spent in steps of this group (threshold p95_excluding:<group>; a scenario without such steps is judged whole); empty judges the whole scenario (threshold p95)")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
 	loginMode := flag.String("login", "bus", "how robots log in: bus (Login → CreateRole → SelectRole on the account service over -account-nats, session ticket on the handshake) or portal (the front door at -portal: login → server list → enter ticket, then EnterStatus / EnterCreate / EnterGame)")
 	portalURL := flag.String("portal", "http://127.0.0.1:8081", "-login portal: base URL of the front door (web.addr in config.account.yaml)")
@@ -137,13 +142,13 @@ func main() {
 		os.Exit(2)
 	}
 	ops := gameOpsClient{addr: *gameOps, token: *adminToken, http: &http.Client{Timeout: 15 * time.Second}}
-	if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login, ops, routes); err != nil {
+	if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *p95ExcludeGroup, *reportPath, login, ops, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login robotLogin, ops gameOpsClient, routes identityRoutes) error {
+func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, p95ExcludeGroup string, reportPath string, login robotLogin, ops gameOpsClient, routes identityRoutes) error {
 	playertcp.MustRegister()
 
 	protocols := protocol.NewRegistry(pbCodec{})
@@ -163,6 +168,10 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 		return err
 	}
 
+	p95Metric := "p95"
+	if group := strings.TrimSpace(p95ExcludeGroup); group != "" {
+		p95Metric = "p95_excluding:" + group
+	}
 	manager := loadtest.New(loadtest.Config{
 		Profiles: map[string]loadtest.Profile{
 			profileName: {
@@ -170,7 +179,7 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 				Thresholds: []loadtest.Threshold{
 					{Metric: "error_rate", Max: maxErrorRate},
 					{Metric: "drop_rate", Max: 0},
-					{Metric: "p95", Max: maxP95},
+					{Metric: p95Metric, Max: maxP95},
 				},
 			},
 		},

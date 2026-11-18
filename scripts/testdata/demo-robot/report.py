@@ -61,6 +61,9 @@ summary = {
     "thresholds": report.get("thresholds"),
     # 逐步计时（RunSnapshot.steps）：整场景时间花在哪一步；按平均耗时从大到小排，方便直接看。
     "steps_by_mean_ms": sorted(report.get("steps") or [], key=lambda s: s.get("mean_ms", 0), reverse=True),
+    # 按步骤组（RunSnapshot.groups）：每个成功场景在组内步骤上的时间（group_ms）与除去该组的场景时间
+    # （excluding_ms）；demo 的 p95 门槛判的是 groups.saga.excluding_ms，saga 组自身只报告。
+    "groups": report.get("groups"),
     "logged_occurrences": counts,
     "startup_saga_replay": replay,
     "log_files_scanned": [str(p.relative_to(out)) for p in sources if p.exists()],

@@ -1,0 +1,13 @@
+ 1. runner 成功场景不调 FinishScenario: RED TestExcludingThresholdJudgesTheScenarioWithoutTheGroup, TestRunnerReportsGroupTimeOfSuccessfulScenarios
+ 2. runner 失败场景也调 FinishScenario（放到 switch 之前）: RED TestRunnerReportsGroupTimeOfSuccessfulScenarios
+ 3. StepInGroup 同组嵌套也累计（去掉外层同组判断）: RED TestNestedSameGroupStepsCountOnce
+ 4. StepInGroup 不累计组时间: RED TestExcludingThresholdJudgesTheScenarioWithoutTheGroup, TestNestedSameGroupStepsCountOnce, TestRunnerReportsGroupTimeOfSuccessfulScenarios, TestSpecGroupsTopLevelSteps
+ 5. 新组不用此前场景补齐: RED TestExcludingThresholdJudgesTheScenarioWithoutTheGroup, TestGroupReportSplitsGroupTimeFromTheRestOfTheScenario
+ 6. 除去组不按 0 截底: RED TestGroupReportSplitsGroupTimeFromTheRestOfTheScenario
+ 7. 只给本次跑过的组记样本: RED TestGroupReportSplitsGroupTimeFromTheRestOfTheScenario
+ 8. GroupSnapshot 不返回点名但未出现的组: RED TestExcludingThresholdJudgesTheScenarioWithoutTheGroup, TestGroupReportSplitsGroupTimeFromTheRestOfTheScenario
+ 9. FinishStep 不计组步骤次数: RED TestGroupReportSplitsGroupTimeFromTheRestOfTheScenario, TestRunnerReportsGroupTimeOfSuccessfulScenarios
+10. 门槛取组内时间而不是除去组: RED TestExcludingThresholdJudgesTheScenarioWithoutTheGroup
+11. YAML 顶层步骤的 group 不交给 StepInGroup: RED TestSpecGroupsTopLevelSteps
+12. 嵌套位置的 group 不报错: RED TestSpecGroupsTopLevelSteps
+13. 快照不深拷贝 Groups: RED TestManagerIncludesRequestAndTrafficReports

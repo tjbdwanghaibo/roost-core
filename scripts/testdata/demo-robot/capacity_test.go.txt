@@ -12,7 +12,8 @@ import (
 )
 
 // TestDemoRobotCapacity 只调用正式 loadtest；不替换登录、协议、业务或场景。
-// count 是完整场景数，保持正式 CLI 的错误率 0 / p95 16s 门槛。
+// count 是完整场景数，保持正式 CLI 的错误率 0 / drop 0 门槛；p95 16s 判除去 saga 组之后的场景时间，
+// saga 组只看成败（失败照样算进错误率），延迟在 robot.json 的 groups.saga 里报告、不卡。
 func TestDemoRobotCapacity(t *testing.T) {
 	nats := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if nats == "" {
@@ -29,7 +30,7 @@ func TestDemoRobotCapacity(t *testing.T) {
 		"-ramp-step", os.Getenv("DEMO_ROBOT_STEP"), "-ramp-interval", os.Getenv("DEMO_ROBOT_INTERVAL"),
 		"-endpoint", os.Getenv("DEMO_ROBOT_ENDPOINT"), "-server-id", "1000", "-login", "bus", "-account-nats", nats,
 		"-nats-prefix", os.Getenv("DEMO_ROBOT_PROJECT"), "-game-ops", os.Getenv("DEMO_ROBOT_OPS"),
-		"-max-error-rate", "0", "-max-p95", "16", "-report", filepath.Join(out, "robot.json")}
+		"-max-error-rate", "0", "-max-p95", "16", "-p95-exclude-group", "saga", "-report", filepath.Join(out, "robot.json")}
 	data, err := json.MarshalIndent(args, "", "  ")
 	if err != nil {
 		t.Fatal(err)

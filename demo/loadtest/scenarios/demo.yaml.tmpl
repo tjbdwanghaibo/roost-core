@@ -11,6 +11,14 @@
 #
 # The same file is the demo's regression test: `go run ./cmd/loadtest` fails
 # when any step returns a non-zero code or the thresholds are exceeded.
+#
+# Every saga status poll carries `group: saga` (five in demo, the founding
+# polls in the alliance join scenarios). A saga is judged on its
+# outcome (it must reach the expected terminal status; a failure fails the
+# robot like any other step), not on its latency: acceptance and completion are
+# two moments, and how long the coordinator takes under a burst is reported
+# (`groups.saga` in the JSON report) but not gated. The p95 threshold
+# (-max-p95, -p95-exclude-group saga) judges the scenario minus those polls.
 scenarios:
   - name: demo
     node:
@@ -87,7 +95,8 @@ scenarios:
           param:
             item_id: 1001
             count: 1
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:
@@ -115,7 +124,8 @@ scenarios:
             to_player_id: 1
             item_id: 1001
             count: 1
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:
@@ -176,7 +186,8 @@ scenarios:
             item_id: 9001
             count: 200
         - action: found_alliance
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:
@@ -198,7 +209,8 @@ scenarios:
         - action: donate_alliance
           param:
             amount: 10
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:
@@ -208,7 +220,8 @@ scenarios:
           param:
             status: completed
         - action: claim_alliance_reward
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:
@@ -380,7 +393,8 @@ scenarios:
         - action: found_alliance
           param:
             open_join: true
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:
@@ -433,7 +447,8 @@ scenarios:
         - action: found_alliance
           param:
             open_join: true
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:
@@ -471,7 +486,8 @@ scenarios:
         - action: found_alliance
           param:
             open_join: true
-        - retry:
+        - group: saga
+          retry:
             times: 40
             node:
               sequence:

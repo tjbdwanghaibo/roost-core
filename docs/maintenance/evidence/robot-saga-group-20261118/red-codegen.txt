@@ -1,0 +1,14 @@
+--- FAIL: TestDemoScenarioGroupsEverySagaPollAndNothingElse (0.00s)
+    demo_test.go:114: scenario demo step 15: saga poll true but group ""
+    demo_test.go:114: scenario demo step 20: saga poll true but group ""
+    demo_test.go:114: scenario demo step 30: saga poll true but group ""
+    demo_test.go:114: scenario demo step 34: saga poll true but group ""
+    demo_test.go:114: scenario demo step 37: saga poll true but group ""
+    demo_test.go:121: demo scenario has 0 saga steps grouped, want 5
+    demo_test.go:114: scenario alliance_offline_join step 5: saga poll true but group ""
+    demo_test.go:114: scenario alliance_cross_join step 5: saga poll true but group ""
+    demo_test.go:114: scenario alliance_cross_join step 20: saga poll true but group ""
+    demo_test.go:129: cmd/loadtest no longer judges -max-p95 on the scenario without the saga group by default
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.602s
+FAIL

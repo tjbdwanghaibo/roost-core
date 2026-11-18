@@ -36,6 +36,7 @@ go run ./cmd/loadtest -executor arrival-rate -rate 10 -max-concurrent 100 -durat
 - `scheduled`：应投递的机器人；`started`：实际启动；`dropped_capacity`：达到本机并发上限；`dropped_schedule`：调度错过的时间槽；`launch_failed`：身份分配失败。排空后 scheduled = started + 三项未启动计数。不会把过期时间槽集中补发成突发负载。
 - `success/failure/canceled`：场景执行结果。looping 会重复场景，不能拿它们之和与机器人 started 比。`online/peak_online` 是机器人实例数。
 - `error_rate` 分母为已完成场景；`drop_rate` 分母为 scheduled。取消、丢拍与失败分别查看。零样本的门禁失败。
+- 门槛指标：`error_rate`、`drop_rate`、`p50/p90/p95/p99`（整场景，成功场景的耗时直方图），以及 `p50/p90/p95/p99_excluding:<组>`（成功场景耗时减去它在该组步骤上的时间，见下文 `groups`）。后者一次只除去一个组；场景里没有这个组的步骤时等于整场景；Runner 不提供组报告时按零样本判失败。用途是“这一类操作只看成败、不卡延迟”：组内步骤失败照样让场景失败、计入 `error_rate`，组自身的时间只在 `groups` 里报告。
 - `quantiles_ms` 保留小数毫秒；门禁不再先截断到整数毫秒。场景耗时包含等待与多个请求。现有 `robot.session.call` 是逐消息统计，需要监控采集，不能把场景 p99 称为网络包或 Sync 延迟。
 - `config/environment` 记录 executor、rate、并发、seed、ramp/stages、Go、GOMAXPROCS、构建版本；不包含票据和 transport headers。使用本地 replace 时另保留检出源码，不能只留一个版本标签。
 - `robot_resources` 是 Robot 进程自身的 CPU 时间/单核百分比、进程生命期 RSS 高水位、每秒采样堆/goroutine 峰值。短于一秒的峰值可能漏采。macOS/Linux 有 CPU/RSS；其他平台标 unavailable。不是服务器监控，不能据此判断服务端磁盘或网卡是否饱和。
@@ -50,6 +51,7 @@ go run ./cmd/loadtest -executor arrival-rate -rate 10 -max-concurrent 100 -durat
 - `request_ok_per_second` = ok 总数 / 整次运行秒数，包含登录、重连和其他场景等待；不是仅采样活跃阶段的峰值 TPS，也不是资产成功写入 TPS。
 - `traffic.socket_read_bytes/socket_written_bytes` 在 TCP socket 实际读写返回时累计，包含 RS 包头、握手、迟到应答和部分写入；不含 TCP/IP 头及重传。`measured_connections` 表示接入计数的连接数。默认 TCP 和 player-tcp 已测量，WS、直接使用 KCP 或自定义传输未接此计数，不能把 0 当成没有流量。
 - `steps` 是逐步计时，用来看整场景耗时花在哪一步。YAML 场景的每个顶层步骤自动计时（根不是 sequence 时整棵树算一步），名字是两位序号加子树摘要，如 `08 retry(wait 250ms,mailbox_list)`，报告按名字排序即场景顺序；代码搭的场景用 `scenario.Step(name, node)` 自己命名。每步给 `samples/ok/failed`、`mean_ms/p50_ms/p95_ms/max_ms`（含失败样本，桶精度同上）、`wait_mean_ms`（场景 `wait` 节点睡掉的时间；动作内部的等待如 `wait_push` 的超时不算在内，只在步骤耗时里）、`retry_attempts_avg/max`（步骤内 Retry 实际执行子节点的次数，一次成功为 1，没有 Retry 为 0）。嵌套 Step 各记一份，内层的 wait / retry 同时计入外层。最多 256 个步骤名，更多的汇总到 `(overflow)`。步骤耗时 = 请求往返 + 场景等待 + 机器人本地处理，不是服务端排队时间。
+- `groups` 是按步骤组的汇总。YAML 顶层步骤可写 `group: <组名>`（只能写在顶层步骤上，其他位置报错；组名去首尾空白、转小写），代码搭的场景用 `scenario.StepInGroup(group, name, node)`；`steps` 里每步带 `group`。每个组给：`scenarios`（成功场景数，即分位数的样本数）、`steps/steps_failed`（该组步骤的执行与失败次数，含失败场景）、`group_ms`（每个成功场景在该组步骤上的时间合计）、`excluding_ms`（场景时间减去组内时间），两者都有 `mean_ms/p50_ms/p90_ms/p95_ms/p99_ms/max_ms`。只算成功场景，与整场景 `quantiles_ms` 同一口径、同一个耗时值；每个成功场景对每个已知组都记一个样本，没跑这个组的记 0。同组嵌套只按最外层算一次；`Parallel` 里并行的同组步骤各记各的，组时间可能超过墙钟时间，`excluding_ms` 按 0 截底。分位数用与 `steps` 相同的约 9% 指数桶取上界，整场景 `quantiles_ms` 用 obs 直方图，同一批数据两者可以差一个桶。最多 32 个组，更多的汇总到 `(overflow)`。`Runner.GroupReport(include...)` 可直接读取，点名但没出现的组也返回（组内 0、除去组 = 整场景）。game-demo 把 saga 状态轮询步骤标为 `saga` 组，`-max-p95`（缺省 16s）判 `p95_excluding:saga`，`-p95-exclude-group ''` 恢复整场景 `p95`。
 - 返回的历史报告深拷贝可变字段；调用方整理表格不会改写保留证据。拒绝、取消和超时不混入成功吞吐。
 
 服务端 CPU/内存/磁盘/网络需由部署侧监控单独采集；目前内置资源采样仍只覆盖 Robot 进程。`SyncProbe` 提供 Full/Delta/Remove 的端到端统计与最慢 32 个样本；服务端队列仍须由场景读取 Nest Stats，不由请求 RT 替代。

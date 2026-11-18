@@ -519,6 +519,8 @@ func (r *Runner) runOnce(ctx context.Context, index int, playerID int64, scn sce
 		slog.Warn("robot runner: scenario failed", "robot", index, "player", playerID, "scenario", scn.Name(), "err", err)
 	default:
 		r.success.Add(1)
+		// 与下面整场景耗时直方图同一个 elapsed：组报告的“除去组”时间与整场景 p95 对得上。
+		r.recorder.FinishScenario(elapsed, rb.GroupTimes())
 		metrics.IncCounter("robot.runner.scenario.total", r.metricLabels(metrics.Labels{"scenario": scn.Name(), "result": "ok"}), 1)
 		metrics.ObserveHistogram("robot.runner.scenario.cost", r.metricLabels(metrics.Labels{"scenario": scn.Name(), "result": "ok"}), elapsed)
 	}
@@ -613,6 +615,11 @@ func (r *Runner) TrafficReport() transport.TrafficReport { return r.traffic.Snap
 
 // StepReport 返回本次运行各具名场景步骤（scenario.Step；YAML 场景的每个顶层步骤）的耗时汇总。
 func (r *Runner) StepReport() []session.StepReport { return r.recorder.StepSnapshot() }
+
+// GroupReport 返回本次运行各步骤组（scenario.StepInGroup；YAML 顶层步骤的 group）的汇总，include 点名的组即使没出现也返回。
+func (r *Runner) GroupReport(include ...string) map[string]session.GroupReport {
+	return r.recorder.GroupSnapshot(include...)
+}
 
 // WithSyncProbe 将场景观测器绑定到本次运行；不要跨 Runner 复用，场景为每个连接分配唯一代际。
 func WithSyncProbe(probe *robot.SyncProbe) Option { return func(r *Runner) { r.syncProbe = probe } }

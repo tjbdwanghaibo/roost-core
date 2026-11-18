@@ -202,3 +202,64 @@ func TestDropRateCountsWorkTheLoadGeneratorCouldNotIssue(t *testing.T) {
 		t.Fatalf("missing Robot environment/resources: %+v", done)
 	}
 }
+
+// runGrouped 用正式 Runner 跑 3 个机器人：每人在 saga 组步骤里等 40ms，其余几乎不花时间。
+func runGrouped(t *testing.T, thresholds []loadtest.Threshold) loadtest.RunSnapshot {
+	t.Helper()
+	scenarios := scenario.NewRegistry()
+	scenarios.MustRegister(scenario.New("grouped", scenario.Sequence(
+		scenario.Step("01 local", scenario.NodeFunc(func(context.Context, *robot.Context) error { return nil })),
+		scenario.StepInGroup("saga", "02 poll", scenario.Wait(40*time.Millisecond)),
+	)))
+	m := loadtest.New(loadtest.Config{
+		Profiles: map[string]loadtest.Profile{
+			"grouped": {Run: runner.Config{Count: 3, Scenario: "grouped"}, Thresholds: thresholds},
+		},
+		RunnerOptions: []runner.Option{runner.WithScenarioRegistry(scenarios)},
+	})
+	if _, err := m.Start(context.Background(), loadtest.StartRequest{Profile: "grouped"}); err != nil {
+		t.Fatal(err)
+	}
+	return waitDone(t, m)
+}
+
+// p95_excluding:<组> 判的是除去该组步骤之后的场景时间：saga 组再慢也不卡它，整场景 p95 照旧卡；
+// 门槛点名的组没出现时等于整场景；组名为空是未知指标；Runner 不提供组报告时不可判、不按 0 通过。
+func TestExcludingThresholdJudgesTheScenarioWithoutTheGroup(t *testing.T) {
+	run := runGrouped(t, []loadtest.Threshold{{Metric: "p95_excluding:saga", Max: 0.02}, {Metric: "error_rate", Max: 0}})
+	if run.State != loadtest.StateFinished {
+		t.Fatalf("saga waits 40ms but the rest is instant; p95_excluding:saga ≤ 20ms judged %s/%s: %s thresholds=%+v groups=%+v",
+			run.State, run.StopReason, run.Error, run.Thresholds, run.Groups)
+	}
+	saga := run.Groups["saga"]
+	if saga.Scenarios != 3 || saga.GroupMS.P50MS < 40 || run.Thresholds[0].Samples != 3 || run.Thresholds[0].Actual >= 0.02 {
+		t.Fatalf("groups=%+v thresholds=%+v", run.Groups, run.Thresholds)
+	}
+
+	whole := runGrouped(t, []loadtest.Threshold{{Metric: "p95", Max: 0.02}})
+	if whole.State != loadtest.StateFailed || whole.StopReason != loadtest.StopReasonThreshold {
+		t.Fatalf("whole-scenario p95 must still count the saga wait: %s/%s %+v", whole.State, whole.StopReason, whole.Thresholds)
+	}
+
+	absent := runGrouped(t, []loadtest.Threshold{{Metric: "P95_EXCLUDING:Other", Max: 0.02}})
+	if absent.State != loadtest.StateFailed || absent.Thresholds[0].Actual < 0.04 || absent.Thresholds[0].Samples != 3 {
+		t.Fatalf("excluding a group the scenario never ran must judge the whole scenario: %+v", absent.Thresholds)
+	}
+	if !strings.Contains(absent.Error, "P95_EXCLUDING:Other") {
+		t.Fatalf("violation does not name the threshold: %q", absent.Error)
+	}
+
+	unnamed := runGrouped(t, []loadtest.Threshold{{Metric: "p95_excluding:", Max: 1}})
+	if r := unnamed.Thresholds[0]; !r.Violated || r.Reason != loadtest.ThresholdReasonUnknownMetric {
+		t.Fatalf("group-less excluding metric = %+v", r)
+	}
+
+	fake := &fakeRunner{stats: runner.Stats{Started: 3, Success: 3}}
+	m := newManager(t, fake, []loadtest.Threshold{{Metric: "p95_excluding:saga", Max: 1}}, time.Millisecond)
+	if _, err := m.Start(context.Background(), loadtest.StartRequest{Profile: "smoke"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := waitDone(t, m).Thresholds[0]; !r.Violated || r.Reason != loadtest.ThresholdReasonNoSamples {
+		t.Fatalf("runner without group report = %+v", r)
+	}
+}

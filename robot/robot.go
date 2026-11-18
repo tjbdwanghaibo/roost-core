@@ -17,6 +17,7 @@ package robot
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -62,9 +63,35 @@ type Context struct {
 	mu      sync.RWMutex
 	session *session.Session
 	onClose []func() error
+	// groupTimes 是本次场景运行在各步骤组上花的时间（AddGroupTime）。
+	groupTimes map[string]time.Duration
 
 	// captureMu 串行化 EnsurePushCapture 的“查标记→注册→写标记”，同 key 并发安装不重复注册。
 	captureMu sync.Mutex
+}
+
+// AddGroupTime 把一个组步骤的耗时计入本次场景运行（scenario.StepInGroup 调用）。Runner 每次场景运行新建
+// Context，所以这里的合计就是“这一次场景在各组上花了多少时间”；Parallel 分支会并发调用，带锁。
+func (c *Context) AddGroupTime(group string, d time.Duration) {
+	if c == nil || group == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.groupTimes == nil {
+		c.groupTimes = make(map[string]time.Duration)
+	}
+	c.groupTimes[group] += d
+}
+
+// GroupTimes 返回本次场景运行在各组步骤上花的时间合计（副本）。
+func (c *Context) GroupTimes() map[string]time.Duration {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return maps.Clone(c.groupTimes)
 }
 
 func NewContext(cfg Config) *Context {

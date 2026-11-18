@@ -1,0 +1,13 @@
+--- FAIL: TestShippedScenariosLoadAndGroupEverySagaPoll (0.00s)
+    scenarios_test.go:47: scenario demo step 15: saga poll true but group ""
+    scenarios_test.go:47: scenario demo step 20: saga poll true but group ""
+    scenarios_test.go:47: scenario demo step 30: saga poll true but group ""
+    scenarios_test.go:47: scenario demo step 34: saga poll true but group ""
+    scenarios_test.go:47: scenario demo step 37: saga poll true but group ""
+    scenarios_test.go:55: demo scenario has 0 saga steps grouped, want 5
+    scenarios_test.go:47: scenario alliance_offline_join step 5: saga poll true but group ""
+    scenarios_test.go:47: scenario alliance_cross_join step 5: saga poll true but group ""
+    scenarios_test.go:47: scenario alliance_cross_join step 20: saga poll true but group ""
+FAIL
+FAIL	example.com/planet/cmd/loadtest	0.367s
+FAIL
