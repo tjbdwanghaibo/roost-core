@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.57.0**（2026-11-19）：portal / login 模块模板按连接方式给地址（`ServerPresence.WSAddr`、`CheckWebSocketAddr`、错误码 `portal_transport_unavailable`），生成器按组件包写法生成，purchase / mailbox 用 `durability=pipelined`。
+
 ## [v1.57.0] - 2026-11-18
 
 - **审查修复 RV-20261118-10～13**（2026-11-18 审查报告的四项新问题，先红后绿，[证据](docs/maintenance/evidence/rv-20261118-10-13/README.md)）：
