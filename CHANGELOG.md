@@ -49,10 +49,11 @@
   - 写 handler 取缺省 async，只读 handler 保留 memory。
   - alliance 里被 Saga 步骤经 RPC 调到的联盟服务写（建盟、两步建盟、捐赠、守卫预约、领奖、撤销领奖）改为 `pipelined`。它们在 Remote 实体上走 strict 路径，行为不变。
   - async 在写进 WAL 文件后回复：进程崩溃（kill -9、panic、OOM）不丢已回复的修改；整机掉电或内核崩溃可能丢最后一个组提交间隔（`dataengine.wal.group_commit_interval`，缺省 10ms）里的修改。
-  - purchase 与 mailbox 原本依赖“回复前已落盘”（维护者定 A，已改）：现在先用 DataEngine 的 `WaitEntityProjection` 等这名玩家的修改投影进 Mongo，再做外部确认，handler 仍是缺省 async。
-    - purchase：持久之后才 `Ack` 删 Redis 待发快照；等持久失败时队列保留，下次补领重放。修前掉电可能卡住补领，之后一直答 `purchase_sequence`。
-    - mailbox：持久之后才让 mail 服务 `CommitClaim`；等持久失败时邮件保持未领，租约到期后可再领。修前掉电可能出现邮件已领、附件未到账。
-    - 场景数 purchase 21→23、mailbox 33→35；旧工程按模块 README 手改 `game/controllers/purchase.go` / `mailbox.go`。证据 [purchase-mailbox-durable-ack-20261118](docs/maintenance/evidence/purchase-mailbox-durable-ack-20261118/README.md)。
+  - purchase 与 mailbox 原本依赖“回复前已落盘”，现已改用 `durability=pipelined`（维护者 2026-11-18：pipelined 已经够严格）。改用之后，fsync 完成才回复，实体锁在入队后就先放掉。
+    - purchase 的 `handlerPurchaseGrant`：回执返回之后才 `Ack` 删 Redis 待发快照。fsync 结果未知（`ErrCommitIndeterminate`）时不 Ack，队列保留，下次补领时重放。修前整机掉电可能卡住补领，之后一直答 `purchase_sequence`。
+    - mailbox 的 `handlerMailboxClaimReward`：发放之后才让 mail 服务 `CommitClaim`。fsync 结果未知时答错误码，邮件保持未领，预留归还。修前掉电可能出现邮件已领、附件未到账。
+    - 工程写了非空 `nest.pipelined.allowlist` 时，要把这两个 handler 列进去。同日的上一版在确认前调 `WaitEntityProjection`，已被替换。
+    - 场景数 purchase 21→23、mailbox 33→35。旧工程要手动把这两个标记改成 `durability=pipelined`，再执行 `roost generate`。证据 [purchase-mailbox-durable-ack-20261118](docs/maintenance/evidence/purchase-mailbox-durable-ack-20261118/README.md)。
   - 证据 [modules-async-20261118](docs/maintenance/evidence/modules-async-20261118/README.md)。
   - **升级**：已安装模块的工程不会自动变，新装或重装模块才生效。已有工程要手工去掉 handler 上的 `durability=strict`，alliance 的 6 个改为 `pipelined`。工程写了 `nest.pipelined.allowlist` 时，要把 alliance 的这 6 个 handler 列进去。
 - **生成器按组件包写法生成，骨架不写 strict**（维护者 2026-11-18）：
