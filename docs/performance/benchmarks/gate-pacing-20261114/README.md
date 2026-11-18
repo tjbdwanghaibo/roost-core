@@ -6,7 +6,9 @@
 
 客户端按目标间隔计算下一次发送时间，但每次 `send()` 都等待上一笔 PB 应答和对应 EntitySync 解码完成。醒来时超过一个间隔，就跳过已经错过的输入槽位，不追发。这是 `Dropped` 的唯一增加位置。
 
-- `drop_reasons.client_pacing`：未发送的输入槽位，等于 `Dropped`。它不是 Gate 或网络丢包。
+- `drop_reasons`（2026-11-18 起按原因分，合计等于 `Dropped`；原 `client_pacing` 一项拆开）：每个未发槽位只记一个原因。本拍先等过定时器、醒来已晚过一个间隔 → `client_beat_lag`（压测端定时器 / 调度）；没等定时器、是上一笔 `send()` 本身把节拍拖过间隔 → 按上一笔在途期间的服务端信号依次记 `deadline_expired`（Robot 请求超时；`send` 遇超时直接失败，通过的报告里为 0）、`admission_reject`（Nest 三池准入拒绝增量）、`heartbeat_skipped_beat`（heartbeat 跳拍增量），都没有记 `slow_round_trip`。落后可能由连续几笔稍慢的往返累积，归到把它推过间隔的那一笔。它们都不是 Gate 或网络丢包。
+- `drop_detail`：`slow_round_trip` 等往返类丢拍里应答段（PB 请求到应答）与 Sync 段（应答到 Delta 解码）哪段更长，以及上一笔在途期间有 heartbeat 修改 World 的次数。`drop_events` 留前 256 次丢拍现场。
+- `load_timers`：负载区间内进程级计时指标（`player_tcp_dispatch_duration`、`nest.handler.lock_hold`、`nestwal.fsync.duration` 等）的次数与均值，max 是进程启动以来的值。
 - `signals.request_rejected`：收到业务拒绝；不能全部解释为队列满。
 - `signals.nest_admission_rejected`：负载开始后 Nest 三个通道的容量拒绝增量。
 - `signals.request_deadline` / `request_other_error`：Robot 已发请求的超时与其他错误。
@@ -49,3 +51,5 @@ done
 ```
 
 完成后按原因与独立指标回写 KNOWN-LIMITS；当前只完成计数实现与功能验证，未把历史 19 / 15 个漏发样本的运行原因写成已确认。
+
+2026-11-18 已按上面的命令（私有依赖 `~/.roost-it`）跑五轮并加两轮带 `load_timers` 的诊断，结论与原始数据见 [category3-anomalies-20261118 §2](../../../maintenance/evidence/category3-anomalies-20261118/README.md#2e-3gate-100s-输入丢拍)。

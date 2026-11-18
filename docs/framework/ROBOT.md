@@ -166,7 +166,7 @@ SLG 的 9 条含原 6 条、两条联盟断言与新增 Robot。合计 182 条�
 
 起终点必须在同一时钟域。报告按 full/delta/remove 给出 expected、received、timed_out、canceled、pending、P50/P95/P99/max；分位数为固定直方图桶上界（约 9% 粒度，最高不超过实测 max），不是保留全部样本的精确排序。空样本不是通过。控制面 JSON/Markdown 保存独立副本；待确认容量有上限，超过计 capacity_rejected，重复/迟到计 unmatched。
 
-`scripts/perf/gate-mixed.sh` 使用调用方已经启动的隔离 Mongo 副本集、Redis、NATS，默认 30 秒，最长 120 秒；不启动或停止共享服务。按 `ROOST_DATAENGINE_IT_*` 注入地址，`ROOST_PERF_CPU=0` 不限定 GOMAXPROCS。真实 account/Redis/NATS → TCP Gate → PB/Nest → strict WAL/Mongo → PB EntitySync，叠加正式 10Hz heartbeat、5% 心跳修改。当前只有一个账号和一个共享 World，`ROOST_GATE_LOAD_RATE` 默认每秒 100 次请求，可显式选择对照档，是持久化热点诊断，不代表 MMO 容量。记录丢拍而不隐去欠载；最终额外一笔排空事务不计测量 TPS。
+`scripts/perf/gate-mixed.sh` 使用调用方已经启动的隔离 Mongo 副本集、Redis、NATS，默认 30 秒，最长 120 秒；不启动或停止共享服务。按 `ROOST_DATAENGINE_IT_*` 注入地址，`ROOST_PERF_CPU=0` 不限定 GOMAXPROCS。真实 account/Redis/NATS → TCP Gate → PB/Nest → strict WAL/Mongo → PB EntitySync，叠加正式 10Hz heartbeat、5% 心跳修改。当前只有一个账号和一个共享 World，`ROOST_GATE_LOAD_RATE` 默认每秒 100 次请求，可显式选择对照档，是持久化热点诊断，不代表 MMO 容量。记录丢拍而不隐去欠载，并按原因分开（`drop_reasons`：压测端定时器醒晚 `client_beat_lag`；上一笔往返拖过间隔时按服务端信号依次记 `deadline_expired` / `admission_reject` / `heartbeat_skipped_beat` / `slow_round_trip`，合计等于 Dropped；`drop_events` 留前 256 次现场，`load_timers` 给负载区间内 Nest / WAL fsync / Gate 分发的计时均值，2026-11-18 起）；最终额外一笔排空事务不计测量 TPS。
 
 报告保存 Sync 三类延迟、请求/字节、Nest 排队累计/最大值、WAL/投影排空与进程资源。客户端与服务端在同一进程，CPU/RSS 不能拆成独立服务器值；不包含 Mongo/NATS/Redis 的进程资源。关闭后重复投影及 DAO 冷水合仍不是进程 SIGKILL 恢复。`verified` 只表示数据一致性断言通过，不替代负载与 P99 门禁。
 

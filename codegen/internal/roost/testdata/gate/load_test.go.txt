@@ -26,6 +26,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
 	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
@@ -40,6 +41,54 @@ type gateLoadObservation struct {
 	exp     int64
 	level   int32
 	err     error
+}
+
+// gateDropCounters 是判断丢拍原因用的服务端信号累计值；丢拍时与上一笔 send 发出前的值相减。
+type gateDropCounters struct {
+	admission, deadline, heartbeatSkipped, heartbeatChanges int64
+}
+
+// gateTimerDelta 是负载区间内进程级计时指标（metrics 计时器，例如 nestwal.fsync.duration）的次数与均值，
+// 用来拆 PB 往返的组成；max_ms 是进程启动以来的最大值，不只属于负载区间。
+func gateTimerDelta(before, after []metrics.Metric) []map[string]any {
+	key := func(m metrics.Metric) string { return fmt.Sprint(m.Name, m.Labels) }
+	base := make(map[string]metrics.Metric, len(before))
+	for _, m := range before {
+		base[key(m)] = m
+	}
+	var out []map[string]any
+	for _, m := range after {
+		if m.Kind != metrics.KindTimer {
+			continue
+		}
+		b := base[key(m)]
+		count := m.Count - b.Count
+		if count <= 0 {
+			continue
+		}
+		out = append(out, map[string]any{
+			"name": m.Name, "labels": m.Labels, "count": count,
+			"mean_ms": float64(m.TotalNanos-b.TotalNanos) / float64(count) / 1e6,
+			"max_ms":  float64(m.MaxNanos) / 1e6,
+		})
+	}
+	return out
+}
+
+// gateDropEvent 是一次丢拍的现场（只留前 256 次）：落后多少、上一笔 send 的应答 / Sync 两段耗时、
+// 上一笔在途期间的服务端信号增量。
+type gateDropEvent struct {
+	AtMS             float64 `json:"at_ms"`
+	Missed           int64   `json:"missed"`
+	Reason           string  `json:"reason"`
+	LagMS            float64 `json:"lag_ms"`
+	Slept            bool    `json:"slept"`
+	ResponseMS       float64 `json:"last_response_ms"`
+	SyncMS           float64 `json:"last_sync_ms"`
+	Admission        int64   `json:"admission_rejected"`
+	Deadline         int64   `json:"request_deadline"`
+	HeartbeatSkipped int64   `json:"heartbeat_skipped"`
+	HeartbeatChanges int64   `json:"heartbeat_mutations"`
 }
 
 // runGateLoad 是一个真实账号的热点诊断，不冒充 1000 人 MMO 容量。
@@ -209,8 +258,11 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	confirm(initial)
 	base := initial.exp + int64(initial.level)*gameprofile.ExpPerLevel()
 	var completed int64
+	// lastResponse / lastSync：最近一笔 send 等 PB 应答、应答后再等 Sync Delta 的耗时，丢拍归因用。
+	var lastResponse, lastSync time.Duration
 	send := func() {
 		t.Helper()
+		began := time.Now()
 		sequence++
 		key := robot.SyncKey{Connection: connection, Sequence: sequence + 1, Kind: robot.SyncDelta}
 		if err := probe.Expect(key, time.Now(), 5*time.Second); err != nil {
@@ -232,7 +284,9 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 		if err != nil {
 			t.Fatalf("AddExp sequence=%d failed: %v; nest=%+v projector=%+v", sequence, err, business.Stats(), projector.Stats())
 		}
+		responded := time.Now()
 		v := wait(robot.SyncDelta)
+		lastResponse, lastSync = responded.Sub(began), time.Since(responded)
 		completed++
 		if v.exp+int64(v.level)*gameprofile.ExpPerLevel() != base+completed {
 			t.Fatal("client state differs from acknowledged changes")
@@ -294,6 +348,61 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 			"meaning":                 "independent counters, not additive; request_rejected includes business rejection; client pacing misses are unsent slots, not Gate packet loss",
 		}
 	}
+	dropCounters := func() gateDropCounters {
+		now := business.Stats()
+		var deadlines int64
+		for _, r := range requests.Snapshot().Messages {
+			deadlines += r.Timeout
+		}
+		hb := beat.Stats()
+		return gateDropCounters{
+			admission:        int64(now.Queue.Short.Rejected + now.Queue.IO.Rejected + now.Queue.Long.Rejected),
+			deadline:         deadlines,
+			heartbeatSkipped: hb.SkippedInflight + hb.SkippedQueueFull + hb.SkippedRejected,
+			heartbeatChanges: beatChanges.Load(),
+		}
+	}
+	// 丢拍原因：每个未发槽位只计一个原因，合计等于 dropped。
+	//   client_beat_lag：本拍先等过定时器、醒来时已晚过一个间隔——落后全部来自压测端的定时器 / 调度；
+	//   其余几项是没有等定时器、上一笔 send（等 PB 应答与 Sync）本身把节拍拖过了一个间隔，
+	//   按上一笔在途期间的服务端信号依次归类：
+	//   deadline_expired：Robot 请求超时（send 遇到超时直接让测试失败，通过的报告里应为 0）；
+	//   admission_reject：Nest 任一池准入拒绝；
+	//   heartbeat_skipped_beat：heartbeat 跳拍（上一拍在途 / 队列满 / 拒绝）；
+	//   slow_round_trip：没有上述信号的慢往返，应答与 Sync 哪段占大头见 drop_detail 与 drop_events。
+	dropReasons := map[string]int64{"client_beat_lag": 0, "deadline_expired": 0, "admission_reject": 0, "heartbeat_skipped_beat": 0, "slow_round_trip": 0}
+	dropDetail := map[string]int64{"round_trip_response_dominant": 0, "round_trip_sync_dominant": 0, "round_trip_with_heartbeat_mutation": 0}
+	var dropEvents []gateDropEvent
+	noteDrop := func(at time.Duration, missed int64, lag time.Duration, slept bool, before gateDropCounters) {
+		after := dropCounters()
+		d := gateDropCounters{after.admission - before.admission, after.deadline - before.deadline, after.heartbeatSkipped - before.heartbeatSkipped, after.heartbeatChanges - before.heartbeatChanges}
+		reason := "slow_round_trip"
+		switch {
+		case slept:
+			reason = "client_beat_lag"
+		case d.deadline > 0:
+			reason = "deadline_expired"
+		case d.admission > 0:
+			reason = "admission_reject"
+		case d.heartbeatSkipped > 0:
+			reason = "heartbeat_skipped_beat"
+		}
+		dropReasons[reason] += missed
+		if !slept {
+			if lastResponse >= lastSync {
+				dropDetail["round_trip_response_dominant"] += missed
+			} else {
+				dropDetail["round_trip_sync_dominant"] += missed
+			}
+			if d.heartbeatChanges > 0 {
+				dropDetail["round_trip_with_heartbeat_mutation"] += missed
+			}
+		}
+		if len(dropEvents) < 256 {
+			ms := func(v time.Duration) float64 { return float64(v.Microseconds()) / 1000 }
+			dropEvents = append(dropEvents, gateDropEvent{AtMS: ms(at), Missed: missed, Reason: reason, LagMS: ms(lag), Slept: slept, ResponseMS: ms(lastResponse), SyncMS: ms(lastSync), Admission: d.admission, Deadline: d.deadline, HeartbeatSkipped: d.heartbeatSkipped, HeartbeatChanges: d.heartbeatChanges})
+		}
+	}
 	defer func() {
 		if !t.Failed() {
 			return
@@ -302,6 +411,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 			"verified": false, "phase": "failed", "signals": signals(),
 			"requests": requests.Snapshot(), "sync": probe.Snapshot(time.Now()),
 			"scheduled": scheduled, "completed": completed, "dropped": dropped,
+			"drop_reasons": dropReasons, "drop_detail": dropDetail, "drop_events": dropEvents,
 		}, "", "  ")
 		if marshalErr == nil {
 			if writeErr := os.WriteFile(reportPath+".failure.json", failed, 0600); writeErr != nil {
@@ -311,9 +421,12 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 			t.Logf("marshal failure evidence: %v", marshalErr)
 		}
 	}()
+	timersBefore := metrics.Snapshot()
+	before := dropCounters()
 	for time.Now().Before(end) {
 		now := time.Now()
-		if now.Before(next) {
+		slept := now.Before(next)
+		if slept {
 			timer := time.NewTimer(next.Sub(now))
 			select {
 			case <-timer.C:
@@ -331,15 +444,18 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 			dropped += missed
 			scheduled += missed
 			next = next.Add(time.Duration(missed) * interval)
+			noteDrop(now.Sub(start), missed, lag, slept, before)
 		}
 		scheduled++
 		next = next.Add(interval)
+		before = dropCounters()
 		send()
 	}
 	elapsed := time.Since(start)
+	loadTimers := gateTimerDelta(timersBefore, metrics.Snapshot())
 	t.Logf("load complete: requests=%d dropped=%d projector=%+v", completed, dropped, projector.Stats())
 	// 即使后续排空失败也保留已完成负载的数据，不把它写成成功验收。
-	phase, marshalErr := json.MarshalIndent(map[string]any{"verified": false, "phase": "before_drain", "target_rate": rate, "completed": completed, "dropped": dropped, "drop_reasons": map[string]int64{"client_pacing": dropped}, "signals": signals(), "seconds": elapsed.Seconds(), "sync": probe.Snapshot(time.Now()), "requests": requests.Snapshot(), "traffic": traffic.Snapshot(), "projector": projector.Stats(), "projection_diagnostics": store.diagnostics(), "nest": business.Stats()}, "", "  ")
+	phase, marshalErr := json.MarshalIndent(map[string]any{"verified": false, "phase": "before_drain", "target_rate": rate, "completed": completed, "dropped": dropped, "drop_reasons": dropReasons, "drop_detail": dropDetail, "drop_events": dropEvents, "load_timers": loadTimers, "signals": signals(), "seconds": elapsed.Seconds(), "sync": probe.Snapshot(time.Now()), "requests": requests.Snapshot(), "traffic": traffic.Snapshot(), "projector": projector.Stats(), "projection_diagnostics": store.diagnostics(), "nest": business.Stats()}, "", "  ")
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
@@ -428,6 +544,9 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 		WAL                                                                 nestwal.Stats
 		ProjectionDiagnostics                                               map[string]any
 		DropReasons                                                         map[string]int64 `json:"drop_reasons"`
+		DropDetail                                                          map[string]int64 `json:"drop_detail"`
+		DropEvents                                                          []gateDropEvent  `json:"drop_events"`
+		LoadTimers                                                          []map[string]any `json:"load_timers"`
 		Signals                                                             map[string]any   `json:"signals"`
 		FinalVerificationRequests                                           int64            `json:"final_verification_requests"`
 	}{
@@ -438,11 +557,18 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 		Seconds: elapsed.Seconds(), CompletedPerSecond: float64(completed-1) / elapsed.Seconds(),
 		Sync: probe.Snapshot(time.Now()), Requests: requests.Snapshot(), Traffic: traffic.Snapshot(),
 		ServerAndClientProcess: resources, Nest: business.Stats(), Projector: stats, WAL: walStats,
-		ProjectionDiagnostics: store.diagnostics(), DropReasons: map[string]int64{"client_pacing": dropped},
+		ProjectionDiagnostics: store.diagnostics(), DropReasons: dropReasons, DropDetail: dropDetail, DropEvents: dropEvents, LoadTimers: loadTimers,
 		Signals: signals(), FinalVerificationRequests: 1,
 	}
 	if report.Scheduled != report.Completed-report.FinalVerificationRequests+report.Dropped {
 		t.Fatalf("pacing counters do not balance: scheduled=%d completed=%d dropped=%d", report.Scheduled, report.Completed, report.Dropped)
+	}
+	var labelled int64
+	for _, n := range report.DropReasons {
+		labelled += n
+	}
+	if labelled != report.Dropped {
+		t.Fatalf("drop reasons do not balance: dropped=%d labelled=%d reasons=%v", report.Dropped, labelled, report.DropReasons)
 	}
 	for _, event := range report.Sync.Events {
 		if event.Received == 0 || event.Pending != 0 || event.TimedOut != 0 || event.Canceled != 0 {
