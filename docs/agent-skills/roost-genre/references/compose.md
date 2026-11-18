@@ -350,7 +350,7 @@ cd "$DIR" && "$ROOST" module add portal
 | 8 | 归属 | 全服限量计数挂 World 组件（附录 A3） | 要和玩家修改一起回滚 | 热点写排在一把锁上 | |
 | 9 | 配置表 | item 表两端共用，掉落权重只给服务端 | 客户端拿到权重就能算出掉落 | | |
 | 10 | 冲突 | 永久防重：wallet 去重窗口只有 128 次 → 推荐 C：用自己的状态判重 | KNOWN-LIMITS“业务模块” | | |
-| 11 | 持久化方式 | 全部 handler 用缺省 async（写进 WAL 就回复） | 最快；崩溃可能丢最后一小段未落盘的修改，由 WAL 与业务幂等兜底 | 改成 strict 要等落盘再回复，同一实体只有百级 TPS | |
+| 11 | 持久化方式 | 全部 handler 用缺省 async（写进 WAL 就回复） | 最快；进程崩溃不丢已回复的修改，整机掉电可能丢最后约 10ms 的修改，由业务幂等兜底 | 改成 strict 要等落盘再回复，同一实体只有百级 TPS | |
 ```
 
 - 类别至少覆盖：要不要 roost、战斗分档、接入方式（含开房间）、需求条目、边界（逐个逻辑点：校验、计算、随机、计时、判定、展示，重点列移动与碰撞、战斗数值与命中、冷却、寻路、客户端预测、本地缓存的配置）、数值、复用、归属（实体、服务、单例实体还是挂 World）、配置表（逐表）、冲突（四要素）、持久化方式（缺省 async；开发者明确要求时才把指定的 handler 改成 `durability=strict`，代价是等落盘再回复、同一实体约百级 TPS，本机样本约 120 次 / 秒，见 KNOWN-LIMITS“热点单例实体的写吞吐”）。
@@ -511,7 +511,7 @@ client_export:
    }
    ```
 
-   - `//roost:nest` 不带参数就是缺省的 `rollback=state durability=async`：修改写进 WAL 后就可以回复，不等落盘。代价是进程崩溃时可能丢最后一小段还没落盘的修改，由 WAL 与业务幂等兜底。生成的骨架若带 `durability=strict`，删掉这一项；借鉴模块写法时同样不抄 `durability=strict`。`strict`（等落盘再回复）是框架支持的写法，但只在开发者明确要求时用（决策单的“持久化方式”一行）。saga 原生步骤与补偿用 `durability=pipelined`（`roost add saga -native` 生成的就是它），这是 saga 的写法，不要改。
+   - `//roost:nest` 不带参数就是缺省的 `rollback=state durability=async`：修改写进 WAL 文件后就回复，不等 fsync。进程崩溃（kill -9、panic、OOM）不丢已回复的修改；代价是整机掉电或内核崩溃时可能丢最后一个组提交间隔（`dataengine.wal.group_commit_interval`，缺省 10ms）里的修改，由业务幂等兜底。回复之后马上向外部系统确认（例如删掉外部队列里的待发记录）的写法要先想清掉电时的后果，见 `modules/README.md`“持久级别”。生成的骨架若带 `durability=strict`，删掉这一项；借鉴模块写法时同样不抄 `durability=strict`。`strict`（等落盘再回复）是框架支持的写法，但只在开发者明确要求时用（决策单的“持久化方式”一行）。saga 原生步骤与补偿用 `durability=pipelined`（`roost add saga -native` 生成的就是它），这是 saga 的写法，不要改。
    - 一个 handler 一个文件，文件名是 handler 名的蛇形写法。
    - 目标参数是生成的窄接口 `view.I<Feature>Entity`，经访问器 `target.<Feature>()` 调组件；`Claim` 要先列进 `view.Task`。要整个玩家时收 `view.PlayerEntity`。
    - 最后一个参数写 `nowUnixMilli int64` 拿到这条消息冻结的业务时间；客户端不传时间。

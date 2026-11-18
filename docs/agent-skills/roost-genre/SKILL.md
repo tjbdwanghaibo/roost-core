@@ -172,7 +172,7 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 | # | 限制 | 出处 |
 | --- | --- | --- |
 | 1 | Nest 业务 worker 内禁止同步等网络、磁盘、数据库、另一个 Nest 请求，禁止自开 goroutine 访问实体；handler 内同步 Nest 请求直接被拒（`ErrSyncInHandler`），已知参与者一次传给多实体 Sender | guide/02-nest-entity.md §1 |
-| 2 | `//roost:nest` 缺省是 `rollback=state durability=async`：写进 WAL 就回复、不等落盘，进程崩溃时可能丢最后一小段还没落盘的修改，由 WAL 与业务幂等兜底。skill 的样例都用缺省；`durability=strict`（等落盘再回复）只在开发者明确要求时用；saga 原生步骤用生成的 `durability=pipelined`；`durability=memory` 不得写持久字段 | `codegen/docs/CODEGEN_REFERENCE.zh-CN.md` §6；guide/02-nest-entity.md §4 |
+| 2 | `//roost:nest` 缺省是 `rollback=state durability=async`：写进 WAL 文件就回复、不等 fsync：进程崩溃（kill -9、panic、OOM）不丢已回复的修改，只有整机掉电或内核崩溃可能丢最后一个组提交间隔（缺省 10ms）里的修改，由业务幂等兜底。skill 的样例都用缺省；`durability=strict`（等落盘再回复）只在开发者明确要求时用；saga 原生步骤用生成的 `durability=pipelined`；`durability=memory` 不得写持久字段 | `codegen/docs/CODEGEN_REFERENCE.zh-CN.md` §6；guide/02-nest-entity.md §4 |
 | 3 | 回复错误按表判别：`ErrCommitIndeterminate` 等结果未知不得盲目重试，按业务幂等键核对 | guide/02-nest-entity.md §6 |
 | 4 | DataEngine 对 MongoDB：≥ 5.0、副本集（单节点即可）、`transactionLifetimeLimitSeconds=20`；实测过 7.0 / 8.0 | guide/03-dataengine.md §6 |
 | 5 | 实体持久定时器：离线实体不准点，加载后只触发一次，补算由业务按 `Fire` 做；Remote 托管与 noPersist 实体不支持；回调只改本实体 | KNOWN-LIMITS“按实体的持久定时器”；guide/10-time.md §4 |
