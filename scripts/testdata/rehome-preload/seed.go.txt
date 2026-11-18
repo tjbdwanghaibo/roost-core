@@ -1,0 +1,144 @@
+// seedrehome 是 scripts/test-rehome-preload-cluster.sh 复制进生成工程的演练工具（DRILL_MODULE 换成工程的模块路径），
+// 不是工程代码。它直接打开 account 的 Redis Cluster 存储（与 account 进程同一个 key_prefix），造三种角色并打印它们的
+// 玩家号、Player 实体号与绑定：
+//
+//	home   建在 -home 服，没有换服；
+//	moved  建在 -home 服，换服到 -away 并已提交（account 把他绑在别处，他在 -home 库里的档就是旧档）；
+//	never  建在从不启动的 -never 服，向 -away 发起、期限 -ttl 秒的换服，谁也不来提交。
+//
+// -show <玩家号> 只打印那个角色当前的绑定。
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"DRILL_MODULE/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+type seeded struct {
+	Kind       string                 `json:"kind"`
+	PlayerID   int64                  `json:"player_id"`
+	EntityID   int64                  `json:"entity_id"`
+	TransferID string                 `json:"transfer_id,omitempty"`
+	Binding    svcaccount.RoleBinding `json:"binding"`
+}
+
+// Player 的分类由 game 进程的装配登记；本工具不装配，按实体标记（category=entity.EntityCategoryOther）登记一次，
+// 才能拼出与 game 进程相同的实体号。
+func init() {
+	if err := entity.RegisterEntityKindCategory(player.EntityKindPlayer, entity.EntityCategoryOther); err != nil {
+		panic(err)
+	}
+}
+
+func main() {
+	cluster := flag.String("redis-cluster", "", "Redis Cluster seed addresses, comma separated")
+	prefix := flag.String("prefix", "", "account.key_prefix")
+	home := flag.Int("home", 1000, "server of the home and moved roles")
+	away := flag.Int("away", 1001, "target server of the transfers")
+	never := flag.Int("never", 1002, "server that never starts")
+	ttl := flag.Int64("ttl", 2, "TTL of the never-started transfer, seconds")
+	show := flag.Int64("show", 0, "only print the binding of this player")
+	flag.Parse()
+	if err := run(*cluster, *prefix, int32(*home), int32(*away), int32(*never), *ttl, *show); err != nil {
+		fmt.Fprintln(os.Stderr, "seedrehome:", err)
+		os.Exit(1)
+	}
+}
+
+func run(cluster, prefix string, home, away, never int32, ttl, show int64) error {
+	ctx := context.Background()
+	config := fredis.DefaultConfig("")
+	config.ClusterAddrs = strings.Split(cluster, ",")
+	client, err := driver.NewClient(config)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	stores, err := svcaccount.NewRedisStores(client, prefix, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	next := time.Now().UnixMilli() % 100_000_000
+	service, err := svcaccount.New(svcaccount.Config{
+		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names, Presence: stores.Presence,
+		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     svcaccount.AllocatorFunc(func(context.Context, int32) (int64, error) { next++; return next, nil }),
+		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "seed-only", Now: time.Now, SystemNow: time.Now,
+	})
+	if err != nil {
+		return err
+	}
+	if show != 0 {
+		binding, err := service.RoleBinding(ctx, show)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(binding)
+	}
+	for _, sid := range []int32{home, away, never} {
+		if _, err := service.UpsertServer(ctx, svcaccount.GameServer{ID: sid, Name: fmt.Sprint(sid), Status: svcaccount.ServerOpen}); err != nil {
+			return fmt.Errorf("upsert server %d: %w", sid, err)
+		}
+	}
+	tag := fmt.Sprint(time.Now().Unix())
+	var out []seeded
+	for _, kind := range []string{"home", "moved", "never"} {
+		origin := home
+		if kind == "never" {
+			origin = never
+		}
+		account, err := service.Login(ctx, svcaccount.Identity{Channel: "seed", OpenID: kind + "-" + tag, Credential: "x"})
+		if err != nil {
+			return fmt.Errorf("login: %w", err)
+		}
+		role, err := service.CreateRole(ctx, account.ID, origin, kind+tag)
+		if err != nil {
+			return fmt.Errorf("create the %s role on %d: %w", kind, origin, err)
+		}
+		item := seeded{Kind: kind, PlayerID: role.PlayerID}
+		if item.EntityID, err = entity.BuildEntityID(role.PlayerID, player.EntityKindPlayer); err != nil {
+			return err
+		}
+		if kind != "home" {
+			current, err := service.RoleBinding(ctx, role.PlayerID)
+			if err != nil {
+				return err
+			}
+			item.TransferID = kind + "-" + tag
+			request := svcaccount.TransferRequest{ID: item.TransferID, FromSID: origin, To: away, ExpectEpoch: current.BindEpoch,
+				ExpectSeq: current.TransferSeq, Note: "drill: " + kind}
+			if kind == "never" {
+				request.TTLSeconds = ttl
+			}
+			if _, err := service.BeginRoleTransfer(ctx, role.PlayerID, request); err != nil {
+				return fmt.Errorf("begin the %s transfer: %w", kind, err)
+			}
+			if kind == "moved" {
+				if _, err := service.CommitRoleTransfer(ctx, role.PlayerID, item.TransferID); err != nil {
+					return fmt.Errorf("commit the %s transfer: %w", kind, err)
+				}
+			}
+		}
+		if item.Binding, err = service.RoleBinding(ctx, role.PlayerID); err != nil {
+			return err
+		}
+		out = append(out, item)
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(out)
+}

@@ -1,0 +1,5 @@
+[drill 08:13:22] project=rhp78d7bd work=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/roost-rehome-preload.929sJx evidence=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/script-mutant-unpublished
+[drill 08:13:37] PASS cluster: an untagged account.key_prefix is refused at Mod init
+[drill 08:13:38] account ready (pid 15695, ops 127.0.0.1:52101)
+[drill 08:13:40] game ready (pid 15757, ops 127.0.0.1:52100)
+[drill 08:13:40] FAIL: PRELOAD: the startup check listed the database instead of using the admitter

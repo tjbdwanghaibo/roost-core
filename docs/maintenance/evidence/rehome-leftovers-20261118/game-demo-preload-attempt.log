@@ -1,0 +1,4 @@
+# run1: Player marked preload=startup
+2026/11/18 08:01:37 refresh generated artifacts: game/entities/player/entity.go:87: entity Player is preloaded at startup (preload=startup or lifetime=resident), but several services could load it (alliance, game): services of different types may share a sid and so the same <db>_<sid> database; declare which one with service=<name> on the //roost:entity marker
+# run2: preload=startup service=game
+2026/11/18 08:03:31 refresh generated artifacts: generator nest: walk: <scratch>/roost-demo-rehome.lgJPtp/rhd909b15/game/handler/alliance_credit.go: handler handlerAllianceCredit is a saga native step on a kind owned by service game; native steps on service-owned kinds are not supported

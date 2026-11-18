@@ -1,0 +1,2 @@
+[drill 08:14:01] project=rhpcdc338 work=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/roost-rehome-preload.Oz6VD8 evidence=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/script-mutant-untagged
+[drill 08:14:37] FAIL: CLUSTER: account kept running with a key_prefix without a hash tag

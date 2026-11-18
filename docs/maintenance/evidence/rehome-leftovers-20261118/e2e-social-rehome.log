@@ -1,0 +1,7 @@
+=== RUN   TestAllianceE2ESocialRehome
+    social_test.go:356: SOCIAL_REHOME stage=handed-off killed_pid=85575 player=100002 transfer=rh1001-96addf6c2d894d45db2636fa target=1000 members=2 donate exactly once; Q4 old-source timers/writes not certified
+    social_test.go:356: SOCIAL_REHOME stage=committed killed_pid=85781 player=100003 transfer=rh1001-28b47724a816062e48e506c5 target=1000 members=3 donate exactly once; Q4 old-source timers/writes not certified
+--- PASS: TestAllianceE2ESocialRehome (40.56s)
+PASS
+ok  	example.com/planet/e2e	41.285s
+alliance actual cases: passed=1, skipped=0

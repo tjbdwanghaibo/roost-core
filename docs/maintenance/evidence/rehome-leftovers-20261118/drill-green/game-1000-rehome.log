@@ -1,0 +1,1 @@
+{"time":"2026-11-18T08:17:06.89218+08:00","level":"WARN","msg":"rehome: a player stored on this server is bound to another server; his copy here is not loaded and is dropped once confirmed","goId":690,"frame":0,"server_time_ms":1794961026892,"player_id":61025652,"bound_to":1001,"bind_epoch":1}

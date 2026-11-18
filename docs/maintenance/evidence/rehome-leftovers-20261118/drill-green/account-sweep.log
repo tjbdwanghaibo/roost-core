@@ -1,0 +1,2 @@
+{"time":"2026-11-18T08:17:33.986048+08:00","level":"WARN","msg":"account: aborted a role transfer past its deadline","goId":197,"frame":0,"server_time_ms":1794961053986,"player_id":61025653,"transfer_id":"never-1794961025","from":1002,"to":1001,"deadline_unix":1794961027}
+{"time":"2026-11-18T08:17:33.986114+08:00","level":"INFO","msg":"account server: aborted transfers past their deadline","goId":197,"frame":0,"server_time_ms":1794961053986,"count":1}

@@ -1,0 +1,1 @@
+{"time":"2026-11-18T08:17:03.724581+08:00","level":"ERROR","msg":"app run failed","goId":1,"frame":0,"server_time_ms":1794961023724,"err":"mod service.account init: servicemods: account.key_prefix (\"rhpea3ab6-acct-untagged\") requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:account} so atomic keys share a slot"}

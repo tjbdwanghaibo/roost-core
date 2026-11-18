@@ -1,0 +1,59 @@
+[
+  {
+    "kind": "home",
+    "player_id": 61025651,
+    "entity_id": 62490266629,
+    "binding": {
+      "player_id": 61025651,
+      "server_id": 1000,
+      "serving_server_id": 1000,
+      "bind_epoch": 0,
+      "transfer_seq": 0
+    }
+  },
+  {
+    "kind": "moved",
+    "player_id": 61025652,
+    "entity_id": 62490267653,
+    "transfer_id": "moved-1794961025",
+    "binding": {
+      "player_id": 61025652,
+      "server_id": 1001,
+      "serving_server_id": 1001,
+      "bind_epoch": 1,
+      "transfer_seq": 1,
+      "last_transfer": {
+        "id": "moved-1794961025",
+        "from": 1000,
+        "to": 1001,
+        "committed": true,
+        "epoch": 1,
+        "at_unix": 1794961025,
+        "note": "drill: moved",
+        "settled": true
+      }
+    }
+  },
+  {
+    "kind": "never",
+    "player_id": 61025653,
+    "entity_id": 62490268677,
+    "transfer_id": "never-1794961025",
+    "binding": {
+      "player_id": 61025653,
+      "server_id": 1002,
+      "serving_server_id": 1002,
+      "bind_epoch": 0,
+      "transfer_seq": 1,
+      "transfer": {
+        "id": "never-1794961025",
+        "from": 1002,
+        "to": 1001,
+        "epoch": 0,
+        "started_at_unix": 1794961025,
+        "deadline_unix": 1794961027,
+        "note": "drill: never"
+      }
+    }
+  }
+]

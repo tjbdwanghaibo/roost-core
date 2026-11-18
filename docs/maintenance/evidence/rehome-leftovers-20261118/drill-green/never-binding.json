@@ -1,0 +1,1 @@
+{"player_id":61025653,"server_id":1002,"serving_server_id":1002,"bind_epoch":0,"transfer_seq":2,"last_transfer":{"id":"never-1794961025","from":1002,"to":1001,"committed":false,"epoch":0,"at_unix":1794961053,"note":"expired: the deadline 1794961027 passed before the transfer was committed","settled":true}}

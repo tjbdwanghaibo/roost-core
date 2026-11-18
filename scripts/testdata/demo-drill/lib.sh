@@ -1,5 +1,7 @@
 # shellcheck shell=bash
 # game-demo 真实进程演练的公共部分：scripts/test-demo-login.sh 与 scripts/test-demo-merge.sh 都 source 它。
+# scripts/test-rehome-preload-cluster.sh（最小模块工程，不是 game-demo）只用其中的 drill_log / drill_fail / drill_port / drill_edit /
+# drill_start_etcd / drill_start / drill_stop / drill_cleanup。
 #
 # 做的事：生成当前检出的 game-demo（工程名 $project，库 / 流 / Redis 键都按它派生，所以每次运行用一个新名字就不与
 # 别人撞），把全部开发配置改指向调用方给的私有依赖、端口整体平移 $port_shift（7000 → 7000+shift，8081、9000–9010、

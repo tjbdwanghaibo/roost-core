@@ -1035,6 +1035,15 @@ var realProcessDependencyEntries = []struct {
 			"scripts/testdata/demo-drill/rehome-instrument.py",
 		},
 	},
+	{
+		script:      "scripts/test-rehome-preload-cluster.sh",
+		environment: "mirror-local 私有 Mongo 副本集 / Redis / Redis Cluster / NATS，自起 etcd；REHOME_PRELOAD_OUT=/abs/path bash scripts/test-rehome-preload-cluster.sh",
+		scope:       "enter+rehome+gm 最小工程、Player preload=startup、account 走 Redis Cluster：不带 hash tag 的 key_prefix 在 Mod 初始化被拒；起服预加载的准入检查否决 account 绑在别处的旧档（skipped=1、不列库），旧档补搬到目标库后删除；源服从不启动的在途换服由 account 进程的清扫按期限中止（expired:）；不进 pretag",
+		fixtures: []string{
+			"scripts/testdata/rehome-preload/seed.go.txt",
+			"scripts/testdata/demo-drill/lib.sh",
+		},
+	},
 }
 
 func TestRealProcessDependencyEntriesRemainReachable(t *testing.T) {

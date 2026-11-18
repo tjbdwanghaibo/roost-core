@@ -1,0 +1,6 @@
+[drill 08:14:49] project=rhpb49f3c work=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/roost-rehome-preload.DTxoEe evidence=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/script-mutant-nosweep
+[drill 08:15:05] PASS cluster: an untagged account.key_prefix is refused at Mod init
+[drill 08:15:06] account ready (pid 18199, ops 127.0.0.1:52101)
+[drill 08:15:08] game ready (pid 18265, ops 127.0.0.1:52100)
+[drill 08:15:08] PASS preload: the admitter skipped the copy bound elsewhere; it was moved to 1001 and dropped on 1000
+[drill 08:16:31] FAIL: SWEEP: the never-started transfer was not aborted as expired: {"player_id":60907068,"server_id":1002,"serving_server_id":1002,"bind_epoch":0,"transfer_seq":1,"transfer":{"id":"never-1794960907","from":1002,"to":1001,"epoch":0,"started_at_unix":1794960907,"deadline_unix":1794960909,"note":"drill: never"}}

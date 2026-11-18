@@ -1,0 +1,9 @@
+[drill 08:16:47] project=rhpea3ab6 work=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/roost-rehome-preload.9YnBlt evidence=/private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/rehome-left/script-run2
+[drill 08:17:03] PASS cluster: an untagged account.key_prefix is refused at Mod init
+[drill 08:17:04] account ready (pid 21257, ops 127.0.0.1:52101)
+[drill 08:17:07] game ready (pid 21345, ops 127.0.0.1:52100)
+[drill 08:17:07] PASS preload: the admitter skipped the copy bound elsewhere; it was moved to 1001 and dropped on 1000
+[drill 08:17:34] PASS sweep: the account process aborted the transfer from a server that never started
+[drill 08:17:35] stopped game
+[drill 08:17:36] stopped account
+[drill 08:17:36] PASS rehome preload + cluster drill
