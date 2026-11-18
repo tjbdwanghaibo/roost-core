@@ -254,7 +254,7 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 - `service` 是这个服归属的 game 服务（account 的 `GameServer.Service`；记录没写时归到唯一的 game 服务）。所有 game 服务的区服共用一个全局号段。
 - `status` 是 account 里的状态（`open` / `maintenance` / `full` / `closed`）。新号只进得了 `open` 的服；已有角色的在任何状态下都能进。
 - `merged_into` 非 0：这个服已并入那个服。这里的老角色照常进，由那个服承载。
-- `addr` 是进这个服该连的地址——它的**承载服**在目录里、所请求连接方式下的地址（`transport: ws` 时是 `wss://play.example.com/ws` 这样的 URL）；`addr_source` 是 `directory`，目录里没有时 `addr` 为空、`addr_source` 是 `none`。`transports` 是承载服在目录里有地址的连接方式（`tcp`、`ws`，按这个顺序；目录里没有时是 `[]`），客户端据此挑能连的服。`load`、`tags` 是目录给的，入口不解释。
+- `addr` 是进这个服该连的地址——它的**承载服**在目录里、所请求连接方式下的地址（`transport: ws` 时是 `wss://play.example.org/ws` 这样的 URL）；`addr_source` 是 `directory`，目录里没有时 `addr` 为空、`addr_source` 是 `none`。`transports` 是承载服在目录里有地址的连接方式（`tcp`、`ws`，按这个顺序；目录里没有时是 `[]`），客户端据此挑能连的服。`load`、`tags` 是目录给的，入口不解释。
 - `transport` 回显这份清单的地址是哪种方式的。
 - `role` 是本账号在这个服上的角色（account 的 `RoleOnServer`），没有是 `null`——这就是“新号还是旧号”。`transferring_to` 只在角色正在换服时有。
 - `recommended_server_id` 是推荐规则挑的服，0 表示没有推荐。`transport: ws` 时推荐规则只看得到有 WebSocket 地址的服（入口过滤），一个都没有时是 0。
@@ -277,7 +277,7 @@ account 的码（`service/account` 的常量）：`560111` 票据无效（过期
 curl -s -X POST http://127.0.0.1:8081/portal/enter \
   -H 'Content-Type: application/json' \
   -d '{"account_ticket":"at2.…","server_id":1000,"transport":"ws"}'
-# {"ok":true,"ticket":"enter:et1.…","server_id":1000,"serving_server_id":1000,"expires_at":…,"addr":"wss://play.example.com/ws","addr_source":"directory","transport":"ws"}
+# {"ok":true,"ticket":"enter:et1.…","server_id":1000,"serving_server_id":1000,"expires_at":…,"addr":"wss://play.example.org/ws","addr_source":"directory","transport":"ws"}
 # 这个服没有 WebSocket 地址时：{"ok":false,"code":<portal_transport_unavailable 的码>,"reason":"the server has no address for the requested connection type"}
 ```
 
@@ -373,7 +373,7 @@ portal:
     "1000": 203.0.113.7:7000
     "1001": 203.0.113.8:7000
   websocket_servers:         # 服号 -> 客户端经 WebSocket 连得到的完整 URL（浏览器用）；至多 1024 个
-    "1000": wss://play.example.com/ws
+    "1000": wss://play.example.org/ws
   services:                  # 服务的地址：服务名（account.services 里的）-> 客户端连得到的地址；至多 64 个
     lobby: https://lobby.example.com
   cors_origins:              # 允许跨域调用的网页 Origin；不写 = 不允许跨域

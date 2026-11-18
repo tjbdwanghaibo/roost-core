@@ -123,7 +123,7 @@ func TestModuleConfigCatalogDeclaresTheMigratedRules(t *testing.T) {
 		"stamina":     {"stamina.max": "100", "stamina.hard_cap": "999", "stamina.regen_interval": "5m", "stamina.refill_daily_limit": "3", "stamina.refill_price_step": "50"},
 		"leaderboard": {"leaderboard.board_id": "total", "leaderboard.season": "1", "leaderboard.min_score": "1", "leaderboard.max_score": "1000000000000", "leaderboard.default_top": "10", "leaderboard.max_top": "50"},
 		"mailbox":     {"mailbox.ledger_prune_grace": "10m"},
-		"portal":      {"portal.servers": "", "portal.services": "", "portal.cors_origins": ""},
+		"portal":      {"portal.servers": "", "portal.services": "", "portal.cors_origins": "", "portal.websocket_servers": ""},
 	} {
 		got := map[string]string{}
 		for _, key := range catalog[module].ConfigSchema.Keys {

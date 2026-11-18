@@ -20,7 +20,7 @@ import (
 //	    "1000": 203.0.113.7:7000
 //	    "1001": 203.0.113.8:7000
 //	  websocket_servers:         # 服号 -> 客户端经 WebSocket 连得到的完整 URL（浏览器用；wss 由前置负载均衡终结）
-//	    "1000": wss://play.example.com/ws
+//	    "1000": wss://play.example.org/ws
 //	  services:                  # 服务的地址：服务名（account.services 里的）-> 客户端连得到的地址
 //	    lobby: https://lobby.example.com
 //	  cors_origins:              # 允许跨域调用入口的网页 Origin（浏览器里的外壳页面、网页游戏）；不写 = 不允许跨域
@@ -37,7 +37,7 @@ type Config struct {
 	Portal struct {
 		Servers map[string]string `config:"servers" help:"静态的区服目录：服号 -> 客户端经 TCP 连得到的地址（host:port，通常是 Gate）。有哪些服由 account 说了算，这里只给地址；没写地址的服照常列出、没有地址"`
 		// WebSocketServers 是同一张静态目录的 WebSocket 那一半：客户端请求 transport=ws 时给的地址。
-		WebSocketServers map[string]string `config:"websocket_servers" help:"静态的区服目录（WebSocket）：服号 -> 客户端经 WebSocket 连得到的完整 URL（ws:// 或 wss://，带路径，例如 wss://play.example.com/ws；TLS 由前置负载均衡终结时写 wss）。客户端进服请求写 transport=ws 时给它；没写的服不支持 WebSocket"`
+		WebSocketServers map[string]string `config:"websocket_servers" help:"静态的区服目录（WebSocket）：服号 -> 客户端经 WebSocket 连得到的完整 URL（ws:// 或 wss://，带路径，例如 wss://play.example.org/ws；TLS 由前置负载均衡终结时写 wss）。客户端进服请求写 transport=ws 时给它；没写的服不支持 WebSocket"`
 		// Services 给 account.services 里的服务配客户端连得到的地址（大厅的 HTTP 地址……），清单的 services 里原样带上。
 		Services map[string]string `config:"services" help:"服务的地址：服务名（account.services 里的）-> 客户端连得到的地址（例如大厅的 https://host:port）。有哪些服务由 account 说了算，这里只给地址"`
 		// CORSOrigins 是允许在浏览器里跨域调用四个端点的网页 Origin（例如游戏页面 https://play.example.com）。
