@@ -22,7 +22,7 @@
 | 开局硬期限 | PartyRoom 的持久实体定时器 | `roost add timer --entity PartyRoom`；开局登记、结算即删 | 心跳没在跑（冷加载、驱动停摆）时由它兜底结算 |
 | 建档 | enter 模块（`PlayerDao.Enter`） | `roost module add enter`；首次初始化走 `EnterInit`（生产由 `EnterGame` 触发），领奖 handler 查 `Enter().Built()` | 派对没有初始资产，不写 `EnterFirst` 监听 |
 | 永久金币 | wallet 模块（`PlayerDao.Wallet`，`persist,sync`，自身视图推给本人） | `roost module add wallet`；领奖 handler 在同一笔里 `Wallet().Add(reward)` | “领过没有”是座位的 `Claimed`，不用 `Apply` 回执；派对的 100 万持有上限读 `Balance()` 手写（wallet 不设上限） |
-| 完赛次数 | Player DAO 的 `Matches`（玩法自己的字段，`nosync`） | 多实体 `MultiSync_PartyClaim(player, room)`，strict | 局内分数与永久金币只在领奖事务里跨过去 |
+| 完赛次数 | Player DAO 的 `Matches`（玩法自己的字段，`nosync`） | 多实体 `MultiSync_PartyClaim(player, room)`，缺省 async | 局内分数与永久金币只在领奖事务里跨过去 |
 | 补位 | 房间状态的 `Backfill`（轮次、本轮房间票是否挂出、已处理的补位成局）+ 补位队列里的房间票 | handler `PartyBackfillOffer` / `PartyBackfill` 在实体锁内裁决，宿主与匹配循环 `game/modules/partymatch` 在事务外排队 / 撤票 / 成局 | 座位是权威，超员由进房 handler 拒绝，不是存储保证（第 6A 节） |
 | 房间内同步 | `roomentity.SyncGroup`（`wiring/selfsync.Groups`，装在 self_sync 的 Manager 上） | `access.player.self_sync: true` + `sync_groups: [party_room]`；handler 在连接 / 离开 / 归还时 `Join` / `Leave` / `Disband`，事务内的调用提交后才生效 | 成员规则归业务；生成器只出声明文件 `sync_group.go` 与 bootstrap 接线（第 5 节） |
 
@@ -190,7 +190,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | `SettlementRewardsOnceAndRoomDestroyed` | `Player.Coins / Matches == {10,50,10,0} / {1,1,1,0}` | wallet 的 `Wallet.Coins` 与 Player 的 `Matches` 是同样的数（领奖改调 `Wallet().Add`，奖励为 0 的座位不调；100 万上限读 `Wallet().Balance()`） |
 | `SelfViewAndRoomShareOneConnection`、`BackfillPlayerJoinsGroupWithFullSync` | 自身视图文档的 `coins` 字段（`patch.Values()` 合并成扁平 map）；用例经测试 handler `SetCoins` 直接改字段 | 自身视图里 wallet 的 `Wallet.Coins`：金币是嵌套状态，增量可能只带嵌套补丁（`patch.Values()` 答 `apply nested patch before Values`），客户端按生成的 `db.ApplySyncPlayerDao` 合到基线上再读；用例经 `Wallet().Add` 加金币 |
 | 全部 Nest 场景、`TestPartyGameRealCrashRecovery` | 建档 `Sync_PartyPlayerInit` 置 `Initialized`，领奖查它 | enter 的 `Sync_EnterInit`，领奖查 `Enter().Built()` |
-| `TestPartyGameRealCrashRecovery` | 冷加载与第三进程核对 `Player.Coins` | 核对 `Wallet.Coins`（同样的数）；WAL 未投影仍 12 条（建档仍是每人一笔 strict）；另把 `dbscope=sid` 的 `<库>_0` 也删掉（原来漏删） |
+| `TestPartyGameRealCrashRecovery` | 冷加载与第三进程核对 `Player.Coins` | 核对 `Wallet.Coins`（同样的数）；WAL 未投影仍 12 条（建档仍是每人一笔记录）；另把 `dbscope=sid` 的 `<库>_0` 也删掉（原来漏删） |
 
 变异证明（把模块调用去掉或改错，对应场景变红，恢复后变绿）记在 [R9 批 2A 证据](../maintenance/evidence/r9-2a-20261117/README.md)。没有场景覆盖“未建档的人领奖”与“领奖越过 100 万上限”（改前的 `Initialized` 与 `Coins` 上限同样没有），这两处的变异是绿的，证据里记为未覆盖。
 
@@ -198,7 +198,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 
 心跳（[时间 §4A](guide/10-time.md#4a-实体心跳周期推进)）是在线的周期推进：驱动按 10ms 一格、固定档位（50ms～60s 十档）把到期的登记交给 Nest，回调在实体自己的 worker 上、实体锁与事务内执行；每个登记至多一拍在途，上一拍没跑完就跳拍、不补发，`Beat.Elapsed` 给出距上次执行的业务时间。本例的回调只做一件事：`Advance(beat.Now)` 再 `SaveRoom`。判定只看时间戳，所以“星星是否已经出现”“回合是否已经结束”与心跳跑了几拍无关；玩家输入的 handler 同样先 `Advance(nowUnixMilli)`，输入与心跳谁先拿到锁结果都一样。
 
-心跳不持久（[时间 §4A](guide/10-time.md#4a-实体心跳周期推进)）：进程重启、实体卸载后都要在 `onHeartbeatInit` 里按持久阶段重新启动；本例 `playing` 才启动。心跳的持久级别缺省 `async`：常规推进丢最后几拍可由下一次推进按时间重算；奖励走 strict 的领奖事务。
+心跳不持久（[时间 §4A](guide/10-time.md#4a-实体心跳周期推进)）：进程重启、实体卸载后都要在 `onHeartbeatInit` 里按持久阶段重新启动；本例 `playing` 才启动。心跳的持久级别缺省 `async`：常规推进丢最后几拍可由下一次推进按时间重算；奖励走领奖 handler 的事务（与 Player 金币同一笔）。
 
 硬期限是持久实体定时器（[时间 §4](guide/10-time.md#4-按实体的持久定时器)）：开局登记在 `State.Deadline`，节点 ID 记进 `WakeTimer`，结算时删除。它不依赖心跳，实体不在内存时由驱动在加载后补触发一次；回调核对节点 ID 与期限后同样 `Advance(fire.Now)`。
 
@@ -328,14 +328,14 @@ ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh
 
 它在第 11 节之后追加 `TestPartyGameRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交三名玩家建档、成局开房、三人连接，把业务时间拨到星星出现、seat 0 抢到；后台投影关闭，断言 WAL 有已确认未投影的记录、房间处于 `playing`、心跳在业务视角启动、期限已登记，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经文件 WAL 提交（业务命令缺省 async）三名玩家建档、成局开房、三人连接，把业务时间拨到星星出现、seat 0 抢到；后台投影关闭，断言 WAL 有已确认未投影的记录、房间处于 `playing`、心跳在业务视角启动、期限已登记，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载：房间 `State` 与期限节点 ID 和崩溃前逐字节一致；`onHeartbeatInit` 按持久阶段重新启动心跳（驱动环里恰好 1 个登记）；重投崩溃前的输入，回执不变。
 3. 启动心跳驱动循环，业务时钟越过三个回合：重新启动的心跳一拍内按时间顺序结束回合，seat 0 唯一领先获胜，心跳与期限停下；三人各领奖两次（50 / 10 / 10）、归还座位，房间关闭；`EntityAccess.Destroy(..., true)` 经 DataEngine 删档，心跳环为空。
 4. 正常关闭后起第三个进程冷加载：三人金币不变，房间不再加载，对它领奖失败、金币仍不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
 2026-10-31 本机实测（私有单节点 Mongo 副本集）：通过，崩溃时 12 条未投影记录，脚本全程约 19 秒。对照：把 `onHeartbeatInit` 里按阶段启动心跳的一行去掉后跑一次，用例在冷加载核对处失败（`cold load lost the room: beat=false`），所以“冷加载后心跳重新启动”确实由业务的 `onHeartbeatInit` 完成。
 
-- **证明**：strict 已确认的输入与房间状态在 SIGKILL 后可从未投影 WAL 恢复；心跳不持久，冷加载后按持久阶段重新启动、离线期间错过的回合在第一拍里一次结算；跨进程重试不重复发奖；删档后房间不再加载。
+- **证明**：已回复的输入与房间状态（业务命令 async，写进 WAL 文件即回复）在进程 SIGKILL 后可从未投影 WAL 恢复；心跳不持久，冷加载后按持久阶段重新启动、离线期间错过的回合在第一拍里一次结算；跨进程重试不重复发奖；删档后房间不再加载。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏；期限定时器的冷加载补触发（由塔防等纵切与 entitytimer 包测试覆盖）；Entity Sync 在恢复后的重新登记（本用例把同步组装到 self_sync 的 Manager 上只为承接连接 handler 的 `Join`，不推送；改用同步组入口后的真实依赖模式 2026-11-02 在 Linux（v1.37.1）上通过，见 [Linux 验收续报](../maintenance/LINUX-FUNCTIONAL-20261102.md)）；多进程 / 跨机、Redis / NATS；三个逻辑玩家不是三台客户端，容量与长稳未测。
 
 ### 14. 结论怎样给

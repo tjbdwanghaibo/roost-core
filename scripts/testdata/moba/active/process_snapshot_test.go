@@ -32,7 +32,7 @@ func TestMOBARealSnapshotDuringHostHandoff(t *testing.T) {
 		}
 		stats := h.projector.Stats()
 		if stats.Projected != 0 || stats.WALUnacked != setup+mobaSnapshotCrashFrames {
-			t.Fatal("seed did not leave every frame in strict WAL", stats)
+			t.Fatal("seed did not leave every frame unprojected in the WAL", stats)
 		}
 		writeMOBAReady(t, "process-snapshot-seed", mobaSnapshotBarrier{Digest: r.Reference.Digest(), Frames: len(r.Frames), Setup: setup, Unprojected: stats.WALUnacked})
 		select {}
@@ -172,7 +172,7 @@ func TestMOBARealSnapshotDuringHostHandoff(t *testing.T) {
 		t.Fatalf("handoff recovery mismatch: snapshots=%d served=%d pages=%d tick=%d/%d", snapshots, checkpoints.Served(), lanes.pageFrames.Load(), state.Tick, len(r.Frames))
 	}
 	stopSnapshotChild(t, admin, authority, mobaAuthoritySID, "authority")
-	t.Logf("3-process NATS snapshot handoff: %d unprojected strict records recovered, old host snapshot in flight at handoff, epoch 1 -> 2, checkpoint %d, head %d, reliable page frames %d; zero uncommitted packets", before.Unprojected, before.Frames, len(r.Frames), lanes.pageFrames.Load())
+	t.Logf("3-process NATS snapshot handoff: %d unprojected WAL records recovered, old host snapshot in flight at handoff, epoch 1 -> 2, checkpoint %d, head %d, reliable page frames %d; zero uncommitted packets", before.Unprojected, before.Frames, len(r.Frames), lanes.pageFrames.Load())
 }
 
 func runSnapshotAuthority(t *testing.T) {

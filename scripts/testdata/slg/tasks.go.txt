@@ -30,7 +30,7 @@ var errSLGRule = errors.New("slg practice: invalid target, insufficient gold or 
 
 // 独立研究队列；目标等级是业务的幂等事实，与建造可同时推进。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSLGResearch(target ISLGEntity, level int64) (int64, error) {
 	dao := target.Dao()
 	if level <= 0 {
@@ -63,7 +63,7 @@ type ISLGTileEntity interface {
 
 // 地块归属与玩家支付同一事务提交；已占地块的竞争者不支付，同一拥有者重放不再扣。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSLGClaimTile(target ISLGEntity, tile ISLGTileEntity) (bool, error) {
 	if owner := tile.Dao().GetOwnerID(); owner != 0 {
 		return owner == target.ID(), nil
@@ -77,7 +77,7 @@ func handlerSLGClaimTile(target ISLGEntity, tile ISLGTileEntity) (bool, error) {
 
 // 用目标等级而不是短期请求去重环保证重复建造不重复扣款；本例只有一个建造队列。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSLGStart(target ISLGEntity, level int64, destination int64) (int64, error) {
 	dao := target.Dao()
 	if level <= 0 || destination <= 0 || destination > 1000 {
@@ -103,7 +103,7 @@ func handlerSLGStart(target ISLGEntity, level int64, destination int64) (int64, 
 	return id, nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSLGCancel(target ISLGEntity, id int64) (bool, error) {
 	if id <= 0 || target.Dao().GetPendingBuild() != id {
 		return false, nil

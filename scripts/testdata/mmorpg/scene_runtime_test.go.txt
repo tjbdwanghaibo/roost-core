@@ -184,7 +184,7 @@ func TestMMORPGTwoScenesTCPTransferRetryAndReconnect(t *testing.T) {
 		p.Dao().GetProfilePrivate().SetExp(987)
 		p.PublishSyncDirty()
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	for _, p := range players {
 		if _, err := engine.Request(ctx, seed, p.ID(), nil); err != nil {
 			t.Fatal(err)

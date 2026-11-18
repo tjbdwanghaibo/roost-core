@@ -207,7 +207,7 @@ SLG 的[跨服联盟活动链路](SLG-INTEGRATION.md#7-跨服联盟活动权限�
 | 改了 SceneID 就完成切图 | 持久事实、兴趣订阅、客户端基线都要更新；派生步骤失败后按权威重试 |
 | AOI 看得见就能攻击 / 交易 | AOI 是交付策略，handler 仍要验证权限、距离、存活、同图与状态 |
 | 收到一次确认就能交换资产 | 两个确认绑定同一报价身份，终态保留作去重依据；取消与确认竞争同一事务事实 |
-| strict 成功等于 Mongo 已落库 | strict 的边界是 WAL fsync；需要 Mongo 可见时用 DataEngine 的 Flush / 投影等待契约 |
+| 提交成功等于 Mongo 已落库 | 缺省 async 的边界是写进 WAL 文件（fsync 由组提交稍后完成），strict 才等 fsync，两者都不等 Mongo；需要 Mongo 可见时用 DataEngine 的 Flush / 投影等待契约 |
 | 连接关闭或 ctx 超时就等于请求撤销 | 已准入的事务可能仍完成；先识别结果未知，再按业务身份查询或恢复 |
 | Skill Runtime 放进组件就自动回滚 | Host 副作用与 Runtime 状态需要业务设计一致的持久边界；本例 DAO 战斗没有接持久技能 Host |
 | 多个 map server 分区就能做无缝大世界 | 当前已有固定 Cell 分区、Ghost 与角色跨格/交互（Player 留在 Base），业务适配见 game-demo/cellworld；动态拆格、任意跨 Cell 原子战斗与目标千人/50ms 容量未通过。本 MMORPG 纵切仍是同进程地图，不自动装入 CellWorld，思路与方案见[无缝大世界方案](../maintenance/FEATURE-2026-11-03-seamless-world.md) |
@@ -259,7 +259,7 @@ ROOST_MMORPG_REAL=1 bash scripts/test-mmorpg-generated.sh
 
 **SIGKILL 崩溃恢复**（`TestMMORPGRealCrashRecovery`，[recovery_test.go](../../scripts/testdata/mmorpg/persistence/recovery_test.go)）：崩溃点选野外战斗进行中——买家在交易窗口开着时被怪物击倒、复活在计时；卖家击杀怪物、拾取并领了任务奖、刚上 Buff（计时中）；双方的托管交易已挂单、卖家已确认（卖家 1 件物品、买家 10 金币托管在 Trade 实体里）。选它是因为这是 MMORPG 最典型的在途组合：两种 Player 定时器节点同时在计时，托管资产不在任何一方背包里，战斗奖励已发。
 
-1. 子进程 strict 提交、关掉后台投影，断言恰有 16 条未投影记录（4 个实体新建 + 3 条种子 + 9 条业务命令；Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务）后写出屏障（四个实体的 DAO 持久字节与两个定时器节点 ID），被父进程 SIGKILL。
+1. 子进程经文件 WAL 提交（种子与业务命令缺省 async）、关掉后台投影，断言恰有 16 条未投影记录（4 个实体新建 + 3 条种子 + 9 条业务命令；Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务）后写出屏障（四个实体的 DAO 持久字节与两个定时器节点 ID），被父进程 SIGKILL。
 2. 父进程用同一 WAL 与本次唯一库在崩溃时刻（T0 + 1 秒，交易期限内）冷加载：四个实体逐字节一致，Buff 与复活两个期限（都是 T0 + 3 秒：复活在 T0 登记，Buff 在第二击之后的 T0 + 1 秒上）都在驱动索引里；用原参数重试战斗、拾取、领奖、挂单、卖家确认与复活，状态不变。然后业务时间推进一小时（玩家离线）。
 3. 启动投递循环：两个过期玩家各补触发一次（Buff 清除、买家复活满血），计数增量 2。
 4. 交易已过 5 秒期限：服务内部按到期清理（actorID 0）退还托管资产，重试两次不重复退，买家迟到的确认被拒。

@@ -73,7 +73,7 @@ func loadRoom(room IPartyRoomEntity, now int64) (party.State, error) {
 // 同一房间 ID 上出现别的 Match（散列碰撞或伪造）拒绝，不合并名单。补位会在名单之后追加座位，所以重放按开房名单人数
 // （State.Roster）核对前面的座位。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyOpenMatch(room IPartyRoomEntity, match string, players []int64, rules party.Rules, nowUnixMilli int64) (party.Board, error) {
 	if room.Dao().GetState() != "" {
 		s, err := loadRoom(room, nowUnixMilli)
@@ -100,7 +100,7 @@ func handlerPartyOpenMatch(room IPartyRoomEntity, match string, players []int64,
 // 开房间码房间：房间 ID 由服务端分配给开房者，码就是房间唯一号的编码（教学用，见 partyroom.EncodeCode）。
 // 重放返回同一个码、不重置房间。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyOpenCode(room IPartyRoomEntity, host int64, rules party.Rules, nowUnixMilli int64) (string, error) {
 	code := party.EncodeCode(entity.GetUniqueIDFromEntityID(room.ID()))
 	if room.Dao().GetState() != "" {
@@ -120,7 +120,7 @@ func handlerPartyOpenCode(room IPartyRoomEntity, host int64, rules party.Rules, 
 	return code, room.SaveRoom(s, nowUnixMilli)
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyJoin(room IPartyRoomEntity, player int64, nowUnixMilli int64) error {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -132,7 +132,7 @@ func handlerPartyJoin(room IPartyRoomEntity, player int64, nowUnixMilli int64) e
 	return room.SaveRoom(s, nowUnixMilli)
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyStart(room IPartyRoomEntity, player int64, nowUnixMilli int64) error {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -144,7 +144,7 @@ func handlerPartyStart(room IPartyRoomEntity, player int64, nowUnixMilli int64) 
 	return room.SaveRoom(s, nowUnixMilli)
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyLeave(room IPartyRoomEntity, player int64, nowUnixMilli int64) error {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -161,7 +161,7 @@ func handlerPartyLeave(room IPartyRoomEntity, player int64, nowUnixMilli int64) 
 
 // 连接事件由接入层在鉴权后发来（ticket 是接入层单调分配的票号）；返回新的连接代，客户端输入要带上它。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyConnect(room IPartyRoomEntity, player int64, ticket uint64, connected bool, nowUnixMilli int64) (uint64, error) {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -179,9 +179,9 @@ func handlerPartyConnect(room IPartyRoomEntity, player int64, ticket uint64, con
 	return s.Seats[s.Index(player)].Epoch, room.SaveRoom(s, nowUnixMilli)
 }
 
-// 玩家输入：strict，回执随房间状态一起落盘，重投返回同一回执。
+// 玩家输入：回执与房间状态同一笔提交（缺省 async），重投返回同一回执。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyInput(room IPartyRoomEntity, player int64, in party.Input, nowUnixMilli int64) (party.Receipt, error) {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -208,12 +208,12 @@ func handlerPartyView(room IPartyRoomEntity, player int64, nowUnixMilli int64) (
 	return s.BoardAt(nowUnixMilli), nil
 }
 
-// 结算领奖：Player 金币（wallet）与房间 Claimed 在同一个 strict 事务里；奖励只由服务端终局推导，重复领返回同一数额。
+// 结算领奖：Player 金币（wallet）与房间 Claimed 在同一笔事务里；奖励只由服务端终局推导，重复领返回同一数额。
 // 玩家必须已经建档（enter 的首次初始化做过，Enter().Built()）。“领过没有”是房间座位的 Claimed，金币走 Wallet().Add
 // （不留回执：长期“只发一次”由 Claimed 保证，见 wallet README）；奖励为 0 不调 Add（Add(0) 是 wallet_invalid）。
 // Player 静态归属；本地同库示例用 MultiSync，跨 sid 发奖另接 Saga / effect，不伪装成本地事务。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyClaim(p IPartyPlayerEntity, room IPartyRoomEntity, nowUnixMilli int64) (int64, error) {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -241,7 +241,7 @@ func handlerPartyClaim(p IPartyPlayerEntity, room IPartyRoomEntity, nowUnixMilli
 // 会话资源归还（session.Releaser 至少一次调用）：返回房间是否已关闭（全部座位释放）。奖励没写进 Player 之前拒绝，
 // Releaser 失败由 session 重试，房间不会在发奖前关闭。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyRelease(room IPartyRoomEntity, player int64, nowUnixMilli int64) (bool, error) {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -266,7 +266,7 @@ func handlerPartyRelease(room IPartyRoomEntity, player int64, nowUnixMilli int64
 // 宿主在离开、补位进房之后以及周期性对账时调用，按返回值在事务外排队 / 撤票（game/modules/partymatch）；它幂等，本轮已挂出时
 // 返回同一轮，所以重复调用只会重放同一个排队请求。排队与撤票不在实体锁内做：handler 不做 I/O。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyBackfillOffer(room IPartyRoomEntity, nowUnixMilli int64) (party.BackfillOffer, error) {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {
@@ -280,7 +280,7 @@ func handlerPartyBackfillOffer(room IPartyRoomEntity, nowUnixMilli int64) (party
 // 同一 Match 重投（匹配器重试、并发投递）返回同一结果、不重复占座。被接受的人与开房名单一样此刻“未进房”，连上房间时
 // PartyConnect 让他加入房间同步组、收到全量。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerPartyBackfill(room IPartyRoomEntity, match string, round int, players []int64, nowUnixMilli int64) (party.BackfillResult, error) {
 	s, err := loadRoom(room, nowUnixMilli)
 	if err != nil {

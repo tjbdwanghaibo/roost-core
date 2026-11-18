@@ -21,7 +21,7 @@ var errMMORule = errors.New("mmorpg practice: stale request or business rejectio
 
 // 两人队伍的业务样例；权限、队长和人数上限由正式游戏定义。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMMORPGParty(target IMMOEntity, peer IMMOEntity, partyID int64) error {
 	if target.ID() == peer.ID() || partyID <= 0 {
 		return errMMORule
@@ -39,7 +39,7 @@ func handlerMMORPGParty(target IMMOEntity, peer IMMOEntity, partyID int64) error
 
 // 同进程切图：持久归属与场景人数一起提交。版本拒绝旧请求；AOI 订阅在提交后另行切换。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMMORPGTransfer(target IMMOEntity, from IMMOSceneEntity, to IMMOSceneEntity, version int64, reject bool) error {
 	d := target.Dao()
 	if from.ID() == to.ID() || version <= 0 {
@@ -65,7 +65,7 @@ func handlerMMORPGTransfer(target IMMOEntity, from IMMOSceneEntity, to IMMOScene
 // 不是通用交易账本；确认窗口、物品交换和长期查询由业务建模。wallet 不做玩家间转账（README），这里照 friends 的
 // 两 Player 同事务写法：两边各调自己的 Wallet().Add，“这一笔做过没有”记在玩法自己的 TradeSeq 上，所以不用 Apply。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMMORPGTrade(target IMMOEntity, peer IMMOEntity, seq int64, amount int64, reject bool) error {
 	d := target.Dao()
 	if target.ID() == peer.ID() || seq <= 0 || amount <= 0 {

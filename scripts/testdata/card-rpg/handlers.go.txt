@@ -59,7 +59,7 @@ func applyEffects(player view.PlayerEntity, e cardrpg.Effects, nowUnixMilli int6
 // 把发进背包的英雄道具取出，换成卡牌实例，重复卡转碎片并得 1 尘。gacha 的重放（Replayed）什么都没写，这里也不再转换。
 // 失败的尝试（余额不足、背包满、转换被拒、提交失败）整笔回滚，没有持久结果；重试会重新抽样，成功结果由回执固定。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCardDraw(player view.PlayerEntity, key string, count int) (cardrpg.DrawReceipt, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
@@ -98,7 +98,7 @@ func handlerCardDraw(player view.PlayerEntity, key string, count int) (cardrpg.D
 	return receipt, nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCardManage(player view.PlayerEntity, command cardrpg.Manage, rules cardrpg.Rules, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
@@ -117,7 +117,7 @@ func handlerCardManage(player view.PlayerEntity, command cardrpg.Manage, rules c
 
 // 体力（stamina）、开局顺序身份、冻结的编队和 Run 一起提交。Player 保持静态 sid，Run 由同一原服承载。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCardStart(player view.PlayerEntity, run ICardRunEntity, seq uint64, stage int, rules cardrpg.Rules, nowUnixMilli int64) (int64, error) {
 	if !entity.MatchEntityID(run.ID(), runentity.EntityKindCardRun) || !cardrpg.ValidTime(nowUnixMilli) {
 		return 0, cardrpg.ErrRule
@@ -172,7 +172,7 @@ func saveCardBattle(run ICardRunEntity, b cardrpg.Battle) error {
 
 // 公网玩家入口只传已鉴权 PlayerID；不接收 ActorID=0 的 server-only 超时或敌方控制命令。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCardTurn(run ICardRunEntity, actorID int64, command cardrpg.TurnCommand, nowUnixMilli int64) (cardrpg.BattleView, error) {
 	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
 	if err != nil {
@@ -195,7 +195,7 @@ func handlerCardTurn(run ICardRunEntity, actorID int64, command cardrpg.TurnComm
 
 // 服务器敌方 AI 入口不暴露为客户端 endpoint；超时由持久 TimerComponent 驱动。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCardEnemy(run ICardRunEntity, expected uint64, nowUnixMilli int64) (cardrpg.BattleView, error) {
 	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
 	if err != nil {
@@ -216,7 +216,7 @@ func handlerCardEnemy(run ICardRunEntity, expected uint64, nowUnixMilli int64) (
 // 同一 Run 与 Player 的奖励（金币经 wallet、尘经 bag）、首通、星级、任务事件（task 的 card.won）和领奖事实同事务，
 // 不信任客户端报胜或奖励数值。“领过没有”是 Run 与开局账本里的 Claimed，金币用不留回执的 Wallet().Add。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerCardClaim(player view.PlayerEntity, run ICardRunEntity, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
@@ -267,7 +267,7 @@ func handlerCardClaim(player view.PlayerEntity, run ICardRunEntity, nowUnixMilli
 
 // 读取也经正式锁边界，防止并发修改时直接从实体指针复制撕裂的视图。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerCardProfile(player view.PlayerEntity, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
@@ -276,7 +276,7 @@ func handlerCardProfile(player view.PlayerEntity, nowUnixMilli int64) (cardrpg.P
 	return cardView(player, p, nowUnixMilli), nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerCardBattle(run ICardRunEntity, actorID int64) (cardrpg.BattleView, error) {
 	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
 	if err != nil {

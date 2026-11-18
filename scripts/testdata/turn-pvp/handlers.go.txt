@@ -31,7 +31,7 @@ type IScenarioPlayerEntity interface {
 // game/entities/room/scenario.go 的 RoomJoining 监听只放名单里的两人入座；之后房主（先入座的人）经 turn 的 TurnStart 开局。
 // 相同 Room 重试只核对名单；已有人入座的普通房不能改造成对战房。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerScenarioOpen(m IScenarioRoomEntity, members [2]int64) error {
 	if raw := m.Dao().GetPvpState(); raw != "" {
 		match, err := rules.Decode(raw)
@@ -62,7 +62,7 @@ func handlerScenarioOpen(m IScenarioRoomEntity, members [2]int64) error {
 // 攻击内容由本玩法的回执比对：一致返回原结果，不同则拒绝。生命归零时 game/components/turn/pvp.go 让 turn 的
 // advance 一并结束对局（终局后期限节点不再续）。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerScenarioCommand(m IScenarioRoomEntity, p IScenarioPlayerEntity, epoch uint64, connection string, cmd rules.Command) (rules.Result, error) {
 	match, err := rules.Decode(m.Dao().GetPvpState())
 	if err != nil {

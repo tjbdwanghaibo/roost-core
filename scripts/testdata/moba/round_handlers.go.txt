@@ -18,7 +18,7 @@ type IMobaRoundEntity interface {
 // Round 只在固定权威进程加载；宿主经 RPC 调用此 Sender，不在不同宿主各开同 ID 的本地 WAL。
 // Host / Epoch 校验与帧 / 快照在同一事务；未知提交须停房间并查询原身份，禁止继续切帧。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMOBARound(round IMobaRoundEntity, c moba.Change) (moba.Round, error) {
 	if c.Op == "init" {
 		for _, m := range c.Members {
@@ -54,7 +54,7 @@ func handlerMOBARound(round IMobaRoundEntity, c moba.Change) (moba.Round, error)
 // 与金币同一笔事务；余额溢出由 wallet 拒绝，整笔回滚。
 // 仅由受信任服务在回查权威终态后调用，不开放给客户端；SID 在原服入口校验。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMOBAAward(player IMobaPlayerEntity, award moba.Award) error {
 	if award.Member.PlayerID != player.ID() || award.Member.SID <= 0 || !entity.MatchEntityID(award.RoundID, roundentity.EntityKindBattleRound) || award.MatchID == "" || len(award.MatchID) > 128 || len(award.Digest) != 64 || award.Won && award.Draw {
 		return moba.ErrRule
@@ -107,7 +107,7 @@ func handlerMOBAAward(player IMobaPlayerEntity, award moba.Award) error {
 	return nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMOBAPreparePlayer(player IMobaPlayerEntity) error {
 	if player.Dao().GetMobaRewards() == "" {
 		player.Dao().SetMobaRewards("[]")
@@ -122,7 +122,7 @@ type IMobaDirectoryEntity interface {
 
 // 候选 ID 必须来自 id-gen 且从不重复；若已有映射，丢弃未使用候选号并永远使用返回的旧 Round ID。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMOBAReserveRound(directory IMobaDirectoryEntity, matchID string, candidateID int64, binding string) (int64, error) {
 	if !entity.MatchEntityID(candidateID, roundentity.EntityKindBattleRound) {
 		return 0, moba.ErrRule

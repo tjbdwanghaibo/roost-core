@@ -233,7 +233,7 @@ func writeSurvivalBarrier(t *testing.T, root, name string, b survivalBarrier) {
 	}
 }
 
-// SIGKILL 仅针对本用例创建的子进程；已确认 strict WAL 不等于 Mongo 已投影，也不等于磁盘断电验收。
+// SIGKILL 仅针对本用例创建的子进程；已回复的提交在 WAL 里（业务命令 async，进程被杀不丢）不等于 Mongo 已投影，也不等于磁盘断电验收。
 func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_SURVIVAL_EXTRACTION_CHILD")
 	root := os.Getenv("ROOST_SURVIVAL_EXTRACTION_WAL")
@@ -303,7 +303,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 		command(2, "move", 1)
 		m, state := survivalRuntimeState(t, h)
 		stats := h.projector.Stats()
-		// 5 个实体创建 + 4 次建档（enter）+ 开房与名单 + 4 次入座（room）+ 4 次付费入场 + 6 条命令 = 24 条未投影的 strict 记录。
+		// 5 个实体创建 + 4 次建档（enter）+ 开房与名单 + 4 次入座（room）+ 4 次付费入场 + 6 条命令 = 24 条未投影的 WAL 记录（实体创建是 strict 独立事务，其余 async）。
 		if stats.Projected != 0 || stats.WALUnacked != 24 || state.Seats[0].CraftAt == 0 || state.Seats[1].ExtractAt == 0 || m.Dao().GetSurvivalWakeTimer() == 0 {
 			t.Fatal("not at unprojected crafting / extraction boundary", stats.WALUnacked)
 		}
@@ -556,7 +556,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; four-player materials, crafting and extraction restored; driver loop delivered one overdue tick after cold load and the next deadline on time; every seat reconnected on the room module's Room with a new generation; third process retried admission, commands (old generations by receipt lookup) and sealed payouts (wallet coins and bag medkits)", barrier.Unprojected)
+	t.Logf("SIGKILL: %d unprojected WAL records; four-player materials, crafting and extraction restored; driver loop delivered one overdue tick after cold load and the next deadline on time; every seat reconnected on the room module's Room with a new generation; third process retried admission, commands (old generations by receipt lookup) and sealed payouts (wallet coins and bag medkits)", barrier.Unprojected)
 }
 
 // survivalSeatView 是席位 i 用自己当前的连接读视图（Self.Epoch 是 room 席位的当前代际；断线也能读）。

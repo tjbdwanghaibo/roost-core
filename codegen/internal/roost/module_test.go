@@ -1127,7 +1127,7 @@ func TestModuleAddDeclaresTheFrameworkServicesItUses(t *testing.T) {
 
 	// 生成失败（工程里有一个写坏的 Nest handler）：rank 的声明与它的文件一起撤销。
 	broken := filepath.Join(root, "game", "handler", "zz_broken.go")
-	if err := os.WriteFile(broken, []byte("package handler\n\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken() error { return nil }\n"), 0o644); err != nil {
+	if err := os.WriteFile(broken, []byte("package handler\n\n//roost:nest rollback=undo\nfunc handlerBroken() error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	before = moduleProjectDigest(t, root)
@@ -1261,7 +1261,7 @@ func TestModulesInstallOntoAProjectWithBusinessCodeAndRollBackOnFailure(t *testi
 
 	// 生成失败（工程里有一个写坏的 Nest handler）：模块写过的业务文件与 roost.yaml 全部恢复。
 	broken := filepath.Join(root, "game", "handler", "zz_broken.go")
-	if err := os.WriteFile(broken, []byte("package handler\n\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken() error { return nil }\n"), 0o644); err != nil {
+	if err := os.WriteFile(broken, []byte("package handler\n\n//roost:nest rollback=undo\nfunc handlerBroken() error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	before = moduleProjectDigest(t, root)

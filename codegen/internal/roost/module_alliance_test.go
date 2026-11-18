@@ -104,7 +104,7 @@ func TestModuleAllianceFailedGenerationRollsBackServiceAndSagas(t *testing.T) {
 	roost("add", "mod", "saga", "-service", "game")
 	roost("add", "transport", "tcp")
 	broken := filepath.Join(root, "game", "handler", "zz_broken.go")
-	if err := os.WriteFile(broken, []byte("package handler\n\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken() error { return nil }\n"), 0644); err != nil {
+	if err := os.WriteFile(broken, []byte("package handler\n\n//roost:nest rollback=undo\nfunc handlerBroken() error { return nil }\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	before := moduleProjectDigest(t, root)

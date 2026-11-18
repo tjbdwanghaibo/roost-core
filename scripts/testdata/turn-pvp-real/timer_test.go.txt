@@ -185,7 +185,7 @@ func TestTurnPVPRealTimerRecovery(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, "facts.json"), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		t.Log("PASS real timer seed: open, joins, turn start, strict attack with receipt, reward and deadline node flushed")
+		t.Log("PASS real timer seed: open, joins, turn start, attack with receipt, reward and deadline node flushed")
 		return
 	}
 	raw, err := os.ReadFile(filepath.Join(root, "facts.json"))

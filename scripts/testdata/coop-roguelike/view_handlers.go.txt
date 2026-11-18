@@ -6,7 +6,7 @@ import (
 
 // 成员用自己当前的连接读视图（room 的 View 做成员与连接检查）；金币是 wallet 的余额。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerCoopView(m IScenarioRoomEntity, p IScenarioPlayerEntity, connection string) (rules.View, error) {
 	if _, err := m.Room().View(p.ID(), connection); err != nil {
 		return rules.View{}, err

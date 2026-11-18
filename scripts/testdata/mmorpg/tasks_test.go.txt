@@ -161,7 +161,7 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 		p.Dao().SetHP(100)
 		p.Dao().SetSceneID(f.scenes[0].ID())
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	for _, p := range f.players {
 		if _, err := f.engine.Request(context.Background(), init, p.ID(), nil); err != nil {
 			t.Fatal(err)
@@ -171,7 +171,7 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 	nest.MustRegisterHandlerWithMeta(seed, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		es[0].(*scene.Scene).Dao().SetOccupants(2)
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.Request(context.Background(), seed, f.scenes[0].ID(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 		d.SetHP(20)
 		d.SetSceneID(f.scenes[0].ID())
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.Request(context.Background(), mobInit, f.monster.ID(), nil); err != nil {
 		t.Fatal(err)
 	}

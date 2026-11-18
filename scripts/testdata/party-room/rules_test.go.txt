@@ -168,7 +168,7 @@ func TestPartyGameRulesBackfillSeats(t *testing.T) {
 		}
 	}
 	if decoded, err := Decode(after); err != nil || decoded.Encode() != after {
-		t.Fatal("backfill facts did not survive the strict round trip", err)
+		t.Fatal("backfill facts did not survive the strict JSON round trip", err)
 	}
 	if offer, _ := s.OfferBackfill(); offer != (BackfillOffer{}) {
 		t.Fatalf("refilled room offered %+v", offer)

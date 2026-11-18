@@ -195,7 +195,7 @@ func mergeRuntimeCommand(t *testing.T, h *mergeRuntime, kind string, a, b int, v
 	return r[0]
 }
 
-// 父进程只 SIGKILL 自己创建的子进程。strict 已确认但尚未投影时崩溃，保留原 WAL 恢复；不模拟断电或结果未知。
+// 父进程只 SIGKILL 自己创建的子进程。已回复的提交尚未投影时崩溃（业务命令 async，进程被杀不丢），保留原 WAL 恢复；不模拟断电或结果未知。
 func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_MERGE_CASUAL_CHILD")
 	root := os.Getenv("ROOST_MERGE_CASUAL_WAL")
@@ -239,9 +239,9 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 		p, state := mergeRuntimeState(t, h)
 		stats := h.projector.Stats()
 		// 新建 Player（Nest 之外 Create 的 strict 隔离事务）、enter 建档（初始金币）、首登、两次生产、广告到账、开挑战
-		// 各一条 strict 记录；后台投影关闭，七条都未投影。
+		// 各一条 WAL 记录（新建是 strict，其余 async）；后台投影关闭，七条都未投影。
 		if stats.Projected != 0 || stats.WALUnacked != 7 || p.Dao().GetMergeWakeTimer() == 0 {
-			t.Fatal("missing unprojected strict records / timer")
+			t.Fatal("missing unprojected WAL records / timer")
 		}
 		raw, _ := json.Marshal(mergeBarrier{state.Digest(), state.View(mergePurse(p, mergeNow)), mergeNow, p.Dao().GetMergeWakeTimer(), stats.WALUnacked})
 		if err := os.WriteFile(filepath.Join(root, "ready.json"), raw, 0600); err != nil {
@@ -461,5 +461,5 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; exact board / assets / timer restored, driver loop delivered one overdue expiry after cold load and the next challenge expiry at its deadline, server goal completed and rewards retried after third-process cold load", barrier.Unprojected)
+	t.Logf("SIGKILL: %d unprojected WAL records; exact board / assets / timer restored, driver loop delivered one overdue expiry after cold load and the next challenge expiry at its deadline, server goal completed and rewards retried after third-process cold load", barrier.Unprojected)
 }

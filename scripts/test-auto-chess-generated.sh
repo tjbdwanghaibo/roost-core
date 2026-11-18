@@ -6,7 +6,7 @@
 # 与配对、淘汰与排名、Room 上的阶段定时器、按排名领奖（Claimed 在 Room，金币经 wallet）、名单准入（RoomJoining 监听）。
 # 这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身。ROOST_AUTO_CHESS_REAL=1（并提供隔离 Mongo 副本集
-# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程 strict 提交后、WAL 记录未投影时被父进程 SIGKILL，新进程
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程提交（业务命令缺省 async）后、WAL 记录未投影时被父进程 SIGKILL，新进程
 # 冷加载、由驱动投递循环续完整局、八人领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

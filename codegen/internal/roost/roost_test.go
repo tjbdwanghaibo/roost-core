@@ -2464,7 +2464,7 @@ func TestTransactionalGenerateDoesNotCommitEarlierGeneratorOnLaterFailure(t *tes
 		t.Fatal(err)
 	}
 	invalidHandler := filepath.Join(root, "game", "handler", "broken.go")
-	if err := os.WriteFile(invalidHandler, []byte("package handler\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken("), 0o644); err != nil {
+	if err := os.WriteFile(invalidHandler, []byte("package handler\n//roost:nest rollback=undo\nfunc handlerBroken("), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard); err == nil {

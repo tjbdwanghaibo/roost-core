@@ -28,7 +28,7 @@ type IScenarioPlayerEntity interface {
 // 开房与成局名单是同一笔事务：名单来自宿主的鉴权与成局结果。房间一开就带着名单，game/entities/room/scenario.go 的
 // RoomJoining 监听只放名单里的两人入座。相同 Room 重试只核对名单；已有人入座的普通房不能改造成合作房。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerScenarioOpen(m IScenarioRoomEntity, members [2]int64, nowUnixMilli int64) error {
 	if raw := m.Dao().GetCoopState(); raw != "" {
 		s, err := rules.Decode(raw)
@@ -75,7 +75,7 @@ func scenarioMember(m IScenarioRoomEntity, playerID int64, epoch uint64, connect
 // 投票与领奖都是 [Room, Player] 一笔事务。同序号同内容返回原结果，改内容的重试拒绝；每人只保留最后一条回执。
 // “领过没有”（Claimed）是 Room 上的长期事实，金币经 wallet 的 Add（不留回执：只发一次由 Claimed 保证）。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerScenarioCommand(m IScenarioRoomEntity, p IScenarioPlayerEntity, epoch uint64, connection string, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
 	s, err := rules.Decode(m.Dao().GetCoopState())
 	if err != nil {

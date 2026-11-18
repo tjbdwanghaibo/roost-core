@@ -35,13 +35,13 @@ flowchart LR
     B --> C[生成 Sender]
     C --> D[Nest 锁 Player / CardRun]
     D --> E[业务规则改 DAO 与回合定时器]
-    E --> F[strict WAL 提交]
+    E --> F[WAL 提交（async）]
     F --> G[回复业务视图]
     F --> H[提交后报告新期限给驱动]
     H --> I[到期投递 Tick：超时托管一回合]
 ```
 
-`strict` 保证回复前 WAL fsync，不保证回复时 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
+业务写 handler 不写 durability，用缺省 `async`：记录写进 WAL 文件就回复，fsync 由组提交稍后完成——进程崩溃（SIGKILL、panic、OOM）不丢已回复的修改，整机掉电或内核崩溃可能丢最后一个组提交间隔（缺省 10ms）；回复时也不保证 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
 
 ### 3. 抽卡、养成与回合制 PvE：如何使用
 
@@ -217,7 +217,7 @@ sequenceDiagram
     N->>R: 校验归属、当前行动者、资源、目标与期限
     N->>R: 确定性推进，记命令、服务器时间和状态
     N->>T: 删除旧节点，登记下一回合期限
-    N->>N: strict WAL 提交
+    N->>N: WAL 提交（async）
     N-->>C: 提交后的 BattleView
     T->>N: 到期投递 Tick（当前节点 ID / 序号）
     N->>R: 托管行动一回合，登记下一回合
@@ -288,14 +288,14 @@ ROOST_CARD_RPG_REAL=1 bash scripts/test-card-rpg-generated.sh
 
 它在第 11 节之后追加 `TestCardRPGRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交建档（enter 的 `EnterInit`）、十连（gacha）、升级、开局和第一回合；后台投影关闭，断言 WAL 有未投影的记录（实测 7 条：Player 与 Run 新建各 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 5 条业务命令；用例只断言非零）后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经文件 WAL 提交（业务命令缺省 async）建档（enter 的 `EnterInit`）、十连（gacha）、升级、开局和第一回合；后台投影关闭，断言 WAL 有未投影的记录（实测 7 条：Player 与 Run 新建各 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 5 条业务命令；用例只断言非零）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载 Player / Run，核对模块资产（金币、钻石、尘、体力存值）、战斗摘要与定时器 ID；再把卡池热更涨价、用新一代卡牌配置重放旧抽卡（等于屏障记下的回执）与升级，结果与扣费不变。
 3. 业务时间推进一小时。断言冷加载已把存量回合期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次补触发，托管一回合后下一回合从实际触发时间起算、新期限再次进入索引，投递计数恰为 1、没有重投。再把业务时间推进到这个新期限，循环按时投递下一回合（从期限时刻起算，计数到 2）。继续用开局那一代配置打完、获胜，领奖三次只得一份。
 4. 正常关闭后再起第三个进程冷加载：核对领奖终态、资产与无待执行定时器，再重试领奖与抽卡，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
 去掉第 3 步的 `Start` 时，用例在补触发处超时失败（`driver loop did not run turn 2`），所以补触发确实由循环完成。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复；恢复后的定时器节点由驱动投递循环在加载后自动补触发一次，框架不追帧；下一个期限由循环按时投递；跨进程重试不重复扣费或发奖。
+- **证明**：已回复的提交（业务命令 async，写进 WAL 文件即回复）在进程 SIGKILL 后可从未投影 WAL 恢复；恢复后的定时器节点由驱动投递循环在加载后自动补触发一次，框架不追帧；下一个期限由循环按时投递；跨进程重试不重复扣费或发奖。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例冻结业务时钟、由循环按 MaxWait 重读）、准入失败重试与 Redeliver（由 entitytimer 包测试覆盖）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
 ### 13. 结论怎样给

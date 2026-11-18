@@ -12,7 +12,7 @@ var errAllianceReward = errors.New("alliance reward: invalid identity, home, amo
 
 // 仅由受信任的原服建档入口调用。Player 始终归属首次持久写入的 sid，不迁移。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceHomeInit(p view.PlayerEntity, sid int32) (int64, error) {
 	if sid != 1000 && sid != 1001 {
 		return 0, errAllianceReward
@@ -28,7 +28,7 @@ func handlerAllianceHomeInit(p view.PlayerEntity, sid int32) (int64, error) {
 	return p.Wallet().Balance(), nil
 }
 
-// 金币和永久到账回执同一 Player strict 事务（金币在 wallet 模块，R9）。key 与 amount 来自原服持久义务，
+// 金币和永久到账回执同一 Player 事务（金币在 wallet 模块，R9）。key 与 amount 来自原服持久义务，
 // sid 来自本进程可信配置；本方法不是公网 handler，不允许客户端自报奖励。RPC / Redis 读取在事务外。
 //
 // “这一笔做过没有”看 Player 上的永久回执 SLGReceipts（活动身份 → 金额），不靠 wallet 的回执窗口：
@@ -36,7 +36,7 @@ func handlerAllianceHomeInit(p view.PlayerEntity, sid int32) (int64, error) {
 // 这名玩家又有多少笔带键入账都不影响判重（维护者 2026-11-17）。所以入账用不判重的 Wallet().Add。
 // 同身份重试必须金额一致；账本满 128 条后拒新身份，不淘汰旧身份。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAllianceCredit(p view.PlayerEntity, sid int32, key activity.Key, amount int64) (int64, error) {
 	if p.Dao().GetHomeSID() != sid || (sid != 1000 && sid != 1001) || key.Validate() != nil || key.Phase != activity.PhaseSettle || amount <= 0 || amount > 100000 {
 		return 0, errAllianceReward
@@ -70,7 +70,7 @@ func handlerAllianceCredit(p view.PlayerEntity, sid int32, key activity.Key, amo
 
 // 仅内部恢复核对使用，不能把永久账本同步给客户端。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerAllianceWallet(p view.PlayerEntity) (string, error) {
 	raw, e := json.Marshal(struct {
 		Home     int32

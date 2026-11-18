@@ -9,7 +9,7 @@
 # 拒绝超员）。room 不广播、不装 EntitySync（D24 A 暂缓），matchmaking 模块不做弹性人数与补位，所以这些留手写。
 # 这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身，心跳驱动跑真实循环、业务时间用 clock.SetSource 拨。
-# ROOST_PARTY_ROOM_REAL=1（并提供隔离 Mongo 副本集 ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在局内（strict 输入
+# ROOST_PARTY_ROOM_REAL=1（并提供隔离 Mongo 副本集 ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在局内（输入
 # 已确认、WAL 未投影）被父进程 SIGKILL，新进程冷加载、心跳按持久阶段重新启动并把局推进到结算、发奖、删档，
 # 再由第三个进程核对奖励与删档并重试领奖。使用本次唯一库，成功后删除。
 set -euo pipefail

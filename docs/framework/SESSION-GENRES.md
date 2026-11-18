@@ -110,7 +110,7 @@ go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <已分配的新房间ID> -epo
 
 ## 验证边界
 
-默认场景的提交器为可注入拒绝的内存替身，DAO / undo / Nest / 生成 Sender / 模块组件为正式实现；默认不连接 Mongo、Redis、NATS，不能用这些场景证明 strict fsync 或进程崩溃恢复。三个玩法各有显式 REAL 档，范围见下文。TCP/PB 场景与存储恢复分别计数；只有回合配方的独立 Gate 已在对应真实档运行，EntitySync、客户端展示、多人容量和跨机恢复仍是独立项。
+默认场景的提交器为可注入拒绝的内存替身，DAO / undo / Nest / 生成 Sender / 模块组件为正式实现；默认不连接 Mongo、Redis、NATS，不能用这些场景证明 WAL 持久或进程崩溃恢复。三个玩法各有显式 REAL 档，范围见下文。TCP/PB 场景与存储恢复分别计数；只有回合配方的独立 Gate 已在对应真实档运行，EntitySync、客户端展示、多人容量和跨机恢复仍是独立项。
 
 ## 后续补齐顺序
 
@@ -140,11 +140,11 @@ GOWORK=off GOFLAGS=-p=2 ROOST_SOCIAL_SIM_REAL=1 bash scripts/test-social-sim-gen
 
 合作默认 **10**、经营默认 **9** 条场景保持不变；各自再运行 1 条真实测试、2 个崩溃子场景（race、零 SKIP）。`ROOST_GENRE_MODULE` 支持自定义 module，`ROOST_GENRE_OUTPUT` 指定保留生成工程与完整日志。默认档也把真实恢复夹具装入工程并编译 / vet，pretag 仍仅运行默认档。
 
-共用的 `genre-common/persistence/runtime_test.go.txt` 只负责正式 Runtime / Nest / 生成 DAO / Sender / 文件 WAL / Mongo 装配和崩溃屏障；实体集合、开局、状态与命令都来自玩法的夹具钩子（合作：room 的 Room + 两名 Player；经营：两名 Player，命令目标是主人）。子进程关闭后台投影，所有命令经 strict 确认，确认 WAL 已 fsync、Appended=Admitted、Acknowledged=0，父子均核对本玩法的真实业务集合为空；通过独立管道报告完整持久文档后，由父进程 SIGKILL。恢复读取原 WAL，核对完整持久文档（BSON 解码后比较），先用**原连接、原代际**重放最后回执（不要求在线），再换连接重连（合作）继续业务；正常排空后再开第三个进程核对终态，同样先重放、再重连重试。没有改变持久策略，也没有靠延时猜测未投影窗口。
+共用的 `genre-common/persistence/runtime_test.go.txt` 只负责正式 Runtime / Nest / 生成 DAO / Sender / 文件 WAL / Mongo 装配和崩溃屏障；实体集合、开局、状态与命令都来自玩法的夹具钩子（合作：room 的 Room + 两名 Player；经营：两名 Player，命令目标是主人）。子进程关闭后台投影，所有命令以缺省 async 回复（写进 WAL 文件即回复，fsync 由组提交完成；SIGKILL 只杀进程、不丢页缓存里的 WAL），确认 WAL 至少刷过一次盘（Syncs>0）、Appended=Admitted、Acknowledged=0，父子均核对本玩法的真实业务集合为空；通过独立管道报告完整持久文档后，由父进程 SIGKILL。恢复读取原 WAL，核对完整持久文档（BSON 解码后比较），先用**原连接、原代际**重放最后回执（不要求在线），再换连接重连（合作）继续业务；正常排空后再开第三个进程核对终态，同样先重放、再重连重试。没有改变持久策略，也没有靠延时猜测未投影窗口。
 
 | 真实测试 | 崩溃点 | 恢复断言 |
 | --- | --- | --- |
-| `TestCoopRoguelikeRealCrashRecovery` | 第二关只有一人投票（9 条 strict 记录；R9 前 GameRoom 版 7 条）；三关完成后第一人已领奖（13 条；R9 前 11 条） | 固定路线种子、阶段、半票、席位代际及回执不变；冷加载后全员断线，原连接重放得原回执，`RoomReconnect` 后继续到双方各 10 金币；同请求重试只返回原结果、新序号重复领奖拒绝；第三进程继续保持终态 |
+| `TestCoopRoguelikeRealCrashRecovery` | 第二关只有一人投票（9 条 WAL 记录；R9 前 GameRoom 版 7 条）；三关完成后第一人已领奖（13 条；R9 前 11 条） | 固定路线种子、阶段、半票、席位代际及回执不变；冷加载后全员断线，原连接重放得原回执，`RoomReconnect` 后继续到双方各 10 金币；同请求重试只返回原结果、新序号重复领奖拒绝；第三进程继续保持终态 |
 | `TestSocialSimRealCrashRecovery` | 加好友、种植、好友帮助后尚未成熟（6 条）；主人收获已确认（7 条） | 好友关系与 ReadyAt 不变，离线两小时加载不自动发收益；仅主人显式收获一次 5 金币，帮助不会再次提前，访客不能领；第三进程保持 Harvests=1、钱包 5/0 |
 
 完整证据和复跑见 [B5 验收记录](../maintenance/evidence/session-real-20261114/README.md) 与 [R9 1A 证据](../maintenance/evidence/r9-1a-20261117/README.md)。这些真实测试直接调用正式 Sender，不包含 TCP/PB、真实登录、Gate、NATS、跨服访问者授权或客户端引擎。各脚本先执行的既有 TCP Robot 使用替身提交器，不能与本段拼称为同一条网络与存储联合链。没有新增社交经营自动 timer，成熟仍按持久 ReadyAt 在 harvest 时判定；不承诺永久回执账本、回复未知、断电、跨机或容量。

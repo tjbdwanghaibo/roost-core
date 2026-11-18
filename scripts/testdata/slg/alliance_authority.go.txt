@@ -18,7 +18,7 @@ type IAllianceAuthorityEntity interface {
 // 联盟完整业务事实用一个生成 DAO 字段持久化；Version 是业务 CAS 版本，
 // 不替代 Remote 的 marker / lock fence。CAS 比较在正式 Remote 写准入之后执行。
 //
-//roost:nest rollback=state durability=strict
+//roost:nest rollback=state durability=memory
 func handlerAllianceRemoteRead(a IAllianceAuthorityEntity) (string, error) {
 	return a.Dao().GetState(), nil
 }
@@ -26,7 +26,7 @@ func handlerAllianceRemoteRead(a IAllianceAuthorityEntity) (string, error) {
 // next 是可信业务适配器根据原快照计算的完整事实，不是客户端整档上传。
 // 冲突只返回明确版本不匹配；结果未知由调用者查询原身份，不能盲目重执行。
 //
-//roost:nest rollback=state durability=strict
+//roost:nest rollback=state
 func handlerAllianceRemoteCAS(a IAllianceAuthorityEntity, expected uint64, next string) (string, error) {
 	var old struct{ Version uint64 }
 	raw := a.Dao().GetState()

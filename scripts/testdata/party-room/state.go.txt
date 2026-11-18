@@ -60,7 +60,7 @@ type Seat struct {
 	// LastSeq / Last 只保留最后一条输入：重投它返回同一回执，比它旧的一律拒绝（派对输入频率低，够用）。
 	LastSeq uint64  `json:"last_seq"`
 	Last    Receipt `json:"last"`
-	// Claimed / Reward 是领奖事实，与 Player 金币在同一个 strict 事务里写；Released 是会话资源已归还。
+	// Claimed / Reward 是领奖事实，与 Player 金币在同一笔事务里写；Released 是会话资源已归还。
 	Claimed  bool  `json:"claimed,omitempty"`
 	Reward   int64 `json:"reward,omitempty"`
 	Released bool  `json:"released,omitempty"`

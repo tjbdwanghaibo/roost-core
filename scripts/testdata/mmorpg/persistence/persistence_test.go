@@ -91,7 +91,7 @@ func registerMMORealHandlers() {
 				return nil, errMMORule
 			}
 			return nil, nil
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 		nest.MustRegisterHandlerWithMeta(mmoRealView, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 			switch e := es[0].(type) {
 			case *player.Player:
@@ -108,7 +108,7 @@ func registerMMORealHandlers() {
 				return mmoRealState{Raw: e.Dao().Marshal(), HP: e.Dao().GetHP()}, nil
 			}
 			return nil, errMMORule
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 	})
 }
 
@@ -125,7 +125,7 @@ type mmoRealRuntime struct {
 }
 
 // openMMORealRuntime 用 walRoot 下的文件 WAL 与本次唯一库装配一个进程。manual 为 true 时关掉后台投影，
-// 让 strict 提交停在“已写 WAL、未投影到 Mongo”（崩溃注入用）。now 是驱动的业务时钟起点，必须在实体加载前设好。
+// 让已回复的提交停在“已写 WAL、未投影到 Mongo”（崩溃注入用）。now 是驱动的业务时钟起点，必须在实体加载前设好。
 func openMMORealRuntime(t *testing.T, walRoot string, manual bool, now int64) *mmoRealRuntime {
 	t.Helper()
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
@@ -241,7 +241,7 @@ func (h *mmoRealRuntime) view(t *testing.T, id int64) mmoRealState {
 	return value.(mmoRealState)
 }
 
-// seed 写入一个实体的初始数值（strict 提交）。
+// seed 写入一个实体的初始数值（async 提交）。
 func (h *mmoRealRuntime) seed(t *testing.T, id, gold, items, hp, area int64) {
 	t.Helper()
 	if _, err := h.scheduler.Request(context.Background(), mmoRealSeed, id, nest.NewParams(gold, items, hp, area)); err != nil {

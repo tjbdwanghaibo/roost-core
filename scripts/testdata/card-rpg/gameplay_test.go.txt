@@ -375,7 +375,7 @@ func TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream(t *testing.T) {
 			return nil, err
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.Request(ctx, name, f.players[0].ID(), nil); !errors.Is(err, refused) {
 		t.Fatal(err)
 	}
@@ -733,7 +733,7 @@ func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
 			return nil, err
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.RequestMulti(ctx, name, []int64{f.players[0].ID(), f.runs[0].ID()}, nil); !errors.Is(err, refused) {
 		t.Fatal(err)
 	}
@@ -756,7 +756,7 @@ func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
 			return nil, err
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.Request(ctx, turn, f.runs[0].ID(), nil); !errors.Is(err, refused) {
 		t.Fatal(err)
 	}

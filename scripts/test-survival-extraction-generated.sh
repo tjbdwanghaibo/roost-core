@@ -6,7 +6,7 @@
 # 撤离读条与封存清单、Room 上的探险定时器、付费入场与兑付（Joined / Claimed 在 Room，金币经 wallet、药剂经 bag）、
 # 名单准入（RoomJoining 监听）、初始金币（EnterFirst 监听）。这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身。ROOST_SURVIVAL_EXTRACTION_REAL=1（并提供隔离 Mongo 副本集
-# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在制作与撤离读条都在途时（strict 已确认、WAL 未投影）被父进程 SIGKILL，
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在制作与撤离读条都在途时（已回复、WAL 未投影）被父进程 SIGKILL，
 # 新进程冷加载、由驱动投递循环一次补触发完成到期事件，全员经 room 重连后续局兑付，再由第三个进程冷加载核对并重试。
 # 使用本次唯一库，成功后删除。
 set -euo pipefail

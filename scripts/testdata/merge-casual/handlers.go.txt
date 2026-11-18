@@ -52,7 +52,7 @@ func mergeSpend(player IMergePlayerEntity, e casual.Effect, nowUnixMilli int64) 
 // 棋盘建在 enter 建档之后：初始金币已经在 enter 的首次初始化事务里发过（game/entities/player/merge_casual.go）；
 // 棋盘要服务端的密钥与捕获的规则，事件里没有，所以仍由这里在第一张票时建。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, nowUnixMilli int64, rules casual.Rules) (casual.View, error) {
 	if ticket == 0 || !player.Enter().Built() {
 		return casual.View{}, casual.ErrRule
@@ -95,7 +95,7 @@ func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now
 
 // 一个离线批次最多 16 步，全部成功才 SetMergeState。公网只接收 Command，不接收 State / Rules / 时间；nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, nowUnixMilli int64) ([]casual.Receipt, error) {
 	if len(commands) == 0 || len(commands) > 16 {
 		return nil, casual.ErrRule
@@ -127,7 +127,7 @@ func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, now
 
 // 广告回调的签名密钥来自服务端依赖装配；该 Sender 不是允许客户端传 key 的公开 endpoint。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMergeAd(player IMergePlayerEntity, proof casual.SignedReward, verificationKey string, epoch uint64, nowUnixMilli int64) (casual.View, error) {
 	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {
@@ -152,7 +152,7 @@ func handlerMergeAd(player IMergePlayerEntity, proof casual.SignedReward, verifi
 // 读视图也在 Player 锁内取得；不顺便推进充能与挑战，因此客户端需显式 recover 后再以新版本发离线批次。
 // 体力是 stamina 在本条消息业务时间的当前值（只读结算，不写状态）。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerMergeView(player IMergePlayerEntity, nowUnixMilli int64) (casual.View, error) {
 	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {
@@ -180,7 +180,7 @@ func saveMerge(player IMergePlayerEntity, s casual.State) error {
 
 // 结果未知后按原 seq 查回执；新设备用当前 Epoch 查询旧操作，不改写旧命令的 Epoch 或 Seq 再发一次。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerMergeReceipt(player IMergePlayerEntity, epoch, seq uint64) (casual.Receipt, error) {
 	s, err := casual.Decode(player.Dao().GetMergeState())
 	if err != nil {

@@ -217,7 +217,7 @@ func readPartyBarrier(t *testing.T, root, name string) partyBarrier {
 	return b
 }
 
-// SIGKILL 只针对本用例创建的子进程；strict WAL 已确认不等于 Mongo 已投影，也不等于磁盘断电验收。
+// SIGKILL 只针对本用例创建的子进程；已回复的提交在 WAL 里（业务命令 async，进程被杀不丢）不等于 Mongo 已投影，也不等于磁盘断电验收。
 // 心跳不持久：冷加载后由 onHeartbeatInit 按持久阶段重新启动，离线期间错过的回合在第一拍里按时间顺序一次结算。
 func TestPartyGameRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_PARTY_ROOM_CHILD")

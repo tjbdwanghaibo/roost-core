@@ -180,8 +180,8 @@ type cardBarrier struct {
 	TurnTimer                int64
 }
 
-// strict 记录未投影时由父进程 SIGKILL 自己的子进程。新进程重放原 WAL、冷加载定时器、续战并重试领奖。
-// 这里只覆盖已确认提交，不模拟磁盘断电或 strict 回复未知。
+// WAL 记录未投影时由父进程 SIGKILL 自己的子进程（业务命令 async：写进 WAL 文件后回复，进程被杀不丢）。新进程重放原 WAL、冷加载定时器、续战并重试领奖。
+// 这里只覆盖已确认提交，不模拟磁盘断电或回复未知。
 func TestCardRPGRealCrashRecovery(t *testing.T) {
 	const baseNow int64 = 1800000000000
 	if os.Getenv("ROOST_CARD_RPG_CHILD") == "verify" {
@@ -274,7 +274,7 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 		}
 		stats := h.projector.Stats()
 		if stats.Projected != 0 || stats.WALUnacked == 0 {
-			t.Fatal("no unprojected strict WAL at crash boundary")
+			t.Fatal("no unprojected WAL at crash boundary")
 		}
 		barrier := cardBarrier{b.Digest(), a.Items[cardrpg.ItemGems], a.Coins, a.Items[cardrpg.ItemDust], a.Stamina, draw, stats.WALUnacked, run.(*runentity.CardRun).Dao().GetTurnTimer()}
 		raw, _ := json.Marshal(barrier)
@@ -490,5 +490,5 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Log(fmt.Sprintf("SIGKILL recovery: %d unprojected strict records; draw/growth unchanged; driver loop delivered one overdue turn after cold load and the next turn at its deadline; won, claimed and retried after another process restart exactly once", barrier.Unprojected))
+	t.Log(fmt.Sprintf("SIGKILL recovery: %d unprojected WAL records; draw/growth unchanged; driver loop delivered one overdue turn after cold load and the next turn at its deadline; won, claimed and retried after another process restart exactly once", barrier.Unprojected))
 }

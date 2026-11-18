@@ -106,7 +106,7 @@ func TestModuleActivityServiceRollback(t *testing.T) {
 	root, roost, try := moduleProject(t, "activityrollback")
 	roost("module", "add", "alliance", "activity")
 	path := filepath.Join(root, "game/handler/zz_broken.go")
-	if err := os.WriteFile(path, []byte("package handler\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken()error{return nil}\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("package handler\n//roost:nest rollback=undo\nfunc handlerBroken()error{return nil}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	before := moduleProjectDigest(t, root)

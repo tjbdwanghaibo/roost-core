@@ -21,7 +21,7 @@ R9（2026-11-17）起本夹具按“装模块 + 只写模块没覆盖的部分�
 | 阶段期限（准备超时、战斗结算） | Room 的实体定时器（类型号 `TimerChessPhase`）+ `ChessWakeTimer` | `roost add timer --entity Room`；节点存 DAO，驱动到期投递 Tick | 每次到期只推进一个阶段；加载后到期节点只触发一次，框架不追帧 |
 | 永久金币 | **wallet** 模块（`PlayerDao.Wallet`） | 领奖 `Wallet().Add(奖励)`；“领过没有”由房间上的 `Claimed` 保证，所以用不留回执的 `Add` | 只承接领奖；跨 sid 发奖另接 Remote / Saga |
 | 建档 | **enter** 模块（`PlayerDao.Enter`） | 进入游戏时 `EnterInit`；领奖查 `Enter().Built()` | 只装 enter（Q6），不装 login / portal |
-| 领奖 | Player + Room | 多实体 Sender `MultiSync_ChessClaim`：房间的 `Claimed` 与 wallet 金币同一 strict 事务 | 排名由服务器终态决定，客户端不能传胜者或奖励额 |
+| 领奖 | Player + Room | 多实体 Sender `MultiSync_ChessClaim`：房间的 `Claimed` 与 wallet 金币同一笔事务 | 排名由服务器终态决定，客户端不能传胜者或奖励额 |
 | 配置（棋子张数 / 价格 / 属性、阶段时长、回合上限） | configdata Store / Snapshot | 注册对象定义 → Load 时校验 → 成局时捕获并整份写进对局 | 已开始的对局沿用成局那一代 |
 | 成局名单与随机种子 | 匹配 / 房间服务 | `Sync_ChessInit` 开房并首次固定八个完整 Player ID、服务器种子与配置 | 同一 Room ID 改名单被拒、不重掷种子；已有人入座的普通房不能改造成对局房 |
 | 客户端看到的对局 | 业务视图 `View` | 锁内读取，按观察者裁剪 | 只有本人能看自己的经济、商店与备用席；不含种子、卡池余量和对手账本 |
@@ -34,13 +34,13 @@ flowchart LR
     C --> D[room 核对代际 / 连接 / 在线，再核对 Seq / 回合 / 期限]
     D --> E[改商店 / 经济 / 阵容，八人都准备则冻结战斗]
     E --> F[替换阶段定时器]
-    F --> G[strict WAL 提交]
+    F --> G[WAL 提交（async）]
     G --> H[回复回执]
     G --> I[提交后报告新期限给驱动]
     I --> J[到期投递 Tick：推进一个阶段]
 ```
 
-`strict` 保证回复前 WAL fsync，不保证回复时 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
+业务写 handler 不写 durability，用缺省 `async`：记录写进 WAL 文件就回复，fsync 由组提交稍后完成——进程崩溃（SIGKILL、panic、OOM）不丢已回复的修改，整机掉电或内核崩溃可能丢最后一个组提交间隔（缺省 10ms）；回复时也不保证 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
 
 ### 3. 共享卡池、阶段与领奖：如何使用
 
@@ -215,7 +215,7 @@ sequenceDiagram
     N->>M: room 核对代际 / 连接 / 在线，再核对序号、回合、期限
     N->>M: 改商店 / 经济 / 阵容；八人都准备则冻结战斗
     N->>T: 删除旧节点，登记新期限
-    N->>N: strict WAL 提交
+    N->>N: WAL 提交（async）
     N-->>C: 回执
     T->>N: 到期投递 Tick（当前节点 ID / 期限）
     N->>M: 推进一个阶段，登记下一期限
@@ -229,7 +229,7 @@ sequenceDiagram
 
 ### 6. 领奖与幂等身份
 
-`MultiSync_ChessClaim(player, match)` 同时锁 Player 与 Room：回查终态与该席排名，奖励 `(9 - 名次) × 10` 金币经 wallet 的 `Add` 到账，与房间的 `Claimed` 在同一 strict 事务里提交；并发重试和冷加载后的重试都只得一份（“领过没有”只看 `Claimed`，所以用不留回执的 `Add`）。领奖要求 Player 已经经 enter 的 `EnterInit` 正式建档（`Enter().Built()`）——只 `Create` 出内存实例不代表记录已持久化。领奖不要求在线，也不过 room 的身份围栏（玩家身份取自会话）。这是同一原服内的多实体原子提交；Player 在别的 sid 时应经 Remote / Saga 回原服发奖，本地 MultiSync 不提供跨 sid 原子性（Saga 原生步骤的单进程容量有限，见 [Saga 指南 §5](guide/06-saga.md#5-接入与运维)）。
+`MultiSync_ChessClaim(player, match)` 同时锁 Player 与 Room：回查终态与该席排名，奖励 `(9 - 名次) × 10` 金币经 wallet 的 `Add` 到账，与房间的 `Claimed` 在同一笔事务里提交；并发重试和冷加载后的重试都只得一份（“领过没有”只看 `Claimed`，所以用不留回执的 `Add`）。领奖要求 Player 已经经 enter 的 `EnterInit` 正式建档（`Enter().Built()`）——只 `Create` 出内存实例不代表记录已持久化。领奖不要求在线，也不过 room 的身份围栏（玩家身份取自会话）。这是同一原服内的多实体原子提交；Player 在别的 sid 时应经 Remote / Saga 回原服发奖，本地 MultiSync 不提供跨 sid 原子性（Saga 原生步骤的单进程容量有限，见 [Saga 指南 §5](guide/06-saga.md#5-接入与运维)）。
 
 每席账本是对局里的持久业务事实，与资产同事务；它不是服务的短期去重环。每席至多 128 条，满了拒绝该席的新命令而不淘汰旧回执；定时器仍会推进，终局后仍能领奖。
 
@@ -281,14 +281,14 @@ ROOST_AUTO_CHESS_REAL=1 bash scripts/test-auto-chess-generated.sh
 
 它在第 10 节之后追加 `TestAutoChessRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交八名玩家建档（enter）、开房与名单，八人各经 room 入座，以及每人买卡、上阵、准备（第八人准备时冻结四场战斗）；后台投影关闭，断言 WAL 恰有 50 条已确认未投影的记录（9 个实体新建：Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务；8 建档 + 1 开房与名单 + 8 入座 + 24 命令）后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经文件 WAL 提交（业务命令缺省 async）八名玩家建档（enter）、开房与名单，八人各经 room 入座，以及每人买卡、上阵、准备（第八人准备时冻结四场战斗）；后台投影关闭，断言 WAL 恰有 50 条已确认未投影的记录（9 个实体新建：Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务；8 建档 + 1 开房与名单 + 8 入座 + 24 命令）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对整局状态（卡池、冻结的战斗、回执）与定时器 ID，room 的席位与代际都在、在线状态为空（全员断线）；用原连接、原代际重放全部 24 条玩家命令得到原回执（重放不要求在线）；核对冷加载已把存量期限报告给驱动索引（`DueOf`）。
 3. 启动驱动自己的投递循环（`Driver.Start`，用例不调用 `DeliverDue`、不手发 Tick）：循环对离线一小时的战斗阶段只补一次，进入第 2 回合准备、期限从当前业务时间起算（entitytimer `delivered_total` 增量 1）；之后用例每次把业务时间推到新期限，循环按时投递一次、推进一个阶段（计数逐次加 1），直到终局、不再挂定时器。终局时核对总数 = 1 + 2×(终局回合 − 1)（样例打满 8 回合，计数 15；第 1 回合的准备→战斗由写进程里第八人准备触发，不经定时器），全程 `redelivered_total` 增量 0。计数只有一个来源：Room 驱动只投递阶段节点，重放的玩家命令命中原回执、不重排定时器。停循环后八人各领奖三次，金币按名次各一份。
 4. 正常关闭后再起第三个进程冷加载：核对整局状态与八人金币，再重放全部命令与领奖，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
 用例确实依赖投递循环：把 `Start` 调用换掉再跑，用例在第 3 步等补触发处超时失败（`bounded wait expired`）。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（共享卡池、随机进度、冻结战斗、回执、room 席位与代际、阶段定时器），不会重新初始化整局；在线状态按 room 的契约清空，全员断线不妨碍阶段推进到终局；冷加载把存量期限报告进驱动索引；驱动投递循环在加载后只补一个阶段（投递一次）、之后每个期限投递一次并推进一个阶段到终局、无重投；跨进程重试不重复购买或发奖。
+- **证明**：已回复的提交（业务命令 async，写进 WAL 文件即回复）在进程 SIGKILL 后可从未投影 WAL 恢复（共享卡池、随机进度、冻结战斗、回执、room 席位与代际、阶段定时器），不会重新初始化整局；在线状态按 room 的契约清空，全员断线不妨碍阶段推进到终局；冷加载把存量期限报告进驱动索引；驱动投递循环在加载后只补一个阶段（投递一次）、之后每个期限投递一次并推进一个阶段到终局、无重投；跨进程重试不重复购买或发奖。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例冻结业务时钟、由循环按 MaxWait 重读）、准入失败重试与 Redeliver（由 entitytimer 包测试覆盖）；八个网络客户端、多进程 / 跨机、Redis / NATS；跨 sid 发奖；容量与长稳。
 
 ### 12. 结论怎样给

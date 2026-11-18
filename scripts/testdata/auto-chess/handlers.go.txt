@@ -31,7 +31,7 @@ type IChessPlayerEntity interface {
 // 只放名单里的玩家入座。名单、随机种子、配置来自服务端；开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的
 // 分发包装从 fctx 填，调用方不传）。相同 Room 不允许改名单或重新掷种子；已有人入座的普通房不能改造成对局房。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules, seed string, nowUnixMilli int64) error {
 	if raw := m.Dao().GetChessState(); raw != "" {
 		s, e := chess.Decode(raw)
@@ -79,7 +79,7 @@ func chessMember(m IChessMatchEntity, playerID int64, epoch uint64, connection s
 
 // 命令按本条消息冻结的业务时间判期限（nowUnixMilli 同上，客户端不能用自报时间绕过截止）。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerChessCommand(m IChessMatchEntity, playerID int64, connection string, c chess.Command, nowUnixMilli int64) (chess.Receipt, error) {
 	s, e := chess.Decode(m.Dao().GetChessState())
 	if e != nil {
@@ -104,7 +104,7 @@ func handlerChessCommand(m IChessMatchEntity, playerID int64, connection string,
 // 成员用自己当前的连接读视图（room 的 View 做成员与连接检查）；Self.Epoch 是 room 席位的当前代际，
 // 各席位的 Connected 是 room 的在线状态。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerChessView(m IChessMatchEntity, playerID int64, connection string) (chess.View, error) {
 	snapshot, e := m.Room().View(playerID, connection)
 	if e != nil {
@@ -119,7 +119,7 @@ func handlerChessView(m IChessMatchEntity, playerID int64, connection string) (c
 
 // 当前代际、当前连接可以查旧代际的回执，但不能把旧命令换成新 Seq 重做。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerChessReceipt(m IChessMatchEntity, playerID int64, connection string, epoch, seq uint64) (chess.Receipt, error) {
 	if e := chessMember(m, playerID, epoch, connection, true); e != nil {
 		return chess.Receipt{}, e
@@ -137,9 +137,9 @@ func handlerChessReceipt(m IChessMatchEntity, playerID int64, connection string,
 
 // Player 静态归属；本地同 database 示例用 MultiSync。跨 sid 应另接 Remote/Saga，不伪装成本地事务。
 // “领过没有”是长期事实，记在 Room 的 Claimed；金币经 wallet 的 Add（不留回执：只发一次由 Claimed 保证，
-// wallet README 的写法），两者在同一个 strict 事务内。奖励仅由服务端终态排名推导；建档看 enter 的 Built。
+// wallet README 的写法），两者在同一笔事务内。奖励仅由服务端终态排名推导；建档看 enter 的 Built。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerChessClaim(p IChessPlayerEntity, m IChessMatchEntity) (int64, error) {
 	s, e := chess.Decode(m.Dao().GetChessState())
 	if e != nil {

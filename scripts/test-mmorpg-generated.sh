@@ -7,7 +7,7 @@
 # 生成器部分：Player / Scene / Trade / Monster DAO、Player 持久定时器、多实体 Sender 与 Nest。
 # 缺省不连接外部存储：提交器是替身，验证内存事务组合。ROOST_MMORPG_REAL=1（并提供隔离 Mongo 副本集
 # ROOST_DATAENGINE_IT_MONGO_URI）时追加两个真实文件 WAL / Mongo 用例，定时器到期都由 Player 驱动的投递循环投递：
-# 两个独立进程正常停机后冷加载恢复；子进程 strict 提交后、WAL 记录未投影时被父进程 SIGKILL，新进程冷加载、
+# 两个独立进程正常停机后冷加载恢复；子进程提交（业务命令缺省 async）后、WAL 记录未投影时被父进程 SIGKILL，新进程冷加载、
 # 由循环补触发离线到期的 Buff / 复活并按时投递下一期限，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

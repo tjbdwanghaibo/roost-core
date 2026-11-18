@@ -8,7 +8,7 @@
 # 另跑两条纯内存用例（补报截止跟随协调器保留期、普通 Bus RPC 接收端预算）。
 # ROOST_SLG_REAL=1（并提供隔离 Mongo 副本集、Redis、NATS：ROOST_DATAENGINE_IT_MONGO_URI / _REDIS_ADDR / _NATS_URL）
 # 时追加联盟活动的四条真实依赖用例：正式 Activity RPC 经真实 NATS 调用独立协调器子进程（重启两次）；两个原服各自的
-# Player 在 strict 文件 WAL 上到账、在“Player 已到账、原服未标记完成”处被 SIGKILL 后冷加载补完；联盟权威换成生成的
+# Player 在文件 WAL 上到账、在“Player 已到账、原服未标记完成”处被 SIGKILL 后冷加载补完；联盟权威换成生成的
 # Remote 托管实体并在同进程内交接 owner；普通 Bus RPC 在真实 NATS 上核对调用方 deadline 不传到接收端、接收端自己
 # 限时后迟到成功不回复。每条用例用本次唯一库、唯一 Redis 前缀与 NATS subject，成功后删除。
 # 真实模式写共享隔离环境，运行前持有 $ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock。

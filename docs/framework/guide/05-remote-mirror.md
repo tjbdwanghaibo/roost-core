@@ -113,7 +113,7 @@ type AllianceRequest struct {
 
 ```go
 // game/handler/alliance.go；player、requests 为业务工程包。
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerApplyAllianceBonus(p player.IPlayerEntity, req requests.AllianceRequest) error {
     // 只访问已准备好的 DTO；此处不做缓存回源、RPC 或数据库读取。
     alliance := req.MustAlliance()

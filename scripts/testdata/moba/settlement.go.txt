@@ -28,7 +28,7 @@ var ErrMOBASettlement = errors.New("moba settlement: invalid result, conflicting
 // 成功 / 无胜者终态都保留，双方战绩、奖励与结算身份在同一事务，不用短期请求环充当永久账本：
 // 金币走 wallet 的 Add（不留回执，“这一场发过没有”由本结算记录的 Status 保证）；余额溢出由 wallet 拒绝，整笔回滚。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerMOBASettle(result IMobaResultEntity, winner IMobaPlayerEntity, loser IMobaPlayerEntity, matchKey string, digest string, aborted bool) error {
 	raw, err := hex.DecodeString(digest)
 	if err != nil || len(raw) != 32 || len(matchKey) == 0 || len(matchKey) > 128 || winner.ID() == loser.ID() {
@@ -63,7 +63,7 @@ func handlerMOBASettle(result IMobaResultEntity, winner IMobaPlayerEntity, loser
 	return nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerMOBAProfile(player IMobaPlayerEntity) (moba.Profile, error) {
 	dao := player.Dao()
 	return moba.Profile{Gold: player.Wallet().Balance(), Wins: dao.GetWins(), Losses: dao.GetLosses()}, nil

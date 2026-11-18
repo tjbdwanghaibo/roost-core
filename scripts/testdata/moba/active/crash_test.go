@@ -98,7 +98,7 @@ func realArenaInput(frame lockstep.FrameID, seat int) []byte {
 	return c.Bytes()
 }
 
-// 子进程使用真实 strict WAL，关闭后台投影以精确制造“已确认但未进 Mongo”的恢复边界。
+// 子进程使用真实文件 WAL（帧提交 async：写进 WAL 文件后回复，进程被杀不丢），关闭后台投影以精确制造“已确认但未进 Mongo”的恢复边界。
 // 父进程 SIGKILL 只杀自己启动的子进程；不是干净停机，也不删除或修改 WAL。
 func TestMOBARealActiveRoundCrashRecovery(t *testing.T) {
 	if os.Getenv("ROOST_MOBA_CHILD") == "authority-crash" {

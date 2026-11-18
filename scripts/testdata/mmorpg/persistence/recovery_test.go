@@ -19,7 +19,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 )
 
-// 崩溃点前子进程提交的 strict 记录数：种子 3（卖家、买家、怪物）+ 挂单、卖家确认、买家受伤、复活登记、
+// 崩溃点前子进程提交的 WAL 记录数（实体新建是 strict 独立事务，种子与业务命令 async）：种子 3（卖家、买家、怪物）+ 挂单、卖家确认、买家受伤、复活登记、
 // 两次攻击、拾取、任务领奖、Buff 共 9 条业务命令。关掉后台投影后这些记录全部停在 WAL、一条也没有投影。
 const mmoCrashUnprojected = 16
 
@@ -107,12 +107,12 @@ func mmoCrashReplayCombat(t *testing.T, s *sender.MmoGameplaySender, ids mmoCras
 // 崩溃点选“野外战斗进行中”：买家在交易窗口开着时被怪物击倒、复活在计时；卖家击杀怪物、拾取并领了任务奖，
 // 刚上了 Buff（计时中）；双方的托管交易已挂单、卖家已确认（卖家 1 件物品、买家 10 金币托管在 Trade 实体里）。
 // 这是 MMORPG 最典型的在途状态组合：两种 Player 定时器节点（Buff、复活）同时在计时，托管资产不在任何一方
-// 背包里，战斗奖励已发。全部 16 条 strict 记录（4 个实体新建各一条 + 12 条业务命令）已确认、未投影时 SIGKILL 子进程；新进程从未投影 WAL 恢复。
+// 背包里，战斗奖励已发。全部 16 条 WAL 记录（4 个实体新建各一条 + 12 条业务命令）已确认、未投影时 SIGKILL 子进程；新进程从未投影 WAL 恢复。
 //
 // 新进程在崩溃时刻（T0 + 1 秒，交易期限内）起来，客户端立即重试已确认的命令；之后业务时间推进一小时
 // （玩家离线），Buff 与复活都已过期，投递循环各补触发一次；交易超过期限，由服务内部按到期清理
 // 退还托管资产，买家迟到的确认被拒。业务时间一律由用例拨 h.clock，调用方不传时间。
-// 只终止自己启动的写入子进程；不模拟磁盘断电或 strict 回复未知。
+// 只终止自己启动的写入子进程；不模拟磁盘断电或回复未知。
 func TestMMORPGRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_MMORPG_CHILD")
 	root := os.Getenv("ROOST_MMORPG_WAL")
@@ -166,7 +166,7 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 		sd, bd := seller.(*player.Player).Dao(), buyer.(*player.Player).Dao()
 		stats := h.projector.Stats()
 		if stats.Projected != 0 || stats.WALUnacked != mmoCrashUnprojected {
-			t.Fatalf("missing strict crash boundary: projected=%d unacked=%d want 0 / %d", stats.Projected, stats.WALUnacked, mmoCrashUnprojected)
+			t.Fatalf("missing unprojected crash boundary: projected=%d unacked=%d want 0 / %d", stats.Projected, stats.WALUnacked, mmoCrashUnprojected)
 		}
 		if sd.GetBuffValue() != 7 || facts.BuffTimer == 0 || mmoItems(sd) != 3 || mmoGold(sd) != 55 || !mmoQuestClaimed(sd) || bd.GetHP() != 0 || facts.ReviveTimer == 0 || mmoGold(bd) != 40 || sd.TimersLen() != 1 || bd.TimersLen() != 1 {
 			t.Fatal("crash point is not the intended in-flight state")
@@ -391,5 +391,5 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; escrow, combat rewards, Buff and revive timers restored byte for byte; driver loop delivered one catch-up per overdue player after cold load and the next Buff expiry at its deadline; expired trade refunded once; third process replayed without duplicating rewards or refunds", barrier.Unprojected)
+	t.Logf("SIGKILL: %d unprojected WAL records; escrow, combat rewards, Buff and revive timers restored byte for byte; driver loop delivered one catch-up per overdue player after cold load and the next Buff expiry at its deadline; expired trade refunded once; third process replayed without duplicating rewards or refunds", barrier.Unprojected)
 }

@@ -78,7 +78,7 @@ func newSLGFixture(t *testing.T) *slgFixture {
 		// 初始金币经 wallet（R9）：不留回执的 Add，与正式发放同一条组件入口。
 		_, err := es[0].(*player.Player).Wallet().Add(50)
 		return nil, err
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.Request(context.Background(), fund, f.subject.ID(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestSLGFailureRollsBackResourcesAndDeadline(t *testing.T) {
 			return nil, err
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.Request(context.Background(), name, f.subject.ID(), nil); !errors.Is(err, refused) {
 		t.Fatalf("rejection=%v", err)
 	}
@@ -183,7 +183,7 @@ func TestSLGOfflineIncomeIsBusinessBounded(t *testing.T) {
 	nest.MustRegisterHandlerWithMeta(arm, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		es[0].(*player.Player).TimerComp().NewTimer(time.Minute, player.TimerIncome, 0, 0, nil)
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.Request(context.Background(), arm, f.subject.ID(), nil); err != nil {
 		t.Fatal(err)
 	}

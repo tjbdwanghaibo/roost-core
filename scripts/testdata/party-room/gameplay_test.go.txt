@@ -908,7 +908,7 @@ func TestPartyGameFoulEliminationAndUndoRollback(t *testing.T) {
 			return nil, err
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	f.refuse(t, room, refused, func() error { _, err := f.engine.Request(f.ctx, name, room, nil); return err })
 	if r, err := f.input(room, 1, in); err != nil || r.Outcome != party.OutcomeScore {
 		t.Fatal("grab after rollback", r, err)
@@ -1013,7 +1013,7 @@ func TestPartyGameGraceExpiryAndMidGameLeaveEndEarly(t *testing.T) {
 	}
 }
 
-// 9. 结算：服务端对每个座位发奖，Player 金币与房间 Claimed 同一 strict 事务；并发重投只发一次，undo 无半笔；
+// 9. 结算：服务端对每个座位发奖，Player 金币与房间 Claimed 同一笔事务；并发重投只发一次，undo 无半笔；
 // 未领奖不能归还座位；session.Finish 触发 Releaser 归还，最后一个归还关闭房间，随后注销同步、销毁实体。
 func TestPartyGameSettlementRewardsOnceAndRoomDestroyed(t *testing.T) {
 	f := newPartyFixture(t)
@@ -1055,7 +1055,7 @@ func TestPartyGameSettlementRewardsOnceAndRoomDestroyed(t *testing.T) {
 			return nil, err
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.RequestMulti(f.ctx, name, []int64{f.ids[1], room}, nil); !errors.Is(err, refused) {
 		t.Fatal(err)
 	}
@@ -1173,13 +1173,13 @@ func TestPartyGameMatchDeadlineTimerForcesSettlement(t *testing.T) {
 var partyCoinsOnce sync.Once
 var partyCoinsName = nest.NewHandlerName("party_room_test_add_coins")
 
-// addCoins 经一个 strict handler 给玩家加金币（wallet 的 Wallet().Add；Wallet 是 persist,sync，自身视图推给本人）。
+// addCoins 经一个可回滚的 async handler 给玩家加金币（wallet 的 Wallet().Add；Wallet 是 persist,sync，自身视图推给本人）。
 func (f *partyFixture) addCoins(t *testing.T, seat int, delta int64) {
 	t.Helper()
 	partyCoinsOnce.Do(func() {
 		nest.MustRegisterHandlerWithMeta(partyCoinsName, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
 			return es[0].(IPartyPlayerEntity).Wallet().Add(args[0].(int64))
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	})
 	if _, err := f.engine.Request(f.ctx, partyCoinsName, f.ids[seat], nest.NewParams(delta)); err != nil {
 		t.Fatal(err)

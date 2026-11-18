@@ -35,13 +35,13 @@ flowchart LR
     C --> D[核对 Epoch / Seq / Base]
     D --> E[按服务器时间恢复充能并执行命令；金币 / 体力交给 wallet / stamina]
     E --> F[留回执、替换挑战定时器]
-    F --> G[strict WAL 提交]
+    F --> G[WAL 提交（async）]
     G --> H[回复回执 / 视图]
     G --> I[提交后报告新期限给驱动]
     I --> J[到期投递 Tick：挑战判负]
 ```
 
-`strict` 保证回复前 WAL fsync，不保证回复时 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
+业务写 handler 不写 durability，用缺省 `async`：记录写进 WAL 文件就回复，fsync 由组提交稍后完成——进程崩溃（SIGKILL、panic、OOM）不丢已回复的修改，整机掉电或内核崩溃可能丢最后一个组提交间隔（缺省 10ms）；回复时也不保证 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
 
 ### 3. 合成、离线批次与挑战：如何使用
 
@@ -290,7 +290,7 @@ ROOST_MERGE_CASUAL_REAL=1 bash scripts/test-merge-casual-generated.sh
 
 它在第 11 节之后追加 `TestMergeCasualRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交 enter 建档、首登、两次生产、一次广告到账和开挑战；后台投影关闭，断言 WAL 有 7 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 enter 建档 1 条、5 条业务命令）后，父进程 SIGKILL 自己启动的子进程。屏障里的视图记下取于哪一刻：体力随业务时间恢复，冷加载后按同一刻重算再比对。
+1. 子进程经文件 WAL 提交（业务命令缺省 async） enter 建档、首登、两次生产、一次广告到账和开挑战；后台投影关闭，断言 WAL 有 7 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 enter 建档 1 条、5 条业务命令）后，父进程 SIGKILL 自己启动的子进程。屏障里的视图记下取于哪一刻：体力随业务时间恢复，冷加载后按同一刻重算再比对。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、公开视图与定时器 ID，并核对冷加载已把存量挑战期限报告给驱动索引（`DueOf`）；再重放第一次生产（同一掉落）与已过期的原广告证明（不再到账）。
 3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不手发 Tick、不调用 `DeliverDue`）：循环投递一次加载后的补触发，过期一小时的挑战只判负一次，充能恢复到上限、stamina 的当前体力回满 100，挑战结束后不再挂期限；`entitytimer.delivered_total` 增量恰为 1。
 4. 领取判负的挑战、重新开局，新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，挑战在期限时刻判负（`LastAt` 等于期限、修订号只加 1），投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。
@@ -299,7 +299,7 @@ ROOST_MERGE_CASUAL_REAL=1 bash scripts/test-merge-casual-generated.sh
 
 去掉第 3 步的 `Start` 时，用例在补触发处等满 10 秒失败（`driver loop did not deliver the overdue challenge expiry …`），所以这一步的判负确实由循环完成。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（棋盘、回执、广告账本、挑战定时器，以及同一 Player 上 wallet / stamina 的模块状态）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次（迟到一小时的挑战只判负一次），并按时投递下一个期限；跨进程重试不重复生产、到账或发奖。
+- **证明**：已回复的提交（业务命令 async，写进 WAL 文件即回复）在进程 SIGKILL 后可从未投影 WAL 恢复（棋盘、回执、广告账本、挑战定时器，以及同一 Player 上 wallet / stamina 的模块状态）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次（迟到一小时的挑战只判负一次），并按时投递下一个期限；跨进程重试不重复生产、到账或发奖。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例用冻结的业务时钟，循环按 `MaxWait` 重读）、准入失败重试与 Redeliver（见 entitytimer 包测试与 `TestEntityTimerGeneratedProjectEndToEnd`）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
 ### 13. 结论怎样给

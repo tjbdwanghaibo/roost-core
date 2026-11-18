@@ -6,7 +6,7 @@
 # HeroStats 属性、CardRun 三人编队回合制 PvE 与回合定时器（借鉴 turn）、首通 / 扫荡（借鉴 dungeon 的有界领奖账本）。
 # 这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身。ROOST_CARD_RPG_REAL=1（并提供隔离 Mongo 副本集
-# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程 strict 提交后、WAL 记录未投影时被父进程 SIGKILL，新进程
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程提交（业务命令缺省 async）后、WAL 记录未投影时被父进程 SIGKILL，新进程
 # 冷加载、由驱动投递一次过期回合、续战领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

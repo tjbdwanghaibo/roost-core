@@ -5,7 +5,7 @@
 # 波次战斗与 Room 上的波次定时器、基地胜负、团队奖励（Claimed 在 Room，金币经 wallet）、名单准入（RoomJoining 监听）。
 # 这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身。ROOST_TOWER_DEFENSE_REAL=1（并提供隔离 Mongo 副本集
-# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在第一波打完第一步后（strict 已确认、WAL 未投影）被父进程 SIGKILL，
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在第一波打完第一步后（已回复、WAL 未投影）被父进程 SIGKILL，
 # 新进程冷加载、由驱动投递循环补触发一步并打完三波、领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

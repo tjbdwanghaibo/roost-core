@@ -10,7 +10,7 @@ import (
 // handlerStartGift checks the sender's balance under the lock and emits the
 // saga's start intent in the same WAL record.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerStartGift(target view.IWalletEntity, from int64, to int64, amount int64, businessKey string) error {
 	if target.Wallet().Gold() < amount {
 		return nil

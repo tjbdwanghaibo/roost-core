@@ -299,7 +299,7 @@ func TestMOBARoundUndoRollsBackFrameAndCheckpoint(t *testing.T) {
 			return nil, err
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.RequestMulti(context.Background(), name, []int64{f.round.ID()}, nil); !errors.Is(err, refused) {
 		t.Fatal(err)
 	}

@@ -426,7 +426,7 @@ func TestMergeCasualUndoRestoresStateRandomResultAndTimer(t *testing.T) {
 				return nil, err
 			}
 			return nil, refused
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 		if _, err := f.engine.Request(ctx, name, f.player.ID(), nil); !errors.Is(err, refused) {
 			t.Fatal(err)
 		}

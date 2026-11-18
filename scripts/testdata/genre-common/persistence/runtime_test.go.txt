@@ -257,7 +257,7 @@ type sessionCrashCase struct {
 
 // runSessionCrash 把业务确认、落盘屏障与 SIGKILL 分开：FD 3 报告完整快照；父进程读完后验证 Mongo 为空再杀。
 // 恢复使用原 WAL：先用原连接、原代际重放最后回执，再换连接重连（rejoin）继续业务；第三个进程再次冷加载最终奖励，
-// 同样先重放、再重连重试。只覆盖 strict 已确认提交，不模拟回复未知或磁盘断电。
+// 同样先重放、再重连重试。只覆盖已回复的提交（业务命令 async，进程被杀不丢），不模拟回复未知或磁盘断电。
 func runSessionCrash(t *testing.T, cases []sessionCrashCase) {
 	t.Helper()
 	if role := os.Getenv("ROOST_SESSION_CHILD"); role != "" {
@@ -410,7 +410,7 @@ func runSessionCrash(t *testing.T, cases []sessionCrashCase) {
 			if output, err := newChild("verify").CombinedOutput(); err != nil {
 				t.Fatalf("third-process reward verification: %v\n%s", err, output)
 			}
-			t.Logf("PASS WAL-only SIGKILL: %d strict records, %d fsyncs; complete cold facts, continuation, reward replay and third-process verification", expected.Records, expected.Syncs)
+			t.Logf("PASS WAL-only SIGKILL: %d WAL records, %d fsyncs; complete cold facts, continuation, reward replay and third-process verification", expected.Records, expected.Syncs)
 		})
 	}
 }

@@ -124,7 +124,7 @@ func TestMOBASettlementRollbackAndRetry(t *testing.T) {
 			return nil, err
 		}
 		return nil, failed
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, err := f.engine.RequestMulti(ctx, name, []int64{f.result.ID(), f.players[0].ID(), f.players[1].ID()}, nil); !errors.Is(err, failed) {
 		t.Fatal(err)
 	}

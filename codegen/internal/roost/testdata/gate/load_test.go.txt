@@ -311,7 +311,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 			beatChanges.Add(1)
 		}
 		return nil
-	}, heartbeat.WithDurability(nest.DurabilityStrict))
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

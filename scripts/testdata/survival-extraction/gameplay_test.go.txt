@@ -272,7 +272,7 @@ func TestSurvivalExtractionAdmissionAtomicAndIdempotent(t *testing.T) {
 			return nil, e
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
@@ -436,7 +436,7 @@ func TestSurvivalExtractionChannelCancellationAndAtomicClaim(t *testing.T) {
 			return nil, e
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}
@@ -590,7 +590,7 @@ func TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer(t *testing.T) {
 			return nil, e
 		}
 		return nil, refused
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 	if _, e := f.engine.Request(context.Background(), name, f.match.ID(), nil); !errors.Is(e, refused) {
 		t.Fatal(e)
 	}

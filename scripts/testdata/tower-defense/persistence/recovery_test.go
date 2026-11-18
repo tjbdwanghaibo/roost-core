@@ -218,7 +218,7 @@ func writeTowerBarrier(t *testing.T, root, name string, b towerBarrier) {
 	}
 }
 
-// SIGKILL 仅针对本用例创建的子进程；已确认 strict WAL 不等于 Mongo 已投影，也不等于磁盘断电验收。
+// SIGKILL 仅针对本用例创建的子进程；已回复的提交在 WAL 里（业务命令 async，进程被杀不丢）不等于 Mongo 已投影，也不等于磁盘断电验收。
 func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_TOWER_DEFENSE_CHILD")
 	root := os.Getenv("ROOST_TOWER_DEFENSE_WAL")
@@ -286,7 +286,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		})
 		m, state = towerRuntimeState(t, h)
 		stats := h.projector.Stats()
-		// 5 个实体创建 + 4 次建档（enter）+ 开房与名单 + 4 次入座（room）+ 8 条命令 + 第一波第一步 = 23 条未投影的 strict 记录。
+		// 5 个实体创建 + 4 次建档（enter）+ 开房与名单 + 4 次入座（room）+ 8 条命令 + 第一波第一步 = 23 条未投影的 WAL 记录（实体创建是 strict 独立事务，其余 async）。
 		if stats.Projected != 0 || stats.WALUnacked != 23 || state.Phase != "battle" || state.Tick != 1 || m.Dao().GetTowerWakeTimer() == 0 {
 			t.Fatal("not at unprojected active wave boundary", stats.WALUnacked)
 		}
@@ -497,5 +497,5 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; four-player active wave restored on the room module's Room (seats kept, online state cleared), driver loop delivered one overdue step after cold load and %d deliveries in total to finish three waves, third process retried all commands and team rewards", barrier.Unprojected, delivered)
+	t.Logf("SIGKILL: %d unprojected WAL records; four-player active wave restored on the room module's Room (seats kept, online state cleared), driver loop delivered one overdue step after cold load and %d deliveries in total to finish three waves, third process retried all commands and team rewards", barrier.Unprojected, delivered)
 }

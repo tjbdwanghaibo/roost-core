@@ -36,7 +36,7 @@ flowchart LR
     G --> H[Interest / AOI 筛选客户端]
 ```
 
-图中的提交门随 durability、watermark 与持久化装配工作，不能理解成所有路径都“等 Mongo 落库后才回复”：`strict` 保证 WAL fsync，不保证回复时 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
+图中的提交门随 durability、watermark 与持久化装配工作，不能理解成所有路径都“等 Mongo 落库后才回复”：业务 handler 用缺省 `async`，记录写进 WAL 文件就回复（进程崩溃不丢，整机掉电可能丢最后一个组提交间隔），不保证回复时 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
 
 ### 3. 建造、行军与抢地：如何使用
 
@@ -61,7 +61,7 @@ ROOST_SLG_KEEP=1 bash scripts/test-slg-generated.sh   # 保留生成工程以便
 进入 `project/` 后按顺序读：
 
 1. `db/def/player.go`、`db/def/tile.go`：玩家等级 / 队列 / 期限（金币是 wallet 装的 `Wallet`）与地块拥有者分别存放，地块权威不放进 AOI。
-2. `game/handler/slg_tasks.go`：业务 handler 的参数接口（生成的 `view.PlayerEntity` 带 `Dao()` 与 `Wallet()`，再加 `TimerComp()`）、扣费 `slgPay`（`Wallet().Add(-cost)`，不留回执）、`rollback=undo durability=strict` 标记与多实体参数。
+2. `game/handler/slg_tasks.go`：业务 handler 的参数接口（生成的 `view.PlayerEntity` 带 `Dao()` 与 `Wallet()`，再加 `TimerComp()`）、扣费 `slgPay`（`Wallet().Add(-cost)`，不留回执）、`rollback=undo` 标记（缺省 async）与多实体参数。
 3. `game/entities/player/timer_handlers.go`：建造完成怎样登记下一段行军、研究怎样独立到期、离线收益怎样封顶。
 4. `game/handler/syncsender/`：生成的 Sender 怎样把目标 ID 与业务参数交给 Nest；业务调用它，不手改。
 5. `game/handler/slg_tasks_test.go`：并发抢同一地块、取消重放、失败回滚、DAO 水合后的补触发。
@@ -192,7 +192,7 @@ SLG 后续学习以“跨服联盟活动 / 国战”为主线，串起三件事�
 `ROOST_SLG_KEEP=1 bash scripts/test-slg-generated.sh` 生成的工程里已有这条链路的全部业务文件（§3.1 第 2 步的 `add mod remote_entity` 与 `AllianceAuthority`）；`ROOST_SLG_REAL=1` 时脚本再把真实依赖测试复制进 `game/modules/alliance/`。按顺序读：
 
 1. `game/modules/alliance/alliance.go`（源 [alliance.go](../../scripts/testdata/slg/alliance/alliance.go)）：联盟成员与贡献意图（`contribute` / `revoke` / `freeze`）、补报（`drain`）、阶段屏障（`phase`）、原服奖励义务（`home.receive`）与有界补发（`home.deliverPending`）。
-2. `game/handler/alliance_rewards.go`（源 [alliance_rewards.go.txt](../../scripts/testdata/slg/alliance_rewards.go.txt)）：Player 建档 `AllianceHomeInit` 与到账 `AllianceCredit`：先查 Player 上的永久到账回执 `SLGReceipts`（活动身份 → 金额），没有才 `Wallet().Add(金额)` 并写回执，余额与回执同一 strict 事务。
+2. `game/handler/alliance_rewards.go`（源 [alliance_rewards.go.txt](../../scripts/testdata/slg/alliance_rewards.go.txt)）：Player 建档 `AllianceHomeInit` 与到账 `AllianceCredit`：先查 Player 上的永久到账回执 `SLGReceipts`（活动身份 → 金额），没有才 `Wallet().Add(金额)` 并写回执，余额与回执同一笔事务（缺省 async）；查询 `AllianceWallet` 与 Remote 权威读 `AllianceRemoteRead` 是 `durability=memory`。
 3. `game/handler/alliance_authority.go`（源 [alliance_authority.go.txt](../../scripts/testdata/slg/alliance_authority.go.txt)）：Remote 托管的联盟权威，读与条件写 `AllianceRemoteRead` / `AllianceRemoteCAS`。
 4. `game/modules/alliance/rpc_budget.go`（源 [rpc_budget.go](../../scripts/testdata/slg/alliance/rpc_budget.go)）：业务自己注册普通 Bus RPC 时的接收端预算 `receiverBudget`（§7.7）。
 5. 测试（源 [alliance/](../../scripts/testdata/slg/alliance/)）：`runtime_test.go` 是协调器子进程、NATS 总线与视野接线；`alliance_test.go` 是连续流程与断言；`fog_test.go` 用 Receiver 解码视野帧；`player_*_test.go` 是 Player 的 WAL / Mongo 接线与 SIGKILL 恢复；`remote_*_test.go` 是 Remote 装配、业务 CAS 适配器与 owner 交接；`rpc_budget_test.go` 是接收端预算（纯内存一条、真实 NATS 一条）。
@@ -208,7 +208,7 @@ sequenceDiagram
     participant V as 本服 Interest 视野
     participant C as 活动协调器（独立进程）
     participant R as 原服奖励义务账本
-    participant P as 原服 Player（strict WAL）
+    participant P as 原服 Player（文件 WAL，async）
     H->>A: 已鉴权角色 + 静态 sid + 唯一战果
     A->>A: 一次条件更新里校验成员并记录贡献意图
     A->>V: 按已提交的成员权限重建 alliance 来源
@@ -226,7 +226,7 @@ sequenceDiagram
 | 贡献补报 | 联盟意图 + `activity.Coordinator.ApplyProgress` | `drain` 在条件更新之外调用 RPC，成功才标记已报；回复丢失时用原 `Key + 玩家 + 战果身份` 重试，协调器按请求身份去重。意图存在超过协调器的 `ReservationTTL` 即停止自动补报、转人工对账，不换身份重加：补报截止**必须**等于协调器配置的 `ReservationTTL`（去重只在这段时间内有效，晚于它补报会把同一战果计两次）。夹具里二者取同一个值——`newAlliance` 的 `reservationTTL` 参数传协调器配置用的 `coordinatorReservationTTL`（本例 1 小时），零值与 `activity.New` 一样按 `activity.DefaultReservationTTL`（30 分钟）；照抄默认配置时截止就是 30 分钟 |
 | 活动阶段 | 本服业务时间线 + 协调器 expected 集合 | `freeze` 后 `phase` 要求全部意图已报才 `NotifyPhase`，否则结算会截断未报的战果；一个服通知时活动仍是 collecting，两个服都通知后完成。本例 expected 固定为 1000 / 1001 |
 | 原服奖励义务 | 按 sid 分开的业务 `versionstore` 记录 | `receive` 核对投递的目标 sid、窗口、完成原因与冻结状态，从冻结的意图算出本服玩家积分，按窗口写不可变清单；写成功才 ACK。重投返回原记录、不提升版本；同窗口清单变化被拒 |
-| Player 金币到账 | 原服 Player DAO：手写的永久到账回执 `SLGReceipts` + wallet 余额，生成 Sender `Sync_AllianceCredit` → Nest strict → 查回执，没有才 `Wallet().Add(金额)` | 余额与永久回执同一事务；同窗口同金额返回当前余额、不再加钱，改金额与错服被拒；满 128 条拒新身份、不淘汰旧身份。义务账本与 Player 是两个存储，没有跨存储原子事务：`deliverPending` 先到账、再标记完成，中间崩溃时恢复会重投同一身份，由 Player 永久回执去重——重投隔多久、这名玩家期间又有多少笔 wallet 带键入账都不影响（不用 wallet 的 `Apply`：它的回执窗口只保留最近 128 次带键加减，§3.5） |
+| Player 金币到账 | 原服 Player DAO：手写的永久到账回执 `SLGReceipts` + wallet 余额，生成 Sender `Sync_AllianceCredit` → Nest（async）→ 查回执，没有才 `Wallet().Add(金额)` | 余额与永久回执同一事务；同窗口同金额返回当前余额、不再加钱，改金额与错服被拒；满 128 条拒新身份、不淘汰旧身份。义务账本与 Player 是两个存储，没有跨存储原子事务：`deliverPending` 先到账、再标记完成，中间崩溃时恢复会重投同一身份，由 Player 永久回执去重（`AllianceCredit` 是缺省 async：进程崩溃不丢已回复的到账；**整机掉电丢掉已回复的到账而义务已标完成时，这笔奖励丢失**，这一步依赖“回复前已落盘”，见 [证据](../maintenance/evidence/testdata-async-20261118/README.md)）——重投隔多久、这名玩家期间又有多少笔 wallet 带键入账都不影响（不用 wallet 的 `Apply`：它的回执窗口只保留最近 128 次带键加减，§3.5） |
 
 **奖励义务不是金币到账**：协调器 ACK 只表示原服已持久接收“谁应得多少”的义务；ACK 之后 `OwedDispatches` 为空，恢复必须从原服义务账本找工作（`deliverPending` 按窗口 / 玩家排序，一次最多 1～128 个窗口），不能靠协调器的索引或内存待发列表。本例是受信任的内部调用，不是公网领奖接口；常驻补发调度、义务归档、邮件附件与 Saga 资产协作仍要业务接入。
 
@@ -292,11 +292,11 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 | --- | --- | --- |
 | 授权交集 | 先算 `在范围内 && (成员有效 \|\| 侦察授权)`，再把筛过的目标经关系视野发布：`DefineRelationView` → `AttachView` 给获准玩家 → `SetViewMembers` 改集合（[Block AOI](INTEREST-BLOCK-AOI.md)） | 空间来源会直接订阅命中者，再加一个侦察关系只是**并集**，不是“空间且已授权”的交集；隐藏目标不要 `Show` 进公共空间 Interest 再指望客户端隐藏 |
 | 权限刷新循环 | 一个视野分区只由一个循环串行刷新：Hold → 带期限的 context 读权威 → 校验代际 → Apply → Ready → Flush；读成功后再查一次 `ctx.Err()`，迟到的成功不发布；失败保持 held，下一轮 ticker 重试 | 失效通知只是“重读下限”：最高代际用原子值、唤醒队列容量 1，重复或旧通知不能降低下限、不能堆积；普通 NATS 会丢通知，所以必须定期重读。held 不收回已发信息；每次 Hold → Ready 全量重发，最后一个对象撤销由框架补空 Full（§7.5），不需要常驻控制对象 |
-| 期限与业务时间 | 侦察等期限在首次建档的 strict 事务里按 `fctx.Now()` 派生并持久化，同服重试直接返回、不按重试时刻重算；刷新时按注入的业务钟惰性判定到期 | 发布时惰性到期只管可见性，攻击等业务命令要自己再校验期限；测试用 `clock.SetSource` / `clock.BusinessFunc` 推进业务时间，不等真实时长、不改全局偏移 |
-| 行军路线 | 路线存起点、终点与绝对的 Start / End，与命令回执、地图 Revision 同一 strict 事务；`At(now)` 在两端钳制、中间有界整数插值；handler 的 `nowUnixMilli` 由生成包装从 fctx 填，Sender 不收时间参数 | 不按离线秒数补 tick、不逐帧写库；“读到终点”不等于一次到达事件，到达要有自己的持久事件 |
+| 期限与业务时间 | 侦察等期限在首次建档的事务里按 `fctx.Now()` 派生并持久化，同服重试直接返回、不按重试时刻重算；刷新时按注入的业务钟惰性判定到期 | 发布时惰性到期只管可见性，攻击等业务命令要自己再校验期限；测试用 `clock.SetSource` / `clock.BusinessFunc` 推进业务时间，不等真实时长、不改全局偏移 |
+| 行军路线 | 路线存起点、终点与绝对的 Start / End，与命令回执、地图 Revision 同一笔事务；`At(now)` 在两端钳制、中间有界整数插值；handler 的 `nowUnixMilli` 由生成包装从 fctx 填，Sender 不收时间参数 | 不按离线秒数补 tick、不逐帧写库；“读到终点”不等于一次到达事件，到达要有自己的持久事件 |
 | 到达事件 | 发起行军的事务同时写到达待办；`DueArrivals(limit 1～128)` 从持久事件按 End / key 发现，`CompleteArrival` 再确认原事件与服务器期限，效果（报告）与“已处理”同一事务 | 枚举与处理之间不是事务；重复或晚到处理返回“已存在”，不改原到达时间；不依赖进程内计时列表 |
 | 常驻 worker | 实现 `app.Service`：Init 装配、Serve 独占循环、Shutdown 取消并等待在途调用；每轮一个期限覆盖发现与消费，失败即结束本轮，下一轮从持久状态重新发现 | 不存游标、不换身份；停机期限不足如实返回 context 错误，不能把未结束的调用当已排空；返回错误可能是结果未知，靠原身份幂等接口收口 |
-| 跨实体 / 跨服投递 | 两步：接收方在自己的 strict 事务里存完整正文作永久回执（同身份同内容返回已有、改内容拒绝）；发送方收到明确的“已接收”后，再用独立事务记 ACK | 两笔写之间没有分布式事务，锁内不做外部 RPC；查询失败、取消后的迟到成功都不 ACK。`FromSid` 是受信任总线的路由声明，不是认证，生产要服务凭据与 subject ACL。**普通 Bus RPC 不把调用方的 deadline 传到接收端**（[dispatchRpc](../../infra/network/bus/bus.go) 用接收端 Bus 的基础 context，只在 Bus 停止时取消；JetStream RPC 才按调用方截止建立处理期限）：接收业务用 `receiverBudget` 给整次处理自己的预算，预算到期或成功返回时已过期都不回复成功，调用方按结果未知重试原身份（`TestAllianceReceiverBudgetRejectsLateSuccess`、真实 NATS 的 `TestSLGAllianceRPCReceiverBudget`） |
+| 跨实体 / 跨服投递 | 两步：接收方在自己的事务里（缺省 async）存完整正文作永久回执（同身份同内容返回已有、改内容拒绝）；发送方收到明确的“已接收”后，再用独立事务记 ACK | 两笔写之间没有分布式事务，锁内不做外部 RPC；查询失败、取消后的迟到成功都不 ACK。`FromSid` 是受信任总线的路由声明，不是认证，生产要服务凭据与 subject ACL。**普通 Bus RPC 不把调用方的 deadline 传到接收端**（[dispatchRpc](../../infra/network/bus/bus.go) 用接收端 Bus 的基础 context，只在 Bus 停止时取消；JetStream RPC 才按调用方截止建立处理期限）：接收业务用 `receiverBudget` 给整次处理自己的预算，预算到期或成功返回时已过期都不回复成功，调用方按结果未知重试原身份（`TestAllianceReceiverBudgetRejectsLateSuccess`、真实 NATS 的 `TestSLGAllianceRPCReceiverBudget`） |
 | Remote 地图交接 | 地图换成 Remote 托管实体后，旧 owner 的 ACK 返回 `entity.ErrRemoteFenced`；接收方每次用 `GetRemoteOwnership` 重读所有权核对来源 | 路由代际不进永久身份；交接前已通过校验的请求可能在交接后完成——协议允许这份报告收件并靠永久回执防重，不提供“交接瞬间撤销所有已准入请求” |
 
 **深化内容的去向**（逐项对照分支 `b75cc81f` 的 `scripts/testdata/slg-alliance` 与本夹具）：
@@ -311,7 +311,7 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 | 持久视点、多目标授权交集、限时侦察期限 | 授权交集与期限是业务规则；`fctx.Now` 冻结与 `nowUnixMilli` 由分发包装注入已有 codegen 契约测试 | 不收，接法见上表“授权交集”“期限与业务时间” |
 | 行军路线持久化与按时间推导位置、到达事件持久消费 | 本夹具行军用实体定时器到达（[guide/10-time §4B](guide/10-time.md) 推荐的做法）；分支用轮询到达待办，和推荐做法不同；路线插值是业务计算 | 不收，接法见上表“行军路线”“到达事件” |
 | 常驻到达 / 视野 worker 的 `app.Service` 启停与排空 | 验证的是夹具自写的 Service；停止契约由框架 `app` 与 `internal/stopcontract` 测试负责 | 不收 |
-| 报告 Inbox 投递、未 ACK 时崩溃恢复 | 与本夹具“原服义务 → Player 永久到账、SIGKILL 后冷加载重投”是同一个两步投递与 strict WAL 恢复契约 | 不收 |
+| 报告 Inbox 投递、未 ACK 时崩溃恢复 | 与本夹具“原服义务 → Player 永久到账、SIGKILL 后冷加载重投”是同一个两步投递与 WAL 恢复契约 | 不收 |
 | 跨 sid 报告路由与两边 WAL 同时崩溃恢复 | Bus RPC 与单进程 WAL 恢复本夹具已有；`FromSid` 不是认证已写入上表 | 不收（只收其中的接收端期限） |
 | Managed Remote 地图交接、owner 准入、多进程 owner SIGKILL | 本夹具 `TestSLGAllianceRemoteDelivery` 同进程交接与旧 owner fence；进程级强杀与接管由 `framework/remoteentity` 的 `TestRealRemoteProcessKillRecoversLease` 与 `remoteflow` 生成工程覆盖 | 不收；“交接前已准入的请求可在交接后完成”见上表“Remote 地图交接” |
 | 私有报告视图从持久 Inbox 重建 | 私有 subject 只订阅给所属会话与 Hold / Ready 同本夹具视野；撤空后补空 Full 由 `entitysync` 测试覆盖 | 不收 |
@@ -387,11 +387,11 @@ ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh
 | 用例 | 实际走过的流程 | 关键断言 |
 | --- | --- | --- |
 | `TestSLGAllianceActivity` | 业务 Redis CAS 联盟；正式 Activity RPC 经真实 NATS 调用协调器子进程（两个静态 sid 客户端各一条 NATS 连接，同在父进程）；协调器正常排空重启两次 | 八路并发同一战果只留一个意图；错服、换玩家复用身份、退盟后新贡献、冻结后新贡献被拒；退盟撤 `alliance` 来源而 `scout` 保留，最后来源撤销才消失；Receiver 解码的视野帧与权限一致，权限读取失败时不发布，重连收到新 Full、旧 epoch 帧被拒；注入“协调器已应用、本地未确认”后，冻结但有未报意图时阶段被拒；重启协调器后超过协调器保留期（`coordinatorReservationTTL`，1 小时）的意图拒绝自动补报，正常补报每人 Score 10、Applies 1；一个服通知后仍 collecting；原服写义务后不 ACK、再重启协调器，`OwedDispatches` 找回原窗口，投递 token 不变、Attempts 为 2，重投不改义务记录版本，错 token 拒绝，重复 ACK 幂等 |
-| `TestSLGAlliancePlayerDelivery` | 上一行的同一条流程，ACK 之后继续：每个原服依次起 write / recover / verify 三个子进程，各用自己的 strict 文件 WAL 与真实 Mongo | write：注入 Player 不可用时义务不标完成、版本不变；创建实体、原服初始化与奖励三条 strict 记录已确认，各阶段严格核对 1→2→3；钱包只读查询后仍为 3，投影数 0、未投影 3、原服未标完成时被父进程 SIGKILL。recover：冷加载后完整钱包与崩溃前一致（HomeSID、wallet 10 金币、Player 上一条该窗口的永久到账回执：金额 10），再从义务账本发现 1 条待发并重投（余额不变）；八路并发重放、错服、改归属、同窗口改金额都不改钱包。verify：第三个进程发现 0 条待发，钱包不变 |
+| `TestSLGAlliancePlayerDelivery` | 上一行的同一条流程，ACK 之后继续：每个原服依次起 write / recover / verify 三个子进程，各用自己的文件 WAL 与真实 Mongo | write：注入 Player 不可用时义务不标完成、版本不变；创建实体（strict 独立事务）、原服初始化与奖励（async）三条 WAL 记录已回复，各阶段严格核对 1→2→3；钱包只读查询后仍为 3，投影数 0、未投影 3、原服未标完成时被父进程 SIGKILL。recover：冷加载后完整钱包与崩溃前一致（HomeSID、wallet 10 金币、Player 上一条该窗口的永久到账回执：金额 10），再从义务账本发现 1 条待发并重投（余额不变）；八路并发重放、错服、改归属、同窗口改金额都不改钱包。verify：第三个进程发现 0 条待发，钱包不变 |
 | `TestSLGAllianceRemoteDelivery` | 联盟权威换成生成的 Remote 托管实体（sid 2000 首次拥有并进入共享）；冻结后、补报之前在同一父进程内先 `LeaveRemoteSharedMode` 回到独占、再 `TransferRemoteOwnership` 到 sid 2001（共享模式下每个进程都能写，转移不挡旧写者，见 [REMOTE_ENTITY“多写者：本地副本与权威”](REMOTE_ENTITY.md#多写者本地副本与权威)；2001 接手后再进入共享），再继续补报、阶段、原服义务与两个原服的 Player 到账（同上一行） | 初始 lease 为 sid 2000 且共享；退出共享后独占；交接后 marker 与 route epoch 都上升、仍独占；旧 Runtime 仍在运行时写入被拒；sid 2001 冷加载的联盟事实（成员、冻结状态、待报意图）与交接前序列化后一致；八路并发同一战果经业务版本冲突重试后全部成功、只计一次 |
 | `TestSLGAllianceRPCReceiverBudget` | 只用 NATS：两个真实 Bus（sid 2000 调用 sid 1000）的普通 RPC | 调用方 300ms 超时返回时接收端回调仍在运行，且它的 context 没有调用方期限（框架现行契约；哪天普通 RPC 开始传播期限，这条会变红，提醒改 `receiverBudget` 与 §7.7）；接收端 `receiverBudget` 200ms 到期后迟到的成功不回复成功，调用方在 3 秒内拿到错误；期限内完成照常回复 |
 
-**不证明**：两个联盟 owner 与两个 sid 客户端都在同一父进程，协调器与原服 Player 是本机子进程；服务发现是固定列表，不含 etcd、singleton 或自动 HA；协调器只做正常排空重启，没有注入网络分区、SIGKILL 或 Redis 故障；Redis 跨进程读到数据不证明节点断电持久；Remote 用普通 NATS SyncBus（默认可丢），不经 Mirror 读，未验证 JetStream 与 Mirror 订阅、lease 中途过期或在途提交时的交接；视野传输是内存捕获，不是 TCP 客户端，也没有空间迷雾或跨服撤权；原服子进程按 sid 依次运行，不证明两服并发、进程自动拉起或 strict 结果未知；这条链路不含实体定时器，离线定时器的真实重载与驱动投递看下面的通用脚本。128 条 / 128 KiB 是教学上限，不是容量结论。
+**不证明**：两个联盟 owner 与两个 sid 客户端都在同一父进程，协调器与原服 Player 是本机子进程；服务发现是固定列表，不含 etcd、singleton 或自动 HA；协调器只做正常排空重启，没有注入网络分区、SIGKILL 或 Redis 故障；Redis 跨进程读到数据不证明节点断电持久；Remote 用普通 NATS SyncBus（默认可丢），不经 Mirror 读，未验证 JetStream 与 Mirror 订阅、lease 中途过期或在途提交时的交接；视野传输是内存捕获，不是 TCP 客户端，也没有空间迷雾或跨服撤权；原服子进程按 sid 依次运行，不证明两服并发、进程自动拉起、整机掉电或提交结果未知；这条链路不含实体定时器，离线定时器的真实重载与驱动投递看下面的通用脚本。128 条 / 128 KiB 是教学上限，不是容量结论。
 
 #### 12.2 通用真实依赖脚本
 

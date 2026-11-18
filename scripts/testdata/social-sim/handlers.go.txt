@@ -21,7 +21,7 @@ type IScenarioPlayerEntity interface {
 
 // 主人操作自己的农场（种植、收获）：只锁主人一人；收获的金币经 wallet 与农场同一笔事务。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerScenarioOwn(owner IScenarioPlayerEntity, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
 	return applyScenario(owner, owner, false, cmd, nowUnixMilli)
 }
@@ -29,7 +29,7 @@ func handlerScenarioOwn(owner IScenarioPlayerEntity, cmd rules.Command, nowUnixM
 // 访客操作主人的农场（帮助）：照 friends 的写法锁 [主人, 访客] 两个 Player 一笔事务（两人都在本进程）；访客资格是
 // 主人好友名单里有他（friends 模块的状态，同一把锁内读）。访客的回执记在主人的农场里；访客的奖励（目前为 0）经他自己的 wallet。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerScenarioVisit(owner IScenarioPlayerEntity, visitor IScenarioPlayerEntity, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
 	friend := slices.Contains(owner.Friends().Snapshot().Peers, entity.GetUniqueIDFromEntityID(visitor.ID()))
 	return applyScenario(owner, visitor, friend, cmd, nowUnixMilli)

@@ -24,7 +24,7 @@ func idlePurse(p IIdlePlayerEntity) idle.Purse {
 // 这里只建放置自己的存档：已经有存档时同号重试只读不写。
 // Rules 来自服务端捕获的 configdata Snapshot，冻结进存档；已有存档不因重试或新配置改变经济。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerIdleInit(p IIdlePlayerEntity, nowUnixMilli int64, rules idle.Rules) (idle.View, error) {
 	if !p.Enter().Built() {
 		return idle.View{}, idle.ErrRule
@@ -47,7 +47,7 @@ func handlerIdleInit(p IIdlePlayerEntity, nowUnixMilli int64, rules idle.Rules) 
 // 新命令的金币 / 宝石 / 每日奖励经模块组件在同一笔事务里生效：wallet 的 Add（不留回执，“只做一次”由放置的
 // Seq 回执保证）、bag 的 Remove、checkin 的 Claim；任何一个拒绝，整笔回滚，放置存档也不写回。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerIdleCommand(p IIdlePlayerEntity, c idle.Command, nowUnixMilli int64) (idle.Receipt, error) {
 	s, err := idle.Decode(p.Dao().GetIdleState())
 	if err != nil {
@@ -79,7 +79,7 @@ func handlerIdleCommand(p IIdlePlayerEntity, c idle.Command, nowUnixMilli int64)
 	return r, nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerIdleView(p IIdlePlayerEntity) (idle.View, error) {
 	s, err := idle.Decode(p.Dao().GetIdleState())
 	return s.View(idlePurse(p)), err
@@ -87,7 +87,7 @@ func handlerIdleView(p IIdlePlayerEntity) (idle.View, error) {
 
 // 结果未知保持原 Seq 查询；不得为领取或取消生成新身份盲重试。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerIdleReceipt(p IIdlePlayerEntity, seq uint64) (idle.Receipt, error) {
 	s, err := idle.Decode(p.Dao().GetIdleState())
 	if err != nil {

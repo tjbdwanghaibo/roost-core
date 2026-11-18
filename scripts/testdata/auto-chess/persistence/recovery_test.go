@@ -221,7 +221,7 @@ func writeChessBarrier(t *testing.T, root, name string, b chessBarrier) {
 	}
 }
 
-// SIGKILL 仅针对本用例创建的子进程；已确认 strict WAL 不等于 Mongo 已投影，也不等于磁盘断电验收。
+// SIGKILL 仅针对本用例创建的子进程；已回复的提交在 WAL 里（业务命令 async，进程被杀不丢）不等于 Mongo 已投影，也不等于磁盘断电验收。
 func TestAutoChessRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_AUTO_CHESS_CHILD")
 	root := os.Getenv("ROOST_AUTO_CHESS_WAL")
@@ -279,7 +279,7 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		}
 		m, state := chessRuntimeState(t, h)
 		stats := h.projector.Stats()
-		// 9 个实体创建 + 8 次建档（enter）+ 开房与名单 + 8 次入座（room）+ 24 条命令 = 50 条未投影的 strict 记录。
+		// 9 个实体创建 + 8 次建档（enter）+ 开房与名单 + 8 次入座（room）+ 24 条命令 = 50 条未投影的 WAL 记录（实体创建是 strict 独立事务，其余 async）。
 		if stats.Projected != 0 || stats.WALUnacked != 50 || state.Phase != "battle" || len(state.Fights) != 4 || m.Dao().GetChessWakeTimer() == 0 {
 			t.Fatal("not at frozen unprojected battle boundary", stats.WALUnacked)
 		}
@@ -497,5 +497,5 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; eight-seat frozen battle restored on the room module's Room (seats kept, online state cleared), driver loop delivered one catch-up stage after cold load and %d later stages at their deadlines (redelivered 0), third process retried all commands and eight rewards", barrier.Unprojected, delivered-1)
+	t.Logf("SIGKILL: %d unprojected WAL records; eight-seat frozen battle restored on the room module's Room (seats kept, online state cleared), driver loop delivered one catch-up stage after cold load and %d later stages at their deadlines (redelivered 0), third process retried all commands and eight rewards", barrier.Unprojected, delivered-1)
 }

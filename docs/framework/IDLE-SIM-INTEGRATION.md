@@ -36,13 +36,13 @@ flowchart LR
     C --> D[按旧窗口积分到 now]
     D --> E[执行命令、留回执、开新窗口]
     E --> F[替换生产唤醒定时器]
-    F --> G[strict WAL 提交]
+    F --> G[WAL 提交（async）]
     G --> H[回复回执]
     G --> I[提交后报告新期限给驱动]
     I --> J[到期投递 Tick：积分一次、排下一次]
 ```
 
-`strict` 保证回复前 WAL fsync，不保证回复时 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
+业务写 handler 不写 durability，用缺省 `async`：记录写进 WAL 文件就回复，fsync 由组提交稍后完成——进程崩溃（SIGKILL、panic、OOM）不丢已回复的修改，整机掉电或内核崩溃可能丢最后一个组提交间隔（缺省 10ms）；回复时也不保证 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
 
 ### 3. 生产队列与离线收益：如何使用
 
@@ -204,7 +204,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 
 每次写存档时 handler 的 `saveIdle` 替换唤醒定时器（`RemoveTimer` 旧节点、`NewTimerAt` 新期限、ID 记进 `IdleWakeTimer`）；期限是 `min(Horizon, LastAt + 1 秒)`，窗口结束后不再挂。回调核对节点 ID 与原期限后调用一次 `Advance(now)`，再挂下一个期限。
 
-**框架不追帧**：实体不在内存期间到期的节点，加载后只触发一次（[按实体的持久定时器](guide/10-time.md#4-按实体的持久定时器)）；离线多久都只投递这一次，补算多少由业务的 `Advance` 一次算完（本例截到窗口为止）。在线时“每秒看到收益涨”这种准点效果才需要走 Nest 消息；如果产品不需要，也可以完全不挂定时器，只在下一条命令到来时惰性积分：积分按区间计算，结果不依赖唤醒频率（`SegmentedTimeMatchesSingleIntegration` 用一组样例核对了“一次积分 25 秒”与“每秒积分一次”的摘要相同）。每秒一次唤醒意味着窗口内每个在线玩家每秒一次 strict 提交，这是教学选择，不代表产品应采用的周期；正式服按需要的刷新精度选周期，或改为只在最近一个任务完成的时刻唤醒。
+**框架不追帧**：实体不在内存期间到期的节点，加载后只触发一次（[按实体的持久定时器](guide/10-time.md#4-按实体的持久定时器)）；离线多久都只投递这一次，补算多少由业务的 `Advance` 一次算完（本例截到窗口为止）。在线时“每秒看到收益涨”这种准点效果才需要走 Nest 消息；如果产品不需要，也可以完全不挂定时器，只在下一条命令到来时惰性积分：积分按区间计算，结果不依赖唤醒频率（`SegmentedTimeMatchesSingleIntegration` 用一组样例核对了“一次积分 25 秒”与“每秒积分一次”的摘要相同）。每秒一次唤醒意味着窗口内每个在线玩家每秒一次 WAL 提交（缺省 async），这是教学选择，不代表产品应采用的周期；正式服按需要的刷新精度选周期，或改为只在最近一个任务完成的时刻唤醒。
 
 驱动的索引在提交之后（AfterCommit）才更新，测试读到新状态后仍有界等待索引变化，不能把二者当成同步返回的一件事。
 
@@ -261,7 +261,7 @@ ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh
 
 它在第 10 节之后追加 `TestIdleSimRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程装好放置规则与宝石道具表，经 strict 文件 WAL 提交 enter 建档、放置初始化、两个工坊各排一个任务、买倍率卡、5 秒后结算；后台投影关闭，断言 WAL 恰有 7 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 enter 建档 1 条、5 条业务命令；此时一个任务已完成待领、一个做了一半）后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程装好放置规则与宝石道具表，经文件 WAL 提交（业务命令缺省 async）enter 建档、放置初始化、两个工坊各排一个任务、买倍率卡、5 秒后结算；后台投影关闭，断言 WAL 恰有 7 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 enter 建档 1 条、5 条业务命令；此时一个任务已完成待领、一个做了一半）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、视图与定时器 ID，重放全部命令得到原回执；核对冷加载已把存量唤醒期限报告给驱动索引（`DueOf`）。
 3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次加载后的补触发，积分截到原窗口，窗口不延长、不再排唤醒；两个任务都完成，收益箱 4、余数 5000，原料与 bag 里的宝石不变；`entitytimer.delivered_total` 增量恰为 1。
 4. 收取第一个工坊：玩家命令把窗口重新推到 now + 30 秒，下一秒的刷新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，恰好积分一秒（余数 5000 → 6000，收益箱仍是 4，窗口不变），再排下一秒，投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。
@@ -270,7 +270,7 @@ ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh
 
 本例“在线每秒看到收益涨”的准点刷新（第 5 节）不是另一套唤醒：它就是这一个 Player 实体定时器节点，期限取 `min(Horizon, LastAt + TickMillis)`，到期由同一个驱动把生成的 Tick 作为 Nest 消息投递。所以每一次每秒刷新都计入同一个 `delivered_total`，计数里没有别的来源；冷加载后窗口已过、没有期限，直到玩家命令重开窗口才排下一秒，用例据此断言恰好的次数。去掉第 3 步的 `Start` 时，用例在补触发处等满 10 秒失败（`driver loop did not deliver the overdue production catch-up …`）。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（队列、投入、倍率、窗口、收益与唤醒定时器，以及同一 Player 上 wallet / bag / checkin 的模块状态）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次、只积分到原窗口，并按时投递下一秒的刷新；跨进程重放不重复扣费或结算。
+- **证明**：已回复的提交（业务命令 async，写进 WAL 文件即回复）在进程 SIGKILL 后可从未投影 WAL 恢复（队列、投入、倍率、窗口、收益与唤醒定时器，以及同一 Player 上 wallet / bag / checkin 的模块状态）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次、只积分到原窗口，并按时投递下一秒的刷新；跨进程重放不重复扣费或结算。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例用冻结的业务时钟，循环按 `MaxWait` 重读）、准入失败重试与 Redeliver（见 entitytimer 包测试与 `TestEntityTimerGeneratedProjectEndToEnd`）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
 ### 12. 结论怎样给

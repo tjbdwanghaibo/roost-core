@@ -32,7 +32,7 @@ type ISurvivalPlayerEntity interface {
 // 只放名单里的玩家入座。名单、配置来自服务端，开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的分发包装
 // 从 fctx 填，调用方不传）。相同 Room 不允许改名单或重置探险；已有人入座的普通房不能改造成撤离房。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSurvivalInit(m ISurvivalRaidEntity, ids [survival.Seats]int64, r survival.Rules, nowUnixMilli int64) error {
 	if raw := m.Dao().GetSurvivalState(); raw != "" {
 		s, e := survival.Decode(raw)
@@ -78,7 +78,7 @@ func survivalMember(m ISurvivalRaidEntity, playerID int64, epoch uint64, connect
 	return nil
 }
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSurvivalCommand(m ISurvivalRaidEntity, playerID int64, connection string, c survival.Command, nowUnixMilli int64) (survival.Receipt, error) {
 	s, e := survival.Decode(m.Dao().GetSurvivalState())
 	if e != nil {
@@ -103,7 +103,7 @@ func handlerSurvivalCommand(m ISurvivalRaidEntity, playerID int64, connection st
 // 成员用自己当前的连接读视图（room 的 View 做成员与连接检查）；Self.Epoch 是 room 席位的当前代际，
 // 各席位的 Connected 是 room 的在线状态。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerSurvivalView(m ISurvivalRaidEntity, playerID int64, connection string) (survival.View, error) {
 	snapshot, e := m.Room().View(playerID, connection)
 	if e != nil {
@@ -118,7 +118,7 @@ func handlerSurvivalView(m ISurvivalRaidEntity, playerID int64, connection strin
 
 // 当前代际、当前连接可以查旧代际的回执，但不能把旧命令换成新 Seq 重做。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=memory
 func handlerSurvivalReceipt(m ISurvivalRaidEntity, playerID int64, connection string, epoch, seq uint64) (survival.Receipt, error) {
 	if e := survivalMember(m, playerID, epoch, connection, true); e != nil {
 		return survival.Receipt{}, e
@@ -138,7 +138,7 @@ func handlerSurvivalReceipt(m ISurvivalRaidEntity, playerID int64, connection st
 // 入场先经 room 的 RoomJoin 入座，入场请求带这一席的代际与连接；入场费经 wallet 的 Add（负数为扣，不足答
 // wallet_short），“扣过没有”由 Joined 保证，所以不用带键的 Apply。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSurvivalEnter(p ISurvivalPlayerEntity, m ISurvivalRaidEntity, epoch uint64, connection string, nowUnixMilli int64) error {
 	s, e := survival.Decode(m.Dao().GetSurvivalState())
 	if e != nil {
@@ -163,10 +163,10 @@ func handlerSurvivalEnter(p ISurvivalPlayerEntity, m ISurvivalRaidEntity, epoch 
 
 // Player 静态归属。本地同库 MultiSync 将封存清单兑付与 Claimed 原子提交；跨 sid 另接 Remote/Saga。
 // “领过没有”是长期事实，记在 Room 的 Claimed；材料兑的金币经 wallet 的 Add、药剂按件经 bag 的 Add（都不留回执：
-// 只发一次由 Claimed 保证），三者在同一个 strict 事务内，任何一步被拒（例如背包里药水已到单种上限 bag_stack_full）
+// 只发一次由 Claimed 保证），三者在同一笔事务内，任何一步被拒（例如背包里药水已到单种上限 bag_stack_full）
 // 整笔回滚、可以处理后重试。建档看 enter 的 Built。
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerSurvivalClaim(p ISurvivalPlayerEntity, m ISurvivalRaidEntity) (int64, error) {
 	s, e := survival.Decode(m.Dao().GetSurvivalState())
 	if e != nil {

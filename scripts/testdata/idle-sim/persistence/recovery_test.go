@@ -190,7 +190,7 @@ func idleRuntimeCommand(t *testing.T, h *idleRuntime, kind string, station, reci
 	return r
 }
 
-// 只终止自己启动的写入子进程。已确认 strict WAL 保留在原目录；不模拟磁盘断电或未知提交回复。
+// 只终止自己启动的写入子进程。已回复的提交（业务命令 async：写进 WAL 文件后回复，进程被杀不丢）保留在原目录；不模拟磁盘断电或未知提交回复。
 func TestIdleSimRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_IDLE_SIM_CHILD")
 	root := os.Getenv("ROOST_IDLE_SIM_WAL")
@@ -233,9 +233,9 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		idleRuntimeCommand(t, h, "settle", 0, 0)
 		p, state := idleRuntimeState(t, h)
 		stats := h.projector.Stats()
-		// 比装模块之前多一条 strict 记录（enter 建档，初始金币在里面）；全部未投影。
+		// 比装模块之前多一条 WAL 记录（enter 建档，初始金币在里面）；全部未投影。
 		if stats.Projected != 0 || stats.WALUnacked != 7 || p.Dao().GetIdleWakeTimer() == 0 || len(state.Stations[0].Ready) != 1 || state.Stations[1].Queue[0].Progress != 10000 {
-			t.Fatal("missing strict crash boundary")
+			t.Fatal("missing unprojected crash boundary")
 		}
 		raw, _ = json.Marshal(idleBarrier{state.Digest(), state.View(idlePurse(p)), p.Dao().GetIdleWakeTimer(), stats.WALUnacked})
 		if err := os.WriteFile(filepath.Join(root, "ready.json"), raw, 0600); err != nil {
@@ -456,5 +456,5 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; two queues / boost / horizon / timer restored, driver loop delivered one catch-up after cold load and the next one-second refresh at its deadline, third process replayed every command without duplicating costs or rewards", barrier.Unprojected)
+	t.Logf("SIGKILL: %d unprojected WAL records; two queues / boost / horizon / timer restored, driver loop delivered one catch-up after cold load and the next one-second refresh at its deadline, third process replayed every command without duplicating costs or rewards", barrier.Unprojected)
 }

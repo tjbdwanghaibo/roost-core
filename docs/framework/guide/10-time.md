@@ -105,7 +105,7 @@ SLG 行军或建造可以用 typed 节点保存任务身份与期限；宿主须
 到点要做的事（Buff 到期、建造完成、行军到达）属于某个实体时，用 `roost add timer --entity <Entity>`（DESIGN-TODO D11，维护者 2026-10-17 决定方案 B）。它把上面这套 Scheduler 接到实体上，分三处：
 
 - **期限在实体自己的 DAO 里**：节点 map 与 ID 种子两个持久字段，生成的组件每次调用从 DAO 现建一个 Scheduler、钩子写回 DAO、用完丢弃。增删改都在调用所在的 Nest 事务里，回滚就是 DAO 的回滚；持久走 DataEngine 正式链路，没有第二份存储。种子随 upsert 推进，重启后不复用 ID。
-- **触发在实体的 Nest 锁内**：生成的 Tick handler（`rollback=undo durability=strict`）调用组件的 `Tick()`，按这条消息冻结的业务时间（`fctx.Now`，§1A）触发；回调改的东西与节点的删除 / 续期是同一条 WAL 记录。回调只改 DAO、记 effect，不做 I/O、不阻塞。
+- **触发在实体的 Nest 锁内**：生成的 Tick handler（`rollback=undo`，缺省 async）调用组件的 `Tick()`，按这条消息冻结的业务时间（`fctx.Now`，§1A）触发；回调改的东西与节点的删除 / 续期是同一条 WAL 记录。回调只改 DAO、记 effect，不做 I/O、不阻塞。
 - **驱动在 core**（`framework/nest/entitytimer`，`wiring/entitytimer` 装配）：进程内按“已加载实例的最早期限”排的小堆。实例加载时报告存量的最早期限，事务提交后（`nest.AfterCommit`）报告新的最早期限，回滚的事务不改；卸载、删档、撤销新建时实例离开索引。只有最早期限到了才经 Nest 正式准入给那一个实体投递一次 Tick，不按在线人数轮询；投递前核对实例，已卸载 / 已删档 / 被同 ID 新实例取代的丢弃。时间取 `fctx.Now`（Nest 消息里是这条消息冻结的业务时间，驱动自己的循环现读进程业务时钟），按毫秒；Tick 消息不带时间。
 
 **离线语义（维护者 2026-10-17 决定）**：框架不追帧。实体不在内存期间（离线、停服）到期的节点，在实体加载起来之后只触发一次，不论错过多少个周期。回调参数 `entitytimer.Fire` 带足业务自己补算的信息：

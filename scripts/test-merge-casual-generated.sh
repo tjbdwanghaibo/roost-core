@@ -6,7 +6,7 @@
 # 设备代际接管、限时挑战与 Player 上的期限定时器、模拟广告回调（每日次数借鉴 checkin 的业务日、到账键借鉴 wallet）；
 # 棋盘规则仍按存档冻结。这些不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身。ROOST_MERGE_CASUAL_REAL=1（并提供隔离 Mongo 副本集
-# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程 strict 提交后、WAL 记录未投影时被父进程 SIGKILL，新进程
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程提交（业务命令缺省 async）后、WAL 记录未投影时被父进程 SIGKILL，新进程
 # 冷加载、判负过期挑战、续玩领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

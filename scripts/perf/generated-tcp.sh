@@ -42,12 +42,14 @@ run_roost add protocol EnterGame --group game --handler player
 run_roost add transport tcp
 cp "$repo_root/scripts/testdata/generated-tcp/player.go.txt" db/def/player.go
 cp "$repo_root/scripts/testdata/generated-tcp/add_gold.go.txt" game/handler/add_gold.go
-cp "$repo_root/scripts/testdata/generated-tcp/wallet.go.txt" game/entities/player/wallet.go
+cp "$repo_root/scripts/testdata/generated-tcp/wallet.go.txt" game/components/wallet/add_gold.go
 cp "$repo_root/scripts/testdata/generated-tcp/auth.go.txt" internal/access/player/tcp/auth.go
 python3 - "$DURABILITY" <<'PY'
 from pathlib import Path
 import sys
-p=Path('game/handler/add_gold.go');p.write_text(p.read_text().replace('durability=strict','durability='+sys.argv[1]))
+# 夹具按业务写法不写 durability（缺省 async）；这里按 DURABILITY 补上要测的级别。
+p=Path('game/handler/add_gold.go');s=p.read_text();old='//roost:nest rollback=undo\n';assert s.count(old)==1
+p.write_text(s if sys.argv[1]=='async' else s.replace(old,'//roost:nest rollback=undo durability='+sys.argv[1]+'\n'))
 p=Path('game/view/component_wallet.go');s=p.read_text();old='type Wallet interface{}';assert old in s;p.write_text(s.replace(old,'type Wallet interface{ AddGold() int64 }'))
 # EnterGame 只把玩家装载进来：填进生成的控制器桩（game/controllers 一个包，Controller 由生成器写）。
 p=Path('game/controllers/player.go');s=p.read_text()

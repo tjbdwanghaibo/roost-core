@@ -24,7 +24,7 @@ type mobaSnapshotBarrier struct {
 	Frames       int
 	Setup        uint64  // 建局（目录预留、选英雄、开局）留下的未投影记录
 	Unprojected  uint64  // SIGKILL 前的未投影记录总数
-	StrictMicros []int64 // 每帧 Sender 调用到 strict durable 返回；不含建局
+	CommitMicros []int64 // 每帧 Sender 调用到回复（帧提交是 async：WAL 写入后回复）；不含建局
 }
 
 // lockstepCounter 汇总默认注册表里一个计数器的值；reason 非空时只取该标签。用前后差值断言，不依赖进程里别的 Match。
@@ -64,7 +64,7 @@ func (l *splitLanes) SendReliable(ctx context.Context, s nettransport.SessionID,
 	return l.committedLog.SendReliable(ctx, s, raw)
 }
 
-// SIGKILL 后经快照恢复（设计 FEATURE-2026-10-20 §15.6 维护者决定②）：子进程用真实 strict WAL 提交 100 帧、关掉后台投影，
+// SIGKILL 后经快照恢复（设计 FEATURE-2026-10-20 §15.6 维护者决定②）：子进程用真实文件 WAL 提交 100 帧、关掉后台投影，
 // 断言每帧恰好留下一条未投影记录后被父进程 SIGKILL。父进程用同一个 WAL 与本次唯一的 Mongo 库冷加载，resume 换代，
 // 用 RecoverRoomWithSnapshots 重建 Room：重建后发布的检查点就是冷加载出的已提交头部。两个客户端请求的起点都早于 64 帧窗口：
 // 一个随宿主一起丢了本地状态、从第 1 帧请求，一个停在第 20 帧、从第 21 帧请求。验收：两人都经同一份第 100 帧检查点恢复
@@ -109,12 +109,12 @@ func TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL(t *testing.T) {
 	if err := <-child.done; err == nil {
 		t.Fatal("snapshot child exited cleanly")
 	}
-	samples := append([]int64(nil), barrier.StrictMicros...)
+	samples := append([]int64(nil), barrier.CommitMicros...)
 	if len(samples) != mobaSnapshotCrashFrames {
-		t.Fatal("missing strict latency samples")
+		t.Fatal("missing commit latency samples")
 	}
 	slices.Sort(samples)
-	t.Logf("strict WAL Sender latency diagnostic: n=%d p50_us=%d p99_us=%d max_us=%d (100 sequential frame commits; functional run, not capacity evidence)", len(samples), samples[(len(samples)*50+99)/100-1], samples[(len(samples)*99+99)/100-1], samples[len(samples)-1])
+	t.Logf("async WAL Sender latency diagnostic: n=%d p50_us=%d p99_us=%d max_us=%d (100 sequential frame commits; functional run, not capacity evidence)", len(samples), samples[(len(samples)*50+99)/100-1], samples[(len(samples)*99+99)/100-1], samples[len(samples)-1])
 	h := openActiveRuntime(t, "active-snapshot", false)
 	r := h.mustApply(t, moba.Change{Op: "read"})
 	if barrier.Frames != mobaSnapshotCrashFrames || len(r.Frames) != barrier.Frames || r.Reference.Digest() != barrier.Digest {
@@ -316,6 +316,6 @@ func TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL(t *testing.T) {
 	if err := h.mongo.DatabaseForSid(h.database, 0).Drop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	t.Log(fmt.Sprintf("SIGKILL snapshot recovery: %d unprojected strict records (%d after setup + %d frames); cold load epoch 1 -> 2; seats %d (from frame 1) and %d (from frame %d) restored from committed checkpoint %d via one fetch (%d bytes), continued to head %d with %d page frames; metric deltas %v",
+	t.Log(fmt.Sprintf("SIGKILL snapshot recovery: %d unprojected WAL records (%d after setup + %d frames); cold load epoch 1 -> 2; seats %d (from frame 1) and %d (from frame %d) restored from committed checkpoint %d via one fetch (%d bytes), continued to head %d with %d page frames; metric deltas %v",
 		barrier.Unprojected, barrier.Setup, barrier.Frames, lostSeat, staleSeat, staleAt+1, barrier.Frames, snapshotBytes, len(final.Frames), lanes.pageFrames.Load(), got))
 }

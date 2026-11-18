@@ -312,7 +312,7 @@ import (
  messages "example.com/planet/protocol/pb"
 )
 
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo
 func handlerAddGold(target view.IWalletEntity, request *messages.AddGoldRequest, nowUnixMilli int64) (*messages.AddGoldResponse, error) {
  if request.Amount == -2 { return nil, nil } // 验证无响应不会被边界伪装成成功。
  if err := target.Wallet().AddGold(request.Amount); err != nil { return nil, err }
