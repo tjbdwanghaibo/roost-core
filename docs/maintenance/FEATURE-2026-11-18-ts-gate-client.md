@@ -662,43 +662,43 @@ request(client, MessageIds.RequestAddExp, MessageIds.ResponseAddExp, AddExpReqSc
 
 ## 10. 风险与需要维护者决定的点
 
-每条给选项，**推荐项在前**。
+每条给选项，**推荐项在前**。维护者 2026-11-18 对 D1～D10 **全部按推荐（A）**，逐条标在下面。
 
-- **D1 包怎么分**：
+- **D1 包怎么分**（**维护者 2026-11-18：A**）：
   - **A. 合成 `@roost/client`，子路径 gate / relay / web / protobuf，`@roost/relay-client` 改名不兼容**（推荐，§3.1）；
   - B. 保留 relay 包名，往里加 gate；
   - C. npm workspaces 拆三个包。
-- **D2 交付方式**：
+- **D2 交付方式**（**维护者 2026-11-18：A**）：
   - **A. 拷同版本 `client/ts` 构建，`npm pack` 或 `file:` 依赖装进游戏工程**（推荐，沿用 skill 现在的做法）；
   - B. 另出单文件 ESM（加 esbuild devDependency）；
   - C. 发 npm（要账号与发布流程）。
-- **D3 PB 库与生成位置**：
+- **D3 PB 库与生成位置**（**维护者 2026-11-18：A**）：
   - **A. protobuf-es v2，`roost generate` 在服务端跑 protoc 31.1 + `protoc-gen-es`**（推荐）。代价：声明 `ts` 的服务端开发机要装 node；
   - B. ts-proto（`forceLong=bigint`）；
   - C. protobufjs（不经 protoc，绕开版本锁，int64 是 `Long`）；
   - D. Go 生成器自写 TS 编解码（服务端不要 node，但要自己维护一个覆盖 oneof / enum / map 的 protobuf 实现，与 C# 的决定 1 相反）。
   - 第一轮开工先做三库实测，结果与 §4.1 的表不符时回来改。
-- **D4 protoc 路径的配置位置**：
+- **D4 protoc 路径的配置位置**（**维护者 2026-11-18：A**）：
   - **A. 新增顶层 `client_export.protoc` 两种语言共用，删掉 `csharp.protoc`**（推荐）。读到旧写法报错并提示搬到顶层；线上尚未部署，不做兼容；CHANGELOG 写“roost.yaml 要改”；
   - B. 保留 `csharp.protoc`，TS 另加 `ts.protoc`，两处各写一份。
-- **D5 64 位整数**：
+- **D5 64 位整数**（**维护者 2026-11-18：A**）：
   - PB 字段：**A. 用 protobuf-es 缺省的 `bigint`**（推荐，精确，与 C# `long` 相同）；B. 在导出的 proto 上加 `jstype = JS_STRING`。
   - 配置表的 `int` / `int64`：
     - **A. 读成 `number`，加载时超出 ±(2^53−1) 抛错，报表、行、字段**（推荐。配置值很少超过 2^53，超了也会大声失败；业务代码不用到处写 `BigInt`）；
     - B. 一律 `bigint`，与 PB 一致但业务算术麻烦。
-- **D6 回调时机**：
+- **D6 回调时机**（**维护者 2026-11-18：A**）：
   - **A. 网络事件里立即同步派发，不做 `Pump`**（推荐，§7.3）；
   - B. 另提供排队模式与 `pump()`，给要求回调只在引擎 `update` 里发生的业务。等有这种需求再加。
-- **D7 小游戏传输放哪里**（影响以后那一轮）：
+- **D7 小游戏传输放哪里**（**维护者 2026-11-18：A**）（影响以后那一轮）：
   - **A. 放进 SDK**（`@roost/client/minigame`）。它们是纯 TS、没有引擎胶水，与 C# 浏览器桥接因为 jslib 和 Unity 而不进 SDK 的理由不同；
   - B. 照 C# 只给参考写法。
-- **D8 WebSocket 地址来源**：
+- **D8 WebSocket 地址来源**（**维护者 2026-11-18：A**）：
   - **A. SDK 只认调用方给的完整 URL，与 C# 相同**（推荐）。
   - 风险：portal 的 `"transport":"ws"` 在 main 上还没实现（§1），TS 的登录端到端要等它。第一轮的测试不经 portal。
-- **D9 `roost client sync` 的写法**：
+- **D9 `roost client sync` 的写法**（**维护者 2026-11-18：A**）：
   - **A. 加 `--lang csharp|ts`，只声明一种语言时可省**（推荐）；
   - B. 新旗标 `--ts-to`。
-- **D10 Lockstep**：
+- **D10 Lockstep**（**维护者 2026-11-18：A**）：
   - **A. 以后做，有 H5 帧同步需求时再做，用 `packets.json` 的 lockstep 金样对齐**（推荐）；
   - B. 第一版就做（多约 600 行加测试）。
 

@@ -11,10 +11,10 @@
 //
 // 浏览器 API（document、sessionStorage、Worker、计时器、时钟）都可以注入，node 下测试用假的。
 
-import { RelayClient, internalHooks, internalSuccessors, type LeaveResult, type RelayClientOptions } from "./client.js";
-import { ALL, RelayChannel, RelayReason, type RelayFrame, type Welcome } from "./codec.js";
-import { MAX_STATE_BYTES, defaultCompressor, unpackState, type Compressor } from "./compress.js";
-import type { CreateRoomRequest, LobbyClient } from "./lobby.js";
+import { RelayClient, internalHooks, internalSuccessors, type LeaveResult, type RelayClientOptions } from "../relay/client.js";
+import { ALL, RelayChannel, RelayReason, type RelayFrame, type Welcome } from "../relay/codec.js";
+import { MAX_STATE_BYTES, defaultCompressor, unpackState, type Compressor } from "../relay/compress.js";
+import type { CreateRoomRequest, LobbyClient } from "../relay/lobby.js";
 
 // ---- 规则模块 ----
 

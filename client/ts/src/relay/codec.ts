@@ -1,15 +1,16 @@
-// relay 帧的编解码（docs/framework/RELAY.md §2）：与 Gate 同一个 16 字节 RS v2 包头（大端），flags 的 bits3..4 是通道。
+// relay 帧的编解码（docs/framework/RELAY.md §2）：与 Gate 同一个 16 字节 RS v2 包头（大端，共用 src/wire/header.ts），
+// flags 的 bits3..4 是通道。
 // 规则与 Go 的 client/wire（Header.ValidateRelay、EncodeRelay）一致，字节由 client/spec/relay-packets.json 核对。
 
-export const HEADER_SIZE = 16;
-export const VERSION = 2;
+import { DEFAULT_MAX_PAYLOAD, RawFrameReader, encodeRaw as encodeHeader } from "../wire/header.js";
+
+export { DEFAULT_MAX_PAYLOAD, HEADER_SIZE, VERSION } from "../wire/header.js";
 /** 目标槽位 0：发给全体（不含自己）。 */
 export const ALL = 0;
 /** 数据帧上归游戏的 flags 位（relay 原样带过）。 */
 export const FLAG_PUSH = 1;
 export const FLAG_SYNC = 2;
 export const FLAG_LOCKSTEP = 4;
-export const DEFAULT_MAX_PAYLOAD = 1 << 20;
 const GAME_BITS = FLAG_PUSH | FLAG_SYNC | FLAG_LOCKSTEP;
 const CHANNEL_SHIFT = 3;
 
@@ -158,17 +159,7 @@ function validate(flags: number, msgId: number, size: number, maxPayload: number
 
 function encodeRaw(flags: number, msgId: number, slot: number, payload: Uint8Array, maxPayload: number): Uint8Array {
   validate(flags, msgId, payload.length, maxPayload);
-  const data = new Uint8Array(HEADER_SIZE + payload.length);
-  const view = new DataView(data.buffer);
-  data[0] = 0x52; // R
-  data[1] = 0x53; // S
-  data[2] = VERSION;
-  data[3] = flags;
-  view.setUint32(4, msgId >>> 0);
-  view.setUint32(8, slot >>> 0);
-  view.setUint32(12, payload.length);
-  data.set(payload, HEADER_SIZE);
-  return data;
+  return encodeHeader(flags, msgId, slot, payload);
 }
 
 /** 编一帧：数据帧带 flags 的游戏位，控制帧只带通道位。 */
@@ -209,47 +200,27 @@ export function decodeFrame(data: Uint8Array, maxPayload = DEFAULT_MAX_PAYLOAD):
  * 不依赖消息边界（TCP 与 WebSocket 同一套解码）。
  */
 export class FrameReader {
-  private buffer: Uint8Array = new Uint8Array(0);
+  private readonly reader: RawFrameReader;
 
-  constructor(private readonly maxPayload = DEFAULT_MAX_PAYLOAD) {}
+  constructor(maxPayload = DEFAULT_MAX_PAYLOAD) {
+    this.reader = new RawFrameReader(
+      (flags, msgId, size) => validate(flags, msgId, size, maxPayload),
+      () => new RelayProtocolError("invalid RS magic or version"),
+    );
+  }
 
   get buffered(): number {
-    return this.buffer.length;
+    return this.reader.buffered;
   }
 
   push(chunk: Uint8Array): RelayFrame[] {
-    if (this.buffer.length === 0) {
-      this.buffer = chunk;
-    } else {
-      const joined = new Uint8Array(this.buffer.length + chunk.length);
-      joined.set(this.buffer);
-      joined.set(chunk, this.buffer.length);
-      this.buffer = joined;
-    }
-    const frames: RelayFrame[] = [];
-    while (this.buffer.length >= HEADER_SIZE) {
-      const data = this.buffer;
-      if (data[0] !== 0x52 || data[1] !== 0x53 || data[2] !== VERSION) {
-        throw new RelayProtocolError("invalid RS magic or version");
-      }
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      const flags = data[3];
-      const msgId = view.getUint32(4);
-      const size = view.getUint32(12);
-      validate(flags, msgId, size, this.maxPayload); // 在等载荷之前检查
-      if (data.length < HEADER_SIZE + size) {
-        break;
-      }
-      frames.push({
-        channel: (flags >> CHANNEL_SHIFT) & 3,
-        slot: view.getUint32(8),
-        msgId,
-        flags: flags & GAME_BITS,
-        payload: data.slice(HEADER_SIZE, HEADER_SIZE + size),
-      });
-      this.buffer = data.subarray(HEADER_SIZE + size);
-    }
-    return frames;
+    return this.reader.push(chunk).map((raw) => ({
+      channel: (raw.flags >> CHANNEL_SHIFT) & 3,
+      slot: raw.seq,
+      msgId: raw.msgId,
+      flags: raw.flags & GAME_BITS,
+      payload: raw.payload,
+    }));
   }
 }
 

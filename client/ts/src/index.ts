@@ -1,19 +1,10 @@
-// Roost 开房间场景（房主的客户端就是 host）的 TS SDK：lobby 的 HTTP 调用（LobbyClient）与 relay 的 WebSocket 连接
-// （RelayClient）。方案 FEATURE-2026-11-16-lobby-relay §4.7.5；帧格式与 Go 的 client/wire 相同（client/spec/relay-packets.json）。
-export * from "./codec.js";
-export * from "./lobby.js";
-export * from "./compress.js";
-export { RelayClient, RelayClosedError, RelayClientClosedError, SnapshotTooSoonError } from "./client.js";
-export type {
-  Disconnect,
-  HostChange,
-  HostRole,
-  HostTakeover,
-  LeaveResult,
-  ReconnectPolicy,
-  RelayClientOptions,
-  SentSnapshot,
-  SnapshotOptions,
-  WebSocketLike,
-} from "./client.js";
-export * from "./web.js";
+// @roost/client（维护者 2026-11-18 D1：合成一个包，原 @roost/relay-client 改名并入，不做兼容）。子路径：
+//   - @roost/client/gate：连玩家接入（嵌入 TCP 或独立 Gate 的 WebSocket 监听）的 GameClient / Connection；
+//   - @roost/client/relay：开房间的 LobbyClient / RelayClient；
+//   - @roost/client/web：Web 端房主辅助 WebHost；
+//   - @roost/client/protobuf：按 protobuf-es 生成的类型收发（peer 依赖 @bufbuild/protobuf）。根路径不导出它：只用 relay 或
+//     gate 的工程不必装运行库，根路径保持运行时零依赖。
+// 两边同名的帧层常量（HEADER_SIZE、VERSION、DEFAULT_MAX_PAYLOAD）来自同一份 src/wire/header.ts，由 relay 一侧导出。
+export * from "./relay/index.js";
+export * from "./web/index.js";
+export * from "./gate/index.js";

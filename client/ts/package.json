@@ -1,17 +1,34 @@
 {
-  "name": "@roost/relay-client",
-  "version": "0.1.0",
+  "name": "@roost/client",
+  "version": "0.2.0",
   "private": true,
-  "description": "Roost 开房间场景的浏览器 SDK：lobby 的 HTTP 调用与 relay 的 WebSocket 连接（帧格式同 client/wire）",
+  "description": "Roost 浏览器客户端 SDK：连玩家接入（gate）、开房间（relay，lobby 的 HTTP 调用与 relay 的 WebSocket 连接）、Web 端房主辅助（web）与 protobuf-es 收发（protobuf）；帧格式同 client/wire",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./gate": { "types": "./dist/gate/index.d.ts", "default": "./dist/gate/index.js" },
+    "./relay": { "types": "./dist/relay/index.d.ts", "default": "./dist/relay/index.js" },
+    "./web": { "types": "./dist/web/index.d.ts", "default": "./dist/web/index.js" },
+    "./protobuf": { "types": "./dist/protobuf/index.d.ts", "default": "./dist/protobuf/index.js" }
+  },
   "files": ["dist"],
+  "sideEffects": false,
+  "engines": { "node": ">=22" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "tsc -p tsconfig.test.json && node --test --test-concurrency=1 dist-test/test/*.test.js"
   },
+  "peerDependencies": {
+    "@bufbuild/protobuf": "2.17.0"
+  },
+  "peerDependenciesMeta": {
+    "@bufbuild/protobuf": { "optional": true }
+  },
   "devDependencies": {
+    "@bufbuild/protobuf": "2.17.0",
+    "@bufbuild/protoc-gen-es": "2.17.0",
     "@types/node": "24.19.1",
     "@types/ws": "8.18.1",
     "typescript": "5.9.3",

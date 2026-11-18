@@ -35,17 +35,10 @@ import { MAX_STATE_BYTES, defaultCompressor, packState, unpackState, type Compre
 import type { LobbyClient } from "./lobby.js";
 import { LobbyError } from "./lobby.js";
 
-/** 浏览器的 WebSocket 与 node 的 ws 包都满足的最小接口。 */
-export interface WebSocketLike {
-  binaryType: string;
-  readonly readyState: number;
-  send(data: Uint8Array): void;
-  close(code?: number, reason?: string): void;
-  onopen: ((event: unknown) => void) | null;
-  onmessage: ((event: { data: unknown }) => void) | null;
-  onclose: ((event: unknown) => void) | null;
-  onerror: ((event: unknown) => void) | null;
-}
+import type { WebSocketLike } from "../wire/websocket.js";
+
+/** 浏览器的 WebSocket 与 node 的 ws 包都满足的最小接口（定义在 src/wire/websocket.ts，gate 同用）。 */
+export type { WebSocketLike } from "../wire/websocket.js";
 
 export interface ReconnectPolicy {
   /** 0 不自动重连（缺省）。 */
