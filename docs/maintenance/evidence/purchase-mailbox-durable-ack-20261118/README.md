@@ -1,6 +1,6 @@
 # purchase / mailbox：外部确认放到本地修改持久之后（2026-11-18）
 
-> **同日改法已替换**：§1～§7 是第一版（`WaitEntityProjection` 屏障，提交 `cb0e5b14`）。维护者随后改为两个 handler 用 `durability=pipelined`，屏障代码已删除，现行做法与验证见 [§8](#8-改为-durabilitypipelined2026-11-18-第二版)。
+> **同日改法已替换**：§1～§7 是第一版（`WaitEntityProjection` 屏障，提交 `b268c6a8`）。维护者随后改为两个 handler 用 `durability=pipelined`，屏障代码已删除，现行做法与验证见 [§8](#8-改为-durabilitypipelined2026-11-18-第二版)。
 
 基线 main `0a9976b8`。维护者 2026-11-18 定 **A**：handler 仍用缺省 async（不回退 strict），purchase 的 `Ack`、mailbox 的 `CommitClaim` 放到本地这笔修改已持久之后。问题来源见[模块改用 async 的核对 §4](../modules-async-20261118/README.md#4-资产类模块核对崩溃后重放--重试是否仍幂等)。本轮只改两个模块的模板、模块测试、清单、README，`codegen/internal/roost` 里这两个模块的场景数与变异锚点，`scripts/test-modules-generated.sh` 的场景数，以及 `demo/WALKTHROUGH.md` 描述这两条流程的句子；没有改框架。
 
@@ -130,12 +130,12 @@ FAIL	example.com/pmdurable/game/controllers	1.043s
 
 ## 8. 改为 durability=pipelined（2026-11-18 第二版）
 
-基线 main `5845553a`（含第一版 `cb0e5b14`）。维护者原话：“很多都不需要strick的方式，pileline就已经很严格了”。规则：回复后马上对外部确认的写用 pipelined。
+基线 main `6a420007`（含第一版 `b268c6a8`）。实现与下面的测试在变基前的等价基线 `0dc725d0` 上完成，`0dc725d0..6a420007` 之间只有 `scripts/testdata` 的 MOBA / SLG 夹具与文档改动，不涉及本节的文件。维护者原话：“很多都不需要strick的方式，pileline就已经很严格了”。规则：回复后马上对外部确认的写用 pipelined。
 
 ### 8.1 改法
 
 - `PurchaseGrant`（`game/handler/purchase_grant.go`）、`handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`）的标记改为 `//roost:nest rollback=undo durability=pipelined`。
-- 删掉第一版的屏障：两个端点不再从 Registry 取 DataEngine Mod、不再调 `WaitEntityProjection`；purchase 的 `Collect` 恢复成“逐笔：查 platform → Sender → Ack”（与 `cb0e5b14^` 的代码相同，只多一行注释），mailbox 恢复成 `ReserveClaim → Sync_MailboxClaimReward → CommitClaim`；purchase 清单 `needs.mods` 去掉补上的 `dataengine`（有 nest 自动带上）。
+- 删掉第一版的屏障：两个端点不再从 Registry 取 DataEngine Mod、不再调 `WaitEntityProjection`；purchase 的 `Collect` 恢复成“逐笔：查 platform → Sender → Ack”（与 `b268c6a8^` 的代码相同，只多一行注释），mailbox 恢复成 `ReserveClaim → Sync_MailboxClaimReward → CommitClaim`；purchase 清单 `needs.mods` 去掉补上的 `dataengine`（有 nest 自动带上）。
 - 理由（按源码核对）：`framework/nest/execution.go` 的 `commitPipelined` 在锁内 `Enqueue`（唯一拒绝点），提前放锁，`<-ticket.Done()` 之后才完成事务并回复；票据由 WAL 组提交 fsync 后完成（`framework/nestwal/wal.go` 的 `resolveDurableLocked`）。所以 Sender 返回时这笔记录已 fsync，随后的 `Ack` / `CommitClaim` 不会比它“活得久”。比第一版少一次 Mongo 投影往返，也不依赖 Mongo 的可用性；代价是这条 handler 的回复多等一次组提交 fsync（与 strict 相同的等待，但实体锁在入队后就放了）。
 - fsync 失败时票据带 `ErrCommitIndeterminate`，Nest fence 实例并把它交给调用方：purchase 不当回执、不 `Ack`；mailbox 按发放失败处理（归还预留、答错误码）。恢复后由 WAL 回放决定这笔在不在，账本 / 游标保证不重复。
 
@@ -168,8 +168,8 @@ FAIL	example.com/pmdurable/game/controllers	1.043s
 - `roost module verify`：bag 20、enter 29、mailbox 35、mailbox+bag 9、mailbox+enter 5、purchase 23、purchase+bag 4、purchase+enter 2、wallet 17，零跳过，4 项工程检查通过。
 - `codegen/internal/roost` 相关 3 个用例：全过（`ok … 249.865s`）；purchase 的变异换成“生成注册改回 async”，日志 `caught mutation in game/handler/purchase_grant_nest_gen.go: orders acknowledged while the grant was only written, not persisted`；“未终结订单”变异的锚点恢复原文。
 - game-demo：生成后 `go vet ./internal/service/game` 通过，`TestActivitySettlementPaysCoinsIntoTheWallet` 通过（领取 handler 走 pipelined 替身）。
-- 真实进程：`scripts/test-operations-real.sh`，私有 `mirror-local.sh` 环境（偏移 26000，etcd 58979，端口基 46500，跑完 `clean`），工作树 = `5845553a` + 本轮未提交改动：`TestOperationsGMHTTPMailAndRehome`、`TestOperationsPurchaseCrashAcrossSIDAndRedisRestart` 两条 PASS（正式 DataEngine 提交器、`allowlist: []` 下 pipelined 发货与领取正常；SIGKILL 停在 pipelined Sender 返回之后、Ack 之前，冷启后 `next=acked=Applied=2`、钱包 200）。`install.py` 的 Ack 锚点在模板里仍唯一。
-- 根包 `go test -count=1 .`：通过。
+- 真实进程：`scripts/test-operations-real.sh`，私有 `mirror-local.sh` 环境（偏移 26000，etcd 58979，端口基 46500，跑完 `clean`），工作树 = 等价基线 `0dc725d0` + 本轮改动：`TestOperationsGMHTTPMailAndRehome`、`TestOperationsPurchaseCrashAcrossSIDAndRedisRestart` 两条 PASS（正式 DataEngine 提交器、`allowlist: []` 下 pipelined 发货与领取正常；SIGKILL 停在 pipelined Sender 返回之后、Ack 之前，冷启后 `next=acked=Applied=2`、钱包 200）。`install.py` 的 Ack 锚点在模板里仍唯一。
+- 变基到 `6a420007` 之后：根包 `go test -count=1 .` 通过；`codegen/internal/roost` 的 `TestDemoTemplateGeneratesABuildableWritePath`（断言 mailbox 发放 handler 带 `//roost:nest rollback=undo`、不带 strict）通过（`ok … 40.060s`）。
 
 ### 8.4 剩余边界与未验证
 
