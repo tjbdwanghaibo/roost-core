@@ -647,7 +647,10 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 
 - **与方案的出入**（实施时按不变量调整）：① 中止的写入顺序是“先写角色、再删占位”（方案是反过来）：按方案的顺序，并发的提交会在占位被删之后把角色改绑过去，留下没有 slot 的角色（用例 `TestConcurrentTransferRequestsHaveOneWinner` 在那个顺序下变红：`ValidateSession: account: conflict: role creation is pending reconciliation`）。② slot 另记所属的绑定代数（`Slot.BindEpoch`）、`LastTransfer` 另记 `Epoch` / `Note` / `Settled`：提交的收尾按代数认旧 slot，迟到的收尾不会删掉角色换回来的 slot；`Settled` 让没做完的收尾能被下一次 `SelectRole` / `Begin` 发现并补完。③ 中止一个没发起成功的 ID 也记为已中止（挡住迟到的 Begin）。④ 人工提交带备注的入口 `Admin.CommitRoleTransferWithNote`（方案的 `CommitRoleTransfer` 没有备注参数）。⑤ 另设换服尝试序号 `Role.TransferSeq`（发起带 `ExpectSeq`）与“占位以角色记录为准”的规则，见下面两条（审查 RV-20261111-BM-01 / BM-02 之后加的）。
 - **方案 §6 第 1～4 项按实现确认**（D6 A，维护者 2026-11-14）：① 换服接口上总线；② `Role.ServerID` 是当前绑定服，不另存建角服（见下“建角服不再可得”）；③ 目标服必须 open、未并入、账号在目标服没有角色；④ 发起之后中途停下一律向前恢复。P1 真实进程六个 SIGKILL 点验收过。
-- **“涉及已合服的服”按“已并入另一服”解释**：角色的绑定服或目标服的 `MergedInto` 非 0 才拒绝；承载着别的服的服照常可作源或目标。`MergeServer` 不检查在途的换服（没有索引）：换服期间目标服被并走，提交被拒绝，由调用方中止。
+- **“涉及已合服的服”按“已并入另一服”解释**：角色的绑定服或目标服的 `MergedInto` 非 0 才拒绝；承载着别的服的服照常可作源或目标。`MergeServer` 在被并走的服是在途换服的来源或目标时拒绝并列出它们（2026-11-18，[证据](evidence/rehome-leftovers-20261118/README.md)）；检查在写之前做一次、不与写原子，检查之后才落下的发起（停服窗口里只可能是人工发起）由提交时拒绝（目标服已并走）与期限中止兜底。
+- **预加载时 account 不可达**：Player 预加载工程起服时准入检查问不到 account 会让起服失败；真实进程上 `ServingGuardMod` 先于 DataEngine 拒绝启动，这条路径只有单测覆盖。（框架限制）
+- **game-demo 的 Player 不能预加载**：alliance 也加载 Player，预加载要写 `service=game`，而 game-demo 在 Player 上有 saga 原生步骤，生成器不允许；预加载路径的真实进程验收在 `scripts/test-rehome-preload-cluster.sh` 的模块工程上。（框架限制）
+- **外部环境**：换服的真实进程演练只在 macOS 同机跑过（单机 Redis 与 Redis Cluster 各一次），Linux、跨机、独立 Gate 尚未确认。
 - **过期的 Begin 由 `TransferSeq` 挡住，ID 只认两个**（RV-20261111-BM-02 已修）：每受理一次发起、每记下一次中止（含中止没发起过的 ID），`Role.TransferSeq` 加 1，发起必须带当前值，所以中止之前发出的 Begin 无论隔了多少次发起与中止都不能被重放复活。按 ID 只认得出在途的那一次与最近了结的那一次（`LastTransfer` 只有一条），因此仍有两条边界：① 调用方拿一个早已了结的 ID、带着**当前**的代数与序号重新发起，会被当作新的换服受理（之后那个 ID 迟到的 Commit 会提交它）——换服 ID 仍要不重复；② 当前没有换服在途时，重发一个已被后来的了结覆盖掉的 ID 的 Abort，会被当作“中止一个没发起过的 ID”再记一次并返回成功，**即使那个 ID 当年是提交的**；调用方要判断“是否已提交”，看返回的绑定（`ServerID` / `BindEpoch`），不要只看 Abort 成没成。读绑定与发 Begin 之间有别的发起或中止落地时，发起方会得到 `ErrTransferStale`，重读再发。
 - **收尾是尽力而为的后半段**：结果已定、slot 没收尾时，另一头的名额仍按已占用回答（`ErrRoleLimit`），直到重发的 Commit / Abort、这个角色的下一次 `SelectRole` 或 `Begin` 补完；`SelectRole` 里补不完只记 Warn 与 `role_transfer.settle_failed`，不挡登录。
 - **没有人认的占位靠入口撤，没有后台清扫**（RV-20261111-BM-01 已修）：Begin / Commit 停在占位写入这一步时换服被中止，占位可能在中止收尾之后才落地。Begin 占完位会再读一次角色并撤掉自己留下的；进程在那之前退出的，由之后的入口撤——这个 ID 重发的 Abort、这个角色的 `SelectRole`、下一次受理的 Begin、Commit 补占位时、账号在那个服的 `CreateRole`。没有人再碰那个名额时占位一直在（不挡任何人，但 `show-role` 看不到它，只能直接读 slot）；`Admin.ResolvePendingCreation` 对它仍答 `ErrNotResolvable`、不撤。被拒绝的 Begin（例如重发一个已中止的 ID）不撤。代价：最近一次了结是中止的角色，每次 `SelectRole` 多读一次目标服的 slot，直到它下一次换服。判定规则（slot 在角色的绑定服上、或角色在途的换服就是它才作数；先读 slot 再读角色）依赖“占位只在角色写下 `Transfer` 之后才建”与“`LastTransfer` 被覆盖之前上一次的收尾已经做完”这两条写入顺序；改这两处要一起看 `releaseStrayHold`。
@@ -906,7 +909,6 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
 
-- **合服与在途换服**：`MergeServer` 不检查指向被合并服的在途换服，靠提交时拒绝与期限中止兜底（方案三期“sidmerge 清单加无在途换服”）。联盟 e2e `TestAllianceE2ESocialRehome` 的 handed-off 点改成不登录、等 account 改绑后没有跑过；Player 预加载工程的准入检查路径只有离线覆盖；Cluster 下 account 进程级装配与“源服一直没起来”的清扫中止只有契约测试（尚未确认，[R2 证据](evidence/r2-rehome-d7-d8-20261117/README.md)）。
 
 #### 大厅 lobby 与转发 relay：遗留
 

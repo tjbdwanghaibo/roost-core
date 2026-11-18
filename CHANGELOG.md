@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+- **account：合服前检查在途换服**（换服遗留，方案三期，2026-11-18）：`MergeServer`（`accountctl merge-server`，含 `-dry-run`）在被并走的服是在途换服的来源或目标时拒绝（`ErrTransferInProgress`），
+  `MergeResult.TransfersInFlight` 列出这些换服，错误给出 `transfer-role list / abort` 的提示；角色存储没有在途索引时答 `ErrNoTransferIndex`。
+  合服 runbook 第 3 步加跑 `merge-server -dry-run`。测试用的进程内角色存储请用 `account.NewMemoryRoles()`（带索引）。
+
+- **修复：DataEngine 预加载 Mod 不发布自己**：`LocalPreloadMod` 在 Provide 里把自己发布为 `dataengine.preload`。原来不发布，rehome 判断不出 Player 已起服预加载，
+  预加载工程起服时除了预加载的准入检查，还会再把本服库列一遍、再问一遍 account。
+
+- `scripts/test-rehome-preload-cluster.sh`：最小模块工程（enter + rehome + gm、Player `preload=startup`、account 走 Redis Cluster）的
+  真实进程演练：不带 hash tag 的 `account.key_prefix` 在 Mod 初始化被拒；起服预加载的准入检查否决 account 绑在别处的旧档；
+  源服从不启动的在途换服由 account 进程的清扫按期限中止。不进 pretag。联盟 e2e `TestAllianceE2ESocialRehome` 已按 handed-off / committed 不登录的写法跑通。维护者 2026-11-18 按推荐定：没有在途索引的角色存储拒绝合服；sidmerge 清单不另加项。[证据](docs/maintenance/evidence/rehome-leftovers-20261118/README.md)
 - **Robot 步骤组与“除去组”门槛**：YAML 场景的顶层步骤可写 `group: <组名>`（其他位置报错），代码搭的场景用 `scenario.StepInGroup(group, name, node)`。`RunSnapshot` / loadtest JSON 新增 `groups`：每个组的 `scenarios`（成功场景数）、`steps / steps_failed`、`group_ms`（每个成功场景在组内步骤上的时间）与 `excluding_ms`（场景时间减去组内时间），各含 mean / p50 / p90 / p95 / p99 / max；`steps` 每步带 `group`。门槛新增 `p50/p90/p95/p99_excluding:<组>`，原整场景 `p95` 等不变。`Runner.GroupReport(include...)` 可直接读取。见 [Robot 报告解释](docs/framework/ROBOT.md#按运行的请求与流量)。
 - **game-demo 机器人的 p95 门槛不再卡 saga 等待时间**（维护者 2026-11-18：saga 有能力就行）：场景里的 saga 状态轮询（demo 的 5 个、两个联盟入会场景的 3 个）标为 `saga` 组；`cmd/loadtest` 新增 `-p95-exclude-group`（缺省 `saga`），`-max-p95`（缺省 16s）判 `p95_excluding:saga`，给空串回到整场景 `p95`。saga 仍要到期望终态，失败照样计入错误率；saga 组的时间在 `groups.saga` 里报告。没有 saga 组的场景（cellworld 等）门槛不变。`scripts/perf/demo-robot.sh` 显式传 `-p95-exclude-group saga`，`summary.json` 带 `groups`。新生成的 game-demo 需要包含此改动的 core（旧 core 不认场景里的 `group`）。100 人同秒忙机一轮：100 / 100，除去 saga 组 p95 8.32s（整场景 28.9s，saga 组 p95 22.6s），[证据](docs/maintenance/evidence/robot-saga-group-20261118/README.md)。
 - **Remote 共享 kind，facebook 一步建立**（维护者 2026-11-18 选 A）：`//roost:entity … remote=managed ownership=shared` 声明这个 kind 的实体生来共享。首写认领（写准入与 `ClaimRemoteOwnership`）一条插入就写成共享的所有权记录，没有“先独占认领、再切共享”的中间态；两个进程同时第一次写都成功（插入输了的一方读回共享记录照常准入）；认领后崩溃留下的是共享空认领，不卡别人。这类实体不能退出共享（`LeaveRemoteSharedMode` 返回 `ErrRemoteOwnerTransition`）；非持久所有权存储（Redis marker）上认领共享 kind 返回 `ErrRemoteWriteCapabilityDisabled`。未声明的 kind 行为不变。生成的登记调 `entity.DeclareRemoteSharedKind`。框架层三条新用例与真实 Mongo / Redis 用例修前红，13 个变异（框架 5、codegen 3、生成工程 3 等）全红。

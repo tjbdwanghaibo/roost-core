@@ -11,7 +11,7 @@ e2e 端口基 37700。分支 `worktree-agent-ab0a4d33433fb6bb5`，基点 `8940ca
 仍把本服库列一遍）。game-demo 的 Player 不能改成预加载（见 §3），第 3、4 件改在一个最小模块工程上做，写成了可复跑的
 脚本 `scripts/test-rehome-preload-cluster.sh`。
 
-## 1. 合服检查在途换服（代码，提交 `02a2eb9e`）
+## 1. 合服检查在途换服（代码，main 提交 `06e3e9b4`）
 
 **方案核对**：换服方案（FEATURE-2026-11-11-player-rehome §7 分期表）三期列有“`sidmerge` 清单加‘无在途换服’”，是已定做法；
 R2 证据 §6 第 3 条只说“是否加属于三期另一项、本轮没做”，没有相反的决定。
@@ -83,7 +83,7 @@ ALLIANCE_E2E_RUN='^TestAllianceE2ESocialRehome$' ALLIANCE_E2E_ETCD_PORT=34979 AL
 用例本身对 committed 点仍写着 “Q4 old-source timers/writes not certified”（脚本头注释“Q4 保留”）：用例不核对源库旧档是否删除，
 这一点由 `test-demo-rehome.sh` 覆盖；文字是旧的，本轮没改。
 
-## 3. Player 预加载工程的准入检查（真实进程；发现并修了一个缺陷，提交 `833f8f8c`）
+## 3. Player 预加载工程的准入检查（真实进程；发现并修了一个缺陷，main 提交 `d9b47375`）
 
 **game-demo 做不了**：先在 `test-demo-rehome.sh` 里加选项把 game-demo 的 Player 标成 `preload=startup`，生成器拒绝两次
 （`game-demo-preload-attempt.log`）：alliance 也加载 Player，预加载要写 `service=game`；写了之后 game-demo 的
