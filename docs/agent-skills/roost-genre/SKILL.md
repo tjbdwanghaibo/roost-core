@@ -16,6 +16,7 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 | 被别的 agent 调用（例如客户端工程里的 agent） | 本文 [§1](#1-与其他-agent-对接)，再按 compose 做 |
 | 照某类玩法出一个最小 demo，或问某类玩法在 roost 上的限制 | 本文 §2～§7 与对应的 reference |
 | 问 roost 有没有某项能力 | [能力清单](../../framework/CAPABILITIES.md)，不凭本文摘要回答 |
+| 问某种客户端（Unity、Unity WebGL、手机、网页、Go、C++ / Unreal）能不能连、用哪个 SDK | [compose 客户端表](references/compose.md#客户端能连什么按客户端类型) |
 | 改框架、修 bug、发版 | 不用本 skill |
 
 两条总规则（细节在 compose）：
@@ -32,7 +33,7 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 | 输入 | 缺了怎么办 |
 | --- | --- |
 | 需求原文 | 必须有；没有就只回交一句“缺需求原文”的摘要 |
-| 客户端引擎与语言、客户端工程路径 | 按需求推断；推断不出按“Unity / C#、路径未知”处理 |
+| 客户端引擎与语言、发行平台（是否网页或 Unity WebGL、是否手机）、客户端工程路径 | 按需求推断；推断不出按“Unity 桌面 / C#、路径未知”处理，平台写进“待决定” |
 | 服务端工程目录（新建还是已有） | 新建，放在调用方工作目录下的 `server/` |
 | 模式：业余 / 专业 / 只给决策 | 业余 |
 | 是否允许提问 | 不允许：开场问题与冲突一律按推荐默认，记成“待决定” |
@@ -48,7 +49,8 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 - 服务端工程：<绝对路径>
 - roost-core 版本：<vX.Y.Z>；模式：<业余 / 专业 / 只给决策>
 - 能做什么：<一两句白话>
-- 怎么起服：`cd <工程> && make dev-up && make dev-run`；登录入口 <http://127.0.0.1:8081>，玩家 TCP <127.0.0.1:7000>
+- 客户端：<引擎 / 平台>；能用：<连 game 走 TCP / 开房间走 relay 的 TCP 或 WebSocket / …>；不支持：<…与替代做法；没有写“无”>（依据 compose 客户端表）
+- 怎么起服：`cd <工程> && make dev-up && make dev-run`；开发地址 <工程里实际有的：登录入口 http://127.0.0.1:8081，玩家 TCP 127.0.0.1:7000，玩家 WebSocket、lobby、relay>
 - 起服冒烟：<通过：登录与握手 / 未做：原因>
 - 客户端入口文档：<工程>/docs/CLIENT.zh-CN.md（同一份在 <工程>/shared/README.md）
 - 导出目录：<工程>/shared/protocol（manifest：protocol_def=<哈希>，dao_sync=<哈希>）；<工程>/shared/config（data_version=<短值>）
@@ -59,10 +61,10 @@ description: 按一段业务需求用 roost-core（Go 游戏服务器框架）�
 
 **客户端一侧的 agent 拿到摘要后的第一步**：
 
-1. 读 `docs/CLIENT.zh-CN.md`（或 `shared/README.md`），第 1 节是它的清单；
+1. 读 `docs/CLIENT.zh-CN.md`（或 `shared/README.md`），第 1 节是它的清单，开头一句写着本客户端能用与不支持的路；写着不支持的（例如网页客户端连 game）不要自己想办法硬连，回给用户；
 2. 同步导出目录：有 roost CLI 时 `roost client sync`，没有时按 CLIENT 文档第 10 节直接拷 `shared/` 下的 C# 与数据；
 3. 在客户端做一处能改服务器接入地址的地方（CLIENT 文档第 2 节），缺省值填开发地址；
-4. 跑最小联调：服务端 `make dev-up && make dev-run`，客户端登录 → 握手 → `EnterGame`，看到 CLIENT 文档第 1 节写的期望现象。
+4. 跑最小联调：服务端 `make dev-up && make dev-run`，客户端登录 → 握手 → `EnterGame`（开房间是登录 → 建房 → 连 relay），看到 CLIENT 文档第 1 节写的期望现象。
 
 调用方是服务端一侧的上层 agent 时，把摘要与 CLIENT 文档路径原样转给客户端 agent，不要改写其中的地址与哈希。
 
@@ -177,12 +179,12 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 | 6 | 实体心跳只有 10 档（50ms～60s），回调不阻塞、不做 I/O | guide/10-time.md §4A |
 | 7 | 长期幂等靠实体上的持久业务事实（序号账本、领奖事实），服务去重环只防短期重投；夹具账本满了拒绝新写、不淘汰旧回执 | 各玩法手册“幂等身份”节 |
 | 8 | Player 跨服协作走 Remote / Saga / 邮件；单玩家换服用 rehome（断线后重连，不是无缝迁移），换服提交后旧服副本的清理还有尚未确认的窗口；按 sid 搬机与 CellWorld 跨格是另外两条路径 | MMORPG-INTEGRATION §6；`modules/rehome/README.md`；KNOWN-LIMITS“单个玩家换服” |
-| 9 | 玩家接入层（嵌入 TCP、独立 Gate）提供 TCP 与 WebSocket（同一套 RS v2 帧，可靠有序）；KCP / UDP 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写。HTTP 不是玩家协议。独立 Gate 没有跨机验证 | docs/framework/GATEWAY.md；compose 第 5 步 |
+| 9 | 服务端的玩家接入层（嵌入 TCP、独立 Gate）能接 TCP 与 WebSocket（同一套 RS v2 帧，可靠有序）；KCP / UDP 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写。HTTP 不是玩家协议。独立 Gate 没有跨机验证。**客户端一侧另看**：不是每种客户端都有能走这些路的 SDK，网页、Unity WebGL、C++ / Unreal 尤其受限 | docs/framework/GATEWAY.md；[compose 客户端表](references/compose.md#客户端能连什么按客户端类型) |
 | 10 | SyncBus 是默认可丢广播；要最终一致须业务自建对账 | guide/04-sync.md §5 |
 | 11 | 视野：缺省 ApplySync 每玩家 ≤ 9 个视野（超出用 ApplyAsync）；一个会话持有的对象受 `MaxObjects`（缺省 100）约束，超出时不断开、超额降级（暂缓多出的对象，从最远处收紧视野） | guide/04-sync.md §2；KNOWN-LIMITS“广播与 AOI” |
 | 12 | Saga 只在 macOS 单机测过（原生正向约 1050 saga/s），Linux、跨机未测；不是跨服瞬时原子交易。业务键只在运行期间 + 终态保留期（`saga.terminal_retention`，缺省 1h）内唯一，之后可复用；要“同一业务键永远只有一笔”在自己数据里记已用过的键 | KNOWN-LIMITS“Saga”；guide/06-saga.md |
 | 13 | match 单分区“每秒成局人数 × `match.retention`”持续上限约 4500 人（本机单样本）；有弹性人数队列（`Queue.MinSize` / `FillAfterSeconds`），没有存储原生补位 | guide/09-services.md §4；KNOWN-LIMITS“匹配的弹性人数成局与补位” |
-| 14 | 真实 Unity / Godot / Unreal 引擎、跨机高可用、断电未验收 | KNOWN-LIMITS“平台与外部验证” |
+| 14 | 客户端引擎与平台只验到客户端表“实跑到哪”一列为止（Godot、Unreal、手机设备没有实跑）；跨机高可用、断电未验收 | [compose 客户端表](references/compose.md#客户端能连什么按客户端类型)；KNOWN-LIMITS“客户端：遗留”“平台与外部验证” |
 | 15 | 业务时间一律取自上下文：handler 用约定参数 `nowUnixMilli`（Sender 不带时间），心跳 `Beat.Now`、定时器 `Fire.Now`；测试用 `clock.SetSource` 拨 | guide/10-time.md §1A |
 | 16 | 一个 Nest 只有一个 `EntitySync` 观察者：打开 `access.player.self_sync` 后它归自身视图。房间 / 队伍推给成员用 `access.player.sync_groups`（与自身视图同一条连接，要求 self_sync，成员关系不持久）；不要自建 Manager 再交给 Nest（报 `ErrEntitySyncObserverConflict`） | ENTITY_SYNC.md“按组同步与 self_sync 共用连接”；references/party-room.md |
 | 17 | 提交后动作用 `if !nest.AfterCommit(fn) { fn() }`（`SyncGroup.Join / Leave / Disband` 内部就是这样） | docs/framework/impl/02-nest-entity.md §2 |

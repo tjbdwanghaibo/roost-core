@@ -83,7 +83,7 @@ bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$
 | 心跳 ≤ 20 次 / 秒 | 档位固定 50ms～60s 十档；不代表 on_change Sync 有 20Hz 硬上限 | PARTY §8；guide/10-time.md §4A |
 | 可变步长 | 上一拍没跑完就跳拍、不补发，`Elapsed` 夹在 `[0, max(1s, 档位)]`；规则按时间戳与事件顺序写，不按“第几拍”累加 | PARTY §8；KNOWN-LIMITS“实体心跳” |
 | 心跳不持久 | 重启 / 卸载后要在 `onHeartbeatInit` 按持久阶段重新启动 | PARTY §4、§13 |
-| 接入 | 玩家接入提供 TCP 与 WebSocket；KCP / UDP 只生成装配函数 | PARTY §8；docs/framework/GATEWAY.md |
+| 接入 | 服务端玩家接入能接 TCP 与 WebSocket；KCP / UDP 只生成装配函数。派对游戏常在网页或 Unity WebGL 上发行，这两种客户端能连什么先查 [compose 客户端表](compose.md#客户端能连什么按客户端类型) | PARTY §8；docs/framework/GATEWAY.md |
 | 房间无跨机接管 | 房间是开房进程的本地实体，崩溃后只能同一份 WAL / Mongo 冷加载恢复 | PARTY §8 |
 | SyncBus 可丢 | 房间内同步不走 SyncBus；跨服务房间事件（大厅、好友在玩）要业务对账 | PARTY §8；guide/04-sync.md §5 |
 | 房间同步 | 要求 self_sync；成员关系不持久，重启后靠玩家重连再 `Join`；没有房间数 / 成员数容量数据；掉线出局的人宽限期满不自动退组 | PARTY §5、§8；ENTITY_SYNC.md“Groups” |

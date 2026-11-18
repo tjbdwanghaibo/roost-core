@@ -46,7 +46,7 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/modules/m
 bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" wallet
 ```
 
-然后按 SKILL.md §3.4 收尾。服务端初始化 / 结算 / 奖励接口不开放为玩家 PB；固定会话凭据只供验收。要 KCP / UDP 装配函数时新建工程加 `-features protocol,config,entity,nest,dao,errcode,nettransport-kcp`（监听、握手鉴权、Session 绑定仍手写，`roost help replication`）；它与上面夹具的组合没有实跑过。
+然后按 SKILL.md §3.4 收尾。服务端初始化 / 结算 / 奖励接口不开放为玩家 PB；固定会话凭据只供验收。要 KCP / UDP 装配函数时新建工程加 `-features protocol,config,entity,nest,dao,errcode,nettransport-kcp`（监听、握手鉴权、Session 绑定仍手写，`roost help replication`）；它与上面夹具的组合没有实跑过。客户端一侧只有 Go 机器人有 KCP 拨号器，C# `LockstepClient` 与 C++ 的帧同步只走 TCP（[compose 客户端表](compose.md#客户端能连什么按客户端类型)）。
 
 ## 3. 期望场景数
 

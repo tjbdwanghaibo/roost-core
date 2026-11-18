@@ -77,6 +77,8 @@ CLI、工程依赖与 skill 正文必须是同一个 `$V`。维护者用 roost-c
 
 用户中途换模式，从当前步骤起按新模式做，做完的不返工。
 
+**先对照[客户端表](#客户端能连什么按客户端类型)**：客户端引擎与发行平台决定它能连哪条路。网页、Unity WebGL、Unreal / C++、Godot 尤其要先查，表里写“不支持”的组合在第 4 步作为冲突提出，不要默认客户端能连上。
+
 **客户端是 Unity 或别的 C# 工程时**，缺省打开导出目录（第 7 步写 `client_export`），协议和配置表都导出，客户端照它编译。导出 C# 协议要 **protoc 31.1**（与 C# SDK 锁定的 Google.Protobuf 3.31.1 同版本，版本对不上 `roost generate` 报错并给出下载地址）：
 
 - 从 protobuf 官方 GitHub release `v31.1` 下载对应平台的压缩包（`protoc-31.1-osx-aarch_64.zip`、`protoc-31.1-osx-x86_64.zip`、`protoc-31.1-linux-x86_64.zip`、`protoc-31.1-linux-aarch_64.zip`），解压到工程外的工具目录。下载前告诉用户文件名与来源。Homebrew、apt 装的 `protobuf` 通常是更新的版本，用不了。
@@ -107,7 +109,7 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 - 只在一个平台上发行，可以直接用平台的大厅、邀请与中继；
 - 朋友之间的合作玩法，对作弊不敏感。
 
-**小房间、房主做主机，但不想绑定平台**（多平台、浏览器、自己的账号）：roost 有现成的大厅 lobby 与转发 relay，不需要 game 服务，见第 6 步。它不替你防作弊、不判定局内结果。
+**小房间、房主做主机，但不想绑定平台**（多平台、浏览器、自己的账号）：roost 有现成的大厅 lobby 与转发 relay，不需要 game 服务，见第 6 步。它不替你防作弊、不判定局内结果。网页与 Unity WebGL 客户端连不连得上 game 先查[客户端表](#客户端能连什么按客户端类型)，连不上时这是它们联机的路。
 
 **典型例子**：只在 Steam 上发行、要联机开房间、人数少——建议 Steam Lobby（建房、邀请）+ Netcode for GameObjects（房主当主机）+ Steam 传输层（P2P 与中继），不用 roost。别的引擎换成对应的联机层，思路相同。通用方案与交付的方案文档见 [steam-lobby-ngo.md](steam-lobby-ngo.md)。
 
@@ -230,6 +232,7 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 - 要的量、频率、一致性超出写明的范围（例如要“永久防重”，而货币的去重窗口只留最近 128 次）；
 - 要的行为模块明确不做（例如要全服唯一的名字，而档案模块不查重）；
 - 依赖的能力在能力清单或已知限制里标成只有原型、只有设计、只有离线验证，或写明“尚未确认”。模块场景用替身提交器这件事不算冲突，统一写进报告的“验收到哪一步”；
+- 用户的客户端在[客户端表](#客户端能连什么按客户端类型)里对这条路写着“不支持”（例如网页客户端要连 game）；
 - 两条需求各自可行、放在一起互相矛盾。
 
 每个冲突写四样：
@@ -252,14 +255,38 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 | 需求 | 接入方式 | 做法 |
 | --- | --- | --- |
 | 按请求交互、很少推送、不需要长期在线；或开房间、一局打完就散（卡牌、回合、休闲、房间合作） | **嵌入 TCP**（缺省） | `project new -template game` 缺省就是这样，玩家 TCP 嵌在 game 里 |
-| 长期在线、持续推送（同屏 / 大地图、实时同步、频繁世界广播：MMO、SLG 大地图） | **独立 Gate** | 装完登录链路（第 8 步）后 `"$ROOST" add gate`：生成 Gate 服务、game 一侧的接线与配置（关掉 game 的嵌入 TCP），Gate 接管原来给客户端的端口；之后 `"$ROOST" project doctor` 的 `gate:*` 检查这套接法。参数以 `"$ROOST" help add` 与 [GATEWAY §2](../../../framework/GATEWAY.md#2-正式接入方式) 为准 |
+| 长期在线、持续推送（同屏 / 大地图、实时同步、频繁世界广播：MMO、SLG 大地图） | **独立 Gate** | 装完登录链路（第 8 步）后 `"$ROOST" add gate`：生成 Gate 服务、game 一侧的接线与配置（关掉 game 的嵌入 TCP），Gate 接管原来给客户端的端口；之后 `"$ROOST" project doctor` 的 `gate:*` 检查这套接法。参数以 `"$ROOST" help gate` 与 [GATEWAY §2](../../../framework/GATEWAY.md#2-正式接入方式) 为准 |
 
 - 业余模式按上表定；专业模式进决策单。
 - 不要用 `project new -services game,gate` 造 Gate：那只会多一个名叫 gate 的普通业务服务。
 - 独立 Gate 只做过单机真实进程演练，**没有跨机验证**，多机部署前要自己补验收。
-- **浏览器客户端**：在选定的接入上再 `"$ROOST" add transport websocket`（要求已有 tcp）。命令不改配置：在 `player_access.tcp.websocket`（独立 Gate 是 `player_access.gate.websocket`）写 `addr: 0.0.0.0:7080` 与 `allowed_origins`（游戏页面的域名）才开；**白名单为空时所有浏览器页面都被拒绝**；wss 由前置负载均衡终结；七层负载均衡后面所有连接按一个 IP 计数，要调大 `max_connections_per_ip`。契约见 [GATEWAY §6](../../../framework/GATEWAY.md#6-websocket-接入)。
+- **服务端的 WebSocket 接入**：在选定的接入上再 `"$ROOST" add transport websocket`（要求已有 tcp）。命令不改配置：在 `player_access.tcp.websocket`（独立 Gate 是 `player_access.gate.websocket`）写 `addr: 0.0.0.0:7080` 与 `allowed_origins`（游戏页面的域名）才开，路径缺省 `/ws`；**白名单为空时所有浏览器页面都被拒绝**；wss 由前置负载均衡终结；七层负载均衡后面要写 `trusted_proxies`（负载均衡自己的地址，逗号分隔），否则全部连接按负载均衡一个 IP 计 `max_connections_per_ip`。契约见 [GATEWAY §6](../../../framework/GATEWAY.md#6-websocket-接入)。
+- **服务端开了 WebSocket 不等于客户端能用**：先查下面的客户端表。表里这位客户端连 game 写着“不支持”时，作为冲突提出（第 4 步），可选做法：改成表里能连的客户端或平台；开房间、房主做主机的玩法改走第 6 步的 lobby + relay；客户端自己实现 RS v2 帧、鉴权首包、心跳与 Entity Sync 解码（工作量大，没有现成代码可抄）。
+- portal 给客户端的区服地址只有一个 `host:port`，是玩家 TCP（或 Gate）的地址；WebSocket 的地址（`ws(s)://主机:7080/ws`）不在 portal 里，用 WebSocket 的客户端要另配。
 
-**完成标准**：接入方式、谁定的、理由写进 HISTORY 草稿与 DEMO 第 5 节。
+### 客户端能连什么（按客户端类型）
+
+本表是 skill 里客户端一侧能力的唯一说明，别处只引用它。DEMO 第 7 节、CLIENT 文档第 1 节与交付摘要只写用户的客户端对应的那一行（能用哪几条路、不支持的与替代做法），从本表取，不凭印象写。“连 game”指连嵌入 TCP 或独立 Gate（玩家协议、自身视图、Lockstep）；“开房间”指第 6 步的 lobby（HTTP）+ relay。
+
+<!-- TODO(gate-ws-csharp) -->
+
+| 客户端 | 连 game | 开房间（lobby + relay） | 登录入口 portal 与大厅 lobby 的 HTTP | 协议与配置表 | 实跑到哪 |
+| --- | --- | --- | --- | --- | --- |
+| Unity 桌面，托管路线（缺省） | TCP：`Roost.Client` 的 `GameClient` + `RoostClientDriver`；不能走 WebSocket | `Roost.Client.Relay`，TCP 或 WebSocket | 自己用 `UnityWebRequest` / `HttpClient` 调 portal；lobby 用 SDK 的 `LobbyClient` | 导出的 C# 直接编译 | 运行库在 .NET 上实跑；托管包只在 macOS 的 Unity Editor 里编译导入过，没有进 Play 连服。relay SDK 在 Unity Editor（Mono）上 TCP 与 WebSocket 都实跑过（WebSocket 偶发断线修复后没有复跑），桌面 Player 没跑 |
+| Unity 原生路线（可选） | TCP：`RoostNativeDriver` + `client/cpp` 的网络内核 | 同上（relay 只有托管 SDK） | 同上 | 同上 | macOS ARM64 的 Editor、Mono / IL2CPP Player 实跑；Windows / Linux 没有编译实跑 |
+| Unity WebGL | **不支持**：浏览器里没有 TCP 套接字，原生插件也用不了，没有 SDK 能经 WebSocket 连 game | `Roost.Client.Relay` 经 WebSocket，三样要自己配：`RelayClientOptions.PumpDriven = true`（每帧 `Pump`，不 Pump 就不发心跳，房主卡住超过 2s 被断开）、浏览器 WebSocket 的 `IRelayTransport` 桥接、`UnityWebRequest` 实现的 `ILobbyHttp`；后两样 SDK 不带，参考写法在 `client/dotnet/unity-webgl-smoke` | `UnityWebRequest`；页面与服务不同源时服务端配 `portal.cors_origins`、`lobby.cors_origins`，relay 配 `ws_allowed_origins` | 同上 | relay 只在一个 Unity 版本的 WebGL 构建、Chromium 内置浏览器面板里冒烟通过；Safari、Firefox、手机浏览器、真实切后台没测 |
+| 手机（Unity Android / iOS） | TCP：托管路线与桌面同一份代码；原生路线有 Android ARM64、iOS ARM64 的打包入口 | `Roost.Client.Relay` | 同 Unity 桌面 | 同上 | 没有在设备上编译实跑；切后台要断开，回前台重新取票登录 |
+| 纯 C# / .NET（工具、Godot .NET） | TCP：`Roost.Client`，在主循环里自己调 `Pump()`；Godot 没有现成的主线程适配 | `Roost.Client.Relay`，TCP 或 WebSocket | `HttpClient` | 同上 | .NET 上的自测与生成工程联合链路；Godot 没跑 |
+| 网页（TS / JS） | **不支持**：服务端能开 WebSocket，但没有浏览器端的 game SDK，也没有 TS 协议导出 | `client/ts`（`@roost/relay-client`，含房主辅助 `WebHost`；不在 npm 上，把同版本的 `$CORE/client/ts` 拷出来再 `npm ci && npm run build`，`$CORE` 本身只读），只走 WebSocket | `fetch`；跨域配 `portal.cors_origins`、`lobby.cors_origins` | 协议导出只有 C#；配置表的 `data/*.json` 能直接读，读取与校验代码只有 C# | relay：node 上的自动化与 Chromium 内置浏览器面板演练 |
+| Go（机器人、压测、工具） | TCP：`robot` 包与生成工程的 `cmd/robot`；`robot/transport` 另有 `ws` 拨号器（没有对 game 的 WebSocket 接入跑过），KCP / QUIC 拨号器给帧同步用 | `client/relay`，只走 TCP | `net/http` | Go 代码就在工程里 | 各玩法的 Robot 场景 |
+| C++ / Unreal | TCP：`client/cpp`（C++17 与 C ABI）；不支持 TLS、WebSocket、KCP，地址只收数值 IP | 没有 SDK | 自己写 | 导出目录的 `proto/` 副本自己用 protoc 生成 C++ | macOS ARM64 实跑；没有运行过 Unreal 工程；Linux、Windows、移动没有编译实跑 |
+
+- 所有 SDK 连 game 都是明文 TCP，进程里不终结 TLS；对公网要放在终结 TLS 的代理后面，或只开在受保护的内网。
+- 帧同步（Lockstep）：C# `LockstepClient` 与 C++ 走 TCP；KCP / UDP 在服务端只有装配函数，客户端只有 Go 机器人的拨号器。
+- 开发端口：玩家 TCP 7000（独立 Gate 时是 Gate 的）、玩家 WebSocket 7080（写了 `addr` 才开）、portal 是 account 的 `web.addr`（8080 + account 的端口块）、lobby 8080 + 端口块、relay 7100 + 端口块（WebSocket 7200 + 端口块）。
+- 细节：[client/README](../../../../client/README.md)、[client/unity/README](../../../../client/unity/README.md)、[Roost.Client.Relay](../../../../client/dotnet/Roost.Client.Relay/README.md)、[client/ts](../../../../client/ts/README.md)、[client/cpp](../../../../client/cpp/README.md)。
+
+**完成标准**：接入方式、谁定的、理由写进 HISTORY 草稿与 DEMO 第 5 节；用户的客户端对应客户端表的哪一行、哪几条路能用写进 DEMO 第 7 节。
 
 ## 6. 开房间联机：lobby + relay，房主做 host
 
@@ -288,7 +315,7 @@ cd "$DIR" && "$ROOST" module add portal
 - 生成的配置可以直接 `make dev-run`：lobby 端口 8080+N、relay 7100+N、relay WebSocket 7200+N（N 是端口块）；`lobby.games` 里有一个以工程名命名的游戏（`max_members: 8`），`account.games` 同名；两边的 `token_key_env` 都是 `ROOST_RELAY_TOKEN_KEY`，开发时 `run.sh` 给开发密钥，生产由环境变量注入（至少 16 字节）。改游戏名、人数上限时两处一起改（doctor 的 `lobby-relay:account-games` 会查）。
 - **登录入口**：客户端先拿游戏账号 token（`gt2.…`）。`-template lobby` 的工程只装 `portal`（连带 account_auth），不要装 `login`（它要 game 服务）；开发登录在 `configs/service/config.account.yaml` 末尾写 `login:` 下的 `dev_token: dev-…`。这种工程没有区服：`/portal/servers` 的清单为空，`/portal/enter` 答 `560104`。有 game 的工程按第 8 步装 `login portal enter`。
 - 客户端用 `POST /portal/login {channel, open_id, credential, game}` 一步拿到 `game_token`，或拿账号票据后 `POST /portal/game-token {account_ticket, game}`。
-- 生产：relay 每个实例要能被客户端直连（`advertise_addr` 不能是回环、每个实例不同）；浏览器要用时配 `relay.ws_listen`、`ws_advertise_addr`（`wss://…`）、`ws_allowed_origins`（空表示拒绝所有浏览器页面）；lobby 配 `cors_origins`。上线前的渠道验签、TLS、限流归工程，写进报告的“没做的”。
+- 生产：relay 每个实例要能被客户端直连（`advertise_addr` 不能是回环、每个实例不同）；浏览器要用时配 `relay.ws_listen`、`ws_advertise_addr`（`wss://…`）、`ws_allowed_origins`（空表示拒绝所有浏览器页面）；游戏页面与服务不同源时 lobby 配 `lobby.cors_origins`、portal 配 `portal.cors_origins`（写在 account 的配置里），不写就不允许跨域。上线前的渠道验签、TLS、限流归工程，写进报告的“没做的”。
 
 **客户端流程**（写进 CLIENT 文档）：`POST /portal/login` 带 `game` 拿 gt2 → 房主 `POST /rooms`（`Authorization: Bearer gt2…`，`transport` 选 tcp / ws）得到 `{room, relay_addr, token}` → 连 relay、首帧发令牌、收 Welcome；成员 `GET /rooms?game=&mode=` → `POST /rooms/{id}/join` → 连 relay。房主 `POST /rooms/{id}/state` 改成已开始后新人进不来；开局后掉线的人席位保留、再 join 回原座。断线重连由 SDK 先经 lobby join 拿新令牌再连 relay。
 
@@ -298,7 +325,7 @@ cd "$DIR" && "$ROOST" module add portal
 
 **换 host 与快照**：房主主动转交（`Transfer`，交接数据随帧带上，最完整）；房主离开（立即换）；房主断线（约每 0.6s 要有一帧，SDK 自动补心跳；断线宽限 5s，过了按房主声明的候选顺序 `SetSuccessors`、兜底最早进房的人选新房主，新房主回 `HostReady` 才生效）。快照里只放别人没有的状态（随机种子、AI 内部状态、隐藏信息、最近还没广播的操作），压缩后不超过 256 KiB，两份之间至少 1s；断线换 host 最多丢最后一份快照之后的变化。同一房间的客户端必须用同一种压缩实现。
 
-**SDK**（[client/README“开房间 SDK”](../../../../client/README.md#开房间-sdklobby--relay)）：Unity / C# 用 `client/dotnet/Roost.Client.Relay`（netstandard2.1，回调在 `Pump` 的线程上）；浏览器用 `client/ts`（`@roost/relay-client`，含 `WebHost`：房主规则写成纯 TS 模块，放进 Worker 跑，页面隐藏满 `hiddenHandoffMs` 转交房主，见 [client/ts/README](../../../../client/ts/README.md)）；Go 机器人与压测用 `client/relay`。三份可以在同一个房间里混用。C# SDK 没有在 Unity / IL2CPP 里跑过，Web 端只在内置浏览器面板演练过，写进 DEMO 第 9 节。
+**SDK**（[client/README“开房间 SDK”](../../../../client/README.md#开房间-sdklobby--relay)；各平台能不能用、要配什么、实跑到哪，以[客户端表](#客户端能连什么按客户端类型)为准）：Unity / C# 用 `client/dotnet/Roost.Client.Relay`（netstandard2.1，TCP 或 WebSocket，回调在 `Pump` 的线程上；Unity WebGL 必须开 `PumpDriven` 并自备浏览器 WebSocket 桥接与 `UnityWebRequest` 的 lobby HTTP）；网页用 `client/ts`（`@roost/relay-client`，只走 WebSocket，含 `WebHost`：房主规则写成纯 TS 模块，放进 Worker 跑，页面隐藏满 `hiddenHandoffMs` 转交房主，见 [client/ts/README](../../../../client/ts/README.md)）；Go 机器人与压测用 `client/relay`（只走 TCP）。一个房间里 TCP 与 WebSocket 的连接可以混在一起，三份 SDK 可以混用。客户端表“实跑到哪”一列里没跑过的平台写进 DEMO 第 9 节。
 
 **完成标准**：`"$ROOST" project doctor` 没有 FAIL 行，`lobby-relay:*` 各行是 OK（`-template lobby` 工程装 portal 之前有一行 `collaborators:account` FAIL，装完通过）。局内玩法在客户端，没有服务器场景可写；报告写明“lobby + relay 的多进程演练、跨机、容量未验”。
 
@@ -357,6 +384,8 @@ client_export:
 ```
 
 之后每次 `roost generate` 都更新 `shared/`，这个目录要提交。
+
+客户端不是 C# 时（C++ / Unreal）：`client_export` 不写 `languages`，只导出 `proto/` 副本与 `manifest.json`（不需要 protoc），客户端用与自己的 Protobuf 运行库同版本的 protoc 生成代码；`config` 照写，`data/*.json` 是给客户端的数据，读取代码只有 C#。网页客户端只走开房间时用不到协议导出。
 
 **已有工程**：`cd` 进去，先读 `roost.yaml`（`modules` 段是已装的模块，`services`、`features`、`ids` 是装配现状），再 `"$ROOST" module list`，带 `*` 的是已装的。不要重装已装的模块；已装模块的文件是业务代码，以工程里的为准。然后按第 14 节走。
 
@@ -584,7 +613,7 @@ make dev-stop && make dev-down
 4. **实体**：每种实体一节：谁创建、挂在哪个服务上、主 DAO 的顶层字段（字段名、来自哪个模块或手写、`persist` / `sync`）、组件与组件号、持久定时器。来源：`db/def/*.go`、`game/components/`、`game/entities/`、`roost.yaml` 的 `entities` 与 `ids`。
 5. **服务**：玩家接入方式（第 5 步结论）；`roost.yaml` 的 `services` 逐个列：业务服务还是托管服务、带了哪些 Mod、对外的端口与入口、哪些模块的逻辑跑在它上面、服务之间的 RPC / Saga；开发启动方式（`make dev-up`、`make dev-run`）与依赖。
 6. **协议与错误码**：客户端请求、服务器推送各一张表（名字、号、谁处理、要点），错误码表（名字、号、什么时候出现）。写明本轮 `shared/protocol/manifest.json` 的 `sources.protocol_def`、`sources.dao_sync` 两个哈希与 `generator` 版本；导出了配置表的再写 `shared/config/manifest.json` 的 `data_version_short`。
-7. **客户端对接**：三五行摘要（客户端引擎、接入地址怎么配、登录方式），详见 `docs/CLIENT.zh-CN.md`。
+7. **客户端对接**：三五行摘要（客户端引擎与平台、对应[客户端表](#客户端能连什么按客户端类型)的哪一行、能用与不支持的路、接入地址怎么配、登录方式），详见 `docs/CLIENT.zh-CN.md`。
 8. **手写的功能**：文件清单、样板模块与借鉴点、业务假设（数值、日界、上限）、日志打在哪、**每个功能的场景数与测试名前缀**（第 9 步写测试时先记，第 10 步比对）。
 9. **验收与上线前缺口**：第 10、11 步的实际结果；离线验收的范围；上线前要补的（渠道验签、TLS、限流、生产地址、托管服务的 collaborators）。
 
@@ -596,6 +625,7 @@ make dev-stop && make dev-down
 # <游戏名> 客户端对接（服务端 roost-core <版本>，导出 manifest <protocol_def 哈希前 12 位>）
 
 ## 1. 客户端第一步
+本客户端（<引擎 / 平台>）能用：<连 game 走 TCP / 开房间走 relay 的 TCP 或 WebSocket / …>；不支持：<…，替代做法；没有写“无”>。
 1. 读完本文件。
 2. 同步导出目录：协议 C# 到 <客户端目录>，配置表代码与数据到 <目录>（第 10 节）。
 3. 做一处能改服务器接入地址的地方（第 2 节），缺省值填第 3 节的开发地址。
@@ -615,10 +645,10 @@ make dev-stop && make dev-down
 
 各节写什么：
 
-1. **客户端第一步**：照上面的四步，填上本工程的实际目录与“期望的现象”（例如“EnterGame 回包 `First=true`，自身视图收到 Wallet”）。
+1. **客户端第一步**：开头一句照[客户端表](#客户端能连什么按客户端类型)里用户客户端那一行写：能用哪几条路、哪些不支持与替代做法（表里写着不支持的，不能写成“能联机”）。再照上面的四步，填上本工程的实际目录与“期望的现象”（例如“EnterGame 回包 `First=true`，自身视图收到 Wallet”）；连 game 不支持的客户端，第 4 步换成它能走的路（开房间时是登录 → 建房 → 连 relay → 收 Welcome）。
 2. **服务器接入地址怎么配**（不论客户端是什么引擎都要写）：客户端里要有一处能改服务器接入地址，不写死在代码里。
    - **位置**：客户端 GM / 调试面板里的输入框（改完存到本地，如 Unity 的 `PlayerPrefs`，下次启动仍用它，面板上显示当前生效的地址），或一个打包后还能改的配置文件（Unity 用 `StreamingAssets/server.json` 这类位置）。至少一处；正式包里 GM 面板通常关掉，所以至少保留配置文件。两处都有时 GM 面板的值优先，其次配置文件，最后是代码里的缺省值。
-   - **要填哪些地址**：装了 portal 时只填入口的 HTTP 地址（`http(s)://host:port`），区服的连接地址由 `/portal/login` 带 `enter`（或 `/portal/enter`）返回，不另填；没装 portal、直接连服的，填玩家接入的 `host:port`（独立 Gate 时是 Gate 的，嵌入 TCP 时是 game 的）；开房间联机填入口地址与大厅 lobby 的 HTTP 地址，relay 的地址由 lobby 返回；浏览器走 WebSocket 时填 `ws(s)://…`。
+   - **要填哪些地址**：装了 portal 时只填入口的 HTTP 地址（`http(s)://host:port`），区服的连接地址由 `/portal/login` 带 `enter`（或 `/portal/enter`）返回，不另填；没装 portal、直接连服的，填玩家接入的 `host:port`（独立 Gate 时是 Gate 的，嵌入 TCP 时是 game 的）；开房间联机填入口地址与大厅 lobby 的 HTTP 地址，relay 的地址由 lobby 按请求里的 `transport` 返回（`tcp` 是 `host:port`，`ws` 是 `ws(s)://…`）；连 game 走 WebSocket 的客户端另填 `ws(s)://主机:端口/ws`，portal 返回的区服地址只有玩家 TCP 的 `host:port`。
    - **缺省值**是第 3 节的开发地址（主机写 `127.0.0.1`），写明真机或别的机器上要改成服务器所在机器的地址。
    - 写明地址填在哪（面板入口、配置文件路径与格式示例，如 `{"portal": "http://127.0.0.1:8081"}`）、每个地址的含义与缺省值。
 3. **开发环境地址与端口**：portal（account 的 `web.addr`）、玩家 TCP（game 的 `player_access.tcp.addr`，或 Gate）、WebSocket、lobby、relay；起服命令 `make dev-up && make dev-run`。
@@ -630,9 +660,9 @@ make dev-stop && make dev-down
 9. **配置表怎么读**：导出了哪些表；`ConfigTables.Load(name => 读文件)` 读取（加载时核对哈希与规则）；数据版本 `ConfigTables.DataVersion` 只记录、登录时不核对；不再保留客户端自己的一份 CSV。
 10. **不装 Go 与 roost CLI 时怎么拿到协议与 SDK**：
     - 协议与配置：`shared/` 已提交在服务端仓库里，直接拷 `shared/protocol/csharp/*.cs` 与 `shared/config/csharp/*.cs`、`shared/config/data/*.json` 进客户端工程；或把服务端仓库作为 git 子模块引进来，指向这几个目录。有 roost CLI 时用 `roost client sync --from <服务端工程> --to <C# 目录> --config-code-to <代码目录> --config-data-to <数据目录>`，它会核对哈希、报告消息号与错误码的变化。手工拷时自己核对 `manifest.json` 与上次是否一致。
-    - SDK：来自同一版本 roost-core 的 `client/`：`Roost.Client`、`Roost.Client.Codecs`（`client/dotnet/`，netstandard2.1）加 Google.Protobuf 3.31.1（游戏工程自己锁版本）。Unity 的托管路线还要 `RoostClientDriver`（`client/unity/Runtime/`）；打成 Unity 包的入口是 [client/unity/README](../../../../client/unity/README.md)“构建可导入包”：托管路线用 `--managed-only`，只要 .NET SDK；原生路线才要 CMake、C++17 编译器与 protoc。
+    - SDK：都来自同一版本 roost-core 的 `client/`，按[客户端表](#客户端能连什么按客户端类型)用户客户端那一行写用哪几个。C# 连 game 是 `Roost.Client`、`Roost.Client.Codecs`（`client/dotnet/`，netstandard2.1）加 Google.Protobuf 3.31.1（游戏工程自己锁版本）；开房间是 `client/dotnet/Roost.Client.Relay`，网页是 `client/ts`（不在 npm 上，拷出源码再构建）。Unity 的托管路线还要 `RoostClientDriver`（`client/unity/Runtime/`）；打成 Unity 包的入口是 [client/unity/README](../../../../client/unity/README.md)“构建可导入包”：托管路线用 `--managed-only`，只要 .NET SDK；原生路线才要 CMake、C++17 编译器与 protoc。
     - 不要手写或复制 PB 类型，不要自己再跑 protoc。
-11. **最小 C# 接线**：对着导出的代码写，命名空间按 `client_export.csharp.namespace`（缺省协议在 `Roost.Protocol`、DAO 同步在 `Roost.Dao.Sync`、消息号与错误码在 `Roost.Generated`）。下面以只装了第 8A 步四个模块的工程为例；Player 还没有 `sync` 字段时没有 `SyncPlayerDao`，删掉第 4 步：
+11. **最小 C# 接线**：客户端不是 C#、或连 game 不支持时，本节改写成它能走的那条路的最小接线（开房间照对应 SDK README 的示例），标题照改。C# 连 game 时对着导出的代码写，命名空间按 `client_export.csharp.namespace`（缺省协议在 `Roost.Protocol`、DAO 同步在 `Roost.Dao.Sync`、消息号与错误码在 `Roost.Generated`）。下面以只装了第 8A 步四个模块的工程为例；Player 还没有 `sync` 字段时没有 `SyncPlayerDao`，删掉第 4 步：
 
     ```csharp
     using System.Threading.Tasks;
@@ -943,7 +973,8 @@ func init() {
 - 没有卸载；分配过的号与存储键不回收。已装模块不会随 roost-core 升级自动更新。
 - 模块组合之后的行为（联动没覆盖的那些）没有人替你验证过，要自己写场景。Player 主 DAO 的顶层字段有上限，完整 game-demo 已到上限，不能再叠装 activity（KNOWN-LIMITS“业务模块”）。
 - 独占新服务的模块（alliance）与带 Saga 的模块只在新生成或结构相同的工程上验证过；已有工程先 `module plan` 看它要动什么。
-- **玩家接入是 RS v2 帧，走 TCP 或 WebSocket**。HTTP 不是玩家协议：`roost add webroute` 的路由拿不到玩家身份、不做鉴权、缺省只绑回环地址，只适合管理面或鉴权代理之后；需求要求玩家走 REST 或 WebSocket 上别的消息格式时按冲突提出。portal 的 HTTP 端点只负责登录、选服、换票，lobby 的只负责建房与加入。
+- **玩家接入是 RS v2 帧，走 TCP 或 WebSocket**。HTTP 不是玩家协议：`roost add webroute` 的路由拿不到玩家身份、不做鉴权、缺省只绑回环地址，只适合管理面或鉴权代理之后；需求要求玩家走 REST 或 WebSocket 上别的消息格式时按冲突提出。portal 的 HTTP 端点只负责登录、选服、换票，lobby 的只负责建房与加入。服务端能接什么与客户端能连什么是两回事，客户端一侧以[客户端表](#客户端能连什么按客户端类型)为准。
+- **一个账号在一个区服只有一个角色**（account 的建角约束，[服务篇 §4](../../../framework/guide/09-services.md#4-关键业务边界)）；需求要“同服多角色”时按冲突提出。同一个人在不同游戏（`account.games` 的不同条目）里是不同的账号号。
 - **lobby + relay 只做过进程内集成与本机起服**：多进程演练、跨机、容量没有验证；relay 进程崩溃时房间丢失。
 - **独立 Gate 没有跨机验证**。
 - 登录链路的单机真实脚本是 `scripts/test-demo-login.sh`（game-demo 加 casual + naming 阶段：双 account、双 game 服、双 Gate、重启后重连）；跨机与别的配方不在范围内。
