@@ -147,7 +147,7 @@ MOBA 快照用例的诊断样本（100 次逐帧 Sender，async）：p50 7.0ms�
 ## 8. 两步投递改 pipelined（2026-11-18）
 
 维护者定 B：§5 的 MOBA `MOBAAward` 与 SLG `AllianceCredit` 改 `//roost:nest rollback=undo durability=pipelined`（原 `rollback=undo`
-不变）。基线 main `c7bb703d`。没有改 Nest / DataEngine / WAL，没有碰 `client/ts` 与 codegen。
+不变）。基线 main `3d703d7e`。没有改 Nest / DataEngine / WAL，没有碰 `client/ts` 与 codegen。
 
 ### 8.1 改了什么
 
