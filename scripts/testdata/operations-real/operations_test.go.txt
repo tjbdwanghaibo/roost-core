@@ -135,7 +135,7 @@ func TestOperationsPurchaseCrashAcrossSIDAndRedisRestart(t *testing.T) {
 		Sequence uint64 `json:"sequence"`
 		Player   int64  `json:"player"`
 	}
-	s.eventually("strict grant before Ack barrier", 20*time.Second, func() (bool, string) {
+	s.eventually("grant persisted before Ack barrier", 20*time.Second, func() (bool, string) {
 		raw, err := os.ReadFile(filepath.Join(control, "purchase-reached"))
 		if err != nil {
 			return false, err.Error()

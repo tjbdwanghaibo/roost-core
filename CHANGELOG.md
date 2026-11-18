@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+- **玩法夹具与 codegen 测试里的业务 handler 不再写 `durability=strict`**（维护者 2026-11-18；game-demo 本轮不改）：
+  - `scripts/testdata` 的 80 个 `//roost:nest` 标记：
+    - 64 个写 handler 取缺省 async，原来的 `rollback` 保留；
+    - 16 个只读 handler 改 `memory`；
+    - 夹具里没有 saga 步骤。
+  - 玩法测试里手写注册的 handler：
+    - 26 处改 `DurabilityAsync`，1 处只读的改 `DurabilityMemory`；
+    - `remoteflow/` 与 `entity-review/` 的 7 处是 Remote / Nest 框架路径的用例，保留 strict。
+  - codegen 测试夹具、写进生成工程的 handler、故意写坏的 handler 去掉 strict；nest 解析器的取值测试、生成器“不出现 strict”的守卫、demo 断言不变。
+  - `scripts/perf/generated-tcp.sh`：
+    - 夹具不写 durability，脚本按 `DURABILITY` 补上要测的级别，缺省仍是 strict，便于与历史基线比较；
+    - wallet 夹具改为组件包写法：生成器改用组件包之后，这个脚本原本编译不过。
+  - REAL 档的 SIGKILL 恢复不受影响：async 已回复的记录在 WAL 文件里，进程被杀不丢。日志文本 “strict records” 改为 “WAL records”。
+  - 玩法文档、`guide/10-time` 的 Tick handler 标记、`guide/05-remote-mirror` 的示例改成现状。
+  - 证据 [testdata-async-20261118](docs/maintenance/evidence/testdata-async-20261118/README.md)。
 - **portal：进服按连接方式给地址**（维护者 2026-11-18）：
   - `/portal/servers`、`/portal/enter` 与 `/portal/login` 的 `enter` 加可选字段 `transport`：`"tcp"` 为缺省，`"ws"` 返回 WebSocket 地址，只认小写。
   - 返回的 `addr` 是所请求方式的地址，WebSocket 为完整的 `ws://` / `wss://` URL；响应回显 `transport`，清单里每个服带 `transports`。

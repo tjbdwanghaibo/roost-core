@@ -879,6 +879,8 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 - **掉电后 WAL 尾部丢失而 Mongo 已有该修改**（2026-11-18 purchase / mailbox 改等持久时发现，尚未确认）：async 记录的投影不等 WAL fsync。`Projector.Commit` 写入后立即唤醒回放，`WAL.Replay` 读到已写入的末尾，所以一笔修改可能已投影进 Mongo，WAL 尾部却还没 fsync。整机掉电后，WAL 丢了这段尾部而 Mongo 已有该修改时，启动排空会不会在 `classifyNoMatch` 判 `ErrProjectionConflict` 而拒绝启动，没有核对。进程崩溃不涉及（WAL 已在页缓存）。证据 [purchase-mailbox-durable-ack-20261118](evidence/purchase-mailbox-durable-ack-20261118/README.md)。
 
+- **MOBA 帧在整机掉电后能否与客户端对齐**（2026-11-18 夹具改 async 时发现，尚未确认）：MOBA 夹具的帧提交是 async，权威回复后 Room 就广播。整机掉电时，最后一个组提交间隔里已广播的帧可能在权威一侧丢失；恢复后 `resume` 换代，客户端会不会与权威分叉，没有掉电演练覆盖。进程崩溃不涉及。证据 [testdata-async-20261118](evidence/testdata-async-20261118/README.md)。
+
 #### Saga：遗留
 
 - **目标部署验收**：Linux Mongo / NATS R3 拓扑下持续准入限流、资产守恒与追平 C-X1 / X2 未验；Linux 既有记录只有生成 Saga 两条功能场景，不能代表 SIGKILL 恢复与性能（C-L3）。兼容政策已在维护手册明确：维护者宣布上线后必须兼容，不再列为未定。
