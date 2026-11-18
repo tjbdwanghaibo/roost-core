@@ -584,8 +584,9 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **房主心跳要求约每 0.6s 一帧**：房主连接的空闲阈值 `relay.host_idle_timeout` 缺省 2s（成员仍是 30s），超过即当断线、进宽限期。三份 SDK 的房主与候选每 600ms 没发过帧就补一个 Ping；自己写客户端时要遵守。
 - **被踢的人收到两种答复**：同一个 relay 上被踢的人再连收到 `Closed{kicked}`（relay 本地记录，房间存续期间有效）；relay 重启后本地记录没了，由 lobby 的被踢名单挡住，收到 `Closed{lobby_rejected}`；再 join 答 403 `kicked`。SDK 两种都停止重连，客户端都按“不能再进”处理。
 - **开局后掉线不回的人占着位子**（§6 第 12 条）：已开始的房间里，连上过 relay 的成员掉线后席位一直保留（他回来回原座），直到他主动离开、被踢或关房；不回来的人要房主踢掉（relay 能踢有座位但不在线的槽位）才空出来。
+- **经 lobby 离开、又被 relay 选成房主、随后再 join 的人，离开前的在线事实算“连上过”**（2026-11-18，RV-20261118-06 修复时定的语义）：他被选成房主时旧连接确实连着，lobby 把房主补回席位；随后他再 join 清掉离开记录，旧连接的在线报告仍按“连上过”记，已开始的房间会给他留座。经 relay 确认离开（包括离开前自己先掉线）的那一支已修成主动离开，见 CHANGELOG。
 - **快照压缩缺省用 deflate，SDK 不带 zstd / LZ4**（2026-11-17，交接 C4 选 A + D）：要用就由游戏自带库实现压缩接口，示例见各 SDK README。状态字节带 1 字节压缩方式标识，内置的不压缩与 deflate 谁都解得开；游戏自带的压缩方式，房间里每个客户端都要配上，否则新房主拿到“不认识的压缩方式”错误、按没有状态处理。deflate 与 zstd 在真实状态上的差距没有测过。解压上限 16 MiB 是常量。 2026-11-18 量了一次 Go 侧：房间状态 JSON 压到约 0.20、定长二进制约 0.33，256KiB 一次压缩 0.8～1.3 ms；每次压缩新建 Writer，固定约 1 MB 分配，小快照也一样（快照最快每秒一次，没改）；C# / TS 没测（[证据](evidence/perf-compressed-20261118/README.md)）。
-- **快照 seq 跨房主递增**：relay 要求 seq 在房间内递增（跨房主也一样），`YouAreHost` 带 relay 存着的最新 seq；SDK 取 `max(本地, YouAreHost 的 seq, epoch<<32) + 1`。自己写客户端时至少从 `YouAreHost` 的 seq 往上接，否则 `Rejected{stale_seq}`。
+- **快照 seq 跨房主递增**：relay 要求 seq 在房间内递增（跨房主也一样），`YouAreHost` 带 relay 存着的最新 seq；SDK 取 `max(本地, YouAreHost 的 seq, epoch<<32) + 1`。自己写客户端时至少从 `YouAreHost` 的 seq 往上接，否则 `Rejected{stale_seq}`。 主动转交（Transfer）的载荷要带发起时的房主 epoch（2026-11-18，RV-20261118-07），自己写客户端时不带或带旧的会收到 `Rejected{stale_epoch}`。
 - **选 relay 有延迟**：lobby 按 etcd 里的房间数选实例，这个数由 relay 定时更新；几个 lobby 实例同时建房，可能都选中同一个 relay。
 - **一个 `lobby.subject` 对应一份房间目录**：共用 relay 的几个 lobby 服务必须共用 `key_prefix` 与 `subject`。过期房间在 `game/mode` 索引里的项只在列表时清理。
 - **relay 的座位表只增不减**（被踢的除外）：一个房间里进出过的不同账号越多表越大，规模由 lobby 的席位与令牌人数限住。

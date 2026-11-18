@@ -1,6 +1,6 @@
 # RV-20261118-08：跨域白名单写明默认端口（2026-11-18）
 
-审查来源：`fix/core-game-server-review` 分支的 `88d55951`（`docs/maintenance/MAIN-REVIEW-20261118.md` 第 08 项，只读，没有合并那条分支）。基线 main `8a2cf3a9`。
+审查来源：`fix/core-game-server-review` 分支上的审查报告（`docs/maintenance/MAIN-REVIEW-20261118.md` 第 08 项，只读，没有合并那条分支）。基线 main `8a2cf3a9`。
 
 ## 根因
 

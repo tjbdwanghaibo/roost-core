@@ -1,6 +1,6 @@
 # 主动转交绑定房主任期（RV-20261118-07）与自动快照用例的同步点（RV-20261118-09）
 
-基线：main `8a2cf3a9`。审查来源：分支 `fix/core-game-server-review` 提交 `88d55951` 的 `docs/maintenance/MAIN-REVIEW-20261118.md`
+基线：main `8a2cf3a9`。审查来源：分支 `fix/core-game-server-review` 上的 `docs/maintenance/MAIN-REVIEW-20261118.md`
 与探针 `review_transfer_test.go.txt`、`review_auto_test.go.txt`（只用 `git show 88d55951:<路径>` 读取，未合并那条分支）。
 环境：macOS，`GOWORK=off`，联机用例用本机传输与内存房间目录。
 
