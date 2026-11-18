@@ -72,7 +72,7 @@ pipelined 的运行要求逐项核对：`rollback=undo`（满足 `Rollback != no
 - 定向复核（模板注释最后改动之后）：新工程装 alliance、facebook、mailbox、purchase：alliance 55、bag 20、facebook 9、mailbox 33、mailbox+bag 9、purchase 21、purchase+bag 4、wallet 17，零跳过，4 项工程检查通过。
 - 没有用例因“假设 strict”而失败：改动前就断言 strict 的 4 处用例（§2）同步改成断言 async，原因是这些断言钉的是“这笔提交声明的持久级别”，声明变了断言随之变；mailbox 用例的注释写明了 async 下的掉电代价。alliance 联盟服务测试提交器补 pipelined 能力后 55 条全过。
 - 根包 `go test -count=1 .`（文档链接等仓库门禁）：通过。
-- `codegen/internal/roost` 的 `-run Module`：见报告（这里只记入已跑完的结果）。
+- `codegen/internal/roost` 的 `-run Module`（`-v -timeout 75m`，第一次 30m 超时后重跑）：重跑时跳过第一次已失败的 lobby 用例，顶层 96 个用例 94 个通过、0 跳过；连同第一次的失败共 3 个失败——`TestModulePortalInstallsOnALobbyProjectWithoutGame`、`TestModulePortalInstallsOnTheHostedAccountService`、`TestModuleAddDeclaresTheFrameworkServicesItUses`，都是“`project sync` 之后工程有变化”。三个在基线 `f229585e` 的干净检出上单独跑同样失败，与本轮改动无关，没有修，也没有改它们的断言。没有用例因 durability 文本变化失败。
 
 ## 6. 未验证
 
