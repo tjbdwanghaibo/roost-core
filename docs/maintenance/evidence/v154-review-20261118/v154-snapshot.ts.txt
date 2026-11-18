@@ -1,0 +1,24 @@
+
+for (const changeEpoch of [false, true]) {
+  test("review snapshot owner epoch " + changeEpoch, async () => {
+    let finish!: (data: Uint8Array) => void;
+    const { client, fake } = await connect({
+      slot: 1, host: true, autoHostReady: true,
+      snapshot: { intervalMs: 0, take: () => new Promise(resolve => { finish = resolve; }) },
+    });
+    try {
+      const pending = client.pushSnapshot();
+      if (changeEpoch) {
+        fake.push(control(RelayOp.YouAreMember, 1, encodeEpoch(1n)));
+        fake.push(youAreHost(1, 2n, StateSource.None, 0n, new Uint8Array(0)));
+        await fake.waitFor("candidate ready", () => fake.controls(RelayOp.HostReady).length > 0);
+        fake.push(control(RelayOp.HostChanged, 1, encodeHostChanged(2n, "a1")));
+      }
+      finish(text("epoch-zero-state"));
+      const seq = await pending;
+      const frames = fake.controls(RelayOp.Snapshot);
+      console.log({ epoch: client.epoch, seq, frames: frames.length });
+      assert.equal(frames.length, changeEpoch ? 0 : 1);
+    } finally { client.close(); }
+  });
+}

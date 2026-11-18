@@ -1,0 +1,42 @@
+golden: ok
+frames across message boundaries (fake transport): ok
+unknown control op: ok
+compressors: ok
+host frames against a fake relay: ok
+2026/11/18 00:06:03 WARN lobby: request failed method=POST path=/rooms err="lobby: no relay instance is available for transport ws"
+lobby without a ws relay: ok
+[tcp] peer: lobby http://127.0.0.1:40723, relay 127.0.0.1:40799, room directory memory
+[tcp] lobby errors: ok
+[tcp] room lifecycle: ok
+[tcp] reconnect: ok
+[tcp] host transfer: ok
+[tcp] host loss → snapshot to the declared successor: ok
+[tcp] host resumed within the grace period: ok
+[tcp] host leave uses the successor order: ok
+[tcp] the last member's leave succeeds after the room closes: ok
+[tcp] snapshot pacing and rejections: ok
+[tcp] automatic snapshots: ok
+[tcp] host heartbeat under host_idle_timeout: ok
+[tcp] reconnect vs lobby_unavailable / lobby_rejected: ok
+[tcp] started room: reconnect, rejoin, kick an offline seat: ok
+[tcp] welcome epoch for a late joiner and a rejoin: ok
+[tcp] presence re-sent after host changed and reconnect: ok
+[ws] peer: lobby http://127.0.0.1:44843, relay ws://127.0.0.1:35723/relay, room directory memory
+[ws] ask the lobby for ws and connect: ok
+[ws] relay reads several frames from one message: ok
+[ws] lobby errors: ok
+[ws] room lifecycle: ok
+[ws] reconnect: ok
+[ws] host transfer: ok
+[ws] host loss → snapshot to the declared successor: ok
+[ws] host resumed within the grace period: ok
+[ws] host leave uses the successor order: ok
+[ws] the last member's leave succeeds after the room closes: ok
+[ws] snapshot pacing and rejections: ok
+[ws] automatic snapshots: ok
+[ws] host heartbeat under host_idle_timeout: ok
+[ws] reconnect vs lobby_unavailable / lobby_rejected: ok
+[ws] started room: reconnect, rejoin, kick an offline seat: ok
+[ws] welcome epoch for a late joiner and a rejoin: ok
+[ws] presence re-sent after host changed and reconnect: ok
+all 722 checks passed

@@ -1,0 +1,53 @@
+package wsconn
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"runtime"
+	"testing"
+	"time"
+)
+
+func TestReviewWriteControl(t *testing.T) {
+	for _, b := range []int{4096, 0} {
+		t.Run(fmt.Sprint(b), func(t *testing.T) { reviewWriteControl(t, b) })
+	}
+}
+func reviewWriteControl(t *testing.T, readBuffer int) {
+	server, client := pair(t, readBuffer)
+	big := bytes.Repeat([]byte{2}, 4<<20)
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	stale := time.Now().Add(3 * time.Millisecond)
+	// no previous write deadline in this control
+	if _, err := server.Write([]byte("pong")); err != nil {
+		t.Fatal(err)
+	}
+	wake := make(chan struct{})
+	time.AfterFunc(time.Until(stale)+time.Millisecond, func() { close(wake) })
+	for time.Now().Before(stale.Add(2 * time.Millisecond)) { // 不让出处理器；总时长远小于 10ms 的异步抢占
+	}
+	<-wake
+
+	_ = server.SetWriteDeadline(time.Now().Add(time.Minute))
+	read := make(chan error, 1)
+	go func() {
+		time.Sleep(200 * time.Millisecond) // 写此时卡在停读的对端上
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.SetReadLimit(int64(len(big))) // 客户端缺省只收 32KiB 的消息
+		for _, want := range [][]byte{[]byte("pong"), big} {
+			if _, message, err := client.Read(ctx); err != nil || !bytes.Equal(message, want) {
+				read <- fmt.Errorf("client read %d bytes, %v; want %d", len(message), err, len(want))
+				return
+			}
+		}
+		read <- nil
+	}()
+	if _, err := server.Write(big); err != nil {
+		t.Fatalf("server write: %v; peer read: %v", err, <-read)
+	}
+	if err := <-read; err != nil {
+		t.Fatal(err)
+	}
+}

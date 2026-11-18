@@ -1,0 +1,17 @@
+=== RUN   TestReviewWriteControl
+=== RUN   TestReviewWriteControl/4096
+    review_v154_test.go:48: server write: failed to write msg: failed to write frame: failed to write frame payload: write tcp 127.0.0.1:41569->127.0.0.1:40034: write: broken pipe; peer read: client read 253942 bytes, failed to read: context deadline exceeded; want 4194304
+=== RUN   TestReviewWriteControl/0
+--- FAIL: TestReviewWriteControl (5.77s)
+    --- FAIL: TestReviewWriteControl/4096 (5.45s)
+    --- PASS: TestReviewWriteControl/0 (0.32s)
+=== RUN   TestReviewWriteControl
+=== RUN   TestReviewWriteControl/4096
+    review_v154_test.go:48: server write: failed to write msg: failed to write frame: failed to write frame payload: write tcp 127.0.0.1:38803->127.0.0.1:41380: write: broken pipe; peer read: client read 253942 bytes, failed to read: context deadline exceeded; want 4194304
+=== RUN   TestReviewWriteControl/0
+--- FAIL: TestReviewWriteControl (5.77s)
+    --- FAIL: TestReviewWriteControl/4096 (5.45s)
+    --- PASS: TestReviewWriteControl/0 (0.32s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	11.554s
+FAIL

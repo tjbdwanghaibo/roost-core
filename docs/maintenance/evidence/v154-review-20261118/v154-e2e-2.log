@@ -1,0 +1,38 @@
+peer: lobby http://127.0.0.1:40483, relay ws ws://127.0.0.1:34325/relay, room directory memory
+{
+  late: 8589934594n,
+  successorSeq: 8589934594n,
+  recovered: 'epoch-zero-state'
+}
+✖ review delayed snapshot survives two host transfers (1360.560885ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1618.039378
+
+✖ failing tests:
+
+test at dist-test/test/relay.test.js:660:1
+✖ review delayed snapshot survives two host transfers (1360.560885ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'epoch-zero-state'
+  - 'epoch-two-state'
+           ^
+
+      at TestContext.<anonymous> (file:///workspace/review-v154/client/ts/dist-test/test/relay.test.js:684:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'epoch-zero-state',
+    expected: 'epoch-two-state',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

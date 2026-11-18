@@ -1,0 +1,31 @@
+{ epoch: 0n, seq: 1n, frames: 1 }
+✔ review snapshot owner epoch false (5.60417ms)
+{ epoch: 2n, seq: 8589934593n, frames: 1 }
+✖ review snapshot owner epoch true (4.325016ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 94.30573
+
+✖ failing tests:
+
+test at dist-test/test/host.test.js:404:5
+✖ review snapshot owner epoch true (4.325016ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file:///workspace/review-v154/client/ts/dist-test/test/host.test.js:422:20)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

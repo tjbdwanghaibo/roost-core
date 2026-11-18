@@ -1,0 +1,121 @@
+=== RUN   TestClientConfigExportSpecValidation
+=== PAUSE TestClientConfigExportSpecValidation
+=== RUN   TestUndeclaredClientConfigExportChangesNothing
+=== PAUSE TestUndeclaredClientConfigExportChangesNothing
+=== RUN   TestGenerateClientConfigExport
+=== PAUSE TestGenerateClientConfigExport
+=== RUN   TestClientConfigExportKeepsTheProtocolExport
+=== PAUSE TestClientConfigExportKeepsTheProtocolExport
+=== RUN   TestClientConfigExportTables
+=== PAUSE TestClientConfigExportTables
+=== RUN   TestClientConfigExportTransactionalRetirement
+=== PAUSE TestClientConfigExportTransactionalRetirement
+=== RUN   TestClientConfigSync
+=== PAUSE TestClientConfigSync
+=== RUN   TestClientConfigCSharpRuntime
+    client_config_export_test.go:740: .NET SDK unavailable; Go tests do not prove the exported C# compiles and loads (set ROOST_REQUIRE_DOTNET=1 to fail instead)
+--- SKIP: TestClientConfigCSharpRuntime (0.00s)
+=== RUN   TestModuleConfigKeysReadFromTheSourceMatchTheRuntimeDeclaration
+--- PASS: TestModuleConfigKeysReadFromTheSourceMatchTheRuntimeDeclaration (0.00s)
+=== RUN   TestModuleConfigSpecValidationNamesWhatIsWrong
+--- PASS: TestModuleConfigSpecValidationNamesWhatIsWrong (0.02s)
+=== RUN   TestModuleConfigCatalogDeclaresTheMigratedRules
+--- PASS: TestModuleConfigCatalogDeclaresTheMigratedRules (0.02s)
+=== RUN   TestModuleConfigIsWrittenCheckedAndLoaded
+=== PAUSE TestModuleConfigIsWrittenCheckedAndLoaded
+=== CONT  TestClientConfigExportSpecValidation
+=== CONT  TestModuleConfigIsWrittenCheckedAndLoaded
+=== CONT  TestClientConfigSync
+=== CONT  TestClientConfigExportTables
+--- PASS: TestClientConfigExportSpecValidation (0.00s)
+=== CONT  TestClientConfigExportKeepsTheProtocolExport
+--- PASS: TestClientConfigSync (0.18s)
+=== CONT  TestGenerateClientConfigExport
+--- PASS: TestClientConfigExportKeepsTheProtocolExport (0.29s)
+=== CONT  TestUndeclaredClientConfigExportChangesNothing
+--- PASS: TestUndeclaredClientConfigExportChangesNothing (0.00s)
+=== CONT  TestClientConfigExportTransactionalRetirement
+--- PASS: TestClientConfigExportTables (0.59s)
+--- PASS: TestGenerateClientConfigExport (0.49s)
+--- PASS: TestClientConfigExportTransactionalRetirement (0.56s)
+--- PASS: TestModuleConfigIsWrittenCheckedAndLoaded (52.65s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	52.702s
+=== RUN   TestGameTokensAreIssuedPerGameAndValidatedByAccount
+--- PASS: TestGameTokensAreIssuedPerGameAndValidatedByAccount (0.00s)
+=== RUN   TestAGameTokenExpiresOnTheSystemClock
+--- PASS: TestAGameTokenExpiresOnTheSystemClock (0.00s)
+=== RUN   TestATamperedGameTokenIsRefused
+--- PASS: TestATamperedGameTokenIsRefused (0.00s)
+=== RUN   TestOtherTicketsCannotPassAsGameTokens
+--- PASS: TestOtherTicketsCannotPassAsGameTokens (0.00s)
+=== RUN   TestAGameTokenOnlyOpensItsOwnGame
+--- PASS: TestAGameTokenOnlyOpensItsOwnGame (0.00s)
+=== RUN   TestABanRefusesGameTokensAtOnce
+--- PASS: TestABanRefusesGameTokensAtOnce (0.00s)
+=== RUN   TestRevokingGameTokensRefusesTheOnesIssuedBefore
+--- PASS: TestRevokingGameTokensRefusesTheOnesIssuedBefore (0.00s)
+=== RUN   TestRevokingGameTokensLeavesBansAndTicketsAlone
+--- PASS: TestRevokingGameTokensLeavesBansAndTicketsAlone (0.00s)
+=== RUN   TestBeginRoleTransferRecordsTheTransferAndHoldsTheTargetSlot
+2026/11/18 00:05:06 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+--- PASS: TestBeginRoleTransferRecordsTheTransferAndHoldsTheTargetSlot (0.00s)
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/stale_epoch
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/stale_transfer_seq
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/wrong_source
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/unknown_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/non-positive_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_is_the_current_server
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_merged_into_another_server
+2026/11/18 00:05:06 INFO account: server merged from=3 into=2 repointed=[] note="merge window 2026-10-20"
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_closed
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/target_in_maintenance
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/account_already_has_a_role_on_the_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/account_has_a_pending_creation_plan_on_the_target
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/empty_transfer_id
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/negative_ttl
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/ttl_above_the_bound
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/oversized_note
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/missing_role
+=== RUN   TestBeginRoleTransferRefusesWithoutWriting/role_whose_creation_is_not_published
+--- PASS: TestBeginRoleTransferRefusesWithoutWriting (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/stale_epoch (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/stale_transfer_seq (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/wrong_source (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/unknown_target (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/non-positive_target (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_is_the_current_server (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_merged_into_another_server (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_closed (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/target_in_maintenance (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/account_already_has_a_role_on_the_target (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/account_has_a_pending_creation_plan_on_the_target (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/empty_transfer_id (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/negative_ttl (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/ttl_above_the_bound (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/oversized_note (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/missing_role (0.00s)
+    --- PASS: TestBeginRoleTransferRefusesWithoutWriting/role_whose_creation_is_not_published (0.00s)
+=== RUN   TestCommitRoleTransferRebindsTheRole
+2026/11/18 00:05:06 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 00:05:06 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note="player asked"
+--- PASS: TestCommitRoleTransferRebindsTheRole (0.00s)
+=== RUN   TestAbortRoleTransferKeepsTheRoleOnTheSource
+2026/11/18 00:05:06 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 00:05:06 INFO account: role transfer aborted player_id=1000001 transfer_id=t-1 from=1 to=2 reason="drain timed out"
+2026/11/18 00:05:06 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=t-1 server_id=2
+2026/11/18 00:05:06 INFO account: role transfer begun player_id=1000001 transfer_id=t-2 from=1 to=2 epoch=0 transfer_seq=3
+2026/11/18 00:05:06 INFO account: role transfer committed player_id=1000001 transfer_id=t-2 from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestAbortRoleTransferKeepsTheRoleOnTheSource (0.00s)
+=== RUN   TestCommitRoleTransferWithNoteRecordsTheOperatorsNote
+2026/11/18 00:05:06 INFO account: role transfer begun player_id=1000001 transfer_id=t-1 from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 00:05:06 INFO account: role transfer committed player_id=1000001 transfer_id=t-1 from=1 to=2 bind_epoch=1 note="source 1 exited; wal-drained ok"
+--- PASS: TestCommitRoleTransferWithNoteRecordsTheOperatorsNote (0.00s)
+=== RUN   TestListRoleTransfersListsTransfersInFlightByDeadline
+2026/11/18 00:05:06 INFO account: role transfer begun player_id=1000001 transfer_id=a from=1 to=2 epoch=0 transfer_seq=1
+2026/11/18 00:05:06 INFO account: role transfer begun player_id=1000002 transfer_id=b from=2 to=3 epoch=0 transfer_seq=1
+2026/11/18 00:05:06 INFO account: role transfer committed player_id=1000001 transfer_id=a from=1 to=2 bind_epoch=1 note=""
+--- PASS: TestListRoleTransfersListsTransfersInFlightByDeadline (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.012s

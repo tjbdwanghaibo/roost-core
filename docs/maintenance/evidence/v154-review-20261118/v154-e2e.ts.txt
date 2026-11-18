@@ -1,0 +1,27 @@
+
+test("review delayed snapshot survives two host transfers", async () => {
+  let finish!: (data: Uint8Array) => void;
+  const a = await Player.create("review-a", { snapshot: { intervalMs: 0, take: () => new Promise(resolve => { finish = resolve; }) } });
+  const ticket = await a.lobby.createRoom({ game: GAME, mode: "review" });
+  await a.client.connect(ticket);
+  const b = await Player.create("review-b");
+  await b.join(ticket.room.id);
+  await a.joined.next("B joined");
+  const pending = a.client.pushSnapshot();
+  assert.ok(await a.client.transfer(2, text("first transfer")));
+  await b.hostChanged.next("B now host");
+  assert.ok(await b.client.transfer(1, text("epoch-two-state")));
+  await a.youAreHost.next("A takes over");
+  await a.hostChanged.next("A saw B as host");
+  await a.hostChanged.next("A now host again");
+  await a.client.pushSnapshot(text("epoch-two-state"));
+  await sleep(1200);
+  finish(text("epoch-zero-state"));
+  const late = await pending;
+  assert.ok(a.client.sendLeave());
+  await b.youAreHost.next("B's first takeover");
+  const recovery = await b.youAreHost.next("B recovers after A leaves");
+  const recovered = new TextDecoder().decode(recovery.state!);
+  console.log({ late, successorSeq: recovery.snapshotSeq, recovered });
+  assert.equal(recovered, "epoch-two-state");
+});

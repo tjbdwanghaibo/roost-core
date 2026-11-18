@@ -1,0 +1,10 @@
+go: downloading github.com/coder/websocket v1.8.15
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	1.564s
+ok  	github.com/tjbdwanghaibo/roost-core/service/relay	9.370s
+--- FAIL: TestAStaleWriteDeadlineDoesNotCloseALaterWrite (5.51s)
+    wsconn_test.go:187: a write under a fresh one-minute deadline failed: failed to write msg: failed to write frame: failed to write frame payload: write tcp 127.0.0.1:42473->127.0.0.1:59142: write: broken pipe (the earlier deadline's timer closed the connection)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	6.467s
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	9.817s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen	2.962s
+FAIL

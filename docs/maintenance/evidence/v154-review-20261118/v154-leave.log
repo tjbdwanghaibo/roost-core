@@ -1,0 +1,42 @@
+=== RUN   TestReviewOrderedLeave
+=== RUN   TestReviewOrderedLeave/ordered
+=== RUN   TestReviewOrderedLeave/ordered/memory
+    review_v154_test.go:39: seats after next heartbeat: acc-host:online
+=== RUN   TestReviewOrderedLeave/heartbeat_first
+=== RUN   TestReviewOrderedLeave/heartbeat_first/memory
+    review_v154_test.go:39: seats after next heartbeat: acc-host:online acc-alice:offline
+    review_v154_test.go:41: join after explicit leave = <nil>, want ErrRoomStarted
+--- FAIL: TestReviewOrderedLeave (0.00s)
+    --- PASS: TestReviewOrderedLeave/ordered (0.00s)
+        --- PASS: TestReviewOrderedLeave/ordered/memory (0.00s)
+    --- FAIL: TestReviewOrderedLeave/heartbeat_first (0.00s)
+        --- FAIL: TestReviewOrderedLeave/heartbeat_first/memory (0.00s)
+=== RUN   TestReviewOrderedLeave
+=== RUN   TestReviewOrderedLeave/ordered
+=== RUN   TestReviewOrderedLeave/ordered/memory
+    review_v154_test.go:39: seats after next heartbeat: acc-host:online
+=== RUN   TestReviewOrderedLeave/heartbeat_first
+=== RUN   TestReviewOrderedLeave/heartbeat_first/memory
+    review_v154_test.go:39: seats after next heartbeat: acc-host:online acc-alice:offline
+    review_v154_test.go:41: join after explicit leave = <nil>, want ErrRoomStarted
+--- FAIL: TestReviewOrderedLeave (0.00s)
+    --- PASS: TestReviewOrderedLeave/ordered (0.00s)
+        --- PASS: TestReviewOrderedLeave/ordered/memory (0.00s)
+    --- FAIL: TestReviewOrderedLeave/heartbeat_first (0.00s)
+        --- FAIL: TestReviewOrderedLeave/heartbeat_first/memory (0.00s)
+=== RUN   TestReviewOrderedLeave
+=== RUN   TestReviewOrderedLeave/ordered
+=== RUN   TestReviewOrderedLeave/ordered/memory
+    review_v154_test.go:39: seats after next heartbeat: acc-host:online
+=== RUN   TestReviewOrderedLeave/heartbeat_first
+=== RUN   TestReviewOrderedLeave/heartbeat_first/memory
+    review_v154_test.go:39: seats after next heartbeat: acc-host:online acc-alice:offline
+    review_v154_test.go:41: join after explicit leave = <nil>, want ErrRoomStarted
+--- FAIL: TestReviewOrderedLeave (0.00s)
+    --- PASS: TestReviewOrderedLeave/ordered (0.00s)
+        --- PASS: TestReviewOrderedLeave/ordered/memory (0.00s)
+    --- FAIL: TestReviewOrderedLeave/heartbeat_first (0.00s)
+        --- FAIL: TestReviewOrderedLeave/heartbeat_first/memory (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.025s
+FAIL

@@ -1,0 +1,95 @@
+=== RUN   TestClientConfigCSharpRuntime
+    client_config_export_test.go:885: harness output:
+        VERSION 2806155c11c41e206113d584144100cf3a484fa39a4369c8ae7df55a4ee305f0
+        DUMP monster 1 id=10 scene_id=1 level=3 model=slime.prefab tags=["a"] rewards=[1,2] weights={a:1} rank=2
+        DUMP monster 2 id=11 scene_id=2 level=5 model=bat.prefab tags=["b"] rewards=[] weights={} rank=1
+        DUMP monster 3 id=12 scene_id=1 level=4 model=orc.prefab tags=["c"] rewards=[3] weights={a:3,b:2} rank=2
+        DUMP scene 1 id=1 name=forest kind=field
+        DUMP scene 2 id=2 name=cave kind=dungeon
+        DUMP tip 1 id=1 text=hello
+        DUMP tip 2 id=2 text=多行
+        提示
+        DUMP balance 1 max_level=60 start_gold=100 shop_banner=summer_sale
+        GET monster 10 slime.prefab tags=["a"]
+        INDEX scene_id=1 -> 10,12; scene_id=3 -> (none)
+        RANK rank=1 -> 11; rank=2 -> 10,12; rank=3 ->
+        MISSING monster 99 KeyNotFoundException
+        BALANCE max_level=60 start_gold=100 shop_banner=summer_sale
+        INDEPENDENT ok
+        CRLF ok
+        TAMPER balance.json -> table=balance rule=hash
+        TAMPER monster.json -> table=monster rule=hash
+        TAMPER scene.json -> table=scene rule=hash
+        TAMPER tip.json -> table=tip rule=hash
+        NULL table balance: read: readText returned null for balance.json
+        TYPES aé
+        "q" bonus=7 alias=(null) grid=[1,2];[] groups=x:p,q rate=1.5 big=18446744073709551615 on=True class=255
+        TYPES b bonus=(null) alias=bb grid= groups= rate=-0.2 big=0 on=False class=0
+        BAD required: table monster row 2 (key 11) field model: required: missing or null
+        BAD ref: table monster row 2 (key 11) field scene_id: ref: references missing scene key 9
+        BAD unique: table scene row 2 (key 2) field name: unique: value forest repeats row 1
+        BAD min: table monster row 2 (key 11) field level: min: value 0 is below min=1
+        BAD enum: table scene row 2 (key 2) field kind: enum: value sky is not one of [field dungeon]
+        BAD kvrequired: table balance field max_level: required: missing or null
+        BAD type: table monster row 2 (key 11) field rewards[1]: type: want an int64, got a string
+        BAD overflow: table monster row 2 (key 11) field level: type: want an int32, got the number 3000000000
+        CANON 0 -> 0
+        CANON -0 -> 0
+        CANON 0.0 -> 0
+        CANON -0.0 -> 0
+        CANON 1 -> 1
+        CANON -1 -> -1
+        CANON 1.0 -> 1
+        CANON 1e0 -> 1
+        CANON 0.1e1 -> 1
+        CANON 100 -> 100
+        CANON 1E2 -> 100
+        CANON 1e6 -> 1000000
+        CANON 1e15 -> 1000000000000000
+        CANON 9007199254740991 -> 9007199254740991
+        CANON 9007199254740992 -> 9007199254740992
+        CANON 9007199254740993 -> 9007199254740993
+        CANON 9223372036854775807 -> 9223372036854775807
+        CANON -9223372036854775808 -> -9223372036854775808
+        CANON 18446744073709551615 -> 18446744073709551615
+        CANON 1.5 -> 1.5
+        CANON -1.5 -> -1.5
+        CANON 0.1 -> 0.1
+        CANON 0.25 -> 0.25
+        CANON 2.5e-1 -> 0.25
+        CANON -0.2 -> -0.2
+        CANON 3.14159 -> 3.14159
+        CANON 0.0001 -> 0.0001
+        CANON 0.000123 -> 0.000123
+        CANON 0.00001 -> 1e-05
+        CANON -0.00001 -> -1e-05
+        CANON 1e-7 -> 1e-07
+        CANON 1.5e-10 -> 1.5e-10
+        CANON 100000.5 -> 100000.5
+        CANON 123456.5 -> 123456.5
+        CANON 999999.5 -> 999999.5
+        CANON 1000000.5 -> 1.0000005e+06
+        CANON 1234567.5 -> 1.2345675e+06
+        CANON -1234567.5 -> -1.2345675e+06
+        CANON 12345678.9 -> 1.23456789e+07
+        CANON 4503599627370496.5 -> 4503599627370496
+        CANON 9007199254740992.0 -> 9.007199254740992e+15
+        CANON 9007199254740993.0 -> 9.007199254740992e+15
+        CANON 1e16 -> 1e+16
+        CANON 1e21 -> 1e+21
+        CANON -1e21 -> -1e+21
+        CANON 1.5e21 -> 1.5e+21
+        CANON 1e22 -> 1e+22
+        CANON 1e23 -> 1e+23
+        CANON -9223372036854775809 -> -9.223372036854776e+18
+        CANON 18446744073709551616 -> 1.8446744073709552e+19
+        CANON 123456789012345678901234567890 -> 1.2345678901234568e+29
+        CANON 1.7976931348623157e308 -> 1.7976931348623157e+308
+        CANON 2.2250738585072014e-308 -> 2.2250738585072014e-308
+        CANON 5e-324 -> 5e-324
+        CANON 1e-400 -> 0
+        CANON 1e400 -> 1e400
+        CANON -1e400 -> -1e400
+--- PASS: TestClientConfigCSharpRuntime (7.12s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	7.126s

@@ -1,0 +1,46 @@
+package lobby
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestReviewOrderedLeave(t *testing.T) {
+	for _, order := range []string{"ordered", "heartbeat_first"} {
+		t.Run(order, func(t *testing.T) {
+			backends(t, time.Hour, func(t *testing.T, h *harness) {
+				id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+				if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+					t.Fatal(err)
+				}
+				heartbeat := RoomEvent{Room: id, Relay: "relay-b", Host: "acc-host", Seq: 1, Type: EventHeartbeat, Online: []string{"acc-host", "acc-alice"}}
+				h.report(t, heartbeat)
+				if _, err := h.svc.SetRoomState(context.Background(), "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+					t.Fatal(err)
+				}
+				heartbeat.Online = []string{"acc-host"}
+				heartbeat.Seq = 3
+				leave := heartbeat
+				leave.Seq = 2
+				leave.Type = EventMemberLeft
+				leave.Account = "acc-alice"
+				leave.Reason = ReasonLeft
+				if order == "ordered" {
+					h.report(t, leave)
+					h.report(t, heartbeat)
+				} else {
+					h.report(t, heartbeat)
+					h.report(t, leave)
+				}
+				heartbeat.Seq = 4
+				h.report(t, heartbeat)
+				t.Log("seats after next heartbeat:", seats(h.room(t, id)))
+				if _, err := h.join("gt-alice", id, JoinRequest{}); !errors.Is(err, ErrRoomStarted) {
+					t.Fatalf("join after explicit leave = %v, want ErrRoomStarted", err)
+				}
+			})
+		})
+	}
+}
