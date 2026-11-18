@@ -2,7 +2,7 @@
 
 维护者 2026-11-18 定：saga 操作“有能力就行”（能完成、结果正确），不按延迟门槛卡；框架本来就说明 saga 的吞吐不高。所以把场景里的 saga 操作单独作为一项统计，和其他步骤分开判门槛。
 
-基线 main `8940ca73`，实现提交 `fa1529d6`（分支 `worktree-agent-ac80204413d57b5c0`）。背景见 [robot-step-timing-20261118](../robot-step-timing-20261118/README.md)：100 人同秒档 5 个 saga 状态轮询合计约 17s，占整场景 72%～73%。
+基线 main `8940ca73`，实现提交 `f076d4fe`（原分支 `worktree-agent-ac80204413d57b5c0`）。背景见 [robot-step-timing-20261118](../robot-step-timing-20261118/README.md)：100 人同秒档 5 个 saga 状态轮询合计约 17s，占整场景 72%～73%。
 
 ## 1. demo 里有哪些 saga 操作
 
@@ -134,7 +134,7 @@ DEMO_ROBOT_MIRROR_OFFSET=20000 DEMO_ROBOT_COUNT=100 DEMO_ROBOT_MODE=burst \
   DEMO_ROBOT_OUT=<scratchpad>/sagagroup/run1 bash scripts/perf/demo-robot.sh
 ```
 
-- 源码：分支提交 `fa1529d6`（`environment.txt`，工作树干净）；端口：私有依赖偏移 20000、`port_shift` 31000（endpoint 38000、ops 40100）、etcd 35479。
+- 源码：分支上与 main `f076d4fe` 同内容的提交（`environment.txt`，工作树干净）；端口：私有依赖偏移 20000、`port_shift` 31000（endpoint 38000、ops 40100）、etcd 35479。
 - **机器不空闲**：起跑前 1 分钟负载 7.17（5 / 15 分钟 8.37 / 7.02），结束 6.40；swap 用了约 7.4 GiB（共 9 GiB）。同时有别的进程（桌面应用、系统扫描、共享隔离环境的 mongod）在占 CPU。
 - 原始小文件在 `run1/`：`summary.json`、`robot.json`、`host-{before,after}.txt`、`environment.txt`、`loadtest-args.json`（含 `-p95-exclude-group saga`）、`test.log`、`diagnostic-matches.json`。
 
