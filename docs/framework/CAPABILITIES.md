@@ -49,7 +49,7 @@
 | 三池调度 | short / long 两个业务池加 io 池，按实体 kind 分流长短业务 | entity marker 的 `businessPool=short` 或 `long`；容量键 `nest.short.queue_capacity` | 正式。short 池内不得阻塞等待 | [三池与 Await](NEST-AWAIT.md#三种执行资源) |
 | 实体生命周期 | 登录加载、首次创建、销毁、删档 | `roost generate` 在每个实体包产出 `lifecycle_gen.go`（`<entity>.LifecycleFromRegistry`；Get / Create / GetOrCreate / Destroy，实现是 core 的 `wiring/entitylifecycle`）；登录端点 `roost add endpoint <name> --handler <domain> --lifecycle <Entity>` | 正式。删档后同一 ID 不可重建；直接 Create 必须用新发的 ID | [Nest 与实体 §2](guide/02-nest-entity.md#2-锁与实体)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#删档后同-id-重建d10) |
 | 冷加载 | 访问不在内存的实体时由 io 池从库加载，上线后新增的 DAO 按初值补空 | 自动；不在 getter 里做 I/O | 正式。旧 schema 与未来 schema 都拒绝加载 | [DataEngine §4](guide/03-dataengine.md#4-冷加载与-schema)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#新建实体落库与缺失-dao-补空r15维护者-2026-10-30) |
-| 实体归属服务 | 声明某类实体只由一个服务写，别的服务经 RPC 写 | marker `//roost:entity service=<服务名>`，改后先 `roost project sync` 再 `roost generate` | 正式。未声明时任何带 Nest 的服务都能写 | [项目生成器 §6.w](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#6w-实体归属服务roostentity-service) |
+| 实体归属服务 | 声明某类实体只由一个服务写，别的服务经 RPC 写 | marker `//roost:entity service=<服务名>`，改后先 `roost project sync` 再 `roost generate` | 正式。未声明时任何带 Nest 的服务都能写 | [项目生成器 §6.w](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#6w-实体归属服务roostentity-servicename) |
 | 单实体运维 | 踢下线、把一个实体从内存卸载后按库重载 | ops 命令 `entity.kick`、`entity.unload` | 正式。不是改档入口；运行期不得直接改权威集合 | [DataEngine 单实体运维](guide/03-dataengine.md#单实体运维命令d16) |
 
 ## 持久化
@@ -65,7 +65,7 @@
 | store 键 | 字段在库里的稳定键，与 Go 字段名解耦 | 字段 tag `store:"<键>"`（推荐数字短键） | 正式。改键等于改数据格式，要提升 schema 并离线迁移 | [tag 手册 §3](../../codegen/docs/TAGS.zh-CN.md#3-dao持久客户端同步与服务端视图)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#dao-持久键d13) |
 | schema 版本 | 运行时只认当前 schema，读到旧版或更新版都拒绝 | `//roost:dao … schema=<N>` | 正式。没有自动迁移，没有在线双读 | [schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema) |
 | schema 离线迁移示例 | 停写 → 备份 → 转换 → 校验 → 切换 → 回退的执行器与命令行 | game-demo 的 `db/migrations/` 与 `cmd/schemamigrate`；公共件 `infra/storage/migration` | 参考实现（demo）。`roost add migration` 骨架未实施 | [schema 变更手册](SCHEMA-MIGRATION.md)、[demo 持久 schema](../../demo/WALKTHROUGH.md#持久-schema) |
-| 按 sid 搬机 | 把一个 game sid 连同数据搬到另一台机器的参考流程与检查工具 | 流程文档；game-demo 的 `cmd/sidmove` | 参考实现（demo）。以已落库数据为准；单玩家改绑另用 rehome 模块，断线重连，committed 源档窗口 Q4 未关 | [Player 迁移](PLAYER-MIGRATION.md) |
+| 按 sid 搬机 | 把一个 game sid 连同数据搬到另一台机器的参考流程与检查工具 | 流程文档；game-demo 的 `cmd/sidmove` | 参考实现（demo）。以已落库数据为准；单玩家改绑另用 rehome 模块（断线重连，不是热迁移） | [Player 迁移](PLAYER-MIGRATION.md) |
 | 合服（别名合服） | 把服 A 并入服 B：account 记录别名，数据按清单离线迁移 | `wiring/sidmerge`；`service/account` 的 `MergeServer`；game-demo 的 `cmd/sidmerge`、`cmd/accountctl merge-server` | 正式（工具与流程）。持久总线消息只列清单不检查积压；saga 要全部终态 | [Player 迁移 §6](PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#合服d15) |
 
 ## 同步
@@ -78,7 +78,7 @@
 | AOI / Block AOI | 按距离的进入、离开与分档；按块的多块可见、并行观察者计算 | `policy.AOI`；Block AOI 用手写的空间组件，不需要代码生成 | 正式。容量与性能验证范围见文档 | [Block AOI](INTEREST-BLOCK-AOI.md)、[性能报告](../performance/GATE-AOI.md) |
 | 同步视图与 LOD | 同一实体对不同观察者下发不同字段集（本人 / 附近 / 队友 / 远处）；按距离档与拉远层换视图 | 实体的 packer 按 DAO 字段名声明视图（`dataengine.NewSyncViewSet`）；`InterestConfig` 的 `ViewSets`、`BandLayer`；`AOIConfig.LODs`；优先级 `entity.MergeSyncViewPriorities` | 正式。可见性由业务层声明，框架不认识字段；缺声明的视图在构造时拒绝 | [demo 同步视图](../../demo/README.md#同步视图谁看见哪些字段)、[Sync 视野](guide/04-sync.md#谁看见谁视野viewd19) |
 | on_change 与 periodic | 提交后汇总变化立即发送，或按周期合并；可设合批窗口；可按实体类型混用两种节奏 | 配置 `sync.entity.mode`、`interval`、`on_change_batch_window`；`entitysync.ManagerConfig.TypeSchedules` | 正式。on_change 不是每个 setter 都发包；首次全量、恢复与 remove 走即时路径 | [Sync §3](guide/04-sync.md#3-periodic-与-on_change)、[按类型的节奏](ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09) |
-| DAO 的 PB 增量同步 | DAO 的同步字段编码成 Protobuf，增量只带变化本身；客户端按命名空间与视图键注册解码器 | 自动（生成器产出同步 PB 与 packer）；客户端 `EntityViews.RegisterDao`（C#）、`register_dao`（C++） | 正式。帧协议 2 / 信封 v3 在 `[Unreleased]`，服务端与客户端要一起升级 | [DAO 同步](DAO-SYNC-PROTOBUF.md)、[线格式](ENTITY_SYNC.md#线格式帧协议-2--信封-v3) |
+| DAO 的 PB 增量同步 | DAO 的同步字段编码成 Protobuf，增量只带变化本身；客户端按命名空间与视图键注册解码器 | 自动（生成器产出同步 PB 与 packer）；客户端 `EntityViews.RegisterDao`（C#）、`register_dao`（C++） | 正式。帧协议 2 / 信封 v3（v1.43.0 起）不兼容旧客户端，服务端与客户端要一起升级 | [DAO 同步](DAO-SYNC-PROTOBUF.md)、[线格式](ENTITY_SYNC.md#线格式帧协议-2--信封-v3) |
 | 按命名空间分开计 | 一类对象（如地形块）有自己的持有上限与快照预算，不挤占玩家、怪物的额度 | `entitysync.ManagerConfig.Namespaces` | 正式 | [Entity Sync Namespaces](ENTITY_SYNC.md#按命名空间分开计namespaces) |
 | 超额降级 | 会话持有对象超过上限时暂缓多出的对象，不关会话、不断开 | 自动；上限 `Limits.MaxObjects` | 正式。不保证超额部分立即可见 | [Entity Sync 超额降级](ENTITY_SYNC.md#超额降级会话持有对象超过上限) |
 | 背压与慢消费者 | 出站有界；一条连接收不下就断开，重连后全量或追帧 | 自动；嵌入 TCP 配置段 `player_access.tcp` | 正式。Push 返回成功只表示本地接纳 | [Sync §4](guide/04-sync.md#4-背压与恢复)、[Gate 慢消费者](GATEWAY.md#慢消费者跟不上就断开) |
@@ -122,15 +122,15 @@
 | 协议与消息号 | 从 Go 定义生成 Proto、PB、消息号、绑定与 Robot 协议表 | `roost add protocol <name> --group <g> --handler <domain>`；标记 `//roost:protocol`、`//roost:msg` | 正式。支持请求 / 响应、客户端 push、服务端通知 | [命令参考 §7](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#7-protocol-生成器) |
 | 端点（协议 → Nest） | 把协议请求映射到生成的 Nest Sender，手写入口与自动转交分开 | `roost add endpoint <name> --handler <group>`（可加 `--protocol`、`--nest-handler`、`--target`、`--lifecycle`）；controller 分组文件 `game/controllers/<group>.go` 由协议存根和 endpoint 按需新建 | 正式。玩家身份只取自已认证连接，业务时间不从请求取 | [玩家协议教程 §3](PLAYER-ACCESS.md#3-controller把协议转换成业务调用) |
 | 嵌入 player TCP | Game 进程内的有界 TCP 接入：帧协议、连接上限、防重放、有界出站 | `roost add transport tcp`；实现 `internal/access/player/tcp/auth.go` 后 `roost config enable player-tcp` | 正式。`auth.go` 默认拒绝，生产鉴权要自己实现 | [player TCP](../../codegen/docs/PLAYER_ACCESS_TCP.zh-CN.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#嵌入-tcp-出站) |
-| 独立 Gate | 客户端连 Gate，Gate 经 NATS 转发到 Game；PB、Sync、Lockstep 与广播都经它 | Gate 进程装 `wiring/gate.NewGateMod(options)`，Game 装生成的 `player/tcp.NewIngressMod(options)` | 正式。信任边界是内网加 Gate 的客户端鉴权；多进程 / 跨机矩阵未验收 | [Gate](GATEWAY.md)、[Gate 实现契约](GATEWAY-IMPLEMENTATION.md) |
-| WebSocket 接入 | 浏览器经 WebSocket 连玩家接入，每条二进制消息一个 RS v2 帧；握手、票据、路由、出站预算与 TCP 相同 | `roost add transport websocket`，配置写 `player_access.{tcp,gate}.websocket.addr` 才开；手工接线 `gateway.TCPConfig.WebSocket`。客户端：C# `Roost.Client` 设 `ConnectionOptions.WebSocketUrl`；Unity WebGL 另开 `PumpDriven`，并照抄浏览器桥接 `BrowserGateTransport` | 服务端 2026-11-17 起、C# 客户端 2026-11-18 起，未发版。Origin 白名单为空时同源也拒绝；TLS 由前置负载均衡终结；七层负载均衡后写 `websocket.trusted_proxies` 才按 `X-Forwarded-For` 的客户端地址计数，不写时按负载均衡一个 IP 计数（relay 没有按 IP 限额）。WebGL 上不 `Pump` 就不发心跳，超过 `idle_timeout` 被断开；Safari、Firefox、移动浏览器没测 | [Gate §6](GATEWAY.md#6-websocket-接入)、[客户端手册](../../client/README.md#c-经-websocket-连玩家接入含-unity-webgl)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#websocket-接入2026-11-17) |
+| 独立 Gate | 客户端连 Gate，Gate 经 NATS 转发到 Game；PB、Sync、Lockstep 与广播都经它 | `roost add gate`（生成 Gate 服务、game 一侧的 Game Ingress 接线与配置，参数固定）；手写接线是 Gate 进程装 `wiring/gate.NewGateMod(options)`，Game 装生成的 `player/tcp.NewIngressMod(options)` | 正式。信任边界是内网加 Gate 的客户端鉴权；只做过单机真实进程演练，跨机未验收 | [Gate](GATEWAY.md)、[Gate 实现契约](GATEWAY-IMPLEMENTATION.md) |
+| WebSocket 接入 | 服务端的玩家接入层（嵌入 TCP 或独立 Gate）开 WebSocket 监听，每条二进制消息一个 RS v2 帧；握手、票据、路由、出站预算与 TCP 相同 | 服务端：`roost add transport websocket`，配置写 `player_access.{tcp,gate}.websocket.addr` 才开；手工接线 `gateway.TCPConfig.WebSocket`。客户端：只有 C# `Roost.Client` 能经 WebSocket 连（`ConnectionOptions.WebSocketUrl`；Unity WebGL 另开 `PumpDriven`，并照抄浏览器桥接 `BrowserGateTransport`）；C++ 只连 TCP；Go `robot` 的 `ws` 拨号器没有对玩家接入跑过；TS 没有连玩家接入的客户端 | 正式（服务端 v1.54.0 起）；C# 客户端的 WebSocket 在 main 上未发版（CHANGELOG `[Unreleased]`）。Origin 白名单为空时同源也拒绝；TLS 由前置负载均衡终结；七层负载均衡后写 `websocket.trusted_proxies` 才按 `X-Forwarded-For` 的客户端地址计数，不写时按负载均衡一个 IP 计数（relay 没有按 IP 限额）。WebGL 上不 `Pump` 就不发心跳，超过 `idle_timeout` 被断开；Safari、Firefox、移动浏览器没测 | [Gate §6](GATEWAY.md#6-websocket-接入)、[客户端手册](../../client/README.md#c-经-websocket-连玩家接入含-unity-webgl)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#websocket-接入2026-11-17) |
 | KCP / UDP / QUIC | 生成这三种传输的装配函数 | `roost.yaml` 的 `features` 加 `nettransport-kcp`、`nettransport-udp`、`nettransport-quic` 后 `roost project sync` | 正式（只到装配函数）。玩家接入层只提供 TCP 与 WebSocket；监听、握手鉴权、Session 绑定由宿主自写 | [项目生成器 §16](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#16-帧同步-transport-预设)、[MOBA 手册](MOBA-INTEGRATION.md) |
-| 开房间 SDK（lobby + relay） | lobby 调用、relay 连接、心跳与重连、换 host（转交、候选、快照）；TS 另有 Web 端房主辅助 `WebHost` | Go `client/relay`（TCP）、C# `client/dotnet/Roost.Client.Relay`（TCP）、TS `client/ts`（浏览器 WebSocket） | 2026-11-17 起，未发版。Web 端只在内置浏览器面板演练过；Unity / IL2CPP 未实跑 | [客户端“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#开房间-sdk2026-11-17) |
-| 配置表导出给客户端 | 同一份 `configs/schema` + `configs/table` 产出客户端的 JSON 与 C# 读取代码（加载时核对哈希与规则）、数据版本号；字段 / 表按端分组、竖排键值表、index、`#` 注释行 | `roost.yaml` 的 `client_export.config`（只要配置时加 `client_export.protocol: false`）；客户端 `roost client sync --config-code-to … --config-data-to …` | 2026-11-17 起，未发版。具名类型不支持，parser 字段在客户端是字符串，数据版本不做运行时核对 | [命令参考 §2.2](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#配置表导出给客户端2026-11-17) |
-| C# 客户端 SDK 与 Unity 适配 | TCP、请求关联、EntitySync 接收、Lockstep、地形 SDK；Unity 主线程适配 | `client/dotnet/Roost.Client`、`client/unity` | 正式。真实 Unity / Godot / Unreal 全矩阵未验收 | [客户端](../../client/README.md)、[网络体验](NETWORK-EXPERIENCE.md) |
-| C++ 客户端 | C++17 网络核心与 C ABI，覆盖 PB、EntitySync、Lockstep、场景时间域 | `client/cpp` | 正式。已实跑的平台与未验收的平台见手册；TLS / WS / UDP / KCP 适配未实现 | [native 手册](../../client/cpp/README.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#native-客户端2026-11-01) |
+| 开房间 SDK（lobby + relay） | lobby 调用、relay 连接、心跳与重连、换 host（转交、候选、快照）；TS 另有 Web 端房主辅助 `WebHost` | Go `client/relay`（只连 TCP）、C# `client/dotnet/Roost.Client.Relay`（TCP 或 WebSocket；Unity WebGL 开 `PumpDriven`）、TS `client/ts`（浏览器 WebSocket） | 正式（v1.54.0 起，C# 的 `PumpDriven` v1.55.0 起）。Web 端只在内置浏览器面板演练过；C# SDK 在 Unity WebGL 构建里通过、Editor 在 relay 写期限修复前跑过，桌面与移动 Player 没跑 | [客户端“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#开房间-sdk2026-11-17) |
+| 配置表导出给客户端 | 同一份 `configs/schema` + `configs/table` 产出客户端的 JSON 与 C# 读取代码（加载时核对哈希与规则）、数据版本号；字段 / 表按端分组、竖排键值表、index、`#` 注释行 | `roost.yaml` 的 `client_export.config`（只要配置时加 `client_export.protocol: false`）；客户端 `roost client sync --config-code-to … --config-data-to …` | 正式（v1.54.0 起）。schema 包以外的具名类型与底层不是标量的具名类型不支持，parser 字段在客户端是字符串，数据版本不做运行时核对；导出的 C# 没在 Unity 里跑过 | [命令参考 §2.2](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#配置表导出给客户端2026-11-17) |
+| C# 客户端 SDK 与 Unity 适配 | 连玩家接入走 TCP 或 WebSocket、请求关联、EntitySync 接收、Lockstep、地形 SDK；Unity 主线程适配（缺省托管路线，可选原生路线） | `client/dotnet/Roost.Client`、`client/unity` | 正式。真实 Unity / Godot / Unreal 全矩阵未验收 | [客户端](../../client/README.md)、[网络体验](NETWORK-EXPERIENCE.md) |
+| C++ 客户端 | C++17 网络核心与 C ABI，覆盖 PB、EntitySync、Lockstep、场景时间域 | `client/cpp` | 正式。只连 TCP：TLS / WebSocket / UDP / KCP 传输未实现；已实跑的平台与未验收的平台见手册 | [native 手册](../../client/cpp/README.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#native-客户端2026-11-01) |
 | 校时、插值与预测 | Gate 校时、客户端有界插值与输入预测、阶段诊断 | 客户端 `NetworkClock` 等，按业务显式启用 | 正式。验证范围见文档 | [网络体验](NETWORK-EXPERIENCE.md) |
-| Robot | 走正式协议的机器人：功能验收、重连重试断言、负载 | 包 `robot`；`roost generate` 产出 `loadtest/protocol/registry_gen.go`；生成工程的 `cmd/robot` | 正式。没有业务 PB 就没有业务 Robot；默认玩法验收用替身鉴权与提交器 | [Robot](ROBOT.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#robot-推广验收2026-11-01) |
+| Robot | 走正式协议的机器人：功能验收、重连重试断言、负载 | 包 `robot`；`roost generate` 产出 `loadtest/protocol/registry_gen.go`；生成工程的 `cmd/robot` | 正式。没有业务 PB 就没有业务 Robot；默认玩法验收用替身鉴权与提交器 | [Robot](ROBOT.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#robot-推广验收的范围2026-11-01) |
 
 ## 通用玩法包
 
@@ -147,8 +147,8 @@
 | state | 实体的状态位（定身、缴械、无敌等），按来源计数，可作门控 | `roost add behavior --entity <Entity> --state` 生成 `states.go` 的目录声明；Set / Gate 接线由业务写；包 `gameplay/state` | 正式。不是状态机 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#行为控制d21)、[demo 怪物](../../demo/WALKTHROUGH.md#怪物巡逻定身与状态门控d21) |
 | timedomain | 场景 / 房间级的时间域 | `roost add timedomain --entity <Scene>`；包 `gameplay/timedomain` | 正式 | [时间 §4D](guide/10-time.md#4d-场景时间域变速) |
 | level | 配置驱动的关卡组件：多阶段、事件 / 条件 / 动作、变量作用域 | 包 `gameplay/level`；手写装配（没有 add 命令），可运行消费者见 `scripts/testdata/level` 与 `scripts/test-level-generated.sh` | 正式。有预算上限、没有容量承诺；示例动作是能力替身，不提供完整闯关或永久奖励 | [LevelComponent](LEVEL-COMPONENT.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#通用-levelcomponent-首版边界) |
-| cellworld | 固定网格分区，Cell / Ghost 与 Base Player 分工；共享写授权、故障恢复、死亡结算与稳定出生槽 | 包 `gameplay/cellworld`，`roost module add cellworld` 装配 Runtime；game-demo 配置 `scene.partition.enabled: true` | 固定拓扑能力已实现，单进程单 Cell、可信内网。千人容量的 50ms 指标尚未通过；Linux / 跨机 / Redis HA 未验收 | [包 README](../../gameplay/cellworld/README.md)、[正式模块](../../modules/cellworld/README.md)、[验收报告](../performance/CELLWORLD.md) |
-| terrain | 可编辑地形底座：2.5D 高度场的块坐标、地形包读写、视图与整数定点查询、笔刷、行走判定 | 包 `gameplay/terrain`（纯逻辑，不依赖 Nest / DataEngine）；块实体、编辑事务、同步与建筑在 game-demo | 正式（底座，在 `[Unreleased]`）。不支持洞穴与流体模拟；真实依赖崩溃演练、Unity、跨机与容量验收后置 | [包 README](../../gameplay/terrain/README.md)、[地形进度](../maintenance/TERRAIN-STATUS.md) |
+| cellworld | 固定网格分区，Cell / Ghost 与 Base Player 分工；共享写授权、故障恢复、死亡结算与稳定出生槽 | 包 `gameplay/cellworld`，`roost module add cellworld` 装配 Runtime；game-demo 配置 `scene.partition.enabled: true` | 正式（固定拓扑）。一个进程一个 Cell、可信内网；没有动态拆格、一进程多 Cell、跨多个 Cell 的原子战斗结算。千人容量的 50ms 指标尚未通过；Linux / 跨机 / Redis HA 未验收 | [包 README](../../gameplay/cellworld/README.md)、[正式模块](../../modules/cellworld/README.md)、[验收报告](../performance/CELLWORLD.md) |
+| terrain | 可编辑地形底座：2.5D 高度场的块坐标、地形包读写、视图与整数定点查询、笔刷、行走判定 | 包 `gameplay/terrain`（纯逻辑，不依赖 Nest / DataEngine）；块实体、编辑事务、同步与建筑在 game-demo | 正式（底座，v1.43.0 起）。不支持洞穴与流体模拟；Unity、跨机与容量验收后置 | [包 README](../../gameplay/terrain/README.md)、[地形进度](../maintenance/TERRAIN-STATUS.md) |
 | physics | 固定步长的原生物理模拟与已提交结果交接 | 包 `gameplay/physics`、`infra/physics/physx`；构建加 `-tags physx` | 正式（可选后端）。模拟器是物理状态的唯一权威，提交失败后停止而不回滚；平台与容量边界见文档 | [Chunk 与物理](CHUNK-PHYSICS.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#ugc-物理闯关) |
 
 ## 领域服务
@@ -157,7 +157,7 @@
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| account | 渠道身份验证、会话令牌、选角与建角计划、别名合服 | `uses: [account]`；包 `service/account` | 正式。身份验证、玩家号分配、名字校验没有默认实现；一个账号一区服一角色 | [Service §4](guide/09-services.md#4-关键业务边界)、[demo account](../../demo/WALKTHROUGH.md#account-这一侧与-accountctl) |
+| account | 渠道身份验证、会话令牌、选角与建角计划、别名合服 | `uses: [account]`；包 `service/account` | 正式。身份验证、玩家号分配、名字校验没有默认实现；一个账号一区服一角色；一套 account 可服务多个游戏，账号号按游戏分开（v1.56.0 起） | [Service §4](guide/09-services.md#4-关键业务边界)、[demo account](../../demo/WALKTHROUGH.md#account-这一侧与-accountctl) |
 | activity | 跨服活动协调：活动组、窗口、进度账本、带确认的结果投递 | `uses: [activity]`；包 `service/activity` | 正式。无法恢复的投递走人工管理流程收口 | [Service §4](guide/09-services.md#4-关键业务边界)、[SLG 手册](SLG-INTEGRATION.md) |
 | chat | 频道消息的发布、历史与保留 | `uses: [chat]`；包 `service/chat` | 正式。频道策略是协作者；系统消息只能经服务端签发的令牌发 | [通用服务](../../wiring/SERVICES.md#包)、[demo 聊天](../../demo/WALKTHROUGH.md#跨服务game--chat-聊天) |
 | directory | 全局名字目录：预留 → 提交 → 释放的两阶段占名 | 嵌入能力，不在九个托管服务里：`wiring/directory.NewMod(normalize, reporter)`，`app.Lookup[directory.Directory]` | 正式。同一 owner 重复预留幂等，所以不是互斥锁 | [Service §4](guide/09-services.md#4-关键业务边界) |
@@ -167,8 +167,8 @@
 | platform | 渠道边缘：凭证换会话、支付回调换恰好一次发货 | `uses: [platform]`；包 `service/platform` | 正式。验签由接入方提供，且必要而不充分；订单是仅插入的持久记录 | [通用服务](../../wiring/SERVICES.md#包) |
 | rank | 榜单提交与分页查询，带幂等 | `uses: [rank]`；包 `service/rank` | 正式 | [通用服务](../../wiring/SERVICES.md#包)、[demo 排行榜](../../demo/WALKTHROUGH.md#排行榜rank-服务与领奖账本同一个准入) |
 | session | 一次运行（副本、试炼）的记录：幂等进入、每 owner 一个活动运行、资源恰好释放一次 | `uses: [session]`；资源释放由业务的 `Releaser` 协作者实现 | 正式。与网络连接、登录令牌、Sync 会话是不同的身份；不模拟场景或战斗 | [Service §1A](guide/09-services.md#1a-session-运行会话)、[demo 副本](../../demo/WALKTHROUGH.md#跨服务game--session-副本) |
-| lobby | 开房间场景的大厅：凭游戏账号 token 建房 / 列房 / 加入 / 离开 / 改状态，Redis 房间目录，选 relay、签房间令牌，记被踢名单、答 relay 的验权 | 托管服务 `framework: lobby`（`roost add lobby`，或 `project new -template lobby`）；包 `service/lobby` | 2026-11-17 起，未发版。直接面向客户端（HTTP），业务服务不能 `uses`；不需要 game 服务 | [LOBBY](LOBBY.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#大厅-lobby-与转发-relay2026-11-17) |
-| relay | 房主的客户端做 host 的转发：只读帧头，游戏 / 房间两种通道，限额，换 host 与快照转存，每条连接向 lobby 验权 | 托管服务 `framework: relay`（`roost add relay`）；包 `service/relay` | 2026-11-17 起，未发版。不解析载荷、不托管玩法逻辑；进程崩溃房间丢失；多进程演练未做 | [RELAY](RELAY.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#大厅-lobby-与转发-relay2026-11-17) |
+| lobby | 开房间场景的大厅：凭游戏账号 token 建房 / 列房 / 加入 / 离开 / 改状态，Redis 房间目录，选 relay、签房间令牌，记被踢名单、答 relay 的验权 | 托管服务 `framework: lobby`（`roost add lobby`，或 `project new -template lobby`）；包 `service/lobby` | 正式（v1.54.0 起）。直接面向客户端（HTTP），业务服务不能 `uses`；不需要 game 服务 | [LOBBY](LOBBY.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#大厅-lobby-与转发-relay2026-11-17) |
+| relay | 房主的客户端做 host 的转发：只读帧头，游戏 / 房间两种通道，限额，换 host 与快照转存，每条连接向 lobby 验权 | 托管服务 `framework: relay`（`roost add relay`）；包 `service/relay` | 正式（v1.54.0 起）。不解析载荷、不托管玩法逻辑；进程崩溃房间丢失；多进程演练只做过单机，跨机与容量未验 | [RELAY](RELAY.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#大厅-lobby-与转发-relay2026-11-17) |
 | physicsroom | 固定 owner 的瞬态物理房间：创建、加入、输入、帧提交到 Nest | `wiring/physicsroom.NewMod` 或 `NewEntityHostMod`，Game 侧 `NewClientMod`；构建加 `-tags physx` | 正式（可选）。不在九个托管服务里；没有物理跨机接管；容量不是上限结论 | [物理房间](PHYSICS-ROOM-SERVICE.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#ugc-物理闯关) |
 
 ## 生成器命令
@@ -186,7 +186,9 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | `roost add service` | 新增一个业务服务 | `roost add service <name>` | 正式 | [命令参考 §3](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#3-业务骨架roost-add) |
 | `roost add mod` | 给服务装一个 Wiring Mod，自动补依赖 | `roost add mod <name> -service <svc>` | 正式 | 同上 |
 | `roost add access` | 玩家协议边界 | `roost add access player --service <svc>` | 正式 | 同上 |
-| `roost add transport` | 嵌入 player TCP | `roost add transport tcp` | 正式。要求先有 access player | 同上 |
+| `roost add transport` | 嵌入 player TCP；在其上开 WebSocket 监听 | `roost add transport tcp`、`roost add transport websocket` | 正式。tcp 要求先有 access player，websocket 要求先有 tcp，且写了 `websocket.addr` 才开 | 同上 |
+| `roost add gate` | 独立 Gate 服务与 game 一侧的接线 | `roost add gate [<名字>]` | 正式（v1.51.0 起）。Gate 参数固定；只认 account 票据 | [Gate §2](GATEWAY.md#2-正式接入方式)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#玩家接入方式2026-11-16) |
+| `roost add lobby` / `relay` | 开房间的托管大厅与转发服务 | `roost add lobby [<名字>]`、`roost add relay [<名字>]`；只开房间的新工程用 `project new -template lobby` | 正式（v1.54.0 起）。没有托管 account 时一并声明 | [LOBBY](LOBBY.md)、[RELAY](RELAY.md) |
 | `roost add protocol` | 协议定义骨架并分配消息号 | `roost add protocol <name> --group <g> --handler <domain>` | 正式 | 同上 |
 | `roost add entity` | Entity 骨架并分配 kind | `roost add entity <name>` | 正式 | 同上 |
 | `roost add component` | 组件包骨架（`game/components/<包>/`、`game/view/component_<包>.go`）并挂到 Entity | `roost add component <name> --entity <owner>` | 正式 | 同上 |
@@ -235,7 +237,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | --- | --- | --- | --- | --- |
 | 技能目录 skillbook | 启动时编译 JSON 技能定义，失败阻止起服；客户端查询技能 ID 与编译 warning 数 | `roost module add skillbook`；工程修改 `game/modules/skills/*.json` 与 `game/modules/skillbook/skillbook_rules.go` | 现成模块，game-demo 使用同一实现。仅目录，不包含技能执行 Host、热更新或客户端技能逻辑 | [modules](../../modules/README.md) |
 | 活动生命周期 | 共用活动状态与阶段引擎，个人/全服/联盟 Entity 适配；五阶段、循环、解锁与自定义流程 | `roost module add activity`；共享宿主另装 `activity_world` / `activity_alliance` | 现成模块；空配置无活动；个人定时器与 Remote 扫描已做本机跨进程迁移/SIGKILL 验收，精简组合与边界见模块文档 | [activity](../../modules/activity/README.md) |
-| 联盟 alliance | 独立服务独占联盟与成员守卫；路由 RPC、Mirror、跨域 Saga 与换服惰性校正 | `roost module add alliance` | 现成模块；普通联盟操作不用 Saga，真实跨进程与存储验收待最终批次 | [alliance](../../modules/alliance/README.md) |
+| 联盟 alliance | 独立服务独占联盟与成员守卫；路由 RPC、Mirror、跨域 Saga 与换服惰性校正 | `roost module add alliance` | 现成模块；普通联盟操作不用 Saga；单机真实多进程（Mongo / Redis / NATS / etcd、Portal + TCP）与双 sid 迁服 SIGKILL 已验，容量与跨机未验 | [alliance](../../modules/alliance/README.md) |
 | 组队 team | 建队、邀请、入队、离队与队长交接；Remote 权威与本地 Player 引用同事务 | `roost module add team`（连带 facebook）；七个 PB 请求、邀请推送与权威核对；安装时代办 Remote | 现成模块；邀请有界，经被邀请人的 facebook（每名玩家一个伴生的共享 Remote 实体）投给任何 game 上或离线的被邀请人；解散后成员引用惰性核对。matchmaking 可组合，demo 通过登记点保留分区队伍视野；两 game 真实依赖验收见 team README | [team](../../modules/team/README.md) |
 | 本服匹配与房间移交 | 单人/整队，取消与补查，固定名单房间 | `roost module add matchmaking`，自动安装 matchroom / team / room | 默认两支同人数队伍；历史消失时保留屏障；跨服房间不在本轮 | [matchmaking](../../modules/matchmaking/README.md) |
 | 基础房间 room | 服务端开房；1～64 席、进出、房主交接、重连代际、关闭 | `roost module add room`；`game/modules/room.Open` / `Disconnect` 与生成的 Nest Sender | 现成模块。自带持久实体；客户端读 PB 快照；自带断线订阅（manager `NewRoomPresence`，连接登记随提交、按席位代际单调）；不含广播、匹配移交或回合超时 | [room](../../modules/room/README.md) |
@@ -244,7 +246,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后发布实体事件 `event.CheckinClaimed`（别的功能用 `//roost:listen` 监听，在同一笔事务里顺带做事） | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；监听返回错误会让这一次签到整笔回滚；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 | 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；世界/私聊不经过 Nest，scene 附近联动在 Nest 中读取收件人快照后于锁外推送，不改聊天实体 | 同上 |
 | 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里；进入之前的登记点 `OnEntering`（能否决登录，换服模块用它挡住正在换服或已换走的玩家）与进入之后的登记点 `game/modules/login` 的 `OnEntered`（别的功能在玩家进入后顺带做事：聊天上线、拉全服邮件）；另一条路“先新建、再进入”（只对被登记为“先新建”的会话生效，login 的联动登记的是用进服票据握手的会话）：新建请求 `EnterCreate{name}` 一笔事务里起名、初始发放、建成，名字规则的登记点（profile 的联动接上档案的名字规则，naming 装着时全服唯一），`EnterGame` 不代建（没建成答 `enter_need_create`），会话激活后的告知 `EnterStatus` | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图；自己的功能要在进入时做事，在自己的包的 `init` 里调 `gamelogin.OnEntered(名字, 钩子)` | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化 → 钩子”的串接没有离线用例；进入钩子在事务之外、失败只记日志 | 同上 |
-| 换服 rehome | 把一名玩家从本服改绑到另一个 game sid：申请协议与服务端入口；源服断开会话、交出实体后拒写；目标服首次进入时到达；换服前检查 / 离开时 / 到达后三个登记点 | `roost module add rehome`（业务服务要 `uses: [account]`，`-template game` 已有；装了 enter 时进入前检查与到达由联动接上）；GM 或别的功能 `controllers.FromRegistry(registry)` 后调 `RehomeMove(ctx, 玩家号, 目标 sid, 备注)`；saga 步骤的属主核对用 `rehome.Binding` | 现成模块，game-demo 用的就是它。缺省允许换到任何别的开放的服、冷却 7 天、不收费（规则文件里改）；只有离线验证；没装 enter 的工程要自己在加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive` | 同上 |
+| 换服 rehome | 把一名玩家从本服改绑到另一个 game sid：申请协议与服务端入口；源服断开会话、交出实体后拒写；目标服首次进入时到达；换服前检查 / 离开时 / 到达后三个登记点 | `roost module add rehome`（业务服务要 `uses: [account]`，`-template game` 已有；装了 enter 时进入前检查与到达由联动接上）；GM 或别的功能 `controllers.FromRegistry(registry)` 后调 `RehomeMove(ctx, 玩家号, 目标 sid, 备注)`；saga 步骤的属主核对用 `rehome.Binding` | 现成模块，game-demo 用的就是它。缺省允许换到任何别的开放的服、冷却 7 天、不收费（规则文件里改）；macOS 单机真实进程演练通过（`scripts/test-demo-rehome.sh`），独立 Gate、Linux、跨机没验；没装 enter 的工程要自己在加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive` | 同上 |
 | 客户端规则 rules | 进入/重连统一推送、RulesGet 补取；模块 PB 规则在 Player 锁内读取 | `roost module add rules`；shop/stamina 自动依赖 | 现成模块。没有规则热更广播；补取失败不返回半份 | [规则模块](../../modules/rules/README.md) |
 | 任务 task | 事件推进；每日、每周、永久、前置链；配置表与金币/道具奖励 | `roost module add task`；事务内 `Task().Report(event, count, nowUnixMilli)`，或保留 `Advance` | 现成模块。ID 1～4096 固定、不复用；事务内联动负责首次上报；排行提交是独立的尽力通知，重放也计数，不作恰好一次结算依据 | [任务模块](../../modules/task/README.md) |
 | 体力 stamina | 随业务时间惰性恢复到上限（不用定时器）；消耗、发放、查询的组件入口；花金币补满的协议（每业务日限次、逐次涨价）；服务端发放 handler；规则是一个业务文件 | `roost module add stamina`（依赖 wallet、rules）；别的功能在自己的事务里调 `Stamina().Spend(n, nowUnixMilli)` | 现成模块。同步只在写入时发生，客户端要按上限、周期与服务器业务时间自己推算当前值；发放超过硬顶静默截断（看返回的 `Granted`）；调高上限等于给已满的玩家立即补到新上限；补满协议不带请求键 | 同上 |
@@ -283,7 +285,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| 登录与凭据 | 登录入口（HTTP 三步）→ 进服票据握手 → 服务器告知 → 先新建（带角色名）→ 进入；会话令牌握手的老路仍是登录端点加载或创建 Player | login / portal / servertime 模块；demo 自己的是渠道入口 `services/account/login_channels.go`、`game/controllers/player_enter_game.go` 与 `player_enter_create.go`（归属、驻留表、登录预算） | 参考实现（demo），登录链路本身是现成模块。demo 渠道凭据不能用于生产；新链路只有离线场景，没有做过真实进程的实跑；连错服有两个码 | [登录](../../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入) |
+| 登录与凭据 | 登录入口（HTTP 三步）→ 进服票据握手 → 服务器告知 → 先新建（带角色名）→ 进入；会话令牌握手的老路仍是登录端点加载或创建 Player | login / portal / servertime 模块；demo 自己的是渠道入口 `services/account/login_channels.go`、`game/controllers/player_enter_game.go` 与 `player_enter_create.go`（归属、驻留表、登录预算） | 参考实现（demo），登录链路本身是现成模块。demo 渠道凭据不能用于生产；单机真实进程演练 `scripts/test-demo-login.sh`（含独立 Gate），跨机未做；连错服有两个码 | [登录](../../demo/WALKTHROUGH.md#登录入口--握手--先新建--进入) |
 | 背包、经验与升级 | 一条玩家写请求从协议到 Nest 到 DAO 的完整链路 | `game/handler/`、`game/controllers/player*.go` | 参考实现（demo） | [链路](../../demo/WALKTHROUGH.md#链路) |
 | 升级发奖励邮件 | effect 与状态变更同一条 WAL 记录，消费者调 mail | mailbox 与 profile 联动，`MailboxProfileReward` 在升级事务中冻结奖励，模块消费并以 EffectID 发件 | 现成模块；缺省不发奖，工程定义连升总奖励 | [事件链](../../demo/WALKTHROUGH.md#事件链升级--奖励邮件事务性-outbox) |
 | 邮件列表与领附件 | 客户端这一半：列表、领取到背包 | 端点 + mail 访问器 | 参考实现（demo） | [邮件](../../demo/WALKTHROUGH.md#邮件列表与领附件客户端这一半) |
@@ -297,7 +299,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 怪物 | 巡逻、定身与状态门控 | Monster 实体 + 行为组件 | 参考实现（demo） | [怪物](../../demo/WALKTHROUGH.md#怪物巡逻定身与状态门控d21) |
 | 场景时间 | 副本 2 倍速 | 场景时间域 | 参考实现（demo） | [场景时间](../../demo/WALKTHROUGH.md#场景时间副本-2-倍速d22) |
 | 服务端权威状态同步 | Player 是复制主体，场景是政策 | 自建 Manager + Nest 提交观察者 | 参考实现（demo） | [状态同步](../../demo/WALKTHROUGH.md#服务端权威状态同步player-是复制主体entitysyncmanager-是调度器scene-是政策) |
-| 同步视图 | 本人、附近的人、队友各拿各的字段 | `game/entities/<kind>/sync_packer.go` | 参考实现（demo）。在 `[Unreleased]` | [同步视图](../../demo/README.md#同步视图谁看见哪些字段) |
+| 同步视图 | 本人、附近的人、队友各拿各的字段 | `game/entities/<kind>/sync_packer.go` | 参考实现（demo）。v1.43.0 起 | [同步视图](../../demo/README.md#同步视图谁看见哪些字段) |
 | 兴趣 | 距离视野与关系视野 | 场景的 Interest | 参考实现（demo） | [兴趣](../../demo/WALKTHROUGH.md#兴趣距离是一种视野关系是另一种) |
 | 刷新 | 场景该有多少东西活着 | spawner | 参考实现（demo） | [刷新](../../demo/WALKTHROUGH.md#刷新场景该有多少东西活着) |
 | 装备栏 | demo 唯一的嵌套字段 | `PlayerDao` 的嵌套结构体 | 参考实现（demo） | [装备栏](../../demo/WALKTHROUGH.md#装备栏) |
@@ -310,7 +312,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 机器人压测 | 走真实凭据的机器人，同时是回归测试 | `cmd/loadtest`、`make loadtest` | 参考实现（demo） | [压测](../../demo/WALKTHROUGH.md#机器人压测--回归测试) |
 | 实体锁档与跨实体事务 | 锁档怎样定、多实体事务怎样写 | 实体 marker 的 category | 参考实现（demo） | [锁档](../../demo/WALKTHROUGH.md#实体锁档与跨实体事务) |
 | schema 迁移与 sid 搬机 | 离线迁移示例与搬机检查工具 | `cmd/schemamigrate`、`cmd/sidmove` | 参考实现（demo） | [持久 schema](../../demo/WALKTHROUGH.md#持久-schema)、[搬 sid](../../demo/WALKTHROUGH.md#把一个-sid-搬到另一台机器) |
-| 可编辑地形与建筑 | 地形包、玩家笔刷编辑与同步、高度场上的行走与寻路、水位、建筑是普通同步实体 | `game/terrainmap/`、`game/entities/terrain_chunk/`、`game/entities/building/`、`cmd/terrainpack`（缺省关闭） | 参考实现（demo）。在 `[Unreleased]`；真实依赖、Unity、跨机验收后置 | [可编辑地形](../../demo/README.md#可编辑地形p1)、[水与建筑](../../demo/README.md#水与建筑p4)、[地形进度](../maintenance/TERRAIN-STATUS.md) |
+| 可编辑地形与建筑 | 地形包、玩家笔刷编辑与同步、高度场上的行走与寻路、水位、建筑是普通同步实体 | `game/terrainmap/`、`game/entities/terrain_chunk/`、`game/entities/building/`、`cmd/terrainpack`（缺省关闭） | 参考实现（demo）。编辑与建筑的 WAL 崩溃恢复已验；Unity、跨机与容量验收后置 | [可编辑地形](../../demo/README.md#可编辑地形p1)、[水与建筑](../../demo/README.md#水与建筑p4)、[地形进度](../maintenance/TERRAIN-STATUS.md) |
 | 分区场景 | cellworld 接进场景，多进程分格 | 配置 `scene.partition`（缺省关闭）；演练 `scripts/test-seamless-demo.sh` | 固定拓扑，容量见验收报告 | [分区场景](../../demo/README.md#分区场景cellworld) |
 
 ## 明确没有 / 不适合的
@@ -319,12 +321,12 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 需求或类型 | 结论 | 是哪条限制 | 出处 |
 | --- | --- | --- | --- |
-| 把其余玩法夹具与 game-demo 拆成模块 | 部分已实现 | 业务模块安装器支持自带 Entity / DAO / lifecycle 与服务级启动、停机接线，现行模块与联动以模块目录为准；casual / turn-pvp 配方及登录链路已实现，game-demo 已部分使用模块，其余玩法与剩余功能的迁移仍待推进 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
+| 把其余玩法夹具与 game-demo 拆成模块 | 大部分已实现 | 13 类玩法夹具已是“装模块 + 只写模块没覆盖的部分”（各脚本的 `genre_modules`）；game-demo 已部分使用模块，CellWorld 的业务适配一部分在模块、其余留在 demo（维护者 2026-11-18 定）；现行模块与联动以模块目录为准 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
 | 业务模块的卸载 | 不做 | 分配过的号与存储键不回收；要去掉一个模块时按 `roost.yaml` 的 `modules.<name>` 归属清单手工删 | [业务模块方案“决定一览”](../maintenance/FEATURE-2026-11-10-business-modules.md#决定一览) |
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP / WebSocket（可靠有序流） | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
-| 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |
+| 无缝开放世界（多进程分区） | 固定分区可做，容量未达标 | cellworld 是固定网格、一个进程一个 Cell；没有动态拆格、一进程多 Cell、跨多个 Cell 的原子战斗结算；千人 / 50ms 未通过 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#cellworld-固定分区v1470) |
 | 状态同步的 MOBA / RTS | 暂缓 | 阵营或单位视野挂接几十个，必须用异步应用并自行压测；没有纵切与容量数据 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[Sync 视野](guide/04-sync.md#谁看见谁视野viewd19) |
-| 单个玩家换服（改绑 sid） | 一期已实现，只有离线验证 | 模块 `rehome` 加 account 的换服接口与 DataEngine 的交出实体；真实交出实体与多进程演练没有做；源服受理后重启而玩家不再登录源服时换服停在在途（没有在途换服的列举，用 `accountctl transfer-role`）；物理库不同的服之间不能换；game-demo 没拦住匹配票据、进行中的副本与对战、名下建筑 | [换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)、[PLAYER-MIGRATION §7](PLAYER-MIGRATION.md) |
+| 单个玩家换服（改绑 sid） | 已实现，断线重连，不是无缝迁移 | 模块 `rehome` 加 account 的换服接口与 DataEngine 的交出实体；macOS 单机真实进程演练通过，独立 Gate、Linux、跨机没验；两个服必须把同一逻辑库映射到同一个 Mongo 与前缀（搬档的前提）；game-demo 拦住了对战座位与匹配中的玩家，旧锁步匹配票据与副本 run 不拦，地形与建筑留在原服 | [换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)、[PLAYER-MIGRATION §7](PLAYER-MIGRATION.md)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#单个玩家换服rehome既定设计) |
 | 玩家接入的 UDP / KCP / QUIC 监听 | 没有 | 只生成装配函数；监听、握手鉴权、Session 绑定宿主自写 | [项目生成器 §16](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#16-帧同步-transport-预设)、[Gate §4](GATEWAY.md#4-synclockstep-与广播) |
 | 高于 20Hz 的实体心跳、固定步长逻辑帧 | 没有 | 心跳只有 50ms～60s 十档，不追帧 | [时间 §4A](guide/10-time.md#4a-实体心跳周期推进)、[派对房间 §8](PARTY-ROOM-INTEGRATION.md#8-框架没有什么) |
 | 离线实体定时器准点 | 没有 | 未加载的实体到期不唤醒，加载后补触发一次；必须准点的由业务发消息 | [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#按实体的持久定时器d11) |

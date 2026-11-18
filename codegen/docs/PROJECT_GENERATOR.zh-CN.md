@@ -522,7 +522,7 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
   方法要求拥有这个 rpc 的服务托管至少一个 Remote 实体 kind（`//roost:entity remote=managed service=<owner>`），否则 `roost generate`
   拒绝——路由查找只认得这类 kind 的登记与所有权记录。不标 route 的 rpc（例如 mail）不受影响。旧的 `shard=` 生成期报“已移除”。
 - 实体加载后在 Redis 登记路由的 kind，就是拥有者自己的 Remote 托管 kind（`registry.RouteKinds("<owner>")`，生成在
-  `internal/registry/ownership_gen.go`）；需要起服就常驻的类型在实体标记上写 `preload=startup`（[§6.w](#6w-实体归属服务roostentity-service)）。
+  `internal/registry/ownership_gen.go`）；需要起服就常驻的类型在实体标记上写 `preload=startup`（[§6.w](#6w-实体归属服务roostentity-servicename)）。
 
 ### 6.w 实体归属服务：`//roost:entity service=<name>`
 
@@ -677,7 +677,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - `config-across-services`（维护者 2026-10-19 批准）：同一工程各服务之间——声明里带 `shared` 的共享资源名（`nats.prefix`、效果流名与主题前缀及 saga 的 start 效果流、saga 库 / 流 / 主题、Remote 库与 L2 前缀、`etcd.service_prefix`、`singleton.key_prefix`、业务时区 `time.business_timezone` / `time.business_day_start` 等）在开发配置集与生产示例里各自必须一致；开发配置集里带 `listen` 的监听地址（`ops.addr`、`web.addr`、`player_access.tcp.addr`，开关打开时）端口不得冲突，带 `unique` 的 `etcd.advertise_addr` 各服务不同。FAIL 并点名服务、键与取值。与 `roost config check --all` 同一个实现（`checkConfigAcrossServices`），不需要编译工程。
 - `singleton:etcd-consistent`（2026-11-16）：开发配置集与生产示例里，所有打开单实例锁（`singleton.enabled: true`）或为业务时间高水位打开同一存储（`time.logic_offset` 非 0）的服务都写了 `etcd.endpoints` 或 `etcd.endpoints_env`，而且取值相同（地址按集合比较；用 `_env` 的按变量名比较，混用报 FAIL），`singleton.key_prefix` 也相同。Live、Gate 与 cellworldhost 的 IdentityChecker 要读别的进程的锁键，只会去自己配置的 etcd 与前缀下找。不一致为 FAIL，点名服务与取值。
 - `config-check:<service>`：用同一个编译好的进程对每个服务的开发配置运行 `<bin> <service> --check-config --config configs/service/config.<service>.yaml`（与进程启动前同一处检查）：除键的声明外，还有各 Mod 配置结构体的跨键规则与跨 Mod 一致性规则（`app.ModConfigCrossChecker`，例如同进程有 DataEngine 时显式写的 `saga.start_effect_stream` / `start_effect_prefix` 必须等于 `dataengine.effects.stream` / `subject_prefix`）。不通过为 FAIL，详情是进程的报错与可直接复跑的命令。生产示例与 Secret 示例带占位值，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项。
-- `entity-owner`：有实体声明 `service=` 时出现（[§6.w](#6w-实体归属服务roostentity-service)）：`service=` 写错为 FAIL；别的服务的代码构造了归属 kind 的 Sender 为 FAIL，详情写出文件与归属服务。
+- `entity-owner`：有实体声明 `service=` 时出现（[§6.w](#6w-实体归属服务roostentity-servicename)）：`service=` 写错为 FAIL；别的服务的代码构造了归属 kind 的 Sender 为 FAIL，详情写出文件与归属服务。
 - `remote-runtime`：工程里有 `remote=managed` 实体（声明了 `service=` 的除外，它们按 `entity-owner` 检查归属服务）时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
 - `saga-steps:<saga>` / `effect-consumer:<service>/<func>`（只读，WARN 不让 doctor 失败）：`roost add saga` 生成的 `steps.go` 有 `StartSteps` / `RegisterSteps`，工程里却没有非测试文件导入该 saga 包并调用它（或调用处所在包没有 `Steps.Drain(ctx)`）时 WARN；`roost add effect` 生成的 `start<Topic>EffectConsumer` 在服务包里没有被调用时 WARN。生成器不改写服务的 Init / Shutdown，这两项提醒“生成了但没启动”——没启动时进程照常起来，步骤命令却等到超时、effect 堆在流里。文本判据（注释不算调用），只说明写了，不证明运行时一定走到；`steps.go` 里没有这两个函数（如 game-demo 手写接线）时不报。
 - `skills:catalog`：工程有 `game/modules/skills/catalog.go` 时运行 `go test ./game/modules/skills/`（生成的 `catalog_test.go` 用 `CompileAll` 编译全部技能 JSON），写坏的定义为 FAIL 并带编译器原话；没有 `catalog_test.go` 为 WARN（下一次 `roost add skill` 补上）。工程编译不过时不报这一项。

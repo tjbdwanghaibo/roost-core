@@ -126,13 +126,13 @@ bits3..7必须为0。PB请求/响应flags=0，PB推送=1，Sync推送=3；Lockst
 - Go实现：`wire.EncodeAuth(ticket, generation)`；robot的`transport.AuthPacket(token)`每次调用自动取`transport.NextConnectionGeneration()`。
 - C#运行库（`client/dotnet`，2026-11-06）：`TcpSession.ConnectAsync`每次连接取`AuthPayload.NextConnectionGeneration()`写成信封（2026-11-18起与传输无关：经WebSocket或自定义`IGateTransport`连接时同样写，信封是第一帧的载荷，传输不看帧的内容），`Connection` / `GameClient`的首次连接与自动重连、Unity托管适配`RoostConnection` / `RoostClientDriver`都经它，调用方API不变、没有新配置项。代号在发起连接时取，进程内所有连接共用一个递增序列。`AuthPayload.Encode` / `Decode`公开，供自建工具核对字节。票据上限由8192改为8182字节：服务端缺省的首包上限`MaxHandshakeBytes`是8 KiB，其中10字节是信封。以`0x00`开头的票据在连接前抛`ArgumentException`。
 - C++运行库（`client/cpp`，2026-11-06）：`roost_connect`每次连接取进程内新代号写成信封（全部`roost_client`共用一个递增序列）。C++ `roost::client::connect`、`game_client`重连、Unity的`NativeClient` / `NativeGameClient` / `NativeReconnect`，以及经C ABI的Unreal模块都经它。C ABI与`roost_abi_version()==2`不变，托管绑定不用改，替换native库即可。票据为空或以`0x00`开头时原样发出，由服务端拒绝（`CLOSED`），与以前的失败方式相同。这里的连接代号与事件里按`roost_client`计数的连接`generation`不是一回事。
-- Unity：正式网络核心是C++（`RoostNativeDriver` + `NativeGameClient`），托管适配走C# `TcpSession`，两条路线都已带代号。重新执行`scripts/client/build-unity.py`打包，新的native插件与`Roost.Client.dll`才生效。Unreal使用同一C++库。
+- Unity：缺省是托管路线（`GameClient` + `RoostClientDriver`，经C# `TcpSession`，TCP或WebSocket），可选原生路线（`RoostNativeDriver` + `NativeGameClient`，C++核心，只有TCP）；两条路线都已带代号。重新执行`scripts/client/build-unity.py`打包，新的`Roost.Client.dll`（原生路线还有native插件）才生效。Unreal使用同一C++库。
 - 跨语言金样：`client/spec/packets.json`的`auth_generation`（票据`ticket`，代号最高位为1，检验按无符号64位大端写出）。Go（`TestClientProtocolGolden*`）、C#（`Roost.Client.Tests`）和C++（`native_client`）都用同一票据与代号编码，并与金样逐字节比对。
 - 混用：服务端对没带代号的一方仍按“后完成者胜出”处理，只要同一会话的两次握手有一次没带代号就退回这条规则。不是这三套运行库的自建客户端要自己按上面的布局与生成规则实现；自建接入服务若直接把首包载荷当票据读，需要先拆信封（Go用`wire.DecodeAuth`，C#用`AuthPayload.Decode`）。
 
 正式生成的player TCP要求客户端首包和后续包seq非零、单连接按线上发送顺序递增（允许uint32回绕）。C#在发送锁内分配seq；推送seq属于服务器独立空间，即使与请求相同也不能匹配待应答请求。正式TCP接收PB业务请求和显式注册的Lockstep Notify，客户端Sync请求在Dispatch前拒绝。类型不符在decoder/handler前拒绝，各类共用同一个message_id注册表。原始Sync推送的载荷是帧协议2 / subject信封v3（2026-11-10起，见`docs/framework/ENTITY_SYNC.md`线格式一节）；外层包头不变。
 
-Go封包实现是`client/wire`，robot TCP/WebSocket与正式生成的player TCP/探针/loadtest共用它。Go客户端解码Entity Sync自身视图（`access.player.self_sync`）的写法见`wiring/selfsync/example_client_test.go`：每连接一个`entitysync.Decoder`（增量信封从基线继承身份，必须按连接有状态地解），取出载荷交给DAO的`ApplySync`，随测试运行；C#用`SubjectUpdate.Decode(data, baseline)`或`EntityViews`，C++用`roost::sync_receiver`。现有`sync/nettransport`的UDP/KCP/QUIC channel管理不在本次改造范围；没有据此宣称所有传输或公网TLS已统一。
+Go封包实现是`client/wire`，robot TCP/WebSocket与正式生成的player TCP/探针/loadtest共用它（robot的`ws`拨号器只对测试里的WebSocket回显端点跑过，没有对game或Gate的WebSocket接入跑过）。Go客户端解码Entity Sync自身视图（`access.player.self_sync`）的写法见`wiring/selfsync/example_client_test.go`：每连接一个`entitysync.Decoder`（增量信封从基线继承身份，必须按连接有状态地解），取出载荷交给DAO的`ApplySync`，随测试运行；C#用`SubjectUpdate.Decode(data, baseline)`或`EntityViews`，C++用`roost::sync_receiver`。现有`sync/nettransport`的UDP/KCP/QUIC channel管理不在本次改造范围；没有据此宣称所有传输或公网TLS已统一。
 
 ## 服务端与代码生成
 
@@ -229,7 +229,7 @@ RV-20261101-06 的原报告见 [review 1bf08673](https://github.com/tjbdwanghaib
 
 ## C# 经 WebSocket 连玩家接入（含 Unity WebGL）
 
-2026-11-18（维护者要求：Unity WebGL 游戏能联机）。`Roost.Client` 的连接抽成可替换的传输，形状照开房间 SDK 的 `IRelayTransport`；WebSocket 只是接入层，握手首包、连接代号、路由、请求关联、推送与心跳（MsgID=0，不用 WebSocket ping）都与 TCP 共用同一套代码。服务端要先开 WebSocket 监听：`roost add transport websocket`，写上 `player_access.{tcp,gate}.websocket.addr`（约定 7080），浏览器页面的来源写进 `allowed_origins`（[GATEWAY §6](../docs/framework/GATEWAY.md#6-websocket-接入)）。
+main 上未发版（CHANGELOG `[Unreleased]`；维护者 2026-11-18 要求：Unity WebGL 游戏能联机）。这是**客户端一侧**：各客户端里只有 C# `Roost.Client` 能经 WebSocket 连玩家接入（C++ 只连 TCP；TS 只有开房间 SDK；Go robot 的 `ws` 拨号器没有对玩家接入跑过）。`Roost.Client` 的连接抽成可替换的传输，形状照开房间 SDK 的 `IRelayTransport`；WebSocket 只是接入层，握手首包、连接代号、路由、请求关联、推送与心跳（MsgID=0，不用 WebSocket ping）都与 TCP 共用同一套代码。服务端要先开 WebSocket 监听：`roost add transport websocket`，写上 `player_access.{tcp,gate}.websocket.addr`（约定 7080），浏览器页面的来源写进 `allowed_origins`（[GATEWAY §6](../docs/framework/GATEWAY.md#6-websocket-接入)）。
 
 **传输**（`client/dotnet/Roost.Client/GateTransport.cs`）：
 
@@ -424,7 +424,7 @@ C# 与 TS 的用例把 `client/relay` 的测试二进制（`go test -c`，`ROOST
 
 按 [Unity 构建入口](unity/README.md) 生成完整 UPM 包，再从输出目录导入 `package.json`；不要直接导入未构建的 `client/unity`，也不要重复放置 `Roost.Client.dll`。Unity 项目选择支持 .NET Standard 2.1 的兼容级别。C# 业务 PB 类型及 Google.Protobuf 依赖由游戏工程管理。包内保留纯 C# 适配，同时提供复用 native 网络线程的 `RoostNativeDriver`；同一连接选择一种路径。
 
-`Roost.Unity.RoostConnection`在Unity主线程Attach会话，`Update`每帧最多拉取配置数量的推送，然后触发`PacketReceived` / `Disconnected`；网络线程不访问Unity对象。Detach/销毁关闭自己的会话，替换时清掉旧连接队列。PB/Sync/Lockstep解码及游戏对象修改由主线程事件处理者实施；Lockstep异步消费必须串行await，不能直接挂并发async void事件。该正式适配源码已在.NET测试中直接链接，并通过真实TCP的缺口/业务异常关闭回归；测试只替代Unity宿主类型，尚未在Unity编辑器/IL2CPP平台实测。
+`Roost.Unity.RoostConnection`在Unity主线程Attach会话，`Update`每帧最多拉取配置数量的推送，然后触发`PacketReceived` / `Disconnected`；网络线程不访问Unity对象。Detach/销毁关闭自己的会话，替换时清掉旧连接队列。PB/Sync/Lockstep解码及游戏对象修改由主线程事件处理者实施；Lockstep异步消费必须串行await，不能直接挂并发async void事件。该正式适配源码已在.NET测试中直接链接，并通过真实TCP的缺口/业务异常关闭回归；测试只替代Unity宿主类型，`RoostConnection`尚未在Unity编辑器/IL2CPP平台实测。高层的`RoostClientDriver`在Unity WebGL构建里跑过（经WebSocket连玩家接入、握手并只靠Pump的心跳保持100s；编辑器batchmode那一轮直接调`GameClient.Pump`，见上文“C# 经 WebSocket 连玩家接入”的验证）；经TCP连服与桌面/移动Player没跑。
 
 后续Godot .NET复用纯C#库并补主线程适配；Godot GDExtension与Unreal优先使用共享C++实现及同一金样。当前没有Godot/Unreal插件；浏览器只有C#（Unity WebGL，经上文的WebSocket传输与`PumpDriven`），不把本机.NET通过等同于引擎验收。Lockstep复用纯C#库；Unreal/GDExtension仍需C++实现，不将.NET验证当C++验收。
 

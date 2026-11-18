@@ -920,6 +920,8 @@ func NewHandlers() *Handlers { return &Handlers{} }
 // Register 把全部 handler 装到 Nest 引擎实例上（引擎 Start 之前）。Cell 侧与 Base 侧的 handler 都注册：注册时还不知道
 // 本进程托管哪一格，没用到的那一侧永远不会被投递。全部 rollback=undo：区域表与角色 DAO 的修改随事务回滚。
 func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
+	// 缺省 async；死亡回执（hDeath）与 Base 入场（hBaseEnter）在下面单独改成 strict：
+	// 回执要落盘后才关闭投递（DeathFact 的约定），入场编号要落入 WAL 后才发消息（BaseState.Entry 的约定）。
 	meta := nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync}
 	for _, entry := range []struct {
 		name nest.HandlerName

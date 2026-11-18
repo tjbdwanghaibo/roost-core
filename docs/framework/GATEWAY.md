@@ -116,7 +116,9 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 
 ## 6. WebSocket 接入
 
-（2026-11-17，lobby-relay 方案 §4.7.1、§6 第 9 条）浏览器经 WebSocket 连玩家接入。维护者的要求是**只做接入层**：握手、票据与连接代号、路由、出站预算、空闲与写超时都沿用 TCP 那一套，不重做。
+（v1.54.0 起，lobby-relay 方案 §4.7.1、§6 第 9 条）浏览器经 WebSocket 连玩家接入。维护者的要求是**只做接入层**：握手、票据与连接代号、路由、出站预算、空闲与写超时都沿用 TCP 那一套，不重做。
+
+本节说的是服务端。客户端一侧现成能经 WebSocket 连玩家接入的只有 C# `Roost.Client`（含 Unity WebGL，main 上未发版，见[客户端手册](../../client/README.md#c-经-websocket-连玩家接入含-unity-webgl)）；C++ `client/cpp` 只连 TCP；TS `client/ts` 只有开房间 SDK，没有连玩家接入的客户端；Go `robot/transport` 的 `ws` 拨号器没有对玩家接入跑过。
 
 **共用适配器** [`infra/network/wsconn`](../../infra/network/wsconn/wsconn.go)（Gate、嵌入 TCP 与 relay 共用，用 `github.com/coder/websocket`）：
 

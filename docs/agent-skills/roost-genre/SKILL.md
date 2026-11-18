@@ -178,8 +178,8 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 | 5 | 实体持久定时器：离线实体不准点，加载后只触发一次，补算由业务按 `Fire` 做；Remote 托管与 noPersist 实体不支持；回调只改本实体 | KNOWN-LIMITS“按实体的持久定时器”；guide/10-time.md §4 |
 | 6 | 实体心跳只有 10 档（50ms～60s），回调不阻塞、不做 I/O | guide/10-time.md §4A |
 | 7 | 长期幂等靠实体上的持久业务事实（序号账本、领奖事实），服务去重环只防短期重投；夹具账本满了拒绝新写、不淘汰旧回执 | 各玩法手册“幂等身份”节 |
-| 8 | Player 跨服协作走 Remote / Saga / 邮件；单玩家换服用 rehome（断线后重连，不是无缝迁移），换服提交后旧服副本的清理还有尚未确认的窗口；按 sid 搬机与 CellWorld 跨格是另外两条路径 | MMORPG-INTEGRATION §6；`modules/rehome/README.md`；KNOWN-LIMITS“单个玩家换服” |
-| 9 | 服务端的玩家接入层（嵌入 TCP、独立 Gate）能接 TCP 与 WebSocket（同一套 RS v2 帧，可靠有序）；KCP / UDP 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写。HTTP 不是玩家协议。独立 Gate 没有跨机验证。**客户端一侧另看**：不是每种客户端都有能走这些路的 SDK，网页、Unity WebGL、C++ / Unreal 尤其受限 | docs/framework/GATEWAY.md；[compose 客户端表](references/compose.md#客户端能连什么按客户端类型) |
+| 8 | Player 跨服协作走 Remote / Saga / 邮件；单玩家换服用 rehome（断线后重连，不是无缝迁移；两个服的玩家库要映射到同一个 Mongo 与前缀；中止或复制失败时目标库可能留一份旧副本，下次换去时覆盖；源档与目标服已有的别的版本冲突时要运维对账）；按 sid 搬机与 CellWorld 跨格是另外两条路径 | MMORPG-INTEGRATION §6；`modules/rehome/README.md`；KNOWN-LIMITS“单个玩家换服” |
+| 9 | 服务端的玩家接入层（嵌入 TCP、独立 Gate）能接 TCP 与 WebSocket（同一套 RS v2 帧，可靠有序）；KCP / UDP 只生成装配函数，监听、握手鉴权、Session 绑定宿主自写。HTTP 不是玩家协议。独立 Gate 没有跨机验证。**客户端一侧另看**：经 WebSocket 连 game 的只有 C# `Roost.Client`（含 Unity WebGL）；C++ / Unreal 只连 TCP；网页（TS）没有连 game 的 SDK，只能开房间（lobby + relay） | docs/framework/GATEWAY.md；[compose 客户端表](references/compose.md#客户端能连什么按客户端类型) |
 | 10 | SyncBus 是默认可丢广播；要最终一致须业务自建对账 | guide/04-sync.md §5 |
 | 11 | 视野：缺省 ApplySync 每玩家 ≤ 9 个视野（超出用 ApplyAsync）；一个会话持有的对象受 `MaxObjects`（缺省 100）约束，超出时不断开、超额降级（暂缓多出的对象，从最远处收紧视野） | guide/04-sync.md §2；KNOWN-LIMITS“广播与 AOI” |
 | 12 | Saga 只在 macOS 单机测过（原生正向约 1050 saga/s），Linux、跨机未测；不是跨服瞬时原子交易。业务键只在运行期间 + 终态保留期（`saga.terminal_retention`，缺省 1h）内唯一，之后可复用；要“同一业务键永远只有一笔”在自己数据里记已用过的键 | KNOWN-LIMITS“Saga”；guide/06-saga.md |

@@ -270,7 +270,7 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 
 | 客户端 | 连 game | 开房间（lobby + relay） | 登录入口 portal 与大厅 lobby 的 HTTP | 协议与配置表 | 实跑到哪 |
 | --- | --- | --- | --- | --- | --- |
-| Unity 桌面，托管路线（缺省） | TCP（缺省）或 WebSocket：`Roost.Client` 的 `GameClient` + `RoostClientDriver`；走 WebSocket 时 `ConnectionOptions.WebSocketUrl` 填完整 `ws(s)://` 地址 | `Roost.Client.Relay`，TCP 或 WebSocket | 自己用 `UnityWebRequest` / `HttpClient` 调 portal；lobby 用 SDK 的 `LobbyClient` | 导出的 C# 直接编译 | 运行库在 .NET 上实跑；托管包只在 macOS 的 Unity Editor 里编译导入过，没有进 Play 连服。relay SDK 在 Unity Editor（Mono）上 TCP 与 WebSocket 都实跑过（WebSocket 偶发断线修复后没有复跑），桌面 Player 没跑 |
+| Unity 桌面，托管路线（缺省） | TCP（缺省）或 WebSocket：`Roost.Client` 的 `GameClient` + `RoostClientDriver`；走 WebSocket 时 `ConnectionOptions.WebSocketUrl` 填完整 `ws(s)://` 地址 | `Roost.Client.Relay`，TCP 或 WebSocket | 自己用 `UnityWebRequest` / `HttpClient` 调 portal；lobby 用 SDK 的 `LobbyClient` | 导出的 C# 直接编译 | 运行库在 .NET 上实跑；托管包在 macOS 的 Unity Editor 里编译导入过，Editor batchmode 下经 WebSocket（`ClientWebSocket` + `PumpDriven`）连玩家接入、握手并保持 100s；经 TCP 连服、桌面 Player 没跑。relay SDK 在 Unity Editor（Mono）上 TCP 与 WebSocket 都实跑过（WebSocket 偶发断线修复后没有复跑），桌面 Player 没跑 |
 | Unity 原生路线（可选） | TCP：`RoostNativeDriver` + `client/cpp` 的网络内核 | 同上（relay 只有托管 SDK） | 同上 | 同上 | macOS ARM64 的 Editor、Mono / IL2CPP Player 实跑；Windows / Linux 没有编译实跑 |
 | Unity WebGL | WebSocket：`Roost.Client` + `ConnectionOptions{ WebSocketUrl, PumpDriven = true, TransportFactory = () => new BrowserGateTransport() }`，`driver.Attach(client, BrowserGateTransport.PollAll)`；地址由 portal 进服请求带 `"transport":"ws"` 返回。浏览器桥接 SDK 不带，从 `client/dotnet/unity-webgl-smoke` 拷 `BrowserGateTransport.cs` 与 jslib。不 Pump 就不发心跳，超过 `idle_timeout`（缺省 90s）被断开、恢复后重连 | `Roost.Client.Relay` 经 WebSocket，三样要自己配：`RelayClientOptions.PumpDriven = true`（每帧 `Pump`，不 Pump 就不发心跳，房主卡住超过 2s 被断开）、浏览器 WebSocket 的 `IRelayTransport` 桥接、`UnityWebRequest` 实现的 `ILobbyHttp`；后两样 SDK 不带，参考写法在 `client/dotnet/unity-webgl-smoke` | `UnityWebRequest`；页面与服务不同源时服务端配 `portal.cors_origins`、`lobby.cors_origins`，relay 配 `ws_allowed_origins` | 同上 | 连 game 与 relay 各在一个 Unity 版本的 WebGL 构建、Chromium 内置浏览器面板里冒烟通过（连 game：握手 + 只靠 Pump 的心跳保持 100s）；进入游戏后的自身视图同步在 IL2CPP 裁剪下没验证；Safari、Firefox、手机浏览器、真实切后台没测 |
 | 手机（Unity Android / iOS） | TCP：托管路线与桌面同一份代码；原生路线有 Android ARM64、iOS ARM64 的打包入口 | `Roost.Client.Relay` | 同 Unity 桌面 | 同上 | 没有在设备上编译实跑；切后台要断开，回前台重新取票登录 |
@@ -325,7 +325,7 @@ cd "$DIR" && "$ROOST" module add portal
 
 **SDK**（[client/README“开房间 SDK”](../../../../client/README.md#开房间-sdklobby--relay)；各平台能不能用、要配什么、实跑到哪，以[客户端表](#客户端能连什么按客户端类型)为准）：Unity / C# 用 `client/dotnet/Roost.Client.Relay`（netstandard2.1，TCP 或 WebSocket，回调在 `Pump` 的线程上；Unity WebGL 必须开 `PumpDriven` 并自备浏览器 WebSocket 桥接与 `UnityWebRequest` 的 lobby HTTP）；网页用 `client/ts`（`@roost/relay-client`，只走 WebSocket，含 `WebHost`：房主规则写成纯 TS 模块，放进 Worker 跑，页面隐藏满 `hiddenHandoffMs` 转交房主，见 [client/ts/README](../../../../client/ts/README.md)）；Go 机器人与压测用 `client/relay`（只走 TCP）。一个房间里 TCP 与 WebSocket 的连接可以混在一起，三份 SDK 可以混用。客户端表“实跑到哪”一列里没跑过的平台写进 DEMO 第 9 节。
 
-**完成标准**：`"$ROOST" project doctor` 没有 FAIL 行，`lobby-relay:*` 各行是 OK（`-template lobby` 工程装 portal 之前有一行 `collaborators:account` FAIL，装完通过）。局内玩法在客户端，没有服务器场景可写；报告写明“lobby + relay 的多进程演练、跨机、容量未验”。
+**完成标准**：`"$ROOST" project doctor` 没有 FAIL 行，`lobby-relay:*` 各行是 OK（`-template lobby` 工程装 portal 之前有一行 `collaborators:account` FAIL，装完通过）。局内玩法在客户端，没有服务器场景可写；报告写明“lobby + relay 的多进程只在单机演练过，跨机、容量未验”。
 
 ### 6A. 专业模式：决策单（写代码前一次问完）
 
@@ -977,7 +977,7 @@ func init() {
 - 独占新服务的模块（alliance）与带 Saga 的模块只在新生成或结构相同的工程上验证过；已有工程先 `module plan` 看它要动什么。
 - **玩家接入是 RS v2 帧，走 TCP 或 WebSocket**。HTTP 不是玩家协议：`roost add webroute` 的路由拿不到玩家身份、不做鉴权、缺省只绑回环地址，只适合管理面或鉴权代理之后；需求要求玩家走 REST 或 WebSocket 上别的消息格式时按冲突提出。portal 的 HTTP 端点只负责登录、选服、换票，lobby 的只负责建房与加入。服务端能接什么与客户端能连什么是两回事，客户端一侧以[客户端表](#客户端能连什么按客户端类型)为准。
 - **一个账号在一个区服只有一个角色**（account 的建角约束，[服务篇 §4](../../../framework/guide/09-services.md#4-关键业务边界)）；需求要“同服多角色”时按冲突提出。同一个人在不同游戏（`account.games` 的不同条目）里是不同的账号号。
-- **lobby + relay 只做过进程内集成与本机起服**：多进程演练、跨机、容量没有验证；relay 进程崩溃时房间丢失。
+- **lobby + relay 的多进程演练只在单机做过**（account、lobby、两个 relay 与 Go SDK 玩家进程）：跨机、两个 lobby 实例、容量没有验证；relay 进程崩溃时房间丢失。
 - **独立 Gate 没有跨机验证**。
 - 登录链路的单机真实脚本是 `scripts/test-demo-login.sh`（game-demo 加 casual + naming 阶段：双 account、双 game 服、双 Gate、重启后重连）；跨机与别的配方不在范围内。
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md)“业务模块”。

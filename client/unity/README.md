@@ -19,7 +19,7 @@
 
 ## 原生路线
 
-正式网络内核来自 `client/cpp`，Unity 主线程通过 `RoostNativeDriver` 消费事件；业务 PB 和 EntitySync 复用 `Roost.Client` 与项目生成的 DAO codec。不会启动第二条 C# TCP 连接。网络 ABI 为 2，插件、绑定和 DLL 必须一起更新。
+原生路线的网络内核来自 `client/cpp`（只连 TCP），Unity 主线程通过 `RoostNativeDriver` 消费事件；业务 PB 和 EntitySync 复用 `Roost.Client` 与项目生成的 DAO codec。不会启动第二条 C# TCP 连接。网络 ABI 为 2，插件、绑定和 DLL 必须一起更新。
 
 ## 构建可导入包
 

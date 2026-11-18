@@ -1,7 +1,7 @@
 # 生成器对齐“组件包 + view + 实体事件”与缺省 async（2026-11-18）
 
 基于 main `f229585e`（v1.56.0）。本机 macOS（Darwin 25.5，arm64），Go 1.27，`GOWORK=off`。规则来源：
-[compose §4D](../../../agent-skills/roost-genre/references/compose.md#4d-组件的写法组件包--gameview--实体事件2026-11-16-起)；
+[compose 附录 A2](../../../agent-skills/roost-genre/references/compose.md#a2-组件的写法组件包--gameview--实体事件)；
 维护者 2026-11-18 的决定：组件写在 `game/components/<功能>/`，标准命令生成这种形态；生成器写出的骨架、示例与文档不用
 `durability=strict`（缺省 async；`strict` 仍是运行时支持的取值）；`roost add entity` 骨架不再在实体包声明 `I<X>Entity`。
 

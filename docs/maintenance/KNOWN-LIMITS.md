@@ -117,7 +117,7 @@
 - **时间域实例随场景实例**：场景卸载重载后是新的 `Domain`，已经挂在旧 `Domain` 上的成员心跳不会自动换；场景（副本）在有成员时不应卸载，或由业务在重载后让成员重新登记。`SetRate` 是否在所属实体锁内调用不校验（契约写在 API 注释）。
 - **域要在构造时给，换场景靠重建**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域。成员换场景时先 `Controller.Close`、`Behavior.Close`（在途动作与任务以给定原因结束、心跳登记撤销、名字释放），再在同一心跳宿主上按新域重建（[guide/10-time §4D](../framework/guide/10-time.md#4d-场景时间域变速)）；不提供 `SetTimeDomain`：旧域里记下的时刻（上一拍的 `Elapsed` 基线、计划步骤时限的起点、`FreezeFor` 的期限）不能拿到新域里比较，而换场景本来就要结束场景里的动作。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
 - **技能 / Buff 的时间域在构造时给**：心跳驱动的 `combatcomponent.BeatConfig.TimeDomain`、`RuntimeBeatConfig.TimeDomain` 在 `AttachBeat` / `NewRuntimeBeat` 时定下，运行中不能换域，换场景靠 `CloseBuffDriver` / `RuntimeBeat.Close` 后按新域重建（不走心跳的驱动经 `StepperConfig.Now` / `Rate` 自己传域时间）。buff 的 `DueTick` 是按域时间算的绝对 tick：实体换到另一个域（或离开变速场景）时，已有 buff 的剩余时长按新域的 tick 算，框架不换算。
-- **客户端外推只有 C# 的计算类**：game-demo 的场景已挂时间域（D20 P3，单场景、`nopersist,sync`、经场景视野下发给每个成员）；生成器的 `roost add timedomain` 只生成场景侧的字段与组件，成员怎样拿到所在场景的域由业务写；C# 客户端有 `Roost.Client.SceneTimeDomain`（同一公式、单调托底）；SDK 不解码业务载荷，三个字段由游戏自己的解码器读出交给它；“估计的服务端业务时间”由游戏提供（SDK 没有对时）。（Unity 适配层见[客户端：遗留](#客户端遗留)）
+- **客户端外推只有计算类，载荷与对时归游戏**：game-demo 的场景已挂时间域（D20 P3，单场景、`nopersist,sync`、经场景视野下发给每个成员）；生成器的 `roost add timedomain` 只生成场景侧的字段与组件，成员怎样拿到所在场景的域由业务写。客户端一侧：C# `Roost.Client.SceneTimeDomain`（同一公式、单调托底，Unity 适配 `RoostSceneTime`）与 C++ `client/cpp` 的 `roost/time_domain.hpp`；TS 没有。SDK 不解码业务载荷，三个字段由游戏自己的解码器读出交给它；“估计的服务端业务时间”由游戏提供（SDK 没有对时）。（Unity 适配层的实跑见[客户端：遗留](#客户端遗留)）
 
 #### Skill Runtime
 
@@ -135,7 +135,7 @@
 
 #### 热点单例实体的写吞吐（2026-11-15）
 
-- **strict 热点仍约“每次 fsync 一条”**：经派发器打到同一实体的同步请求，strict 与不声明的 pipelined 仍约每次 fsync 一条（同实体准入链等回复，这是契约代价）；要吞吐的热点写声明 `//roost:nest durability=pipelined completion=async`（2026-11-15 起，`HandlerMeta.AsyncCompletion`；同一实体约 120 → 约 2900 次/秒，回复仍在持久之后）。异步完成不是缺省，handler 要显式声明。game-demo 的 World 登录计数仍只投递（`Send_RecordEnter`）。
+- **strict 热点仍约“每次 fsync 一条”**：经派发器打到同一实体的同步请求，strict 与不声明的 pipelined 仍约每次 fsync 一条（同实体准入链等回复，这是契约代价）；要吞吐的热点写声明 `//roost:nest durability=pipelined completion=async`（v1.49.0 起，`HandlerMeta.AsyncCompletion`；同一实体约 120 → 约 2900 次/秒，回复仍在持久之后）。异步完成不是缺省，handler 要显式声明。game-demo 的 World 登录计数仍只投递（`Send_RecordEnter`）。
 - **nestwal 的 fsync 已移出 writer，平台差异未测**：async 追加不再排在 strict 的 fsync 后面（有 strict 负载时 async 吞吐 +135%）；macOS 上 `F_FULLFSYNC` 进行中同一文件的 write 仍在内核里等（约 190µs），目标 Linux 上未对照测量。证据见 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。
 
 #### 实体事件（2026-11-16）
@@ -152,7 +152,7 @@
 
 #### 起服预加载与按服分库（v1.47.0）
 
-设计见 [guide/02“起服预加载与按服分库”](../framework/guide/02-nest-entity.md#起服预加载与按服分库v1470-起)、实现见 [impl/12 §2H1](../framework/impl/12-codegen.md#2h1-本地实体起服预加载与-dao-缺省-dbscopesidv1470)。没做到位的部分见[起服预加载与按服分库：遗留](#起服预加载与按服分库遗留)。
+设计见 [guide/02“起服预加载与按服分库”](../framework/guide/02-nest-entity.md#起服预加载与按服分库v1470-起)、实现见 [impl/12 §2H1](../framework/impl/12-codegen.md#2h1-本地实体起服预加载与-dao-缺省-dbscopesidv1470)。下面都是设计边界，没有遗留项。
 
 - **预加载不等于常驻，常驻要显式声明**：只写 `preload=startup` 的实体被运维卸载、换服交出、业务空闲卸载之后按需加载，不会再预加载。要一直留在内存用 `lifetime=resident`（v1.47.0 起，隐含 `preload=startup`）：除换服交出、删档收尾与运维强制刷新三处框架许可外，所有移出内存的路径都返回 `entity.ErrEntityResident`。
 - **常驻实体的内存没有上限**：占用随本服库里该类实体的文档数增长，框架不估算、不截断。
@@ -215,7 +215,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
 #### Remote
 
 - **多写者本地副本**（2026-11-04 修复后的边界，契约见 [REMOTE_ENTITY“多写者：本地副本与权威”](../framework/REMOTE_ENTITY.md#多写者本地副本与权威)）：写准入发现本地实例落后于权威或停在 `Fenced` 时卸载重载，需要 loader 实现 `IRemoteEntityUnloader`（正式 `ManagerAccess` 实现了）；自定义 loader 不支持卸载时照旧报版本冲突 / fenced，直到业务自己重载。事务外独立删档持有实体锁，遇到落后实例按版本冲突拒绝，不在删档中途换实例；先有一次 Nest 写准入（或 `ManagerAccess.Unload`）换掉旧实例再删。回归用两进程共用的 Mongo 权威替身与 Redis 版本锁替身（`write_admission_test.go`），以及 `scripts/test-remote-generated.sh` / `test-remote-matrix.sh` 的现有真实依赖用例。两个真实进程交替写同一共享实体见 `scripts/testdata/remoteflow/shared_writers_test.go` 的 `TestGeneratedRemoteSharedEntityTwoWriterProcesses`（2026-11-14）。
-- **路由 RPC 与 Redis 路由登记的边界**（联盟服务方案 1R，2026-11-04，契约见 [REMOTE_ENTITY“路由登记”](../framework/REMOTE_ENTITY.md#路由登记)、[guide/09“路由 RPC 与改投”](../framework/guide/09-services.md#2a-路由-rpc-与改投)）：① 登记表只增不减：Remote 实体没有空闲卸载，续期量是“已加载的登记 kind 实体数 / 10s”，`AllianceMember` 这类按玩家的实体长时间运行后会一直增长，阶段 5 实测：续期量就是已登记实体数——预加载 1000 / 10000 个联盟后 `route_renew_total{result=renewed}` 每 10s 1000 / 10000 次（每批不超过 1000 个键一次 pipeline），按需加载的守卫每个同样每 10s 一次，长时间运行后的守卫加载量没有测（[benchmarks/alliance-20261104](../performance/benchmarks/alliance-20261104/README.md)）。② Redis 不可用时每次缓存未命中的查找多一次 Mongo 点读：阶段 5 断开 toxiproxy 的 redis 代理实测，空路由缓存的调用方 Redis 正常时 0 次点读，断开时每次 1 次，调用方 p50 14ms → 125ms（多出的是 go-redis 拨号重试）；跨实例两步入会照常完成，恢复后约 5s 由续期“不存在”重新登记。**断开 Redis 不再影响单实例锁**（2026-11-16 起锁改存 etcd，c261b304）：原来写的“断开超过单实例锁扛得住的时长（缺省 9～12s）时实例因续不上锁而 fail-stop、只影响路由效率的说法只对更短的断开成立”只在 Redis 后端时期成立。`TestAllianceE2ERedisOutage` 已按现状简化（e62f2313）：去掉锁参数、短断开上限、恢复后等 `/readyz` singleton 回到 ok 与长断开 fail-stop 段，改为断言断开期间两个实例一直活着；改后的用例**待最终阶段实测**（本轮阶段 7 的 alliance-e2e）。etcd 断开时的 fail-stop 见[单实例锁的有效窗口](#单实例锁的有效窗口v1470)。③ 死掉的 owner 不拉起同 sid 时登记按 TTL 过期，调用方回退读到的仍是它，请求一直是 no responders（“可重试”），直到它被拉起；转不走它的实体（`TransferRemoteOwnership` 要求本地是 owner）。④ 缩容入口 `(*bus.Bus).LeaveRPCQueue` 只支持轻量 RPC：JetStream RPC 的服务级 consumer 是全部实例共享的 durable，按实例退出返回 `ErrRPCQueueLeaveUnsupported`；退出后不能重新加入（重启实例）。⑤ “预加载完成前不接请求”要求路由 RPC 的 owner Mod 把 `remote_entity.preload` 写进 `OptionalDependsOn`，由生成器（方案 2R）声明；1R 只验证了预加载 Mod 的 Start 跑完才返回与依赖声明，阶段 5 已在生成工程的真实进程上验证（`scripts/test-alliance-e2e.sh` 的 `TestAllianceE2EPreloadOrder`：2000 个联盟预加载 2.0s，期间 342 次路由请求全部 no responders，完成后约 30ms 第一次得到答复）。⑥ 预加载的起服时间与内存随“owner 是本 sid 的该 kind 实体数”线性增长：阶段 5 实测 1000 / 2000 / 10000 个演示联盟预加载 1.7 / 2.0 / 13.7s（约 1.4ms 一个，并发 16），预加载完的常驻内存 65 / 71 / 123 MiB；演示联盟只有几个成员，大联盟的文档与内存没有测。
+- **路由 RPC 与 Redis 路由登记的边界**（联盟服务方案 1R，2026-11-04，契约见 [REMOTE_ENTITY“路由登记”](../framework/REMOTE_ENTITY.md#路由登记)、[guide/09“路由 RPC 与改投”](../framework/guide/09-services.md#2a-路由-rpc-与改投)）：① 登记表只增不减：Remote 实体没有空闲卸载，续期量是“已加载的登记 kind 实体数 / 10s”，`AllianceMember` 这类按玩家的实体长时间运行后会一直增长，阶段 5 实测：续期量就是已登记实体数——预加载 1000 / 10000 个联盟后 `route_renew_total{result=renewed}` 每 10s 1000 / 10000 次（每批不超过 1000 个键一次 pipeline），按需加载的守卫每个同样每 10s 一次，长时间运行后的守卫加载量没有测（[benchmarks/alliance-20261104](../performance/benchmarks/alliance-20261104/README.md)）。② Redis 不可用时每次缓存未命中的查找多一次 Mongo 点读：阶段 5 断开 toxiproxy 的 redis 代理实测，空路由缓存的调用方 Redis 正常时 0 次点读，断开时每次 1 次，调用方 p50 14ms → 125ms（多出的是 go-redis 拨号重试）；跨实例两步入会照常完成，恢复后约 5s 由续期“不存在”重新登记。**断开 Redis 不影响单实例锁**（v1.52.0 起锁存 etcd，c261b304）。`TestAllianceE2ERedisOutage` 按此简化（e62f2313）：断言断开期间两个实例一直活着；简化后的用例在 2026-11-16 整理轮阶段 7 的 alliance-e2e（11 / 11）里通过（[证据](evidence/round-20261116/README.md)）。etcd 断开时的 fail-stop 见[单实例锁的有效窗口](#单实例锁的有效窗口v1470)。③ 死掉的 owner 不拉起同 sid 时登记按 TTL 过期，调用方回退读到的仍是它，请求一直是 no responders（“可重试”），直到它被拉起；转不走它的实体（`TransferRemoteOwnership` 要求本地是 owner）。④ 缩容入口 `(*bus.Bus).LeaveRPCQueue` 只支持轻量 RPC：JetStream RPC 的服务级 consumer 是全部实例共享的 durable，按实例退出返回 `ErrRPCQueueLeaveUnsupported`；退出后不能重新加入（重启实例）。⑤ “预加载完成前不接请求”要求路由 RPC 的 owner Mod 把 `remote_entity.preload` 写进 `OptionalDependsOn`，由生成器（方案 2R）声明；1R 只验证了预加载 Mod 的 Start 跑完才返回与依赖声明，阶段 5 已在生成工程的真实进程上验证（`scripts/test-alliance-e2e.sh` 的 `TestAllianceE2EPreloadOrder`：2000 个联盟预加载 2.0s，期间 342 次路由请求全部 no responders，完成后约 30ms 第一次得到答复）。⑥ 预加载的起服时间与内存随“owner 是本 sid 的该 kind 实体数”线性增长：阶段 5 实测 1000 / 2000 / 10000 个演示联盟预加载 1.7 / 2.0 / 13.7s（约 1.4ms 一个，并发 16），预加载完的常驻内存 65 / 71 / 123 MiB；演示联盟只有几个成员，大联盟的文档与内存没有测。
 - **独占实体的只读请求与所有权查询**（2026-11-06 修复后，修复经过见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-06remote-独占实体的只读请求不再取写许可)）：（1）扫描仍是 N 次本地 Nest 事务，所有权列表 `ListOwnedRemoteEntities` 按 `_id` 扫、在 FETCH 里按 owner / kind 过滤，键数约 N + 守卫数；按 DAO 字段只列带标记的联盟仍不可行（Remote 的 DAO 文档在 Mongo 里是不透明的 `data` 字节）。（2）只读请求与写请求同样排在同一实体的写门后、占 `max_concurrent_writes` 名额，写额度被在途写占满时读也答 overloaded。（3）前提（一个实体同一时刻只有一个 owner）由 App 单实例与 fail-stop 保证；被打破时稳定持有的进程在下一次写之前读到的是自己的内存，写在投影元数据 CAS 被拒（WAL 写使进程 fail-stop，memory 写隔离后重载），计 `remote_entity.commit_conflict_total` 并记 ERROR。
 - **NATS 驱动建消费者的重发**（2026-11-04 修复后，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-04联盟服务冒烟里的两条观察)）：重发最多 4 次、每次 2s，连续 4 次都没有回答仍按原样失败；`EnsureStream` 同时建同一个流没有观察到同样的问题，没有加重发。
 - **空认领**（`9a1d9ee4` 修复后，契约见 [REMOTE_ENTITY“路由登记”](../framework/REMOTE_ENTITY.md#路由登记)“空认领”）：① **重启前后答复的码不同**：重启前内存里还有业务 `GetOrCreate` 新建、未提交的空实例，game-demo 的 `Info` 答业务码 100031；重启后答框架的 `entity_not_found`（errcode 2）。两者都是确定的拒绝。 ③ 未采用“回滚时撤销认领”（理由见契约）。② **清理是运维动作、不自动**（D17，2026-11-15 实施，契约见 [REMOTE_ENTITY“删空认领”](../framework/REMOTE_ENTITY.md#路由登记)）：`remote_entity.empty_claims` 只由持有它的 sid 删自己的，owner 已死且不再拉起的 sid 上的空认领删不了（与“转不走它的实体”同一边界）；`remote_entity.empty_claim_total{event="left"}` 不计提交前崩溃留下的，现存数靠命令不带 `delete` 列出；删掉之后同 ID 再建时所有权代际从 1 重新开始（被删那一代下没有任何提交，理由见契约）；删之前内存里的版本 0 空实例保留在内存。
@@ -226,8 +226,10 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
   - **outbox 发布归属**（2026-11-06 维护者选 A“写者自己先发”之后，仍有的限制）：① 写者崩溃后它留下的提交晚一个宽限期（缺省 30 s）才由别的进程发布（同 sid 重启立即发布；接管者写同一实体时立即代发；还需要别的进程在崩溃后扫描过一次 outbox——扫描由各进程自己的写触发，没有周期轮询，别的进程都不写时等到同 sid 重启或下一次别处的写，2026-11-06 演练时读代码确认，未改），其间订阅方收不到推送（维护者 2026-11-06 确认保持缺省 30 s、作为下限，不与收尾期限一起调小）；② 宽限期按写者写入时刻与代发方本地时钟比较，依赖进程间时钟大致同步（**2026-11-06 已演练**，时钟偏差经 `outboxNow` 注入真实进程的发布归属判定，宽限期按 1/10 缩为 3 s：实际宽限期是“宽限期 − 代发方时钟快出的量”，崩溃接管时延实测与之相符（慢 6 / 3 / 1 s 时 9.0 / 6.0 / 4.0 s，快 1 / 2.5 s 时 2.0 / 0.54 s，快到宽限期以上时下一次扫描即代发）；代发方快到接近宽限期时活着的写者退化为修复前的现象（strict 写超时、写门持有到收尾期限），偏差小于宽限期减去写者发布耗时则没有影响；任何偏差下每笔都只由 Applied 改成 Committed 一次、写者 tracker 都在上界内结束，没有正确性问题。要求各进程 NTP 校时、偏差 1 s 以内并告警，不靠调小宽限期提速；写者之间的偏差还会让 outbox 排序与写入先后不一致，“同实体后继立即代发”认不出前序，前序照常等宽限期、晚于后继发布（被版本比较丢弃），见 [REMOTE_ENTITY“时钟同步要求”](../framework/REMOTE_ENTITY.md#outbox-发布归属)）；③ 写者活着但超过宽限期仍没发布、被别的进程代发时，它的 tracker 没人通知，靠延迟收尾的期限回源结束（最多再等一次 strict 等待的剩余时间或一次收尾重试间隔），不另外回源（维护者未选方案 B）（**2026-11-06 已演练，与上界相符**：两个真实进程，写者到 NATS 的发布确认经 toxiproxy 延迟 3.5 s，宽限期 = 收尾期限 = 3 s、strict 等待 1 s；接管方写入后 3.01～3.02 s 代发、每笔只发布一次，被抢先的 strict 写 1.0 s 答“结果未知”，写门在代发后 0.95 s 释放（上界 1 s），释放后同实体的写 46 ms 确认；宽限期 = 2 × 收尾期限时代发后 0.96 s 释放（上界一次重试间隔）；写者 `finalize_projection_timeout_total` 1 / 2、`remote_entity_write_gate_timeout_total` 1（演练里故意在持门期间写了一次），接管方 `outbox.takeover_total{reason="grace"}` 2。用例 `TestRealOutboxTakeoverOfALiveStalledWriter`，`ROOST_OUTBOX_DRILL=1` 才运行，已加入 `scripts/test-remote-matrix.sh`）；④ “同实体后继立即代发”只在一页（256 条）内判断，跨页时后面的提交可能先发布（维护者 2026-11-06 确认保持页内判断，与发布失败时的同实体顺序语义一致，不做跨页状态）。
   - **顺序只在一个接收实例上成立**：改投、缩容转移、调用方并发发出的请求不在承诺之内（与修前相同）；新旧进程混跑时旧接收端按旧规则串行、旧调用方不带键，不承诺顺序（按未上线规则整体换新）。
   - **RPC 并发上限**：在跑与排队的 RPC 合计受 `bus.Config.RPCMaxPending`（缺省 `nats.worker_num` × 1024）约束，没有单独的“同时在跑”上限；下游压力由 Nest 的准入与队列承担。模块消息（`Bus.Handle`）仍按目标模块串行，handler 阻塞会挡住同一 worker 上的其他模块（没有改，模块消息依赖到达顺序）。
-- **单实例锁在后端恢复后的重连延迟（etcd，待最终阶段实测）**：Redis 后端时期有约 1s 盲区——Redis 已恢复，go-redis 的拨号缓存仍可能让续期失败而失锁（只会让失锁提前、安全一侧；维护者 2026-11-05 决定保持现状，`TestAllianceE2ERedisOutage` 的定位经过见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-05testalliancee2eredisoutage-偶发失败)）。2026-11-16 起锁改存 etcd，这个原因不再作用于锁；etcd 客户端在 etcd 恢复后的重连延迟、实际“稳扛多久”**尚未实测**，由[单实例锁：遗留](#单实例锁遗留)的演练 `singleton-etcd-drill.sh` 在最终阶段量。量出来之前按 [guide/01“单实例锁在后端短暂不可用时”](../framework/guide/01-app-lifecycle.md#单实例锁在后端短暂不可用时)的续期窗口理解。
+- **单实例锁在 etcd 恢复后的重连**：锁存 etcd（v1.52.0 起），Redis 后端时期 go-redis 拨号缓存造成的约 1s 盲区不再作用于锁（[定位经过](evidence/known-limits-history-20261113/README.md#2026-11-05testalliancee2eredisoutage-偶发失败)）。演练 `scripts/testdata/singleton-etcd-drill/singleton-etcd-drill.sh` 四步已通过（[证据](evidence/round-20261116/README.md)）：etcd 停 20s 时持锁进程 fail-stop，etcd 恢复 18s 后同 sid 的新进程重新拿到锁。能扛多长的断开按 [guide/01“单实例锁在后端短暂不可用时”](../framework/guide/01-app-lifecycle.md#单实例锁在后端短暂不可用时)的续期窗口理解；精确值没有单独量，见[单实例锁：遗留](#单实例锁遗留)。
 - **Remote WAL级Rejected处理**（`38b710a2`）：Durability 1/2/3 的正式链路不产生 Remote Rejected，strict / pipelined 的 `Commit` 失败一律带 `ErrRemotePersistenceIndeterminate`；tracker 的 Rejected 收尾只剩 Durability 0 来源。守卫 `TestWALRemoteAuthorityConflictNeverProducesRejected` 只覆盖正式 MongoStore / MongoCommitter 投影链路；自定义投影存储若产生 Rejected，strict / pipelined 仍按结果未知回复、由 finalizer 按 tracker 结论收尾（`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`）。
+- **共享 kind（`ownership=shared`，v1.55.0 起；使用者：facebook 的 Facebook、team 的 Team）的代价**：每次读写都走共享准入（分布式锁 + 一次 GrantWrite），没有独占实体的稳定持有快路径；不能退出共享。声明是进程级登记（`entity.DeclareRemoteSharedKind`）：同一 kind 在不同二进制里声明不一致时，没声明的一方首写会插入独占记录（同一工程同一份生成代码时不出现）（[证据](evidence/remote-shared-kind-20261118/README.md)）。
+- **没有所有权记录、但本进程内存里有实例的 Remote 实体，只读请求也会首写认领成本进程独占**：读写同一准入，没有只读声明。
 
 - **单实例分散 `Join` 的吞吐**（2026-11-05，本机三成员同盘副本集，[基准页](../performance/benchmarks/alliance-join-1000-20261105/README.md)）：约 340～400 次/秒，封顶在 Mongo——每次 `Join` 约 22～25 条 Mongo 命令、约 1.15 个提交的事务。为此调整过的缺省：Nest I/O 池 max(256, 4×短池)、`dataengine.projection.workers` 32、`remote_entity.outbox_publish_workers` 32、Nest 派发队列满答“可重试”、effect outbox 一批认领 / 确认常数次往返、effect 消费者进程内按实体并发（缺省 16，`dataengine.effect_consumer.workers`）。写额度 `remote_entity.max_concurrent_writes` 缺省 128，256 并发下会答“可重试”，额度 512 的三轮既有探针 retryable / unknown 均为 0（`ffe2b98d`，`TestAllianceE2EJoinRetryableSources`）；这不是本轮 M-11 的 effect worker 对照结论。目标 1000 次/秒要主节点约 2.2～2.5 万条命令/秒、约 1200 事务/秒，属部署硬件容量。
 - **strict 写在存储 I/O 停顿超过请求期限时会一起超时**（单实例 128 / 256 并发写 Remote 时“约 3s 全体超时簇”的机制）：strict 写要等持久与发布，投影 Mongo 事务（多数派）、outbox 标记、WAL fsync 或 checkpoint 落盘出现超过请求期限的停顿时，在途写全部超时（2026-11-06 证据：load 11～57、swap 接近用满时 8 轮 20 簇，停顿栈全在这些 I/O 上）。2026-11-18 在当前树上复跑：正式入口 `TestAllianceE2ERPCConcurrency` 128 / 256 各 3 轮（load 5～7）与 11-06 的同一探针 `TestJoinScaleRetry` 8 轮（load 5～22，swap 6.66G / 8G），`background_checkpoint` 开，**0 簇**、无 ≥2.5s 的单次尝试（[证据](evidence/category3-batch2-20261118/README.md) 第 2 节）。本机造不出当时的 I/O 停顿，未复现不等于不会发生；目标硬件上的验收仍按 C-Q1（保留停顿栈、fsync / outbox 指标、主从慢日志）。
@@ -363,27 +365,29 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 #### 玩家接入方式（2026-11-16）
 
-- **玩家协议是 RS v2 帧，走 TCP 或 WebSocket**：嵌入在业务服务里（缺省），或经独立 Gate。WebSocket（2026-11-17 起，未发版）只是接入层：每条二进制消息装一个 RS v2 帧，握手、票据、路由与 TCP 相同，边界见下一节[WebSocket 接入](#websocket-接入2026-11-17)。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（`wiring/web`）拿不到请求头、不做鉴权、缺省只绑回环地址，只用于管理面、内部调用或鉴权代理之后；登录入口（portal）的 HTTP 端点只负责登录、选服、换票，大厅 lobby 的 HTTP 只负责建房与加入。玩家走 HTTP / REST 业务协议、或在 WebSocket 上走 RS 帧以外的格式不支持。
+- **玩家协议是 RS v2 帧，服务端接入层走 TCP 或 WebSocket**：嵌入在业务服务里（缺省），或经独立 Gate。WebSocket（v1.54.0 起）只是接入层：每条二进制消息装一个 RS v2 帧，握手、票据、路由与 TCP 相同，边界见下一节[WebSocket 接入](#websocket-接入2026-11-17)。这里说的是服务端能接什么；客户端一侧哪种 SDK 能走哪条路见[客户端](#客户端)。HTTP 不是玩家协议：`roost add webroute` 生成的 JSON 路由（`wiring/web`）拿不到请求头、不做鉴权、缺省只绑回环地址，只用于管理面、内部调用或鉴权代理之后；登录入口（portal）的 HTTP 端点只负责登录、选服、换票，大厅 lobby 的 HTTP 只负责建房与加入。玩家走 HTTP / REST 业务协议、或在 WebSocket 上走 RS 帧以外的格式不支持。
 - **独立 Gate 没有跨机验证**：只做过单机真实进程演练（account、经 Game Ingress 的 game、Gate 各一个进程，真实 NATS / Redis / Mongo / etcd；`scripts/test-demo-login.sh` 的 casual + naming 阶段另有双 Gate 与重启重连），没有跨机、跨机房的验收；属于外部环境验收。`roost add gate` 生成的接线只在单机、单个 Gate 进程、一次登录上做过真实进程演练（`scripts/testdata/gate-drill/gate-drill.sh`，[证据](evidence/gate-command-20261116/README.md)；缺省名与自定义 Gate 名 / 玩家服务名四组，[证据](evidence/gate-identity-20261117/README.md)）；多个 Gate、game / Gate 崩溃重启只由 game-demo 手写接线的脚本覆盖。
-- **`roost add gate` 的 Gate 是固定参数**（2026-11-16）：配置里只开放地址（`player_access.gate.addr` / `advertise_addr`）与命名空间；TCP 与内部上限（两侧报文 512 KiB、连接数、超时）取 `gatewiring.DefaultOptions()`，两侧 Ready 恒真（与嵌入 TCP 相同：Mod Start 起就接收，业务没有另外的准入条件）。要改这些按 [GATEWAY §2](../framework/GATEWAY.md#2-正式接入方式) 手写接线。
+- **`roost add gate` 的 Gate 是固定参数**（v1.51.0 起）：配置里只开放地址（`player_access.gate.addr` / `advertise_addr`）与命名空间；TCP 与内部上限（两侧报文 512 KiB、连接数、超时）取 `gatewiring.DefaultOptions()`，两侧 Ready 恒真（与嵌入 TCP 相同：Mod Start 起就接收，业务没有另外的准入条件）。要改这些按 [GATEWAY §2](../framework/GATEWAY.md#2-正式接入方式) 手写接线。
 - **生成的 Gate 只认 account 票据**：Gate 用 `wiring/gate.AccountAuthenticator`（`enter:` 与 `session:` 两种票据）；`auth.go` 认别的票据的工程不能直接在前面放生成的 Gate。
 - **doctor 的 `gate:client-address` 只查开发配置**：生产示例里的地址保持 `CHANGE_ME`，由运维填写。
 - **接入方式怎么选**写在 roost-genre 的 compose 第 5 步：短连接（按请求交互）与开房间类用嵌入 TCP，长连接（长期在线、持续推送）缺省加独立 Gate；房主做 host 的开房间联机用 lobby + relay（compose 第 6 步）。
 
 #### WebSocket 接入（2026-11-17）
 
-Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/websocket`），契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，方案 [FEATURE-2026-11-16-lobby-relay §4.7.1](FEATURE-2026-11-16-lobby-relay.md)，[证据](evidence/lobby-relay-ws-20261117/README.md)。
+服务端一侧（v1.54.0 起）：Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/websocket`），契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，方案 [FEATURE-2026-11-16-lobby-relay §4.7.1](FEATURE-2026-11-16-lobby-relay.md)，[证据](evidence/lobby-relay-ws-20261117/README.md)。
+
+客户端一侧经 WebSocket 连**玩家接入**（嵌入 TCP 或独立 Gate）的只有 C# `Roost.Client`（`ConnectionOptions.WebSocketUrl`，main 上未发版，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入2026-11-18)）。Go `robot/transport` 有 `ws` 拨号器，只对测试里的 WebSocket 回显端点跑过，没有对 game 或 Gate 的 WebSocket 接入跑过；C++ `client/cpp` 只连 TCP；TS `client/ts` 只有开房间 SDK，没有连玩家接入的客户端。连 **relay** 的 WebSocket 是另一回事，见[开房间 SDK](#开房间-sdk2026-11-17)。
 
 - **Origin 白名单为空时同源页面也拒绝**：不带 `Origin` 的请求（原生客户端、工具）总是放行；带 `Origin` 的必须匹配 `allowed_origins`（relay 是 `ws_allowed_origins`）。白名单为空时拒绝所有带 Origin 的请求，**同源页面也拒绝**（选择理由：失败即关闭；游戏页面通常与接入地址不同域，前置负载均衡还可能改写 Host，按 Host 判同源靠不住）。要让浏览器连上来，必须写白名单。
 - **七层负载均衡后要配可信代理才按客户端计数**（2026-11-17，交接 C3）：不写 `websocket.trusted_proxies` 时连接的对端是负载均衡，`max_connections_per_ip` 把经它来的全部 WebSocket 连接算作一个 IP；写上负载均衡自己的地址后按 `X-Forwarded-For` 从右往左第一个不可信的地址计数（规则见 GATEWAY §6“部署注意”）。只认 `X-Forwarded-For`（`Forwarded`、`X-Real-IP` 不读），每一项都可信时退回对端地址（不取最左项），四层负载均衡的 PROXY protocol 不支持，玩家 TCP 监听不读任何转发信息。relay 没有按 IP 的连接限额，保护靠令牌、每连接帧率与房间人数上限。没有经真实七层负载均衡与浏览器演练（尚未确认，[证据](evidence/c3-trusted-proxies-20261117/README.md)）。
 - **TLS 由前置负载均衡终结**（wss）：进程里不配证书。
-- **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。 只有读写进行中到期才关闭；上一次读写留下的期限不作用于之后的读写（2026-11-17 修复 relay 成员在心跳整 10s 点被断开，[证据](evidence/ws-write-deadline-20261117/README.md)）。一次读写恰在期限处结束时，库的到期回调仍可能关掉紧接着的那次读写，等同于那次超时。修复后的 relay 在 Unity 编辑器 C# SDK 上没有复跑（尚未确认）。
+- **期限在读写进行中到期会关闭整条连接**：这是 coder/websocket 的 NetConn 的行为（TCP 只打断这一次）。写一帧时调用方期限到了，TCP 上是拒绝、连接保留，WebSocket 上是连接被关；relay 的空闲与令牌首帧超时因此改用计时器，不用读期限。 只有读写进行中到期才关闭；上一次读写留下的期限不作用于之后的读写（v1.54.0 修复 relay 成员在心跳整 10s 点被断开，[证据](evidence/ws-write-deadline-20261117/README.md)）。一次读写恰在期限处结束时，库的到期回调仍可能关掉紧接着的那次读写，等同于那次超时。修复后在客户端一侧的复跑范围见[客户端：遗留](#客户端遗留)。
 - **单条消息上限有 1 字节余量**：库按流读，越过上限后的下一次读才失败，超出部分最多先读出 1 个字节，之后连接以 1009 关闭。上限之内的帧照常处理。
-- **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 在同一段 `ports` 里发布玩家 TCP 7000 与 7080（2026-11-17 起，之前漏了 7000）。生产 compose 的 ops 发布在宿主机 `127.0.0.1:<9100+端口块>`（2026-11-17 起，只对本机，见 CHANGELOG）。
+- **玩家 WebSocket 的部署端口是约定的 7080**：`roost add transport websocket` 不写 `websocket.addr`（写上才开），部署模板按 7080 发布 `player-ws`；开 WebSocket 时写 `addr: 0.0.0.0:7080`，换端口时同步改部署模板。生产 compose 在同一段 `ports` 里发布玩家 TCP 7000 与 7080；ops 发布在宿主机 `127.0.0.1:<9100+端口块>`，只对本机（均 v1.54.0 起，见 CHANGELOG）。
 
 ### 生成器、配置与模块
 
-- **模块配置（D19 B，2026-11-17；①②③⑤ 维护者 2026-11-18 按推荐定：退出码保持 3、保持多 3s、清单指向结构体、宽限下限 2m）**：模块清单 `config:` 指向模块包里带 `config` tag 的结构体，安装器写进宿主服务的配置段，进程启动时装载一次（`wiring/modulehost` 的 `ConfigOf` / `Value[T]`）。① `roost config check --keys-only` 不认模块声明的键：模块键的错值由编译出的进程 `--check-config` 报，`roost config check` 退出 3（与业务服务自己声明的键相同）。② 装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s。③ 清单指向 Go 结构体，不能只写 YAML 声明键。④ 仍是代码的规则：leaderboard 的榜范围（Scope）与按日历换周期、stamina 随玩家变化的规则、dungeon 的 `LedgerPruneGraceSeconds`；portal 的 `portal.servers` 只声明，入口仍在 Start 里自己读。⑤ mailbox 宽限下限 2m（启动时允许比高水位慢 1 分钟，留余量）。 ⑥ 模块的场景测试与 `roost module verify` 在模块声明的缺省配置上跑（`modulehost.Value` 未装载时返回缺省），不读工程 yaml：工程只改配置不改代码时，模块自带的“钉住缺省值”的用例照样通过，也不会提醒配置与之不同；工程自己要钉配置值时，在用例里装载配置段（见 demo 的 `leaderboard_board_test.go`）。生成 demo 的包测试只由 CI 的生成工程测试覆盖，codegen 的 `TestDemo*` 只生成、编译、vet。[证据](evidence/r5-module-config-d19-20261117/README.md)
+- **模块配置（D19 B，v1.54.0 起；①②③⑤ 维护者 2026-11-18 按推荐定：退出码保持 3、保持多 3s、清单指向结构体、宽限下限 2m）**：模块清单 `config:` 指向模块包里带 `config` tag 的结构体，安装器写进宿主服务的配置段，进程启动时装载一次（`wiring/modulehost` 的 `ConfigOf` / `Value[T]`）。① `roost config check --keys-only` 不认模块声明的键：模块键的错值由编译出的进程 `--check-config` 报，`roost config check` 退出 3（与业务服务自己声明的键相同）。② 装了带配置模块的业务服务多一个只带配置的 modulehost Mod，生成的 `shutdown.total_timeout` 多 3s。③ 清单指向 Go 结构体，不能只写 YAML 声明键。④ 仍是代码的规则：leaderboard 的榜范围（Scope）与按日历换周期、stamina 随玩家变化的规则、dungeon 的 `LedgerPruneGraceSeconds`；portal 的 `portal.servers` 只声明，入口仍在 Start 里自己读。⑤ mailbox 宽限下限 2m（启动时允许比高水位慢 1 分钟，留余量）。 ⑥ 模块的场景测试与 `roost module verify` 在模块声明的缺省配置上跑（`modulehost.Value` 未装载时返回缺省），不读工程 yaml：工程只改配置不改代码时，模块自带的“钉住缺省值”的用例照样通过，也不会提醒配置与之不同；工程自己要钉配置值时，在用例里装载配置段（见 demo 的 `leaderboard_board_test.go`）。生成 demo 的包测试只由 CI 的生成工程测试覆盖，codegen 的 `TestDemo*` 只生成、编译、vet。[证据](evidence/r5-module-config-d19-20261117/README.md)
 <a id="生成器配置与工具"></a>
 #### 生成器、配置与工具
 
@@ -464,13 +468,12 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
   - 夹具调用包级的 `room.TimerDriver.SetClock` 后撤不掉（`SetClock(nil)` 是空操作），同一进程里之后的定时器场景会读到这只时钟。玩法测试只拨 `clock.SetSource`，或者分开跑。
 - **前置骨架不回退**：安装会先执行缺失的 `roost add dao` / `roost add access player`；之后模块安装失败时这两步的结果保留（它们是完整的工程状态）。
 - **game-demo 接入登录链路的既定取舍**（2026-11-12；验证范围见[业务模块（roost module）](#业务模块roost-module)）：
-  - **维护者 2026-11-12 接受了下面六项取舍**（“做的 6 个决定都接受”），按现状保留，不是待办：连错服有两个码、不再拒绝退役的计数键、demo 渠道经入口对外、告知在驻留表之外装载 Player、每条会话多一帧推送、发版后单独提最低 core 版本。
+  - **维护者 2026-11-12 接受了下面五项取舍**（“做的 6 个决定都接受”；第六项“发版后单独提最低 core 版本”已做完，见[已修复的历史](#三已修复的历史)），按现状保留，不是待办：连错服有两个码、不再拒绝退役的计数键、demo 渠道经入口对外、告知在驻留表之外装载 Player、每条会话多一帧推送。
   - **会话激活后的告知在驻留表之外装载 Player**：进服票据握手、已经有档的玩家，`EnterStatus` 读“建成了没有”时经 lifecycle 装载他的档，不经 `PlayerOwners.Serve`（模块的 `enter_status.go` 不认识 demo 的驻留表）。它只对通过了进入前检查的会话发生，随后的 `EnterGame` 照常 `Serve`；握手之后不进入就断开的玩家，这份内存副本没有驻留记录，闲置卸载扫不到，到进程重启才释放。有界于“握手了却不进入的已有玩家数”，没有修。要修得让 enter 模块的告知认一个“装载之前”的登记点。
   - **连错服有两个码**：`EnterGame` / `EnterCreate` 答 demo 的 `player_elsewhere`（带 `owner_sid`），会话激活后的告知推的是登录模块的 `login_elsewhere`，随后断开。保留 `player_elsewhere` 是为了不改会话令牌那条老路的应答；统一成一个码要改客户端约定，等维护者决定。
   - **每条会话都多一帧推送**：会话令牌握手的会话（机器人缺省方式、`scripts/testdata` 里的演练客户端）现在也收到 `EnterStatus{need_create=false}`。读过代码的三个演练客户端（alliance-e2e、seamless、mmorpg crosssid）按关联号或消息号取应答，会跳过它。本轮实跑证据只计 alliance-e2e 与 seamless 两套；P6 登录档与十三玩法默认 / REAL 复验不包含 `test-mmorpg-cross-sid.sh`，不能替代该专项。统一结果见[最终验收报告](evidence/v147-final-validation-20261114/README.md)。连错服的会话在收到告知 300 毫秒后被断开，原来可以一直连着重发 `EnterGame`。
   - **demo 渠道经入口对外**：`demo:<open_id>` 不是身份校验，不看配置、哪份配置下都开着；装了 portal 之后够得着 account 进程 `web.addr` 的人都能以任何账号登录。入口缺省只听回环地址，生产配置要显式写 `web.allow_public_addr`；对外之前必须换掉 `login_channels.go`。是否让 demo 渠道在生产配置下自动关闭，等维护者决定。
   - **不再拒绝退役的计数键**：demo 原来的玩家号分配器在旧固定键 `roost:demo:player_id` 存在时拒绝分配、在 `account.key_prefix=roost:demo` 时拒绝绑定（RV-20261014-01）；改用登录模块的计数器之后这两条没有了。新生成的工程没有那个键；从旧 demo 升级、Redis 里还留着旧键的部署会从 100001 重新发号。
-  - **生成依赖没发布的包**：portal 的接线用 `wiring/modulehost`，已发布的 core（v1.44.0）里没有，所以 `-template game-demo` 现在要 `--skip-deps` 加本地 `replace` 才生成得出来；demo 的模块那一步因此与配方一样不在安装时跑 `go mod tidy`。下一次发版之后要把最低 core 版本提到那一版（打 tag 之后单独提交）。
   - **accountctl 的两处缺省变了**：`upsert-server` 的 `-sid` 必填（原来缺省 1000）、`-region` 缺省为空（原来是 `demo`）。仓库里的脚本都带 `-sid`。
 - **场景模块的边界**：scene / monster / terrain 是单进程所有权，没有跨进程切图或分布式容量。Scene / Terrain 的控制器构造不再要求 Start 后发布的 runtime；2026-11-13 已完成单机真实依赖的生成工程启动与 TCP 验收，未改框架生命周期。combat 仅固定双人会话，墙钟 50ms 拍，不跟随 scene 倍速；退出 / 会话结束恢复生命，死亡本身不自动结束会话。friends 仅拒绝申请 / 取消拉黑支持对方离线，双边动作仍需双方本进程在线以证明写归属。维护者已于 2026-11-13 确认该边界，归属不明时拒绝双边修改。notice 的 GM 命令仅装 gm 时登记；本身不默认调度。naming / cdkey 的共享占名依赖 Directory。详见[本轮修复验收](evidence/module-fixes-20261112/README.md)。
 - **chat 模块的边界**：在线名单是每进程的内存集合，多个 game 进程不互相扇出世界频道的推送（要么各推各的在线玩家，要么改为订阅 chat 的流）；连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订；系统消息入口无条件授予（前提是 chat 只经内部总线可达，见 collaborators 的注释）；没有群组频道。基础 10 条场景覆盖频道规则、消息体校验、在线名单和本地频道登记；scene 联动增加 5 条附近聊天场景，Nest 锁内只取收件人快照，实际发送在锁外，没有附近历史或离线投递。game-demo 使用同一 chat 模块。
@@ -479,7 +482,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **task 的边界**：支持配置表、每日/每周/永久与前置链。业务目录接受 ID 1～4096，ID/周期/前置发布后固定，退役保留永久领奖事实；无效行不可推进。Report/Advance 不自带跨消息去重，事件提供方在首次事实提交时调用；排行榜提交是跨服务后的尽力通知，重复提交也计数，不能拿来发恰好一次奖励。奖励按领取时配置读取。跨日/周未推进时同步记录仍是旧周期，客户端按周期戳判断。见[任务模块](../../modules/task/README.md)。
 - **进入钩子不是事务的一部分**：钩子在首次初始化提交之后、事务之外执行，失败只记 Warn，下一次进入再调；必须成功的事（初始发放）仍写在 `enter_first.go` 的事务里。mailbox 的钩子缺省把“首次进入游戏的时间”当注册时间、范围只有“所有玩家”；会话 claims 里有 account 的 `role_created_at` / `server_id` / `origin_server_id` 时自动采用（角色创建时间、本服与合服前的原服范围），公会范围仍要工程自己加。`role_created_at` 缺失时退回首次进入的时间照拉（只会少收，不会多收）。`Entered.Claims` 与会话共用同一个 map，约定只读。工程改写进入端点（game-demo 就改写了）时要自己在同一位置调 `gamelogin.RunEntered`，否则钩子不执行。
 - **leaderboard 的边界**：提交与改总分的事务不是原子的，提交失败时榜上暂时落后，靠重试或下一次分数变动补上（提交的是快照加 UpdateMax，本身幂等，不带请求键）；只升不降，一个错的大数提交上去之后压不下来（所以有分数上限的检查）；缺省是改 `leaderboard_board.go` 里 `CurrentSeason()` 的返回值后发版来换周期，也可以按业务时钟算，没有清榜协议；只有一张榜——读榜的两条协议固定读 `CurrentBoard()`，写入侧 `SubmitSeason` 只能选周期不能选榜，多张榜、读历史周期要手写。
-- **bag 的边界**：表名 `item` 是固定的，工程已有 `configs/schema/item.go` 或 `configs/table/item.csv` 时装不了（落点被占用），要先把自己的表挪开、装完再合并列；进程里没装载配置时背包拒绝一切放入（有意如此：不退回“正数就行”），模块场景所在的包由安装器写的公共夹具 `roost_config_data_test.go` 先按正式启动装载工程的 `configs/data`（2026-11-17 起，只在安装模块那一次写，已有工程要手抄一份），工程自己另起的测试进程（不在这些包里）仍要自己装道具表，否则一律 `bag_item_invalid`；每次变化同步的是整份背包（至多 200 种），不是按键增量；道具从表里删掉后能数、能丢、不能再放，单种上限调小到持有量以下时只拒放入、不扣已有；没有格子、装备与过期。
+- **bag 的边界**：表名 `item` 是固定的，工程已有 `configs/schema/item.go` 或 `configs/table/item.csv` 时装不了（落点被占用），要先把自己的表挪开、装完再合并列；进程里没装载配置时背包拒绝一切放入（有意如此：不退回“正数就行”），模块场景所在的包由安装器写的公共夹具 `roost_config_data_test.go` 先按正式启动装载工程的 `configs/data`（v1.53.0 起，只在安装模块那一次写，已有工程要手抄一份），工程自己另起的测试进程（不在这些包里）仍要自己装道具表，否则一律 `bag_item_invalid`；每次变化同步的是整份背包（至多 200 种），不是按键增量；道具从表里删掉后能数、能丢、不能再放，单种上限调小到持有量以下时只拒放入、不扣已有；没有格子、装备与过期。
 - **模块装进 game-demo 之后靠提交观察者同步**：模块的 handler 不调 demo 的 `PublishSyncDirty`，靠 Nest 的提交观察者复制（bag、profile 各有一条按生产接线的用例钉住）；没装观察者的夹具里模块的写入不会被推送。
 - **客户端访问按模块清单声明**：equipment、idle、gacha 独立安装会开启 `access.player.transport: tcp` 与 `self_sync: true`，已新建工程检查 manifest、生成文件与 build；dungeon 经 profile → enter 获得同样接线。仅声明协议不等于开启 TCP，其他模块须按自己清单与依赖核对。真正监听仍要认证器与 `roost config enable player-tcp`，独立安装验收不代表真实客户端鉴权已配置。
 - **wallet 的去重窗口不是永久账本**：`Apply(key, delta)` 只在最近 128 次带业务键的加减内去重，更早的键被淘汰后再用会重新执行。长期“只发一次”由调用方在自己的状态里记事实并调 `Add`（checkin 这样做）。首版曾是“回执满了拒绝、不淘汰”，连续签到到第 129 天起签到与消费全部被拒，由只凭 skill 的实测发现并修掉（回归 `TestCheckinKeepsPayingPastTheWalletReceiptWindow`、`TestWalletOldReceiptsLeaveTheWindow`）。
@@ -500,7 +503,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 - **turn 的边界**：固定开局名单，每位玩家成功命令连续编号、最后一条可重放；期限迟到只推进一次，离线实体下次加载补触发；成员减少 / 房间关闭在下一次推进结束；没有自动广播、胜负 / 伤害规则或跨机接管。
 - **enter 的边界**：建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`，但不做鉴权（`auth.go` 缺省拒绝，也不执行 `roost config enable player-tcp`），独立安装要业务接入鉴权并开启监听。“先新建、再进入”（`EnterCreate` / `EnterStatus` / `enter_need_create`）只对登记为“先新建”的会话生效（login 联动登记的是进服票据握手的会话），其余会话与没装 login 的工程照旧由 `EnterGame` 加载或创建。新建先建空档再提交：名字被 naming 拒绝或提交失败时空档留着、下次接着用，不合规的名字在建档前被拒；已建成的再发 `EnterCreate` 答 `enter_created`、不改；在 `EnterGame` 里直接建成的玩家没有名字，用改名协议。`PlayerDao.Enter.Fresh`（store 键 3）只落库。
 - **login 的边界**：握手认进服票据 `enter:<票据>` 与角色会话令牌，成败只由 account 决定；新号第一次握手就在 account 里建出账号 ↔ 玩家号映射（握手后没在游戏服新建就离开的，映射与号已占）。游戏服的结论在会话激活后以 `EnterStatus` 推送，只是告知（在 login manager 的后台执行、同时至多 256 条、超出丢弃；停机时取消在途告知并在期限内等它们返回，`Managers()` 里没有 `NewLoginNotices()` 时告知全部丢弃、记一条 Error；带码拒绝后 300 ms 按玩家断开，慢连接可能收不到那一帧），权威判断在 `EnterGame` / `EnterCreate`。生成器不生成 Gate 进程；独立 Gate 下 account 的 `EnterServer` 每次握手执行两次，别的服的票据在 Gate 上直接断开、收不到 `login_elsewhere`。票据都不能单张吊销；封号对进服票据与账号票据立即生效，对已签发的会话令牌至多滞后一个 `session_ttl`。开发令牌可冒充任何账号，生产靠环境键加 `dev-` 前缀拒绝（没写 `env: prod` 的预发环境照样可冒充）；doctor 的 `collaborators:account` 变 OK 不代表渠道验签已接。玩家号计数器在 Redis，被清或换前缀不搬数据会重号。已有 `cmd/accountctl` 或自己实现 account collaborators 的工程装不了 login（`replaces` 全有或全无）。没装 rehome 时换服在途的角色不被源服拒绝；login 与 rehome 的进入前检查先后靠名字排序。
-- **portal 的边界**：入口挂在托管 account 服务的进程上（`runtime.framework: account`；手写 bootstrap 要加 `kitmodulehost.NewMod`），四个端点：登录 → 凭票清单与推荐 → 换进服票据，以及换游戏账号 token 的 `POST /portal/game-token`（2026-11-17 起，未发版）；不持有密钥，不建角不选角。没有限流、没有防撞库，`/portal/login` 每次都问渠道；凭据与票据明文放在请求体里，web Mod 不终止 TLS，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr`。账号票据、进服票据与游戏账号 token（gt2）不落库、不能单张吊销，有效期内可重复使用（封号当场生效）；gt2 可按账号整代吊销（`RevokeGameTokens`，运维用 `accountctl revoke-game-tokens`，2026-11-17），吊销不碰 at1 / et1，at1 有效期内仍能换新的 gt2，已连上 relay 的房间不断开；account 没有改密码路径；渠道验证器在 `Verified.CredentialVersion` 返回凭证版本时，改密之后的下一次登录自动吊销（维护者 2026-11-18 选 B，[证据](evidence/c6-credential-version-20261118/README.md)），要当场吊销由渠道 / 账号中心经总线调 `RevokeGameTokens`；凭证版本只比较相等，渠道必须只在凭证真变时改它，玩家不再登录时旧 gt2 有效到过期。被封账号登录照样被拒，但版本变化照样落库（维护者 2026-11-18 确认保留：封号期间改密，解封后旧 gt2 不复活）。`-template lobby` 工程没有 accountctl（在 login 模块里），只能经总线调用。at1 窗口与 lobby 工程没有 accountctl 两点维护者 2026-11-18 按推荐定（不改）。登录带了 account 不认识的 `game` 时整个登录失败。区服地址缺省来自静态配置 `portal.servers`、服务地址来自 `portal.services`（模块自己读，`--check-config` 查不到写错的值）；清单开销随区服数线性增长（account 读 1 + N 条记录、每服一次角色查询、顺序执行、无缓存），任何一个服的记录对不上（560113）或合服别名两跳，整个请求失败；清单里的 `role` 指 account 映射。新号被送到非 open 的服时拿得到票据、握手才被拒。account 新增的总线接口要求 account 先于 manifest 升级。
+- **portal 的边界**：入口挂在托管 account 服务的进程上（`runtime.framework: account`；手写 bootstrap 要加 `kitmodulehost.NewMod`），四个端点：登录 → 凭票清单与推荐 → 换进服票据，以及换游戏账号 token 的 `POST /portal/game-token`（v1.54.0 起）；不持有密钥，不建角不选角。没有限流、没有防撞库，`/portal/login` 每次都问渠道；凭据与票据明文放在请求体里，web Mod 不终止 TLS，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr`。账号票据、进服票据与游戏账号 token（gt2）不落库、不能单张吊销，有效期内可重复使用（封号当场生效）；gt2 可按账号整代吊销（`RevokeGameTokens`，运维用 `accountctl revoke-game-tokens`，2026-11-17），吊销不碰 at1 / et1，at1 有效期内仍能换新的 gt2，已连上 relay 的房间不断开；account 没有改密码路径；渠道验证器在 `Verified.CredentialVersion` 返回凭证版本时，改密之后的下一次登录自动吊销（维护者 2026-11-18 选 B，[证据](evidence/c6-credential-version-20261118/README.md)），要当场吊销由渠道 / 账号中心经总线调 `RevokeGameTokens`；凭证版本只比较相等，渠道必须只在凭证真变时改它，玩家不再登录时旧 gt2 有效到过期。被封账号登录照样被拒，但版本变化照样落库（维护者 2026-11-18 确认保留：封号期间改密，解封后旧 gt2 不复活）。`-template lobby` 工程没有 accountctl（在 login 模块里），只能经总线调用。at1 窗口与 lobby 工程没有 accountctl 两点维护者 2026-11-18 按推荐定（不改）。登录带了 account 不认识的 `game` 时整个登录失败。区服地址缺省来自静态配置 `portal.servers`、服务地址来自 `portal.services`（模块自己读，`--check-config` 查不到写错的值）；清单开销随区服数线性增长（account 读 1 + N 条记录、每服一次角色查询、顺序执行、无缓存），任何一个服的记录对不上（560113）或合服别名两跳，整个请求失败；清单里的 `role` 指 account 映射。新号被送到非 open 的服时拿得到票据、握手才被拒。account 新增的总线接口要求 account 先于 manifest 升级。
 - **portal 的跨域白名单不是访问控制**（2026-11-18）：不在 `portal.cors_origins` 里的 Origin 拿不到 CORS 头，但请求照常处理；非浏览器客户端不受约束。限流与拒绝来源放在反向代理上。`"*"` 目前照收（与 `lobby.cors_origins` 一致）。[证据](evidence/portal-cors-20261118/README.md)
 - **配方的验收口径**：casual / turn-pvp 使用 login、portal、servertime，开发配置自带本机令牌与业务服地址，生产与 Secret 示例不带。缺省场景的持久提交为替身；2026-11-14 [登录真实档](evidence/v147-login-20261114.md)另验 casual 购买回执与 self_sync 内容、真实 naming、双 account / game / Gate 和重启重连；[turn-pvp 真实档](evidence/turn-real-20261114/README.md)另验 account → 匹配 → Room / Turn、Gate → NATS → Ingress 与 SIGKILL 恢复。两套证据只覆盖各自列出的组合，不涵盖生产渠道、跨机或容量。
 - **验证范围**（2026-11-14）：新认证器下的真实进程已跑通机器人总线登录、`-login portal`、`alliance_offline_join`，以及 alliance-e2e、seamless 两个演练；MMORPG 跨 sid 专项不在本轮 P6 或十三玩法默认 / REAL 的验证范围内。`scripts/test-demo-login.sh`（含独立 Gate）与 `scripts/test-demo-merge.sh`（合服中的角色、已并入服老角色经入口三步再握手）可重复跑；仓库里的用例是离线场景（持久层、驻留表、传输为替身）与 `TestPortalRobotAfterTheHandshake`。其中内存替身用例和真实进程演练是两层证据，不能互相替代。
@@ -512,14 +515,14 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 #### 组件包与 game/view（v1.47.0）
 
-组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。2026-11-16 起组件类型号与工厂登记也挪进组件包（`comp:"<包>.CompType<X>"`，模块清单 `component_package`），同一组件只用一个类型号；Holder 里可列宿主方法，纯 DAO 交接的由生成器实现。
+组件逻辑写在 `game/components/<功能>/`，包之间只经 `game/view` 的接口相连（`component_<功能>.go` 定义组件接口与 `<X>Holder`，`entity_<实体>.go` 由实体生成器写出、组合各组件的 Holder；维护者 2026-11-13 定）。v1.52.0 起组件类型号与工厂登记也挪进组件包（`comp:"<包>.CompType<X>"`，模块清单 `component_package`），同一组件只用一个类型号；Holder 里可列宿主方法，纯 DAO 交接的由生成器实现。
 
 - **签名里的结构体要定义在 view 里**（维护者 2026-11-13：组件对外的方法都应在 view 下）：view 不能反向 import 组件包，所以方法参数 / 结果用到的结构体定义在 `game/view/component_<功能>.go`，名字带功能前缀（`view.ShopResult`、`view.PurchaseGrant`），组件包与功能包留同名别名。搬进 view 的类型只能带用内建、db 与其他 view 类型的方法；要用工程错误码或别的包的方法改成功能包里的函数（如 `purchase.ValidateGrant`）。名字在全部模块与 game-demo 的 view 文件里必须唯一（`TestModuleViewNamesAreUniqueAcrossModules`、`TestDemoViewNamesDoNotCollideWithItsModules` 检查）。
 - **view 是一个包**：import 它就带上所有 view 文件的依赖（db、`game/modules/actor` 及其玩法包、`game/modules/gameplay/attribute`）。`actor.Body` 是带行为的运行时类型、`gameattr.Combat` 由 `roost add attribute` 生成在固定目录，两者没有搬进 view。
 - **冷组件没有 view 访问器**：冷组件的字段可能是 nil，装进接口后不等于 nil，所以生成器不给它生成 `func (e *Player) X() view.X`；跨组件调用冷组件要经实体的具体类型。
 - **view 豁免只剩两类**（`TestModuleViewInterfacesListTheComponentMethods` 的豁免表，2026-11-14）：返回 core 运行时对象的方法（activity `Host`、actor `SavedPosition`、attribute `Container`、combat `Core`），以及参数是对方 `*Component`、要读对方战斗核心的 combat `Cast` / `Step` / `Tick` / `Leave`。
 - **实体包只留接线**：实体包保留框架接口的实现（`cellworld.Actor` / `BasePlayer` 等）、运行时对象、定时器与同步适配、packer、mirror 与 replica；生成的定时器组件的方法只能声明在实体包，回调只把节点交给组件方法（`on…` 回调必须一行）。守卫测试（`TestModuleEntityPackagesHoldOnlyComponentWiring`、`TestDemoEntityPackagesHoldOnlyComponentWiring`）按 `Set…` / `Del…` 调用识别实体方法改状态，换个名字的写入认不出。
-- **handler 的实体参数用 view 的窄接口**（2026-11-16 起）：`roost generate` 给每个 `<X>Holder` 生成 `view.I<X>Entity`，handler 收它（或实体总接口 `view.<E>Entity`）；实体包不再声明 `I<X>Entity`。锁目标仍按“参数类型名带 Entity”推断；归哪个服务按 view 类型解析：`view.<E>Entity` 归实体 E 的服务，`view.I<X>Entity` 按挂这个组件的全部实体解析，归属不同服务时生成失败、要求写 `target=<实体>`（endpoint 同样）。
+- **handler 的实体参数用 view 的窄接口**（v1.52.0 起）：`roost generate` 给每个 `<X>Holder` 生成 `view.I<X>Entity`，handler 收它（或实体总接口 `view.<E>Entity`）；实体包不再声明 `I<X>Entity`。锁目标仍按“参数类型名带 Entity”推断；归哪个服务按 view 类型解析：`view.<E>Entity` 归实体 E 的服务，`view.I<X>Entity` 按挂这个组件的全部实体解析，归属不同服务时生成失败、要求写 `target=<实体>`（endpoint 同样）。
 
 #### 业务 HTTP 路由与配置检查
 
@@ -540,11 +543,11 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 #### 配置表导出给客户端（2026-11-17）
 
-`client_export.config` 与 tablegen 的按端分组、`layout=kv`、`index`、`#` 注释行（未发版），方案 [FEATURE-2026-11-17-client-config-export](FEATURE-2026-11-17-client-config-export.md)，说明见 [CODEGEN_REFERENCE §2.2](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)，证据 [tablegen 组](evidence/client-config-export-tablegen-20261117/README.md)、[导出组](evidence/client-config-export-20261117/README.md)。
+`client_export.config` 与 tablegen 的按端分组、`layout=kv`、`index`、`#` 注释行（v1.54.0 起），方案 [FEATURE-2026-11-17-client-config-export](FEATURE-2026-11-17-client-config-export.md)，说明见 [CODEGEN_REFERENCE §2.2](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#22-配置表导出给客户端client_exportconfig)，证据 [tablegen 组](evidence/client-config-export-tablegen-20261117/README.md)、[导出组](evidence/client-config-export-20261117/README.md)。
 
-- **别的包里的具名类型、底层不是内建标量的具名类型不支持**（2026-11-17 起 schema 包里的具名标量可用，交接 C5）：schema 包里底层是内建标量的具名类型（`type Rank int32`）按底层类型导出与建索引（C# 是底层类型，不生成 enum）；别的包里的（`time.Duration`、`foo.Kind`，生成器只读 schema 包自己的声明）与底层是结构体等的具名类型，导出与 index 报错并说明原因，要改成 parser 或 `side:"s"`。结构体、`[]byte`、键不是 string 的 map 同样不支持。
+- **别的包里的具名类型、底层不是内建标量的具名类型不支持**（schema 包里的具名标量 v1.54.0 起可用）：schema 包里底层是内建标量的具名类型（`type Rank int32`）按底层类型导出与建索引（C# 是底层类型，不生成 enum）；别的包里的（`time.Duration`、`foo.Kind`，生成器只读 schema 包自己的声明）与底层是结构体等的具名类型，导出与 index 报错并说明原因，要改成 parser 或 `side:"s"`。结构体、`[]byte`、键不是 string 的 map 同样不支持。
 - **带 parser 的字段在客户端是 string**（方案第 7 节）：导出的 JSON 与 C# 里是 CSV 原文字符串，由游戏自己解析。
-- **C# 的数字规范写法依赖 `double.ToString("R")` 给出最短往返位数**：两端按共用样例表 `framework/configdata/rules/testdata/canonical_numbers.json`（57 条）一致（2026-11-17，交接 C5）；这一点在 .NET Core 3.0 起成立，Unity Mono / IL2CPP 上随“Unity 没有实跑”一起待验。
+- **C# 的数字规范写法依赖 `double.ToString("R")` 给出最短往返位数**：两端按共用样例表 `framework/configdata/rules/testdata/canonical_numbers.json`（57 条）一致（v1.54.0 起）；这一点在 .NET Core 3.0 起成立，Unity Mono / IL2CPP 上没有实跑，见[配置表导出：遗留](#配置表导出遗留)。
 - **只给客户端的字段在服务端结构体里是零值**（决定 1）：不另生成一份服务端结构体，服务端代码读这些字段得到零值。
 - **数据版本不做运行时核对**（决定 4）：`manifest.json` 的 `data_version` 与 C# 的 `ConfigTables.DataVersion` 只供查看或上报；登录不核对，SDK 不比较，热更也不提示过期。
 - **同步覆盖手改过的已同步文件**：与协议同步相同，上次同步写过、之后在客户端被手改的文件照样覆盖并提示；拒绝覆盖的只有“不是上次同步写的同名文件”和被手改的服务端导出目录。
@@ -569,7 +572,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 #### account：一套服务多个游戏（2026-11-18）
 
-账号号按游戏分开（维护者 2026-11-18），契约见[服务篇 account 一节](../framework/guide/09-services.md)，[证据](evidence/account-per-game-20261118/README.md)。
+账号号按游戏分开（维护者 2026-11-18，v1.56.0 起），契约见[服务篇 account 一节](../framework/guide/09-services.md)，[证据](evidence/account-per-game-20261118/README.md)。
 
 - **账号号顺序发号**：全局计数器十进制递增，相邻号可被猜到；号在第一次登录某个游戏时才分配，理论上能从分配时间粗略对上同一个人。需要时可改为随机化（本轮未做）。
 - **只有身份级封号**：封号作用于（渠道, open id），所有游戏一起封；按游戏封号未做。
@@ -577,7 +580,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 #### 大厅 lobby 与转发 relay（2026-11-17）
 
-房主的客户端做 host 的开房间联机（未发版）：方案 [FEATURE-2026-11-16-lobby-relay](FEATURE-2026-11-16-lobby-relay.md)（§6 是维护者的 12 条决定），契约 [LOBBY](../framework/LOBBY.md)、[RELAY](../framework/RELAY.md)，用法见 roost-genre compose 第 6 步。没做到位的部分见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
+房主的客户端做 host 的开房间联机（v1.54.0 起）：方案 [FEATURE-2026-11-16-lobby-relay](FEATURE-2026-11-16-lobby-relay.md)（§6 是维护者的 12 条决定），契约 [LOBBY](../framework/LOBBY.md)、[RELAY](../framework/RELAY.md)，用法见 roost-genre compose 第 6 步。没做到位的部分见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
 
 - **relay 只转发**（§6 第 4、5 条）：只读帧头，不解析载荷，不做帧同步、状态校验、反作弊与断线托管；玩法逻辑跑在房主的客户端上，快照的内容、版本与合法性由游戏负责。换 host 不保证玩法状态连续：主动转交最完整；断线时最多丢“最后一份快照之后”的变化。
 - **relay 进程崩溃时房间丢失**：房间（连接、座位、快照、本地被踢记录）只在一个实例的内存里，没有跨实例接管，也不落盘。进程重启后关房记录也没了：还没过期的 host 令牌能在新进程上重建同一个房间号（lobby 验权仍要求是目录里的房主、房间没关）。
@@ -657,7 +660,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 
 #### 单个角色换服（account 一侧）
 
-单个玩家换服（[方案](FEATURE-2026-11-11-player-rehome.md)，一期实施中）里 account 的部分已实现（未发版）：`RoleBinding` / `BeginRoleTransfer` / `CommitRoleTransfer` / `AbortRoleTransfer`、认证器的两个新 claim、`accountctl show-role / transfer-role`，契约与 runbook 见 [PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md#7-单个玩家换服account-一侧)。当前边界：
+单个玩家换服（[方案](FEATURE-2026-11-11-player-rehome.md)）里 account 的部分（v1.45.0 起）：`RoleBinding` / `BeginRoleTransfer` / `CommitRoleTransfer` / `AbortRoleTransfer`、认证器的两个新 claim、`accountctl show-role / transfer-role`，契约与 runbook 见 [PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md#7-单个玩家换服account-一侧)。当前边界：
 
 - **与方案的出入**（实施时按不变量调整）：① 中止的写入顺序是“先写角色、再删占位”（方案是反过来）：按方案的顺序，并发的提交会在占位被删之后把角色改绑过去，留下没有 slot 的角色（用例 `TestConcurrentTransferRequestsHaveOneWinner` 在那个顺序下变红：`ValidateSession: account: conflict: role creation is pending reconciliation`）。② slot 另记所属的绑定代数（`Slot.BindEpoch`）、`LastTransfer` 另记 `Epoch` / `Note` / `Settled`：提交的收尾按代数认旧 slot，迟到的收尾不会删掉角色换回来的 slot；`Settled` 让没做完的收尾能被下一次 `SelectRole` / `Begin` 发现并补完。③ 中止一个没发起成功的 ID 也记为已中止（挡住迟到的 Begin）。④ 人工提交带备注的入口 `Admin.CommitRoleTransferWithNote`（方案的 `CommitRoleTransfer` 没有备注参数）。⑤ 另设换服尝试序号 `Role.TransferSeq`（发起带 `ExpectSeq`）与“占位以角色记录为准”的规则，见下面两条（审查 RV-20261111-BM-01 / BM-02 之后加的）。
 - **方案 §6 第 1～4 项按实现确认**（D6 A，维护者 2026-11-14）：① 换服接口上总线；② `Role.ServerID` 是当前绑定服，不另存建角服（见下“建角服不再可得”）；③ 目标服必须 open、未并入、账号在目标服没有角色；④ 发起之后中途停下一律向前恢复。P1 真实进程六个 SIGKILL 点验收过。
@@ -671,7 +674,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **建角服不再可得**：`OriginServerIDClaim` 在换服之后是当前绑定服；业务要按“最初的服”做显示或归属，得自己在玩家数据里记。
 - **物理库不同的服**：account 不知道两个服是否把玩家数据映射到同一个 Mongo 与前缀（v1.47.0 起搬档由 rehome 模块做，前提见上一节）；独立 Gate 转交给 game 的绑定不带 claims（两个新 claim 只在认证器那一侧可见）。
 - **绕开 rehome 模块直接改绑不安全**：游戏侧的停写、断开、交出实体、到达处理由 `rehome` 模块完成（v1.45.0 起；game-demo 的 `PlayerOwners` 与 saga 准入用它的绑定与“换服中”状态）。account 自己不检查源服是否已经停写：直接调这四个接口（或 `accountctl transfer-role commit`）改绑一个在线玩家，会出现两个进程写同一个玩家。
-- 在途换服的列举与清扫（D8 A，2026-11-17 已实施）：在途索引、期限之后的提交被拒并记为中止、每 30s 清扫、`accountctl transfer-role list`，见[单个玩家换服（rehome）：既定设计](#单个玩家换服rehome既定设计)；遗留见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
+- 在途换服的列举与清扫（D8 A，v1.54.0 起）：在途索引、期限之后的提交被拒并记为中止、每 30s 清扫、`accountctl transfer-role list`，见[单个玩家换服（rehome）：既定设计](#单个玩家换服rehome既定设计)；遗留见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
 
 ### 地形与无缝世界
 
@@ -720,11 +723,12 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **属性变化钩子收 `attribute.Owner`**：`OnAttributeChanged` 不限定实体类型，要 Player 的登记方自己判断宿主类型。
 - **cellworld 真实时钟用例的墙钟期限**：用例仍按墙钟、负载更高时可能误报的只剩协议自己的墙钟期限（HandoffAbort 3s、租约 1s、GhostTTL），各处注释写明。证据见 [cellworld 真实时钟用例整治](evidence/cellworld-clock-cleanup-20261110/README.md)。
 
+- **业务适配的分工**（D21 后半，维护者 2026-11-18 按推荐定，维护者可改）：SceneActor 实体、分区状态映射、格心跳登记、Node 安装点、Player 的恢复快照 / 死亡回执在 cellworld 模块（v1.54.0 起，[证据](evidence/cellworld-module-d21-20261117/README.md)）。留在 demo：Player 的 Base 标量字段与面板 / 队伍副本（Q1 A：字段由工程按模块 README 的字段表声明；改成模块状态要同时改客户端 / drill / loadtest 的同步解码）、队伍视图 `with/team`（Q2 随 Q1）、mirror 编码与攻击结论推送、奖励规则、分区地形转发（Q4 暂不合一）。MMORPG 夹具的队伍、场景、怪物、战斗、副本不随 CellWorld 走，留作各模块的扩展项。`scene.partition` 改名见[业务模块（roost module）](#业务模块roost-module)。
 - **无缝世界原型的产品简化**：方案 §8.4、§9.6、§10.4、§11.10、§12.2、§13.6 列的简化（面板变化不回血、邀请不推送、队伍面板只在分区场景里等）按原样保留。Team 归 game 服务（`service=game`、共享模式，game 因此保留 `remote_entity`），按方案 §14.3 B 实施（`649f2c78`）。维护者 2026-11-14 确认（D14 A，#154）：Team 保持在 game 服务，不改成独占实体服务。
 
 #### cellworld 的位置零头与入场序号
 
-- **位置零头**（2026-11-10 按千分位累计零头之后，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-10cellworld-按经过时间积分的子步截断已证实维护者-2026-11-10-选定按千分位整数累计零头已修复未发版)）：每个子步仍在千分位上截断，丢不到 1 千分位（400/s、50ms 档平均约十万分之二点五）；游泳进出速度不同的地面格时缩放剩下的位移，再截断一次千分位。各情形的零头规则见 [cellworld README“位置零头”](../../gameplay/cellworld/README.md)，修复记录见 [证据](evidence/cellworld-subunit-20261110/README.md)、CHANGELOG `[Unreleased]`。
+- **位置零头**（2026-11-10 按千分位累计零头之后，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-10cellworld-按经过时间积分的子步截断已证实维护者-2026-11-10-选定按千分位整数累计零头已修复未发版)）：每个子步仍在千分位上截断，丢不到 1 千分位（400/s、50ms 档平均约十万分之二点五）；游泳进出速度不同的地面格时缩放剩下的位移，再截断一次千分位。各情形的零头规则见 [cellworld README“位置零头”](../../gameplay/cellworld/README.md)，修复记录见 [证据](evidence/cellworld-subunit-20261110/README.md)、CHANGELOG v1.43.0。
 - **入场序号**（RV-20261106-03 修复后，原有、未变的边界，见[已修复的历史](evidence/known-limits-history-20261113/README.md#2026-11-06-续审cellworld-生命周期与编码)）：发给冻结中旧格的 Leave 不处理、离场后才到的旧 Enter 会重建无人续租的角色，均由租约兜底；入场序号由 Player 的持久计数（`CellEntry`，`nosync`）在 strict 事务里分配，恢复边界见 CellWorld README。
 
 ### 玩法组件与物理房间
@@ -744,17 +748,26 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 
 ### 客户端
 
+本节只说客户端一侧（SDK 与引擎适配）；服务端接入层能接什么见[玩家接入方式](#玩家接入方式2026-11-16)。各客户端能走的路（连玩家接入，或连开房间的 relay）：
+
+| 客户端 | 连玩家接入（嵌入 TCP / 独立 Gate） | 连 relay |
+| --- | --- | --- |
+| C# `Roost.Client` / `Roost.Client.Relay`（含 Unity 托管路线与 WebGL） | TCP 或 WebSocket | TCP 或 WebSocket |
+| C++ `client/cpp`（含 Unity 原生路线、经 C ABI 的 Unreal） | 只有 TCP | 没有 SDK |
+| Go `robot`（机器人、压测） | TCP；`ws` 拨号器没有对玩家接入跑过；KCP / QUIC 拨号器给帧同步用 | `client/relay` 只有 TCP |
+| TS `client/ts`（浏览器） | 没有客户端 | 只有 WebSocket |
+
 #### Native 客户端（2026-11-01）
 
 当前 Core TCP 协议的 PB、EntitySync、Lockstep 与时间域已提供 native 实现；通知/取消/重连与引擎接入见 [native 手册](../../client/cpp/README.md)。网络 ABI 2 不兼容旧插件，重新编译库和绑定。DNS 和账号取票由平台/业务异步准备，不在网络线程阻塞解析。（未测的平台见[客户端：遗留](#客户端遗留)）
 
 - **原生C++接入**：无完整 C++ / Unreal / GDExtension SDK 承诺，需独立设计和协议一致性验收。
 
-- **没有实现的传输**：TLS / WS / UDP / KCP 适配没有实现。已实跑的是 macOS ARM64 的 Editor、Mono / IL2CPP Player、50～10000 可见集解码与 TCP 延迟 / 分片 / 故障（[客户端报告](../performance/CLIENT-20261101.md)）。
+- **C++ 运行库只连 TCP**：`client/cpp` 没有 TLS / WebSocket / UDP / KCP 传输（服务端接入层的 WebSocket 与它无关；要经 WebSocket 连用 C# `Roost.Client`）。原生路线已实跑的是 macOS ARM64 的 Unity Editor、Mono / IL2CPP Player、50～10000 可见集解码与 TCP 延迟 / 分片 / 故障（[客户端报告](../performance/CLIENT-20261101.md)）。
 
 #### C# 经 WebSocket 连玩家接入（2026-11-18）
 
-C# `Roost.Client` 经 WebSocket 连嵌入 TCP 或独立 Gate（未发版）。用法见 [client/README“C# 经 WebSocket 连玩家接入”](../../client/README.md#c-经-websocket-连玩家接入含-unity-webgl)，契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，[证据](evidence/csharp-gate-ws-20261118/README.md)。没验证的部分见[客户端：遗留](#客户端遗留)。
+C# `Roost.Client` 经 WebSocket 连嵌入 TCP 或独立 Gate（main 上未发版，CHANGELOG `[Unreleased]`）。用法见 [client/README“C# 经 WebSocket 连玩家接入”](../../client/README.md#c-经-websocket-连玩家接入含-unity-webgl)，契约见 [GATEWAY §6](../framework/GATEWAY.md#6-websocket-接入)，[证据](evidence/csharp-gate-ws-20261118/README.md)。没验证的部分见[客户端：遗留](#客户端遗留)。
 
 - **Unity WebGL 必须开 `ConnectionOptions.PumpDriven`，代价是不 `Pump` 就不跑**（照开房间 SDK 的 A1，维护者 2026-11-18 要求）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行不运行。打开后连接、请求与心跳超时，心跳间隔，重连退避都只在 `Pump` 时检查。游戏不 `Pump`（加载场景卡住主线程、切后台时浏览器停了循环）就不发心跳。服务端 `idle_timeout`（`DefaultTCPConfig` 缺省 90s）内收不到帧就断开，恢复 `Pump` 后按 `AutoReconnect` 重连，`EntitiesReset` 之后重新收 Full。到期的计时经主线程的 `SynchronizationContext` 触发，比到期时刻晚约一帧。
 - **PumpDriven 的前提**：
@@ -767,9 +780,9 @@ C# `Roost.Client` 经 WebSocket 连嵌入 TCP 或独立 Gate（未发版）。�
 
 #### 开房间 SDK（2026-11-17）
 
-Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（未发版），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
+Go `client/relay`、C# `Roost.Client.Relay`、TS `client/ts`（v1.54.0 起；C# 的 `PumpDriven` 与 `ILobbyHttp` v1.55.0 起），说明见 [client/README“开房间 SDK”](../../client/README.md#开房间-sdklobby--relay)。房主、快照与踢人的协议边界见[大厅 lobby 与转发 relay](#大厅-lobby-与转发-relay2026-11-17)；没验证的平台见[客户端：遗留](#客户端遗留)。
 
-- **Go 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**：这一条说的是连 relay。连玩家接入（Gate）的 C# `Roost.Client` 2026-11-18 起也能走 WebSocket，见[C# 经 WebSocket 连玩家接入](#c-经-websocket-连玩家接入2026-11-18)。
+- **连 relay：Go `client/relay` 只连 TCP（维护者 2026-11-17 定不加），C# 连 TCP 或 WebSocket，TS 只连 WebSocket**。这一条只说连 relay；连玩家接入（嵌入 TCP / 独立 Gate）见本节开头的表。
 - **Unity WebGL 上 C# 开房间 SDK 要开 `PumpDriven`**（维护者 2026-11-18 定 A1，已实施）：WebGL 上线程池、计时器与 `ConfigureAwait(false)` 之后的续行不运行（2026-11-17 实测）。打开 `PumpDriven` 后 SDK 只靠 `Pump`：游戏不调 `Pump`（加载场景卡住主线程、切后台浏览器停了循环）就不发心跳、不判超时、不重连；成员超过 relay `idle_timeout`（30s）、房主超过 `host_idle_timeout`（2s）会被断开，房主宽限期 5s 内重连回来仍是房主，否则换 host；恢复 `Pump` 后按 `ReconnectAttempts` 重连。到期的计时器经同步上下文触发，比到期时刻晚约一帧。2026-11-18 在 Unity 6000.7.0b7 WebGL 构建、Claude 内置浏览器（隐藏面板）里两次通过。没测：Safari / Firefox / 移动浏览器、真实切后台、WebGL 里长时间卡帧的房主（[证据](evidence/sdk-webgl-a1-20261118/README.md)）。
 - **Web 房主在后台标签页靠 Worker 撑住只是缓解**：浏览器不保证 Worker 计时器不被限流，手机后台页随时被冻结，冻结后走 relay 的断线换 host。
 - **内置浏览器面板测不了真实后台**：Claude 桌面应用内置浏览器面板里，后台标签页的 `document.visibilityState` 始终是 `visible`，所以在那里“切到后台”只能用演示页的“模拟隐藏”按钮触发；后台限流对 Worker 计时器的影响没有实测。
@@ -853,11 +866,9 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 单实例锁：遗留
 
+- **etcd 短断能扛多久没有单独量**：演练只做过“etcd 停 20s → 持锁进程 fail-stop、恢复 18s 后新进程拿到锁”（[证据](evidence/round-20261116/README.md)）；续期窗口内（缺省约 9～12s，guide/01）的短断能否撑过、etcd 客户端恢复后的重连延迟没有逐档测量。跨机 etcd 三节点换 leader 属外部验收。
 
 ### DataEngine、Remote 与 Saga（遗留）
-
-#### 起服预加载与按服分库：遗留
-
 
 #### Remote：遗留
 
@@ -894,11 +905,9 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 业务模块（roost module）
 
-- **CellWorld 业务适配进模块（D21 后半）：第一块已做（2026-11-17），其余按推荐留在 demo（Q1 A、Q2 随 Q1、Q3 以后单独做，维护者 2026-11-18 按推荐定）**：SceneActor 实体、分区状态映射、格心跳登记、Node 安装点、Player 的恢复快照 / 死亡回执进了 cellworld 模块（[证据](evidence/cellworld-module-d21-20261117/README.md)）。按证据里的推荐暂留 demo（维护者可改）：Player 的 Base 标量字段与面板 / 队伍副本（Q1 推荐 A：字段由工程按模块 README 的字段表声明；改成模块状态要同时改客户端 / drill / loadtest 的同步解码）、队伍视图 `with/team`（Q2 随 Q1）、mirror 编码与攻击结论推送、奖励规则、`scene.partition` 配置（Q3 推荐以后单独改成 `cellworld.*`）、分区地形转发（Q4 维护者 2026-11-18 定暂不合一，留在 demo，等 Q1 / Q3 再一起评估）。MMORPG 夹具的队伍、场景、怪物、战斗、副本不随 CellWorld 走，留作各模块的扩展项。
+- **CellWorld 的 `scene.partition` 配置改名**（D21 后半 Q3，维护者 2026-11-18 按推荐定“以后单独做”）：game-demo 的分区开关仍是 `scene.partition`，推荐以后单独改成模块的 `cellworld.*`；做时与 Q1 / Q4（见 [CellWorld 固定分区](#cellworld-固定分区v1470)“业务适配的分工”）一起评估。
 - **登录外部边界**：双 account / game / Gate、真实 naming 与重启重连、casual 购买 / self_sync 已验；完整 naming 故障阶段、生产渠道、Redis 故障、跨机与长稳未验。跨机入口见 C-X4；时间推送仍为 best-effort。
 - **社交容量与归属**：两 game 共享 Team + toxiproxy、排队 SIGKILL / 重试与排队禁止建队 / 入队已验；容量未验。邀请的跨 game 投递已经 facebook 模块实现（2026-11-17，伴生共享 Remote 实体 + syncbus 广播告知）：告知广播给所有 game、尽力而为（普通 NATS 至多一次只用替身测过，真实依赖验的是 JetStream；靠 `TeamInvites` 补查）；投递在邀请事务之后，失败不撤销邀请；facebook 由第一次写它的 game 建（邀请不存在的玩家号也会建出一个空 facebook，数量有界）；Facebook 声明为共享 kind 后一步建立，并发首投两份都进收件箱（2026-11-18）。谁建、投递在事务之后、广播告知、名字 facebook 四点按现状，维护者 2026-11-18 按推荐定（[证据](evidence/social-facebook-entity-20261117/README.md)）。Team 归 game 服务已由维护者确认（D14），见[CellWorld 固定分区](#cellworld-固定分区v1470)“无缝世界原型的产品简化”。
-- **共享 kind（`ownership=shared`，使用者：facebook 的 Facebook、team 的 Team）的代价**（2026-11-18）：每次读写都走共享准入（分布式锁 + 一次 GrantWrite），没有独占实体的稳定持有快路径；不能退出共享。声明是进程级登记：同一 kind 在不同二进制里声明不一致时，没声明的一方首写会插入独占记录（同一工程同一份生成代码时不出现）（框架限制，[证据](evidence/remote-shared-kind-20261118/README.md)）。
-- **没有所有权记录、但本进程内存里有实例的 Remote 实体，只读请求也会首写认领成本进程独占**（读写同一准入，没有只读声明；框架限制）。
 
 ##### 2026-11-12：活动模块的驱动与验收边界
 
@@ -956,7 +965,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
-- **CellWorld Runtime**：模块场景 10 条已验，含 Start / Stop、三种失败复位（就绪前退出、ctx 先到、就绪后 AddIngress 失败，2026-11-17 补，[证据](evidence/d-small-items-20261117/README.md)）与 manager 托管；业务 Entity 适配仍只在 demo（D21 后半，维护者 2026-11-17 说先不做）。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
+- **CellWorld Runtime**：模块场景 10 条已验，含 Start / Stop、三种失败复位（就绪前退出、ctx 先到、就绪后 AddIngress 失败，2026-11-17 补，[证据](evidence/d-small-items-20261117/README.md)）与 manager 托管；业务适配的模块 / demo 分工见 [CellWorld 固定分区](#cellworld-固定分区v1470)“业务适配的分工”。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 
 ### 玩法组件与物理房间（遗留）
 
@@ -971,7 +980,8 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **设备与引擎**：C-U1～U4 包括 Unity / IL2CPP 场景时间与地形、快照 restore、UGC 交互、Windows / Linux / Android / iOS 与 Unreal / Godot 实机，线程、移动前后台、WAN / 跨 Gate 和确定性。已有 macOS ARM64 Editor / Mono / IL2CPP 与 .NET 功能证据不能代表全矩阵。
 - **只在内置浏览器面板里演练过**：Web 端房主（`WebHost` + Worker 规则循环、主动转交、刷新恢复、隐藏让出）在 Claude 桌面应用内置的 Chromium 面板里两个标签页演练通过（[证据](evidence/lobby-relay-browser-20261117/README.md)，第一轮发现的“主动转交后新房主规则不跑”已由 f2532dba 修掉并复测）。“切到后台”是用演示页的“模拟隐藏”按钮触发的；Safari、Firefox、手机浏览器没测，真实后台标签页的计时器限流对 Worker 的影响没实测。TS SDK 的自动化用例仍只在 node 上跑（`ws` 包代替浏览器的 WebSocket，`document`、`sessionStorage` 用假的）。
-- **Unity / IL2CPP 没有实跑**：开房间的 C# SDK `Roost.Client.Relay` 与配置导出的 C# 读取代码只在 .NET 上编译和运行过（netstandard2.1、`TreatWarningsAsErrors`），没有在 Unity Editor、Mono / IL2CPP Player 上跑过。
+- **开房间 C# SDK 在 Unity 上实跑到哪**（`Roost.Client.Relay`，[unity-webgl-smoke 实测结果](../../client/dotnet/unity-webgl-smoke/README.md#实测结果)）：Unity Editor（6000.3.12f1、Mono、macOS）在 relay 写期限修复之前跑过：TCP 通过，WebSocket 13 次 8 次通过、5 次被那个服务端缺陷断开；修复之后 Editor 没有复跑。Unity WebGL（6000.7.0b7、IL2CPP、`PumpDriven`）在修复之后两次通过（停 45s / 60s 不断线）。桌面与移动 Player 没跑。
+- **配置导出的 C# 读取代码没在 Unity 里跑过**：只在 .NET 上编译和运行（netstandard2.1、`TreatWarningsAsErrors`），Unity Editor、Mono / IL2CPP Player 都没跑。
 - **C# 经 WebSocket 连玩家接入：没验证的部分**（2026-11-18，[证据](evidence/csharp-gate-ws-20261118/README.md)）：
   - **自身视图同步在 IL2CPP 裁剪后能不能用**：WebGL 走 IL2CPP。冒烟只做握手与心跳，只走到很少的编解码路径。进入游戏后的 EntitySync / 生成的 DAO Apply 有没有被代码裁剪影响，没有验证，留给真实项目接入时验收。
   - **浏览器与平台**：Safari、Firefox、移动浏览器没测；真实后台标签页的限流没测；`wss://` 经真实负载均衡与 TLS 终结没测。
@@ -1013,6 +1023,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-18 核对：game-demo 生成依赖没发布的 `wiring/modulehost`**（原在“game-demo 接入登录链路的既定取舍”）：`wiring/modulehost` 随 v1.45.0 发布，生成物最低 core 之后逐版提高（现为 v1.56.0，`codegen/internal/roost/manifest.go` 的 `minimumVersions`），`-template game-demo` 不再需要 `--skip-deps` 加本地 `replace`。
 - **2026-11-18：Unity 托管路线打包不再要 CMake**（skill 重写时发现：`client/unity/README` 说托管路线不要 C++ 构建环境，但唯一的打包入口 `scripts/client/build-unity.py` 先检查 cmake，没有就退出）：加 `--managed-only`，只构建 `Roost.Client.dll`、带 Driver 与原生绑定的 C# 源码，不建插件、不生成原生示例（同时去掉 `package.json` 的 samples），只要 .NET SDK。修前 PATH 里没有 cmake 时退出 2；修后同样环境打出包，Unity 6000.3.12f1 batchmode 导入后 `Roost.Unity` 与引用 `RoostClientDriver` 的业务脚本编译通过。证据 [unity-managed-only-20261118](evidence/unity-managed-only-20261118/README.md)。
 - **2026-11-17：`module verify` 两项行为修正（R9 §9.5，维护者 2026-11-17 决定）**：模块场景先按正式启动的方式装载工程的 `configs/data`（安装器在放了模块测试文件的包里写公共夹具 `roost_config_data_test.go`），enter 的场景不再因工程 `EnterFirst` 发道具表里的道具而 13 / 29 答 `bag_item_invalid`，卡牌、放置删掉绕法；verify 只运行、只统计模块装进工程的测试文件里的用例，工程同前缀的测试不再算进模块条数，回合 PvP 去掉 `turnreal` 标签。各模块条数不变。证据 [module-verify-20261117](evidence/module-verify-20261117/README.md)。
 - **2026-11-17：13 类玩法改成模块组合（R9，维护者 D21 A；Q1～Q8 按推荐）**：原“二”里“模块化顺序（N1）”的玩法部分完成，CellWorld 部分留在“二”。各类场景名与条数不变、REAL 全绿，脚本加跑 `module verify`；room 补公开身份围栏 `Room().Authorize`（turn 改调）；pretag 清 REAL 开关补三个变量。证据：[批 0](evidence/r9-batch0-20261117/README.md)、[room Authorize](evidence/room-authorize-20261117/README.md)、[1A](evidence/r9-1a-20261117/README.md)、[1B](evidence/r9-1b-20261117/README.md)、[1C](evidence/r9-1c-20261117/README.md)、[1D](evidence/r9-1d-20261117/README.md)、[2A](evidence/r9-2a-20261117/README.md)、[2B](evidence/r9-2b-20261117/README.md)、[2C](evidence/r9-2c-20261117/README.md)、[2D](evidence/r9-2d-20261117/README.md)。
@@ -1036,25 +1047,25 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：遗留第 2 批（生成器与模块）**：`roost module verify` 只数顶层场景（原来把子测试数进通过数）；`-template game` 缺省带 `PlayerDao`（`add dao` 对已接好的同一 DAO 不重复）；嵌套类型里的 nil map 往返保持 `null`；nest 测试里手写的 `Lifecycle[T]` 副本加了与 wiring 逐声明比对的守卫；stamina 的免费补满、mailbox 的“等结果超时但事务已提交”补了场景；purchase+bag、bag+gm 的场景改为装载自带道具行；DAO golden 去掉 delta 里的实体号前缀；nest-game 夹具加心跳投递方式、独立 Gate + self_sync、集中布局与覆盖扇出开关；生成配置的 `remote_entity.snapshot_l2_key_prefix` 默认 `roost:<工程名>`（原为空，不同名工程共用 Redis 时 Remote 键互相覆盖）；组件拆分后过期的 5 个 codegen 用例改到新文件。证据见 CHANGELOG。
 - **2026-11-14：遗留第 3 批（game-demo 与客户端）**：空闲清扫与卸载先认 `lifetime=resident`；卸载与换服交出前先走 `LeaveScene` 存位置；`Player.PublishSyncDirty` 改取客户端同步掩码，背包不再重发；玩家换 Base 时 `TerrainEditor` 账本随玩家交出（原“尚未确认”，确认为缺陷并修复）；地形变异未杀死的三项各补一条能杀死变异的用例；Unity 加 `RoostSceneTime`；对战座位拒绝换服；机器人走 portal 登录时建盟名字为空（黑板键还是旧的 `guild_name`）；机器人每帧战斗输入改为不等应答（200ms±100ms 延迟下原来全部 `battle not found`，1 KB/s 时帧流大于链路，属链路容量，见 demo/WALKTHROUGH）；C# subject 载荷解码早已有（`EntityViews` / `SyncFrame` 与用例），删条。证据见 CHANGELOG。
 - **2026-11-14：遗留核心第 2 批**：handler 内新建未声明的 Remote 托管实体原来被本地投影写成普通文档，现在拒绝并回滚（`nest.ErrDurableRemoteWriteUnsupported`，行为变化）；SLG 联盟交接夹具改为先退出共享模式再独占转移（旧夹具与 REMOTE_ENTITY 多写者契约不符，20/20 失败）；补真实依赖用例：常驻实体的刷新与换服中止后载回（真实副本集）、两个真实进程交替写同一共享实体、LevelComponent 的 WAL 崩溃恢复、独占模式 Remote 转移时的 Mongo 故障注入（三个故障时刻）。证据见 CHANGELOG 与各用例。
-- **2026-11-14：遗留第 1 批与 CellWorld 千人排查**：嵌套 DAO 字段上的 `persist / nopersist / sync / nosync` 原来被静默忽略（v1.47 起字段默认同步，嵌套里的私有账本会发给客户端），现在生成期报错；预加载加了数量上限与时间预算（`dataengine.preload.max_entities` / `timeout`）；匹配补位补了 Redis 单机与 Cluster 上两个匹配器的并发验收；删去没有调用方的地形 `Brush.ApplyIn` / `View.BrushChangesIn`；sync-aoi 加心跳投递开关；Lockstep 历史窗口写进 guide/04 的核对表；活动施法一项有了逐拍证据。CellWorld：Touch 锁争用、视野查询分配、按 ID 分批与整帧相位不齐、整端重置风暴已修（CHANGELOG `[Unreleased]`）。
+- **2026-11-14：遗留第 1 批与 CellWorld 千人排查**：嵌套 DAO 字段上的 `persist / nopersist / sync / nosync` 原来被静默忽略（v1.47 起字段默认同步，嵌套里的私有账本会发给客户端），现在生成期报错；预加载加了数量上限与时间预算（`dataengine.preload.max_entities` / `timeout`）；匹配补位补了 Redis 单机与 Cluster 上两个匹配器的并发验收；删去没有调用方的地形 `Brush.ApplyIn` / `View.BrushChangesIn`；sync-aoi 加心跳投递开关；Lockstep 历史窗口写进 guide/04 的核对表；活动施法一项有了逐拍证据。CellWorld：Touch 锁争用、视野查询分配、按 ID 分批与整帧相位不齐、整端重置风暴已修（v1.47.0）。
 - **2026-11-13：saga 准入的“换服中”钩子**：原来 demo 的 `admitBound` 只留钩子 `playerMoving`（缺省不在换服中）；rehome 模块合入后（v1.45.0）准入改用 `PlayerOwners` 取玩家当前绑定与是否换服中，钩子已删除（`kitsaga.WithAdmit(steps.admitBound)`，`demo/internal/service/game/gift_saga.go.tmpl`）。
-- **2026-11-13：combat 与 dungeon 的组件 DAO 原来是 global**：`CombatDao` / `LevelDAO` 原来没有 `DbScope()`，挂在 sid 实体上时一个实体的文档分在两个库里；2026-11-13 改为跟随宿主主 DAO 的范围，注册校验拒绝范围不一致的组合（未发版）。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-13本地实体起服预加载与本地实体-dao-缺省-dbscopesidcombat-与-dungeon-的组件-dao)；CHANGELOG `[Unreleased]`“组件 DAO 跟随宿主实体的 dbscope”。
-- **2026-11-11：地形审查 RV-20261110-01～04**：四项已在 main 修复，留下的限制见[地形副本订阅与地图参数](#地形副本订阅与地图参数rv-20261110-0104-修复后)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-11地形审查-rv-20261110-0104已修复未发版留下的边界)；[地形进度总表 §2](TERRAIN-STATUS.md#2-缺陷修复均已关闭)。
+- **2026-11-13：combat 与 dungeon 的组件 DAO 原来是 global**：`CombatDao` / `LevelDAO` 原来没有 `DbScope()`，挂在 sid 实体上时一个实体的文档分在两个库里；2026-11-13 改为跟随宿主主 DAO 的范围，注册校验拒绝范围不一致的组合（v1.47.0）。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-13本地实体起服预加载与本地实体-dao-缺省-dbscopesidcombat-与-dungeon-的组件-dao)；CHANGELOG v1.47.0“组件 DAO 跟随宿主实体的 dbscope”。
+- **2026-11-11：地形审查 RV-20261110-01～04**：四项已修复（v1.45.0），留下的限制见[地形副本订阅与地图参数](#地形副本订阅与地图参数rv-20261110-0104-修复后)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-11地形审查-rv-20261110-0104已修复未发版留下的边界)；[地形进度总表 §2](TERRAIN-STATUS.md#2-缺陷修复均已关闭)。
 - **2026-11-11：wallet 的业务键**：`Apply` 的键只收 1～64 字节的 ASCII 字母、数字与 `- _ :`，别的答 `wallet_invalid`（shop 模块的作者发现）。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-11wallet-的业务键)
 - **2026-11-10：开地形场景同步 128 个对象时每观察者的下行**：增量字节压缩后 128 个同时动约 18.6KB/s，在 50KB/s 预算以内，不再需要维护者决定；降频 / LOD 不做。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10开地形场景同步-128-个对象时每观察者的下行已重算增量字节压缩后约-186kbs在-50kbs-以内)
 - **2026-11-10：场景主视野改用 near / team 视图**：主视野改用 packer 的 `near` 视图、队伍关系视野用 `team`（业务层实施，未改框架），留下的边界见[场景主视野的视图与 Codec](#场景主视野的视图与-codec)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10场景主视野改用-near--team-视图)
 - **2026-11-10：同一视图换 Codec 时改发全量**：确认会静默错用后，Manager 按（会话, subject）记基线 Codec，不符就转回待快照、下一次 Flush 收全量（Reason = Resync），代价见[场景主视野的视图与 Codec](#场景主视野的视图与-codec)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10同一视图换-codec-时改发全量)
 - **2026-11-10：建筑进场景主视野后的 demo 尺度与偶发全量**：主视野尺度先按 §28 放大、再由 §29 按游戏尺度重定；偶发的“第二次改参数以全量发出”已证实为 on_change 冻结的缺陷并修复（随 v1.43.0 发布）。剩下的代价见[场景主视野的视图与 Codec](#场景主视野的视图与-codec)；建筑进主视野之后偶发频率变高的具体原因尚未确认（只影响时序窗口的宽窄，不影响根因结论），原文并入同一份证据。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10建筑进场景主视野后的-demo-尺度维护者-2026-11-10主视野已按推荐放大见地形方案-28偶发已定位修复见本条末段)；[证据](evidence/entitysync-resync-flake-20261110/README.md)。
-- **2026-11-10：cellworld 按经过时间积分的子步截断**：按 A 实施：零头按千分位存在 `ActorState.FracX` / `FracY`（未发版），剩下的边界见[cellworld 的位置零头与入场序号](#cellworld-的位置零头与入场序号)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10cellworld-按经过时间积分的子步截断已证实维护者-2026-11-10-选定按千分位整数累计零头已修复未发版)；CHANGELOG `[Unreleased]`。
+- **2026-11-10：cellworld 按经过时间积分的子步截断**：按 A 实施：零头按千分位存在 `ActorState.FracX` / `FracY`（v1.43.0），剩下的边界见[cellworld 的位置零头与入场序号](#cellworld-的位置零头与入场序号)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10cellworld-按经过时间积分的子步截断已证实维护者-2026-11-10-选定按千分位整数累计零头已修复未发版)；CHANGELOG v1.43.0。
 <a id="2026-11-10无缝演练最后一步普通场景机器人压测阈值时过时不过尚未确认"></a>
 - **2026-11-10：无缝演练最后一步（普通场景机器人压测阈值）时过时不过**：已定位为 saga 步骤落到非属主进程后按 NAK 退避重投；先放宽演练阈值（方案 A），2026-11-11 改为 saga 步骤按 sid 确切路由（方案 ③）并恢复缺省阈值 16s。剩下的边界见 [Saga](#saga)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10无缝演练最后一步普通场景机器人压测阈值时过时不过尚未确认)；[FEATURE-2026-11-11-saga-step-sid-route](FEATURE-2026-11-11-saga-step-sid-route.md)。
-- **2026-11-10：`scripts/perf/sync-business.sh` 夹具与当前 core 不兼容**：原因 ③ 更正为空载荷增量，夹具按当前契约重写（未发版），没有放宽框架校验；冒烟与剩下的边界见[sync-business 夹具](#sync-business-夹具的范围)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10scriptsperfsync-businesssh-夹具与当前-core-不兼容已修复未发版)
+- **2026-11-10：`scripts/perf/sync-business.sh` 夹具与当前 core 不兼容**：原因 ③ 更正为空载荷增量，夹具按当前契约重写（v1.43.0），没有放宽框架校验；冒烟与剩下的边界见[sync-business 夹具](#sync-business-夹具的范围)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-10scriptsperfsync-businesssh-夹具与当前-core-不兼容已修复未发版)
 - **2026-11-09：地形原两项去重问题（T01 / T02）**：原两项去重问题（T01 / T02）已修复、客户端岸线 C# 算法层已实现，随 v1.43.0 发布。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-09类型调度框架与-demo-生产接线已实现原两项去重问题)
-- **2026-11-07：v1.42.1 修复复验**：RV-20261106-01/03/04 与 RV-20261107-02 复验关闭；RV-20261107-03 已修复（未发版）；Saga 偶发 fenced 见下一条。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-07v1421-修复复验)；[修复复验与续审](FIX-REVIEW-20261107.md)。
-- **2026-11-07：Saga 协调器偶发误判“被别的写者隔离”**：错误码 10164 是服务端同一期望序号过滤还有提案在处理，不是被隔离；修复后原样重发并计 `Stats.FenceBusy`（未发版），Saga 整轮 15 档通过。[经过与证据](evidence/known-limits-history-20261113/README.md#saga-协调器偶发误判被别的写者隔离2026-11-07-发版前压测已定位并修复未发版)；[证据](evidence/saga-fence-busy-20261107/probe-results.txt)。
-- **2026-11-07：新功能审查收尾**：RV-20261107-01（联盟迁移后宣战补发）与 RV-20261107-02（best_effort Stop）已修复（未发版）；联盟扫描剩下的边界见[业务模块的既定设计](#业务模块的既定设计)“宣战扫描接手”。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-07新功能审查收尾)；[收尾报告](FEATURE-REVIEW-20261107.md)。
-- **2026-11-06：cellworld 生命周期与编码（续审）**：RV-20261106-03（迟到 Leave 删新角色）与 RV-20261106-04（BaseState 重复标签）已修复（未发版），原有的剩余边界见[cellworld 的位置零头与入场序号](#cellworld-的位置零头与入场序号)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-06-续审cellworld-生命周期与编码)；[续审报告](FEATURE-REVIEW-20261106.md#续审跨区生命周期与状态编码)。
-- **2026-11-06：新功能审查（v1.42.0）**：RV-20261106-01（best_effort 失败创建发布）与 RV-20261106-02（cellworld 收尾等待）已修复；2026-11-10 真实时钟用例统一整治，冻结报告重建 frozen 记录的实现缺陷已修复（未发版）。剩下的见[无缝世界：遗留](#地形--无缝世界遗留)。[经过与证据](evidence/known-limits-history-20261113/README.md#最新新功能审查2026-11-06v1420)；[审查报告](FEATURE-REVIEW-20261106.md)。
+- **2026-11-07：v1.42.1 修复复验**：RV-20261106-01/03/04 与 RV-20261107-02 复验关闭；RV-20261107-03 已修复（v1.42.2）；Saga 偶发 fenced 见下一条。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-07v1421-修复复验)；[修复复验与续审](FIX-REVIEW-20261107.md)。
+- **2026-11-07：Saga 协调器偶发误判“被别的写者隔离”**：错误码 10164 是服务端同一期望序号过滤还有提案在处理，不是被隔离；修复后原样重发并计 `Stats.FenceBusy`（v1.42.2），Saga 整轮 15 档通过。[经过与证据](evidence/known-limits-history-20261113/README.md#saga-协调器偶发误判被别的写者隔离2026-11-07-发版前压测已定位并修复未发版)；[证据](evidence/saga-fence-busy-20261107/probe-results.txt)。
+- **2026-11-07：新功能审查收尾**：RV-20261107-01（联盟迁移后宣战补发）与 RV-20261107-02（best_effort Stop）已修复（v1.42.1）；联盟扫描剩下的边界见[业务模块的既定设计](#业务模块的既定设计)“宣战扫描接手”。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-07新功能审查收尾)；[收尾报告](FEATURE-REVIEW-20261107.md)。
+- **2026-11-06：cellworld 生命周期与编码（续审）**：RV-20261106-03（迟到 Leave 删新角色）与 RV-20261106-04（BaseState 重复标签）已修复（v1.42.1），原有的剩余边界见[cellworld 的位置零头与入场序号](#cellworld-的位置零头与入场序号)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-06-续审cellworld-生命周期与编码)；[续审报告](FEATURE-REVIEW-20261106.md#续审跨区生命周期与状态编码)。
+- **2026-11-06：新功能审查（v1.42.0）**：RV-20261106-01（best_effort 失败创建发布）与 RV-20261106-02（cellworld 收尾等待）已修复；2026-11-10 真实时钟用例统一整治，冻结报告重建 frozen 记录的实现缺陷已修复（v1.43.0）。剩下的见[无缝世界：遗留](#地形--无缝世界遗留)。[经过与证据](evidence/known-limits-history-20261113/README.md#最新新功能审查2026-11-06v1420)；[审查报告](FEATURE-REVIEW-20261106.md)。
 - **2026-11-06：Remote 独占实体的只读请求不再取写许可**：独占实体稳定持有期间读写都不碰 Mongo，`GetRemoteOwnership` 在稳定独占时答缓存的租约；仍有效的边界见 [Remote](#remote)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-06remote-独占实体的只读请求不再取写许可)
 - **2026-11-05：`TestAllianceE2ERedisOutage` 偶发失败**：根因是用例的“短断开”没有上限、单实例锁实际扛得住的断开比文档写的短，用例已修，产品语义没改；仍有的限制见 [Remote](#remote)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-05testalliancee2eredisoutage-偶发失败)
 - **2026-11-05～06：联盟 `Join` 的 Mongo 命令数与 effect outbox workers 缺省**：联盟去掉可靠 effect 与守卫快照后每次 `Join` 少约 7 条 Mongo 命令（方案 §2.5A）；`dataengine.outbox.workers` 缺省 2 → 8（维护者 2026-11-05 决定 B，2026-11-06 定为正式缺省）。仍到不了 1000/s，见 [Remote：遗留](#remote遗留)。[经过与证据](evidence/known-limits-history-20261113/README.md#2026-11-0506联盟-join-的-mongo-命令数与-effect-outbox-workers-缺省)
