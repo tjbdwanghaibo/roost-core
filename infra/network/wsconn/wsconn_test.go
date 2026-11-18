@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -152,10 +153,18 @@ func TestAnExpiredWriteDeadlineRefusesTheVeryNextWrite(t *testing.T) {
 //
 // 调度次序用 GOMAXPROCS(1) 固定：测试 goroutine 占住唯一的处理器跨过旧期限与唤醒计时器两个到期点，再在通道上挂起；
 // 调度器在同一轮里先触发旧期限（回调进 runnext）、再触发唤醒（唤醒 goroutine 进 runnext，回调挤到队尾），唤醒把测试
-// goroutine 放回 runnext，于是测试 goroutine 先设新期限、开始一次塞满停读对端的写并挂起，回调此时才跑。
+// goroutine 放回 runnext，于是测试 goroutine 先设新期限、开始一次塞满不读的对端的写并挂起，回调此时才跑。-race 下
+// 运行时随机化 runnext，这个次序不再固定：修复撤掉时只是部分轮次变红，变红的证明看不带 -race 的轮次。
+//
+// 写必须真的卡住，旧期限的回调才会碰上“写在进行”。这作为前提显式检查，不靠睡多久：客户端 goroutine 等到观察到写已开始
+// （只有一个处理器，它能跑就说明测试 goroutine 卡在写里让出了处理器）才读；写不经阻塞就写完了，用例按前提不成立失败。
+// 客户端用缺省的接收缓冲，开始读之前不读任何东西，靠 32 MiB 的消息塞满两端的 socket 缓冲；开始读之后内核自动调大窗口，
+// 很快读完（v1.54.0 审查 RV-20261118-04：原来把接收缓冲设成 4 KiB 来让写卡住，Linux 上连接建立时就把接收窗口钳在这个
+// 大小，小于一个 MSS 的窗口按糊涂窗口规避一小段一小段地放，4 MiB 在 5 秒内只读到约 25 万字节，读超时关掉连接，写报
+// broken pipe，被误报成旧期限关了连接）。写完再写一条确认连接仍可用；失败时同时打印写错误与客户端读到的结果。
 func TestAStaleWriteDeadlineDoesNotCloseALaterWrite(t *testing.T) {
-	server, client := pair(t, 4<<10)
-	big := bytes.Repeat([]byte{2}, 4<<20)
+	server, client := pair(t, 0)
+	big := bytes.Repeat([]byte{2}, 32<<20)
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	stale := time.Now().Add(3 * time.Millisecond)
 	_ = server.SetWriteDeadline(stale)
@@ -169,10 +178,18 @@ func TestAStaleWriteDeadlineDoesNotCloseALaterWrite(t *testing.T) {
 	<-wake
 
 	_ = server.SetWriteDeadline(time.Now().Add(time.Minute))
+	var written atomic.Bool
 	read := make(chan error, 1)
 	go func() {
-		time.Sleep(200 * time.Millisecond) // 写此时卡在停读的对端上
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		for !server.write.inProgress() { // 同步条件：写已开始，且测试 goroutine 卡在写里
+			if written.Load() {
+				read <- errors.New("precondition: the write finished without blocking, so the stale deadline was never exercised")
+				return
+			}
+			runtime.Gosched()
+		}
+		runtime.Gosched() // 让排在前面的旧期限回调先跑（修复前它在这里关掉连接）
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		client.SetReadLimit(int64(len(big))) // 客户端缺省只收 32KiB 的消息
 		for _, want := range [][]byte{[]byte("pong"), big} {
@@ -183,12 +200,29 @@ func TestAStaleWriteDeadlineDoesNotCloseALaterWrite(t *testing.T) {
 		}
 		read <- nil
 	}()
-	if _, err := server.Write(big); err != nil {
-		t.Fatalf("a write under a fresh one-minute deadline failed: %v (the earlier deadline's timer closed the connection)", err)
+	_, err := server.Write(big)
+	written.Store(true)
+	if err != nil {
+		t.Fatalf("a write under a fresh one-minute deadline failed: %v (the earlier deadline's timer closed the connection); peer read: %v", err, <-read)
 	}
 	if err := <-read; err != nil {
-		t.Fatal(err)
+		t.Fatalf("the write returned but the peer did not get the whole message: %v", err)
 	}
+	if _, err := server.Write([]byte("after")); err != nil {
+		t.Fatalf("a write after the big one: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, message, err := client.Read(ctx); err != nil || string(message) != "after" {
+		t.Fatalf("client read %q, %v; want the connection still usable", message, err)
+	}
+}
+
+// inProgress 报告这个方向有读写在进行（期限已交给 NetConn）。测试用来观察“写已开始”。
+func (d *deadline) inProgress() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.busy
 }
 
 // 写期限真的生效：对端停止读取、缓冲写满后，写在期限处失败（os.ErrDeadlineExceeded），不会挂住。

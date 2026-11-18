@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -470,8 +471,10 @@ func TestWebSocketConfigIsValidatedAndTheListenerStopsWithTheServer(t *testing.T
 }
 
 // stalledWebSocketSession 是一条真实 WebSocket 连接服务端一侧的会话（wsconn.Conn），客户端连上后不读：
-// 缓冲写满之后每次写都卡在 socket 上。返回的客户端连接供用例之后再开始读。
-func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration) (*tcpSession, *websocket.Conn) {
+// 缓冲写满之后每次写都卡在 socket 上。readBuffer > 0 时把客户端 socket 的接收缓冲设成这么大（很快就塞满）；
+// 之后还要读完的用例传 0 用缺省缓冲——Linux 在连接建立时按设的大小钳住接收窗口，4 KiB 的窗口小于一个 MSS，
+// 读起来一秒只有几十 KB。返回的客户端连接供用例之后再开始读。会话的单帧上限是 32 MiB。
+func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration, readBuffer int) (*tcpSession, *websocket.Conn) {
 	t.Helper()
 	listener, err := wsconn.Listen("127.0.0.1:0", wsconn.Config{Path: "/ws", MaxMessageBytes: 1 << 21, HandshakeTimeout: 2 * time.Second})
 	if err != nil {
@@ -487,8 +490,8 @@ func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration) (*tcpSess
 	transport := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		var dialer net.Dialer
 		connection, err := dialer.DialContext(ctx, network, address)
-		if err == nil {
-			_ = connection.(*net.TCPConn).SetReadBuffer(4 << 10)
+		if err == nil && readBuffer > 0 {
+			_ = connection.(*net.TCPConn).SetReadBuffer(readBuffer)
 		}
 		return connection, err
 	}}
@@ -503,7 +506,7 @@ func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration) (*tcpSess
 	select {
 	case conn := <-accepted:
 		t.Cleanup(func() { _ = conn.Close() })
-		return &tcpSession{connection: conn, writeTimeout: writeTimeout, maxPayloadBytes: 1 << 20}, client
+		return &tcpSession{connection: conn, writeTimeout: writeTimeout, maxPayloadBytes: 32 << 20}, client
 	case <-time.After(2 * time.Second):
 		t.Fatal("the upgraded connection never reached Accept")
 		return nil, nil
@@ -513,7 +516,7 @@ func stalledWebSocketSession(t *testing.T, writeTimeout time.Duration) (*tcpSess
 // 会话关闭（慢连接断开、停机）立即打断 WebSocket 连接上阻塞的写，不等一分钟的写期限：tcpSession.close 先关连接再取写锁，
 // wsconn.Conn.Close 立即关闭底层 socket。
 func TestWebSocketSessionCloseInterruptsABlockedWrite(t *testing.T) {
-	session, _ := stalledWebSocketSession(t, time.Minute)
+	session, _ := stalledWebSocketSession(t, time.Minute, 4<<10)
 	payload := bytes.Repeat([]byte{1}, 512<<10)
 	written := make(chan error, 1)
 	go func() {
@@ -544,7 +547,7 @@ func TestWebSocketSessionCloseInterruptsABlockedWrite(t *testing.T) {
 // 调用方期限（独立 Gate 的单帧发送预算）在 WebSocket 写的过程中到期：库已关闭整条连接，这一写报告连接坏了
 // （errConnectionBroken），不能当成“什么也没写、连接还在”的拒绝。慢连接因此被断开，与 TCP 上写到一半的结果相同。
 func TestACallerDeadlineThatEndsAWebSocketWriteBreaksTheConnection(t *testing.T) {
-	session, _ := stalledWebSocketSession(t, time.Minute)
+	session, _ := stalledWebSocketSession(t, time.Minute, 4<<10)
 	payload := bytes.Repeat([]byte{1}, 512<<10)
 	for attempt := 0; ; attempt++ {
 		if attempt == 256 {
@@ -567,10 +570,15 @@ func TestACallerDeadlineThatEndsAWebSocketWriteBreaksTheConnection(t *testing.T)
 // 期限，不能被上一帧的期限断开（TCP 上 SetWriteDeadline 换期限即生效，旧期限不再作用）。修复前 wsconn 把期限原样交给
 // coder/websocket 的 NetConn，它的期限计时器一直挂着，到期回调晚于新一帧拿到写锁时把新一帧当成“写在期限处未完成”，
 // 关掉整条连接——relay 成员在心跳整 10s 点被断开是同一个原因（wsconn 的 TestAStaleWriteDeadlineDoesNotCloseALaterWrite）。
-// 调度次序的固定方法见那个用例：GOMAXPROCS(1)、占住处理器跨过两个到期点、由唤醒计时器把测试 goroutine 排在回调之前。
+// 调度次序的固定方法见那个用例：GOMAXPROCS(1)、占住处理器跨过两个到期点、由唤醒计时器把测试 goroutine 排在回调之前；
+// “写真的卡住”也照那个用例作为前提显式检查（观察到写已开始才读，写不经阻塞就写完按前提不成立失败），客户端用缺省接收
+// 缓冲、靠 32 MiB 的帧塞满两端缓冲（v1.54.0 审查 RV-20261118-04 的同类问题：原来 4 KiB 缓冲加 1 MiB，Linux 上 5 秒内
+// 只读到约 25 万字节就读超时）。-race 下 runnext 随机化，修复撤掉时只部分轮次变红。
 func TestAnEarlierFramesDeadlineDoesNotBreakTheNextWebSocketWrite(t *testing.T) {
-	session, client := stalledWebSocketSession(t, time.Minute)
-	big := bytes.Repeat([]byte{2}, 1<<20)
+	session, client := stalledWebSocketSession(t, time.Minute, 0)
+	observed := &writeObservedConn{Conn: session.connection.(*wsconn.Conn)}
+	session.connection = observed
+	big := bytes.Repeat([]byte{2}, 32<<20)
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	stale := time.Now().Add(3 * time.Millisecond)
 	ctx, cancel := context.WithDeadline(context.Background(), stale)
@@ -585,12 +593,20 @@ func TestAnEarlierFramesDeadlineDoesNotBreakTheNextWebSocketWrite(t *testing.T) 
 	}
 	<-wake
 
+	var written atomic.Bool
 	read := make(chan error, 1)
 	go func() {
-		time.Sleep(200 * time.Millisecond) // 写此时卡在停读的客户端上
-		readCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		for !observed.writing.Load() { // 同步条件：写已开始，且测试 goroutine 卡在写里
+			if written.Load() {
+				read <- errors.New("precondition: the frame was written without blocking, so the stale deadline was never exercised")
+				return
+			}
+			runtime.Gosched()
+		}
+		runtime.Gosched() // 让排在前面的旧期限回调先跑（修复前它在这里关掉连接）
+		readCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		client.SetReadLimit(2 << 20) // 客户端缺省只收 32KiB 的消息
+		client.SetReadLimit(64 << 20) // 客户端缺省只收 32KiB 的消息
 		for _, want := range []int{wire.HeaderSize + len("small"), wire.HeaderSize + len(big)} {
 			if _, message, err := client.Read(readCtx); err != nil || len(message) != want {
 				read <- fmt.Errorf("client read a %d-byte message, %v; want %d bytes", len(message), err, want)
@@ -599,12 +615,26 @@ func TestAnEarlierFramesDeadlineDoesNotBreakTheNextWebSocketWrite(t *testing.T) 
 		}
 		read <- nil
 	}()
-	if err := session.WritePacket(context.Background(), 101, 0, wire.PayloadProtobuf, true, big); err != nil {
-		t.Fatalf("a frame written under write_timeout (a minute) failed: %v (the previous frame's deadline closed the connection)", err)
+	err = session.WritePacket(context.Background(), 101, 0, wire.PayloadProtobuf, true, big)
+	written.Store(true)
+	if err != nil {
+		t.Fatalf("a frame written under write_timeout (a minute) failed: %v (the previous frame's deadline closed the connection); peer read: %v", err, <-read)
 	}
 	if err := <-read; err != nil {
-		t.Fatal(err)
+		t.Fatalf("the frame was written but the peer did not get it whole: %v", err)
 	}
+}
+
+// writeObservedConn 在 wsconn.Conn 外面记下“有一帧正在写”：测试据此观察写已开始。
+type writeObservedConn struct {
+	*wsconn.Conn
+	writing atomic.Bool
+}
+
+func (c *writeObservedConn) WriteMessage(parts ...[]byte) (int64, error) {
+	c.writing.Store(true)
+	defer c.writing.Store(false)
+	return c.Conn.WriteMessage(parts...)
 }
 
 // TCPConfig 必须保持可比较：生成工程的 TestDeclaredDefaultsAreDefaultConfig 用 != 比较整份配置，
