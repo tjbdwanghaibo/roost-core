@@ -195,7 +195,9 @@ func (s *Service) JoinRoom(ctx context.Context, gameToken, roomID string, req Jo
 		case len(room.Members) >= room.MaxMembers:
 			return false, ErrRoomFull
 		}
-		room.Members = append(room.Members, Member{Account: account, ReservedUntilUnix: s.reservedUntil(now)})
+		// 新席位的事实从房间当前水位起算（Member.PresenceSeq）：同一账号上一个席位留下的、还在路上的旧报告
+		// 不能把这个还没连上 relay 的预留记成“连上过”。
+		room.Members = append(room.Members, Member{Account: account, ReservedUntilUnix: s.reservedUntil(now), PresenceSeq: room.RelaySeq})
 		room.clearLeaving(account)
 		return true, nil
 	})

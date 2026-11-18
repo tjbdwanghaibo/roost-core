@@ -230,7 +230,11 @@ type Member struct {
 	// 主动离开（lobby 的 leave、relay 报告 member_left 原因 left）清掉它，席位按没开局的规则让出。
 	Connected bool `json:"connected,omitempty"`
 	// PresenceSeq 是 Connected 依据的那条 relay 报告的序号：报告里他在线，或 member_left 原因 left 说他主动离开。
-	// relay 的报告会乱序到达，Connected 只被比它更新的事实改写（Room.notePresence），与房间水位 RelaySeq 无关。
+	// relay 的报告会乱序到达，Connected 只被比它更新的事实改写（Room.notePresence），之后不再跟着房间水位 RelaySeq 走。
+	// 席位新建时它是下界：JoinRoom 给新加入的人建预留时取当时的 RelaySeq——同一账号上一个席位被删后还在路上的旧
+	// 报告（序号不超过这个水位）说的是上一个席位，不能把还没连上的新预留记成“连上过”；新连接一定发生在签出令牌
+	// 之后，relay 在锁内给快照占序号，含这条新连接的报告序号必然大于它。relay 名单补进来的席位取那条报告的序号
+	// （Room.applyOnline）。经 lobby 离开、由 relay 确认的人，按确认那条报告的序号记成主动离开（HandleRelayEvent）。
 	PresenceSeq uint64 `json:"presence_seq,omitempty"`
 }
 

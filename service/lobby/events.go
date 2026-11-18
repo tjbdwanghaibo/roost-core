@@ -128,8 +128,14 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 		// 在线名单：只认序号更大的报告。
 		if event.Seq > room.RelaySeq {
 			room.RelaySeq = event.Seq
-			// relay 确认这个人走了（任何原因）：经 lobby 离开的记录可以清掉。
+			// relay 确认这个人走了（任何原因）：经 lobby 离开的记录可以清掉。经 lobby 离开在 relay 上没有自己的序号，
+			// 这条确认就是它的序号：还占着席位的（房主经 lobby 离开时席位不动）记成这个序号上的主动离开。否则他自己先
+			// 掉线（原因 disconnected，不是 left）时，离开前那条连接的旧在线报告晚到，会在记录清掉后把他记回“连上过”，
+			// 换完 host 后已开始的房间仍给他留座。这里 event.Seq 大于房间水位，也就大于任何成员已记下的 PresenceSeq。
 			if event.Type == EventMemberLeft && event.Account != "" {
+				if i := room.memberIndex(event.Account); i >= 0 && room.leaving(event.Account) {
+					room.Members[i].Connected, room.Members[i].PresenceSeq = false, event.Seq
+				}
 				room.clearLeaving(event.Account)
 			}
 			for _, account := range event.Online {
