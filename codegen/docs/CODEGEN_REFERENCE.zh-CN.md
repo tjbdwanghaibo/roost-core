@@ -430,7 +430,7 @@ DAO 里，到点由驱动投递一次 Tick，在实体的 Nest 锁与事务内�
 | `game/entities/<entity>/<component>_component_gen.go` | 生成（sync 重写） | `//roost:component`、`<Component>Component`（`New<Component>` / `New<Component>WithPriority` / `New<Component>At` / `Change<Component>` / `Remove<Component>` / `<Component>(id)` / `<Component>s()` / `Tick`）、`<Component>Of(target view.<Entity>Entity)`（handler 收实体总接口时取回组件）、DAO 适配、`<Component>Driver` 与 `<Component>TickHandler`；定时器组件是实体的基础设施，留在实体包。`I<Component>Entity` 只剩兼容别名（`= view.<Entity>Entity`，已装模块的测试还在用，模块改完后删除） |
 | `game/handler/tick_<entity>_<component>_gen.go`（+`_test.go`） | 生成（sync 重写） | `//roost:nest rollback=undo`（缺省 async）的 `handlerTick<Entity><Component>(target view.<Entity>Entity) (int32, error)`，调 `<entity>.<Component>Of(target).Tick()`（Tick 消息不带时间，按这条消息冻结的业务时间触发）；测试钉住驱动投递的名字就是 Nest 生成器得出的名字 |
 | `internal/bootstrap/generated.go` | 生成（sync 重写） | 该服务追加 `kitentitytimer.NewMod(EntityAccess, <entity>.<Component>Driver, ...)` |
-| `game/entities/<entity>/<component>_handlers.go` | 业务（只在缺失时创建） | 定时器类型号常量与 `register<Component>Handlers`（`handlers.Register(type, callback)`），回调签名 `func(entitytimer.Fire) time.Duration`。回调只有一句：把到期节点交给业务组件的导出方法（`component.Owner().<组件>().OnDeadline(fire)`），规则写在组件包里；组件要建 / 删节点时在实体包写宿主方法（只建 / 删节点）并列进 view 的 Holder（compose §4D 第 1 条） |
+| `game/entities/<entity>/<component>_handlers.go` | 业务（只在缺失时创建） | 定时器类型号常量与 `register<Component>Handlers`（`handlers.Register(type, callback)`），回调签名 `func(entitytimer.Fire) time.Duration`。回调只有一句：把到期节点交给业务组件的导出方法（`component.Owner().<组件>().OnDeadline(fire)`），规则写在组件包里；组件要建 / 删节点时在实体包写宿主方法（只建 / 删节点）并列进 view 的 Holder（compose 附录 A2） |
 
 **驱动**：进程内按“已加载实例的最早期限”排的小堆。实例加载（组件 `OnInitFinish`）时报告存量里的最早期限，事务里的增删改在提交后
 （`nest.AfterCommit`）报告新的最早期限，回滚的事务不改索引；同一实例的报告带单调序号，晚到的旧报告丢弃；卸载 / 删档 / 撤销新建
@@ -778,7 +778,7 @@ roost generate
 roost project doctor
 ```
 
-`roost add component <X> --entity <E>` 按组件包写法生成（compose §4D，2026-11-18 起；与模块模板、game-demo 一致）：
+`roost add component <X> --entity <E>` 按组件包写法生成（compose 附录 A2，2026-11-18 起；与模块模板、game-demo 一致）：
 
 | 文件 | 所有权 | 内容 |
 | --- | --- | --- |

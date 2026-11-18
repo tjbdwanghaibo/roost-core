@@ -71,7 +71,7 @@ type HeartbeatComponent struct {
 	beats map[string]*heartbeat.Reg
 }
 
-// HeartbeatOf 取回 @Entity@ 的心跳组件：Nest handler 收实体总接口 view.@Entity@Entity（compose §4D，handler 的参数是
+// HeartbeatOf 取回 @Entity@ 的心跳组件：Nest handler 收实体总接口 view.@Entity@Entity（compose 附录 A2，handler 的参数是
 // game/view 的接口），要启停心跳时经它取组件。target 不是 *@Entity@ 时返回 nil。
 func HeartbeatOf(target view.@Entity@Entity) *HeartbeatComponent {
 	if typed, ok := target.(*@Entity@); ok {
@@ -159,7 +159,7 @@ func (component *HeartbeatComponent) onHeartbeatInit(isCreate bool) error {
 // onExampleBeat 是示例心跳的回调：实体锁与事务内。按 beat.Elapsed（距上次执行的业务时间）推进，不按“第几拍”算；
 // beat.Now 是这一拍冻结的业务时间。
 //
-// 心跳组件是 @Entity@ 的基础设施，回调里不写业务（compose §4D 第 1 条）：回调只有一句，把这一拍交给业务组件的导出
+// 心跳组件是 @Entity@ 的基础设施，回调里不写业务（compose 附录 A2）：回调只有一句，把这一拍交给业务组件的导出
 // 方法，例如 return component.owner.<组件>().OnBeat(beat.Elapsed, beat.Now)；推进规则写在 game/components/<功能>/ 里。
 func (component *HeartbeatComponent) onExampleBeat(beat heartbeat.Beat) error {
 	_ = beat
@@ -230,7 +230,7 @@ type BehaviorComponent struct {
 	behavior *actionflow.Behavior@AIField@
 }
 
-// BehaviorOf 取回 @Entity@ 的行为组件：Nest handler 收实体总接口 view.@Entity@Entity（compose §4D，handler 的参数是
+// BehaviorOf 取回 @Entity@ 的行为组件：Nest handler 收实体总接口 view.@Entity@Entity（compose 附录 A2，handler 的参数是
 // game/view 的接口），要发起 / 结束动作时经它取组件。target 不是 *@Entity@ 时返回 nil。
 func BehaviorOf(target view.@Entity@Entity) *BehaviorComponent {
 	if typed, ok := target.(*@Entity@); ok {
@@ -374,7 +374,7 @@ type ExampleParam struct {
 
 // ExampleAction 是示例动作：每拍按 ctx.Elapsed 累计，满 Duration 成功结束。它演示动作的三件事：Start 校验（返回错误 =
 // 没能启动）、Tick 按经过时间推进（不按“第几拍”，掉拍时下一拍一次覆盖）、Cancel 收尾。动作自己的状态只在内存里；
-// 要改实体状态时交给业务组件（compose §4D：业务规则写在 game/components/<功能>/）：ctx.Owner 断言成 view.@Entity@Entity，
+// 要改实体状态时交给业务组件（compose 附录 A2：业务规则写在 game/components/<功能>/）：ctx.Owner 断言成 view.@Entity@Entity，
 // 调组件的导出方法，随这一拍的事务提交或回滚。
 type ExampleAction struct {
 	param  ExampleParam
@@ -576,7 +576,7 @@ type TimeDomainComponent struct {
 	domain *timedomain.Domain
 }
 
-// TimeDomainOf 取回 @Entity@ 的时间域组件：Nest handler 收实体总接口 view.@Entity@Entity（compose §4D，handler 的参数
+// TimeDomainOf 取回 @Entity@ 的时间域组件：Nest handler 收实体总接口 view.@Entity@Entity（compose 附录 A2，handler 的参数
 // 是 game/view 的接口），要改倍率时经它取组件。target 不是 *@Entity@ 时返回 nil。
 func TimeDomainOf(target view.@Entity@Entity) *TimeDomainComponent {
 	if typed, ok := target.(*@Entity@); ok {

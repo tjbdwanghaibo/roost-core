@@ -1044,7 +1044,7 @@ func TestOwnerModStopWithdrawsTheHandlers(t *testing.T) {
 }
 ` + generatedOwnerStopHelpers
 
-// 生成器写出的组件按 compose §4D（组件包 + game/view + 实体事件，2026-11-16 起）的写法。新建 -template game 工程，
+// 生成器写出的组件按 compose 附录 A2（组件包 + game/view + 实体事件，2026-11-16 起）的写法。新建 -template game 工程，
 // add entity / dao / component / handler / timer / behavior 之后 roost generate：
 //   - 组件在 game/components/<包>/（类型号常量、工厂登记、Owner、NewComponent），view 里有 <X> 与 <X>Holder，实体结构体
 //     直接挂 `<字段> *<包>.Component` 与 comp:"<包>.CompType<X>"；

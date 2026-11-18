@@ -75,7 +75,7 @@ func TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks(t *testing.T) {
 		}
 	}
 	tick := readProjectFile(t, root, "game/handler/tick_player_timer_gen.go")
-	// 缺省 async，参数是 game/view 的实体总接口，经 player.TimerOf 取回定时器组件（compose §4D）。
+	// 缺省 async，参数是 game/view 的实体总接口，经 player.TimerOf 取回定时器组件（compose 附录 A2）。
 	if !strings.Contains(tick, "//roost:nest rollback=undo\nfunc handlerTickPlayerTimer(target view.PlayerEntity) (int32, error) {\n\treturn int32(player.TimerOf(target).Tick()), nil") {
 		t.Fatalf("tick handler:\n%s", tick)
 	}

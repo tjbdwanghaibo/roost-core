@@ -16,7 +16,7 @@ import (
 
 const coreEntityImport = "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
-// addEntityComponent 是 roost add component <X> --entity <E>：按 compose §4D 的组件包写法（2026-11-16 起，与模块模板
+// addEntityComponent 是 roost add component <X> --entity <E>：按 compose 附录 A2 的组件包写法（2026-11-16 起，与模块模板
 // 和 game-demo 一致）一次做完组件的三处：
 //
 //	game/components/<包>/<包>.go      组件包：类型号常量与工厂登记、Component、宿主接口 Owner、NewComponent（业务文件）
@@ -494,7 +494,7 @@ func formatAST(fset *token.FileSet, file *ast.File) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-// renderComponentPackage 写 roost add component 的组件包 game/components/<包>/<包>.go（compose §4D 第 1 条）。
+// renderComponentPackage 写 roost add component 的组件包 game/components/<包>/<包>.go（compose 附录 A2）。
 // Owner 缺省是整个宿主实体（view.<E>Entity：DAO getter 与它挂的各组件访问器，roost generate 生成），与只挂在一个实体上的
 // 模块组件（checkin、profile）同一写法。
 func renderComponentPackage(module, pkg, name, componentType, entityType string, id int64) string {

@@ -489,8 +489,12 @@ client_export:
    - 只能加在末尾；不改已有字段的 `store` 键。
 2. **组件**：写在 `game/components/<feature>/`（[附录 A2](#a2-组件的写法组件包--gameview--实体事件)）：组件类型号与工厂登记在组件包里，对外的方法列进 `game/view/component_<feature>.go` 的接口，实体包里只留生成文件与手写的宿主方法。
 
-   <!-- TODO(component-cmd) -->
-   **生成组件骨架的命令**：待生成器直接生成组件包后补上。在那之前照附录 A2 的写法，以一个模块的组件包（如 `modules/checkin` 装进工程后的 `game/components/checkin/`）为样板手写，再 `"$ROOST" generate`。
+   **生成组件骨架**：`"$ROOST" add component <Feature> --entity <Entity>`（工程只有一个实体时 `--entity` 可省），再 `"$ROOST" generate`。命令写出：
+   - `game/components/<包>/<包>.go`：`//roost:component`、类型号、工厂登记、`Owner`、`Component`（业务文件，只建一次）；
+   - `game/view/component_<包>.go`：接口 `<Feature>` 与 `<Feature>Holder`；
+   - 实体结构体上挂 `<feature> *<包>.Component` 字段。
+   
+   generate 之后有访问器 `<Feature>()`、`view.<Entity>Entity`、`view.I<Feature>Entity`。接着：业务方法写在组件包的 `*Component` 上；要被别处调用的方法列进 `view.<Feature>`；用 `"$ROOST" add handler <Handler> --entity <Entity> --component <Feature>` 生成收 `view.I<Feature>Entity` 的 handler，里面只写 `target.<Feature>().<方法>(…)`；组件要实体提供的东西写成 `<Feature>Holder` 里的宿主方法，在 `game/entities/<entity>/<包>.go` 实现。同一个组件挂到第二个实体时再跑一次 `add component`，按提示把 `Owner` 改成最小接口。
 
    状态只经生成的 setter 改（`c.owner.Dao().GetTask().SetProgress(…)`）；组件不另存会被回滚的东西、不加锁。同一实体上的别的组件经 view 访问器直接调（`c.owner.Wallet()`），同一把锁、同一笔事务。“只做一次”怎么保证：
    - **自己的状态里记着这一次做过没有**（今天领过、这个订单到过账）：先判自己的状态，再 `c.owner.Wallet().Add(delta)`。周期性发放都用这个。
@@ -817,8 +821,7 @@ make dev-stop && make dev-down
 
 **每个实体的每个组件都写在自己的包 `game/components/<功能>/` 里，不写进实体包**（Player 与别的实体一样，模块自带的实体也一样：dungeon 的 Dungeon 是 `game/components/dungeonrun`，terrain 的是 `terrainchunkdata` / `terrainsite`）。组件的类型号与工厂登记也在组件包里；实体包只剩实体本体、`_gen` 文件、组件要实体手写提供的宿主方法（`<模块>.go`，每个模块一个小文件），以及只属于实体本身的东西（实体号与坐标换算、同步打包器、镜像、实体对框架接口的实现、生成的定时器组件与它的登记）。实体上的业务规则也写成组件；唯一的例外是只对这一种实体生效的事件监听可以写成实体方法。样板：只挂在 Player 上的看 `modules/profile`、`modules/task`；别的实体看 `modules/alliance`、`modules/room` / `turn` / `matchroom`、`modules/team`；多个实体共用的看 `modules/bag`、`modules/wallet`、`modules/attribute`、`modules/activity`。
 
-<!-- TODO(component-cmd) -->
-用哪条命令生成组件包：待生成器直接生成组件包后补上；在那之前照本节手写。
+生成组件包用 `"$ROOST" add component <Feature> --entity <Entity>`（写出的文件与之后要手写的部分见第 9 步第 2 条），不要手写组件包骨架。
 
 **依赖方向**（谁 import 谁）：
 

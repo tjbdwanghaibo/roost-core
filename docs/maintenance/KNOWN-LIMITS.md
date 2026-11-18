@@ -368,7 +368,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **`roost add gate` 的 Gate 是固定参数**（2026-11-16）：配置里只开放地址（`player_access.gate.addr` / `advertise_addr`）与命名空间；TCP 与内部上限（两侧报文 512 KiB、连接数、超时）取 `gatewiring.DefaultOptions()`，两侧 Ready 恒真（与嵌入 TCP 相同：Mod Start 起就接收，业务没有另外的准入条件）。要改这些按 [GATEWAY §2](../framework/GATEWAY.md#2-正式接入方式) 手写接线。
 - **生成的 Gate 只认 account 票据**：Gate 用 `wiring/gate.AccountAuthenticator`（`enter:` 与 `session:` 两种票据）；`auth.go` 认别的票据的工程不能直接在前面放生成的 Gate。
 - **doctor 的 `gate:client-address` 只查开发配置**：生产示例里的地址保持 `CHANGE_ME`，由运维填写。
-- **接入方式怎么选**写在 roost-genre 的 compose §1A：短连接（按请求交互）与开房间类用嵌入 TCP，长连接（长期在线、持续推送）缺省加独立 Gate；房主做 host 的开房间联机用 lobby + relay（compose §1B）。
+- **接入方式怎么选**写在 roost-genre 的 compose 第 5 步：短连接（按请求交互）与开房间类用嵌入 TCP，长连接（长期在线、持续推送）缺省加独立 Gate；房主做 host 的开房间联机用 lobby + relay（compose 第 6 步）。
 
 #### WebSocket 接入（2026-11-17）
 
@@ -577,7 +577,7 @@ Gate、嵌入 TCP 与 relay 共用 `infra/network/wsconn`（`github.com/coder/we
 
 #### 大厅 lobby 与转发 relay（2026-11-17）
 
-房主的客户端做 host 的开房间联机（未发版）：方案 [FEATURE-2026-11-16-lobby-relay](FEATURE-2026-11-16-lobby-relay.md)（§6 是维护者的 12 条决定），契约 [LOBBY](../framework/LOBBY.md)、[RELAY](../framework/RELAY.md)，用法见 roost-genre compose §1B。没做到位的部分见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
+房主的客户端做 host 的开房间联机（未发版）：方案 [FEATURE-2026-11-16-lobby-relay](FEATURE-2026-11-16-lobby-relay.md)（§6 是维护者的 12 条决定），契约 [LOBBY](../framework/LOBBY.md)、[RELAY](../framework/RELAY.md)，用法见 roost-genre compose 第 6 步。没做到位的部分见[大厅 lobby 与转发 relay：遗留](#大厅-lobby-与转发-relay遗留)。
 
 - **relay 只转发**（§6 第 4、5 条）：只读帧头，不解析载荷，不做帧同步、状态校验、反作弊与断线托管；玩法逻辑跑在房主的客户端上，快照的内容、版本与合法性由游戏负责。换 host 不保证玩法状态连续：主动转交最完整；断线时最多丢“最后一份快照之后”的变化。
 - **relay 进程崩溃时房间丢失**：房间（连接、座位、快照、本地被踢记录）只在一个实例的内存里，没有跨实例接管，也不落盘。进程重启后关房记录也没了：还没过期的 host 令牌能在新进程上重建同一个房间号（lobby 验权仍要求是目录里的房主、房间没关）。

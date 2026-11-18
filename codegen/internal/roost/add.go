@@ -449,7 +449,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		// the implicit "that line must run before any RegisterEntity" ordering.
 		// Other is the safe default; a scaffold must never mint a per-entity
 		// "= 1", which is the rank reserved for remote-managed kinds.
-		// 实体包里不声明 I<X>Entity（compose §4D 第 5 条）：handler 的参数是 roost generate 写的 game/view 接口——
+		// 实体包里不声明 I<X>Entity（compose 附录 A2）：handler 的参数是 roost generate 写的 game/view 接口——
 		// 实体总接口 view.<E>Entity 与组件窄接口 view.I<X>Entity。
 		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// category is this kind's lock rank, acquired lowest first. Other is the safe\n// default: holding it permits acquiring nothing further. Move the kind to\n// EntityCategoryWorld / PlayerScoped / Player once its ordering is known.\n//\n// To make the kind Remote-owned (remote=managed, written from several\n// processes) change three things together: category=entity.EntityCategoryRemote,\n// remote=managed on this marker, and the embedded EntityBase field below\n// becomes *entity.RemoteEntityBase. The service running Nest also needs the Remote\n// runtime: roost add mod remote_entity -service <service>.\n//roost:entity id=%d entityKind=EntityKind%s category=entity.EntityCategoryOther\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, o.ID, pascal, pascal)
 	case "component":
@@ -607,11 +607,11 @@ type handlerComponentTarget struct {
 	component  string // 取组件的表达式（target.Profile() / guild.TimerOf(target)）
 	call       string // TODO 里的调用说明
 	// marker 是 //roost:nest 上追加的选项（以空格开头）：组件挂在几种实体上时写 target=<实体>，Nest 归属与 endpoint
-	// 寻址都按它认 handler 锁的是哪一种（compose §4D 第 3 条）。
+	// 寻址都按它认 handler 锁的是哪一种（compose 附录 A2）。
 	marker string
 }
 
-// componentHandlerTarget：handler 的参数一律是 game/view 的接口（compose §4D）。组件在 game/view 里有 <X>Holder 时
+// componentHandlerTarget：handler 的参数一律是 game/view 的接口（compose 附录 A2）。组件在 game/view 里有 <X>Holder 时
 // （roost add component 生成的组件、模块组件），handler 收生成的窄接口 view.I<X>Entity，经访问器 <X>() 调组件，方法要先
 // 写进 view.<X>。没有 Holder 的是实体的基础设施组件（roost add timer / heartbeat / behavior / timedomain 生成在实体包里），
 // handler 收实体总接口 view.<E>Entity，用实体包生成的 <X>Of(target) 取回组件。

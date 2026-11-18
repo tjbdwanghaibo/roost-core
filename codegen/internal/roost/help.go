@@ -336,7 +336,7 @@ name := dao.GetName()`,
 roost add component <name> --entity <owner>
 roost add dao <name> --entity <owner>
 roost generate`,
-		Configuration: `高层 add 命令自动分配 ID，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag。add component 按组件包写法（compose §4D）生成 game/components/<包>/<包>.go（类型号常量与工厂登记、Component、宿主接口 Owner、NewComponent）与 game/view/component_<包>.go（组件接口 <X> 与 <X>Holder），实体结构体只挂 ` + "`<x> *<包>.Component` comp:\"<包>.CompType<X>\"" + `，实体包里不写组件文件与 I<X>Entity；组件包已存在时只挂字段（挂到第二个实体）。roost generate 生成 Entity wire 的 getter、view 访问器 <X>()、实体接口 view.<E>Entity 与 handler 用的窄接口 view.I<X>Entity。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //roost:entity entityKind=<const>，还可配置 businessPool=short|long、remote=managed、sync=true、syncNamespace、subjectPacker；service=<服务名> 声明归属服务（只在那个服务注册锁住它的 handler，别的服务经 rpc 写；未声明时任何带 Nest 的服务都能写），改了之后先 roost project sync 再 roost generate。`,
+		Configuration: `高层 add 命令自动分配 ID，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag。add component 按组件包写法（compose 附录 A2）生成 game/components/<包>/<包>.go（类型号常量与工厂登记、Component、宿主接口 Owner、NewComponent）与 game/view/component_<包>.go（组件接口 <X> 与 <X>Holder），实体结构体只挂 ` + "`<x> *<包>.Component` comp:\"<包>.CompType<X>\"" + `，实体包里不写组件文件与 I<X>Entity；组件包已存在时只挂字段（挂到第二个实体）。roost generate 生成 Entity wire 的 getter、view 访问器 <X>()、实体接口 view.<E>Entity 与 handler 用的窄接口 view.I<X>Entity。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //roost:entity entityKind=<const>，还可配置 businessPool=short|long、remote=managed、sync=true、syncNamespace、subjectPacker；service=<服务名> 声明归属服务（只在那个服务注册锁住它的 handler，别的服务经 rpc 写；未声明时任何带 Nest 的服务都能写），改了之后先 roost project sync 再 roost generate。`,
 		Example: `//roost:entity entityKind=EntityKindPlayer
 type Player struct {
     *entity.EntityBase

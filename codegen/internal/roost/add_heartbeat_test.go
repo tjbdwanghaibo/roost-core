@@ -94,7 +94,7 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 		"game/entities/monster/behavior_strategy.go": {"type ExampleStrategy struct", "ctx.ActionList.CreateAction(ActionExample"},
 		"game/entities/monster/states.go":            {"StateExample state.ID = 1", "state.NewCatalog(defs...)"},
 		"game/handler/monster_behavior.go": {
-			// handler 收 game/view 的实体总接口，经 monster.BehaviorOf 取回行为组件（compose §4D）。
+			// handler 收 game/view 的实体总接口，经 monster.BehaviorOf 取回行为组件（compose 附录 A2）。
 			"//roost:nest rollback=undo\nfunc handlerStartExampleMonsterAction(target view.MonsterEntity, millis int64) (int64, error) {\n\treturn monster.BehaviorOf(target).Behavior().CreateAction(",
 			"func handlerStartExampleMonsterStrategy(target view.MonsterEntity) (string, error)",
 		},

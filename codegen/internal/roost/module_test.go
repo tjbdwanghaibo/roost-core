@@ -79,7 +79,7 @@ func TestModuleCatalogEmbedsEveryTemplateAndValidates(t *testing.T) {
 
 // game/view 的组件接口要列出组件包里 *Component 的全部导出方法（handler、钩子与别的组件经 view 调用它们），
 // 签名用到的结构体也放在 view（组件包里只留同名别名）；view 只引用内建类型、db、protocol、core 的包，
-// 以及两个叶子类型包 game/modules/actor 与 game/modules/gameplay/attribute（见 compose §4D）。
+// 以及两个叶子类型包 game/modules/actor 与 game/modules/gameplay/attribute（见 compose 附录 A2）。
 // viewMethodExemptions 是不进 view 的方法与原因，只有两种：返回 core 运行时对象、参数是同一组件的另一个实例。
 // 新增的导出方法不在 view 里也不在这里时报错；豁免表里的方法已经进了 view 或已经不存在时也报错（表不留陈项）。
 func TestModuleViewInterfacesListTheComponentMethods(t *testing.T) {

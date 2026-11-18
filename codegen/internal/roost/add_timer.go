@@ -587,7 +587,7 @@ type %[7]sComponent struct {
 	host  *entitytimer.Host
 }
 
-// %[7]sOf 取回 %[3]s 的定时器组件：Nest handler 收实体总接口 view.%[3]sEntity（compose §4D，handler 的参数是 game/view 的
+// %[7]sOf 取回 %[3]s 的定时器组件：Nest handler 收实体总接口 view.%[3]sEntity（compose 附录 A2，handler 的参数是 game/view 的
 // 接口），要登记 / 取消定时器或推进到期节点时经它取组件。target 不是 *%[3]s 时返回 nil。
 func %[7]sOf(target view.%[3]sEntity) *%[7]sComponent {
 	if typed, ok := target.(*%[3]s); ok {
@@ -771,7 +771,7 @@ func (component *%[3]sComponent) register%[3]sHandlers(handlers *entitytimer.Han
 
 // on%[3]sExample 在节点到期时执行：实体的 Nest 锁与事务内，只改 DAO、记 effect，不做 I/O、不阻塞。
 //
-// 定时器组件是 %[2]s 的基础设施，回调里不写业务（compose §4D 第 1 条）：回调只有一句，把到期节点交给业务组件的导出方法，
+// 定时器组件是 %[2]s 的基础设施，回调里不写业务（compose 附录 A2）：回调只有一句，把到期节点交给业务组件的导出方法，
 // 例如 return component.owner.<组件>().OnDeadline(fire)；期限与节点号的记账、到期要做的事都写在 game/components/<功能>/
 // 里。组件要建 / 删定时节点时，在 game/entities/%[1]s/<功能>.go 写宿主方法（只建 / 删节点，例如
 // func (e *%[2]s) Arm<功能>Deadline(at time.Time) int64 { return e.%[3]sComp().New%[3]sAt(at, ...) }），列进 view 的 <功能>Holder。

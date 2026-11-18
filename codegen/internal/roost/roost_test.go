@@ -439,7 +439,7 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 组件包写法（compose §4D，2026-11-18）：组件包、实体挂字段、view 接口。
+	// 组件包写法（compose 附录 A2，2026-11-18）：组件包、实体挂字段、view 接口。
 	if got, want := strings.Join(componentPaths, ","), "game/components/inventory/inventory.go,game/entities/player/entity.go,game/view/component_inventory.go"; got != want {
 		t.Fatalf("component paths = %s, want %s", got, want)
 	}
@@ -2223,7 +2223,7 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 		`import "example.com/planet/game/view"`, "target view.IProfileEntity", "target.Profile().Rename(name)",
 		"game/view/component_profile.go", "game/view/holder_entities_gen.go", "Rename(name string) error", "SetName(name)",
 		"业务层不要再次", "//roost:nest rollback=undo\n", "ID、id、tracker",
-		// 组件包写法与缺省 async（compose §4D，维护者 2026-11-18）。
+		// 组件包写法与缺省 async（compose 附录 A2，维护者 2026-11-18）。
 		"game/components/profile/profile.go", "func (component *Component) Rename(name string) error", "component.owner.Dao().SetName(name)",
 		"durability 用缺省的 async",
 	} {
