@@ -1,0 +1,5 @@
+2026/11/18 08:20:26 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=27.791µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestTeamCreateClaimsSharedInOneStep
+--- PASS: TestTeamCreateClaimsSharedInOneStep (0.00s)
+PASS
+ok  	example.com/studio/tgreen/game/controllers	0.545s

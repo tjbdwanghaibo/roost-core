@@ -105,7 +105,8 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 - **认领之后崩溃**：留下的是一条共享的空认领（`_ver` 0），别的进程照常写，同 sid 重启照常读写；不需要“删空认领”（`DeleteEmptyClaimExpected` 只删非共享的，也不计 `empty_claim_total{left}`）。
 - **不能退出共享**：`LeaveRemoteSharedMode` 对共享 kind 直接返回 `ErrRemoteOwnerTransition`（不取锁、不改记录）——退回独占就又是“只有 owner 能写、别的进程被 fence”。`TransferRemoteOwnership` 不变（只有记录上的 owner 能转，转完仍是共享；共享实体不进 `ListOwnedRemoteEntities`，缩容 / 迁移不枚举它）。
 - **非持久所有权存储**（Redis marker 等自行 `SetOwnershipStore` 的装配）没有一条原子写出共享记录的认领，认领共享 kind 返回 `ErrRemoteWriteCapabilityDisabled`；正式装配都是 Mongo 持久权威。
-- **未声明的 kind** 行为不变：首写认领仍是独占，切共享仍由 owner `EnterRemoteSharedMode`（Team 目前就是这样建的）。
+- **未声明的 kind** 行为不变：首写认领仍是独占，切共享仍由 owner `EnterRemoteSharedMode`。
+- **使用者**：facebook 模块的 Facebook（每名玩家的收件箱，`Ensure` 只装进内存，第一次投递时认领）；team 模块的 Team（2026-11-18，[证据](../maintenance/evidence/team-shared-kind-20261118/README.md)：建队在取号、`Create` 之后调 `ClaimRemoteOwnership`，一条插入就是共享记录，不再 `EnterRemoteSharedMode`；认领答出非共享记录时建队报错）。
 - **代价**：共享 kind 的每次读写都是共享准入（分布式锁 + 一次 `GrantWrite`），没有独占实体的稳定持有快路径；只给“多个进程都要写、没有天然 owner”的实体用。
 - **回归**：[write_admission_test.go](../../framework/remoteentity/write_admission_test.go) 的 `TestSharedKindFirstWritesFromTwoProcessesBothSucceed`（两个进程都缓存了“没有记录”后先后首写：先插入的记录直接共享、代际 1，后到的插入读回共享记录照常写，两边读到对方修改；另 8 组真正并发的首写都成功）、`TestSharedKindClaimerCrashLeavesOthersWriting`（首写进程认领后不提交就消失，别的进程与同 sid 重启的进程照常读写）、`TestSharedKindOwnershipOperations`（`ClaimRemoteOwnership` 一条插入就共享、别的进程再调答出同一条记录；退出共享被拒；不存在的实体不认领；非持久存储拒绝）；真实 Mongo 副本集与真实 Redis 上的 [ownership_redis_integration_test.go](../../framework/remoteentity/ownership_redis_integration_test.go) `TestRealSharedKindFirstWritesFromTwoProcesses`（12 个实体各两进程并发首写 + 同 sid 重启读写）。去掉共享插入、去掉读回共享记录的接受、去掉退出共享的拒绝，各自变红。
 

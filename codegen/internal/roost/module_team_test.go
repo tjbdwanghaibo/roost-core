@@ -41,13 +41,13 @@ func TestModuleTeamGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("team: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"facebook": 9, "team": 31})
+	checkTaskModuleRows(t, report, map[string]int{"facebook": 9, "team": 32})
 	roost("module", "add", "rehome")
 	report, err = VerifyModules(context.Background(), root, nil, nil)
 	if err != nil {
 		t.Fatalf("team/rehome: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"facebook": 9, "team": 31, "rehome": 62, "team+rehome": 2})
+	checkTaskModuleRows(t, report, map[string]int{"facebook": 9, "team": 32, "rehome": 62, "team+rehome": 2})
 	before := moduleProjectDigest(t, root)
 	roost("module", "add", "rehome", "team")
 	if moduleProjectDigest(t, root) != before {
@@ -67,6 +67,9 @@ func TestModuleTeamGenerated(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/entities/facebook/facebook_gen_wire.go", "entity.DeclareRemoteSharedKind(EntityKindFacebook)", "_ = EntityKindFacebook", "./game/modules/facebook", "TestFacebookIsASharedKind", "is not declared shared")
 	recipeMutationMustFail(t, root, "game/modules/facebook/facebook.go", "if !found || !lease.Shared {", "if false && (!found || !lease.Shared) {", "./game/modules/facebook", "TestFacebookUnopenedInboxIsEmptyWithoutNest", "unopened facebook")
 	recipeMutationMustFail(t, root, "game/components/facebook/facebook.go", "!renewing && dao.InvitesLen() >= MaxInvites", "!renewing && dao.InvitesLen() > MaxInvites", "./game/handler", "TestFacebookInvitesAreBoundedAndPruned", "invite beyond the bound accepted")
+	// Team 也是共享 kind：生成的登记声明它，建队认领一条插入就是共享记录，不再切共享；认领答出独占记录时建队报错。
+	recipeMutationMustFail(t, root, "game/entities/team/team_gen_wire.go", "entity.DeclareRemoteSharedKind(EntityKindTeam)", "_ = EntityKindTeam", "./game/controllers", "TestTeamCreateClaimsSharedInOneStep", "kind declared shared=false")
+	recipeMutationMustFail(t, root, "game/controllers/team.go", "	if !lease.Shared {", "	if false && !lease.Shared {", "./game/controllers", "TestTeamCreateClaimsSharedInOneStep", "an exclusive claim was accepted")
 	recipeMutationMustFail(t, root, "game/controllers/team.go", "if invitation.ExpireAt == 0 {", "if invitation.ExpireAt != 0 {", "./game/controllers", "TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority", "online invitee not told")
 	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome|^TestFacebook", "./game/handler", "./game/controllers", "./game/modules/facebook")
 

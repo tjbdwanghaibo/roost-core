@@ -25,7 +25,8 @@ import (
 )
 
 // teamDeps 是建队与入队要用的依赖：本服 sid，与建队前的准备 create（取持久唯一号、创建空的 Remote 实体、
-// 切到共享模式）。都由无状态的能力拼成，每次请求从 Registry 现取（teamDepsFromRegistry），不挂在 Controller 上。
+// 认领——Team 是共享 kind，认领一步就是共享记录）。都由无状态的能力拼成，每次请求从 Registry 现取
+// （teamDepsFromRegistry），不挂在 Controller 上。
 type teamDeps struct {
 	sid    int32
 	create func(context.Context) (int64, error)
@@ -88,17 +89,25 @@ func teamDepsFromRegistry(registry *app.Registry) (*teamDeps, error) {
 			return 0, err
 		}
 		id := value.ID()
-		lease, err := remote.ClaimRemoteOwnership(ctx, id)
-		if err != nil {
+		if err := teamClaim(ctx, remote, id); err != nil {
 			return 0, err
-		}
-		if !lease.Shared {
-			if _, err := remote.EnterRemoteSharedMode(ctx, id); err != nil {
-				return 0, err
-			}
 		}
 		return id, nil
 	}}, nil
+}
+
+// teamClaim 认领刚建的 Team。Team 声明为共享 kind（实体标记 ownership=shared），认领的那一条插入就是共享的所有权记录：
+// 不经过建队进程独占的中间态，不用再切共享，建队中途崩溃留下的是不卡任何人的共享空认领。认领答出非共享记录，说明本进程
+// 的登记没有声明共享（标记被删、旧的生成代码）：这样的队伍别的 game 写它会被 fence，报错而不是把它建出来。
+func teamClaim(ctx context.Context, remote entity.IRemoteEntityManager, id int64) error {
+	lease, err := remote.ClaimRemoteOwnership(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !lease.Shared {
+		return fmt.Errorf("team: claim of %d is exclusive to sid %d: the Team entity must be declared ownership=shared", id, lease.OwnerSid)
+	}
+	return nil
 }
 
 // teamNextID 的计数器与 Team 使用相同物理库；拒绝回绕。未知结果允许跳号，绝不复用旧号。
@@ -134,7 +143,7 @@ func teamResponse(ctx *playeraccess.Context, info view.TeamSnapshot, err error) 
 	return response
 }
 
-// HandleTeamCreate 先保留持久唯一号、创建共享 Remote 空实体，再在 [Team, Player] 事务中建立队伍。
+// HandleTeamCreate 先保留持久唯一号、创建并认领共享 Remote 空实体（一条插入，生来共享），再在 [Team, Player] 事务中建立队伍。
 // 准备失败只留下不可复用的空实体，不写玩家引用；重试已完成的建队返回现有队伍。
 func (c *Controller) HandleTeamCreate(ctx *playeraccess.Context, req *pb.TeamCreateRequest) (*pb.TeamResponse, error) {
 	if req == nil {

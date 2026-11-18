@@ -1,0 +1,26 @@
+    module_alliance_test.go:72: caught mutation in game/handler/alliance_home.go: stale=
+    module_alliance_test.go:73: caught mutation in game/handler/alliance_home.go: stale=
+    module_alliance_test.go:74: caught mutation in game/handler/alliance_home.go: replay=
+    module_alliance_test.go:75: caught mutation in game/controllers/alliance.go: <nil>
+    module_alliance_test.go:76: caught mutation in game/controllers/alliance.go: stale mirror
+    module_alliance_test.go:77: caught mutation in game/modules/alliance/rehome.go: 
+--- PASS: TestModuleAllianceGenerated (115.23s)
+--- PASS: TestModuleMatchmakingGenerated (74.25s)
+    module_team_test.go:56: caught mutation in game/components/teamroster/teamroster.go: deadline accepted:
+    module_team_test.go:57: caught mutation in game/components/teamroster/teamroster.go: ninth member accepted:
+    module_team_test.go:58: caught mutation in game/components/teamroster/teamroster.go: 65th invitation accepted:
+    module_team_test.go:59: caught mutation in game/components/teamroster/teamroster.go: leader handoff=
+    module_team_test.go:60: caught mutation in game/components/teamroster/teamroster.go: empty team ID reused:
+    module_team_test.go:61: caught mutation in game/components/team/team.go: joined second team:
+    module_team_test.go:62: caught mutation in game/components/team/team_rehome.go: team allowed rehome:
+    module_team_test.go:63: caught mutation in game/components/team/team_rehome.go: moving player joined:
+    module_team_test.go:67: caught mutation in game/entities/facebook/facebook_gen_wire.go: is not declared shared
+    module_team_test.go:68: caught mutation in game/modules/facebook/facebook.go: unopened facebook
+    module_team_test.go:69: caught mutation in game/components/facebook/facebook.go: invite beyond the bound accepted
+    module_team_test.go:71: caught mutation in game/entities/team/team_gen_wire.go: kind declared shared=false
+    module_team_test.go:72: caught mutation in game/controllers/team.go: an exclusive claim was accepted
+    module_team_test.go:73: caught mutation in game/controllers/team.go: online invitee not told
+--- PASS: TestModuleTeamGenerated (64.00s)
+--- PASS: TestDemoTeamModuleIntegration (59.01s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	313.219s
+EXIT=0

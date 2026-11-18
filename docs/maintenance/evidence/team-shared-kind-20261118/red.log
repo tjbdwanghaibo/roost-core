@@ -1,0 +1,6 @@
+2026/11/18 08:19:45 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=27.834µs changed=0 added=0 removed=0 unchanged=0 members=[]
+--- FAIL: TestTeamCreateClaimsSharedInOneStep (0.00s)
+    team_test.go:114: team creation went through an exclusive claim: kind declared shared=false claims=1 enter-shared calls=1 err=<nil>
+FAIL
+FAIL	example.com/studio/tred/game/controllers	0.543s
+FAIL

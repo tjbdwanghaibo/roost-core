@@ -10,9 +10,10 @@ import (
 const EntityKindTeam entity.EntityKind = {{ID:entity:Team}}
 
 // Team 是跨进程共享的组队权威；写者在 Nest 准备阶段取得 Remote 权限，随后与本地 Player 一起提交。
-// 建队入口先切到共享模式；不挂心跳。EntityCategoryRemote 保证锁序先于 Player。
+// ownership=shared 声明它是共享 kind：建队认领的那一条插入就是共享记录（没有独占中间态、不用切共享），
+// 不能退出共享；不挂心跳。EntityCategoryRemote 保证锁序先于 Player。
 //
-//roost:entity id={{ID:entity:Team}} entityKind=EntityKindTeam category=entity.EntityCategoryRemote remote=managed service={{GAME_SERVICE}}
+//roost:entity id={{ID:entity:Team}} entityKind=EntityKindTeam category=entity.EntityCategoryRemote remote=managed service={{GAME_SERVICE}} ownership=shared
 type Team struct {
 	*entity.RemoteEntityBase
 	entity.ComponentManager

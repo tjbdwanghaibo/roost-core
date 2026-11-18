@@ -1,0 +1,28 @@
+== T1 game/entities/team/entity.go: remote=managed service=game ownership=shared -> remote=managed service=game
+RED
+--- FAIL: TestTeamCreateClaimsSharedInOneStep (0.00s)
+    team_test.go:115: team creation went through an exclusive claim: kind declared shared=false claims=1 enter-shared calls=0 err=team: claim of 4611686018520572945 is exclusive to sid 1000: the Team entity must be declared ownership=shared
+FAIL
+FAIL	example.com/studio/tgreen/game/controllers	0.541s
+FAIL
+restored
+
+== T2 game/entities/team/team_gen_wire.go: entity.DeclareRemoteSharedKind(EntityKindTeam) -> _ = EntityKindTeam
+RED
+--- FAIL: TestTeamCreateClaimsSharedInOneStep (0.00s)
+    team_test.go:115: team creation went through an exclusive claim: kind declared shared=false claims=1 enter-shared calls=0 err=team: claim of 4611686018520572945 is exclusive to sid 1000: the Team entity must be declared ownership=shared
+FAIL
+FAIL	example.com/studio/tgreen/game/controllers	0.315s
+FAIL
+restored
+
+== T3 game/controllers/team.go: 	if !lease.Shared { -> 	if false && !lease.Shared {
+RED
+--- FAIL: TestTeamCreateClaimsSharedInOneStep (0.00s)
+    team_test.go:119: an exclusive claim was accepted for a team: enter-shared calls=0 err=<nil>
+FAIL
+FAIL	example.com/studio/tgreen/game/controllers	0.313s
+FAIL
+restored
+
+ok  	example.com/studio/tgreen/game/controllers	0.287s

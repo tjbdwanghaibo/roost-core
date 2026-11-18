@@ -1,6 +1,6 @@
 # team：可跨 game 进程的队伍——建队、邀请、入队、离队、解散，成员表与玩家引用同一笔事务
 
-队伍是一个 Remote 共享权威实体（Team）：成员表只有一份，放在 Team 上，多个 game 进程都能在事务里读写它；每名玩家身上只存“我在哪支队伍”的引用。邀请经被邀请人的 Facebook（依赖的 [facebook](../facebook/README.md) 模块，同样是共享 Remote 实体）投递，被邀请人连在哪个 game 上、在不在线都收得到。
+队伍是一个 Remote 共享权威实体（Team，实体标记 `remote=managed ownership=shared`，生来共享、不能退出共享，见 [共享 kind](../../docs/framework/REMOTE_ENTITY.md#共享-kindownershipshared)）：成员表只有一份，放在 Team 上，多个 game 进程都能在事务里读写它；每名玩家身上只存“我在哪支队伍”的引用。邀请经被邀请人的 Facebook（依赖的 [facebook](../facebook/README.md) 模块，同样是共享 Remote 实体）投递，被邀请人连在哪个 game 上、在不在线都收得到。
 
 ## 能力
 
@@ -18,7 +18,7 @@
   - Player 上的 Team 组件（逻辑、类型号 `team.CompTypeTeam` 与工厂登记在 `game/components/team/team.go`，对外接口 `view.Team`；handler 收生成的 `view.ITeamEntity`，经 `Team()` 取得）：`TeamID() int64`、`Create(target, sid)`、`Accept(target, sid, now)`、`Invite(target, invitee, now)`、`Leave(target, disband)`、`Info(target)`。除 `TeamID()` 外都同时修改 Team 与 Player，调用方的事务必须同时声明两者。
   - Team 实体（`game/entities/team/entity.go`，直接挂 `teamroster.CompTypeTeamRoster`）上的成员表组件 TeamRoster（`game/components/teamroster/teamroster.go`，类型号与工厂登记也在那里；handler 收 `view.TeamEntity`，经 `TeamRoster()` 取得）：`Info() view.TeamSnapshot`（`{TeamID, Leader, Revision, Members, SIDs}`，锁内读出的值拷贝）、`IsMember(id)`、`HoldMatch(key)` / `ReleaseMatch(key)`（匹配期间冻结名单，见“联动”）。
   - Nest handler（`game/handler/`，参数是 `view.TeamEntity` 与 `view.ITeamEntity`）：`handlerPlayerTeam`（只读本人的队伍号：`sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`）、`handlerTeamCreate`、`handlerTeamInvite`、`handlerTeamAccept`、`handlerTeamLeave`、`handlerTeamInfo`（后五个都是 `[Team, Player]` 两个实体的事务，`rollback=undo durability=strict`，例如 `sender.NewTeamCreateSender(client).MultiSync_TeamCreate(ctx, teamEntityID, playerEntityID, sid)`）。
-  - Controller（`game/controllers/team.go`）：七个 `HandleTeam…` 端点；建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、切到共享模式）发生在事务之外。
+  - Controller（`game/controllers/team.go`）：七个 `HandleTeam…` 端点；建队准备（从 Mongo 的 `_team_id_sequence` 集合取号、创建空的 Remote 实体、`ClaimRemoteOwnership` 认领）发生在事务之外。Team 声明为共享 kind，认领的那一条插入就是共享记录，不经过建队进程独占的中间态，也不再切共享；认领答出非共享记录（本进程的登记没有声明共享）时建队报错。
 - **实体事件**（`game/event/team.go`，在 Player 上发布；别的模块在自己的组件或 Player 的方法上标 `//roost:listen [priority=N]` 监听，`roost generate` 按优先级排好顺序）
   - 拦截事件 `event.TeamJoining{TeamID}`（`game/components/team/team.go` 的 `checkJoin`）：建队与入队的事务内准入检查，先于任何写入。监听返回错误就拒绝这次入队；只做检查、不改状态、不做 I/O。现在的监听：matchmaking 20、team 的 rehome 联动 10（沿用改成事件之前按名字字母序的顺序）。
   - `event.TeamChanged`（`game/components/team/changed.go`）：队伍关系变化时发布，字段是变化前后两份 `view.TeamSnapshot` 的值拷贝（`TeamID/Leader/Revision/Members/SIDs` 与 `Before…`，`team.ChangedSnapshots(ev)` 还原成两份快照）和 `Refresh`；`Refresh` 为真表示只是当前玩家核对了一次（`TeamInfo` 等），不是名单变了。在同一笔事务里，监听出错整笔回滚；监听里不能做 I/O，要发通知得用提交后的机制。
@@ -39,7 +39,7 @@
   - 建队、入队、离队、解散都在一笔 `[Team, Player]` 事务里：成员表的变化与操作者本人的引用一起提交或回滚。
   - 重复请求是安全的：已是成员时再 `TeamAccept`、已建成时再 `TeamCreate`，都不改事实、返回现状。
   - 解散与队长离队**不会**在同一笔事务里改其他成员的档：其他成员身上的引用是惰性清除的，在他们下一次 `TeamInfo` / `TeamLeave` 核对权威成员表时清掉。没核对之前，残留的引用会保守地挡住换服（装了 rehome 时）。
-  - 建队的准备阶段在事务之外：取号成功但事务没成、或并发的首次建队，可能留下建到一半的空实体；持久号不复用。
+  - 建队的准备阶段在事务之外：取号成功但事务没成、或并发的首次建队，可能留下建到一半的空实体（共享的空认领，不卡任何人）；持久号不复用。
 - **前提**：依赖 facebook 模块（安装时一起装上）；需要 nest 与 remote_entity 两个 Mod（安装时自动补上 remote_entity）；运行时需要 Mongo、Redis、NATS；服务配置里的 sid 必须为正。玩家侧入口要求 Player 已经建好（通常先装 enter）。
 - **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md`）：“team 的边界”一条——当前只验收了离线的 Nest 事务与生成的 Remote 提交格式，真实 Redis / Mongo / NATS、独立 Gate、跨进程的队伍都没有验收。
 
@@ -51,7 +51,7 @@
   - 加入队条件（等级、冷却、正在副本里不能入队）：在自己的组件上监听 `event.TeamJoining`（只读）。
   - 名单变了要更新别的东西（队友视野分组、缓存）：在自己的组件或 Player 上监听 `event.TeamChanged`；通知用提交后的机制发，不在监听里做 I/O。
   - 加踢人 / 转让队长：照 `game/components/teamroster/teamroster.go` 里 `Leave` 的写法加方法（记得推进 `Revision`、检查 `MatchKey`），再加协议与 `[Team, Player]` 的 handler。被踢的人的引用同样只能惰性清除。
-  - 不要改 `TeamDao` 的 store 键与集合名、`EntityCategoryRemote` 的实体类别（它保证锁序先于 Player）、建队时“先取号建空实体、再进事务”的次序。
+  - 不要改 `TeamDao` 的 store 键与集合名、`EntityCategoryRemote` 的实体类别（它保证锁序先于 Player）、实体标记上的 `ownership=shared`（去掉后建队认领出的是建队进程独占的队伍，别的 game 写它被 fence，建队直接报错）、建队时“先取号建空实体并认领、再进事务”的次序。
 - **别的模块 / 业务代码要用它**
   - 读某名玩家的队伍号（事务外）：`id, err := sender.NewPlayerTeamSender(client).Sync_PlayerTeam(ctx, playerEntityID)`。
   - 在自己的事务里要整队名单：handler 的目标参数写 `view.TeamEntity`，调 `target.TeamRoster().Info()`，名单与各成员的 sid 都在返回的 `view.TeamSnapshot` 里。
@@ -67,7 +67,7 @@
 
 ## 验证范围
 
-- `roost module verify team`：31 条场景（`^TestTeam`，包 `./game/handler` 24 条、`./game/controllers` 7 条）。覆盖：建队与入队同一笔事务、准入失败回滚建队与双方成员、同一条提交记录同时含 Remote 的变化与 Player 的变化、重复接受与重复建队不改事实、必须有邀请、邀请恰好到期即失效、只有队长能邀请与解散、容量在接受时检查、邀请有界且可续期、过期邀请释放名额、队长交给最小号成员、最后一人离开留下不可复用的空壳、解散后其他人的引用在读权威时清除、不能加入第二支队、快照自有集合、并发接受被串行化、离队 / 解散被拒时双方恢复、非法 sid、外人不能读或改名单、投影钩子失败整笔回滚；端点要求已认证玩家、拒绝空请求、拒绝错误类型的实体号与非法被邀请人、Controller 使用实体运行时的 lifecycle。
+- `roost module verify team`：32 条场景（`^TestTeam`，包 `./game/handler` 24 条、`./game/controllers` 8 条）。覆盖：建队与入队同一笔事务、准入失败回滚建队与双方成员、同一条提交记录同时含 Remote 的变化与 Player 的变化、重复接受与重复建队不改事实、必须有邀请、邀请恰好到期即失效、只有队长能邀请与解散、容量在接受时检查、邀请有界且可续期、过期邀请释放名额、队长交给最小号成员、最后一人离开留下不可复用的空壳、解散后其他人的引用在读权威时清除、不能加入第二支队、快照自有集合、并发接受被串行化、离队 / 解散被拒时双方恢复、非法 sid、外人不能读或改名单、投影钩子失败整笔回滚；端点要求已认证玩家、拒绝空请求、拒绝错误类型的实体号与非法被邀请人、Controller 使用实体运行时的 lifecycle、建队认领一步就是共享记录（Team 声明了共享 kind、不调切共享、认领答出独占记录时建队报错）。
 - 邀请投递：查询只认收件箱里的队伍邀请并过滤权威已失效的；收件箱记不上时照样告知在线的被邀请人，推送失败不改变邀请，不在本进程的不推、不冷加载；别的 game 广播来的告知走同一个推送。收件箱自身的回滚、过期、容量与迟到告知在 facebook 模块的场景里。
 - rehome 联动另有 2 条（`^TestWithTeamRehome`）。
 - 上述模块场景用真实 Nest 引擎与生成的 DAO / Sender，提交器、Remote 外部锁与权威回执是内存替身。另有 `scripts/test-social-real.sh` 的 `TestAllianceE2ESocialTeam`：私有 Mongo / Redis / NATS 上两个 game sid 共享同一 Team，经真实玩家 TCP 建队、邀请、跨进程接受；toxiproxy 丢接受回包与 80±20ms 下行延迟下重连重试，核对双方同一成员表 / 版本、队长转移，以及跨 sid 整队匹配拒绝后无意图。本场景用已知 TeamID 接受；跨 game 的邀请投递另由 `TestAllianceE2ESocialTeamInvite` 验（A 在 game 1000 邀请连在 game 1001 的 B：B 收到推送、查得到并接受；离线的 C 再登录后查到并接受）。两条都不验证独立 Gate、容量或持续压力；[#154 归属决定](../../docs/maintenance/KNOWN-LIMITS.md)不因本场景关闭。证据见 [B-7 报告](../../docs/maintenance/evidence/social-real-20261114/README.md)。

@@ -101,6 +101,42 @@ func TestTeamControllerUsesEntityRuntimeLifecycle(t *testing.T) {
 	}
 }
 
+// Team 是共享 kind（实体标记 ownership=shared，生成的登记调 entity.DeclareRemoteSharedKind）：建队认领的那一条插入就是
+// 共享的所有权记录，不经过“先独占认领、再切共享”的中间态，建队也不再调切共享。替身按框架的认领规则作答：kind 在本进程
+// 声明了共享，认领答出共享记录；没声明，答出建队进程独占的记录（别的 game 写它会被 fence）。认领答出独占记录时建队报错，
+// 不把一支别的 game 写不了的队伍建出来，也不去切共享。
+func TestTeamCreateClaimsSharedInOneStep(t *testing.T) {
+	teamentity.RegisterEntity()
+	id, _ := entity.BuildEntityID(91001, teamentity.EntityKindTeam)
+	remote := &teamClaimRecorder{}
+	err := teamClaim(context.Background(), remote, id)
+	declared := entity.RemoteKindShared(teamentity.EntityKindTeam)
+	if !declared || err != nil || remote.claims != 1 || remote.enters != 0 {
+		t.Fatalf("team creation went through an exclusive claim: kind declared shared=%v claims=%d enter-shared calls=%d err=%v", declared, remote.claims, remote.enters, err)
+	}
+	exclusive := &teamClaimRecorder{exclusive: true}
+	if err := teamClaim(context.Background(), exclusive, id); err == nil || exclusive.enters != 0 {
+		t.Fatalf("an exclusive claim was accepted for a team: enter-shared calls=%d err=%v", exclusive.enters, err)
+	}
+}
+
+// teamClaimRecorder 替代 Remote 运行时，记下建队认领与切共享的调用；exclusive 时认领总答独占记录（kind 没声明共享的进程）。
+type teamClaimRecorder struct {
+	entity.IRemoteEntityManager
+	exclusive      bool
+	claims, enters int
+}
+
+func (r *teamClaimRecorder) ClaimRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, error) {
+	r.claims++
+	shared := entity.RemoteKindShared(teamentity.EntityKindTeam) && !r.exclusive
+	return entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1, Shared: shared}, nil
+}
+func (r *teamClaimRecorder) EnterRemoteSharedMode(context.Context, int64) (entity.RemoteEntityMarkerLease, error) {
+	r.enters++
+	return entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 2, RouteEpoch: 1, Shared: true}, nil
+}
+
 // 这里替代 Nest 只验证端点的编排和失败答法；权威邀请、事务回滚另由 handler 场景走正式 Nest 验证。
 type teamEndpointClient struct {
 	nest.Client

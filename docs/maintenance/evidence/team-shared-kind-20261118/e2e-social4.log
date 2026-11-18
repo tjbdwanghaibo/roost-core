@@ -1,0 +1,20 @@
+=== RUN   TestAllianceE2ESocialTeam
+    social_test.go:129: SOCIAL_TEAM two game SIDs, lost accept reply + 80±20ms downstream, retry revision=2, leader transfer revision=3; cross-sid queue rejected without intent
+    harness_test.go:522: all processes stopped; 0 ERROR log lines in total
+--- PASS: TestAllianceE2ESocialTeam (7.38s)
+=== RUN   TestAllianceE2ESocialTeamInvite
+    social_test.go:243: SOCIAL_INVITE team 4611686018427388957 on game 1000: B (game 1001) pushed &{TeamID:4611686018427388957 Inviter:100001 ExpireAtUnixMilli:1794961501712} and listed it, accepted revision 2; C invited offline, listed after relogin on game 1001, joined revision 3; D invited at once from games 1000 and 1001, listed [{TeamID:4611686018427388957 Inviter:100001 ExpireAtUnixMilli:1794961502469} {TeamID:4611686018427389981 Inviter:100004 ExpireAtUnixMilli:1794961502469}]
+    harness_test.go:522: all processes stopped; 0 ERROR log lines in total
+--- PASS: TestAllianceE2ESocialTeamInvite (6.59s)
+=== RUN   TestAllianceE2ESocialMatchmaking
+    social_test.go:301: SOCIAL_MATCH queued key=100001:1 survives game SIGKILL; retry produces one room=1; team/rehome remain blocked until terminal clearance
+    harness_test.go:522: all processes stopped; 0 ERROR log lines in total
+--- PASS: TestAllianceE2ESocialMatchmaking (20.37s)
+=== RUN   TestAllianceE2ESocialRehome
+    social_test.go:397: SOCIAL_REHOME stage=handed-off killed_pid=38105 player=100002 transfer=rh1001-28589b2c5fc86c8e9756dd8e target=1000 members=2 donate exactly once; Q4 old-source timers/writes not certified
+    social_test.go:397: SOCIAL_REHOME stage=committed killed_pid=38163 player=100003 transfer=rh1001-3a7a4fc616d2cb614bbb6ed4 target=1000 members=3 donate exactly once; Q4 old-source timers/writes not certified
+    harness_test.go:522: all processes stopped; 0 ERROR log lines in total
+--- PASS: TestAllianceE2ESocialRehome (39.18s)
+ok  	example.com/planet/e2e	74.274s
+alliance actual cases: passed=4, skipped=0
+EXIT=0
