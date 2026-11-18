@@ -350,7 +350,7 @@ portal:
 | 键 | 缺省 | 说明 |
 | --- | --- | --- |
 | `portal.servers` | 空 | 服号 → 带主机的 `host:port`（通常是 Gate）。键必须是正的服号的规范十进制写法（`"+7"`、`"007"` 不算），只写端口的地址（`":7000"`）不行。有哪些服由 account 说了算，这里只给地址；写了一个 account 没登记的服不会让它出现在清单里 |
-| `portal.services` | 空 | 服务名 → 地址（非空、至多 255 字节、不含空白；形式由客户端与那个服务约定，入口不解释）。名字的写法同 `account.services`；写了一个 account 没列出的服务不会让它出现在清单里。与 `portal.servers` 一样不在 App 的配置声明里，写错了启动到入口这一步才报错 |
+| `portal.services` | 空 | 服务名 → 地址（非空、至多 255 字节、不含空白；形式由客户端与那个服务约定，入口不解释）。名字的写法同 `account.services`；写了一个 account 没列出的服务不会让它出现在清单里。与 `portal.servers` 一样在 account 进程的配置声明里（见“能力边界”），`--check-config` 能查出写法错误 |
 | `portal.cors_origins` | 空（不允许跨域） | 允许在浏览器里跨域调用四个端点的网页 Origin：`scheme://host[:port]`，http 或 https，主机名小写，不带路径与结尾的 `/`（写成 `https://www.example.com/` 浏览器发的 Origin 永远对不上，所以配置检查就拒绝）；`"*"` 表示任何 Origin（`null` 除外）。在 App 的配置声明里（`--check-config` 查写法） |
 | `account.games` / `account.default_game` / `account.services` | 生成的工程写一个以工程名命名的游戏 | account Mod 的键：这套 account 服务的游戏（`games.<游戏>.token_ttl`，至少一个）、登录不带游戏时落到哪个（只有一个游戏时不用写）、接受本账号体系的服务（`services.<服务>.kind`，不写时与只有 game 区服的工程相同） |
 | `web.*` | 见 web Mod | 入口的监听地址、超时、请求体上限。开发配置的端口是 8080 + 这个服务的端口块号；生产环境 `web.addr` 不是回环地址时必须同时写 `web.allow_public_addr: true` |
