@@ -200,6 +200,54 @@ func TestLoginPresenceReportsThisServerAndExpiresWhenItStops(t *testing.T) {
 	}
 }
 
+// WebSocket 地址（维护者 2026-11-18）：写了 login.presence.ws_addr 就连同 TCP 地址一起报；没写而本进程开着嵌入的
+// WebSocket 监听时，由 addr 的主机（给客户端的地址，不是监听的 0.0.0.0）加监听端口与路径得出 ws:// 的地址；嵌入的 TCP
+// 关着（独立 Gate 部署，WebSocket 在 Gate 上）或没开 WebSocket 时不报 WebSocket 地址。写了的 ws_addr 优先于得出的。
+func TestLoginPresenceReportsTheWebSocketAddress(t *testing.T) {
+	for label, test := range map[string]struct {
+		settings map[string]any
+		want     string
+	}{
+		"explicit": {map[string]any{"login.presence.addr": "gate.example.test:7000", "login.presence.ws_addr": " wss://play.example.test/ws "}, "wss://play.example.test/ws"},
+		"derived from the embedded listener": {map[string]any{"login.presence.addr": "game.example.test:7000",
+			"player_access.tcp.enabled": true, "player_access.tcp.websocket.addr": "0.0.0.0:7080"}, "ws://game.example.test:7080/ws"},
+		"derived with a path and an IPv6 host": {map[string]any{"login.presence.addr": "[2001:db8::7]:7000",
+			"player_access.tcp.enabled": true, "player_access.tcp.websocket.addr": ":7081", "player_access.tcp.websocket.path": "/play"}, "ws://[2001:db8::7]:7081/play"},
+		"explicit wins over derived": {map[string]any{"login.presence.addr": "game.example.test:7000", "login.presence.ws_addr": "wss://lb.example.test/ws",
+			"player_access.tcp.enabled": true, "player_access.tcp.websocket.addr": "0.0.0.0:7080"}, "wss://lb.example.test/ws"},
+		"embedded TCP off (Gate)": {map[string]any{"login.presence.addr": "gate.example.test:7000",
+			"player_access.tcp.enabled": false, "player_access.tcp.websocket.addr": "0.0.0.0:7080"}, ""},
+		"no WebSocket listener": {map[string]any{"login.presence.addr": "game.example.test:7000", "player_access.tcp.enabled": true}, ""},
+	} {
+		w := newLoginPresenceWorld(t)
+		mod, err := w.start(test.settings)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		w.eventually(label, func(listed map[int32]svcaccount.ServerPresence) bool { return listed[1000].ServerID == 1000 })
+		if got := w.listed()[1000]; got.WSAddr != test.want || got.Addr == "" {
+			t.Fatalf("%s: reported %+v, want the WebSocket address %q", label, got, test.want)
+		}
+		loginPresenceStop(t, mod)
+	}
+	// 写错了在启动时报错、点名 login.presence.ws_addr；只写 ws_addr 不写 addr 也不行（上报两个都带）。
+	w := newLoginPresenceWorld(t)
+	for label, settings := range map[string]map[string]any{
+		"an http URL":      {"login.presence.addr": "gate.example.test:7000", "login.presence.ws_addr": "https://play.example.test/ws"},
+		"host:port":        {"login.presence.addr": "gate.example.test:7000", "login.presence.ws_addr": "play.example.test:7080"},
+		"no host":          {"login.presence.addr": "gate.example.test:7000", "login.presence.ws_addr": "ws://:7080/ws"},
+		"ws_addr only":     {"login.presence.ws_addr": "wss://play.example.test/ws"},
+		"a user":           {"login.presence.addr": "gate.example.test:7000", "login.presence.ws_addr": "wss://u:p@play.example.test/ws"},
+	} {
+		if _, err := w.start(settings); err == nil || !strings.Contains(err.Error(), "login.presence.ws_addr") {
+			t.Fatalf("%s: Start = %v, want an error naming login.presence.ws_addr", label, err)
+		}
+	}
+	if w.accounts.reports.Load() != 0 {
+		t.Fatalf("reported %d times with a malformed login.presence.ws_addr", w.accounts.reports.Load())
+	}
+}
+
 // 没写 login.presence.addr：不上报、启停照常。写错了（只写端口、没有端口、间隔超出 1s～200s、标签超限、sid 不是正数）
 // 启动时就报错，点名是哪个键。
 func TestLoginPresenceConfiguration(t *testing.T) {

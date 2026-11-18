@@ -53,7 +53,7 @@ func TestServerPresenceExpiresWhenTheReporterStops(t *testing.T) {
 	}
 	ctx := context.Background()
 	const ttl = 1
-	if err := remote.ReportServerPresence(ctx, ServerPresence{ServerID: 1000, Addr: "203.0.113.7:7000", Load: 3, Tags: []string{"new"}}, ttl); err != nil {
+	if err := remote.ReportServerPresence(ctx, ServerPresence{ServerID: 1000, Addr: "203.0.113.7:7000", WSAddr: " wss://play.example.test/ws ", Load: 3, Tags: []string{"new"}}, ttl); err != nil {
 		t.Fatal(err)
 	}
 	if err := remote.ReportServerPresence(ctx, ServerPresence{ServerID: 1001, Addr: " 203.0.113.8:7000 ", Load: 1}, 2*ttl); err != nil {
@@ -61,7 +61,9 @@ func TestServerPresenceExpiresWhenTheReporterStops(t *testing.T) {
 	}
 	for _, accounts := range []Accounts{s, remote} {
 		got := presenceIDs(t, accounts)
-		if len(got) != 2 || got[1000].Addr != "203.0.113.7:7000" || got[1000].Load != 3 || !slices.Equal(got[1000].Tags, []string{"new"}) || got[1001].Addr != "203.0.113.8:7000" {
+		// WebSocket 地址经总线、存储原样带回（去掉两端空白）；没报的服没有 WebSocket 地址。
+		if len(got) != 2 || got[1000].Addr != "203.0.113.7:7000" || got[1000].WSAddr != "wss://play.example.test/ws" || got[1000].Load != 3 ||
+			!slices.Equal(got[1000].Tags, []string{"new"}) || got[1001].Addr != "203.0.113.8:7000" || got[1001].WSAddr != "" {
 			t.Fatalf("presence after two reports = %+v", got)
 		}
 	}
@@ -82,7 +84,7 @@ func TestServerPresenceExpiresWhenTheReporterStops(t *testing.T) {
 	if err := remote.ReportServerPresence(ctx, ServerPresence{ServerID: 1000, Addr: "203.0.113.9:7001", Load: 9}, ttl); err != nil {
 		t.Fatal(err)
 	}
-	if got := presenceIDs(t, s); got[1000].Addr != "203.0.113.9:7001" || got[1000].Load != 9 || len(got[1000].Tags) != 0 {
+	if got := presenceIDs(t, s); got[1000].Addr != "203.0.113.9:7001" || got[1000].WSAddr != "" || got[1000].Load != 9 || len(got[1000].Tags) != 0 {
 		t.Fatalf("a renewed report did not replace the entry: %+v", got[1000])
 	}
 	// 正常下线：立刻撤掉，不等过期；撤一个没登记的服不是错误。
@@ -119,6 +121,12 @@ func TestServerPresenceRefusesBadReports(t *testing.T) {
 		{"bad port", ServerPresence{ServerID: 7, Addr: "host:70000"}, 30},
 		{"long addr", ServerPresence{ServerID: 7, Addr: string(long) + ":1"}, 30},
 		{"negative load", ServerPresence{ServerID: 7, Addr: "h:1", Load: -1}, 30},
+		{"ws addr over http", ServerPresence{ServerID: 7, Addr: "h:1", WSAddr: "https://h/ws"}, 30},
+		{"ws addr without a scheme", ServerPresence{ServerID: 7, Addr: "h:1", WSAddr: "h:7080"}, 30},
+		{"ws addr without a host", ServerPresence{ServerID: 7, Addr: "h:1", WSAddr: "ws://:7080/ws"}, 30},
+		{"ws addr with port zero", ServerPresence{ServerID: 7, Addr: "h:1", WSAddr: "ws://h:0/ws"}, 30},
+		{"ws addr with a user", ServerPresence{ServerID: 7, Addr: "h:1", WSAddr: "wss://u:p@h/ws"}, 30},
+		{"long ws addr", ServerPresence{ServerID: 7, Addr: "h:1", WSAddr: "ws://" + string(long)}, 30},
 		{"too many tags", ServerPresence{ServerID: 7, Addr: "h:1", Tags: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}}, 30},
 		{"empty tag", ServerPresence{ServerID: 7, Addr: "h:1", Tags: []string{""}}, 30},
 		{"zero ttl", good, 0},

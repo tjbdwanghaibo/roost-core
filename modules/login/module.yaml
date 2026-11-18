@@ -18,10 +18,11 @@ next:
   - "客户端的登录入口：没装 portal 模块的话 roost module add portal（HTTP 的登录 / 清单与推荐 / 进服，握手用 enter:<进服票据>），或者由工程自己的入口代客户端调 account"
   - "装了 enter 模块时，用进服票据握手的会话要先发 EnterCreate（带角色名）再发 EnterGame；握手之后服务器会推 EnterStatus 告诉客户端要不要新建（只是告知，以两个请求的应答为准）"
   - "区服入口上报（给 portal 的清单配地址）：在 game 服务配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate；可选 login.presence.interval 缺省 10s、login.presence.tags），game 定期报给 account，停报三个间隔后自动消失；不写不报"
+  - "浏览器的 WebSocket 地址：game 配置写 login.presence.ws_addr（ws:// 或 wss:// 的完整 URL）；不写而本进程开着嵌入的 WebSocket 监听时取 ws://<addr 的主机>:<监听端口><路径>"
 verify:
   packages: [./game/modules/login, ./internal/access/player/tcp, ./cmd/accountctl, ./game/managers]
   run: ^TestLogin
-  pass: 34
+  pass: 35
 with:
   enter:
     summary: 进入前检查：会话记的承载服不是本服（或没有记）答 login_elsewhere，不加载也不创建 Player；用进服票据握手的会话先新建再进入（EnterGame 不代建，没建成答 enter_need_create）；会话激活之后把“能不能进、要不要先新建”推给客户端（EnterStatus），本服不该服务的会话推完断开

@@ -2,6 +2,7 @@ package managers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -17,7 +18,7 @@ import (
 // 这个文件是 login 模块的第二个 manager：**区服入口上报**（维护者 D23）。安装 login 时，安装器在本目录 managers.go 的
 // Managers() 列表里加了一行 NewLoginPresence()。
 //
-// 它定期经总线告诉 account：“本服（sid）现在连这个地址、有这么多在线连接”。account 把它放进带过期的登记表
+// 它定期经总线告诉 account：“本服（sid）现在连这个地址（TCP，以及有的话 WebSocket）、有这么多在线连接”。account 把它放进带过期的登记表
 // （service/account 的 ReportServerPresence），登录入口（portal 模块）给客户端的区服清单从那里取地址与负载；
 // 本进程停报（崩溃、断网）之后，期限一到这个服的动态地址自己从清单里消失，入口回到 portal.servers 的静态地址。
 //
@@ -34,9 +35,16 @@ import (
 //
 //	login:
 //	  presence:
-//	    addr: gate.example.com:7000   # 客户端连得到的地址 host:port（通常是本服前面的 Gate）；不写不上报
+//	    addr: gate.example.com:7000   # 客户端经 TCP 连得到的地址 host:port（通常是本服前面的 Gate）；不写不上报
+//	    ws_addr: wss://play.example.com/ws  # 客户端经 WebSocket 连得到的完整 URL（浏览器用）；可以不写，见下
 //	    interval: 10s                 # 上报间隔，1s～200s；期限取它的三倍（缺省 10s / 30s）
 //	    tags: [new]                   # 给客户端与推荐规则看的标签，至多 8 个、每个至多 32 字节
+//
+// WebSocket 地址（维护者 2026-11-18：登录入口按客户端要的连接方式给地址）：写了 ws_addr 就报它；没写而本进程自己开着
+// 嵌入的 WebSocket 监听（player_access.tcp.enabled 为真、player_access.tcp.websocket.addr 非空）时，由 addr 的主机加
+// WebSocket 监听的端口与路径得出 ws://<addr 的主机>:<监听端口><路径，缺省 /ws>——与 TCP 一样，主机取给客户端的地址，
+// 不取监听的 0.0.0.0。前面有终结 TLS 的负载均衡（wss）、端口被映射、或玩家接入在独立 Gate 上（game 看不到 Gate 的
+// WebSocket 配置）时得不出对的地址，要写 ws_addr；都没有就不报 WebSocket 地址，入口对要 ws 的客户端答 portal_transport_unavailable。
 //
 // 这几个键由 manager 在启动时自己读，不在 App 的配置声明里：--check-config 查不到写错的值，写错了在启动到这一步时报错退出。
 
@@ -60,10 +68,55 @@ type loginPresenceConfig struct {
 	Login struct {
 		Presence struct {
 			Addr     string        `config:"addr" help:"本服给客户端的入口地址 host:port（通常是本服前面的 Gate）；写了就定期上报给 account，登录入口的清单用它；不写不上报"`
+			WSAddr   string        `config:"ws_addr" help:"本服给客户端的 WebSocket 地址，完整 URL（ws:// 或 wss://，例如 wss://play.example.com/ws）；要先写 addr。不写时若本进程开着嵌入的 WebSocket 监听，取 ws://<addr 的主机>:<监听端口><路径>"`
 			Interval time.Duration `config:"interval" help:"上报间隔（1s～200s，缺省 10s）；account 那边的期限是它的三倍"`
 			Tags     []string      `config:"tags" help:"给客户端与推荐规则看的标签，至多 8 个、每个至多 32 字节"`
 		} `config:"presence"`
 	} `config:"login"`
+	// PlayerAccess 是本进程嵌入的玩家接入里得出 WebSocket 地址要用的键（只读，不改它们的规则：规则在生成的接入 Mod 里）。
+	PlayerAccess struct {
+		TCP struct {
+			Enabled   bool `config:"enabled"`
+			WebSocket struct {
+				Addr string `config:"addr"`
+				Path string `config:"path"`
+			} `config:"websocket"`
+		} `config:"tcp"`
+	} `config:"player_access"`
+}
+
+// loginPresenceDefaultWebSocketPath 是玩家 WebSocket 接入的缺省路径（player_access.tcp.websocket.path 不写时，GATEWAY.md §6）。
+const loginPresenceDefaultWebSocketPath = "/ws"
+
+// webSocketAddr 是要上报的 WebSocket 地址：写了 login.presence.ws_addr 用它；否则本进程开着嵌入的 WebSocket 监听时
+// 由 addr 的主机加监听的端口与路径得出；都没有是空串（不报）。调用前 ValidateConfig 已经检查过 addr 与 ws_addr。
+func (c *loginPresenceConfig) webSocketAddr() string {
+	presence := c.Login.Presence
+	if presence.WSAddr != "" || presence.Addr == "" {
+		return presence.WSAddr
+	}
+	listener := c.PlayerAccess.TCP
+	if !listener.Enabled || strings.TrimSpace(listener.WebSocket.Addr) == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(presence.Addr)
+	if err != nil {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(strings.TrimSpace(listener.WebSocket.Addr))
+	if err != nil {
+		return ""
+	}
+	path := strings.TrimSpace(listener.WebSocket.Path)
+	if path == "" {
+		path = loginPresenceDefaultWebSocketPath
+	}
+	derived, err := svcaccount.CheckWebSocketAddr("ws://" + net.JoinHostPort(host, port) + path)
+	if err != nil {
+		// 得不出成样子的地址（路径里有空白……）：不报，比报一个连不上的地址好。
+		return ""
+	}
+	return derived
 }
 
 // ValidateConfig 在 Start 读配置时执行，不通过进程不启动。
@@ -76,8 +129,19 @@ func (c *loginPresenceConfig) ValidateConfig(bool) error {
 	if presence.Interval < loginPresenceMinInterval || presence.Interval > loginPresenceMaxInterval {
 		return fmt.Errorf("config: login.presence.interval %s is outside %s..%s", presence.Interval, loginPresenceMinInterval, loginPresenceMaxInterval)
 	}
+	presence.WSAddr = strings.TrimSpace(presence.WSAddr)
 	if presence.Addr == "" {
+		if presence.WSAddr != "" {
+			return errors.New("config: login.presence.ws_addr is set but login.presence.addr is not; the report carries both, write addr too")
+		}
 		return nil
+	}
+	if presence.WSAddr != "" {
+		wsAddr, err := svcaccount.CheckWebSocketAddr(presence.WSAddr)
+		if err != nil {
+			return fmt.Errorf("config: login.presence.ws_addr %q: %w", presence.WSAddr, err)
+		}
+		presence.WSAddr = wsAddr
 	}
 	host, port, err := net.SplitHostPort(presence.Addr)
 	number, portErr := strconv.Atoi(port)
@@ -132,7 +196,7 @@ func (m *loginPresence) Start(registry *app.Registry) error {
 	if players, ok := app.Lookup[interface{ SessionCount() int }](registry, loginPlayerTCPCapability); ok && players != nil {
 		m.players = players
 	}
-	m.presence = svcaccount.ServerPresence{ServerID: settings.Sid, Addr: settings.Login.Presence.Addr, Tags: append([]string(nil), settings.Login.Presence.Tags...)}
+	m.presence = svcaccount.ServerPresence{ServerID: settings.Sid, Addr: settings.Login.Presence.Addr, WSAddr: settings.webSocketAddr(), Tags: append([]string(nil), settings.Login.Presence.Tags...)}
 	if m.interval == 0 { // 测试可以预先给更短的间隔
 		m.interval = settings.Login.Presence.Interval
 	}
@@ -175,7 +239,7 @@ func (m *loginPresence) loop(ctx context.Context) {
 			slog.Debug("login presence: report to account still failing", "sid", presence.ServerID, "err", err)
 		case failing || first:
 			failing = false
-			slog.Info("login presence: reporting this server to account", "sid", presence.ServerID, "addr", presence.Addr, "interval", m.interval, "ttl_seconds", ttl)
+			slog.Info("login presence: reporting this server to account", "sid", presence.ServerID, "addr", presence.Addr, "ws_addr", presence.WSAddr, "interval", m.interval, "ttl_seconds", ttl)
 		}
 	}
 }

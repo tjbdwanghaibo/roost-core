@@ -5,7 +5,10 @@ import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 // 登录入口（portal）自己的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
 // 票据不对、凭据不对、账号被封、区服没登记……都不在这里：那些是 account 的判断，入口原样带着 account 的码答回去。
 var (
-	// ErrPortalRequestInvalid：请求本身不成样子——必填字段没填、字段超过长度上限、服号不是正数。
+	// ErrPortalRequestInvalid：请求本身不成样子——必填字段没填、字段超过长度上限、服号不是正数、transport 不是 tcp / ws。
 	// 这样的请求不去问 account。重试同一个请求没有用。
 	ErrPortalRequestInvalid = errcode.Define({{ID:errcode:portal_request_invalid}}, "portal_request_invalid", "the request is missing a field or a field is out of bounds")
+	// ErrPortalTransportUnavailable：要进的服（它的承载服）没有请求的那种连接方式的地址——例如要 ws，而区服目录里
+	// 这个服只有 TCP 地址。入口不回落到别的方式：客户端换一个支持这种方式的服（清单里每个服的 transports），或改用别的方式。
+	ErrPortalTransportUnavailable = errcode.Define({{ID:errcode:portal_transport_unavailable}}, "portal_transport_unavailable", "the server has no address for the requested connection type")
 )

@@ -11,7 +11,7 @@ import (
 
 // newDirectory 决定入口用哪个区服目录（Directory：每个服该连哪个地址、多忙）。入口启动时调一次。
 //
-//   - configured 是配置 portal.servers 的静态目录（没有配置时是空的）；
+//   - configured 是配置 portal.servers（TCP）与 portal.websocket_servers（WebSocket）的静态目录（没有配置时是空的）；
 //   - reported 是 account 的区服入口登记表（NewPresenceDirectory，维护者 D23）：game 进程经总线定期上报本服的地址与
 //     负载（login 模块的 manager，game 配置 login.presence.addr），停报的服到期自动消失。
 //
@@ -35,9 +35,12 @@ type ServerChoice struct {
 	Status string
 	// MergedInto 非 0 表示这个服已经并入那个服（不能在这里建新角色）。
 	MergedInto int32
-	// Addr 为空表示目录里没有这个服的地址：客户端现在连不上它。
+	// Addr 是客户端所请求连接方式（tcp 或 ws）下这个服的地址；为空表示目录里没有：客户端现在用这种方式连不上它。
+	// 请求 ws 时入口只把有 WebSocket 地址的服交给 recommend（维护者 2026-11-18），所以那时 Addr 总是非空。
 	Addr string
-	Load int
+	// Transports 是这个服在目录里有地址的连接方式（"tcp"、"ws"），给想按方式导量的规则看。
+	Transports []string
+	Load       int
 	Tags []string
 	// HasRole 表示本账号在这个服上有角色；RoleLastLoginAt 是那个角色最近一次选角的时间（Unix 秒，没登录过是 0）。
 	HasRole         bool
@@ -45,7 +48,8 @@ type ServerChoice struct {
 }
 
 // recommend 是导量规则：从清单里挑一个服推荐给这名玩家，返回它的服号；没有可推荐的返回 0。
-// servers 按服号升序。返回一个不在清单里的服号按“没有推荐”处理。
+// servers 按服号升序。返回一个不在 servers 里的服号按“没有推荐”处理。客户端请求 ws（WebSocket）时，servers 里只有
+// 有 WebSocket 地址的服——过滤是入口的机制做的，规则不用自己判断连接方式；请求 tcp（缺省）时与以前一样是全部的服。
 //
 // 缺省规则：
 //

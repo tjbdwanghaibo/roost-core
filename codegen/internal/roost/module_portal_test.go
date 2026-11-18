@@ -138,7 +138,7 @@ func TestModulePortalInstallsOnTheHostedAccountService(t *testing.T) {
 		}
 		counts[module.Name] = module.Passed
 	}
-	if counts["account_auth"] != 7 || counts["login"] != 34 || counts["portal"] != 17 || counts["portal+login"] != 1 ||
+	if counts["account_auth"] != 7 || counts["login"] != 35 || counts["portal"] != 21 || counts["portal+login"] != 1 ||
 		counts["portal+enter"] != 2 || counts["login+enter"] != 6 || counts["enter"] != 29 {
 		t.Fatalf("scenario counts = %v", counts)
 	}
@@ -215,7 +215,7 @@ func TestModulePortalInstallsOnALobbyProjectWithoutGame(t *testing.T) {
 	for _, module := range report.Modules {
 		counts[module.Name] = module.Passed
 	}
-	if counts["account_auth"] != 7 || counts["portal"] != 17 || len(counts) != 2 {
+	if counts["account_auth"] != 7 || counts["portal"] != 21 || len(counts) != 2 {
 		t.Fatalf("scenario counts = %v", counts)
 	}
 	before := moduleProjectDigest(t, root)

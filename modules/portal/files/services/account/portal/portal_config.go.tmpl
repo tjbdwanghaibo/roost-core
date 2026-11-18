@@ -10,14 +10,17 @@ import (
 	"unicode"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
 // Config 是入口在托管 account 服务的进程配置（configs/service/config.<account 服务>.yaml）里读的键，可以不写：
 //
 //	portal:
-//	  servers:                   # 静态的区服目录：服号 -> 客户端连得到的地址（host:port，通常是 Gate）
+//	  servers:                   # 静态的区服目录：服号 -> 客户端经 TCP 连得到的地址（host:port，通常是 Gate）
 //	    "1000": 203.0.113.7:7000
 //	    "1001": 203.0.113.8:7000
+//	  websocket_servers:         # 服号 -> 客户端经 WebSocket 连得到的完整 URL（浏览器用；wss 由前置负载均衡终结）
+//	    "1000": wss://play.example.com/ws
 //	  services:                  # 服务的地址：服务名（account.services 里的）-> 客户端连得到的地址
 //	    lobby: https://lobby.example.com
 //	  cors_origins:              # 允许跨域调用入口的网页 Origin（浏览器里的外壳页面、网页游戏）；不写 = 不允许跨域
@@ -32,7 +35,9 @@ import (
 // app.LoadConfig 读它（清单没有 use），读到的与检查的是同一份声明。
 type Config struct {
 	Portal struct {
-		Servers map[string]string `config:"servers" help:"静态的区服目录：服号 -> 客户端连得到的地址（host:port，通常是 Gate）。有哪些服由 account 说了算，这里只给地址；没写地址的服照常列出、没有地址"`
+		Servers map[string]string `config:"servers" help:"静态的区服目录：服号 -> 客户端经 TCP 连得到的地址（host:port，通常是 Gate）。有哪些服由 account 说了算，这里只给地址；没写地址的服照常列出、没有地址"`
+		// WebSocketServers 是同一张静态目录的 WebSocket 那一半：客户端请求 transport=ws 时给的地址。
+		WebSocketServers map[string]string `config:"websocket_servers" help:"静态的区服目录（WebSocket）：服号 -> 客户端经 WebSocket 连得到的完整 URL（ws:// 或 wss://，带路径，例如 wss://play.example.com/ws；TLS 由前置负载均衡终结时写 wss）。客户端进服请求写 transport=ws 时给它；没写的服不支持 WebSocket"`
 		// Services 给 account.services 里的服务配客户端连得到的地址（大厅的 HTTP 地址……），清单的 services 里原样带上。
 		Services map[string]string `config:"services" help:"服务的地址：服务名（account.services 里的）-> 客户端连得到的地址（例如大厅的 https://host:port）。有哪些服务由 account 说了算，这里只给地址"`
 		// CORSOrigins 是允许在浏览器里跨域调用四个端点的网页 Origin（例如游戏页面 https://play.example.com）。
@@ -43,7 +48,8 @@ type Config struct {
 }
 
 // ValidateConfig 在读配置时执行（进程启动时，任何请求之前），不通过进程不启动：
-// servers 的键不是正的服号、值不是带主机的 host:port、条数超过 MaxEntries；cors_origins 里有浏览器发不出的
+// servers 的键不是正的服号、值不是带主机的 host:port、条数超过 MaxEntries；websocket_servers 的键同上、值不是
+// ws / wss 的 URL（svcaccount.CheckWebSocketAddr）；cors_origins 里有浏览器发不出的
 // Origin 写法（带路径、结尾的 /、大写主机）——拒绝，点名是哪一条。
 func (c *Config) ValidateConfig(bool) error {
 	var problems []error
@@ -51,6 +57,12 @@ func (c *Config) ValidateConfig(bool) error {
 		problems = append(problems, fmt.Errorf("config: portal.servers lists %d servers; at most %d", len(c.Portal.Servers), MaxEntries))
 	}
 	if _, err := parseServers(c.Portal.Servers); err != nil {
+		problems = append(problems, err)
+	}
+	if len(c.Portal.WebSocketServers) > MaxEntries {
+		problems = append(problems, fmt.Errorf("config: portal.websocket_servers lists %d servers; at most %d", len(c.Portal.WebSocketServers), MaxEntries))
+	}
+	if _, err := parseWebSocketServers(c.Portal.WebSocketServers); err != nil {
 		problems = append(problems, err)
 	}
 	if _, err := parseServices(c.Portal.Services); err != nil {
@@ -96,20 +108,31 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 // parseServers 把 portal.servers 变成 服号 -> 地址。键必须是正的服号的规范十进制写法（"+7"、"007" 不算），
 // 值必须是带主机的 host:port——只写端口（":7000"）的地址客户端连不了。
 func parseServers(raw map[string]string) (map[int32]string, error) {
+	return parseServerAddrs("portal.servers", raw, checkAddr)
+}
+
+// parseWebSocketServers 把 portal.websocket_servers 变成 服号 -> WebSocket URL。键的写法同 portal.servers，
+// 值按 svcaccount.CheckWebSocketAddr 检查（ws / wss、有主机、不带用户名密码与片段、至多 255 字节）。
+func parseWebSocketServers(raw map[string]string) (map[int32]string, error) {
+	return parseServerAddrs("portal.websocket_servers", raw, svcaccount.CheckWebSocketAddr)
+}
+
+// parseServerAddrs 是两张静态表共用的解析：键是正的服号，值交给 check。key 是配置键名，错误里点名它。
+func parseServerAddrs(key string, raw map[string]string, check func(string) (string, error)) (map[int32]string, error) {
 	servers := make(map[int32]string, len(raw))
 	keys := make([]string, 0, len(raw))
-	for key := range raw {
-		keys = append(keys, key)
+	for name := range raw {
+		keys = append(keys, name)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		sid, err := strconv.ParseInt(key, 10, 32)
-		if err != nil || sid <= 0 || strconv.FormatInt(sid, 10) != key {
-			return nil, fmt.Errorf("config: portal.servers key %q is not a server id (a positive number, the game process's sid)", key)
+	for _, name := range keys {
+		sid, err := strconv.ParseInt(name, 10, 32)
+		if err != nil || sid <= 0 || strconv.FormatInt(sid, 10) != name {
+			return nil, fmt.Errorf("config: %s key %q is not a server id (a positive number, the game process's sid)", key, name)
 		}
-		addr, err := checkAddr(raw[key])
+		addr, err := check(raw[name])
 		if err != nil {
-			return nil, fmt.Errorf("config: portal.servers.%s: %w", key, err)
+			return nil, fmt.Errorf("config: %s.%s: %w", key, name, err)
 		}
 		servers[int32(sid)] = addr
 	}

@@ -12,18 +12,20 @@ import (
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
 
-// 区服目录：入口的扩展点，回答“每个区服现在该连哪个地址”。
+// 区服目录：入口的扩展点，回答“每个区服现在该连哪个地址”——每种连接方式（TCP、WebSocket）各一个。
 //
 // “有哪些服、叫什么、开没开、并没并”是 account 的数据（ListServers）；“客户端连哪里、现在多忙”不是——
 // 那通常是 Gate 的地址，由部署决定、会随扩缩容变化。入口把两边按服号拼起来，再加上本账号在各服的角色，
 // 就是给客户端的清单。目录只管地址这一半：
 //
-//   - 静态的：配置 portal.servers（服号 -> host:port），见 NewStaticDirectory；
+//   - 静态的：配置 portal.servers（服号 -> TCP 的 host:port）与 portal.websocket_servers（服号 -> WebSocket 的 URL），
+//     见 NewStaticTransportDirectory；
 //   - 动态的：account 的区服入口登记表（NewPresenceDirectory）。game 进程经总线定期上报本服的地址与负载
 //     （login 模块的 manager，配置 login.presence.addr），account 放进带过期的登记表，停报的服到期自动消失（维护者 D23）；
 //   - 工程也可以自己实现 Directory（读服务发现……）。
 //
-// 缺省是 Overlay(静态, 登记表)：上报的盖住配置的，没有上报（或已过期）的回到配置。
+// 缺省是 Overlay(静态, 登记表)：上报的盖住配置的，没有上报（或已过期）的回到配置；按连接方式分开叠——上报里没有
+// WebSocket 地址时，这个服的 WebSocket 地址仍用配置的。
 //
 // 用哪一个在 portal_rules.go 的 newDirectory 里选，那个文件归工程所有。
 
@@ -32,7 +34,7 @@ const MaxEntries = svcaccount.MaxServers
 
 // 目录条目里各字段的上限。
 const (
-	// MaxAddrBytes 是地址的长度上限。
+	// MaxAddrBytes 是地址的长度上限（TCP 的 host:port 与 WebSocket 的 URL 相同）。
 	MaxAddrBytes = 255
 	// MaxTags / MaxTagBytes 是一个条目的标签个数与单个标签的长度上限。
 	MaxTags     = 8
@@ -43,8 +45,11 @@ const (
 type Entry struct {
 	// ServerID 是区服号（game 进程的 sid），正数。
 	ServerID int32
-	// Addr 是客户端该连的地址，host:port，主机不能为空——通常是这个服前面的 Gate。
+	// Addr 是客户端经 TCP 该连的地址，host:port，主机不能为空——通常是这个服前面的 Gate。空表示这个服没有 TCP 地址。
 	Addr string
+	// WSAddr 是客户端经 WebSocket 该连的完整 URL（ws:// 或 wss://，规则是 svcaccount.CheckWebSocketAddr），浏览器用它；
+	// 空表示这个服没有 WebSocket 地址。Addr 与 WSAddr 至少有一个。
+	WSAddr string
 	// Load 是这个服现在多忙，刻度由工程自己定（在线人数、百分比……），不小于 0；0 表示没有上报。
 	// 入口原样带给客户端与推荐规则，自己不解释它。
 	Load int
@@ -56,7 +61,8 @@ type Entry struct {
 //
 // 约定：
 //   - 返回错误表示“现在问不到”，入口答 500，不给客户端一份没有地址的清单；
-//   - 一个服至多一个条目。不成样子的条目（服号不是正数、地址不是带主机的 host:port、字段超长、负的负载）与
+//   - 一个服至多一个条目。不成样子的条目（服号不是正数、两个地址都没有、TCP 地址不是带主机的 host:port、WebSocket
+//     地址不是 ws / wss 的 URL、字段超长、负的负载）与
 //     重复的服号（留第一个）由入口丢掉，那个服在清单里就是“没有地址”——坏数据不会让整个请求失败，也不会被带给客户端；
 //   - account 没登记的服即使目录里有也不会列给客户端；account 登记了而目录里没有的服照常列出，只是没有地址；
 //   - 并发安全：请求是并发的。
@@ -75,9 +81,20 @@ func checkEntry(entry Entry) (Entry, error) {
 	if entry.ServerID <= 0 {
 		return Entry{}, fmt.Errorf("portal: directory entry has server id %d; it must be positive", entry.ServerID)
 	}
-	addr, err := checkAddr(entry.Addr)
-	if err != nil {
-		return Entry{}, fmt.Errorf("portal: directory entry of server %d: %w", entry.ServerID, err)
+	if strings.TrimSpace(entry.Addr) == "" && strings.TrimSpace(entry.WSAddr) == "" {
+		return Entry{}, fmt.Errorf("portal: directory entry of server %d has neither a TCP nor a WebSocket address", entry.ServerID)
+	}
+	var addr, wsAddr string
+	var err error
+	if strings.TrimSpace(entry.Addr) != "" {
+		if addr, err = checkAddr(entry.Addr); err != nil {
+			return Entry{}, fmt.Errorf("portal: directory entry of server %d: %w", entry.ServerID, err)
+		}
+	}
+	if strings.TrimSpace(entry.WSAddr) != "" {
+		if wsAddr, err = svcaccount.CheckWebSocketAddr(entry.WSAddr); err != nil {
+			return Entry{}, fmt.Errorf("portal: directory entry of server %d: %w", entry.ServerID, err)
+		}
 	}
 	if entry.Load < 0 {
 		return Entry{}, fmt.Errorf("portal: directory entry of server %d has a negative load", entry.ServerID)
@@ -92,7 +109,7 @@ func checkEntry(entry Entry) (Entry, error) {
 		}
 		tags = append(tags, tag)
 	}
-	return Entry{ServerID: entry.ServerID, Addr: addr, Load: entry.Load, Tags: tags}, nil
+	return Entry{ServerID: entry.ServerID, Addr: addr, WSAddr: wsAddr, Load: entry.Load, Tags: tags}, nil
 }
 
 // checkAddr 检查一个给客户端的地址：带主机的 host:port，端口 1～65535，至多 MaxAddrBytes 字节。
@@ -131,15 +148,34 @@ func usableEntries(entries []Entry) (byServer map[int32]Entry, dropped int) {
 // staticDirectory 是不会变的目录：构造时给定的条目。
 type staticDirectory struct{ entries []Entry }
 
-// NewStaticDirectory 用 服号 -> 地址 建一个静态目录（配置 portal.servers 就是这样用的）。
-// 地址不成样子、服号不是正数、条目超过 MaxEntries 时返回错误：静态的数据写错了应该在启动时就知道。
+// NewStaticDirectory 用 服号 -> TCP 地址 建一个静态目录，等于 NewStaticTransportDirectory(addrs, nil)。
 func NewStaticDirectory(addrs map[int32]string) (Directory, error) {
-	if len(addrs) > MaxEntries {
-		return nil, fmt.Errorf("portal: %d servers in the static directory; at most %d", len(addrs), MaxEntries)
-	}
-	entries := make([]Entry, 0, len(addrs))
+	return NewStaticTransportDirectory(addrs, nil)
+}
+
+// NewStaticTransportDirectory 用 服号 -> TCP 地址（host:port）与 服号 -> WebSocket 地址（URL）建一个静态目录（配置
+// portal.servers 与 portal.websocket_servers 就是这样用的）。一个服可以只出现在其中一边。地址不成样子、服号不是正数、
+// 服的个数超过 MaxEntries 时返回错误：静态的数据写错了应该在启动时就知道。
+func NewStaticTransportDirectory(addrs, wsAddrs map[int32]string) (Directory, error) {
+	byServer := make(map[int32]Entry, len(addrs))
 	for sid, addr := range addrs {
-		entry, err := checkEntry(Entry{ServerID: sid, Addr: addr})
+		byServer[sid] = Entry{ServerID: sid, Addr: addr}
+	}
+	for sid, wsAddr := range wsAddrs {
+		entry := byServer[sid]
+		entry.ServerID, entry.WSAddr = sid, wsAddr
+		if entry.WSAddr == "" {
+			// 空串不是“没有 WebSocket 地址”的写法（不写这个服就是），按写错处理。
+			return nil, fmt.Errorf("portal: directory entry of server %d has an empty websocket address", sid)
+		}
+		byServer[sid] = entry
+	}
+	if len(byServer) > MaxEntries {
+		return nil, fmt.Errorf("portal: %d servers in the static directory; at most %d", len(byServer), MaxEntries)
+	}
+	entries := make([]Entry, 0, len(byServer))
+	for _, raw := range byServer {
+		entry, err := checkEntry(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -176,14 +212,16 @@ func NewPresenceDirectory(accounts svcaccount.Accounts) Directory {
 		}
 		entries := make([]Entry, 0, len(presences))
 		for _, presence := range presences {
-			entries = append(entries, Entry{ServerID: presence.ServerID, Addr: presence.Addr, Load: presence.Load, Tags: append([]string(nil), presence.Tags...)})
+			entries = append(entries, Entry{ServerID: presence.ServerID, Addr: presence.Addr, WSAddr: presence.WSAddr, Load: presence.Load, Tags: append([]string(nil), presence.Tags...)})
 		}
 		return entries, nil
 	})
 }
 
-// Overlay 把几个目录叠起来：同一个服在几个目录里都有时，后面的盖住前面的。
-// 缺省用法是 Overlay(静态配置, account 的登记表)：登记表里有的服用上报的地址与负载，没有上报（或已过期）的回到配置。
+// Overlay 把几个目录叠起来：同一个服在几个目录里都有时，后面的盖住前面的——按连接方式分开盖：后面那一条有 TCP 地址
+// 就用它的，没有就留前面的；WebSocket 地址同样；负载与标签取后面那一条的。
+// 缺省用法是 Overlay(静态配置, account 的登记表)：登记表里有的服用上报的地址与负载，没有上报（或已过期）的回到配置；
+// 上报只带 TCP 地址而配置写了这个服的 WebSocket 地址（例如 wss 的负载均衡地址只有运维知道）时，两者都给。
 // 任何一个目录出错，整体出错——不拿一份不完整的回答冒充全部。nil 的目录跳过。
 func Overlay(directories ...Directory) Directory {
 	layers := make([]Directory, 0, len(directories))
@@ -206,6 +244,14 @@ func Overlay(directories ...Directory) Directory {
 					continue
 				}
 				seen[entry.ServerID] = true
+				if below, ok := merged[entry.ServerID]; ok {
+					if strings.TrimSpace(entry.Addr) == "" {
+						entry.Addr = below.Addr
+					}
+					if strings.TrimSpace(entry.WSAddr) == "" {
+						entry.WSAddr = below.WSAddr
+					}
+				}
 				merged[entry.ServerID] = entry
 			}
 		}

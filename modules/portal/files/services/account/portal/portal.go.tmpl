@@ -6,6 +6,12 @@
 //	POST /portal/enter       账号票据 + 服号 -> 进服票据 + 该连的地址
 //	POST /portal/game-token  账号票据 + 游戏名 -> 游戏账号 token（开房间类游戏的大厅凭它认人）
 //
+// 连接方式（维护者 2026-11-18）：玩家接入同时有 TCP 与 WebSocket（浏览器 / Unity WebGL 用后者）。客户端在
+// /portal/servers、/portal/enter 与 /portal/login 的 enter 里写 transport（"tcp" 缺省、"ws"），入口只给那种方式的地址
+// （TCP 是 host:port，WebSocket 是完整的 ws:// / wss:// URL），响应里回显 transport；清单的每个服带上它支持的方式。
+// 推荐只在支持所请求方式的服里挑；要进的服没有这种方式的地址时答 portal_transport_unavailable，不回落到别的方式。
+// 不写 transport 的客户端与以前相同（TCP）。入口仍然只是 HTTP 服务，不代理任何连接。
+//
 // 客户端走完这三步，拿进服票据去连那个地址（Gate，或直连的 game），握手时出示它；握手的认证器再去问
 // account 这个账号在这个服上是哪一名玩家（登录模块 login）。入口不建角、不选角，也不知道玩家号。
 //
@@ -67,6 +73,25 @@ const (
 	// MaxNameBytes 是请求里游戏名、服务名的上限，与 account 的上限一致（svcaccount.MaxGameNameBytes）。
 	MaxNameBytes = 32
 )
+
+// 客户端请求里 transport 的取值：要哪种连接方式的地址。不写等于 TransportTCP。
+const (
+	// TransportTCP：玩家 TCP 接入，地址是 host:port（目录条目的 Addr）。
+	TransportTCP = "tcp"
+	// TransportWebSocket：玩家 WebSocket 接入，地址是 ws:// 或 wss:// 的完整 URL（目录条目的 WSAddr）。
+	TransportWebSocket = "ws"
+)
+
+// parseTransport 认请求里的 transport：空串是 tcp，只认小写的 tcp 与 ws；别的写法 ok 为假（portal_request_invalid）。
+func parseTransport(raw string) (transport string, ok bool) {
+	switch raw {
+	case "", TransportTCP:
+		return TransportTCP, true
+	case TransportWebSocket:
+		return TransportWebSocket, true
+	}
+	return "", false
+}
 
 // EnterTicketPrefix 是 /portal/enter 回给客户端的握手票据的前缀：握手帧里出示 enter:<account 签的进服票据>。
 // 它是与登录模块（login）的握手认证器之间的约定——认证器按这个前缀认出进服票据（它的 game/modules/login/login.go
@@ -146,7 +171,11 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if err != nil {
 		return nil, fmt.Errorf("portal: %w", err)
 	}
-	configured, err := NewStaticDirectory(addrs)
+	wsAddrs, err := parseWebSocketServers(settings.Portal.WebSocketServers)
+	if err != nil {
+		return nil, fmt.Errorf("portal: %w", err)
+	}
+	configured, err := NewStaticTransportDirectory(addrs, wsAddrs)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +205,7 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if err := portal.RegisterRoutes(routes); err != nil {
 		return stop, fmt.Errorf("portal: %w", err)
 	}
-	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "servers", PathServers, "enter", PathEnter, "game_token", PathGameToken, "configured_addresses", len(addrs), "service_addresses", len(serviceAddrs), "cors_origins", len(settings.Portal.CORSOrigins))
+	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "servers", PathServers, "enter", PathEnter, "game_token", PathGameToken, "configured_addresses", len(addrs), "configured_websocket_addresses", len(wsAddrs), "service_addresses", len(serviceAddrs), "cors_origins", len(settings.Portal.CORSOrigins))
 	return stop, nil
 }
 
@@ -232,6 +261,8 @@ type loginEnter struct {
 	ServerID int32 `json:"server_id,omitempty"`
 	// Service 只在进推荐的服时有用：只在这个 game 服务的服里挑（同 /portal/servers 的 service）。与 ServerID 同时写算请求不成样子。
 	Service string `json:"service,omitempty"`
+	// Transport 是要哪种连接方式的地址（同 /portal/enter 的 transport）：进推荐的服时只在支持它的服里挑。
+	Transport string `json:"transport,omitempty"`
 }
 
 // loginResponse 是登录成功的响应：账号票据；请求带了游戏名时另有一张游戏账号 token；请求带了 enter 时另有进服结果。
@@ -286,6 +317,11 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 	if enter := request.Enter; enter != nil && (enter.ServerID < 0 || len(enter.Service) > MaxNameBytes || (enter.ServerID > 0 && enter.Service != "")) {
 		return loginResponse{}, invalidRequest()
 	}
+	if enter := request.Enter; enter != nil {
+		if _, ok := parseTransport(enter.Transport); !ok {
+			return loginResponse{}, invalidRequest()
+		}
+	}
 	account, err := portal.accounts.Login(ctx, svcaccount.Identity{Channel: svcaccount.Channel(channel), OpenID: openID, Credential: request.Credential, Game: request.Game})
 	if err != nil {
 		if svcaccount.Code(err) == svcaccount.CodeIdentityDenied {
@@ -314,14 +350,14 @@ func (portal *Portal) login(ctx context.Context, request loginRequest) (loginRes
 	if request.Enter != nil {
 		sid := request.Enter.ServerID
 		if sid == 0 {
-			list, err := portal.servers(ctx, serversRequest{AccountTicket: ticket.Ticket, Service: request.Enter.Service})
+			list, err := portal.servers(ctx, serversRequest{AccountTicket: ticket.Ticket, Service: request.Enter.Service, Transport: request.Enter.Transport})
 			if err != nil {
 				return loginResponse{}, err
 			}
 			sid = list.RecommendedServerID
 		}
 		if sid > 0 {
-			entered, err := portal.enter(ctx, enterRequest{AccountTicket: ticket.Ticket, ServerID: sid})
+			entered, err := portal.enter(ctx, enterRequest{AccountTicket: ticket.Ticket, ServerID: sid, Transport: request.Enter.Transport})
 			if err != nil {
 				return loginResponse{}, err
 			}
@@ -340,13 +376,18 @@ type serversRequest struct {
 	// Service 可选：只列这个 game 服务的区服（account.services 里 kind=game 的服务名）。不写列全部。
 	// 不是 account.services 里的 game 服务（含没有配置 account.services 的工程写了它）时答 portal_request_invalid。
 	Service string `json:"service,omitempty"`
+	// Transport 可选：要哪种连接方式的地址，"tcp"（缺省）或 "ws"。每个服的 addr 是这种方式的地址，推荐只在支持它的服里挑。
+	Transport string `json:"transport,omitempty"`
 }
 
 // serversResponse 是清单。
 type serversResponse struct {
 	OK bool `json:"ok"`
-	// RecommendedServerID 是推荐规则（portal_rules.go 的 recommend）挑的服；0 表示没有推荐。推荐只在列出的服里挑。
+	// RecommendedServerID 是推荐规则（portal_rules.go 的 recommend）挑的服；0 表示没有推荐。推荐只在列出的服里挑；
+	// 请求 ws 时只在有 WebSocket 地址的服里挑。
 	RecommendedServerID int32 `json:"recommended_server_id"`
+	// Transport 回显这份清单的地址是哪种连接方式的：tcp 或 ws。
+	Transport string `json:"transport"`
 	// Services 是 account.services 里的服务（按名字升序），带着配置 portal.services 给的地址；没有配置 account.services
 	// 的工程没有这一项。
 	Services []serviceView `json:"services,omitempty"`
@@ -374,10 +415,12 @@ type serverView struct {
 	Status string `json:"status"`
 	// MergedInto 非 0 表示这个服已经并入那个服：这里的老角色照常进（由那个服承载），新号进不了。
 	MergedInto int32 `json:"merged_into,omitempty"`
-	// Addr 是进这个服该连的地址（它的承载服在目录里的地址）；目录里没有时是空串。
+	// Addr 是进这个服该连的地址（它的承载服在目录里的、所请求连接方式的地址）；目录里没有时是空串。
 	Addr string `json:"addr"`
 	// AddrSource 说明 Addr 是怎么来的：directory、none。
 	AddrSource string `json:"addr_source"`
+	// Transports 是这个服（它的承载服）在目录里有地址的连接方式，按 tcp、ws 的顺序；目录里没有时是空的。
+	Transports []string `json:"transports"`
 	// Load 与 Tags 是目录给的负载与标签，入口不解释；目录里没有这个服时是 0 与空。
 	Load int      `json:"load"`
 	Tags []string `json:"tags,omitempty"`
@@ -421,8 +464,12 @@ func (portal *Portal) handleServers(w http.ResponseWriter, r *http.Request) {
 //
 // 服务清单来自 account 的 ListServices（account.services），地址来自配置 portal.services。写了 service 时只列
 // 那个 game 服务的区服，推荐也只在其中挑。
+//
+// 写了 transport 时每个服的 addr 是那种方式的地址；请求 ws 时推荐规则只看得到有 WebSocket 地址的服（机制在这里过滤，
+// 不靠工程的推荐规则自觉），它推荐出别的服按没有推荐处理。tcp（缺省）与以前完全相同：没有地址的服也交给推荐规则。
 func (portal *Portal) servers(ctx context.Context, request serversRequest) (serversResponse, error) {
-	if len(request.Service) > MaxNameBytes {
+	transport, ok := parseTransport(request.Transport)
+	if len(request.Service) > MaxNameBytes || !ok {
 		return serversResponse{}, invalidRequest()
 	}
 	account, err := portal.account(ctx, request.AccountTicket)
@@ -460,7 +507,8 @@ func (portal *Portal) servers(ctx context.Context, request serversRequest) (serv
 		if server.MergedInto > 0 {
 			serving = server.MergedInto
 		}
-		view.Addr, view.AddrSource, view.Load, view.Tags = addressOf(entries, serving)
+		view.Addr, view.AddrSource, view.Load, view.Tags = addressOf(entries, serving, transport)
+		view.Transports = transportsOf(entries, serving)
 		role, err := portal.accounts.RoleOnServer(ctx, account.ID, server.ID)
 		switch {
 		case err == nil:
@@ -476,23 +524,28 @@ func (portal *Portal) servers(ctx context.Context, request serversRequest) (serv
 			return serversResponse{}, err
 		}
 		views = append(views, view)
+		if transport != TransportTCP && view.Addr == "" {
+			// 这个服没有所请求方式的地址：照常列出，但不交给推荐规则。
+			continue
+		}
 		choice := ServerChoice{
 			ServerID: view.ServerID, Name: view.Name, Status: view.Status, MergedInto: view.MergedInto,
-			Addr: view.Addr, Load: view.Load, Tags: append([]string(nil), view.Tags...),
+			Addr: view.Addr, Transports: append([]string(nil), view.Transports...), Load: view.Load, Tags: append([]string(nil), view.Tags...),
 		}
 		if view.Role != nil {
 			choice.HasRole, choice.RoleLastLoginAt = true, view.Role.LastLoginAt
 		}
 		choices = append(choices, choice)
 	}
-	response := serversResponse{OK: true, Servers: views}
+	response := serversResponse{OK: true, Transport: transport, Servers: views}
 	for _, service := range services {
 		response.Services = append(response.Services, serviceView{Name: service.Name, Kind: string(service.Kind), Addr: portal.services[service.Name]})
 	}
-	// 推荐规则是工程的代码：它返回一个不在清单里的服号时按没有推荐处理，不把一个客户端进不了的服推出去。
+	// 推荐规则是工程的代码：它返回一个不在交给它的服里的服号（不在清单里，或没有所请求方式的地址）时按没有推荐处理，
+	// 不把一个客户端进不了的服推出去。
 	if recommended := portal.recommend(choices); recommended > 0 {
-		for _, view := range views {
-			if view.ServerID == recommended {
+		for _, choice := range choices {
+			if choice.ServerID == recommended {
 				response.RecommendedServerID = recommended
 				break
 			}
@@ -507,6 +560,8 @@ func (portal *Portal) servers(ctx context.Context, request serversRequest) (serv
 type enterRequest struct {
 	AccountTicket string `json:"account_ticket"`
 	ServerID      int32  `json:"server_id"`
+	// Transport 可选：要哪种连接方式的地址，"tcp"（缺省）或 "ws"。承载服没有这种方式的地址时答 portal_transport_unavailable。
+	Transport string `json:"transport,omitempty"`
 }
 
 // enterResponse 是进服的响应。
@@ -524,9 +579,12 @@ type enterResult struct {
 	ServingServerID int32 `json:"serving_server_id"`
 	// ExpiresAt 是进服票据的过期时刻（Unix 秒）：过期之前可以反复握手（断线重连），过期之后重新要一张。
 	ExpiresAt int64 `json:"expires_at"`
-	// Addr 是承载服的地址（host:port，目录给的）；目录里没有时是空串——票据照发，AddrSource 是 none。
+	// Addr 是承载服在所请求连接方式下的地址（tcp 是 host:port，ws 是 ws:// / wss:// 的 URL，目录给的）。tcp 而目录里没有时
+	// 是空串——票据照发，AddrSource 是 none（与以前相同）；ws 而没有 WebSocket 地址时整个请求答 portal_transport_unavailable。
 	Addr       string `json:"addr"`
 	AddrSource string `json:"addr_source"`
+	// Transport 回显 Addr 是哪种连接方式的：tcp 或 ws。
+	Transport string `json:"transport"`
 }
 
 func (portal *Portal) handleEnter(w http.ResponseWriter, r *http.Request) {
@@ -547,8 +605,10 @@ func (portal *Portal) handleEnter(w http.ResponseWriter, r *http.Request) {
 // 账号只取自账号票据。服号必须是 account 登记过的服，否则带着 account 的码拒绝；被封的账号拿不到票据。
 // 区服的状态这里不拦（维护中的服，老号照常能进），新号能不能进由握手时的 account 按建角的规则回答。
 // 目录里没有承载服的地址时照样成功、地址留空：票据是好的，只是入口不知道该连哪里。
+// 请求 ws 而承载服没有 WebSocket 地址时答 portal_transport_unavailable，不回落到 TCP：浏览器拿到 host:port 也连不上。
 func (portal *Portal) enter(ctx context.Context, request enterRequest) (enterResponse, error) {
-	if request.ServerID <= 0 {
+	transport, ok := parseTransport(request.Transport)
+	if request.ServerID <= 0 || !ok {
 		return enterResponse{}, invalidRequest()
 	}
 	account, err := portal.account(ctx, request.AccountTicket)
@@ -569,9 +629,13 @@ func (portal *Portal) enter(ctx context.Context, request enterRequest) (enterRes
 	}
 	response := enterResponse{OK: true, enterResult: enterResult{
 		Ticket:   EnterTicketPrefix + ticket.Ticket,
-		ServerID: ticket.ServerID, ServingServerID: ticket.ServingServerID, ExpiresAt: ticket.ExpiresAtUnix,
+		ServerID: ticket.ServerID, ServingServerID: ticket.ServingServerID, ExpiresAt: ticket.ExpiresAtUnix, Transport: transport,
 	}}
-	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID)
+	response.Addr, response.AddrSource, _, _ = addressOf(entries, ticket.ServingServerID, transport)
+	if transport != TransportTCP && response.Addr == "" {
+		slog.InfoContext(ctx, "portal: the serving server has no address for the requested transport", "server_id", ticket.ServerID, "serving_server_id", ticket.ServingServerID, "transport", transport)
+		return enterResponse{}, errcode.Wrap(apperrors.ErrPortalTransportUnavailable, nil)
+	}
 	slog.InfoContext(ctx, "portal: enter ticket issued", "account_id", account.ID, "server_id", ticket.ServerID, "serving_server_id", ticket.ServingServerID)
 	return response, nil
 }
@@ -669,13 +733,34 @@ func (portal *Portal) entries(ctx context.Context) (map[int32]Entry, error) {
 	return usable, nil
 }
 
-// addressOf 取 sid 这个服在目录里的地址、负载与标签。
-func addressOf(entries map[int32]Entry, sid int32) (addr, source string, load int, tags []string) {
+// addressOf 取 sid 这个服在目录里 transport 那种连接方式的地址，以及负载与标签。目录里有这个服、却没有这种方式的
+// 地址时，地址为空、来源是 none，负载与标签照给（它们说的是这个服，不是某种连接方式）。
+func addressOf(entries map[int32]Entry, sid int32, transport string) (addr, source string, load int, tags []string) {
 	entry, ok := entries[sid]
 	if !ok {
 		return "", AddrNone, 0, nil
 	}
-	return entry.Addr, AddrFromDirectory, entry.Load, entry.Tags
+	addr = entry.Addr
+	if transport == TransportWebSocket {
+		addr = entry.WSAddr
+	}
+	if addr == "" {
+		return "", AddrNone, entry.Load, entry.Tags
+	}
+	return addr, AddrFromDirectory, entry.Load, entry.Tags
+}
+
+// transportsOf 是 sid 这个服在目录里有地址的连接方式，按 tcp、ws 的顺序；没有条目时是空的（不是 nil：JSON 里是 []）。
+func transportsOf(entries map[int32]Entry, sid int32) []string {
+	entry := entries[sid]
+	transports := make([]string, 0, 2)
+	if entry.Addr != "" {
+		transports = append(transports, TransportTCP)
+	}
+	if entry.WSAddr != "" {
+		transports = append(transports, TransportWebSocket)
+	}
+	return transports
 }
 
 // decode 读一个 JSON 请求体。超过 MaxRequestBytes 答 413，不是 JSON 答 400（两者都由 webroute 写好了响应，

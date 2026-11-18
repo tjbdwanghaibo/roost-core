@@ -1999,3 +1999,375 @@ func TestPortalListsServersByService(t *testing.T) {
 		}
 	}
 }
+
+// ---- 连接方式（transport） ----
+
+// portalCodeTransportUnavailable 是“要进的服没有请求的那种连接方式的地址”的码，同 portalCodeRequestInvalid 取自定义。
+var portalCodeTransportUnavailable = int(apperrors.ErrPortalTransportUnavailable.Code())
+
+// portalServerList 把 /portal/servers 的成功响应整理成 服号 -> 那一项、推荐的服号；不是成功响应时让用例失败。
+func portalServerList(t *testing.T, label string, reply portalReply) (map[int]map[string]any, int) {
+	t.Helper()
+	list, ok := reply.body["servers"].([]any)
+	if reply.status != http.StatusOK || reply.body["ok"] != true || !ok {
+		t.Fatalf("%s: %d %s", label, reply.status, reply.raw)
+	}
+	servers := map[int]map[string]any{}
+	for _, item := range list {
+		entry, _ := item.(map[string]any)
+		sid, _ := entry["server_id"].(float64)
+		servers[int(sid)] = entry
+	}
+	return servers, int(reply.number("recommended_server_id"))
+}
+
+// portalTransports 是清单里一个服的 transports（它支持的连接方式），拼成 "tcp,ws" 便于比较。
+func portalTransports(server map[string]any) string {
+	list, _ := server["transports"].([]any)
+	names := make([]string, 0, len(list))
+	for _, item := range list {
+		name, _ := item.(string)
+		names = append(names, name)
+	}
+	return strings.Join(names, ",")
+}
+
+// 玩家接入同时有 TCP 与 WebSocket（维护者 2026-11-18）：客户端在请求里说要哪种连接方式（transport：tcp 缺省、ws），
+// 入口只给那种方式的地址，响应里回显 transport；清单的每个服带上它支持的方式（transports）。不写 transport 的老客户端
+// 拿到的地址与以前相同。地址来自配置：portal.servers 是 TCP 的 host:port，portal.websocket_servers 是 WebSocket 的完整
+// URL（wss 由前置负载均衡终结，所以是 URL 而不是 host:port）。要 ws 而那个服只有 TCP 地址时答 portal_transport_unavailable，
+// 不回落到 TCP；推荐只在支持所请求方式的服里挑。transport 写成别的（大小写不同、websocket、超长）答 portal_request_invalid。
+func TestPortalAnswersWithTheAddressOfTheRequestedTransport(t *testing.T) {
+	w := newPortalWorld(t)
+	w.upsert(1002, svcaccount.ServerOpen)
+	engine, err := portalProcess(t, w.accounts, map[string]any{
+		"portal.servers":           map[string]any{"1000": "203.0.113.7:7000", "1001": "203.0.113.8:7000"},
+		"portal.websocket_servers": map[string]any{"1001": "wss://play.example.test/ws/1001", "1002": "ws://203.0.113.9:7080/ws"},
+	})
+	if err != nil {
+		t.Fatalf("Start with portal.websocket_servers: %v", err)
+	}
+	ticket := w.login("alice")
+	list := func(label string, payload map[string]any) (portalReply, map[int]map[string]any, int) {
+		t.Helper()
+		payload["account_ticket"] = ticket
+		reply := portalPost(t, engine, "/portal/servers", payload)
+		servers, recommended := portalServerList(t, label, reply)
+		return reply, servers, recommended
+	}
+
+	// 不写 transport 与写 tcp 一样：TCP 地址，回显 tcp；每个服带它支持的方式（1002 只有 WebSocket 地址）。
+	for label, payload := range map[string]map[string]any{"no transport": {}, "transport tcp": {"transport": "tcp"}} {
+		reply, servers, recommended := list(label, payload)
+		// 推荐与以前相同：新号去最新开的、有地址的服——1002 没有 TCP 地址，所以是 1001。
+		if reply.text("transport") != "tcp" || recommended != 1001 {
+			t.Fatalf("%s: transport %q, recommended %d; want tcp and 1001 (the newest open server with an address, as before): %s", label, reply.text("transport"), recommended, reply.raw)
+		}
+		for sid, want := range map[int][3]string{
+			1000: {"203.0.113.7:7000", "directory", "tcp"},
+			1001: {"203.0.113.8:7000", "directory", "tcp,ws"},
+			1002: {"", "none", "ws"},
+		} {
+			server := servers[sid]
+			if server["addr"] != want[0] || server["addr_source"] != want[1] || portalTransports(server) != want[2] {
+				t.Fatalf("%s: server %d = %v; want addr %q (%s), transports %s", label, sid, server, want[0], want[1], want[2])
+			}
+		}
+	}
+	// ws：WebSocket 的 URL；没有 WebSocket 地址的服照常列出，只是没有地址。推荐在有 WebSocket 地址的服里挑最新的 1002。
+	reply, servers, recommended := list("transport ws", map[string]any{"transport": "ws"})
+	if reply.text("transport") != "ws" || recommended != 1002 {
+		t.Fatalf("ws list: transport %q, recommended %d: %s", reply.text("transport"), recommended, reply.raw)
+	}
+	for sid, want := range map[int][2]string{
+		1000: {"", "none"},
+		1001: {"wss://play.example.test/ws/1001", "directory"},
+		1002: {"ws://203.0.113.9:7080/ws", "directory"},
+	} {
+		if servers[sid]["addr"] != want[0] || servers[sid]["addr_source"] != want[1] {
+			t.Fatalf("ws list: server %d = %v; want addr %q (%s)", sid, servers[sid], want[0], want[1])
+		}
+	}
+
+	// 进服：老客户端（不写 transport）拿 TCP 地址；要 ws 拿 URL，票据一样能握手。
+	enter := func(payload map[string]any) portalReply {
+		t.Helper()
+		payload["account_ticket"] = ticket
+		return portalPost(t, engine, "/portal/enter", payload)
+	}
+	if old := enter(map[string]any{"server_id": 1001}); old.status != http.StatusOK || old.text("addr") != "203.0.113.8:7000" || old.text("addr_source") != "directory" || old.text("transport") != "tcp" {
+		t.Fatalf("enter 1001 without a transport: %d %s; want the TCP address", old.status, old.raw)
+	}
+	ws := enter(map[string]any{"server_id": 1001, "transport": "ws"})
+	if ws.status != http.StatusOK || ws.text("addr") != "wss://play.example.test/ws/1001" || ws.text("addr_source") != "directory" || ws.text("transport") != "ws" {
+		t.Fatalf("enter 1001 over ws: %d %s; want the WebSocket URL", ws.status, ws.raw)
+	}
+	if playerID, isNew := w.handshake(ws.text("ticket")); playerID <= 0 || !isNew {
+		t.Fatalf("the ws enter ticket: player %d (new %v)", playerID, isNew)
+	}
+	// 只有 TCP 地址的服要 ws：答新码，不回落到 TCP。只有 WebSocket 地址的服要 tcp：与以前没有地址时一样，票据照发、地址为空。
+	refused := enter(map[string]any{"server_id": 1000, "transport": "ws"})
+	if refused.status != http.StatusBadRequest || refused.code() != portalCodeTransportUnavailable || refused.body["ok"] != false || refused.text("ticket") != "" || strings.Contains(refused.raw, "203.0.113.7") {
+		t.Fatalf("enter 1000 (TCP only) over ws: %d %s; want 400 with %d, no ticket and no TCP address", refused.status, refused.raw, portalCodeTransportUnavailable)
+	}
+	if tcpOnly := enter(map[string]any{"server_id": 1002}); tcpOnly.status != http.StatusOK || tcpOnly.text("addr") != "" || tcpOnly.text("addr_source") != "none" || strings.Contains(tcpOnly.raw, "7080") {
+		t.Fatalf("enter 1002 (WebSocket only) over tcp: %d %s; want a ticket without an address, as before", tcpOnly.status, tcpOnly.raw)
+	}
+
+	// 推荐按方式过滤：alice 的角色在 1001（上面握手建的），老号推荐角色所在的服。1001 去掉 WebSocket 地址之后，
+	// 要 ws 时只在有 WebSocket 地址的服里挑（1002），不把她导向一个这种方式连不上的服；要 tcp 时仍是 1001。
+	narrowed, err := portalProcess(t, w.accounts, map[string]any{
+		"portal.servers":           map[string]any{"1000": "203.0.113.7:7000", "1001": "203.0.113.8:7000"},
+		"portal.websocket_servers": map[string]any{"1002": "ws://203.0.113.9:7080/ws"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for transport, want := range map[string]int{"": 1001, "tcp": 1001, "ws": 1002} {
+		reply := portalPost(t, narrowed, "/portal/servers", map[string]any{"account_ticket": ticket, "transport": transport})
+		if _, recommended := portalServerList(t, "narrowed "+transport, reply); recommended != want {
+			t.Fatalf("transport %q: recommended %d, want %d: %s", transport, recommended, want, reply.raw)
+		}
+	}
+	// 一个服都没有 WebSocket 地址：要 ws 时没有推荐（0），要 tcp 时照旧。
+	tcpOnlyProcess, err := portalProcess(t, w.accounts, map[string]any{"portal.servers": map[string]any{"1000": "203.0.113.7:7000"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for transport, want := range map[string]int{"tcp": 1001, "ws": 0} {
+		reply := portalPost(t, tcpOnlyProcess, "/portal/servers", map[string]any{"account_ticket": ticket, "transport": transport})
+		if _, recommended := portalServerList(t, "tcp only "+transport, reply); recommended != want {
+			t.Fatalf("no WebSocket address anywhere, transport %q: recommended %d, want %d: %s", transport, recommended, want, reply.raw)
+		}
+	}
+
+	// 工程的推荐规则推荐了一个没有所请求方式地址的服（规则写错了）：按没有推荐处理，不把它推给要 ws 的客户端。
+	stubborn := newPortalWorld(t, func(options *Options) {
+		options.Directory = DirectoryFunc(func(context.Context) ([]Entry, error) {
+			return []Entry{{ServerID: 1000, Addr: "203.0.113.7:7000"}, {ServerID: 1001, WSAddr: "wss://play.example.test/ws"}}, nil
+		})
+		options.Recommend = func([]ServerChoice) int32 { return 1000 }
+	})
+	stubbornTicket := stubborn.login("alice")
+	for transport, want := range map[string]int{"tcp": 1000, "ws": 0} {
+		reply := stubborn.post("/portal/servers", map[string]any{"account_ticket": stubbornTicket, "transport": transport})
+		if _, recommended := portalServerList(t, "stubborn rule "+transport, reply); recommended != want {
+			t.Fatalf("a rule that always recommends 1000 (TCP only), transport %q: recommended %d, want %d: %s", transport, recommended, want, reply.raw)
+		}
+	}
+
+	// transport 只认 tcp 与 ws（小写）：别的写法答 portal_request_invalid，不去问 account 要票据。
+	issued := w.accounts.count("IssueEnterTicket")
+	for _, transport := range []string{"websocket", "WS", "TCP", "udp", " ws", strings.Repeat("w", 64)} {
+		for path, payload := range map[string]map[string]any{
+			"/portal/servers": {"account_ticket": ticket, "transport": transport},
+			"/portal/enter":   {"account_ticket": ticket, "server_id": 1001, "transport": transport},
+		} {
+			if reply := portalPost(t, engine, path, payload); reply.status != http.StatusBadRequest || reply.code() != portalCodeRequestInvalid {
+				t.Fatalf("%s with transport %q: %d %s; want 400 with %d", path, transport, reply.status, reply.raw, portalCodeRequestInvalid)
+			}
+		}
+	}
+	if got := w.accounts.count("IssueEnterTicket"); got != issued {
+		t.Fatalf("enter requests with a malformed transport reached IssueEnterTicket %d times", got-issued)
+	}
+}
+
+// /portal/login 带 enter 时同样按 enter.transport 给地址：不写服号就在支持这种方式的服里推荐；写的服没有这种方式的
+// 地址时整个登录失败（新码），不交出账号票据，与进服失败的其余情况相同；一个服都推荐不出来时登录照样成功、没有 enter。
+// enter.transport 写得不成样子时在问 account 之前就拒绝，渠道凭据没被用掉。不写 transport 的老客户端拿 TCP 地址。
+func TestPortalLoginEntersOverTheRequestedTransport(t *testing.T) {
+	w := newPortalWorld(t)
+	engine, err := portalProcess(t, w.accounts, map[string]any{
+		"portal.servers":           map[string]any{"1000": "203.0.113.7:7000", "1001": "203.0.113.8:7000"},
+		"portal.websocket_servers": map[string]any{"1000": "wss://play.example.test/ws"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := func(process http.Handler, openID string, enter map[string]any) portalReply {
+		t.Helper()
+		return portalPost(t, process, "/portal/login", map[string]any{"channel": "dev", "open_id": openID, "credential": portalDevToken, "enter": enter})
+	}
+	entered := func(label string, reply portalReply, sid int32, addr, transport string) {
+		t.Helper()
+		enter, _ := reply.body["enter"].(map[string]any)
+		ticket, _ := enter["ticket"].(string)
+		if reply.status != http.StatusOK || reply.text("account_ticket") == "" || enter["server_id"] != float64(sid) || enter["addr"] != addr ||
+			enter["addr_source"] != "directory" || enter["transport"] != transport || !strings.HasPrefix(ticket, "enter:et1.") {
+			t.Fatalf("%s: %d %s; want server %d at %s over %s", label, reply.status, reply.raw, sid, addr, transport)
+		}
+	}
+	// 新号不写服号：tcp 推荐最新开的 1001；ws 只在有 WebSocket 地址的服里挑，是 1000。
+	entered("bob, recommended, no transport", login(engine, "bob", map[string]any{}), 1001, "203.0.113.8:7000", "tcp")
+	entered("carol, recommended, ws", login(engine, "carol", map[string]any{"transport": "ws"}), 1000, "wss://play.example.test/ws", "ws")
+	entered("dave, 1000 over ws", login(engine, "dave", map[string]any{"server_id": 1000, "transport": "ws"}), 1000, "wss://play.example.test/ws", "ws")
+	entered("dave, 1000 over tcp", login(engine, "dave", map[string]any{"server_id": 1000, "transport": "tcp"}), 1000, "203.0.113.7:7000", "tcp")
+	// 写的服没有 WebSocket 地址：整个登录失败，不交出账号票据。
+	if refused := login(engine, "erin", map[string]any{"server_id": 1001, "transport": "ws"}); refused.status != http.StatusBadRequest ||
+		refused.code() != portalCodeTransportUnavailable || refused.text("account_ticket") != "" || refused.body["enter"] != nil {
+		t.Fatalf("login entering 1001 (TCP only) over ws: %d %s; want 400 with %d and no ticket", refused.status, refused.raw, portalCodeTransportUnavailable)
+	}
+	// 一个服都没有 WebSocket 地址：要 ws 推荐不出来，登录照样成功、没有 enter。
+	tcpOnly, err := portalProcess(t, w.accounts, map[string]any{"portal.servers": map[string]any{"1000": "203.0.113.7:7000"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frank := login(tcpOnly, "frank", map[string]any{"transport": "ws"}); frank.status != http.StatusOK || frank.text("account_ticket") == "" || frank.body["enter"] != nil {
+		t.Fatalf("frank, ws with no WebSocket address anywhere: %d %s; want a login without an enter result", frank.status, frank.raw)
+	}
+	// 写得不成样子：不去问 account。
+	logins := w.accounts.count("Login")
+	for _, transport := range []string{"websocket", "WS", "udp", strings.Repeat("w", 64)} {
+		if reply := login(engine, "grace", map[string]any{"transport": transport}); reply.status != http.StatusBadRequest || reply.code() != portalCodeRequestInvalid || reply.text("account_ticket") != "" {
+			t.Fatalf("login enter with transport %q: %d %s; want 400 with %d", transport, reply.status, reply.raw, portalCodeRequestInvalid)
+		}
+	}
+	if got := w.accounts.count("Login"); got != logins {
+		t.Fatalf("login enters with a malformed transport reached account's Login %d times", got-logins)
+	}
+}
+
+// WebSocket 地址走与 TCP 同一条登记路：game 上报（ServerPresence.WSAddr，login 模块的 login.presence.ws_addr）进 account
+// 的带过期登记表，入口的缺省目录 Overlay(配置, 登记表) 按连接方式分开叠——上报带了 WebSocket 地址就用上报的，上报只带
+// TCP 地址时 WebSocket 地址仍取配置 portal.websocket_servers 的（wss 的负载均衡地址常常只有运维知道）。停报到期后两种
+// 方式都回到配置。目录条目里不成样子的 WebSocket 地址让整条被丢掉（与 TCP 地址写错相同），不带给客户端。
+func TestPortalReadsWebSocketAddressesFromThePresenceAndTheConfig(t *testing.T) {
+	w := newPortalWorld(t)
+	ctx := context.Background()
+	engine, err := portalProcess(t, w.accounts, map[string]any{
+		"portal.servers":           map[string]any{"1000": "static-a.example.test:7000"},
+		"portal.websocket_servers": map[string]any{"1001": "wss://lb.example.test/ws/1001"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket := w.login("alice")
+	addrs := func(label, transport string) map[int]string {
+		t.Helper()
+		servers, _ := portalServerList(t, label, portalPost(t, engine, "/portal/servers", map[string]any{"account_ticket": ticket, "transport": transport}))
+		out := map[int]string{}
+		for sid, server := range servers {
+			addr, _ := server["addr"].(string)
+			out[sid] = addr + " [" + portalTransports(server) + "]"
+		}
+		return out
+	}
+	want := func(label string, tcp, ws map[int]string) {
+		t.Helper()
+		for transport, expected := range map[string]map[int]string{"tcp": tcp, "ws": ws} {
+			got := addrs(label, transport)
+			for sid, value := range expected {
+				if got[sid] != value {
+					t.Fatalf("%s, %s: server %d = %q, want %q (all: %v)", label, transport, sid, got[sid], value, got)
+				}
+			}
+		}
+	}
+	want("nothing reported",
+		map[int]string{1000: "static-a.example.test:7000 [tcp]", 1001: " [ws]"},
+		map[int]string{1000: " [tcp]", 1001: "wss://lb.example.test/ws/1001 [ws]"})
+
+	// 1000 上报两种地址，1001 只报 TCP 地址：1000 两种都用上报的；1001 的 TCP 用上报的、WebSocket 仍是配置的。
+	for _, presence := range []svcaccount.ServerPresence{
+		{ServerID: 1000, Addr: "gate-a.example.test:7000", WSAddr: "ws://gate-a.example.test:7080/ws", Load: 3},
+		{ServerID: 1001, Addr: "gate-b.example.test:7000", Load: 4},
+	} {
+		if err := w.service.ReportServerPresence(ctx, presence, 30); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want("both reported",
+		map[int]string{1000: "gate-a.example.test:7000 [tcp,ws]", 1001: "gate-b.example.test:7000 [tcp,ws]"},
+		map[int]string{1000: "ws://gate-a.example.test:7080/ws [tcp,ws]", 1001: "wss://lb.example.test/ws/1001 [tcp,ws]"})
+	if entered := portalPost(t, engine, "/portal/enter", map[string]any{"account_ticket": ticket, "server_id": 1000, "transport": "ws"}); entered.status != http.StatusOK || entered.text("addr") != "ws://gate-a.example.test:7080/ws" {
+		t.Fatalf("enter 1000 over ws with a reported WebSocket address: %d %s", entered.status, entered.raw)
+	}
+
+	// 停报到期：两种方式都回到配置；1000 没有配置的 WebSocket 地址，要 ws 时答新码。
+	w.advance(30 * time.Second)
+	want("reports expired",
+		map[int]string{1000: "static-a.example.test:7000 [tcp]", 1001: " [ws]"},
+		map[int]string{1000: " [tcp]", 1001: "wss://lb.example.test/ws/1001 [ws]"})
+	if refused := portalPost(t, engine, "/portal/enter", map[string]any{"account_ticket": ticket, "server_id": 1000, "transport": "ws"}); refused.code() != portalCodeTransportUnavailable {
+		t.Fatalf("enter 1000 over ws after its report expired: %d %s; want %d", refused.status, refused.raw, portalCodeTransportUnavailable)
+	}
+
+	// 自己实现的目录给了不成样子的 WebSocket 地址：那一条整条丢掉（连同 TCP 地址），不带给客户端；只有 WebSocket 地址的条目照用。
+	bad := newPortalWorld(t, func(options *Options) {
+		options.Directory = DirectoryFunc(func(context.Context) ([]Entry, error) {
+			return []Entry{
+				{ServerID: 1000, Addr: "203.0.113.7:7000", WSAddr: "https://203.0.113.7/ws"},
+				{ServerID: 1001, WSAddr: "wss://lb.example.test/ws"},
+			}, nil
+		})
+	})
+	badTicket := bad.login("alice")
+	reply := bad.post("/portal/servers", map[string]any{"account_ticket": badTicket, "transport": "ws"})
+	servers, recommended := portalServerList(t, "bad entries", reply)
+	if servers[1000]["addr"] != "" || portalTransports(servers[1000]) != "" || servers[1001]["addr"] != "wss://lb.example.test/ws" || recommended != 1001 || strings.Contains(reply.raw, "203.0.113.7") {
+		t.Fatalf("a directory entry with a malformed WebSocket address: %s", reply.raw)
+	}
+	// Overlay 按连接方式叠：上一层只有 TCP 地址时保留下一层的 WebSocket 地址，反过来也一样。
+	base := DirectoryFunc(func(context.Context) ([]Entry, error) {
+		return []Entry{{ServerID: 1, Addr: "base-1:7000", WSAddr: "ws://base-1:7080/ws"}, {ServerID: 2, Addr: "base-2:7000", WSAddr: "ws://base-2:7080/ws"}}, nil
+	})
+	top := DirectoryFunc(func(context.Context) ([]Entry, error) {
+		return []Entry{{ServerID: 1, Addr: "top-1:7000", Load: 5}, {ServerID: 2, WSAddr: "wss://top-2/ws", Load: 6}}, nil
+	})
+	merged, err := Overlay(base, top).Entries(context.Background())
+	if err != nil || len(merged) != 2 || merged[0].Addr != "top-1:7000" || merged[0].WSAddr != "ws://base-1:7080/ws" || merged[0].Load != 5 ||
+		merged[1].Addr != "base-2:7000" || merged[1].WSAddr != "wss://top-2/ws" || merged[1].Load != 6 {
+		t.Fatalf("Overlay by transport = %+v, %v", merged, err)
+	}
+}
+
+// portal.websocket_servers 的写法在启动时检查（与 portal.servers 同一处）：键是正的服号，值是 ws:// 或 wss:// 的完整 URL，
+// 有主机、端口（写了的话）在 1～65535、不带用户名密码与片段、不含空白、至多 255 字节；写错的进程不启动、点名那一条，
+// 一条路由都不登记。
+func TestPortalChecksWebSocketAddressesAtStart(t *testing.T) {
+	w := newPortalWorld(t)
+	for label, test := range map[string]struct {
+		servers map[string]any
+		want    string
+	}{
+		"a key that is not a number": {map[string]any{"main": "wss://play.example.test/ws"}, `"main"`},
+		"server id zero":             {map[string]any{"0": "wss://play.example.test/ws"}, `"0"`},
+		"an http URL":                {map[string]any{"1000": "https://play.example.test/ws"}, "portal.websocket_servers.1000"},
+		"host:port without a scheme": {map[string]any{"1000": "203.0.113.7:7080"}, "portal.websocket_servers.1000"},
+		"no host":                    {map[string]any{"1000": "ws://:7080/ws"}, "portal.websocket_servers.1000"},
+		"an empty authority":         {map[string]any{"1000": "ws:///ws"}, "portal.websocket_servers.1000"},
+		"port zero":                  {map[string]any{"1000": "ws://203.0.113.7:0/ws"}, "portal.websocket_servers.1000"},
+		"port out of range":          {map[string]any{"1000": "ws://203.0.113.7:70000/ws"}, "portal.websocket_servers.1000"},
+		"a user and password":        {map[string]any{"1000": "wss://user:secret@play.example.test/ws"}, "portal.websocket_servers.1000"},
+		"a fragment":                 {map[string]any{"1000": "wss://play.example.test/ws#lobby"}, "portal.websocket_servers.1000"},
+		"a space":                    {map[string]any{"1000": "wss://play.example.test/w s"}, "portal.websocket_servers.1000"},
+		"empty":                      {map[string]any{"1000": ""}, "portal.websocket_servers.1000"},
+		"256 bytes":                  {map[string]any{"1000": "wss://play.example.test/" + strings.Repeat("w", 232)}, "portal.websocket_servers.1000"},
+	} {
+		refused, err := portalProcess(t, w.accounts, map[string]any{"portal.websocket_servers": test.servers})
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("%s: err = %v, want it to name %s", label, err, test.want)
+		}
+		if reply := portalPost(t, refused, "/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken}); reply.status != http.StatusNotFound {
+			t.Fatalf("%s: a refused start registered routes (%d)", label, reply.status)
+		}
+	}
+	// 恰好 255 字节、带查询串、IPv6 主机、不写端口与路径的都是能连的 URL，原样给客户端。
+	ticket := w.login("alice")
+	for label, addr := range map[string]string{
+		"255 bytes":     "wss://play.example.test/" + strings.Repeat("w", 231),
+		"a query":       "wss://play.example.test/ws?zone=1000",
+		"an IPv6 host":  "ws://[2001:db8::7]:7080/ws",
+		"no path":       "wss://play.example.test",
+		"explicit port": "ws://127.0.0.1:7080/ws",
+	} {
+		engine, err := portalProcess(t, w.accounts, map[string]any{"portal.websocket_servers": map[string]any{"1000": addr}})
+		if err != nil {
+			t.Fatalf("%s: Start refused %q: %v", label, addr, err)
+		}
+		if reply := portalPost(t, engine, "/portal/enter", map[string]any{"account_ticket": ticket, "server_id": 1000, "transport": "ws"}); reply.status != http.StatusOK || reply.text("addr") != addr {
+			t.Fatalf("%s: enter over ws: %d %s; want %q", label, reply.status, reply.raw, addr)
+		}
+	}
+}

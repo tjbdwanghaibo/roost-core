@@ -12,17 +12,19 @@ runtime:
 config:
   package: services/account/portal
   type: Config
-errcodes: [portal_request_invalid]
+errcodes: [portal_request_invalid, portal_transport_unavailable]
 next:
   - "登录入口随托管 account 的进程监听 web.addr（configs/service/config.account.yaml；开发端口 8080 + services.account.port_block，按声明先后分配）：POST /portal/login、/portal/servers、/portal/enter、/portal/game-token；请求与响应见 roost-core 的 modules/portal/README.md"
   - "不带 game 的开房间工程（-template lobby）：客户端 POST /portal/login 带 game（或 /portal/game-token）拿 gt2，再以 Authorization: Bearer <gt2> 调大厅；/portal/servers 与 /portal/enter 在这种工程里没有区服可给"
   - "区服地址：game 配置写 login.presence.addr（客户端连得到的 host:port，通常是 Gate），game 定期报给 account、停报 30 秒后消失；或在 config.account.yaml 写静态的 portal.servers（服号 -> host:port），两者都有时上报的优先。都不写时清单照常列出、没有地址；别的来源改 services/account/portal/portal_rules.go 的 newDirectory"
+  - "浏览器客户端：请求写 transport: ws，入口只给 WebSocket 地址（ws:// / wss:// 的 URL），没有时答 portal_transport_unavailable、不回落 TCP"
+  - "WebSocket 地址：game 配置 login.presence.ws_addr（开着嵌入的 WebSocket 监听时可不写，由 addr 的主机与监听端口得出），或 config.account.yaml 的 portal.websocket_servers（服号 -> URL）；有终结 TLS 的负载均衡或独立 Gate 时要写"
   - "推荐规则（导量）在 services/account/portal/portal_rules.go 的 recommend：缺省老号推荐最近登录的有角色的服，新号推荐最新开的开放服"
   - "上线前：入口没有限流，凭据与票据明文在请求体里——对外要放在终止 TLS、带限流的反向代理后面，并在生产配置里显式写 web.allow_public_addr"
 verify:
   packages: [./services/account/portal]
   run: ^TestPortal
-  pass: 17
+  pass: 21
 with:
   login:
     summary: 入口给的握手票据（EnterTicketPrefix 加进服票据）交给登录模块真实的认证器核对：认得出、映射与承载服 / 原服与 account 一致、不带前缀不认；入口为了不带 game 也能装而没有 import 登录模块，这里守住两边各写一份的前缀约定；只有测试，不加运行时代码

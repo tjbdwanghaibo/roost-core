@@ -54,10 +54,11 @@ login.OnSessionActive("enter", func(ctx context.Context, registry *app.Registry,
 
 ### 区服入口上报（`game/managers/login_presence.go`，维护者 D23）
 
-- 第二个 manager `NewLoginPresence()`（安装时登记进 `Managers()`）：写了 `login.presence.addr` 就先报一次、再每 `login.presence.interval`（缺省 10 秒，1～200 秒）报一次，经 account 的总线接口 `ReportServerPresence({sid, addr, 在线连接数, tags}, 期限)` 写进 account 的带过期登记表；期限是间隔的三倍（缺省 30 秒，错过两次还在）。[portal](../portal/README.md#动态目录) 的清单与进服结果从那张表取地址与负载，上报的盖住 `portal.servers`。
+- 第二个 manager `NewLoginPresence()`（安装时登记进 `Managers()`）：写了 `login.presence.addr` 就先报一次、再每 `login.presence.interval`（缺省 10 秒，1～200 秒）报一次，经 account 的总线接口 `ReportServerPresence({sid, addr, ws_addr, 在线连接数, tags}, 期限)` 写进 account 的带过期登记表；期限是间隔的三倍（缺省 30 秒，错过两次还在）。[portal](../portal/README.md#动态目录) 的清单与进服结果从那张表取地址与负载，上报的盖住 `portal.servers`（按连接方式分开盖，见下一条）。
+- WebSocket 地址（2026-11-18，portal 按客户端要的连接方式给地址）：写了 `login.presence.ws_addr`（`ws://` / `wss://` 的完整 URL，规则是 core 的 `svcaccount.CheckWebSocketAddr`）就连同 TCP 地址一起报；没写而本进程开着嵌入的 WebSocket 监听（`player_access.tcp.enabled` 为真、`player_access.tcp.websocket.addr` 非空）时取 `ws://<login.presence.addr 的主机>:<监听端口><player_access.tcp.websocket.path，缺省 /ws>`——主机取给客户端的地址，不取监听的 `0.0.0.0`，与 TCP 的做法相同。前面有终结 TLS 的负载均衡（`wss`）、端口被映射、或玩家接入在独立 Gate 上（嵌入 TCP 关着，game 看不到 Gate 的 WebSocket 配置）时得不出对的地址，要写 `ws_addr`；都没有就不报 WebSocket 地址，portal 对要 `ws` 的客户端答 `portal_transport_unavailable`（或用 `portal.websocket_servers` 的静态地址）。只写 `ws_addr` 不写 `addr` 启动报错。
 - 停报即消失：进程崩溃、断网之后，期限一到这个服的动态地址从清单里消失（回到静态配置的地址或没有地址）；正常停机时 Stop 先停下循环、再 `WithdrawServerPresence` 立刻撤销（撤销失败只记 Warn，期限到了照样消失）。
 - 地址必须写：上报的是**客户端连得到的地址**（通常是本服前面的 Gate）；监听地址 `0.0.0.0`、独立 Gate 部署时进程猜不出来。不写就不报，启动时记一条 Info。负载是玩家接入层的在线连接数（`access.player.tcp` 的 `SessionCount`；独立 Gate 部署时是经 Gate 进来的会话数），刻度要换时改这个文件。
-- 失败不影响本服：account 不可达时只记日志（成功 ↔ 失败的转变各一条），下一轮再报。配置写错（地址不是带主机的 `host:port`、间隔越界、标签超过 8 个或单个超过 32 字节、写了地址而 `sid` 不是正数）进程启动到这一步报错退出；这几个键由 manager 自己读，`--check-config` 查不到。
+- 失败不影响本服：account 不可达时只记日志（成功 ↔ 失败的转变各一条），下一轮再报。配置写错（地址不是带主机的 `host:port`、`ws_addr` 不是 ws / wss 的 URL 或没写 `addr`、间隔越界、标签超过 8 个或单个超过 32 字节、写了地址而 `sid` 不是正数）进程启动到这一步报错退出；这几个键由 manager 自己读，`--check-config` 查不到。
 
 ### 进入前的判断：`Admit`（`game/modules/login/login_admit.go`）
 
@@ -88,7 +89,7 @@ go run ./cmd/accountctl unban -account 17 -note "申诉通过"
 ### 状态、配置、错误码
 
 - **状态：** 无。模块不往任何实体上加字段；账号、角色映射、区服记录都在 account 服务的存储里。
-- **配置键：** `login.dev_token`（写在 `configs/service/config.account.yaml`，必须以 `dev-` 开头；生产配置里写了它 account 进程不启动）。`login.presence.addr` / `login.presence.interval` / `login.presence.tags`（写在 **game 服务**的配置里，区服入口上报，见上；不写不上报）。握手的认证器要求承载玩家接入的业务服务在 `roost.yaml` 的 `uses` 里有 `account`。
+- **配置键：** `login.dev_token`（写在 `configs/service/config.account.yaml`，必须以 `dev-` 开头；生产配置里写了它 account 进程不启动）。`login.presence.addr` / `login.presence.ws_addr` / `login.presence.interval` / `login.presence.tags`（写在 **game 服务**的配置里，区服入口上报，见上；不写不上报）。握手的认证器要求承载玩家接入的业务服务在 `roost.yaml` 的 `uses` 里有 `account`。
 - **错误码：** `login_elsewhere`（`internal/errors/login.go`）：这条会话的角色不由本服承载，客户端重新选角。握手失败没有码。
 
 **日志**：握手认证成功，记录玩家、承载服、握手方式与是否新建映射，不记录票据和 claims。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/modules/login/login.go`, `internal/access/player/tcp/auth.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -167,7 +168,7 @@ go run ./cmd/accountctl unban -account 17 -note "申诉通过"
 
 ## 验证范围
 
-`roost module verify` 跑 34 条场景（`^TestLogin`：`game/modules/login` 21 条、`internal/access/player/tcp` 2 条、`cmd/accountctl` 7 条、`game/managers` 4 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）；account 一侧的 7 条（`services/account`）随 account_auth 计。全部是离线的：
+`roost module verify` 跑 35 条场景（`^TestLogin`：`game/modules/login` 21 条、`internal/access/player/tcp` 2 条、`cmd/accountctl` 7 条、`game/managers` 5 条），与 enter 的联动另 6 条（`^TestWithLoginEnter`）；account 一侧的 7 条（`services/account`）随 account_auth 计。全部是离线的：
 
 - 认证器的场景用真实的 `account.Service` 加内存存储：两种票据的通过与拒绝、过期、伪造、合服后的承载服、换服在途、并发握手只建一个映射、“拒绝”与“判断不了”的区分。
 - 告知的场景验证后台执行、上限（含丢弃计数）、停机后到达的会话不告知（含丢弃计数）与登记错误 panic；“独立 Gate 下用绑定时的 Principal”是对 `SessionActive` 的直接调用，不是真实的 Gate。

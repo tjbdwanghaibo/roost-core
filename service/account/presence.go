@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // 区服入口登记（维护者 D23，2026-11-14）：game 进程经总线定期向 account 上报“本服现在连这个地址、这么忙”，
@@ -35,7 +37,7 @@ import (
 // MaxPresenceTTLSeconds 是一次登记的最长期限（秒）。期限按秒过总线（servicerpc 不让 time.Duration 上总线）。
 const MaxPresenceTTLSeconds = 600
 
-// 登记条目各字段的上限，与登录入口目录条目的上限一致。
+// 登记条目各字段的上限，与登录入口目录条目的上限一致。MaxPresenceAddrBytes 同时是 Addr 与 WSAddr 的上限。
 const (
 	MaxPresenceAddrBytes = 255
 	MaxPresenceTags      = 8
@@ -46,8 +48,12 @@ const (
 type ServerPresence struct {
 	// ServerID 是区服号（上报的 game 进程的 sid），正数。
 	ServerID int32 `json:"server_id"`
-	// Addr 是客户端该连的地址，host:port，主机不能为空——通常是这个服前面的 Gate，直连部署时是 game 的玩家 TCP 地址。
+	// Addr 是客户端经 TCP 该连的地址，host:port，主机不能为空——通常是这个服前面的 Gate，直连部署时是 game 的玩家 TCP 地址。
 	Addr string `json:"addr"`
+	// WSAddr 是客户端经 WebSocket 该连的完整 URL（ws:// 或 wss://，见 CheckWebSocketAddr），浏览器（Unity WebGL）用它；
+	// 空表示这个服不给 WebSocket 地址。它是 URL 而不是 host:port：前面常有终结 TLS 的负载均衡（wss），路径也由部署决定。
+	// 不带这个字段的旧条目（Redis 里的、旧进程报的）等同只有 TCP（维护者 2026-11-18）。
+	WSAddr string `json:"ws_addr,omitempty"`
 	// Load 是这个服现在多忙（缺省上报在线连接数），不小于 0。account 与入口都不解释它。
 	Load int `json:"load"`
 	// Tags 是给客户端与推荐规则看的标签，至多 MaxPresenceTags 个、每个至多 MaxPresenceTagBytes 字节。
@@ -75,6 +81,13 @@ func (presence ServerPresence) validate() (ServerPresence, error) {
 	if number, err := strconv.Atoi(port); err != nil || number <= 0 || number > 65535 {
 		return ServerPresence{}, fmt.Errorf("%w: server %d presence address %q has no usable port", ErrRangeInvalid, presence.ServerID, addr)
 	}
+	if presence.WSAddr != "" {
+		wsAddr, err := CheckWebSocketAddr(presence.WSAddr)
+		if err != nil {
+			return ServerPresence{}, fmt.Errorf("%w: server %d presence websocket address: %v", ErrRangeInvalid, presence.ServerID, err)
+		}
+		presence.WSAddr = wsAddr
+	}
 	if presence.Load < 0 {
 		return ServerPresence{}, fmt.Errorf("%w: server %d presence has a negative load", ErrRangeInvalid, presence.ServerID)
 	}
@@ -88,6 +101,36 @@ func (presence ServerPresence) validate() (ServerPresence, error) {
 	}
 	presence.Addr = addr
 	return presence.clone(), nil
+}
+
+// CheckWebSocketAddr 检查一个给客户端的 WebSocket 地址，返回去掉两端空白的写法。规则只在这里一处（account 收上报、
+// 登录入口的配置与目录条目、login 模块的上报配置都调它）：
+//
+//   - 完整的 URL，scheme 是小写的 ws 或 wss（TLS 由前置负载均衡终结时是 wss）；
+//   - 有主机（不能是 "ws://:7080/ws" 或 "ws:///ws"）；写了端口时在 1～65535，不写取 scheme 的缺省端口；
+//   - 不带用户名密码、不带片段（#…），不含空白；路径与查询串原样保留（路径由部署决定，缺省的玩家接入是 /ws）；
+//   - 至多 MaxPresenceAddrBytes（255）字节。
+func CheckWebSocketAddr(raw string) (string, error) {
+	addr := strings.TrimSpace(raw)
+	if addr == "" || len(addr) > MaxPresenceAddrBytes || strings.ContainsFunc(addr, unicode.IsSpace) {
+		return "", fmt.Errorf("the websocket address must be a ws:// or wss:// URL of 1..%d bytes without spaces", MaxPresenceAddrBytes)
+	}
+	parsed, err := url.Parse(addr)
+	if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Opaque != "" {
+		return "", errors.New("the websocket address must be a ws:// or wss:// URL")
+	}
+	if parsed.User != nil || parsed.Fragment != "" || strings.Contains(addr, "#") {
+		return "", errors.New("the websocket address must not carry a user, a password or a #fragment")
+	}
+	if parsed.Hostname() == "" {
+		return "", errors.New("the websocket address must name the host clients connect to")
+	}
+	if port := parsed.Port(); port != "" || strings.HasSuffix(parsed.Host, ":") {
+		if number, err := strconv.Atoi(port); err != nil || number <= 0 || number > 65535 {
+			return "", errors.New("the websocket address has no usable port")
+		}
+	}
+	return addr, nil
 }
 
 // PresenceStore 存登记表。实现要并发安全，并且由存储自己判断过期（多个 account 副本共用一份时不比较各自的时钟）。
