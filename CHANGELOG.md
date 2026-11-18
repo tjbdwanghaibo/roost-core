@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **开房间 SDK（Go / TS / C#）：同一任期内并发推快照以发起顺序为准**（接 RV-20261118-02，按推荐定 A，2026-11-18）：同一任期里两份快照并发（游戏从几处同时调，或手动推与定时推重叠；TS 定时推送在 `take` 慢于 `intervalMs` 时也会重叠）时，原来先发起、取状态或压缩更慢的那份会拿到更大的 seq，盖掉 relay 已存的较新状态，下一任房主恢复成旧状态。现在每份在开始准备时取发起号，比它晚发起的一份已经发出时这一份丢弃、不发、不占 seq，报告方式与换任期相同：Go `ErrSnapshotStale`、C# `RelaySnapshotResult.Stale`、TS `pushSnapshot` 返回 `undefined`。见 [RELAY §4A](docs/framework/RELAY.md)，[证据](docs/maintenance/evidence/snapshot-start-order-20261118/README.md)
 - **lobby：已开局房间里经 relay 主动离开的人，left 报告晚于后续心跳到达也不再留座**（RV-20261118-03）：relay 的报告可以并发发出、乱序到达；只剩房主在线的心跳先到时，原来的 lobby 把迟到的 `member_left{left}` 当成旧报告丢掉，主动离开的人被当成掉线、还能再 join 回原座。现在每个席位记 `presence_seq`，“连上过 / 主动离开”按成员自己的事实序号收敛，新旧报告都看；迟到的旧 left 仍不清掉回座又连上的人。见 [LOBBY](docs/framework/LOBBY.md)，[证据](docs/maintenance/evidence/v154-review-fixes-20261118/README.md)
 - **开房间 SDK（Go / TS / C#）：快照绑定准备时的连接与房主任期**（RV-20261118-02）：取状态或压缩期间房主换了一圈（A→B→A）或断线重连时，旧状态原来会拿新任期的 seq 发出，relay 当成最新一份存下，下一任房主恢复成旧状态。现在这一份丢弃、不发、不占 seq：Go 返回新增的 `ErrSnapshotStale`，C# 返回新增的 `RelaySnapshotResult.Stale`，TS `pushSnapshot` 返回 `undefined`；定时快照在向游戏要状态之前记任期。见 [RELAY §4A](docs/framework/RELAY.md)，[证据](docs/maintenance/evidence/v154-review-fixes-20261118/README.md)
 - **测试：WebSocket 旧写期限回归在 Linux 上不再误报**（RV-20261118-04）：wsconn 与 gateway 的两条用例原来把客户端接收缓冲设成 4 KiB 再要求 5 秒内读完，Linux 建连时把窗口钳在这个大小、读不完而误报；现在显式检查“写已卡住”，客户端用缺省缓冲读完。产品代码未改。Linux 只在本机 Colima（arm64）上复跑（20/20 绿、撤修复红），amd64 实机尚未确认。[证据](docs/maintenance/evidence/v154-review-fixes-20261118/README.md)

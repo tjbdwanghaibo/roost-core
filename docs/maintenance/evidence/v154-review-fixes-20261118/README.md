@@ -181,6 +181,8 @@ peer read 一项有时是 “precondition …”（写被回调打断后客户�
 
 ## 要维护者定的点
 
+> **后续（2026-11-18）**：第 1 点按推荐定为 A，已在 main `c1fd42d5` 修复，证据 [snapshot-start-order-20261118](../snapshot-start-order-20261118/README.md)。
+
 1. RV-02 同任期并发推送：A（推荐）在 SDK 里按发起顺序编号，已发出更新的一份后，落后的那份同样丢弃（三份 SDK 一致，
    改动小，代价是游戏自己并发调用时较早那份返回 Stale / undefined）；B 维持现状，只在 README 写明“不要并发推快照，
    take 要快于 intervalMs”。

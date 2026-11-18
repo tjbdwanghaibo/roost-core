@@ -6,7 +6,7 @@
 
 | 项 | 结论 | 提交 |
 |---|---|---|
-| 同任期并发快照乱序覆盖（Go / TS / C#） | 已修复、已验证（三份 SDK 红→绿、变异变红） | `ac1dcf43` |
+| 同任期并发快照乱序覆盖（Go / TS / C#） | 已修复、已验证（三份 SDK 红→绿、变异变红） | `c1fd42d5` |
 
 ## 根因
 
@@ -82,7 +82,7 @@ newer-state 之后发出。C# 的红停在第一条断言（返回 `Sent`），�
 发出（Go / C# 返回成功，TS 拿到 seq 1；定时推送那条等到 relay 收到第一帧），再越过两边的最小间隔（Go 30ms，TS / C# 真实对端
 1200ms，relay 缺省 1s）才放行。Go 两条用例 `-race -count=5` 连跑全绿。
 
-## 绿（修后，`ac1dcf43`）
+## 绿（修后，`c1fd42d5`）
 
 | 命令 | 结果 |
 |---|---|
@@ -117,9 +117,9 @@ newer-state 之后发出。C# 的红停在第一条断言（返回 `Sent`），�
   两份快照并发（游戏从几处同时调，或手动推与定时推重叠；TS 定时推送在 `take` 慢于 `intervalMs` 时也会重叠）时，原来先发起、
   取状态或压缩更慢的那份会拿到更大的 seq，盖掉 relay 已存的较新状态，下一任房主恢复成旧状态。现在每份在开始准备时取发起号，
   比它晚发起的一份已经发出时这一份丢弃、不发、不占 seq，报告方式与换任期相同：Go `ErrSnapshotStale`（错误文本改为同时说明
-  两种情况）、C# `RelaySnapshotResult.Stale`、TS `pushSnapshot` 返回 `undefined`。见 [RELAY §4A](docs/framework/RELAY.md)。
+  两种情况）、C# `RelaySnapshotResult.Stale`、TS `pushSnapshot` 返回 `undefined`。见 [RELAY §4A](../../../framework/RELAY.md)。
 
 ## 建议写进 KNOWN-LIMITS 的文字
 
 - 删去 v154-review-fixes-20261118 建议里的遗留条目“开房间 SDK 同一任期内并发推快照，较早发起、较晚取完状态的那份仍会以更大
-  seq 覆盖较新的一份”，改为“已修复（`ac1dcf43`），证据 evidence/snapshot-start-order-20261118”。
+  seq 覆盖较新的一份”，改为“已修复（`c1fd42d5`），证据 evidence/snapshot-start-order-20261118”。
