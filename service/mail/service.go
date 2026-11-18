@@ -530,7 +530,7 @@ func (s *Service) List(ctx context.Context, playerID int64, cursor string, limit
 		return Page{}, err
 	}
 	if mailbox.expireEntries(expiryNowUnix) || ledger != nil {
-		updated, err := s.refreshMailbox(ctx, playerID, nil, ledger, expiryNowUnix)
+		updated, _, err := s.refreshMailbox(ctx, playerID, nil, ledger, expiryNowUnix)
 		if err != nil {
 			return Page{}, err
 		}
@@ -1077,6 +1077,10 @@ type Summary struct {
 	PlayerID int64
 	Unread   int32
 	Evicted  uint64
+	// BroadcastsBehind 表示这一次合并没有追平：还有属于他（按记着的画像）的全服邮件因为邮箱放不下（全是未读）
+	// 停在水位之上。这是正常背压，Summary 本身仍然成功；腾出位置后下一次 List / Summary 补上。要“已经追平”这个
+	// 事实的调用方（换服离开前按旧范围合并，RV-20261117-01）必须看它，不能把 Summary 成功当作追平。
+	BroadcastsBehind bool
 }
 
 // Summary reads the unread count.
@@ -1101,12 +1105,13 @@ func (s *Service) Summary(ctx context.Context, playerID int64) (Summary, error) 
 	if err != nil {
 		return Summary{}, err
 	}
+	behind := false
 	if ledger != nil {
-		if mailbox, err = s.refreshMailbox(ctx, playerID, nil, ledger, s.cfg.Now().Unix()); err != nil {
+		if mailbox, behind, err = s.refreshMailbox(ctx, playerID, nil, ledger, s.cfg.Now().Unix()); err != nil {
 			return Summary{}, err
 		}
 	}
-	return Summary{PlayerID: playerID, Unread: mailbox.Unread, Evicted: mailbox.Evicted}, nil
+	return Summary{PlayerID: playerID, Unread: mailbox.Unread, Evicted: mailbox.Evicted, BroadcastsBehind: behind}, nil
 }
 
 // PullBroadcasts records the player's broadcast profile and merges every
@@ -1133,11 +1138,11 @@ func (s *Service) PullBroadcasts(ctx context.Context, playerID int64, profile Br
 		return Summary{}, err
 	}
 	profile = profile.clone()
-	mailbox, err := s.refreshMailbox(ctx, playerID, &profile, &ledger, s.cfg.Now().Unix())
+	mailbox, behind, err := s.refreshMailbox(ctx, playerID, &profile, &ledger, s.cfg.Now().Unix())
 	if err != nil {
 		return Summary{}, err
 	}
-	return Summary{PlayerID: playerID, Unread: mailbox.Unread, Evicted: mailbox.Evicted}, nil
+	return Summary{PlayerID: playerID, Unread: mailbox.Unread, Evicted: mailbox.Evicted, BroadcastsBehind: behind}, nil
 }
 
 // RevokeBroadcast stops a LazyBroadcast broadcast from being merged into any
@@ -1181,8 +1186,10 @@ func (s *Service) pendingBroadcasts(ctx context.Context, mailbox Mailbox) (*Broa
 
 // refreshMailbox is the one compare-and-set that expires entries, records a
 // new profile (profile != nil) and merges the ledger (ledger != nil), so the
-// watermark and the entries it accounts for always move together.
-func (s *Service) refreshMailbox(ctx context.Context, playerID int64, profile *BroadcastProfile, ledger *BroadcastLedger, nowUnix int64) (Mailbox, error) {
+// watermark and the entries it accounts for always move together. behind
+// reports that the committed merge stopped early because the mailbox could
+// not take one more (Summary.BroadcastsBehind).
+func (s *Service) refreshMailbox(ctx context.Context, playerID int64, profile *BroadcastProfile, ledger *BroadcastLedger, nowUnix int64) (Mailbox, bool, error) {
 	var (
 		merged  int
 		stopped bool
@@ -1212,16 +1219,17 @@ func (s *Service) refreshMailbox(ctx context.Context, playerID int64, profile *B
 		return next, changed, nil
 	})
 	if err != nil {
-		return Mailbox{}, err
+		return Mailbox{}, false, err
 	}
 	if merged > 0 {
 		s.report.Accepted("merge_broadcast")
 	}
 	if stopped {
-		// 邮箱放不下（全是未读）：合并停在那封之前，等玩家读完 / 删掉再补；计数让运维看得见。
+		// 邮箱放不下（全是未读）：合并停在那封之前，等玩家读完 / 删掉再补；计数让运维看得见。返回给调用方，
+		// 要“已追平”的（换服离开前的合并）据此拒绝，不把成功当作追平。
 		s.report.Refused("merge_broadcast", "mailbox_full")
 	}
-	return updated.Value.clone(), nil
+	return updated.Value.clone(), stopped, nil
 }
 
 // mergedBroadcast reports whether this player's mailbox holds the broadcast

@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -122,6 +123,78 @@ func TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving(t *testing.T) {
 		if got[c.id] != c.want {
 			t.Errorf("%s: in the mailbox = %v, want %v", c.name, got[c.id], c.want)
 		}
+	}
+}
+
+// 邮箱满（全是未读）时 mail 服务的合并停在放不下的那封之前、Summary 仍然成功（正常背压，见 service/mail 的
+// mergeBroadcasts）。离开钩子不能把这当作“旧服的全服邮件已合并完”：那样换走之后按新服范围合并，旧服那封永远补不回来，
+// 离开前发给新服的反而在腾出位置后被合并（RV-20261117-01）。这里钩子必须拒绝（带 mail 的 ErrMailboxFull），换服中止、
+// 画像不变；腾出一个位置再离开就合并上旧服那封，到新服之后离开前发给新服的那封仍不属于他。
+func TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged(t *testing.T) {
+	const playerID, from, to = int64(94309), int32(3), int32(4)
+	ctx := context.Background()
+	mail := mailboxRehomeService(t)
+	registered := time.Now().Add(-24 * time.Hour).Unix()
+	pull := func(server int32) {
+		t.Helper()
+		if _, err := mail.PullBroadcasts(ctx, playerID, svcmail.BroadcastProfile{Scopes: []string{svcmail.ServerScope(server)}, RegisteredAtUnix: registered}); err != nil {
+			t.Fatalf("pull with server %d's scope: %v", server, err)
+		}
+	}
+	send := func(req svcmail.SendRequest) string {
+		t.Helper()
+		envelope, err := mail.Send(ctx, req)
+		if err != nil {
+			t.Fatalf("send %s: %v", req.RequestID, err)
+		}
+		return envelope.ID
+	}
+	broadcast := func(server int32, name string) string {
+		return send(svcmail.SendRequest{
+			Audience: svcmail.AudienceBroadcast, Scope: svcmail.ServerScope(server),
+			Subject: name, Body: name, ExpiresInSeconds: 7 * 24 * 3600, RequestID: name,
+		})
+	}
+
+	pull(from) // 在 A 进入
+	var filler string
+	for i := 0; i < svcmail.MaxMailboxEntries; i++ { // 邮箱塞满未读
+		id := send(svcmail.SendRequest{
+			Audience: svcmail.AudienceDirect, Recipients: []int64{playerID},
+			Subject: "filler", Body: "filler", ExpiresInSeconds: 7 * 24 * 3600, RequestID: "filler-" + strconv.Itoa(i),
+		})
+		if i == 0 {
+			filler = id
+		}
+	}
+	oldBeforeLeaving := broadcast(from, "a-before-leaving")
+	newBeforeLeaving := broadcast(to, "b-before-leaving")
+	move := gamerehome.Move{PlayerID: playerID, ID: "transfer-94309", From: from, To: to}
+
+	err := mailboxPullBroadcastsOnLeave(ctx, mail, move)
+	if !errors.Is(err, svcmail.ErrMailboxFull) {
+		box, _, _ := mail.Mailbox(ctx, playerID)
+		t.Fatalf("leave hook with server %d's mail not merged (mailbox full, watermark %d): err = %v; want the move refused with mail's ErrMailboxFull",
+			from, box.BroadcastWatermark, err)
+	}
+
+	// 玩家留在 A、腾出一个位置，再离开一次：A 的那封合并进来，钩子放行。
+	if _, err := mail.Delete(ctx, playerID, filler); err != nil {
+		t.Fatal(err)
+	}
+	if err := mailboxPullBroadcastsOnLeave(ctx, mail, move); err != nil {
+		t.Fatalf("leave hook after making room: %v", err)
+	}
+	pull(to) // 到 B 进入
+	box, _, err := mail.Mailbox(ctx, playerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := box.Entries[oldBeforeLeaving]; !ok {
+		t.Errorf("server %d's mail sent while he was there is missing after the move", from)
+	}
+	if _, ok := box.Entries[newBeforeLeaving]; ok {
+		t.Errorf("server %d's mail sent before he left was merged", to)
 	}
 }
 

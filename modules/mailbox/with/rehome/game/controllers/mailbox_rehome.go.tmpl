@@ -21,7 +21,9 @@ import (
 //     离开之前就发给新服的都在水位以下，不再合并——那一段时间他不属于那个范围。
 //
 // 拉不成（mail 服务不可用）就返回错误、中止这一次换服：宁可留在本服，也不带着没合并的邮件走（离开钩子的约定，
-// 见 game/modules/rehome/rehome_hooks.go）。可以重复：源服重启后接着做换服时会再调一次，已合并的不会再合并。
+// 见 game/modules/rehome/rehome_hooks.go）。“拉成了”以追平为准，不以 Summary 成功为准：邮箱满（全是未读）时合并
+// 停在半路而 Summary 仍成功，汇总里的 BroadcastsBehind 标出这种情形，这时同样中止（带 mail 的 ErrMailboxFull），
+// 玩家清掉一些邮件后再申请（RV-20261117-01）。可以重复：源服重启后接着做换服时会再调一次，已合并的不会再合并。
 // 没有配置 LazyBroadcast 的工程，或从没拉过（没有画像）的玩家，这一步只是问一次汇总。
 func init() {
 	gamerehome.OnLeaving("mailbox", func(ctx context.Context, registry *app.Registry, move gamerehome.Move) error {
@@ -41,8 +43,16 @@ type mailboxBroadcastSummarizer interface {
 }
 
 func mailboxPullBroadcastsOnLeave(ctx context.Context, mailer mailboxBroadcastSummarizer, move gamerehome.Move) error {
-	if _, err := mailer.Summary(ctx, move.PlayerID); err != nil {
+	summary, err := mailer.Summary(ctx, move.PlayerID)
+	if err != nil {
 		return fmt.Errorf("mailbox: merge player %d's server-wide mail of server %d before moving to server %d: %w", move.PlayerID, move.From, move.To, err)
+	}
+	if summary.BroadcastsBehind {
+		// 邮箱满（全是未读）时 mail 的合并停在放不下的那封之前，Summary 照样成功（正常背压）。这时旧服的全服邮件
+		// 没有合并完：换走之后按新服范围合并，旧服那封再也补不回来，离开前发给新服的反而会在腾出位置后合并进来
+		// （RV-20261117-01）。所以中止这一次换服，玩家留在本服；读完 / 删掉一些邮件后重新申请即可。
+		return fmt.Errorf("mailbox: player %d's mailbox is full, so server %d's server-wide mail is not all merged; clear some mail before moving to server %d: %w",
+			move.PlayerID, move.From, move.To, svcmail.ErrMailboxFull)
 	}
 	return nil
 }

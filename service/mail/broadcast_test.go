@@ -431,6 +431,63 @@ func TestLazyBroadcastWaitsForRoomInsteadOfDropping(t *testing.T) {
 	}
 }
 
+// 满箱时合并没有追平：Summary / PullBroadcasts 仍然成功，但标出 BroadcastsBehind（经总线的客户端同样看得到）；
+// 腾出位置、合并补上之后不再标。换服离开前的合并靠它分辨“追平”与“停在半路”（RV-20261117-01）。
+func TestLazyBroadcastSummaryReportsAMergeThatDidNotCatchUp(t *testing.T) {
+	for _, transport := range []string{"local", "bus"} {
+		t.Run(transport, func(t *testing.T) {
+			h, _ := lazyHarness(t, LazyBroadcastConfig{})
+			var mail Mail = h.service
+			if transport == "bus" {
+				fake := newFakeBus()
+				if err := RegisterHandlers(fake, h.service); err != nil {
+					t.Fatal(err)
+				}
+				client, err := NewBusClient(fake, "", 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mail = client
+			}
+			ctx := context.Background()
+			summary, err := mail.PullBroadcasts(ctx, 7, veteran(h))
+			if err != nil || summary.BroadcastsBehind {
+				t.Fatalf("first pull = %+v, %v; want caught up", summary, err)
+			}
+			for i := 0; i < MaxMailboxEntries; i++ {
+				req := directTo(7)
+				req.RequestID = fmt.Sprintf("fill-%d", i)
+				mustSend(t, h, req)
+			}
+			sent := mustSend(t, h, broadcastTo("", "all-1"))
+			if summary, err = mail.Summary(ctx, 7); err != nil || !summary.BroadcastsBehind {
+				t.Fatalf("summary with a broadcast that does not fit = %+v, %v; want success with BroadcastsBehind", summary, err)
+			}
+			if summary, err = mail.PullBroadcasts(ctx, 7, veteran(h)); err != nil || !summary.BroadcastsBehind {
+				t.Fatalf("pull with a broadcast that does not fit = %+v, %v; want success with BroadcastsBehind", summary, err)
+			}
+			page, err := mail.List(ctx, 7, "", MaxPageSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, item := range page.Items {
+				if item.Envelope.ID == sent.ID {
+					t.Fatal("a full mailbox took the broadcast")
+				}
+			}
+			if _, err := mail.Delete(ctx, 7, page.Items[0].Envelope.ID); err != nil {
+				t.Fatal(err)
+			}
+			if summary, err = mail.Summary(ctx, 7); err != nil || summary.BroadcastsBehind {
+				t.Fatalf("summary after making room = %+v, %v; want caught up", summary, err)
+			}
+			if _, ok := listIDs(t, h, 7)[sent.ID]; !ok {
+				t.Fatal("the broadcast did not arrive once there was room")
+			}
+		})
+	}
+}
+
 // 没配置 LazyBroadcast 时拉取是无害的 no-op（登录端点可以无条件调用）；配置了却没有索引时 New 拒绝。
 func TestLazyBroadcastConfiguration(t *testing.T) {
 	plain := newHarness(t)
