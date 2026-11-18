@@ -102,4 +102,19 @@ func TestCheckCORSOriginsRefusesWhatABrowserNeverSends(t *testing.T) {
 			t.Fatalf("%q: err = %v, want refused naming the key", origin, err)
 		}
 	}
+	// RV-20261118-08：写明默认端口（https 的 443、http 的 80）时浏览器发的 Origin 不带端口，永远对不上；拒绝并提示该写的值。
+	// 非默认端口照常接受。
+	for origin, want := range map[string]string{
+		"https://play.example.com:443": "https://play.example.com",
+		"http://localhost:80":          "http://localhost",
+		"https://[::1]:443":            "https://[::1]",
+	} {
+		err := CheckCORSOrigins("portal.cors_origins", []string{origin})
+		if err == nil || !strings.Contains(err.Error(), "portal.cors_origins") || !strings.Contains(err.Error(), `"`+want+`"`) {
+			t.Fatalf("%q: err = %v, want refused naming the key and suggesting %q", origin, err, want)
+		}
+	}
+	if err := CheckCORSOrigins("portal.cors_origins", []string{"https://play.example.com:80", "http://play.example.com:443", "https://play.example.com:8443"}); err != nil {
+		t.Fatalf("non-default ports: %v", err)
+	}
 }

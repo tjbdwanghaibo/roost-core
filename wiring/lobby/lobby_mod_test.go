@@ -88,6 +88,20 @@ func TestModInitRefusesMissingGamesAndKey(t *testing.T) {
 	if err := NewMod(nil).Init(zero); err == nil || !strings.Contains(err.Error(), "max_members") {
 		t.Fatalf("zero max members: %v", err)
 	}
+	// lobby.cors_origins 与 portal.cors_origins 同一套写法检查（httpserver.CheckCORSOrigins）：浏览器永远不会发的 Origin
+	// （结尾斜杠、带路径、大写主机、写明默认端口）在读配置时拒绝，点名键；不然大厅起来了、页面的预检却全是 403。
+	for _, origin := range []string{"https://play.example.com/", "https://Play.example.com", "https://play.example.com:443", "play.example.com"} {
+		bad := validConfig("roost:test:lobby")
+		bad.Set("lobby.cors_origins", []string{origin})
+		if err := NewMod(nil).Init(bad); err == nil || !strings.Contains(err.Error(), "lobby.cors_origins") {
+			t.Fatalf("cors origin %q: Init = %v; want a refusal naming lobby.cors_origins", origin, err)
+		}
+	}
+	anyOrigin := validConfig("roost:test:lobby")
+	anyOrigin.Set("lobby.cors_origins", []string{"*", "http://localhost:5173"})
+	if err := NewMod(nil).Init(anyOrigin); err != nil {
+		t.Fatalf("valid cors origins: %v", err)
+	}
 	t.Setenv(keyEnv, "short")
 	if err := NewMod(nil).Init(validConfig("roost:test:lobby")); !errors.Is(err, token.ErrKey) {
 		t.Fatalf("short key: %v", err)

@@ -88,6 +88,12 @@ func CheckCORSOrigins(key string, origins []string) error {
 			parsed.Host != strings.ToLower(parsed.Host) || origin != parsed.Scheme+"://"+parsed.Host {
 			return fmt.Errorf("config: %s entry %q is not an origin like https://example.com or https://example.com:8443 (no path, no trailing slash)", key, origin)
 		}
+		// 浏览器序列化 Origin 时省掉默认端口（https 的 443、http 的 80）：写明默认端口的项永远对不上（RV-20261118-08），
+		// 拒绝并给出该写的值，而不是悄悄改写——配置里写的就是比较时用的。
+		if port := parsed.Port(); (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
+			bare := strings.TrimSuffix(origin, ":"+port)
+			return fmt.Errorf("config: %s entry %q names the default port, which browsers leave out of Origin; write %q", key, origin, bare)
+		}
 	}
 	return nil
 }

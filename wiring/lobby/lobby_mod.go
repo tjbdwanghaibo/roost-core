@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/service/account"
 	"github.com/tjbdwanghaibo/roost-core/service/relay/token"
@@ -75,6 +76,12 @@ type config struct {
 		Subject             string                `config:"subject" required:"true" example:"roost.{project}.lobby" help:"与 relay 之间的 NATS 主题前缀：<subject>.events 收房间事件，<subject>.relay.<实例> 发命令；与 relay 侧同一个值"`
 		CORSOrigins         []string              `config:"cors_origins" example:"[]" help:"允许跨域调用大厅的游戏页面 Origin（例如 https://play.example.com）；\"*\" 表示任何 Origin"`
 	} `config:"lobby"`
+}
+
+// ValidateConfig 检查 lobby.cors_origins 的写法（与 portal.cors_origins 同一套，httpserver.CheckCORSOrigins）：
+// 浏览器永远发不出的 Origin（结尾斜杠、带路径、大写主机、写明默认端口）在加载时拒绝，--check-config 也查得出。
+func (c *config) ValidateConfig(bool) error {
+	return httpserver.CheckCORSOrigins("lobby.cors_origins", c.Lobby.CORSOrigins)
 }
 
 // gameConfig 是 lobby.games.<游戏名>。

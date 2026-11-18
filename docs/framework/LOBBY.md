@@ -68,7 +68,7 @@
 
 ### 2.2 CORS
 
-`lobby.cors_origins` 列出允许跨域调用的游戏页面 Origin，`"*"` 表示任何 Origin。凭证是 `Authorization` 头而不是 cookie，所以放开 Origin 不会让别的站点借用玩家的登录。
+`lobby.cors_origins` 列出允许跨域调用的游戏页面 Origin，`"*"` 表示任何 Origin。写法与 `portal.cors_origins` 相同（`httpserver.CheckCORSOrigins`）：`scheme://host[:port]`，主机名小写，不带路径、结尾 `/` 与默认端口；浏览器永远发不出的写法在读配置时拒绝（2026-11-18 起，之前不检查）。凭证是 `Authorization` 头而不是 cookie，所以放开 Origin 不会让别的站点借用玩家的登录。
 - Origin 在列表里：答复带 `Access-Control-Allow-Origin: <Origin>`；预检答 204，允许 `GET, POST`，允许的请求头是 `Authorization, Content-Type`。
 - Origin 不在列表里：答复没有 CORS 头，预检答 403。
 
