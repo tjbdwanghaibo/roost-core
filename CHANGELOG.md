@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+- **portal：进服按连接方式给地址**（维护者 2026-11-18）：
+  - `/portal/servers`、`/portal/enter` 与 `/portal/login` 的 `enter` 加可选字段 `transport`：`"tcp"` 为缺省，`"ws"` 返回 WebSocket 地址，只认小写。
+  - 返回的 `addr` 是所请求方式的地址，WebSocket 为完整的 `ws://` / `wss://` URL；响应回显 `transport`，清单里每个服带 `transports`。
+  - 推荐服只在支持所请求方式的服里挑。指定的服没有该方式的地址时，答新错误码 `portal_transport_unavailable`，不回落到 TCP。
+  - 不写 `transport` 的客户端行为不变。
+  - WebSocket 地址有两种来源：
+    - 静态：account 配置 `portal.websocket_servers`（服号 -> URL），`roost config check` 会校验写法；
+    - 动态：login 模块的 `login.presence.ws_addr`。本进程开着嵌入的 WebSocket 监听时，不写也会按 `login.presence.addr` 的主机加监听端口与路径推导；前面有终结 TLS 的负载均衡或用独立 Gate 时，要自己写 `wss://` 地址。
+  - `service/account`：`ServerPresence` 加可选字段 `WSAddr`（JSON 里是 `ws_addr`）与 `CheckWebSocketAddr`。不带新字段的旧登记等同只支持 TCP，存储格式不升版本。
+  - 验证：portal 场景 17 → 21，login 34 → 35。证据 [portal-transport-20261118](docs/maintenance/evidence/portal-transport-20261118/README.md)。
+  - **升级**：生成的 portal / login 模块用到新字段，发版后要在单独提交里提高最低 core 版本。已装 portal 的工程，`services/account/portal/portal_rules.go` 归工程所有、不会被重写（`ServerChoice` 多了 `Transports` 字段），新行为只对新装的工程保证。
 - **C# 客户端经 WebSocket 连玩家接入，Unity WebGL 可以联机**（维护者 2026-11-18）：
   - `Roost.Client` 的连接抽成 `IGateTransport`，自带 `TcpGateTransport`（缺省，行为不变）与 `WebSocketGateTransport`（`ClientWebSocket`，可连 `wss://`）。
   - `ConnectionOptions` 新增 `WebSocketUrl`（调用方给完整 `ws(s)://` 地址）、`TransportFactory`、`PumpDriven`；新增 `Connection.Pump`、`Connection.HeartbeatRoundTrips`、`RoostClientDriver.Attach(client, beforePump)`。

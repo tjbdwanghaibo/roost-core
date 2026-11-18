@@ -262,7 +262,7 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 - 独立 Gate 只做过单机真实进程演练，**没有跨机验证**，多机部署前要自己补验收。
 - **服务端的 WebSocket 接入**：在选定的接入上再 `"$ROOST" add transport websocket`（要求已有 tcp）。命令不改配置：在 `player_access.tcp.websocket`（独立 Gate 是 `player_access.gate.websocket`）写 `addr: 0.0.0.0:7080` 与 `allowed_origins`（游戏页面的域名）才开，路径缺省 `/ws`；**白名单为空时所有浏览器页面都被拒绝**；wss 由前置负载均衡终结；七层负载均衡后面要写 `trusted_proxies`（负载均衡自己的地址，逗号分隔），否则全部连接按负载均衡一个 IP 计 `max_connections_per_ip`。契约见 [GATEWAY §6](../../../framework/GATEWAY.md#6-websocket-接入)。
 - **服务端开了 WebSocket 不等于客户端能用**：先查下面的客户端表。表里这位客户端连 game 写着“不支持”时，作为冲突提出（第 4 步），可选做法：改成表里能连的客户端或平台；开房间、房主做主机的玩法改走第 6 步的 lobby + relay；客户端自己实现 RS v2 帧、鉴权首包、心跳与 Entity Sync 解码（工作量大，没有现成代码可抄）。
-- portal 给客户端的区服地址只有一个 `host:port`，是玩家 TCP（或 Gate）的地址；WebSocket 的地址（`ws(s)://主机:7080/ws`）不在 portal 里，用 WebSocket 的客户端要另配。
+- portal 按客户端请求里的 `transport` 给地址：`tcp`（缺省）是玩家 TCP（或 Gate）的 `host:port`，`ws` 是完整的 `ws://` / `wss://` URL；清单每个服带 `transports`，推荐只在支持所请求方式的服里挑，指定的服没有该方式的地址答 `portal_transport_unavailable`（不回落到 TCP）。WebSocket 地址写在 account 配置的 `portal.websocket_servers`（服号 -> URL），或 game 配置的 `login.presence.ws_addr`；嵌入 TCP 开着 WebSocket 监听时可以不写，自动取 `ws://<login.presence.addr 的主机>:<监听端口>/ws`。前面有终结 TLS 的负载均衡或用独立 Gate 时，一定要自己写 `wss://` 地址，推导出来的不对。
 
 ### 客户端能连什么（按客户端类型）
 
@@ -416,11 +416,11 @@ client_export:
        "1000": 127.0.0.1:7000      # 服号 -> 客户端连得到的地址（嵌入 TCP 时是 game 的 player_access.tcp.addr）
    ```
 
-   有独立 Gate 时地址填 Gate 的；也可以改在 game 的配置里写 `login.presence.addr`，由 game 定期上报。
+   有独立 Gate 时地址填 Gate 的；也可以改在 game 的配置里写 `login.presence.addr`，由 game 定期上报。浏览器 / WebGL 客户端还要 WebSocket 地址：在同一处加 `websocket_servers: {"1000": ws://127.0.0.1:7080/ws}`，或在 game 配置写 `login.presence.ws_addr`（第 5 步）。
 2. `"$ROOST" config enable player-tcp`：打开 game 的玩家 TCP 监听。
 3. 区服登记：`make dev-run` 起完服务后自动登记本机的服（缺省 1000）；别的环境用 `go run ./cmd/accountctl upsert-server -sid <服号>`。
 
-**客户端的登录顺序**：`POST /portal/login`（渠道、open_id、凭据；可带 `enter`）→ 用 `enter:<进服票据>` 握手 → 服务器推 `EnterStatus{need_create}` → 需要新建就发 `EnterCreate{name}` → `EnterGame`。推送只是告知，没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。登录时带 `"enter": {}` 进推荐的服、`{"server_id": N}` 进指定的服，答复里直接有进服票据与地址，省掉 `/portal/servers` 与 `/portal/enter` 两个来回；推荐规则一个服也没推荐时答复里没有 `enter`，客户端改走 `/portal/servers` 让玩家选（`modules/portal/README.md`“端点”）。
+**客户端的登录顺序**：`POST /portal/login`（渠道、open_id、凭据；可带 `enter`；走 WebSocket 的客户端在 `enter` 里写 `"transport": "ws"`，拿返回的 URL 去连）→ 用 `enter:<进服票据>` 握手 → 服务器推 `EnterStatus{need_create}` → 需要新建就发 `EnterCreate{name}` → `EnterGame`。推送只是告知，没收到就直接发 `EnterGame`，得到 `enter_need_create` 再发 `EnterCreate`。登录时带 `"enter": {}` 进推荐的服、`{"server_id": N}` 进指定的服，答复里直接有进服票据与地址，省掉 `/portal/servers` 与 `/portal/enter` 两个来回；推荐规则一个服也没推荐时答复里没有 `enter`，客户端改走 `/portal/servers` 让玩家选（`modules/portal/README.md`“端点”）。
 
 - 新玩家的初始发放写在 enter 的首次初始化里（[附录 A7](#a7-进入游戏建档与首次初始化)），不写在登录入口或握手里。
 - 上线前要做而模块不替你做的：渠道验签（`services/account/login_channels.go`）、入口前面的 TLS 与限流、生产配置里的地址，写进报告的“没做的”。
