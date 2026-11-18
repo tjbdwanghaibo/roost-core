@@ -1528,6 +1528,89 @@ portal:
 	}
 }
 
+// 浏览器跨域调用（游戏页面或外壳页面与入口不同源）：只对 portal.cors_origins 里的 Origin 答 CORS——四个端点的
+// 预检（OPTIONS）答 204、POST 的响应带 Access-Control-Allow-Origin；别的 Origin 预检 403、响应不带这个头（请求本身照常
+// 处理，浏览器读不到）；从不发 Access-Control-Allow-Credentials（凭据在请求体里，不用 cookie）。不写这个键就不允许跨域；
+// 写成浏览器发不出的样子（结尾多一个 /）进程不启动、点名键。
+func TestPortalAnswersCrossOriginCallsOnlyFromConfiguredOrigins(t *testing.T) {
+	const shell = "https://www.play.example.com"
+	w := newPortalWorld(t)
+	send := func(engine http.Handler, method, path, origin string, body []byte) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(method, "http://portal.test:8081"+path, bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", origin)
+		if method == http.MethodOptions {
+			request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+			request.Header.Set("Access-Control-Request-Headers", "content-type")
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		if recorder.Header().Get("Access-Control-Allow-Credentials") != "" {
+			t.Fatalf("%s %s from %s: Access-Control-Allow-Credentials is set", method, path, origin)
+		}
+		return recorder
+	}
+	login, err := json.Marshal(map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	engine, err := portalProcess(t, w.accounts, map[string]any{"portal.cors_origins": []string{shell, "http://localhost:5173"}})
+	if err != nil {
+		t.Fatalf("Start with portal.cors_origins: %v", err)
+	}
+	for _, path := range []string{"/portal/login", "/portal/servers", "/portal/enter", "/portal/game-token"} {
+		preflight := send(engine, http.MethodOptions, path, shell, nil)
+		if preflight.Code != http.StatusNoContent || preflight.Header().Get("Access-Control-Allow-Origin") != shell ||
+			!strings.Contains(preflight.Header().Get("Access-Control-Allow-Methods"), "POST") || !strings.Contains(preflight.Header().Get("Access-Control-Allow-Headers"), "Content-Type") {
+			t.Fatalf("preflight %s from the shell: %d %v", path, preflight.Code, preflight.Header())
+		}
+		if refused := send(engine, http.MethodOptions, path, "https://evil.example", nil); refused.Code != http.StatusForbidden || refused.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("preflight %s from another origin: %d %v", path, refused.Code, refused.Header())
+		}
+	}
+	allowed := send(engine, http.MethodPost, "/portal/login", shell, login)
+	if allowed.Code != http.StatusOK || allowed.Header().Get("Access-Control-Allow-Origin") != shell || !strings.Contains(allowed.Body.String(), "account_ticket") {
+		t.Fatalf("login from the shell: %d %v %s", allowed.Code, allowed.Header(), allowed.Body.String())
+	}
+	other := send(engine, http.MethodPost, "/portal/login", "https://evil.example", login)
+	if other.Code != http.StatusOK || other.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("login from another origin: %d %v; want it served without Allow-Origin", other.Code, other.Header())
+	}
+
+	// 不写 portal.cors_origins：不允许跨域（预检 403），同源 / 原生客户端照常。
+	plain, err := portalProcess(t, w.accounts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight := send(plain, http.MethodOptions, "/portal/login", shell, nil); preflight.Code != http.StatusForbidden {
+		t.Fatalf("preflight without portal.cors_origins: %d", preflight.Code)
+	}
+	if reply := portalPost(t, plain, "/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken}); reply.status != http.StatusOK {
+		t.Fatalf("a same-origin login without portal.cors_origins: %d %s", reply.status, reply.raw)
+	}
+
+	for _, bad := range []string{shell + "/", shell + "/play", "https://WWW.play.example.com", "www.play.example.com"} {
+		refused, err := portalProcess(t, w.accounts, map[string]any{"portal.cors_origins": []string{bad}})
+		if err == nil || !strings.Contains(err.Error(), "portal.cors_origins") {
+			t.Fatalf("cors origin %q: err = %v, want the config refused naming portal.cors_origins", bad, err)
+		}
+		if reply := portalPost(t, refused, "/portal/login", map[string]any{"channel": "dev", "open_id": "alice", "credential": portalDevToken}); reply.status != http.StatusNotFound {
+			t.Fatalf("cors origin %q: a refused start registered routes (%d)", bad, reply.status)
+		}
+		if portal, err := New(Options{Accounts: w.accounts, CORSOrigins: []string{bad}}); err == nil || portal != nil {
+			t.Fatalf("New accepted cors origin %q", bad)
+		}
+		// 配置检查（--check-config、roost config check 用的同一份声明）也拒绝它，不等到进程启动。
+		var settings Config
+		settings.Portal.CORSOrigins = []string{bad}
+		if err := settings.ValidateConfig(false); err == nil || !strings.Contains(err.Error(), "portal.cors_origins") {
+			t.Fatalf("cors origin %q: ValidateConfig = %v, want it refused naming portal.cors_origins", bad, err)
+		}
+	}
+}
+
 // New 不接受没有 account 的入口；没有目录就是“一个地址都没有”。同一条路由登记两次在登记时就报错。
 func TestPortalNewRefusesIncompleteOptions(t *testing.T) {
 	w := newPortalWorld(t)

@@ -88,9 +88,12 @@ type Engine struct {
 
 // RouteRegistrar is the minimal HTTP route contract used by higher-level
 // registration packages. Engine and Group both implement it.
+//
+// Options 只给 CORS 预检用（浏览器跨域 POST JSON 之前先发 OPTIONS，见 CORS.Preflight）。
 type RouteRegistrar interface {
 	Get(path string, handler http.HandlerFunc)
 	Post(path string, handler http.HandlerFunc)
+	Options(path string, handler http.HandlerFunc)
 }
 
 func NewEngine(opts ...Option) *Engine {
@@ -151,6 +154,13 @@ func (e *Engine) Post(path string, handler http.HandlerFunc) {
 	e.router.Post(path, handler)
 }
 
+func (e *Engine) Options(path string, handler http.HandlerFunc) {
+	if e == nil || e.router == nil {
+		return
+	}
+	e.router.Options(path, handler)
+}
+
 type Group struct {
 	router chi.Router
 	mount  func(string, http.Handler)
@@ -178,6 +188,14 @@ func (g *Group) Post(path string, handler http.HandlerFunc) {
 	}
 	g.ensureMounted()
 	g.router.Post(path, handler)
+}
+
+func (g *Group) Options(path string, handler http.HandlerFunc) {
+	if g == nil || g.router == nil {
+		return
+	}
+	g.ensureMounted()
+	g.router.Options(path, handler)
 }
 
 func (g *Group) ensureMounted() {

@@ -1,0 +1,20 @@
+## portal: no OPTIONS route  [services/account/portal/portal.go]
+RED
+--- FAIL: TestPortalAnswersCrossOriginCallsOnlyFromConfiguredOrigins (0.00s)
+    portal_test.go:1567: preflight /portal/login from the shell: 405 map[Allow:[POST] X-Request-Id:[req-1794984156403659000]]
+
+## portal: POST not wrapped with CORS headers  [services/account/portal/portal.go]
+RED
+--- FAIL: TestPortalAnswersCrossOriginCallsOnlyFromConfiguredOrigins (0.00s)
+    portal_test.go:1575: login from the shell: 200 map[Content-Type:[application/json; charset=utf-8] X-Request-Id:[req-1794984160221091000]] {"ok":true,"account_ticket":"at2.1800000600.main.MQ.9QKXysQe36rIvAeFdO6ULzYKPogf5Zw_u9Nc9tcZ7Jo","account_ticket_expires_at":1800000600}
+
+## portal: cors_origins not passed from config  [services/account/portal/portal.go]
+RED
+--- FAIL: TestPortalAnswersCrossOriginCallsOnlyFromConfiguredOrigins (0.00s)
+    portal_test.go:1567: preflight /portal/login from the shell: 403 map[Vary:[Origin] X-Request-Id:[req-1794984163270865000]]
+
+## portal: ValidateConfig does not check cors_origins  [services/account/portal/portal_config.go]
+RED
+--- FAIL: TestPortalAnswersCrossOriginCallsOnlyFromConfiguredOrigins (0.00s)
+    portal_test.go:1609: cors origin "https://www.play.example.com/": ValidateConfig = <nil>, want it refused naming portal.cors_origins
+

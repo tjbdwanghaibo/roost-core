@@ -33,6 +33,7 @@
 
 - `portal.servers`：静态的区服目录，服号 → 客户端连得到的 `host:port`。可以不写。
 - `portal.services`：服务的地址，服务名（`account.services` 里的）→ 客户端连得到的地址（例如大厅的 HTTP 地址），清单的 `services` 里原样带上。可以不写。
+- `portal.cors_origins`：允许在浏览器里跨域调用四个端点的网页 Origin（游戏页面、替游戏登录的外壳页面）。不写 = 不允许跨域（见“浏览器跨域调用”）。
 - 游戏账号 token 服务哪些游戏、各自的寿命，服务清单有哪些服务，是 account 的键（`account.games`、`account.services`，见 [服务篇“account 的游戏账号 token 与多个服务”](../../docs/framework/guide/09-services.md#4-关键业务边界)）。
 - 动态地址不在这里配：写在 **game 服务**的配置里（`login.presence.addr`，login 模块的 manager 读），game 定期报给 account。
 - `web.*`：入口的监听地址、超时、请求体上限（web Mod 的键）。
@@ -47,6 +48,7 @@
 - **账号号是这个游戏的**（维护者 2026-11-18）：一套 account 服务多个游戏，同一个人在每个游戏里是不同的账号号；账号票据绑定游戏，清单里的角色、进服票据、游戏账号 token 都是这个游戏账号的。入口拿不到别的游戏的账号号（account 的总线接口不返回它们，`Login` 交回的账号记录上也没有身份键）；入口自己能看到的只有客户端这次登录请求里的渠道与 open id。
 - **入口只守一件事**：账号只取自 account 校验过的账号票据，绝不取自请求。它不认证任何人（身份由 account 向渠道确认）、不签也不验任何票据、**不建角不选角**、不知道玩家号、不知道角色名（名字是游戏服的数据）。
 - **没有限流，也没有防撞库**。四个端点谁都能调；`/portal/login` 每次都会去问渠道。对外暴露时放在有限流的反向代理后面。
+- **跨域只按 Origin 白名单答 CORS 头**（`portal.cors_origins`，2026-11-18）。不在名单里的 Origin 拿不到 CORS 头、预检答 403，但请求本身照常处理（浏览器读不到响应；非浏览器客户端不受 CORS 约束）——白名单不是访问控制，限流与拒绝来源放在反向代理上。从不发 `Access-Control-Allow-Credentials`：入口不用 cookie。
 - **明文**。凭据与票据都在请求体里；web Mod 不终止 TLS。生产环境 web Mod 缺省只绑回环地址，对外要放在终止 TLS 的代理后面并显式写 `web.allow_public_addr: true`。生成的生产示例配置里 `web.addr` 是占位值，上线前要改。
 - **上限**：请求体 16 KiB（`MaxRequestBytes`）；`channel` 32 字节、`open_id` 128 字节、`credential` 8 KiB、账号票据 1024 字节、`game` 与 `service` 32 字节（`MaxNameBytes`）；区服至多 1024 个（`MaxEntries`，与 account 的区服上限 `svcaccount.MaxServers` 一致，2026-11-17 由 256 放宽）；目录条目的地址至多 255 字节、标签至多 8 个、每个至多 32 字节；`portal.services` 至多 64 条；account 登记表一次登记的期限至多 600 秒（`svcaccount.MaxPresenceTTLSeconds`），至多 1024 个没过期的服。
 - **清单的开销随区服数增长**：每次 `/portal/servers` 是 1 次清单（account 读 1 + N 条记录）、1 次登记表（account 读一个 Redis 哈希）加每个服 1 次角色查询，顺序执行，没有缓存；`/portal/enter` 也多 1 次登记表。区服很多、请求很密的部署该把 manifest 拆出去并自己加缓存，或者换成分页的清单。
@@ -57,7 +59,7 @@
 - **账号 ↔ 玩家号的映射在握手时才建**：拿了进服票据而没有去握手的新号，在 account 里没有角色，清单里仍是 `role: null`。反过来，握手过而没有在游戏服新建的账号，清单里已经有 `role`（“老号”），推荐规则把那个服当作他玩过的服；游戏服那边仍告知要新建。清单里的 `role` 说的是 account 的映射，不是游戏服的玩家数据。
 - **地址可以是空的**：零配置时清单与进服结果里 `addr` 为空、`addr_source` 是 `none`，票据照发。
 - **动态地址的新鲜度**：game 每 `login.presence.interval`（缺省 10 秒）报一次，期限是三倍（30 秒）。进程死了、断网了，它的地址最多还会被发出去一个期限；正常停机时立刻撤销。上报者自报服号，account 不核对（总线只在内网，调用方可信）。没写 `login.presence.addr` 的 game 不上报，那个服只有静态地址。
-- **`portal.servers` / `portal.services` 在 account 进程的配置声明里**（清单的 `config:`，D19 B，结构体是 `services/account/portal/portal_config.go` 的 `Config`）：`--print-config` 打印、`go run ./cmd/account --check-config` 与 `roost config check --service account` 按声明与 `ValidateConfig`（服号写法、地址带主机、条数上限）检查，写错了在检查时就报、进程不启动；入口仍在 Start 里读它。两个键都没有缺省值也没有 example，安装器不往配置里写段。
+- **`portal.servers` / `portal.services` / `portal.cors_origins` 在 account 进程的配置声明里**（清单的 `config:`，D19 B，结构体是 `services/account/portal/portal_config.go` 的 `Config`）：`--print-config` 打印、`go run ./cmd/account --check-config` 与 `roost config check --service account` 按声明与 `ValidateConfig`（服号写法、地址带主机、条数上限）检查，写错了在检查时就报、进程不启动；入口仍在 Start 里读它。三个键都没有缺省值也没有 example，安装器不往配置里写段。
 - **前提**：依赖 `account_auth`（account 的登录协作者；开发登录、渠道入口、玩家号计数器都在那里），不依赖 `login`：`/portal/enter` 给的握手票据 `enter:<进服票据>` 由入口自己拼（`EnterTicketPrefix`），与 login 的认证器认的前缀是两边各写一份的约定，两个都装着时由联动场景 `TestWithPortalLogin` 核对；握手那一侧要 login（或工程自己的认证器）。托管 account 的服务要有 web Mod（安装时代办）；工程里没有托管 account 的服务时安装器在同一次安装里声明它（带上 web Mod），名字 account 被业务服务占着时拒绝安装。入口挂在 account 进程上依赖生成的 bootstrap 里那一行 `kitmodulehost.NewMod(...)`，自己手写 bootstrap 的工程要照着加。account 的 `ListServers`、`ListServices`、`ListServerPresence`、`RoleOnServer`、`IssueAccountTicket`、`ValidateAccountTicket`、`IssueEnterTicket`、`IssueGameToken`、`EnterServer` 是总线接口：manifest 拆出去之后比 account 进程新时请求会失败，要先升 account。
 - **已知限制**：[KNOWN-LIMITS“portal 的边界”](../../docs/maintenance/KNOWN-LIMITS.md)，以及同一处的“login 的边界”“game-demo 接入登录链路的边界”（demo 渠道经入口对外、生成依赖没发布的 `wiring/modulehost`）。
 
@@ -119,9 +121,9 @@ roost project doctor      # collaborators:account 通过，0 FAIL
 
 ## 验证范围
 
-- `roost module verify portal`：15 条场景（`services/account/portal`）；与 `login` 的联动 1 条，与 `enter`（还要 login）的联动 2 条。
+- `roost module verify portal`：16 条场景（`services/account/portal`）；与 `login` 的联动 1 条，与 `enter`（还要 login）的联动 2 条。
 - 场景是离线的：真实的 `account.Service`（内存存储，票据由它签、由它验）、真实的路由引擎（不开端口）；握手那一侧直接问 account 的 `EnterServer`（认证器做的就是这件事；联动场景里用 login 真实的认证器）；只有“account 给不出结论”“account 答非所问”用替身。与 enter 的联动里游戏服的档是内存替身。没有经真实的监听端口、总线、Redis 与 TCP。
-- 覆盖：从渠道身份走到 account 认的进服票据、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt2 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
+- 覆盖：从渠道身份走到 account 认的进服票据、账号只取自票据（请求里夹带账号不起作用）、超长与畸形请求不去问 account、account 的拒绝与故障分开回答（400 带码 / 500）、account 答非所问时不往下传、清单按 account 与目录拼出、推荐先看角色再看最新的开放服、进服给票据与承载服地址、缺省目录读 account 的登记表（两个入口副本看到同一份、上报盖住配置、停报到期回到配置、撤销立刻生效、登记表问不到答 500）、坏目录条目被丢弃、零配置在 account 进程里启动、缺参数时构造失败；游戏账号 token 的两条拿法（`/portal/game-token` 与登录时带 `game`，账号只取自票据或渠道确认）与各种拒绝（游戏不在 `account.games`、票据无效或拿 gt2 / et1 冒充、封号、畸形请求不去问 account、account 问不到答 500、account 答了别的游戏的 token 答 500）；按服务列出（服务清单与 `portal.services` 的地址、服上的 `service`、按 `service` 筛选与筛选后的推荐、非 game 服务不能筛选、没有配置 `account.services` 的工程与以前一样）；浏览器跨域（`portal.cors_origins` 里的 Origin 四个端点预检 204、响应带 Allow-Origin，别的 Origin 预检 403、响应不带，不写时不允许跨域，浏览器发不出的写法在配置检查与启动时拒绝）。CORS 头本身的规则在 core 的 `infra/network/httpserver`（`TestCORS*`）。登记表本身的过期 / 上限 / 校验在 core 的 `service/account`（`TestServerPresence*`，可走真实 Redis），game 一侧的上报在 login 模块（`TestLoginPresence*`）。
 - 真实进程只做过一次单机演练（2026-11-12：一个 account 进程加一个嵌入 TCP 的 game 进程，整条链路与各种拒绝，记录在仓库 CHANGELOG）；game-demo 与两个配方另各做过 `make dev-run`、curl 三步与真实 TCP 的登录 / 新建 / 重连；game-demo 的这一段有可重复的脚本（仓库的 `scripts/test-demo-login.sh`：`make dev-run`、curl 三步、机器人 `-login portal` 新号与老号，最后经独立 Gate 再跑一遍）。已并入别的服的老角色也有脚本（`scripts/test-demo-merge.sh`：合服后原服 1001 的角色走三步，清单标出 `merged_into`、地址给承载服，1001 的进服票据在承载服 1000 上嵌入 TCP 与经独立 Gate 各握手一次，进到原角色、背包延续）。
 - `scripts/test-demo-login.sh` 的 casual + naming 阶段增加两个 account 进程：A 签发账号票据，B 校验并选服、签发进服票据；停掉 A 后 B 独立完成同一角色的重连。两个 game sid 共用正式 Redis Directory，验证建角、重名拒绝与换名；嵌入 TCP 和双 Gate 都走真实入口。
 - 没有验证：动态地址经真实进程（game 上报 → NATS → account → Redis → 入口）、换服中的角色、生产配置、跨机。可重复步骤见[登录线证据](../../docs/maintenance/evidence/v147-login-20261114.md)。
@@ -175,6 +177,18 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter \
 read -rsp "ticket: " ROOST_PLAYER_TOKEN; export ROOST_PLAYER_TOKEN; echo
 go run ./cmd/playerprobe -addr 127.0.0.1:7000      # 只验证握手；之后的 EnterStatus / EnterCreate / EnterGame 要客户端（或 Robot）收发
 ```
+
+## 浏览器跨域调用
+
+网页里的游戏（或替游戏登录的外壳页面）与入口不同源时，浏览器在跨域 `POST` JSON 之前先发预检（`OPTIONS`）。入口对四个端点都登记了 `OPTIONS`：Origin 在 `portal.cors_origins` 里答 204（`Access-Control-Allow-Origin` 回写这个 Origin，`Access-Control-Allow-Methods: POST`，`Access-Control-Allow-Headers: Content-Type`，缓存 600 秒），否则 403；`POST` 的响应对名单里的 Origin 带 `Access-Control-Allow-Origin`，每个响应都带 `Vary: Origin`。不写 `portal.cors_origins` 时与以前一样只服务同源页面、原生客户端与服务端调用。
+
+```yaml
+portal:
+  cors_origins:
+    - https://play.example.com    # 示例：以调用入口的网页实际的 Origin 为准
+```
+
+预检路由用的是 web 路由登记的 `OPTIONS`（`webroute` 2026-11-18 起接受 GET、POST、OPTIONS），CORS 头的规则在 core 的 `infra/network/httpserver.CORS`；做法与大厅的 `lobby.cors_origins` 相同（入口另外不放行 `null` Origin、在读配置时检查 Origin 的写法）。
 
 ## 端点
 
@@ -329,12 +343,15 @@ portal:
     "1001": 203.0.113.8:7000
   services:                  # 服务的地址：服务名（account.services 里的）-> 客户端连得到的地址；至多 64 个
     lobby: https://lobby.example.com
+  cors_origins:              # 允许跨域调用的网页 Origin；不写 = 不允许跨域
+    - https://www.example.com
 ```
 
 | 键 | 缺省 | 说明 |
 | --- | --- | --- |
 | `portal.servers` | 空 | 服号 → 带主机的 `host:port`（通常是 Gate）。键必须是正的服号的规范十进制写法（`"+7"`、`"007"` 不算），只写端口的地址（`":7000"`）不行。有哪些服由 account 说了算，这里只给地址；写了一个 account 没登记的服不会让它出现在清单里 |
 | `portal.services` | 空 | 服务名 → 地址（非空、至多 255 字节、不含空白；形式由客户端与那个服务约定，入口不解释）。名字的写法同 `account.services`；写了一个 account 没列出的服务不会让它出现在清单里。与 `portal.servers` 一样不在 App 的配置声明里，写错了启动到入口这一步才报错 |
+| `portal.cors_origins` | 空（不允许跨域） | 允许在浏览器里跨域调用四个端点的网页 Origin：`scheme://host[:port]`，http 或 https，主机名小写，不带路径与结尾的 `/`（写成 `https://www.example.com/` 浏览器发的 Origin 永远对不上，所以配置检查就拒绝）；`"*"` 表示任何 Origin（`null` 除外）。在 App 的配置声明里（`--check-config` 查写法） |
 | `account.games` / `account.default_game` / `account.services` | 生成的工程写一个以工程名命名的游戏 | account Mod 的键：这套 account 服务的游戏（`games.<游戏>.token_ttl`，至少一个）、登录不带游戏时落到哪个（只有一个游戏时不用写）、接受本账号体系的服务（`services.<服务>.kind`，不写时与只有 game 区服的工程相同） |
 | `web.*` | 见 web Mod | 入口的监听地址、超时、请求体上限。开发配置的端口是 8080 + 这个服务的端口块号；生产环境 `web.addr` 不是回环地址时必须同时写 `web.allow_public_addr: true` |
 | `account.ticket_ttl` | `10m` | 账号票据的有效期（account Mod 的键，不写进生成的配置） |
@@ -347,7 +364,7 @@ portal:
 | `services/account/portal/portal.go` | 启动入口 `Start`（清单的 `runtime`，在托管 account 的进程里启动）、四个端点、请求与响应的形状 |
 | `services/account/portal/portal_rules.go` | **归工程所有**：用哪个区服目录（`newDirectory`）、推荐规则（`recommend`） |
 | `services/account/portal/portal_directory.go` | 区服目录的接口、静态目录、account 登记表的目录（`NewPresenceDirectory`）、`Overlay` |
-| `services/account/portal/portal_config.go` | `portal.servers`、`portal.services` 的声明与启动时的检查 |
+| `services/account/portal/portal_config.go` | `portal.servers`、`portal.services`、`portal.cors_origins` 的声明与启动时的检查 |
 | `internal/errors/portal.go` | 入口自己的业务码 |
 | `services/account/portal/portal_login_test.go` | 只在装了 login 时有：入口的握手票据交给 login 的认证器核对 |
 | `services/account/portal/portal_enter_test.go` | 只在 enter 与 login 都装着时有：整条链路的场景（登录 → 清单 → 进服 → 握手 → 告知 → 新建 → 进入） |

@@ -20,6 +20,9 @@
 //
 // 路由在进程启动时登记到本进程的 web Mod（Start），监听地址、超时、请求体上限都是 web.* 的配置。web Mod
 // 不做鉴权也不做限流；生产环境它缺省只绑回环地址，对外要放在终止 TLS 的反向代理后面（凭据与票据都在请求体里明文传）。
+//
+// 浏览器跨域调用（游戏页面或替游戏登录的外壳页面与入口不同源）：配置 portal.cors_origins 列出允许的
+// 网页 Origin，四个端点对它们答 CORS 头与预检（OPTIONS）；不写时不允许跨域。
 package portal
 
 import (
@@ -35,6 +38,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/webroute"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -84,6 +88,7 @@ type Portal struct {
 	directory Directory
 	recommend func([]ServerChoice) int32
 	services  map[string]string
+	cors      *httpserver.CORS
 }
 
 // Options 是 New 的参数。Start 按进程配置填它；测试直接填。
@@ -97,6 +102,8 @@ type Options struct {
 	// ServiceAddrs 是服务名 -> 客户端连得到的地址（配置 portal.services，例如大厅的 HTTP 地址）；清单的 services
 	// 里按名字带上。nil 表示一个都没有。
 	ServiceAddrs map[string]string
+	// CORSOrigins 是允许在浏览器里跨域调用的网页 Origin（配置 portal.cors_origins）；nil 表示不允许跨域。
+	CORSOrigins []string
 }
 
 // New 检查参数并返回处理器。
@@ -116,7 +123,11 @@ func New(options Options) (*Portal, error) {
 	for name, addr := range options.ServiceAddrs {
 		services[name] = addr
 	}
-	return &Portal{accounts: options.Accounts, directory: directory, recommend: rule, services: services}, nil
+	if err := httpserver.CheckCORSOrigins("portal.cors_origins", options.CORSOrigins); err != nil {
+		return nil, fmt.Errorf("portal: %w", err)
+	}
+	cors := httpserver.NewCORS(options.CORSOrigins, []string{http.MethodPost}, []string{"Content-Type"})
+	return &Portal{accounts: options.Accounts, directory: directory, recommend: rule, services: services, cors: cors}, nil
 }
 
 // Start 是模块的服务级启动入口（清单的 runtime）：在托管 account 服务的进程里，全部 Mod 启动之后、
@@ -158,18 +169,19 @@ func Start(registry *app.Registry) (func(context.Context) error, error) {
 	if directory == nil {
 		return stop, errors.New("portal: newDirectory returned no directory")
 	}
-	portal, err := New(Options{Accounts: accounts, Directory: directory, ServiceAddrs: serviceAddrs})
+	portal, err := New(Options{Accounts: accounts, Directory: directory, ServiceAddrs: serviceAddrs, CORSOrigins: settings.Portal.CORSOrigins})
 	if err != nil {
 		return stop, err
 	}
 	if err := portal.RegisterRoutes(routes); err != nil {
 		return stop, fmt.Errorf("portal: %w", err)
 	}
-	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "servers", PathServers, "enter", PathEnter, "game_token", PathGameToken, "configured_addresses", len(addrs), "service_addresses", len(serviceAddrs))
+	slog.Info("portal: login entry registered on the web mod", "login", PathLogin, "servers", PathServers, "enter", PathEnter, "game_token", PathGameToken, "configured_addresses", len(addrs), "service_addresses", len(serviceAddrs), "cors_origins", len(settings.Portal.CORSOrigins))
 	return stop, nil
 }
 
 // RegisterRoutes 把四个端点登记到 reg（web Mod，或测试里的替身）。实现 webroute.Module。
+// 每个端点是一条 POST（响应带 CORS 头：Origin 在 portal.cors_origins 里时）加一条 OPTIONS（答浏览器的预检）。
 // 路由只能在服务启动之前登记；同一条路由登记两次（工程自己也占了 /portal/...）会在这里报错。
 func (portal *Portal) RegisterRoutes(reg webroute.Registerer) error {
 	if reg == nil {
@@ -184,7 +196,10 @@ func (portal *Portal) RegisterRoutes(reg webroute.Registerer) error {
 		{PathEnter, portal.handleEnter},
 		{PathGameToken, portal.handleGameToken},
 	} {
-		if err := reg.Register(http.MethodPost, route.path, route.handler); err != nil {
+		if err := reg.Register(http.MethodPost, route.path, portal.cors.Handle(route.handler)); err != nil {
+			return err
+		}
+		if err := reg.Register(http.MethodOptions, route.path, portal.cors.Preflight); err != nil {
 			return err
 		}
 	}

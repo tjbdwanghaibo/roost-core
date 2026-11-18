@@ -22,7 +22,7 @@ next:
 verify:
   packages: [./services/account/portal]
   run: ^TestPortal
-  pass: 15
+  pass: 16
 with:
   login:
     summary: 入口给的握手票据（EnterTicketPrefix 加进服票据）交给登录模块真实的认证器核对：认得出、映射与承载服 / 原服与 account 一致、不带前缀不认；入口为了不带 game 也能装而没有 import 登录模块，这里守住两边各写一份的前缀约定；只有测试，不加运行时代码

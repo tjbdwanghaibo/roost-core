@@ -13,6 +13,37 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 )
 
+// OPTIONS 可以登记（CORS 预检用，httpserver.CORS.Preflight），经 Engine 真的路由到它；同一路径的 POST 不受影响，
+// 重复登记 OPTIONS 照样报 duplicate。
+func TestRegistrarRoutesOptionsForCORSPreflight(t *testing.T) {
+	engine := httpserver.NewEngine()
+	registrar := NewRegistrar(engine)
+	cors := httpserver.NewCORS([]string{"https://shell.example"}, []string{http.MethodPost}, []string{"Content-Type"})
+	if err := registrar.Register(http.MethodPost, "/portal/login", cors.Handle(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })); err != nil {
+		t.Fatal(err)
+	}
+	if err := registrar.Register(" options ", "/portal/login", cors.Preflight); err != nil {
+		t.Fatalf("register OPTIONS: %v", err)
+	}
+	if err := registrar.Register(http.MethodOptions, "/portal/login", cors.Preflight); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("a second OPTIONS route: %v", err)
+	}
+	preflight := httptest.NewRequest(http.MethodOptions, "/portal/login", nil)
+	preflight.Header.Set("Origin", "https://shell.example")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, preflight)
+	if recorder.Code != http.StatusNoContent || recorder.Header().Get("Access-Control-Allow-Origin") != "https://shell.example" {
+		t.Fatalf("preflight: %d %v", recorder.Code, recorder.Header())
+	}
+	post := httptest.NewRequest(http.MethodPost, "/portal/login", nil)
+	post.Header.Set("Origin", "https://shell.example")
+	recorder = httptest.NewRecorder()
+	engine.ServeHTTP(recorder, post)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Access-Control-Allow-Origin") != "https://shell.example" {
+		t.Fatalf("post: %d %v", recorder.Code, recorder.Header())
+	}
+}
+
 func TestDecodeJSONRejectsMalformedBody(t *testing.T) {
 	engine := httpserver.NewEngine()
 	registrar := NewRegistrar(engine)
@@ -196,7 +227,8 @@ func (r *failingRouteInstaller) Get(string, http.HandlerFunc) {
 		panic(r.failure)
 	}
 }
-func (r *failingRouteInstaller) Post(path string, h http.HandlerFunc) { r.Get(path, h) }
+func (r *failingRouteInstaller) Post(path string, h http.HandlerFunc)    { r.Get(path, h) }
+func (r *failingRouteInstaller) Options(path string, h http.HandlerFunc) { r.Get(path, h) }
 
 func TestRegisterInstallationPanicDoesNotReservePair(t *testing.T) {
 	cause := errors.New("installer failed")

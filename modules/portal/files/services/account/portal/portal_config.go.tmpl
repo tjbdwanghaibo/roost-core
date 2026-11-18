@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 )
 
 // Config 是入口在托管 account 服务的进程配置（configs/service/config.<account 服务>.yaml）里读的键，可以不写：
@@ -18,6 +20,8 @@ import (
 //	    "1001": 203.0.113.8:7000
 //	  services:                  # 服务的地址：服务名（account.services 里的）-> 客户端连得到的地址
 //	    lobby: https://lobby.example.com
+//	  cors_origins:              # 允许跨域调用入口的网页 Origin（浏览器里的外壳页面、网页游戏）；不写 = 不允许跨域
+//	    - https://www.example.com
 //
 // 入口没有自己的密钥，也没有票据的有效期：票据由 account 签发与校验（account.session_secret、
 // account.ticket_ttl、account.session_ttl）。
@@ -31,11 +35,16 @@ type Config struct {
 		Servers map[string]string `config:"servers" help:"静态的区服目录：服号 -> 客户端连得到的地址（host:port，通常是 Gate）。有哪些服由 account 说了算，这里只给地址；没写地址的服照常列出、没有地址"`
 		// Services 给 account.services 里的服务配客户端连得到的地址（大厅的 HTTP 地址……），清单的 services 里原样带上。
 		Services map[string]string `config:"services" help:"服务的地址：服务名（account.services 里的）-> 客户端连得到的地址（例如大厅的 https://host:port）。有哪些服务由 account 说了算，这里只给地址"`
+		// CORSOrigins 是允许在浏览器里跨域调用四个端点的网页 Origin（例如游戏页面 https://play.example.com）。
+		// 入口的凭据与票据都在请求体里、不用 cookie，所以放开不会让别的站点借用浏览器里的登录态；白名单只是不让任意
+		// 网页把入口当成自己的后端。不写（缺省）= 不允许跨域：同源页面、原生客户端、服务端调用不受影响。
+		CORSOrigins []string `config:"cors_origins" help:"允许在浏览器里跨域调用登录入口的网页 Origin（scheme://host[:port]，不带路径与结尾的 /，例如 https://www.example.com）；\"*\" 表示任何 Origin；不写表示不允许跨域"`
 	} `config:"portal"`
 }
 
 // ValidateConfig 在读配置时执行（进程启动时，任何请求之前），不通过进程不启动：
-// servers 的键不是正的服号、值不是带主机的 host:port、条数超过 MaxEntries——拒绝，点名是哪一条。
+// servers 的键不是正的服号、值不是带主机的 host:port、条数超过 MaxEntries；cors_origins 里有浏览器发不出的
+// Origin 写法（带路径、结尾的 /、大写主机）——拒绝，点名是哪一条。
 func (c *Config) ValidateConfig(bool) error {
 	var problems []error
 	if len(c.Portal.Servers) > MaxEntries {
@@ -45,6 +54,9 @@ func (c *Config) ValidateConfig(bool) error {
 		problems = append(problems, err)
 	}
 	if _, err := parseServices(c.Portal.Services); err != nil {
+		problems = append(problems, err)
+	}
+	if err := httpserver.CheckCORSOrigins("portal.cors_origins", c.Portal.CORSOrigins); err != nil {
 		problems = append(problems, err)
 	}
 	return errors.Join(problems...)

@@ -82,7 +82,8 @@ func (r *Registrar) Register(method, path string, handler http.HandlerFunc) (err
 	if err := ValidatePath(path); err != nil {
 		return err
 	}
-	if method != http.MethodGet && method != http.MethodPost {
+	// OPTIONS 只用于 CORS 预检（httpserver.CORS.Preflight）：浏览器跨域 POST JSON 前先发它。
+	if method != http.MethodGet && method != http.MethodPost && method != http.MethodOptions {
 		return fmt.Errorf("webroute: unsupported method %q", method)
 	}
 
@@ -107,6 +108,8 @@ func (r *Registrar) Register(method, path string, handler http.HandlerFunc) (err
 		r.routes.Get(path, handler)
 	case http.MethodPost:
 		r.routes.Post(path, handler)
+	case http.MethodOptions:
+		r.routes.Options(path, handler)
 	}
 	// 成功安装后才登记。自定义 installer 失败可能半安装；调用方应重建
 	// 该 router，而不是把 error 当作对外部 router 的完整回滚。
