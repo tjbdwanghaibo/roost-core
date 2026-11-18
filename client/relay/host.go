@@ -104,9 +104,9 @@ type MemberPresence struct {
 var (
 	// ErrSnapshotTooSoon：离上一份快照不到 Options.SnapshotMinInterval，这一份没有发出。
 	ErrSnapshotTooSoon = errors.New("relay: snapshot sent too soon after the previous one")
-	// ErrSnapshotStale：准备这一份（取状态、压缩）期间换了连接或房主任期（例如转出去又转回来），它是旧任期的状态，
-	// 没有发出，也没占用 seq。
-	ErrSnapshotStale = errors.New("relay: snapshot dropped: the connection or host term changed while it was being prepared")
+	// ErrSnapshotStale：这一份的状态已经过时，没有发出，也没占用 seq。两种情况：准备这一份（取状态、压缩）期间换了连接
+	// 或房主任期（例如转出去又转回来）；或者同一任期里比它晚发起的一份已经先发出了（并发推送以发起顺序为准）。
+	ErrSnapshotStale = errors.New("relay: snapshot dropped: a newer snapshot was sent, or the connection or host term changed, while it was being prepared")
 	// ErrStateTooBig：压缩后的快照或交接数据超过 Options.SnapshotMaxBytes，没有发出。
 	ErrStateTooBig = errors.New("relay: snapshot or handoff exceeds SnapshotMaxBytes after compression")
 	// ErrTooManySuccessors：候选顺序超过 wire.RelayMaxSuccessors 个槽位。
@@ -239,7 +239,11 @@ type hostState struct {
 	candidate bool
 	snapSeq   uint64    // 最近发出（或从 YouAreHost 接过来）的快照 seq；下一份是它加 1
 	snapAt    time.Time // 最近一次发出快照的时刻；零值表示当上房主之后还没发过
-	autoAt    time.Time // 最近一次定时推送的尝试（State 返回 nil、压缩后太大也算），下一次定时推送从它和 snapAt 的较晚者算
+	// snapStarted 是最近一份快照发起时取的号（hostTerm 里加 1，只增不减）；snapSent 是已分配 seq 的那些份里最大的号。
+	// 号比 snapSent 小的一份是在已发出的一份之前发起的，状态更旧，分配 seq 时丢弃（见 hostTerm）。
+	snapStarted uint64
+	snapSent    uint64
+	autoAt      time.Time // 最近一次定时推送的尝试（State 返回 nil、压缩后太大也算），下一次定时推送从它和 snapAt 的较晚者算
 }
 
 // OnYouAreHost 注册“relay 选自己当新房主”的回调。游戏准备好后调 HostReady(e.Epoch)（或打开 Options.AutoHostReady）。
@@ -350,8 +354,8 @@ func (c *Client) SetSuccessors(slots []uint32) error {
 
 // Snapshot 推一份快照（只有房主能发）：state 经 Options.Compressor 压缩，seq 由 SDK 递增。离上一份不到
 // SnapshotMinInterval 的不发（ErrSnapshotTooSoon）；压缩后超过 SnapshotMaxBytes 的不发（ErrStateTooBig）；压缩期间
-// 换了连接或房主任期的不发（ErrSnapshotStale，见 hostTerm）。relay 仍可能拒收（例如它的 snapshot_min_interval 比 SDK
-// 的大），经 OnRejected 通知。state 应是调用时刻的状态：SDK 只能把这一份绑定到调用时的任期。
+// 换了连接或房主任期、或者比它晚发起的一份已经发出的不发（ErrSnapshotStale，见 hostTerm）。relay 仍可能拒收
+// （例如它的 snapshot_min_interval 比 SDK 的大），经 OnRejected 通知。state 应是调用时刻的状态：SDK 只能把这一份绑定到调用时的任期。
 func (c *Client) Snapshot(state []byte) error {
 	term, err := c.hostTerm()
 	if err != nil {
@@ -365,12 +369,18 @@ func (c *Client) Snapshot(state []byte) error {
 // 房主恢复的就是旧状态（v1.54.0 审查 RV-20261118-02）。所以准备之前记下任期，分配 seq 之前在同一把锁里核对：
 // 变了就丢弃，不发、不占 seq（与 TS / C# SDK 相同）。核对通过后 seq 已按这一任期分配，之后再换任期的话，relay
 // 按 seq 递增（新任期的 seq 不低于 epoch<<32，见 seqFloor）拒收它。
+//
+// 同一任期里也可以并发推（游戏从几个 goroutine 调 Snapshot，或定时快照与手动的重叠）：先发起的一份若取状态、压缩更慢，
+// 会拿到更大的 seq，盖掉 relay 已存的、后发起的较新状态。所以每份在发起时取一个递增的号（ticket），分配 seq 时同样在锁里
+// 核对：比它晚发起的一份已经分配过 seq，就丢弃这一份（ErrSnapshotStale），并发推送以发起顺序为准、后发起的胜出
+// （维护者 2026-11-18 定，与 TS / C# SDK 相同）。
 type hostTerm struct {
-	sess  *session
-	epoch uint64
+	sess   *session
+	epoch  uint64
+	ticket uint64
 }
 
-// hostTerm 返回此刻的连接与房主任期：不是已就绪的房主时 ErrNotRoomHost，没有连接时 ErrNotConnected。
+// hostTerm 返回此刻的连接与房主任期，并给这一份取发起号：不是已就绪的房主时 ErrNotRoomHost，没有连接时 ErrNotConnected。
 func (c *Client) hostTerm() (hostTerm, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -380,7 +390,8 @@ func (c *Client) hostTerm() (hostTerm, error) {
 	case c.current == nil:
 		return hostTerm{}, ErrNotConnected
 	}
-	return hostTerm{sess: c.current, epoch: c.role.Epoch}, nil
+	c.host.snapStarted++
+	return hostTerm{sess: c.current, epoch: c.role.Epoch, ticket: c.host.snapStarted}, nil
 }
 
 // snapshotIn 压缩 state，核对它仍属于 term，分配 seq 后在 term 的连接上发出。
@@ -398,12 +409,16 @@ func (c *Client) snapshotIn(term hostTerm, state []byte) error {
 	case c.current != term.sess || c.role.Epoch != term.epoch:
 		c.mu.Unlock()
 		return ErrSnapshotStale
+	case term.ticket < c.host.snapSent: // 晚发起的一份已经发出
+		c.mu.Unlock()
+		return ErrSnapshotStale
 	case !c.host.snapAt.IsZero() && now.Sub(c.host.snapAt) < c.opts.SnapshotMinInterval:
 		c.mu.Unlock()
 		return ErrSnapshotTooSoon
 	}
 	c.host.snapSeq++
 	c.host.snapAt = now
+	c.host.snapSent = term.ticket
 	seq := c.host.snapSeq
 	c.mu.Unlock()
 	frame, err := encodeFrame(Frame{Channel: wire.RelayControl, MsgID: wire.RelayOpSnapshot,

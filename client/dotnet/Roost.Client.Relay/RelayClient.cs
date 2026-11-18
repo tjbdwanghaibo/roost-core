@@ -135,7 +135,10 @@ namespace Roost.Client.Relay
         TooSoon,
         /// <summary>没有连接，或写失败。</summary>
         NotConnected,
-        /// <summary>压缩期间换了连接或房主任期（例如转出去又转回来）：这一份是旧任期的状态，没有发出，也没占用 seq。</summary>
+        /// <summary>
+        /// 这一份的状态已经过时，没有发出，也没占用 seq：压缩期间换了连接或房主任期（例如转出去又转回来），或者同一任期里比它晚发起的
+        /// 一份已经先发出了（并发推送以发起顺序为准）。
+        /// </summary>
         Stale,
     }
 
@@ -382,6 +385,8 @@ namespace Roost.Client.Relay
         private int presence = -1;     // SetForeground 记下的前台状态：-1 没设过（不发），0 后台，1 前台；换 host、重连后重发
         private ulong snapshotSeq;     // 最近发出（或从 YouAreHost 接过来）的快照 seq；下一份是它加 1
         private long snapshotAt = -1;  // 最近一次发出快照的时刻（Clock tick）；-1 表示当上房主之后还没发过
+        private ulong snapshotStarted; // 最近一份快照发起时取的号（CurrentHostTerm 里加 1，只增不减），见 HostTerm
+        private ulong snapshotSent;    // 已分配 seq 的那些份里最大的号；号比它小的一份比已发出的旧，分配 seq 时丢弃
         private long autoAt = -1;      // 最近一次定时推送的尝试（State 返回 null 也算）
         private bool autoQueued;       // 定时推送已放进 Pump 队列、还没执行
         private Task completion = Task.CompletedTask;
@@ -577,7 +582,7 @@ namespace Roost.Client.Relay
 
         /// <summary>
         /// 推一份快照（只有房主能发）：state 经 Compressor 压缩，seq 由 SDK 递增。离上一份不到 SnapshotMinInterval 的不发（TooSoon）；
-        /// 压缩期间换了连接或房主任期的不发（Stale，见 HostTerm）；压缩后超过 SnapshotMaxBytes 抛 ArgumentException。relay 仍可能拒收
+        /// 压缩期间换了连接或房主任期、或者比它晚发起的一份已经发出的不发（Stale，见 HostTerm）；压缩后超过 SnapshotMaxBytes 抛 ArgumentException。relay 仍可能拒收
         /// （例如它的最小间隔更大），经 OnRejected 通知。state 应是调用时刻的状态：SDK 只能把这一份绑定到调用时的任期。
         /// </summary>
         public RelaySnapshotResult Snapshot(ReadOnlySpan<byte> state)
@@ -592,21 +597,25 @@ namespace Roost.Client.Relay
         /// 下一任房主恢复的就是旧状态（v1.54.0 审查 RV-20261118-02）。所以准备之前记下任期，分配 seq 之前在同一把锁里核对：变了就丢弃，
         /// 不发、不占 seq（与 Go / TS SDK 相同）。核对通过后 seq 已按这一任期分配，之后再换任期的话，relay 按 seq 递增（新任期的 seq
         /// 不低于 epoch&lt;&lt;32，见 SeqFloor）拒收它。
+        /// 同一任期里也可以并发推（游戏从几个线程调 Snapshot，或 Snapshot 与 Pump 里的定时快照重叠）：先发起的一份若压缩更慢，会拿到
+        /// 更大的 seq，盖掉 relay 已存的、后发起的较新状态。所以每份在发起时取一个递增的号（Ticket），分配 seq 时同样在锁里核对：比它晚
+        /// 发起的一份已经分配过 seq，就丢弃这一份（Stale），并发推送以发起顺序为准、后发起的胜出（维护者 2026-11-18 定，与 Go / TS SDK 相同）。
         /// </summary>
         private readonly struct HostTerm
         {
             public readonly RelaySession? Session;
             public readonly ulong Epoch;
-            public HostTerm(RelaySession? session, ulong epoch) { Session = session; Epoch = epoch; }
+            public readonly ulong Ticket;
+            public HostTerm(RelaySession? session, ulong epoch, ulong ticket) { Session = session; Epoch = epoch; Ticket = ticket; }
         }
 
-        /// <summary>此刻的连接与房主任期；不是已就绪的房主时抛 InvalidOperationException，没有连接时 Session 为 null。</summary>
+        /// <summary>此刻的连接与房主任期，并给这一份取发起号；不是已就绪的房主时抛 InvalidOperationException，没有连接时 Session 为 null。</summary>
         private HostTerm CurrentHostTerm()
         {
             lock (gate)
             {
                 if (!role.IsHost) throw new InvalidOperationException("Only the room host may send snapshots.");
-                return new HostTerm(current, role.Epoch);
+                return new HostTerm(current, role.Epoch, ++snapshotStarted);
             }
         }
 
@@ -620,9 +629,11 @@ namespace Roost.Client.Relay
             {
                 if (!role.IsHost) throw new InvalidOperationException("Only the room host may send snapshots.");
                 if (current != term.Session || role.Epoch != term.Epoch) return RelaySnapshotResult.Stale;
+                if (term.Ticket < snapshotSent) return RelaySnapshotResult.Stale; // 晚发起的一份已经发出
                 if (snapshotAt >= 0 && now - snapshotAt < options.SnapshotMinInterval.Ticks) return RelaySnapshotResult.TooSoon;
                 seq = ++snapshotSeq;
                 snapshotAt = now;
+                snapshotSent = term.Ticket;
             }
             var frame = RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Snapshot, RelayCodec.EncodeSnapshot(seq, data)), frameLimit);
             return term.Session!.Write(frame) ? RelaySnapshotResult.Sent : RelaySnapshotResult.NotConnected;

@@ -464,6 +464,42 @@ test("a snapshot started in an earlier host term is dropped: the next host recov
   b.client.close();
 });
 
+// 同一任期内并发推送以发起顺序为准（维护者 2026-11-18 定 A）：A 发起一次取状态很慢的推送，期间又推出 newer-state。
+// 慢的那份这时才取到 older-state：它落后于已发出的一份，不发、不占 seq；relay 存的仍是 newer-state，A 离开后 B 恢复的就是它。
+test("an earlier-started snapshot that finishes last is dropped: the next host recovers the later-started state", async () => {
+  let finish!: (data: Uint8Array) => void;
+  const a = await Player.create("ts-order-a", {
+    snapshot: { intervalMs: 0, take: () => new Promise<Uint8Array>((resolve) => (finish = resolve)) },
+  });
+  const ticket = await a.lobby.createRoom({ game: GAME, mode: "ts-order" });
+  await a.client.connect(ticket);
+  const b = await Player.create("ts-order-b");
+  await b.join(ticket.room.id);
+  await a.joined.next("B joined");
+  const sentByA: bigint[] = [];
+  a.client.onSnapshotSent((s) => sentByA.push(s.seq));
+  const rejectedForA: unknown[] = [];
+  a.client.onRejected((r) => rejectedForA.push(r));
+
+  const pending = a.client.pushSnapshot(); // take 还没返回
+  const newer = await a.client.pushSnapshot(text("newer-state"));
+  assert.equal(newer, 1n);
+  await sleep(1200); // 过了 snapshot_min_interval：慢的那份若被放行，SDK 与 relay 都不会以间隔为由拦下它
+  finish(text("older-state"));
+  assert.equal(await pending, undefined, "the earlier-started snapshot is dropped");
+  assert.deepEqual(sentByA, [newer], "only the later-started snapshot went out");
+  assert.equal(a.client.snapshotSeq, newer, "the dropped one did not use up a seq");
+
+  assert.ok(a.client.sendLeave());
+  const recovery = await b.youAreHost.next("B recovers after A leaves");
+  assert.deepEqual(
+    [recovery.source, recovery.snapshotSeq, recovery.state && new TextDecoder().decode(recovery.state)],
+    [StateSource.Snapshot, newer, "newer-state"],
+  );
+  assert.deepEqual(rejectedForA, []);
+  b.client.close();
+});
+
 test("host heartbeat: an idle host is not replaced within 5s", async () => {
   const { host, others } = await room("ts-idle", "ts-idle-m1");
   const [m1] = others;

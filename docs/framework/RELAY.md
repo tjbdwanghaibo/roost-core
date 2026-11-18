@@ -174,6 +174,7 @@
 - 只认当前房主发的（否则 `Rejected{not_host}`）；每个房间只存最新一份，relay 不压缩、不解压、不解析。
 - seq 在房间内必须递增，跨房主也一样：新房主从 `YouAreHost` 里的快照 seq 往上接（否则 `Rejected{stale_seq}`）。`YouAreHost` 的快照 seq 不管来源是交接数据还是快照，都是 relay 存着的最新那份的 seq（2026-11-17 起；之前交接数据来源时为 0，主动转交后新房主的第一份快照会被拒）。Go、C#、TS 三份 SDK 另外取 `max(本地, YouAreHost 的 seq, epoch<<32) + 1`，两条规则同时满足。
 - relay 只按 seq 判断新旧，分不出“新任期里发来的旧状态”，所以 SDK 保证每一份快照属于准备它时的连接与房主任期（三份 SDK 一致，v1.54.0 审查 RV-20261118-02）：开始准备（取状态、压缩）之前记下当前连接与 `epoch`，分配 seq 之前核对，期间换过（例如 A→B→A，epoch 0→2，或断线重连）就丢弃——不发、不占 seq（Go `ErrSnapshotStale`、C# `RelaySnapshotResult.Stale`、TS `pushSnapshot` 返回 `undefined`）。之前旧任期的状态会拿到新任期的 seq，relay 把它当成新任期最新的一份存下，下一任房主恢复成旧状态。核对通过、seq 已分配之后才换任期的那一份，按 seq 递增被 relay 拒收（新任期的 seq 不低于 `epoch<<32`）。游戏自己传入状态时（`Snapshot(state)` / `pushSnapshot(data)`），SDK 只能绑定调用时的任期：状态应在调用时刻取。
+- 同一任期里可以并发推快照（游戏从几处同时调，或手动推与定时推重叠；TS 的定时推送在 `take` 慢于 `intervalMs` 时会叠上来），以**发起顺序**为准、后发起的胜出（维护者 2026-11-18 定，三份 SDK 一致）：每份在开始准备时取一个递增的发起号，分配 seq 时在同一把锁里核对，比它晚发起的一份已经分配过 seq 的，这一份同样丢弃——不发、不占 seq，报告方式与换任期相同（Go `ErrSnapshotStale`、C# `Stale`、TS `undefined`）。之前先发起、取状态或压缩更慢的那份会拿到更大的 seq，盖掉 relay 已存的、后发起的较新状态。晚发起的一份因最小间隔等原因没发出时不算，较早那份照常可发。
 - 同一个房主的两份快照之间不少于 `snapshot_min_interval`（否则 `Rejected{too_soon}`）；换了房主重新算。
 - 快照在换 host 之后仍保留，直到新房主推来更新的一份：新房主刚接手就又走了，下一个候选拿到的仍是最近的那份。
 

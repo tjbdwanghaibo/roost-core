@@ -406,6 +406,70 @@ func TestASnapshotPreparedOnAnEarlierConnectionIsDropped(t *testing.T) {
 	}
 }
 
+// 同一任期内并发推快照，以发起顺序为准（维护者 2026-11-18 定 A，三份 SDK 一致）：A 先发起一份 older-state（Snapshot
+// 卡在压缩里，或定时快照卡在 SnapshotState 里），没准备完时后发起的 newer-state 已经发出（seq 1）。较早发起的那份这时才
+// 准备好：它落后于已发出的一份，返回 ErrSnapshotStale，不发、不占 seq；A 离开后 B 恢复的是 seq 1 的 newer-state。
+// 修前它拿到 seq 2 发出，relay 按 seq 递增存下，B 恢复成较旧的 older-state。
+func TestAnEarlierStartedSnapshotDoesNotOverwriteALaterOne(t *testing.T) {
+	for _, path := range []string{"Snapshot", "SnapshotState"} {
+		t.Run(path, func(t *testing.T) {
+			peer := startPeer(t, relaysvc.Config{SnapshotMinInterval: 10 * time.Millisecond})
+			entered, release := make(chan struct{}), make(chan struct{})
+			hold := func() {
+				close(entered)
+				<-release
+			}
+			compressHold := func(state []byte) {
+				if path == "Snapshot" && string(state) == "older-state" {
+					hold()
+				}
+			}
+			hostOpts := relay.Options{SnapshotMinInterval: time.Millisecond, Compressor: gatedCompressor{compressHold}}
+			if path == "SnapshotState" {
+				// 定时快照只要第一份；之后返回 nil 不推，newer-state 由测试手动推。
+				var calls atomic.Int32
+				hostOpts.SnapshotInterval = time.Hour
+				hostOpts.SnapshotState = func() []byte {
+					if calls.Add(1) > 1 {
+						return nil
+					}
+					hold()
+					return []byte("older-state")
+				}
+			}
+			a, members, _ := openRoom(t, peer, "order-"+path, hostOpts, []relay.Options{{}})
+			var older chan error
+			if path == "Snapshot" {
+				older = make(chan error, 1)
+				go func() { older <- a.client.Snapshot([]byte("older-state")) }()
+			}
+			recv(t, entered, "the older snapshot is being prepared")
+
+			if err := a.client.Snapshot([]byte("newer-state")); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(30 * time.Millisecond) // 过了两边的最小间隔：较早那份若被放行，不会因间隔被拦
+			close(release)
+			if older != nil {
+				if err := <-older; !errors.Is(err, relay.ErrSnapshotStale) {
+					t.Errorf("the earlier-started snapshot returned %v, want ErrSnapshotStale", err)
+				}
+			}
+			waitPong(t, a)
+			waitPong(t, a) // 定时快照在心跳 goroutine 上：再一轮 Pong 回来时它已处理完
+			none(t, a.rejected, "a rejected snapshot")
+
+			if _, err := a.client.Leave(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			offer := recv(t, members[0].youAreHost, "B recovers after A leaves")
+			if offer.Source != relay.StateSnapshot || offer.SnapshotSeq != 1 || string(offer.State) != "newer-state" {
+				t.Fatalf("B recovered seq %d state %q (source %d), want seq 1 newer-state", offer.SnapshotSeq, offer.State, offer.Source)
+			}
+		})
+	}
+}
+
 // gatedCompressor 不压缩，压缩前先调 hold（测试用它把某一份卡在压缩里）。
 type gatedCompressor struct{ hold func([]byte) }
 

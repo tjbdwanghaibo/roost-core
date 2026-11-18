@@ -362,6 +362,87 @@ test("a snapshot taken on one connection is not sent on the next one", async (t)
   await client.done;
 });
 
+// 同一任期内并发推送以发起顺序为准（维护者 2026-11-18 定 A，三份 SDK 一致）：先发起的一份卡在取状态或压缩里，后发起的
+// newer-state 先发出（seq 1）。先发起的那份这时才准备好：它比已发出的一份旧，返回 undefined，不发、不占 seq、不触发
+// onSnapshotSent。修前它拿到 seq 2 发出，relay 按 seq 递增存下，盖掉较新的 newer-state。
+const stateOf = (payload: Uint8Array) => new TextDecoder().decode(decodeSnapshot(payload).data.subarray(1));
+for (const where of ["take", "compress"] as const) {
+  test(`an earlier-started snapshot whose ${where} finishes after a later one is sent is dropped`, async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slowCompressor: Compressor = {
+      name: "slow",
+      id: identityCompressor.id,
+      compress: async (data) => {
+        if (where === "compress" && new TextDecoder().decode(data) === "older-state") await gate;
+        return identityCompressor.compress(data);
+      },
+      decompress: (data, limit) => identityCompressor.decompress(data, limit),
+    };
+    const { client, fake } = await connect({
+      slot: 1,
+      host: true,
+      compressor: slowCompressor,
+      snapshotMinIntervalMs: 0,
+      snapshot: {
+        intervalMs: 0,
+        take: async () => {
+          if (where === "take") await gate;
+          return text("older-state");
+        },
+      },
+    });
+    const sent: bigint[] = [];
+    client.onSnapshotSent((s) => sent.push(s.seq));
+    try {
+      const older = client.pushSnapshot();
+      assert.equal(await client.pushSnapshot(text("newer-state")), 1n, "the later-started snapshot goes out first");
+      release();
+      assert.equal(await older, undefined, "the earlier-started snapshot is dropped");
+      assert.deepEqual(fake.controls(RelayOp.Snapshot).map((f) => stateOf(f.payload)), ["newer-state"], "relay only got the newer state");
+      assert.deepEqual(sent, [1n], "onSnapshotSent is not called for the dropped snapshot");
+      assert.equal(client.snapshotSeq, 1n, "the dropped snapshot did not use up a seq");
+    } finally {
+      client.close();
+    }
+  });
+}
+
+// 定时推送也一样：take 比 intervalMs 慢时，下一轮的推送会与上一轮重叠。卡住的第一轮 older-state 在后续轮次发出之后才
+// 取完，它被丢弃，relay 收到的都是较新的状态，seq 连续递增。
+test("timer pushes that overlap because take is slower than intervalMs never send an older state after a newer one", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let takes = 0;
+  const { client, fake } = await connect({
+    slot: 1,
+    host: true,
+    snapshotMinIntervalMs: 0,
+    snapshot: {
+      intervalMs: 10,
+      take: async () => {
+        if (++takes === 1) {
+          await gate;
+          return text("older-state");
+        }
+        return text("newer-state");
+      },
+    },
+  });
+  try {
+    await fake.waitFor("a later timer push", () => fake.controls(RelayOp.Snapshot).length > 0);
+    release();
+    await sleep(50); // 卡住的第一轮已取完；期间定时推送照常进行
+    client.close();
+    const frames = fake.controls(RelayOp.Snapshot);
+    const states = frames.map((f) => stateOf(f.payload));
+    assert.ok(!states.includes("older-state"), `relay got the older state after a newer one: ${states.join(", ")}`);
+    assert.deepEqual(frames.map((f) => decodeSnapshot(f.payload).seq), frames.map((_, i) => BigInt(i + 1)), "seqs are consecutive");
+  } finally {
+    client.close();
+  }
+});
+
 test("kicking an offline seat: the host's second MemberLeft{kicked} reaches the callback and the seat is gone", async () => {
   const { client, fake } = await connect({ slot: 3, autoHostReady: true });
   const left: { slot: number; reason: RelayReason }[] = [];

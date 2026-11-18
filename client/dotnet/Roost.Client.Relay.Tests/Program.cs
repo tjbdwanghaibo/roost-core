@@ -93,6 +93,7 @@ internal static partial class Program
             ("snapshot pacing and rejections", SnapshotPacing),
             ("automatic snapshots", AutoSnapshot),
             ("a snapshot prepared in an earlier host term or connection is dropped", StaleSnapshot),
+            ("an earlier-started snapshot is dropped once a later one is sent", SnapshotStartOrder),
             ("host heartbeat under host_idle_timeout", HostHeartbeat),
             ("reconnect vs lobby_unavailable / lobby_rejected", ReconnectAdmission),
             ("started room: reconnect, rejoin, kick an offline seat", StartedRoom),
@@ -1046,6 +1047,39 @@ internal static partial class Program
         Check(offer.SnapshotSeq == 1 && Encoding.UTF8.GetString(offer.State!) == "new-connection-state",
             $"recovered seq {offer.SnapshotSeq}, want seq 1 new-connection-state");
         Dispose(host, others);
+    }
+
+    // 同一任期内并发推送以发起顺序为准（维护者 2026-11-18 定 A，三份 SDK 一致）：A 从工作线程调 Snapshot(older-state)，压缩没结束时
+    // 又推出 newer-state（seq 1）。较早发起的那份压缩完时落后于已发出的一份：返回 Stale，不发、不占 seq；A 离开后 B 恢复的是 seq 1 的
+    // newer-state。修前它拿到 seq 2 发出，relay 按 seq 递增存下，B 恢复成较旧的 older-state。
+    private static async Task SnapshotStartOrder(Peer peer)
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var gated = new GatedCompressor(state =>
+        {
+            if (Encoding.UTF8.GetString(state) == "older-state") { entered.Set(); release.Wait(); }
+        });
+        var (a, members, _) = await OpenRoom(peer, "cs-order", Opts(o =>
+        {
+            o.Compressor = gated; o.SnapshotMinInterval = TimeSpan.FromMilliseconds(1);
+        }), Opts());
+        var b = members[0];
+        var older = Task.Run(() => a.Client.Snapshot(Encoding.UTF8.GetBytes("older-state")));
+        Check(entered.Wait(TimeSpan.FromSeconds(5)), "the earlier-started snapshot is being compressed");
+        Check(a.Client.Snapshot(Encoding.UTF8.GetBytes("newer-state")) == RelaySnapshotResult.Sent, "the later-started snapshot goes out first");
+        await Task.Delay(1200); // 过了 relay 的 snapshot_min_interval（1s）：较早那份若被放行，不会因间隔被拦
+        release.Set();
+        var result = await older;
+        Check(result == RelaySnapshotResult.Stale, "the earlier-started snapshot is dropped, got " + result);
+        await WaitPong(a);
+        Player.PumpAll();
+        Check(a.Rejected.IsEmpty, "no snapshot rejected");
+        await a.Client.LeaveAsync();
+        var offer = await b.Next(b.YouAreHost, "B recovers after A leaves");
+        Check(offer.Source == RelayStateSource.Snapshot && offer.SnapshotSeq == 1 && Encoding.UTF8.GetString(offer.State!) == "newer-state",
+            $"B recovered seq {offer.SnapshotSeq} state {(offer.State == null ? "null" : Encoding.UTF8.GetString(offer.State))}, want seq 1 newer-state");
+        Dispose(a, members);
     }
 
     /// <summary>不压缩（标识 0，谁都解得开），压缩前先调 hold（用它把某一份卡在压缩里）。</summary>

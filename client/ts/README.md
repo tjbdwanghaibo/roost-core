@@ -53,7 +53,7 @@ const { roomGone } = await client.leave(); // 经 lobby 离开、close；房间�
 - **前台上报**：`setForeground(foreground)` 发 `Presence`，relay 只转给当前房主（`onMemberPresence`）；SDK 记下状态，收到 `HostChanged`、每次连上（含自动重连、`rejoin`）都自动重发，从没调过不发；没有连接时返回 false，状态仍记下。`WebHost` 按页面可见性自动调它（见下）。
 
 - **快照 seq**：每份加 1，房间内跨房主递增。收到 `YouAreHost` 时取 `max(本地, YouAreHost 的 seq, epoch << 32)`，下一份再加 1（与 Go / C# 相同；relay 不管来源都在 `YouAreHost` 里带上它存着的最新 seq，`epoch << 32` 保证大于以前任何房主发过的 seq）；刷新页面后 `raiseSnapshotSeq` 从存档往上接。
-- **快照属于发起时的任期**：`pushSnapshot` 在取状态（`snapshot.take()`）和压缩之前记下当前连接与 `epoch`，异步结束、分配 seq 之前核对；期间换了连接或房主任期（例如转出去又转回来、断线重连）就返回 `undefined`，不发、不占 seq、不触发 `onSnapshotSent`（与 Go / C# 相同，见 RELAY.md §4A“快照”）。
+- **快照属于发起时的任期**：`pushSnapshot` 在取状态（`snapshot.take()`）和压缩之前记下当前连接与 `epoch`，异步结束、分配 seq 之前核对；期间换了连接或房主任期（例如转出去又转回来、断线重连）就返回 `undefined`，不发、不占 seq、不触发 `onSnapshotSent`（与 Go / C# 相同，见 RELAY.md §4A“快照”）。几次推送可以并发（游戏连着调，或 `take` 慢于 `intervalMs` 时定时推送叠上来），以发起顺序为准、后发起的胜出：比它晚发起的一份已经发出时，这一份同样返回 `undefined`、不发、不占 seq。
 - **快照节奏**：`snapshot.intervalMs` 缺省 3s；离上一份不到 `snapshotMinIntervalMs`（缺省 1s，同 relay 的 `snapshot_min_interval`）的 `pushSnapshot` 不发、不占 seq，抛 `SnapshotTooSoonError`；当上房主时重新计算。手动推一份后定时推送从那一刻重新计时。
 - **踢人**：房主可以踢有座位但不在线的槽位，relay 回 `MemberLeft{kicked}`（对已离线的人是第二条 `MemberLeft`）。SDK 只维护在线成员表，不维护离线座位，收到就照常交给 `onMemberLeft`。
 - **开局后掉线**：lobby 给开局后掉线的成员保留席位，再 join 回到原座（满员也放行），所以开局后的自动重连照常可用；开局后新来的人 join 答 `room_started`。

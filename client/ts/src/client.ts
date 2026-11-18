@@ -392,6 +392,9 @@ export class RelayClient {
   private seq = 0n;
   /** 最近一份快照发出的时刻；当上房主时清零（relay 换了房主重新算最小间隔）。 */
   private lastSnapshotAt: number | undefined;
+  /** 最近一次 pushSnapshot 发起时取的号（只增不减）；snapshotSentTicket 是已发出的那些份里最大的号。见 pushSnapshot。 */
+  private snapshotTicket = 0;
+  private snapshotSentTicket = 0;
   private successorList: number[] = [];
   /** 游戏自己调过 setSuccessors（换 host 后清零）：WebHost 的自动排序不覆盖它。 */
   private declaredByGame = false;
@@ -668,8 +671,8 @@ export class RelayClient {
 
   /**
    * 推一份快照（只有房主能推）：data 缺省取 snapshot.take()，压缩后带上递增的 seq 发给 relay。返回用的 seq；
-   * 没东西可推、没有连接、已不是房主，或取状态 / 压缩期间换了连接或房主任期（这一份已过期，不发也不占 seq）时返回
-   * undefined；离上一份不到 snapshotMinIntervalMs 时抛 SnapshotTooSoonError
+   * 没东西可推、没有连接、已不是房主，或取状态 / 压缩期间换了连接或房主任期、或者比它晚发起的一份已经发出（这一份
+   * 已过期，不发也不占 seq）时返回 undefined；离上一份不到 snapshotMinIntervalMs 时抛 SnapshotTooSoonError
    * （relay 仍可能拒收，经 onRejected 通知）。之后的定时推送从现在重新计时。
    */
   async pushSnapshot(data?: Uint8Array): Promise<bigint | undefined> {
@@ -678,20 +681,26 @@ export class RelayClient {
     // 这一份属于发起时的连接与房主任期（epoch）。取状态、压缩都是异步的，期间房主可能换了一圈（A→B→A，epoch 0→2）
     // 或断线重连：旧任期的状态拿新任期的 seq 发出去，relay 会把它当成新任期最新的一份存下，下一任房主恢复的就是旧状态。
     // 所以异步结束、分配 seq 之前核对两者，变了就丢弃：不发、不占 seq（与 Go / C# SDK 相同）。
+    // 同一任期里几次推送也会重叠（游戏连着调，或 take 慢于 intervalMs 时定时推送叠上来）：先发起的一份若取状态更慢，
+    // 会拿到更大的 seq，盖掉 relay 已存的、后发起的较新状态。所以每次推送在发起时取一个递增的号，比它晚发起的一份已经
+    // 发出就同样丢弃：并发推送以发起顺序为准、后发起的胜出（维护者 2026-11-18 定，与 Go / C# SDK 相同）。
     const session = this.current;
     const epoch = this.epochValue;
     if (!session) return undefined;
+    const ticket = ++this.snapshotTicket;
     const state = data ?? (await this.opts.snapshot?.take());
     if (state === undefined) return undefined;
     const compressed = await packState(this.compressor, state);
     this.checkStateSize(compressed.length);
     if (!this.role.host || this.current !== session || this.epochValue !== epoch) return undefined;
+    if (ticket < this.snapshotSentTicket) return undefined; // 晚发起的一份已经发出
     const t = now();
     if (this.lastSnapshotAt !== undefined && t - this.lastSnapshotAt < this.opts.snapshotMinIntervalMs) throw new SnapshotTooSoonError();
     const seq = this.seq + 1n; // 压缩完再取 seq：并发的几次推送按发出顺序递增
     if (!this.sendBig(RelayOp.Snapshot, 0, encodeSnapshot(seq, compressed))) return undefined;
     this.seq = seq;
     this.lastSnapshotAt = t;
+    this.snapshotSentTicket = ticket;
     this.hooks.snapshotSent?.({ seq, data: compressed });
     this.handlers.snapshotSent?.({ seq, data: compressed });
     return seq;
