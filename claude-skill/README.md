@@ -13,9 +13,9 @@ curl -fsSL https://raw.githubusercontent.com/tjbdwanghaibo/roost-core/main/claud
 
 想对所有项目生效，就放到 `~/.claude/skills/roost-genre/SKILL.md`。
 
-**更新**：入口文件每次使用时会先检查两样——自己有没有新版（与 GitHub 上 main 的这份比较）、roost-core 有没有新的发布版——有新版就告诉你并给出更新办法，不会自己改文件，也不会未经同意升级你的服务端工程。手动更新入口文件就是重新执行上面的下载命令。入口文件本身与版本无关：用哪个 roost-core 版本由它在运行时决定（已有工程跟工程的 `go.mod`，新工程用最新发布版，用户可以指定）。
+**更新**：入口文件每次对话开始时检查两样——自己有没有新版（与 GitHub 上 main 的这份比较）、roost-core 有没有新的发布版（只比版本号，你要升级时才下载新版读发布说明）——有新版就告诉你并给出更新办法，不会自己改文件，也不会未经同意升级你的服务端工程。手动更新入口文件就是重新执行上面的下载命令。用哪个 roost-core 版本由入口在运行时决定（已有工程跟工程的 `go.mod`，新工程用最新发布版，用户可以指定），适用 v1.56.0 及以后。
 
-前置：Go 1.27 及以上，能访问 GitHub 与 Go 模块代理。
+前置：Go 1.27 及以上，git、curl、python3，能访问 GitHub 与 Go 模块代理；起服冒烟要 docker；客户端是 Unity / C# 时导出协议要 protoc 31.1（正文 compose 第 1 步写了怎么准备）。
 
 ## 可选：禁止 agent 修改入口文件
 
@@ -35,9 +35,9 @@ skill 规定使用它的 agent 只读；正文在 Go 模块缓存里，本来就
 
 直接对 Claude Code 说需求，例如“用 roost 做一个休闲游戏的服务端：登录建角、金币、每日签到……”。skill 会：
 
-1. 问一次要不要专业模式（不回答就是业余模式）；
-2. 先判断需求是否真的需要这套服务器框架；
-3. 拆需求、分服务器与客户端、复用模块、手写其余、离线验收；
-4. 在生成的工程里写 `docs/DEMO.zh-CN.md`（模块、实体、服务、协议、客户端对接等）与 `docs/DEMO-HISTORY.zh-CN.md`（逐次变更，也是之后增改需求时的记忆）。
+1. 开场一次问完几个白话问题：客户端用什么做、工程在哪，大概多少人在线，局外有没有要保存的东西，有没有实时战斗，你想让 AI 先做完（业余，默认）、逐项确认（专业）还是只给决策清单；
+2. 判断需求是否真的需要这套服务器框架；
+3. 拆需求、分服务器与客户端、复用模块、手写其余、离线验收，再真起服务做一次登录冒烟；
+4. 在生成的工程里写 `docs/DEMO.zh-CN.md`（当前状态）、`docs/CLIENT.zh-CN.md`（客户端对接的单一入口，同一份在导出目录 `shared/README.md`）与 `docs/DEMO-HISTORY.zh-CN.md`（逐次变更，也是之后增改需求时的记忆）；专业模式还有决策单 `docs/DECISIONS.zh-CN.md`。
 
-之后在同一个工程里继续提需求或改需求即可。完整流程见对应版本的 [compose.md](../docs/agent-skills/roost-genre/references/compose.md)。
+之后在同一个工程里继续提需求或改需求即可。别的 agent（例如 Unity 客户端工程里的 agent）也可以调用它，结束时它回交一块固定格式的交付摘要，客户端 agent 照 `docs/CLIENT.zh-CN.md` 接入。完整流程见对应版本的 [compose.md](../docs/agent-skills/roost-genre/references/compose.md) 与 [SKILL.md](../docs/agent-skills/roost-genre/SKILL.md) 的“与其他 agent 对接”。

@@ -1,48 +1,18 @@
 # MMORPG
 
-手册：`docs/framework/MMORPG-INTEGRATION.md`（下称 MMO §N）。路径相对 roost-core 根目录，以检出或 module cache 中的 `docs/` 为准。
-
-> **版本要求**：§3.2 的业务纵切夹具 **v1.33.1 起可用（2026-10-31 实测 13 条 PASS），最低版本 v1.33.1**。v1.33.0 上 `mmo_gameplay_test.go` 仍以 3 参数调用生成的 `Sync_TickPlayerTimer`，编译失败。目标版本是 v1.33.0 时只做 §3.1（game-demo 参考形态）并告诉用户纵切要升级，不要自行改夹具绕过。
->
-> v1.33.2 起夹具 handler 的业务时间改为约定参数 `nowUnixMilli`（分发包装从 fctx 填），**生成的 Sender 不带时间参数**，测试用 `clock.SetSource` 拨时钟；v1.33.1 上的旧夹具 / 旧手册 Sender 示例还带 `now`（SKILL.md §0）。二档 REAL 恢复用例需 ≥ v1.33.2（SKILL.md §7）。
-
-> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+手册：`docs/framework/MMORPG-INTEGRATION.md`（下称 MMO §N）。命令对应当前版本的 `scripts/test-mmorpg-generated.sh` 与 `scripts/test-mmorpg-scenes.sh`；目标 roost-core 版本更早时读那个 tag 里的本文件。
 
 ## 1. 适用与不适用
 
 | 适用 | 不适用 / 要另想办法 |
 | --- | --- |
-| 同进程多地图的服务器权威状态同步 MMO：登录建角、移动与 AOI、组队、面对面交易、权威战斗与冷却、Buff / 死亡复活、掉落任务副本、背包装备、公会（Remote）、跨 sid 赠礼（Saga）、邮件 / 支付 / 活动 / 排行 | 本纵切不含 CellWorld 固定分区或 Player 跨 sid 无缝迁移；另有 rehome 断线改绑，Q4 旧源档窗口保留（MMO §6）；跨服世界 Boss + 副本权限视野 + 活动结算的联合消费者尚未验收（MMO §6.1）；竞技副本要帧同步时单独走 moba-lockstep |
+| 同进程多地图的服务器权威状态同步 MMO：登录建角、移动与视野、组队、面对面交易、权威战斗与冷却、Buff / 死亡复活、掉落任务副本、背包装备、公会（Remote）、跨服赠礼（Saga）、邮件 / 支付 / 活动 / 排行 | 固定分区大世界（另见 SKILL.md §6 与 cellworld 模块）；Player 跨 sid 无缝迁移（rehome 只做断线改绑）；跨服世界 Boss + 副本权限视野 + 活动结算的联合链没有验收（MMO §6.1）；要公平的竞技副本单独走 moba-lockstep |
 
-## 2. 用到的框架模块（MMO §2、§3）
+## 2. 命令
 
-| 业务 | 模块 |
-| --- | --- |
-| 金币 / 材料道具 / 击杀任务（R9 起） | 业务模块 `wallet`、`bag`、`task`：状态是 Player 主 DAO 的嵌套字段，handler 收 `view.PlayerEntity`，在同一笔事务里调 `Wallet()` / `Bag()` / `Task()`（MMO §4.5） |
-| 血量、地图归属、队伍、冷却、Buff | Player DAO 的玩法字段；Nest 串行 |
-| 交易托管、怪物归属、副本事实 | 独立 Trade / Monster / Scene 实体（World 锁档）+ 多实体 Sender |
-| Buff 到期、复活 | `roost add timer --entity Player` |
-| 谁能看到谁 | 每张地图一个 `policy.Interest`（Block AOI、关系来源、Profile 白名单），一个连接一个 `entitysync.Manager` |
-| 怪物 / 回复 / 场景帧 | `roost add heartbeat` / `add behavior --ai --state` / `add timedomain`（guide/10-time.md §4A～§4B；纵切夹具未用） |
-| 技能 | `gameplay/skill`（Runtime 不进 Nest 回滚域，guide/08-skill.md） |
-| 公会 / 跨服 | Remote Entity + Mirror；Saga 原生步骤 / effect |
+### 2.1 参考形态：game-demo 模板 + 多地图 TCP
 
-### 普通 Player + Remote 公会 View
-
-生成玩家读取公会加成、资料等允许快照语义的功能时，使用 [Remote 指南 §6](../../../framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取) 的正式链路：请求 DTO 放在 `game/requests` 等共用包，`entity.RemoteViewRef` 字段声明 `remote:"view.XxxSnapshot,consistency=monotonic,required"`，运行 `roost generate`。访问器在请求包生成，handler 与 Sender 共用同一类型；不要把 Remote View 当成第二个可写 Entity，也不要在 handler 里直接调用 Mirror 回源。
-
-- 优先从 Mongo DAO 顶层字段声明 `remoteview:"public,member"` 生成视图，如 `db.AllianceMemberSnapshot`；请求 tag 引用生成类型，不手工复制 DTO 或另写字段映射。Snapshot 与 DAO 同包，`RegisterEntity()` 自动登记解码，提交/outbox 自动发布，删除自动失效。未标字段不进入投影；嵌套字段一旦选中，包含其全部持久字段，不能把嵌套私密信息误暴露。
-- `remoteview` 名称不授予权限；版本下限来自该视图的已知版本（首读可为 0），不使用无关字段提交后的实体全局版本。变更/删除视图定义不自动迁移或删除历史存储快照，按指南的升级边界处理。
-- 入口提供可信引用及版本，底层 I/O 池预取、业务池锁住 Player 后读取 `req.MustXxx()` 并修改 Player DAO。普通消息不必显式设置 I/O option。
-- 预取不是自动跟随 `Player.公会ID`，handler 要校验当前归属与引用一致。视图是预取时的快照，不能授权扣公会资源、审批成员或处理严格撤权；这些走 Remote 权威写入/拥有者命令。
-- `required` 失败不执行业务；可选视图用 `(view, ok)` 明确降级。同一消息别名唯一，异步投递后请求不可变，不把视图跨 handler 保存。缓存一致性不能描述成跨实体原子事务。
-- 新接入先跑指南的生成消费工程回归，再验证自身公会投影/解码器和真实存储装配；本轮消费工程使用 resolver 替身，不能宣称该玩法真实跨服链路已经验收。旧 tag 工具不支持独立请求生成，必须与包含此变更的检出保持一致。
-
-## 3. 生成最小 demo
-
-### 3.1 参考形态：game-demo 模板 + 多地图 TCP（v1.33.0 起可用）
-
-`-template game-demo` 生成完整参考应用（登录、背包、邮件、匹配、聊天、副本、赠礼 saga、地图与 AOI、lockstep 战斗、GM、loadtest；`demo/README.md`）。把 SKILL.md §3.2 的 `project new` 那行换成 `-template game-demo` 再执行，之后：
+`-template game-demo` 生成完整参考应用（登录、背包、邮件、匹配、聊天、副本、赠礼 saga、地图与视野、lockstep 战斗、GM、loadtest；`demo/README.md`）。把 SKILL.md §3.2 的 `project new` 那行换成 `-template game-demo` 再执行，之后：
 
 ```bash
 F="$CORE/scripts/testdata/mmorpg"
@@ -54,14 +24,14 @@ gofmt -w internal/service/game/mmo_*.go
 go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMMORPGTwoScenesTCPTransferRetryAndReconnect$' ./internal/service/game 2>&1 | tee "$WORK/test.log"
 ```
 
-期望 1 条 PASS（两张地图、真实 TCP 客户端、切图重试与重连，MMO §12）。这两份夹具用 `MMO_MODULE` 占位，不需要 `fix_mod`。对应 `scripts/test-mmorpg-scenes.sh`（该脚本不跑 `generate`，模板已生成齐；多跑一次只做核对）。
+这两份夹具用 `MMO_MODULE` 占位，不需要 `fix_mod`。
 
-### 3.2 业务纵切：Player / Scene / Trade / Monster（v1.33.1 起可用；R9 起装模块）
+### 2.2 业务纵切：Player / Scene / Trade / Monster
 
-接在 SKILL.md §3.2（`-template game`）之后。对应 `scripts/test-mmorpg-generated.sh`。模块清单 `wallet bag task`（Q5 A：队伍 / 场景 / 怪物 / 战斗 / 副本留手写，到 CellWorld 进模块那一轮再定；交易托管借鉴 friends 的两 Player 同事务写法，MMO §4.5）；不再 `add dao Player`（game 模板已有），Player 不再加 `Gold` / `Items` / `QuestKills` / `QuestClaimed`。
+接在 SKILL.md §3.2（`-template game`）之后。模块：`wallet`（金币）、`bag`（材料道具 3001）、`task`（击杀任务 201，`Task().Report("mmo.kill")`，领奖 `Task().Claim`），handler 收 `view.PlayerEntity` 在同一笔事务里调它们。队伍、场景、怪物、战斗、副本、交易托管手写（交易借鉴 friends 的两 Player 同事务写法，MMO §4.5）。
 
 ```bash
-bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet bag task   # = roost module add + 核对已登记
+bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet bag task
 "$ROOST" add timer --entity Player
 for e in Scene Trade Monster; do
   "$ROOST" add entity "$e"
@@ -75,7 +45,7 @@ dao_i64 Scene db/def/scene.go Occupants InstanceComplete
 dao_i64 Trade db/def/trade.go Status SellerID BuyerID Price Count Deadline SellerConfirmed BuyerConfirmed
 dao_i64 Monster db/def/monster.go HP SceneID LootOwner LootTaken
 world game/entities/scene/entity.go game/entities/trade/entity.go game/entities/monster/entity.go
-# 材料道具 3001（单种上限 1000）与击杀任务 201（事件 mmo.kill，奖 5 金币）追加在模块自带的表后面（MMO §4.1 第 3 步）
+# 材料道具 3001（单种上限 1000）与击杀任务 201（事件 mmo.kill，奖 5 金币）追加在模块自带的表后面
 printf '%s\n' '3001,MMO 材料,1000' >> configs/table/item.csv
 printf '%s\n' 201,mmo.kill,permanent,1,0,coins,0,5,false >> configs/table/task.csv
 F="$CORE/scripts/testdata/mmorpg"
@@ -83,50 +53,42 @@ for n in tasks tasks_test gameplay gameplay_test; do cp "$F/$n.go.txt" "game/han
 cp "$F/timer_handlers.go.txt" game/entities/player/timer_handlers.go
 fix_mod mmorpg-practice game/handler/mmo_*.go game/entities/player/timer_handlers.go
 gofmt -w db/def/*.go game/handler/mmo_*.go game/entities/player/timer_handlers.go
-python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" mmorpg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" mmorpg
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Combat|Buff|Transfer|Death|Robot)' ./game/handler 2>&1 | tee "$WORK/test.log"
 bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" wallet bag task
 ```
 
-期望：`--- PASS: TestMMORPG` 恰好 **14** 条（13 条业务 + `TestMMORPGRobotBusiness`）、0 skip；`modules.sh verify` 打印 `bag 20/20`、`task 29/29`、`task+bag 3/3`、`task+wallet 6/6`、`wallet 17/17`（每个模块通过数 == 检出 `modules/<名>/module.yaml` 的 `verify.pass`、0 skip）；然后按 SKILL.md §3.4 收尾。
+两种形态都按 SKILL.md §3.4 收尾。
 
-## 4. demo 的最小玩法范围（MMO §4.4，7 组 13 条业务 + 1 条 Robot）
+## 3. 期望场景数
 
-两人组队 / 解散；并发转账重放与拒绝重试；Trade 托管交易（确认、取消、到期、并发竞争）；战斗 → 掉落 → 任务 → 副本完成；Buff 刷新与回滚；死亡与复活期限；切图、返回与旧请求。最小可讲的玩法：进图 → 打怪 → 拾取 → Buff 到期，再加一次面对面交易。
+| 形态 | 期望 |
+| --- | --- |
+| 2.1 参考形态 | 1 条 PASS（两张地图、真实 TCP 客户端、切图重试与重连）；game-demo 工程 `project doctor` 没有 FAIL |
+| 2.2 业务纵切 | `--- PASS: TestMMORPG` 恰好 **14** 条（13 条业务 + `TestMMORPGRobotBusiness`）、0 SKIP；`modules.sh verify` 打印 `bag 20/20`、`task 29/29`、`task+bag 3/3`、`task+wallet 6/6`、`wallet 17/17` |
 
-R9（2026-11-17）起：金币读 `PlayerDao.Wallet`、材料读 `PlayerDao.Bag` 的道具 3001、击杀任务读 `PlayerDao.Task` 的永久任务 201；击杀时 `Task().Report("mmo.kill")`，领奖 `MMORPGQuest` 调 `Task().Claim`（已领答 `task_claimed`，这里当重放成功）。场景名与条数不变，旧断言 → 新断言见 MMO §4.5。
+业务场景覆盖：两人组队 / 解散；并发转账重放与拒绝重试；Trade 托管交易（确认、取消、到期、并发竞争）；战斗 → 掉落 → 任务 → 副本完成；Buff 刷新与回滚；死亡与复活期限；切图、返回与旧请求。
 
-## 5. 业务限制清单
+## 4. 限制
 
 | 类别 | 内容 | 出处 |
 | --- | --- | --- |
-| 框架能做 | 多实体同事务（交易三实体）、持久期限、同进程切图（Nest 提交 + Interest Reconcile 两阶段）、Hold / Ready 与高 epoch 全量、Profile 字段白名单、Remote 公会、Saga 跨 sid 赠礼 | MMO §3、§5、§6 |
-| 框架不能做 | Player 跨 sid 无缝迁移（rehome 断线改绑另有入口）、副本 / 战场自动 HA、跨服撤权传播、已下发信息收回；寻路 / 巡逻组件（movement 只有 MapBasic / Move / MoveTo / Follow）；Skill Runtime 随 Nest 回滚 | MMO §6、§6.1、§7；guide/10-time.md §4B；guide/08-skill.md |
-| AOI 容量 | 2026-10-20 sync-aoi（1000 玩家、1 万实体、20Hz、本机 loopback）：单视野 Nest 改值→客户端 P99 约 64ms，+4 视野 78ms（修复后 65ms），+16 视野修复后 97～141ms（ApplyAsync）；缺省 ApplySync 每玩家 ≤ 9 视野；`MaxSpatialViews` 缺省 8192；`MaxObjects` 缺省 100，超出关整个会话 | guide/04-sync.md §2“已测规模与边界”；KNOWN-LIMITS“广播与 AOI” |
-| 吞吐 / 心跳 | 生成工程 strict 50 连接约 1253 TPS、同实体约 108 TPS（SKILL.md §5 #3）；心跳最短 50ms，移动建议 200ms | KNOWN-LIMITS“能力与验证边界”；guide/10-time.md §4A |
-| 一致性边界 | strict = WAL fsync，Mongo 可见要用 Flush / 投影等待；连接关闭或 ctx 超时不等于撤销；AOI 可见不等于攻击 / 交易授权；Saga 不是跨服瞬时原子交易；Saga 业务键（如跨 sid 赠礼）只在运行期间 + 终态保留期内唯一，保留期后可复用、前后两轮靠协调器生成的生命周期身份区分（维护者 2026-10-31 定案 A），要“同一礼物永远只送一次”在业务数据里记已用过的键 | MMO §3、§7；SAGA.md“定义”业务键与查询；guide/06-saga.md 幂等键 |
-| 业务要自己补 | 战斗公式、射程、视线、反作弊；组队 / 交易 / 掉落规则；技能 Host 副作用与持久边界；寻路；副本准入与容量；公会命名与权限；切图失败的重试驱动 | MMO §3“业务负责什么”列 |
+| 框架能做 | 多实体同事务（交易三实体）、持久期限、同进程切图（Nest 提交 + Interest 两阶段）、Hold / Ready 与高 epoch 全量、Profile 字段白名单、Remote 公会、Saga 跨服赠礼 | MMO §3、§5、§6 |
+| 框架不能做 | Player 跨 sid 无缝迁移、副本 / 战场自动高可用、跨服撤权传播、已下发信息收回；寻路 / 巡逻组件（movement 只有 MapBasic / Move / MoveTo / Follow）；Skill Runtime 随 Nest 回滚 | MMO §6、§7；guide/10-time.md §4B；guide/08-skill.md |
+| 视野容量 | 本机 loopback 1000 玩家、1 万实体、20Hz：单视野改值到客户端 P99 约 64ms，+16 视野 97～141ms（ApplyAsync）；缺省 ApplySync 每玩家 ≤ 9 视野；`MaxObjects` 缺省 100，超出时超额降级 | guide/04-sync.md §2“已测规模与边界”；KNOWN-LIMITS“广播与 AOI” |
+| 心跳 | 最短 50ms，移动建议 200ms | guide/10-time.md §4A |
+| 一致性 | 提交确认不等于 Mongo 已可见（要用 Flush / 投影等待）；连接关闭或超时不等于撤销；视野可见不等于攻击 / 交易授权；Saga 不是跨服瞬时原子交易，业务键只在运行期间 + 终态保留期内唯一，“同一礼物永远只送一次”要在业务数据里记已用过的键 | MMO §3、§7；guide/06-saga.md |
+| 业务要自己补 | 战斗公式、射程、视线、反作弊；组队 / 交易 / 掉落规则；技能 Host 副作用与持久边界；寻路；副本准入与容量；公会命名与权限；切图失败的重试驱动 | MMO §3 |
+| 缺省模式不证明 | 无 WAL / Mongo。真实依赖档 `ROOST_MMORPG_REAL=1`（隔离 Mongo）：正常停机与 SIGKILL 后经投递循环恢复；`scripts/test-mmorpg-cross-sid.sh` 双服赠礼（Mongo + NATS）；game-demo `make dev-up && make dev-run && make dev-smoke` | MMO §11、§13 |
 
-## 6. 常见坑（MMO §7）
+玩家读取公会加成、资料这类允许快照语义的功能，用 [Remote 指南 §6](../../../framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取) 的“普通 Player + Remote View”链路；视图是预取时的快照，不能授权扣公会资源、审批成员，handler 要校验当前归属与引用一致。
+
+**常见坑**（MMO §7）：
 
 - 改了 SceneID 就当切图完成：持久事实、兴趣订阅、客户端基线都要更新。
-- 两个独立 Manager 的流拼到同一个客户端 Receiver；应用 Full 时不清旧对象（MMO §5）。
-- 收到一次确认就交换资产：两个确认绑定同一报价身份。
-- 照搬 game-demo 的 Scene 注解：demo 地形 Scene 是 `noPersist=true lifetime=runtime_rebuild`，纵切的 Scene 带人数事实要持久（MMO §2）。
-- 框架有 Lockstep 就以为 MMO 必须帧同步：开放世界用服务器权威状态同步。
+- 两个独立 Manager 的流拼到同一个客户端 Receiver；应用 Full 时不清旧对象。
+- 收到一次确认就交换资产：两个确认要绑定同一报价身份。
+- 照搬 game-demo 的 Scene 注解：demo 地形 Scene 是 `noPersist=true lifetime=runtime_rebuild`，纵切的 Scene 带人数事实要持久。
+- 有 Lockstep 就以为 MMO 必须帧同步：开放世界用服务器权威状态同步。
 - 真实 TCP 场景通过就说容量合格：功能与容量分开验收。
-
-## 7. 验证
-
-- §3.1：1 条 PASS + SKILL.md §3.4。2026-10-31 在 v1.33.0 检出、自定 module 实测通过（含 `generate`、build / vet / `id check` / `generate --check`）。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：1 PASS、0 SKIP，§3.4 全过；game-demo 工程 `project doctor` 退出 0、无 FAIL。
-- §3.2：13 条 PASS。2026-10-31 在 v1.33.1 检出、自定 module `example.com/mymmo` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：13 PASS、0 SKIP，build / vet / `id check` / `generate --check` 通过，`project doctor` 仅 4 个 collaborators FAIL。同日在 v1.33.0 上执行，唯一错误是 `mmo_gameplay_test.go` 两处 `Sync_TickPlayerTimer` 多传参数。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：13 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 FAIL。仓库脚本另把 `scripts/testdata/mmorpg/persistence/*_test.go` 复制为 `game/handler/mmo_*_test.go` 后 `go vet`（真实模式夹具只编译），一档 demo 可省。
-- §3.2（R9 装模块之后）：2026-11-17 在 main 检出、自定 module `example.com/mymmo` 按 SKILL.md §3.2 + 本节命令 + §3.4 连跑：14 PASS（13 条业务 + Robot）、0 SKIP，`modules.sh verify` 五项 n/n，build / vet / `id check` / `generate --check` 通过，doctor 无 FAIL（[证据](../../../maintenance/evidence/r9-2b-20261117/README.md)）。
-- 二档：`ROOST_MMORPG_REAL=1`（隔离 Mongo 副本集）正常停机与 SIGKILL 后经投递循环恢复（MMO §11）；`scripts/test-mmorpg-cross-sid.sh` 双 sid 赠礼（需 Mongo + NATS，MMO §13）；game-demo `make dev-up && make dev-run && make dev-smoke`。
-
-## 8. 手册指针
-
-- `docs/framework/MMORPG-INTEGRATION.md`：§3 业务与框架对照（最全的模块映射）、§5 切图与重连、§6 跨服协作、§7 易混边界、§9～§14 验收
-- `docs/framework/guide/04-sync.md` §2（AOI 选型、上限、已测规模）、`docs/framework/INTEREST-BLOCK-AOI.md`
-- `docs/framework/guide/10-time.md` §4～§4E（定时器、心跳、移动、行为、技能推进）
-- `demo/README.md` 与 `demo/` 模板源码（game-demo 是完整参考）

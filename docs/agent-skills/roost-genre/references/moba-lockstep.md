@@ -1,35 +1,21 @@
 # MOBA / 竞技对战（帧同步）
 
-手册：`docs/framework/MOBA-INTEGRATION.md`（下称 MOBA §N）。路径相对 roost-core 根目录，以检出或 module cache 中的 `docs/` 为准。
-
-> 本篇命令按当前检出的脚本写（R9 起先 `roost module add wallet` 再只写模块没覆盖的部分；v1.40.0 起 DAO 字段写 `store` 键；v1.35.0 起 KCP 网络用例改用公共 `robot.LockstepBot`，要多复制 Robot 场景与结果协议）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+手册：`docs/framework/MOBA-INTEGRATION.md`（下称 MOBA §N）。命令对应当前版本的 `scripts/test-moba-generated.sh`；目标 roost-core 版本更早时读那个 tag 里的本文件。
 
 ## 1. 适用与不适用
 
 | 适用 | 不适用 / 要另想办法 |
 | --- | --- |
-| 帧同步对局：1v1 单路入门到 5v5 三路；匹配成局、断线追帧 / 快照恢复、服务器参考模拟判胜负、幂等结算、持久对局续赛、宿主代际交接、原服逐人奖励 | 需要隐藏信息（战争迷雾）的 MOBA：要服务端状态同步，见 SKILL.md §6“MOBA 状态同步 / RTS”暂缓；格斗 / 射击类 rollback netcode（框架无）；对局权威自动 HA（MOBA §7 末行） |
+| 帧同步对局：1v1 单路到 5v5 三路；匹配成局、断线追帧 / 快照恢复、服务器参考模拟判胜负、幂等结算、持久对局续赛、宿主代际交接、原服逐人奖励 | 需要隐藏信息（战争迷雾）的 MOBA：要服务端状态同步，见 SKILL.md §6；格斗 / 射击类 rollback netcode（框架没有）；对局权威自动高可用 |
 
 核心区分：**局内状态**由服务器参考模拟与客户端按同一输入序列各自计算，不写 DAO；**局外事实**（结算身份、奖励、战绩）经 Nest 多实体事务写 DAO（MOBA §1）。
 
-## 2. 用到的框架模块
+## 2. 命令
 
-| 业务 | 模块 | 出处 |
-| --- | --- | --- |
-| 排队、成局、跨分区成局 | `service/match`（Enqueue / Commit / CommitAcross），手写（matchmaking 模块只做本 sid、同人数整队，不跨分区） | MOBA §2、§5.1 |
-| 席位、输入排序、切帧、追帧 | `framework/sync/lockstep`：`Match`、`Sequencer`；客户端 `FrameAssembler`（D5：夹具与 Lockstep 房间不迁 `Stepper`，不装 room / turn） | MOBA §2；guide/04-sync.md §6 |
-| 窗口外恢复 | `MatchConfig.Recovery` + `SnapshotProvider`（服务器参考模拟的检查点） | MOBA §6；guide/04-sync.md §6 |
-| 局外金币 | **装** wallet 模块：结算与原服奖励的胜者 `Wallet().Add(10)`（不留回执，判重靠 MatchResult 终态 / `MobaRewards`） | MOBA §4.6、§5.4、§5.8 |
-| 结算、战绩、原服奖励回执 | Player（`Wins` / `Losses` / `MobaRewards`，手写）/ MatchResult DAO + 多实体 Sender + Nest | MOBA §2、§5.4 |
-| 持久对局、比赛目录 | BattleRound / BattleDirectory 实体（World 锁档），先提交再广播 | MOBA §5.5、§5.6 |
-| 传输 | 嵌入 TCP `lockstep.TCPSender`；KCP 只生成装配（`-features nettransport-kcp`） | MOBA §6；`roost help replication` |
-
-## 3. 生成最小 demo
-
-接在 SKILL.md §3.2 公共前置命令之后。对应 `scripts/test-moba-generated.sh` 的缺省模式（双英雄入门 + 5v5 夹具一起拷，测试互相依赖，不拆）。模块清单只有 `wallet`（R9）；不再 `add dao Player`（game 模板已有），不给 Player 加 `Gold`。
+接在 SKILL.md §3.2 公共前置命令之后。模块：`wallet`（胜者奖励 `Wallet().Add`，判重靠 MatchResult 终态与 Player 上的 `MobaRewards`）。排队成局用 `service/match`，席位与切帧用 `framework/sync/lockstep`，结算与战绩、持久对局、比赛目录都手写；双英雄入门与 5v5 夹具一起拷，测试互相依赖，不拆。
 
 ```bash
-bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet   # = roost module add + 核对已登记
+bash "$CORE/scripts/testdata/genre-common/modules.sh" add "$ROOST" wallet
 for e in MatchResult BattleRound BattleDirectory; do
   "$ROOST" add entity "$e"
   "$ROOST" add dao "$e" --entity "$e"
@@ -42,7 +28,7 @@ dao_add MatchResult db/def/match_result.go "MatchKey string matchkey" "Digest st
 world game/entities/match_result/entity.go game/entities/battle_round/entity.go game/entities/battle_directory/entity.go
 F="$CORE/scripts/testdata/moba"
 mkdir -p game/modules/moba loadtest protocol/def
-# 公共 Robot：结果协议、LockstepBot 场景与 KCP 网络用例（网络用例是 handler 包的测试）
+# 公共 Robot：结果协议、LockstepBot 场景与 KCP 网络用例
 cp "$F/result_protocol.go.txt"     protocol/def/result.go
 cp "$F/robot.go.txt"               loadtest/battle.go
 cp "$F/network_test.go.txt"        game/handler/moba_network_test.go
@@ -60,53 +46,38 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/modules/m
 bash "$CORE/scripts/testdata/genre-common/modules.sh" verify "$ROOST" "$CORE" "$WORK/module-verify.json" wallet
 ```
 
-期望：`--- PASS: TestMOBA` 恰好 **28** 条、0 skip（含 4 条真实 loopback KCP，其中 `TestMOBAKCPRobotMatchSettlementAndClientResult` 用公共 LockstepBot 打完整局、经可信 Nest 幂等结算并向客户端发 PB 资产结果）；`modules.sh verify` 打印 `wallet 17/17`（== 检出 `modules/wallet/module.yaml` 的 `verify.pass`、0 skip，并带 build / vet / `id check` / `generate --check`）；然后按 SKILL.md §3.4 收尾。store 键沿用脚本的“字段名小写”写法。服务端初始化 / 结算 / 奖励接口不开放为玩家 PB；固定会话凭据只供验收。
+然后按 SKILL.md §3.4 收尾。服务端初始化 / 结算 / 奖励接口不开放为玩家 PB；固定会话凭据只供验收。要 KCP / UDP 装配函数时新建工程加 `-features protocol,config,entity,nest,dao,errcode,nettransport-kcp`（监听、握手鉴权、Session 绑定仍手写，`roost help replication`）；它与上面夹具的组合没有实跑过。
 
-可选：需要 KCP / UDP 装配函数时，新建工程加 `-features protocol,config,entity,nest,dao,errcode,nettransport-kcp`（生成 `internal/transport/generated.go`；监听、握手鉴权、Session 绑定仍手写，`roost help replication`）。本 skill 未把它和上面的夹具组合实测。
+## 3. 期望场景数
 
-## 4. demo 的最小玩法范围（MOBA §4.4）
+`--- PASS: TestMOBA` 恰好 **28** 条、0 SKIP；`modules.sh verify` 打印 `wallet 17/17`。
 
-| 层 | 场景（28 条） | 证明 |
-| --- | --- | --- |
-| 双英雄单路入门（12） | 结算并发重放 / 身份冲突 / 拒绝回滚 / 无胜者；会话身份、输入窗口与重放、冗余去重、断线追帧、旁观、历史过期、`NoMajority`；match 内存存储排队 / 取消 / 过期 / 并发 Commit 幂等；一条真实 KCP 丢包追帧 | MOBA §10 第一条 |
-| 5v5 三路（16） | 十人成局与准备；日志重算拒绝被改快照 / 规则版本 / 种子；十个 KCP 客户端追帧与超窗快照恢复；先提交后广播、提交未知停房间、`resume` / `handoff` 代际隔离、目录并发只分配一局、奖励部分投递重放 | MOBA §10 第二条 |
+| 层 | 场景 |
+| --- | --- |
+| 双英雄单路入门（12） | 结算并发重放 / 身份冲突 / 拒绝回滚 / 无胜者；会话身份、输入窗口与重放、冗余去重、断线追帧、旁观、历史过期、`NoMajority`；match 排队 / 取消 / 过期 / 并发 Commit 幂等；一条真实 KCP 丢包追帧 |
+| 5v5 三路（16） | 十人成局与准备；日志重算拒绝被改快照 / 规则版本 / 种子；十个 KCP 客户端追帧与超窗快照恢复；先提交后广播、提交未知停房间、`resume` / `handoff` 代际隔离、目录并发只分配一局、奖励部分投递重放 |
 
-最小可讲的玩法：两名英雄单路对推 → 服务器参考模拟判胜负 → 一次多实体结算发奖；5v5、ban/pick、持久续赛是进阶。
+28 条里有 4 条真实 loopback KCP，其中 `TestMOBAKCPRobotMatchSettlementAndClientResult` 用公共 LockstepBot 打完整局、经可信 Nest 幂等结算并向客户端发 PB 结果。
 
-## 5. 业务限制清单
+## 4. 限制
 
 | 类别 | 内容 | 出处 |
 | --- | --- | --- |
-| 框架能做 | 输入准入与按 seat 排序、冗余广播、窗口内追帧、窗口外经业务快照恢复、`ReportHash` 发现分歧、匹配幂等与跨分区原子成局、嵌入 TCP 追帧随链路放慢 | MOBA §2、§6 |
-| 框架不能做 | 确定性模拟本身（整数、固定 seat 序、逻辑帧由业务保证）；活动对局持久化的默认实现（5v5 夹具自己提交输入帧日志）；KCP 监听 / 鉴权 / Session 绑定；权威 Round 的选主或自动接管；反作弊（hash 一致不证明没作弊） | MOBA §1、§6、§7 |
-| 网络 / 恢复边界 | 历史窗口缺省 3600 帧（60Hz 下 60 秒），越界未配快照来源即 `ErrCatchupUnservable` 终止本场；输入去重只在 `ReplayHorizon` 内；独立 Gate 下追帧与快照不随链路放慢，慢链路大快照会被断开并从头重传（缺省 16 KiB/Tick 节流）；已提交门要求宿主提交落后切帧 ≤ `RedundancyDepth - 1` | MOBA §6、§10；KNOWN-LIMITS“Lockstep”“Lockstep 追帧链路背压（独立 Gate）”；docs/performance/README.md 的历史快照（LOCKSTEP-SNAPSHOT-DRILL-20261020） |
-| 容量边界 | 无 5v5 目标负载、Tick 预算、分位延迟、移动网络、跨数据中心数据；本机 KCP / TCP 回归不代表这些；Tick 不能放进 Nest worker（`TCPSender` 发送前 `fctx.BlockingError` 守卫） | MOBA §6、§13；guide/04-sync.md §6“经嵌入 TCP 追帧” |
-| 一致性边界 | 胜负与摘要只取服务器参考模拟；结算 ID 开局分配并保留，换 ID 就绕开幂等；匹配记录只保留 `match.retention`，开局后 Match→Round 路由由业务目录保存；跨服奖励各原服逐人提交，不是十人原子到账 | MOBA §7 |
-| 业务要自己补 | 英雄 / 技能 / 兵线 / 装备、ban/pick 与准备政策、队伍与 MMR、输入 codec、快照 Provider、长局分段日志 / 归档、常驻奖励投递、权威 HA | MOBA §8、§13 |
+| 框架能做 | 输入准入与按 seat 排序、冗余广播、窗口内追帧、窗口外经业务快照恢复、`ReportHash` 发现分歧、匹配幂等与跨分区原子成局 | MOBA §2、§6 |
+| 框架不能做 | 确定性模拟本身（整数、固定 seat 序、逻辑帧由业务保证）；活动对局持久化的默认实现；KCP 监听 / 鉴权 / Session 绑定；权威 Round 的选主或自动接管；反作弊（hash 一致不证明没作弊） | MOBA §1、§6、§7 |
+| 网络 / 恢复 | 历史窗口缺省 3600 帧（60Hz 下 60 秒），越界未配快照来源即 `ErrCatchupUnservable` 终止本场；输入去重只在 `ReplayHorizon` 内；独立 Gate 下追帧与快照不随链路放慢，慢链路大快照会被断开重传 | MOBA §6、§10；KNOWN-LIMITS“Lockstep” |
+| 容量 | 没有 5v5 目标负载、Tick 预算、分位延迟、移动网络、跨数据中心数据；Tick 不能放进 Nest worker | MOBA §6、§13 |
+| 一致性 | 胜负与摘要只取服务器参考模拟；结算 ID 开局分配并保留；匹配记录只保留 `match.retention`，开局后 Match → Round 路由由业务目录保存；跨服奖励各原服逐人提交，不是十人原子到账 | MOBA §7 |
+| 业务要自己补 | 英雄 / 技能 / 兵线 / 装备、ban/pick 与准备政策、队伍与 MMR、输入编码、快照 Provider、长局分段日志、常驻奖励投递、权威高可用 | MOBA §8、§13 |
+| 缺省模式不证明 | 对客户端广播与真实鉴权的端到端链路、权威高可用、tick 预算、5v5 目标负载与跨机。真实依赖档 `ROOST_MOBA_REAL=1`（隔离 Mongo）追加两进程结算恢复与 SIGKILL 续赛；再加 `ROOST_MOBA_ROUTING=1`（+ NATS）追加多进程宿主交接与奖励重投 | MOBA §9、§11 |
 
-## 6. 常见坑（MOBA §7）
+**常见坑**（MOBA §7）：
 
 - 每帧把局内状态写 DAO：持久的应是结算事实或输入日志。
-- 局外奖励改用 wallet 的 `Apply(业务键)` 代替自己的回执：wallet 回执窗口只有最近 128 次，原服重投可能晚于它；有永久事实（MatchResult 终态、`MobaRewards`）时用 `Add`（MOBA §4.6）。
+- 局外奖励改用 wallet 的 `Apply(业务键)`：回执窗口只有最近 128 次，原服重投可能晚于它；有永久事实时用 `Add`。
 - 客户端上报胜负 / hash 一致就发奖。
 - 放宽匹配对两个分区各 `Commit` 一半：失败留半局，用一次 `CommitAcross`。
-- 以为 `Tick` 报错就是没切帧：只有 `ErrMatchClosed` 不切帧，其他错误帧已在历史里。
-- `Match.Tick` 切出帧就广播：需要续赛时先提交到权威、成功后再发，提交结果未知就停房间。
+- 以为 `Tick` 报错就是没切帧：只有 `ErrMatchClosed` 不切帧。
+- `Match.Tick` 切出帧就广播：要续赛时先提交到权威、成功后再发，提交结果未知就停房间。
 - 宿主 SID 相同就当同一宿主：重启要 `resume` 推进 Epoch。
-- 以为用了 KCP 就有了玩家接入与鉴权：接入层只提供 TCP（GATEWAY.md §4）。
-
-## 7. 验证
-
-- 一档（R9 起）：§3 的 28 条 PASS + `module verify` 的 wallet 17/17 + SKILL.md §3.4；场景名与条数不变，金币断言改读 wallet（旧断言 → 新断言见 MOBA §4.6）。2026-11-17 在 main（R9 批 2）按 SKILL.md §3.2（自定 module 名）+ 本篇 §3 命令块实跑，见 MOBA §4.6 的证据链接。以下为 R9 之前的记录（金币是手写 `Gold`）。
-- 2026-10-31 在 v1.33.0 检出、自定 module `example.com/mymoba` 实测通过（约 11s，构建缓存热）。2026-10-31 在 v1.33.2 检出（`e4ec6260`）复测：28 PASS、0 SKIP，§3.4 全过，doctor 仅 4 项 collaborators FAIL。
-- 框架自带网络门禁（在 roost-core 根目录）：`GOWORK=off go test -race -count=1 ./framework/sync/lockstep ./framework/sync/nettransport`（MOBA §12）。
-- 二档：`ROOST_MOBA_REAL=1`（隔离 Mongo 副本集）追加两进程结算恢复、活动对局 SIGKILL 续赛、SIGKILL 后窗口外快照恢复；再加 `ROOST_MOBA_ROUTING=1`（+ NATS）追加五进程宿主交接与奖励重投，以及三进程旧宿主快照在途时交接、新宿主恢复（MOBA §9、§11）。原快照用例另输出 100 次 strict Sender 的 p50 / p99 诊断，功能验收负载未隔离，不作为容量证据。
-- 不证明：对客户端广播与真实鉴权的端到端链路、权威 HA、tick 预算、5v5 目标负载与跨机（KNOWN-LIMITS“游戏接入验收”MOBA 行）。
-
-## 8. 手册指针
-
-- `docs/framework/MOBA-INTEGRATION.md`：§2 状态归谁、§4 纵切与阅读顺序、§5 一场对局怎样连接模块、§6 网络恢复反作弊边界、§7 易混边界、§9～§13 验收
-- `docs/framework/guide/04-sync.md` §6 Lockstep（历史窗口、追帧 / 快照、嵌入 TCP）
-- `docs/framework/guide/09-services.md` §4（match 保留期与分区容量）
-- `docs/maintenance/KNOWN-LIMITS.md`“Lockstep”与“游戏接入验收”MOBA 行
-- 参考实现：game-demo 的 battle 房间（嵌入 TCP lockstep，`demo/internal/service/game/battle.go.tmpl`）
+- 以为用了 KCP 就有了玩家接入与鉴权。

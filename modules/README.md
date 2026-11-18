@@ -115,7 +115,7 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 
 `-template game` 缺省不托管任何框架服务（维护者 2026-11-13：只生成用到的服务）。模块的 `needs.uses` 与 `runtime.framework` 用到、工程还没有的托管服务，安装器在同一个安装事务里声明 `services.<name>.framework: <name>`、加进业务服务的 `uses`，它的配置、部署、协作者文件随安装最后的 project sync 生成，业务服务的配置补上 ClientMod 要的段（match、activity 要 etcd）；安装失败整体撤销。`plan` 输出 `framework service <name>: will declare`（JSON 的 `framework_services`）。入口在托管服务上的模块要的可代办 Mod（portal 的 `web`）直接写进这次新声明的服务。同名的已经是业务服务时拒绝安装。
 
-标了同步的状态要打开玩家自身视图客户端才收得到。装 `enter` 模块时安装器会代办（`roost add transport tcp`、`access.player.self_sync: true`、`roost project sync`）；不装它就自己做，步骤见 skill 的[按需求组合 §4A](../docs/agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)。
+标了同步的状态要打开玩家自身视图客户端才收得到。装 `enter` 模块时安装器会代办（`roost add transport tcp`、`access.player.self_sync: true`、`roost project sync`）；不装它就自己做，步骤见 skill 的[按需求组合附录 A6](../docs/agent-skills/roost-genre/references/compose.md#a6-让客户端看到状态)。
 
 安装之后直接改工程里的文件（例如在 `game/components/checkin/checkin.go` 里改奖励规则），改完再跑 `roost module verify`。模块库里没有的需求用 `roost add entity / component / dao / handler / protocol / endpoint` 手写，可以照着已装模块的文件写。
 

@@ -194,3 +194,15 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 4. **热路径改函数体须 benchstat**：Nest 调度、Sync Flush / AOI / Relation、DataEngine 提交与投影、编解码等热路径的函数体改动（含为可读性做的拆分与改写），在同机同配置下前后交替多轮跑相关 benchmark（`-count` 至少 10，长基准后台跑并加 `-timeout 0`），用 `benchstat` 对比 ns/op、B/op、allocs/op；样本放 `docs/performance/benchmarks/<label>/`。有退化写明代价与取舍，不宣称未测量的吞吐变化。只改注释和命名不需要。
 5. **生成产物字节不变**：只为可读性改生成器或模板（局部命名、注释、拆分）时，生成物必须字节不变：`go generate ./...` 后 `git diff --exit-code` 干净，各生成器 golden 测试不加 `-update` 即通过，重新生成 game-demo 与改动前的生成树 `diff -r` 一致。若改动有意让生成物只差注释或 help 文本，在提交说明里写明“生成代码只差注释 / 文本”并一并提交重新生成的产物与快照。
 6. **验收**：每批改动跑受影响包 `go vet`、`go test`，并发相关加 `-race`，再跑根包 `go test -count=1 .`（含 gofmt 与文档链接门禁）；跨包改动推送前跑全仓 `go test ./...`。文档补丁不混入行为重构。
+
+## 9. roost-genre skill 的维护
+
+生成游戏的 skill（`docs/agent-skills/roost-genre/`，入口 `claude-skill/roost-genre/SKILL.md`）随框架 tag 发布，给使用者看的正文只写当前版本的事实；下面这些维护规则不写进 skill。
+
+1. **与仓库一致**：场景数、脚本步骤、夹具文件名、CLI 参数、限制数字以仓库为准。各玩法 reference 的命令序列是 `scripts/test-<genre>-generated.sh` 的手工版：脚本改了步骤（新增 add、夹具文件、DAO 字段、`genre_modules`）或计数断言时，同一提交里改对应 reference 与主 SKILL §2 的场景数表；拿不准时以脚本为准。
+2. **只写当前事实**：不写“vX 起 / vX 前”、某天实测、某版本的缺陷与内部编号（RV-、R、D、Q 等）；用户用旧版本时由 skill 指向那个 tag 里的 skill。实测记录、证据与过程留在 CHANGELOG、`docs/release/`、`evidence/` 与 Git 历史。
+3. **不写没有出处的数字**：性能数字写明宿主与样本口径，并指向 `docs/performance/` 或 KNOWN-LIMITS 的现行条目，不当作承诺。
+4. **锚点**：compose 与主 SKILL 的小节标题被入口、各 reference、`modules/README.md`、`docs/framework/CAPABILITIES.md` 链接；改标题时用 `rg 'compose\.md#|roost-genre/SKILL\.md#'` 找全引用一起改（根包链接门禁只查文件，不查锚点）。
+5. **入口版本**：改 `claude-skill/roost-genre/SKILL.md` 时把“入口版本”改成当天日期加序号，并核对“适用的 roost-core”一句；入口只负责定版本、取正文、装 CLI，流程细节放正文。
+6. **只读约定**：使用者的 agent 不改 skill；发现 skill 与仓库不符的报告按维护流程核对，确认的缺陷修正文，疑点写 KNOWN-LIMITS“尚未确认”，不在 skill 里登记。
+7. **验证**：改了命令片段的，在临时目录用本检出的 CLI（`--skip-deps` + replace）实跑受影响的片段；临时目录用完即删，检查没有遗留进程。
