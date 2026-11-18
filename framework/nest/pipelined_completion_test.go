@@ -326,6 +326,9 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
+	// 失败路径也要落定票据：未决票据上等待的事务会让 StopNest 永远等下去，整个包挂到 -timeout（2026-11-18 pretag 实例）。
+	// defer 后进先出，这一条先于 StopNest 执行。
+	defer committer.resolveAllFromNowOn(errors.New("test cleanup"))
 
 	var hooks []int
 	var hooksMu sync.Mutex
@@ -361,21 +364,16 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 			replies <- ret
 		}()
 	}
-	// All three must reach the WAL before any ticket resolves, so that one of
-	// them provably takes the saturated fallback.
-	for i := 0; i < transactions; i++ {
-		select {
-		case <-committer.enqueued:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("only %d of %d transactions were enqueued", i, transactions)
-		}
-	}
-	// Enqueue is reported just before prepareCompletion tries the pump. Wait
-	// until the third transaction has actually observed the full queue before
-	// resolving tickets; otherwise a fast resolve can drain the queue between
-	// those two operations and make this overload test scheduler-dependent.
+	// Wait until one transaction has provably taken the saturated fallback before
+	// resolving any ticket. Which one degrades depends on the scheduler: if the pump
+	// has already dequeued the first entry, the third finds the queue full; if it
+	// has not, the second does, and then waits for its ticket on the entity's serial
+	// dispatch so the third cannot even reach Enqueue until tickets resolve. The old
+	// version waited for three enqueues first and so failed (and, with tickets left
+	// pending, hung StopNest) whenever the pump lagged. Both orders exercise the
+	// fallback; the ordering claim below holds for either.
 	degraded := int64(0)
-	degradedDeadline := time.Now().Add(2 * time.Second)
+	degradedDeadline := time.Now().Add(10 * time.Second)
 	for degraded == 0 && time.Now().Before(degradedDeadline) {
 		for _, metric := range metrics.Snapshot() {
 			if metric.Name == "nest.pipelined.async_total" && metric.Labels["result"] == "degraded" {
@@ -387,10 +385,10 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 		}
 	}
 	if degraded == 0 {
-		committer.resolveAll(errors.New("test cleanup: pump did not saturate"))
 		t.Fatal("no transaction took the saturated fallback path: the ordering claim was not exercised")
 	}
-	committer.resolveAll(nil)
+	// Tickets enqueued after this point (the third, when the second degraded) resolve at once.
+	committer.resolveAllFromNowOn(nil)
 
 	seen := make(map[int]bool, transactions)
 	for i := 0; i < transactions; i++ {

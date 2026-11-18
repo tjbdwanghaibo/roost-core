@@ -1,0 +1,27 @@
+# 旧用例单独 -count=300（无并行负载）：第 N 轮挂住，9m 超时
+2026/11/18 09:50:42 WARN slow dispatch trace title=nest handler=test_async_saturated_order type=Single key=354273 cost_ms=201 cost=201.037208ms result=running msg_info="map[context_valid:true cost_pool:false groups:[] groups_count:0 handler:test_async_saturated_order has_ret_chan:true key:354273 msg:Msg{Name:test_async_saturated_order,Type:Single,Tid:354273} param_samples:[] param_types:[] params_count:0 ref_count:1 remote:false tid:354273 tids:[] tids_count:0 trace_enabled:false trace_id: trace_reason: trace_tags:map[] type:Single]" suppressed_since_last_trace=0
+panic: test timed out after 9m0s
+	running tests:
+		TestAsyncCompletionKeepsOrderWhenPumpIsSaturated (9m0s)
+
+goroutine 15552 [running]:
+
+## 卡住的 worker（第二个事务走降级、在本 worker 等票据）
+goroutine 16622 [chan receive, 8 minutes]:
+github.com/tjbdwanghaibo/roost-core/framework/nest.(*RollbackTx).commitPipelined(0x6cbb86ef8908, {0x1054783a0, 0x1054f53a8}, {0x1054774c8, 0x6cbb871f2080}, {0x6cbb86ff40e0, 0x1, 0x1}, 0x6cbb86ce5608, {0x6cbb871f6008?, ...}, ...)
+	/Users/whb/roost/roost-core/framework/nest/execution.go:403 +0x54c
+github.com/tjbdwanghaibo/roost-core/framework/nest.runTransaction(0x1, {0x40?, 0x7f?, 0x4?}, {0x6cbb86ff40e0, 0x1, 0x1}, {0x105474240, 0x6cbb871f2080}, {0x104d68a5a, ...}, ...)
+	/Users/whb/roost/roost-core/framework/nest/execution.go:244 +0xbd8
+github.com/tjbdwanghaibo/roost-core/framework/nest.invokeWithTransaction(...)
+	/Users/whb/roost/roost-core/framework/nest/execution.go:95
+github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).invokeHandlerTransaction(0x6cbb87004000, {0x6cbb86e0d950?, {0x3f?, 0x98?, 0xd5?}, 0x4?}, {0x6cbb86ff40e0, 0x1, 0x1}, {0x104d68a5a, ...}, ...)
+	/Users/whb/roost/roost-core/framework/nest/execution.go:42 +0x1dc
+github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).dispatchLoadedEntities(0x6cbb87004000, {0x6cbb86e0d950?, {0x18?, 0x5a?, 0xce?}, 0x86?}, {0x104d68a5a, 0x1a}, {0x6cbb86ff40e0, 0x1, ...}, ...)
+	/Users/whb/roost/roost-core/framework/nest/nest_dispatch.go:488 +0x2b8
+github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).singleDispatch(0x6cbb87004000, {0x104d68a5a, 0x1a}, 0x567e1, {0x0, 0x0, 0x0})
+
+## 泵（已取出第一个条目，等它的票据）
+683:github.com/tjbdwanghaibo/roost-core/framework/nest.(*completionPump).run(0x6cbb871f6008)
+684-	/Users/whb/roost/roost-core/framework/nest/pipelined_completion.go:197 +0x12c
+685-created by github.com/tjbdwanghaibo/roost-core/framework/nest.(*completionPump).start in goroutine 16620
+686-	/Users/whb/roost/roost-core/framework/nest/pipelined_completion.go:187 +0x74

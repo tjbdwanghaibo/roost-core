@@ -42,6 +42,7 @@ type pipelinedTestCommitter struct {
 	durable     atomic.Uint64
 	enqueueErr  error
 	autoResolve bool
+	autoErr     error // autoResolve 时新票据落定的结果；nil 即持久
 	enqueued    chan struct{}
 	released    TransactionID
 	commits     int
@@ -70,7 +71,10 @@ func (c *pipelinedTestCommitter) Enqueue(_ context.Context, record CommitRecord)
 	c.records = append(c.records, record)
 	c.tickets = append(c.tickets, ticket)
 	if c.autoResolve {
-		c.durable.Store(ticket.lsn)
+		ticket.err = c.autoErr
+		if c.autoErr == nil {
+			c.durable.Store(ticket.lsn)
+		}
 		close(ticket.done)
 	}
 	select {
@@ -86,6 +90,26 @@ func (c *pipelinedTestCommitter) TransactionReleased(id TransactionID) {
 	c.mu.Lock()
 	c.released = id
 	c.mu.Unlock()
+}
+
+// resolveAllFromNowOn 落定所有未决票据，并让之后 Enqueue 的票据立即落定（同一个 err）。
+// 用于“未决票据会挡住后继事务入队”的场景与失败路径的清理。
+func (c *pipelinedTestCommitter) resolveAllFromNowOn(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.autoResolve = true
+	c.autoErr = err
+	for _, ticket := range c.tickets {
+		select {
+		case <-ticket.done:
+		default:
+			ticket.err = err
+			if err == nil {
+				c.durable.Store(ticket.lsn)
+			}
+			close(ticket.done)
+		}
+	}
 }
 
 // resolveFrom 只落定第 from 个及以后的票据（按 Enqueue 顺序，从 0 起），前面的保持未决。

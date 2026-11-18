@@ -1,0 +1,28 @@
+# 旧用例：6 个进程并行，各 -count=600，-timeout 3m
+run1 rc=2
+run2 rc=2
+run3 rc=2
+run4 rc=2
+run5 rc=2
+run6 rc=2
+   6 panic: test timed out after 3m0s
+
+# 新用例：同样 6 个进程并行，各 -count=600，-timeout 9m
+run1 rc=0
+run2 rc=0
+run3 rc=0
+run4 rc=0
+run5 rc=0
+run6 rc=0
+   6 PASS
+
+# 新用例失败路径（临时把降级等待期限改成 0）：快速失败而不是挂住
+--- FAIL: TestAsyncCompletionKeepsOrderWhenPumpIsSaturated (0.00s)
+    pipelined_completion_test.go:388: no transaction took the saturated fallback path: the ordering claim was not exercised
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.655s
+FAIL
+
+# 整包与根包
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	5.785s
+ok  	github.com/tjbdwanghaibo/roost-core	12.814s

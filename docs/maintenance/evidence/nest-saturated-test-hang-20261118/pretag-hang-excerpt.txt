@@ -1,0 +1,18 @@
+# pretag v1.55.0 第一次：go test ./... 摘录（2026-11-18 09:02 起，SIGQUIT 于 09:49）
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	2844.111s
+FAIL
+
+## 测试 goroutine 与停机等待
+791:goroutine 61613 gp=0x49f17d3e45a0 m=nil [select, 47 minutes]:
+792-runtime.gopark(0x49f17d0a9a88?, 0x2?, 0x4d?, 0x0?, 0x49f17d0a9a64?)
+794-runtime.selectgo(0x49f17d0a9a88, 0x49f17d0a9a60, 0x49f17d0a9a58?, 0x0, 0x49f17d0a9aa8?, 0x1)
+796-github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).waitStopped(0x49f17d252000, {0x1010ec3a0, 0x1011693a8}, 0x49f17d9282a0)
+798-github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Shutdown(0x49f17d252000, {0x1010ec3a0?, 0x1011693a8?})
+800-github.com/tjbdwanghaibo/roost-core/framework/nest.StopNest()
+802-runtime.Goexit()
+804-testing.(*common).FailNow(0x49f17d833208)
+806-testing.(*common).Fatalf(0x49f17d833208, {0x1009eb77e?, 0x49f17d031b78?}, {0x49f17d0a9e80?, 0x1?, 0x7f100000001?})
+808-github.com/tjbdwanghaibo/roost-core/framework/nest.TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(0x49f17d833208)
+810-testing.tRunner(0x49f17d833208, 0x1010ef318)
+812-testing.(*T).Run.gowrap1()
+814-runtime.goexit({})
