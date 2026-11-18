@@ -13,7 +13,7 @@
 **服务端入口**
 
 - `controllers.FromRegistry(registry)` 之后 `controller.PurchaseCollect(ctx, playerID) ([]purchase.Receipt, error)`（`game/controllers/purchase.go`）：服务端替一名玩家补领一批，在 Nest 事务之外调用。
-- handler `PurchaseGrant(grant)`（`game/handler/purchase_grant.go`，`rollback=undo`（持久级别取缺省 async））：把一笔待发记录应用到 Player。参数只能来自待发队列。回复不等 fsync，所以补领在删外部快照之前另等本地持久（见“一致性与幂等”）。
+- handler `PurchaseGrant(grant)`（`game/handler/purchase_grant.go`，`rollback=undo durability=pipelined`）：把一笔待发记录应用到 Player。参数只能来自待发队列。回复在这笔记录 fsync 之后，所以补领随后 `Ack` 是安全的（见“一致性与幂等”）。
 - 待发队列 `purchase.Queue`（`game/modules/purchase/purchase.go`）：`Record(ctx, order)`（platform 一侧，第一次投递时写快照）、`Pending(ctx, playerID, limit)`、`Ack(ctx, grant)`。实现是 `RedisQueue`（`game/modules/purchase/queue.go`）。
 - platform 一侧的协作者（`services/platform/collaborators.go`，安装时替换生成的桩）：`Deliver()` 把订单记进待发队列；`Verify()` 与 `Players()` 一律拒绝（充值不管登录）。
 
@@ -44,17 +44,17 @@
 - **批量与暂缓**：每次补领至多 32 笔（`BatchLimit`）。队列按序号连续处理：某一笔发不出去（背包满、奖励种类没登记、platform 那边订单还没终结或查不到），它和它后面的订单都留在队列里，等它解决。
 - **“已投递”不等于到账**：platform 的 `delivered` 只表示写进了待发队列。Player 奖励到账以 `PurchaseGrant` 提交为准。
 - **一致性与幂等**：
-  - 奖励与游标 `Applied` 在同一笔 Player 事务里（持久级别取缺省 async）；提交失败两者都不变，可以重放。
+  - 奖励与游标 `Applied` 在同一笔 Player 事务里（`durability=pipelined`）；提交失败两者都不变，可以重放。
   - 序号小于等于游标的重放不写任何字段，返回同样的回执；序号必须恰好是游标加一。
   - 序号与快照在 Redis 里用同一条 HSET 分配；同一订单重复投递拿到原序号与原快照，商品改价或下架不改变已有订单。价格、币种或商品对不上的订单不入队。
   - 发货之前在实体锁外向 platform 查订单：只有 `delivered` 或 `settled` 且没有在途投递的才进 Nest。
-  - **本地持久之后才 `Ack`（维护者 2026-11-18 定 A）**：`PurchaseGrant` 用缺省 async，回复时记录只写进了本进程 WAL 文件（可能还在页缓存），整机掉电 / 内核崩溃会丢。所以一批先逐笔发货，再调 DataEngine Mod 的 `WaitEntityProjection(玩家的完整 Entity ID)` 等这名玩家在本进程已提交的修改落库（Mongo 多数派写），之后才逐笔 `Ack`（推进 `acked`、删快照）。若先 `Ack` 再掉电，Player 的 `Applied` 停在上一号、Redis 的 `acked` 已越过、快照已删：奖励丢失，之后的订单永远答 `purchase_sequence`。
-  - 等持久失败（投影 fatal、WAL 不健康、Runtime 已停、等到请求截止）时一条都不 `Ack`：已发的回执照常返回并带错误，下一次补领重放这些订单（游标已到，不再写），持久之后再删。掉电恰好丢了已回执的发货时，快照还在，下一次补领重新发一次——客户端可能先看到一次回执、重连后奖励没了、再补领又到账，不会丢、不会重复。
+  - **发货用 `durability=pipelined`（维护者 2026-11-18）**：回复后马上对外部确认的写用 pipelined——Nest 入队后先放实体锁，等这笔记录 fsync 之后才回复，所以补领拿到回执再 `Ack`（推进 `acked`、删快照）时本地发货已经持久。若用缺省 async，回复只说明写进了 WAL 文件（可能还在页缓存），整机掉电 / 内核崩溃会丢掉已回复的发货，而快照已删：Player 的 `Applied` 停在上一号、Redis 的 `acked` 已越过，奖励丢失，之后的订单永远答 `purchase_sequence`。
+  - fsync 失败（WAL 进入 terminal）时 Sender 答 `nest.ErrCommitIndeterminate`，实例被 fence：这笔不当回执、不 `Ack`，快照留在 Redis；实例从 WAL 恢复后，下一次补领按游标重放（这笔在）或重发（这笔不在），不会丢、不会重复。
   - `Ack` 失败可以原样重试，重试时 Player 不会再发一次。
 - **不过期**：离线期间的订单没有失效时间，不会因为“账本满了”被丢弃。Redis 里未履行的订单与 platform 的支付历史会一直占空间。
 - **三处状态必须一起恢复**：Redis 的游标与待发、Player 的 `Applied`、platform 的订单，不能单独重置、回退其中一侧，也不能把旧订单手工放回队列。`StoragePrefix` 在有在途发货时不能改。
 - **序号上限**：2^53−1（Redis Lua 的数值精度）。
-- **前提**：依赖 `wallet`；业务服务要有 `nest`、`dataengine`（有 nest 就自动带上）与 `redis` 三个 Mod 并 `uses: [platform]`；补领时从 Registry 取 DataEngine Mod（能力名 `dataengine`）等本地持久，取不到时补领只发不删、答错误；game 与 platform 必须用同一个 Redis 与同一个 `StoragePrefix`；Redis 的持久性由部署保证，模块不调整 AOF 或副本策略。安装时替换 `services/platform/collaborators.go`，那个文件已经被工程改过时安装被拒绝。
+- **前提**：依赖 `wallet`；业务服务要有 `nest` 与 `redis` 两个 Mod 并 `uses: [platform]`；`nest.pipelined.allowlist`：生成配置是 `[]`（空 = 全部允许），不用动；工程写了非空名单时必须把 `handlerPurchaseGrant` 列进去（框架只自动补 saga 原生步骤），否则补领答 `nest.ErrPipelinedNotAllowed`；game 与 platform 必须用同一个 Redis 与同一个 `StoragePrefix`；Redis 的持久性由部署保证，模块不调整 AOF 或副本策略。安装时替换 `services/platform/collaborators.go`，那个文件已经被工程改过时安装被拒绝。
 - **已知限制**：[KNOWN-LIMITS“purchase 模块的恢复与验收边界”](../../docs/maintenance/KNOWN-LIMITS.md)。下节列出真实 NATS/TCP/Mongo/WAL 的限定恢复验收；旧订单格式不自动迁移，Redis/Player/platform 不能单侧回退。
 
 ## 复用方式
@@ -64,7 +64,7 @@
   - 接渠道：实现 `purchase_channels.go` 的 `verifyPaymentCallback`；渠道的 HTTPS 接入与“渠道凭据 → 内部支付 JSON”的转换另写。
   - 商品表：改 `products.go` 的 `LookupProduct`（金额用货币最小单位的整数）。
   - 新的奖励种类（月卡、礼包）：在自己的文件里 `RegisterPurchaseReward("<种类>", …)`，照着 `with/bag` 的 `purchase_item.go` 写。
-  - 不要改 `purchase.Component.Apply` 的游标判断、`queue.go` 的四段 Lua，以及 `Collect` 里“先查 platform、Nest 确认、本地持久（`WaitEntityProjection`）之后才 Ack”的顺序。
+  - 不要改 `purchase.Component.Apply` 的游标判断、`queue.go` 的四段 Lua、`PurchaseGrant` 的 `durability=pipelined`，以及 `Collect` 里“先查 platform、Nest 确认后才 Ack”的顺序。
 - **别的代码要用它**：补领 `controller.PurchaseCollect(ctx, playerID)`；读某名玩家发到第几号，在 Player handler 里 `owner.Dao().GetPurchase().GetApplied()`。
 - **只适合借鉴的情形**：别的“外部系统欠玩家东西”的场景（补偿、跨服奖励）。值得借鉴的是“按玩家连续编号的待发队列 + Player 上一个常量大小的游标”，它让重放安全而且不需要在玩家档里存无限增长的订单表。直接复用本模块的队列去发别的东西不合适：序号空间与 platform 的订单绑定。
 
@@ -77,15 +77,15 @@
 ## 验证范围
 
 - `roost module verify purchase`：23 条场景（`game/handler` 8、`game/modules/purchase` 5、`game/controllers` 8、`services/platform` 2）；与 `bag` 的联动 4 条，与 `enter` 的联动 2 条。
-- 离线：真实的 Nest 引擎加替身提交器，待发队列与 platform 是内存替身。替身提交器兼作持久屏障：提交只算“已写进 WAL”，`WaitEntityProjection` 之后才算已持久；`game/controllers` 的每个用例结束时核对没有一笔订单在本地持久之前被 `Ack`。
-- 覆盖：金币发货与游标同提交、重放不写、乱序等待、提交失败后重放、超过 513 笔之后重放旧单仍安全、别人的订单被拒、结清只推进游标、价格不符不入队、目录变化不影响已有快照、队列回答损坏不当回执、补领时等待在途投递与未终结订单、`Ack` 失败后重试得到同一张回执、一批发完且本地持久之后才 `Ack`、等持久失败时队列一条不删且重试只发一次、渠道缺省拒绝。
+- 离线：真实的 Nest 引擎加替身提交器，待发队列与 platform 是内存替身。替身提交器按持久级别区分：async 的 `Commit` 只算“已写进 WAL”，pipelined 的 `Enqueue` 票据在另一个 goroutine 里“fsync”后才完成并算已持久；`game/controllers` 的每个用例结束时核对没有一笔订单在本地持久之前被 `Ack`。
+- 覆盖：金币发货与游标同提交（并且以 pipelined 提交）、重放不写、乱序等待、提交失败后重放、超过 513 笔之后重放旧单仍安全、别人的订单被拒、结清只推进游标、价格不符不入队、目录变化不影响已有快照、队列回答损坏不当回执、补领时等待在途投递与未终结订单、`Ack` 失败后重试得到同一张回执、`Ack` 到达时发货已持久、fsync 结果未知时不当回执也不 `Ack`、渠道缺省拒绝。
 - 真实 Redis 上的 Lua 另有 3 条集成用例（构建标签 `integration`，不在 `verify` 的 21 条里），在生成的工程里跑：
 
   ```sh
   ROOST_PURCHASE_REDIS_ADDR=127.0.0.1:6379 GOWORK=off go test -tags=integration -race -count=2 -run '^TestPurchaseRedis' ./game/modules/purchase
   ```
 
-- 真实联合验收：[scripts/test-operations-real.sh](../../scripts/test-operations-real.sh) 生成 game-demo，用开发模拟渠道经真实 NATS 送单、玩家 TCP 补领、正式 Nest/DataEngine/Mongo/WAL 入账。精确暂停在 Sender 成功（2026-11-18 起还在等本地持久之后）、队列 Ack 之前并 SIGKILL；停掉依赖该 Redis 的进程后，SIGKILL 用例自己的 `appendonly=yes, appendfsync=always` Redis，沿用同一持久目录重启。平台终态与待发快照保持不变，玩家移到另一 sid 后补领不增发，再杀目标进程冷启；核对 `next=acked=Applied=2`、待发为空、钱包 200。[2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
+- 真实联合验收：[scripts/test-operations-real.sh](../../scripts/test-operations-real.sh) 生成 game-demo，用开发模拟渠道经真实 NATS 送单、玩家 TCP 补领、正式 Nest/DataEngine/Mongo/WAL 入账。精确暂停在 Sender 成功（2026-11-18 起 pipelined：已 fsync）之后、队列 Ack 之前并 SIGKILL；停掉依赖该 Redis 的进程后，SIGKILL 用例自己的 `appendonly=yes, appendfsync=always` Redis，沿用同一持久目录重启。平台终态与待发快照保持不变，玩家移到另一 sid 后补领不增发，再杀目标进程冷启；核对 `next=acked=Applied=2`、待发为空、钱包 200。[2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
 - 此窗口允许 Mongo 已投影，证明 Ack 丢失与跨 sid 恢复，不冒称仅 WAL 未投影；未验证真实支付渠道、主从切换/断电持久性、单侧回退、长期积压或容量。Redis 策略由部署保证，本测试不修改模块配置。
 
 ## 发货过程
@@ -93,6 +93,6 @@
 1. platform 对回调原文校验 HMAC，再调工程的 `verifyPaymentCallback`。HMAC 只证明请求来自持有内部回调密钥的接入方，不能代替渠道的支付凭据验证。
 2. platform 记订单并调发货协作者。第一次投递时按 `LookupProduct` 校验币种、金额与商品，把奖励快照写进 Redis。
 3. 进入游戏（装了 `enter`）或 `PurchaseCollect` 时取一批待发。逐笔先向 platform 查订单状态，再发 `PurchaseGrant`。
-4. 这一批 `PurchaseGrant` 都提交、并且这名玩家的修改已落库（`WaitEntityProjection`）之后才 `Ack`。此时 platform 的这笔订单已经终结、不会再被重新打开，在途投递也已清空，本地发货掉电也不会丢，所以删掉快照是安全的；预先取出的旧消息带的是旧序号，Player 不会再发一次。
+4. `PurchaseGrant` 提交（pipelined：回复时已 fsync）之后 `Ack`。此时 platform 的这笔订单已经终结、不会再被重新打开，在途投递也已清空，本地发货掉电也不会丢，所以删掉快照是安全的；预先取出的旧消息带的是旧序号，Player 不会再发一次。
 
 平台投递次数耗尽之后的重新投递与人工结清走 platform 自己的受控管理流程；清理结果未知的投递之前要先确认外部的尝试确实终止了。

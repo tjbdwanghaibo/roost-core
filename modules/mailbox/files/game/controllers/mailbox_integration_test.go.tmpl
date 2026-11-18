@@ -283,7 +283,7 @@ func newMailboxRealEnv(t *testing.T, transport string) *mailboxRealEnv {
 		t.Fatal(err)
 	}
 	env.player = built.(*playerentity.Player)
-	env.engine = nest.NewEngine(nest.NestOptionWithGetter(mailboxEndpointGetter{id: built}), nest.NestOptionWithTransactionCommitter(mailboxEndpointCommitter{}),
+	env.engine = nest.NewEngine(nest.NestOptionWithGetter(mailboxEndpointGetter{id: built}), nest.NestOptionWithTransactionCommitter(&mailboxDurability{}),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := env.engine.Start(); err != nil {
 		t.Fatal(err)
@@ -293,7 +293,7 @@ func newMailboxRealEnv(t *testing.T, transport string) *mailboxRealEnv {
 			t.Error(err)
 		}
 	})
-	env.controller = newMailboxTestController(env.engine, env.remote, &mailboxDurability{})
+	env.controller = newMailboxTestController(env.engine, env.remote)
 	return env
 }
 
@@ -490,7 +490,7 @@ func TestMailboxRealDependenciesClaimOverNATSAndRedis(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				patientController := newMailboxTestController(env.engine, patient, &mailboxDurability{})
+				patientController := newMailboxTestController(env.engine, patient)
 				a := env.server
 				a.mail.stallNext("ReserveClaim", 20*time.Second)
 				answered := make(chan *pb.MailboxClaimResponse, 1)

@@ -712,9 +712,25 @@ func (settledNest) Request(context.Context, corenest.HandlerName, int64, corenes
 	return true, nil
 }
 
+// settleCommitter 不落盘；领取 handler 是 durability=pipelined，所以也接 Enqueue（入队即算持久，票据立即完成）。
 type settleCommitter struct{}
 
 func (settleCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+func (settleCommitter) Enqueue(context.Context, dataengine.CommitRecord) (corenest.CommitTicket, error) {
+	return settleTicket{}, nil
+}
+func (settleCommitter) DurableLSN() uint64 { return 0 }
+
+// settleTicket 是已经持久的 pipelined 票据。
+type settleTicket struct{}
+
+func (settleTicket) LSN() uint64 { return 0 }
+func (settleTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (settleTicket) Err() error { return nil }
 
 // D26：活动结算除名次道具外还发金币。结算发出的邮件逐封走 mailbox 模块的领取 handler（附件经 wallet 模块到账）
 // 领到玩家身上，领完之后钱包里的金币变多。修前结算只发道具邮件，领完钱包仍是 0。

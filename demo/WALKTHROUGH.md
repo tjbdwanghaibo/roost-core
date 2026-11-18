@@ -38,7 +38,7 @@ TCP (player access)
   （骨架本来也会被立刻覆盖）；模块那一步跑生成器时全部 handler 都已经在盘上。邮件附件进背包不在其中：那是 mailbox 模块与
   bag 模块的联动（`game/components/mailbox/mailbox_item.go`，见下文[邮件](#邮件列表与领附件客户端这一半)）。
 - **领取账本不是背包的职责**：付费发货来自 [purchase 模块](../modules/purchase/README.md)，Redis 按玩家保存待发快照，
-  Player 的 `Purchase.Applied` 连续游标与奖励在同一笔事务提交；这名玩家的修改落库（DataEngine `WaitEntityProjection`）之后才清理待发，旧序号不能再发一次。demo 不保留不断增长的
+  Player 的 `Purchase.Applied` 连续游标与奖励在同一笔事务提交；发货 handler 是 `durability=pipelined`（回复时已 fsync），回执之后才清理待发，旧序号不能再发一次。demo 不保留不断增长的
   `PurchaseClaims`。商品表与模拟渠道是 demo 的规则，真实渠道仍需工程接入；模块与 enter 联动补发离线订单。
   邮件附件账本仍由 mailbox 模块维护。demo 购买响应里的 BagCount 是另一笔只读 Nest 查询的当前快照，不是发货幂等回执。
 - **同步不用组件自己标脏**：模块的组件不调 `Player.PublishSyncDirty()`（模块不认识工程的同步）。demo 的 Nest 装着场景的
@@ -138,12 +138,12 @@ mailbox 模块消费者 → Mongo inbox + SendTo(RequestID = EffectID) → mail 
 ```
 MailboxList 端点  ─ List(playerID, cursor, limit)   ─▶ mail 服务（按认证玩家作用域，服务端不需要端点再查归属）
 MailboxClaim 端点 ─ ReserveClaim(mailID, "")        ─▶ mail 服务：交出附件 + 对 (玩家, 邮件) 恒定的 token
-                  ─ Sync_MailboxClaimReward(...)    ─▶ Nest 锁 Player 的一笔事务：奖励 + **邮件 id 记进账本**，同一条 WAL 记录
-                  ─ WaitEntityProjection(player)    ─▶ DataEngine：这名玩家已提交的修改落库（发放是 async，回复时还没 fsync）
+                  ─ Sync_MailboxClaimReward(...)    ─▶ Nest 锁 Player 的一笔事务：奖励 + **邮件 id 记进账本**，同一条 WAL 记录；
+                                                       durability=pipelined：入队后先放锁，fsync 之后才回复
                   ─ CommitClaim(token)              ─▶ mail 服务：标记已领；重试同 token 幂等
 ```
 
-确认排在本地持久之后：先让 mail 服务标成已领的话，整机掉电丢了发放、邮件却已领，附件再也领不到（2026-11-18，
+确认排在本地持久之后（发放是 pipelined，回复即已 fsync）：若发放用 async、回复后就确认，整机掉电丢了发放、邮件却已领，附件再也领不到（2026-11-18，
 [证据](../docs/maintenance/evidence/purchase-mailbox-durable-ack-20261118/README.md)）。
 
 - **附件是（种类，号，数量）**：线上格式 `{"type":"item","id":1002,"amount":1}`，金币是 `{"type":"coins","amount":100}`

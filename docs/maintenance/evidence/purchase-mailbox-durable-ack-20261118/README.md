@@ -1,5 +1,7 @@
 # purchase / mailbox：外部确认放到本地修改持久之后（2026-11-18）
 
+> **同日改法已替换**：§1～§7 是第一版（`WaitEntityProjection` 屏障，提交 `cb0e5b14`）。维护者随后改为两个 handler 用 `durability=pipelined`，屏障代码已删除，现行做法与验证见 [§8](#8-改为-durabilitypipelined2026-11-18-第二版)。
+
 基线 main `0a9976b8`。维护者 2026-11-18 定 **A**：handler 仍用缺省 async（不回退 strict），purchase 的 `Ack`、mailbox 的 `CommitClaim` 放到本地这笔修改已持久之后。问题来源见[模块改用 async 的核对 §4](../modules-async-20261118/README.md#4-资产类模块核对崩溃后重放--重试是否仍幂等)。本轮只改两个模块的模板、模块测试、清单、README，`codegen/internal/roost` 里这两个模块的场景数与变异锚点，`scripts/test-modules-generated.sh` 的场景数，以及 `demo/WALKTHROUGH.md` 描述这两条流程的句子；没有改框架。
 
 ## 1. 选的等持久手段
@@ -125,3 +127,52 @@ FAIL	example.com/pmdurable/game/controllers	1.043s
 - 没有在真实 DataEngine（文件 WAL + Mongo）上跑这两个模块的端点；`scripts/test-operations-real.sh` 与 mailbox 的 `-tags integration` 档没有重跑（后者的 Nest 仍是替身提交器）。
 - async 记录的投影不等 WAL fsync（`Projector.Commit` 写入即唤醒回放，`WAL.Replay` 读到已写入的末尾）：掉电后 WAL 尾部丢失而 Mongo 已有该修改时，启动排空的行为（是否会在 `classifyNoMatch` 判冲突）本轮没有核对，属于框架层面，不随本轮改动变化。
 - 没跑全量 pretag 与全模块矩阵（按任务约定由协调者统一跑）。
+
+## 8. 改为 durability=pipelined（2026-11-18 第二版）
+
+基线 main `5845553a`（含第一版 `cb0e5b14`）。维护者原话：“很多都不需要strick的方式，pileline就已经很严格了”。规则：回复后马上对外部确认的写用 pipelined。
+
+### 8.1 改法
+
+- `PurchaseGrant`（`game/handler/purchase_grant.go`）、`handlerMailboxClaimReward`（`game/handler/mailbox_claim_reward.go`）的标记改为 `//roost:nest rollback=undo durability=pipelined`。
+- 删掉第一版的屏障：两个端点不再从 Registry 取 DataEngine Mod、不再调 `WaitEntityProjection`；purchase 的 `Collect` 恢复成“逐笔：查 platform → Sender → Ack”（与 `cb0e5b14^` 的代码相同，只多一行注释），mailbox 恢复成 `ReserveClaim → Sync_MailboxClaimReward → CommitClaim`；purchase 清单 `needs.mods` 去掉补上的 `dataengine`（有 nest 自动带上）。
+- 理由（按源码核对）：`framework/nest/execution.go` 的 `commitPipelined` 在锁内 `Enqueue`（唯一拒绝点），提前放锁，`<-ticket.Done()` 之后才完成事务并回复；票据由 WAL 组提交 fsync 后完成（`framework/nestwal/wal.go` 的 `resolveDurableLocked`）。所以 Sender 返回时这笔记录已 fsync，随后的 `Ack` / `CommitClaim` 不会比它“活得久”。比第一版少一次 Mongo 投影往返，也不依赖 Mongo 的可用性；代价是这条 handler 的回复多等一次组提交 fsync（与 strict 相同的等待，但实体锁在入队后就放了）。
+- fsync 失败时票据带 `ErrCommitIndeterminate`，Nest fence 实例并把它交给调用方：purchase 不当回执、不 `Ack`；mailbox 按发放失败处理（归还预留、答错误码）。恢复后由 WAL 回放决定这笔在不在，账本 / 游标保证不重复。
+
+### 8.2 运行时要求（逐项核对）
+
+| 要求 | 结论 |
+| --- | --- |
+| `Rollback != none` | 两个都是 `rollback=undo`。 |
+| 提交器实现 `Enqueue` / `DurableLSN`，否则 `ErrPipelinedCommitterRequired` | 正式进程的 committer 是 DataEngine Mod（`wiring/dataengine` 的 `Mod.Enqueue` / `DurableLSN`）。模块测试的替身提交器全部补上：purchase / mailbox 的 handler 与端点测试、mailbox 真实依赖档（`-tags integration`，Nest 替身改用 `mailboxDurability`）、`demo/internal/service/game/activity_test.go` 的 `settleCommitter`（demo 结算后逐封调领取 handler）。 |
+| `nest.pipelined.allowlist` | 生成配置（`configs/service/config.game.yaml` 与 prod 示例）是 `allowlist: []`，空 = 全部允许，不用动。框架只自动补 saga 原生步骤；工程写了非空名单时必须把 `handlerPurchaseGrant`、`handlerMailboxClaimReward` 列进去，否则 `ErrPipelinedNotAllowed`。写进了两个模块 README 的“前提”与 `modules/README.md` 的“持久级别”。 |
+| 异步完成 | 两个都不是 saga 原生步骤、没声明 `completion=async`：第一阶段，在派发 worker 上等票据。 |
+| Remote 批次 | 只写 Player（本地实体），不走 strict 回退路径。 |
+
+### 8.3 测试与变异
+
+替身：端点 / 补领测试的提交器按持久级别区分——`Commit`（async）只算“已写进 WAL”，strict 算已持久；`Enqueue`（pipelined）入队即写入，票据在另一个 goroutine 里睡 1ms（组提交间隔）后“fsync”、才算已持久并完成。外部确认（队列替身的 `Ack`、mail 替身的 `CommitClaim`）到达时若还有没持久的提交，记一笔“过早确认”；保留第一版的“每个用例结束时没有过早确认”核对与 `…AcksOnlyAfterTheGrantsArePersisted`、`…CommitsTheMailOnlyAfterTheGrantIsPersisted` 两条场景。第一版的两条“等持久失败”场景换成 fsync 结果未知的场景：`TestPurchaseCollectionIndeterminateGrantKeepsTheQueue`（`ErrCommitIndeterminate`、无回执、不 Ack）、`TestMailboxClaimEndpointIndeterminateGrantLeavesTheMailUnclaimed`（答错误码、邮件未领、预留已归还）。handler 层 `TestPurchaseGrantCommitsRewardAndCursor`、`TestMailboxFirstClaimPaysTheCoins` 断言提交记录声明的是 pipelined。场景数不变（purchase 23、mailbox 35）。
+
+全部 `GOWORK=off`，临时工程 `module add purchase mailbox bag` 后再 `module add enter`：
+
+- 定向 19 条（端点 / 补领 17 + handler 2）全过；`go vet -tags integration ./game/controllers` 通过。
+- 变异（生成工程上改、跑同一组、还原后复跑全绿）：
+
+| 变异 | 结果 |
+| --- | --- |
+| purchase 生成注册 `DurabilityPipelined` → `DurabilityAsync` | 红：controllers 4 条（`orders acknowledged while the grant was only written, not persisted: [order-1 order-2]` 等）+ handler `the grant committed with durability async, want pipelined` |
+| purchase 标记去掉 `durability=pipelined` 后 `roost generate` | 红：同上 5 条 |
+| mailbox 生成注册改回 async | 红：端点 6 条（`mails committed before the grant was persisted locally`、`claim whose grant is indeterminate = &{Code:0 …}`）+ handler 1 条 |
+| mailbox 标记去掉 durability 后重新生成 | 红：同上 7 条 |
+
+- `roost module verify`：bag 20、enter 29、mailbox 35、mailbox+bag 9、mailbox+enter 5、purchase 23、purchase+bag 4、purchase+enter 2、wallet 17，零跳过，4 项工程检查通过。
+- `codegen/internal/roost` 相关 3 个用例：全过（`ok … 249.865s`）；purchase 的变异换成“生成注册改回 async”，日志 `caught mutation in game/handler/purchase_grant_nest_gen.go: orders acknowledged while the grant was only written, not persisted`；“未终结订单”变异的锚点恢复原文。
+- game-demo：生成后 `go vet ./internal/service/game` 通过，`TestActivitySettlementPaysCoinsIntoTheWallet` 通过（领取 handler 走 pipelined 替身）。
+- 真实进程：`scripts/test-operations-real.sh`，私有 `mirror-local.sh` 环境（偏移 26000，etcd 58979，端口基 46500，跑完 `clean`），工作树 = `5845553a` + 本轮未提交改动：`TestOperationsGMHTTPMailAndRehome`、`TestOperationsPurchaseCrashAcrossSIDAndRedisRestart` 两条 PASS（正式 DataEngine 提交器、`allowlist: []` 下 pipelined 发货与领取正常；SIGKILL 停在 pipelined Sender 返回之后、Ack 之前，冷启后 `next=acked=Applied=2`、钱包 200）。`install.py` 的 Ack 锚点在模板里仍唯一。
+- 根包 `go test -count=1 .`：通过。
+
+### 8.4 剩余边界与未验证
+
+- 两条 handler 的回复多等一次组提交 fsync；同一玩家连续补领 / 领取时，下一笔要等上一笔回复（第一阶段 pipelined），不影响别的玩家。
+- fsync 失败是实例级故障（fence），这两条请求的结果未知，恢复后按账本 / 游标收敛。
+- 没有真实掉电演练；没有跑 mailbox 的 `-tags integration` 档（只做了编译检查）。§7 关于“投影先于 fsync 时掉电后的启动排空”仍是框架层面的尚未确认项，pipelined 记录要 fsync 后才投影（`Projector.Enqueue` 的 `signalWhenDurable`），这两条写不再落在那个窗口里。

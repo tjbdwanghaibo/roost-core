@@ -19,7 +19,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	mailboxcomp "{{MODULE}}/game/components/mailbox"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
@@ -166,41 +165,56 @@ func (g mailboxEndpointGetter) GetMany(ctx context.Context, ids []int64, cats []
 	return out, nil
 }
 
-// mailboxEndpointCommitter 是替身提交器：不落盘，一律接受。
-type mailboxEndpointCommitter struct{}
-
-func (mailboxEndpointCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
-
-// mailboxDurability 是替身提交器，兼 DataEngine Mod 的实体持久屏障（WaitEntityProjection，端点按能力名
-// mods.ModDataEngine 取）。Commit 只记“已写进 WAL 文件”：async 的发放此刻就回复，记录可能还在页缓存里，
-// 整机掉电会丢；WaitEntityProjection 之后才把此前的提交算作已持久（正式实现是这名玩家的在途投影已落库）。
+// mailboxDurability 是替身提交器，按持久级别区分“已写进 WAL”与“已持久”：
+//   - Commit（async / strict 路径）：async 的记录只写进 WAL 文件就回复，可能还在页缓存里，整机掉电会丢，不算已持久；
+//     strict 等 fsync 才回复，算已持久。
+//   - Enqueue（pipelined）：入队即写入，票据在另一个 goroutine 里“fsync”之后才完成，此时算已持久；Nest 等票据完成才回复。
+//
 // confirmedExternally 在外部确认（CommitClaim）到达时调用：此刻还有没持久的提交，就记进 early——
 // 这时掉电，mail 服务里邮件已领、玩家身上附件没了。
 type mailboxDurability struct {
 	mu        sync.Mutex
 	written   int
 	persisted int
-	waits     int
-	waitErr   error
+	ticketErr error
 	early     []string
 }
 
-func (d *mailboxDurability) Commit(context.Context, dataengine.CommitRecord) error {
+func (d *mailboxDurability) Commit(_ context.Context, record dataengine.CommitRecord) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.written++
+	if record.Durability == dataengine.DurabilityStrict {
+		d.persisted = d.written
+	}
 	return nil
 }
 
-func (d *mailboxDurability) WaitEntityProjection(context.Context, int64) error {
+func (d *mailboxDurability) Enqueue(_ context.Context, _ dataengine.CommitRecord) (nest.CommitTicket, error) {
+	d.mu.Lock()
+	d.written++
+	n, fail := d.written, d.ticketErr
+	d.mu.Unlock()
+	ticket := &mailboxTicket{lsn: uint64(n), done: make(chan struct{})}
+	go func() {
+		time.Sleep(time.Millisecond) // 组提交间隔：回复若不等票据，CommitClaim 会落在这段时间里
+		if fail == nil {
+			d.mu.Lock()
+			if n > d.persisted {
+				d.persisted = n
+			}
+			d.mu.Unlock()
+		}
+		ticket.err = fail
+		close(ticket.done)
+	}()
+	return ticket, nil
+}
+
+func (d *mailboxDurability) DurableLSN() uint64 {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.waits++
-	if d.waitErr != nil {
-		return d.waitErr
-	}
-	d.persisted = d.written
-	return nil
+	return uint64(d.persisted)
 }
 
 func (d *mailboxDurability) confirmedExternally(mailID string) {
@@ -211,10 +225,10 @@ func (d *mailboxDurability) confirmedExternally(mailID string) {
 	}
 }
 
-func (d *mailboxDurability) failWaits(err error) {
+func (d *mailboxDurability) failTickets(err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.waitErr = err
+	d.ticketErr = err
 }
 
 func (d *mailboxDurability) confirmedEarly() []string {
@@ -222,6 +236,17 @@ func (d *mailboxDurability) confirmedEarly() []string {
 	defer d.mu.Unlock()
 	return append([]string(nil), d.early...)
 }
+
+// mailboxTicket 是替身的 pipelined 票据：done 关闭之前记录还没持久。
+type mailboxTicket struct {
+	lsn  uint64
+	done chan struct{}
+	err  error
+}
+
+func (t *mailboxTicket) LSN() uint64           { return t.lsn }
+func (t *mailboxTicket) Done() <-chan struct{} { return t.done }
+func (t *mailboxTicket) Err() error            { <-t.done; return t.err }
 
 type mailboxEndpointFixture struct {
 	controller *Controller
@@ -283,18 +308,15 @@ func newMailboxEndpointFixture(t *testing.T) *mailboxEndpointFixture {
 			t.Error(err)
 		}
 	})
-	f.controller = newMailboxTestController(f.engine, f.mail, f.durability)
+	f.controller = newMailboxTestController(f.engine, f.mail)
 	return f
 }
 
-// newMailboxTestController 把 mail 服务与持久屏障按能力名登记进一个 Registry，Nest 用 client；端点用到时取。
+// newMailboxTestController 把 mail 服务按能力名登记进一个 Registry，Nest 用 client；端点用到时取。
 // 本包的端点测试与真实依赖档（-tags integration）共用它。
-func newMailboxTestController(client nest.Client, mailer svcmail.Mail, durability *mailboxDurability) *Controller {
+func newMailboxTestController(client nest.Client, mailer svcmail.Mail) *Controller {
 	registry := app.NewRegistry(nil)
 	if err := registry.Register(svcmail.CapabilityName, mailer); err != nil {
-		panic(err)
-	}
-	if err := registry.Register(mods.ModDataEngine, durability); err != nil {
 		panic(err)
 	}
 	return &Controller{registry: registry, nestClient: client}
@@ -494,7 +516,7 @@ func (c *mailboxLateResultClient) Request(ctx context.Context, name nest.Handler
 func TestMailboxClaimEndpointTimedOutGrantThatCommittedPaysOnce(t *testing.T) {
 	f := newMailboxEndpointFixture(t)
 	late := &mailboxLateResultClient{Client: f.engine}
-	f.controller = newMailboxTestController(late, f.mail, f.durability)
+	f.controller = newMailboxTestController(late, f.mail)
 	mailID := f.send(t, mailboxPlayerA, "level reward", mailboxCoins(t, 100))
 
 	late.late.Store(1)
@@ -777,9 +799,9 @@ func TestMailboxSendToLetterIsListedClaimedAndNeverSentTwice(t *testing.T) {
 	}
 }
 
-// mail 服务只在本地发放已持久之后才把邮件标成已领：async 的发放回复时记录只写进了 WAL 文件，
-// 此刻整机掉电会丢；若 CommitClaim 已到达，邮件“已领”、附件没到账，账本也没有这封，没人会补发。
-// 首次发放与“CommitClaim 丢失后重试”（账本已有、Claimed=false）两条路径都先等持久再确认。
+// mail 服务只在本地发放已持久之后才把邮件标成已领：发放是 durability=pipelined，Sender 等票据完成（fsync）才返回。
+// 改回 async 的话回复只说明记录写进了 WAL 文件，此刻整机掉电会丢；若 CommitClaim 已到达，邮件“已领”、附件没到账，
+// 账本也没有这封，没人会补发。首次发放与“CommitClaim 丢失后重试”（账本已有、Claimed=false）两条路径都要成立。
 func TestMailboxClaimEndpointCommitsTheMailOnlyAfterTheGrantIsPersisted(t *testing.T) {
 	f := newMailboxEndpointFixture(t)
 	mailID := f.send(t, mailboxPlayerA, "level reward", mailboxCoins(t, 100))
@@ -810,31 +832,20 @@ func TestMailboxClaimEndpointCommitsTheMailOnlyAfterTheGrantIsPersisted(t *testi
 	}
 }
 
-// 等持久失败（投影 fatal、WAL 不健康、等到截止）时不让 mail 服务确认：附件已在玩家身上（内存里），照常答成功；
-// 邮件保持未领，租约到期后可以再领。若那笔发放其实没留下来（掉电丢了），再领会重新发；
-// 留下来了，账本认出这封、不发第二笔，持久之后补上确认。
-func TestMailboxClaimEndpointUnpersistedGrantLeavesTheMailUnclaimed(t *testing.T) {
+// 发放的 pipelined 票据结果未知（fsync 失败，WAL 进入 terminal）：Sender 答 ErrCommitIndeterminate，端点不让 mail 服务
+// 确认、归还预留并答错误码，邮件保持未领。实例恢复后由 WAL 回放决定这笔在不在：在，再领时账本认出它、只补确认；不在，重新发。
+func TestMailboxClaimEndpointIndeterminateGrantLeavesTheMailUnclaimed(t *testing.T) {
 	f := newMailboxEndpointFixture(t)
 	mailID := f.send(t, mailboxPlayerA, "level reward", mailboxCoins(t, 100))
-	f.durability.failWaits(errors.New("injected: projection not confirmed"))
-	first := f.claim(t, mailboxPlayerA, mailID)
-	if first.Code != 0 || first.Amount != 100 || first.Held != 100 {
-		t.Fatalf("claim whose grant is not yet persisted = %+v, want success: the coins are in the wallet", first)
+	f.durability.failTickets(fmt.Errorf("%w: injected fsync failure", nest.ErrCommitIndeterminate))
+	refused := f.claim(t, mailboxPlayerA, mailID)
+	if refused.Code == 0 || refused.Amount != 0 || refused.Held != 0 {
+		t.Fatalf("claim whose grant is indeterminate = %+v, want an error code and no amount", refused)
 	}
-	if status := f.entry(t, mailboxPlayerA, mailID).Status; status == svcmail.StatusClaimed {
-		t.Fatal("the mail service committed a mail whose grant was not persisted")
+	if entry := f.entry(t, mailboxPlayerA, mailID); entry.Status == svcmail.StatusClaimed {
+		t.Fatal("the mail service committed a mail whose grant may be lost")
 	}
-
-	f.durability.failWaits(nil)
-	f.advance(60) // 租约（30 秒）到期
-	retry := f.claim(t, mailboxPlayerA, mailID)
-	if retry.Code != 0 || retry.Amount != 100 || retry.Held != 100 {
-		t.Fatalf("retry after the grant was persisted = %+v, want this mail's 100 coins and the balance still 100", retry)
-	}
-	if status := f.entry(t, mailboxPlayerA, mailID).Status; status != svcmail.StatusClaimed {
-		t.Fatalf("the retry did not commit the mail: status %q", status)
-	}
-	if coins, ledger := f.wallet(t); coins != 100 || ledger != 1 {
-		t.Fatalf("the retry paid again: coins=%d ledger=%d", coins, ledger)
+	if listed := f.listed(t, mailboxPlayerA, mailID); !listed.Claimable {
+		t.Fatalf("the reservation was not released after the indeterminate grant: %+v", listed)
 	}
 }

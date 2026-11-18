@@ -36,18 +36,42 @@ func (g purchaseGetter) GetMany(ctx context.Context, ids []int64, categories []e
 	return targets, nil
 }
 
+// purchaseCommitter 是替身提交器：数提交次数、记下最近一次提交声明的持久性；reject 打开时拒绝提交。
+// 发货是 durability=pipelined，走 Enqueue：入队即算持久，票据立即完成。
 type purchaseCommitter struct {
-	reject  atomic.Bool
-	commits atomic.Int64
+	reject     atomic.Bool
+	commits    atomic.Int64
+	durability atomic.Int32
 }
 
-func (c *purchaseCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+func (c *purchaseCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
 	if c.reject.Load() {
 		return fmt.Errorf("injected purchase commit failure")
 	}
 	c.commits.Add(1)
+	c.durability.Store(int32(record.Durability))
 	return nil
 }
+
+func (c *purchaseCommitter) Enqueue(ctx context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	if err := c.Commit(ctx, record); err != nil {
+		return nil, err
+	}
+	return purchaseDurableTicket(c.DurableLSN()), nil
+}
+
+func (c *purchaseCommitter) DurableLSN() uint64 { return uint64(c.commits.Load()) }
+
+// purchaseDurableTicket 是已经持久的 pipelined 票据。
+type purchaseDurableTicket uint64
+
+func (t purchaseDurableTicket) LSN() uint64 { return uint64(t) }
+func (purchaseDurableTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (purchaseDurableTicket) Err() error { return nil }
 
 type purchaseFixture struct {
 	engine    *nest.NestMgr
@@ -116,6 +140,10 @@ func TestPurchaseGrantCommitsRewardAndCursor(t *testing.T) {
 		t.Fatalf("receipt=%+v err=%v", r, err)
 	}
 	f.expect(t, 1, 100, 1)
+	// 发货用 durability=pipelined（维护者 2026-11-18）：回复在 fsync 之后，补领随后才删外部快照。
+	if got := dataengine.Durability(f.committer.durability.Load()); got != dataengine.DurabilityPipelined {
+		t.Fatalf("the grant committed with durability %v, want pipelined", got)
+	}
 }
 func TestPurchaseReplayReturnsOriginalWithoutWriting(t *testing.T) {
 	f := newPurchaseFixture(t)

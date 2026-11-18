@@ -107,7 +107,7 @@ func (g mailboxGetter) GetMany(ctx context.Context, ids []int64, cats []entity.E
 }
 
 // mailboxCommitter 是替身提交器：不落盘，数提交次数、记下最近一次提交声明的持久性；
-// reject 打开时拒绝提交，用来验证回滚。
+// reject 打开时拒绝提交，用来验证回滚。发放是 durability=pipelined，走 Enqueue：入队即算持久，票据立即完成。
 type mailboxCommitter struct {
 	reject     atomic.Bool
 	commits    atomic.Int64
@@ -122,6 +122,26 @@ func (c *mailboxCommitter) Commit(_ context.Context, record dataengine.CommitRec
 	c.durability.Store(int32(record.Durability))
 	return nil
 }
+
+func (c *mailboxCommitter) Enqueue(ctx context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	if err := c.Commit(ctx, record); err != nil {
+		return nil, err
+	}
+	return mailboxDurableTicket(c.DurableLSN()), nil
+}
+
+func (c *mailboxCommitter) DurableLSN() uint64 { return uint64(c.commits.Load()) }
+
+// mailboxDurableTicket 是已经持久的 pipelined 票据。
+type mailboxDurableTicket uint64
+
+func (t mailboxDurableTicket) LSN() uint64 { return uint64(t) }
+func (mailboxDurableTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (mailboxDurableTicket) Err() error { return nil }
 
 type mailboxFixture struct {
 	engine    *nest.NestMgr
@@ -242,11 +262,11 @@ func TestMailboxFirstClaimPaysTheCoins(t *testing.T) {
 	if !f.recorded(t, "mail-1") {
 		t.Fatal("the mail id is not in the ledger: a replay would be paid again")
 	}
-	// 发放用缺省 async 提交（维护者 2026-11-18：模块不用 strict）：handler 返回时 WAL 已写入、尚未 fsync。
-	// 端点随后让 mail 服务把邮件标成已领；进程被杀不丢已写入的 WAL，整机掉电 / 内核崩溃可能丢掉最后一个组提交
-	// 间隔里的发放，那时就是“邮件已领、钱没到”（见模块 README“一致性”）。
-	if got := dataengine.Durability(f.committer.durability.Load()); got != dataengine.DurabilityAsync {
-		t.Fatalf("the grant committed with durability %v, want async", got)
+	// 发放用 durability=pipelined（维护者 2026-11-18）：回复在这笔记录 fsync 之后，端点随后才让 mail 服务把邮件
+	// 标成已领。改回 async 的话回复只说明写进了 WAL 文件，整机掉电会丢掉已回复的发放，那时就是“邮件已领、钱没到”
+	// （见模块 README“一致性”）。
+	if got := dataengine.Durability(f.committer.durability.Load()); got != dataengine.DurabilityPipelined {
+		t.Fatalf("the grant committed with durability %v, want pipelined", got)
 	}
 }
 

@@ -19,7 +19,11 @@ import (
 // 邮件的过期时刻是 Unix 秒，这里按 mail 服务同样的取整（向下取到秒）换算后再比较。
 // 规则本身见 game/components/mailbox 的 Component.Claim。
 //
-//roost:nest rollback=undo
+// durability=pipelined（维护者 2026-11-18）：回复在这笔记录 fsync 之后（实体锁在入队后先放），端点随即让 mail 服务
+// CommitClaim。用缺省 async 的话回复只说明写进了 WAL 文件，整机掉电会丢掉已回复的发放而邮件已标成已领：
+// 附件没到账、账本里也没有这封，没人会补发。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerMailboxClaimReward(target view.IMailboxEntity, mailID string, attachmentType string, attachmentID int64, amount int64, expiresAtUnix int64, nowUnixMilli int64) (gamemailbox.ClaimResult, error) {
 	attachment := gamemailbox.Attachment{Type: gamemailbox.Type(attachmentType), ID: attachmentID, Amount: amount}
 	return target.Mailbox().Claim(mailID, attachment, expiresAtUnix, time.UnixMilli(nowUnixMilli).Unix())

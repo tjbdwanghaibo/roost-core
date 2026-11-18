@@ -7,7 +7,11 @@ import (
 
 // handlerPurchaseGrant 的参数只能来自可信待发队列；客户端补领端点只能提供自己身份，不能提供奖励或序号。
 //
-//roost:nest rollback=undo
+// durability=pipelined（维护者 2026-11-18）：回复在这笔记录 fsync 之后（实体锁在入队后先放），补领随即 Ack 删掉
+// Redis 里的快照。用缺省 async 的话回复只说明写进了 WAL 文件，整机掉电会丢掉已回复的发货而快照已删：
+// 奖励丢失，之后的订单永远答 purchase_sequence。
+//
+//roost:nest rollback=undo durability=pipelined
 func handlerPurchaseGrant(target view.IPurchaseEntity, grant purchase.Grant) (purchase.Receipt, error) {
 	return target.Purchase().Apply(grant)
 }

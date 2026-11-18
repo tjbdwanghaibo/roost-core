@@ -2,11 +2,13 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -38,35 +40,63 @@ func (g purchaseGetter) GetMany(ctx context.Context, ids []int64, categories []e
 	return targets, nil
 }
 
-// purchaseCommitter 是替身提交器，兼 DataEngine Mod 的实体持久屏障（WaitEntityProjection）。
-// Commit 只记“已写进 WAL 文件”：async 的 handler 此刻就回复，记录可能还在页缓存里，整机掉电会丢；
-// WaitEntityProjection 之后才把此前的提交算作已持久（正式实现是这名玩家的在途投影已落库）。
+// purchaseCommitter 是替身提交器，按持久级别区分“已写进 WAL”与“已持久”：
+//   - Commit（async / strict 路径）：async 的记录只写进 WAL 文件就回复，可能还在页缓存里，整机掉电会丢，不算已持久；
+//     strict 等 fsync 才回复，算已持久。
+//   - Enqueue（pipelined）：入队即写入，票据在另一个 goroutine 里“fsync”之后才完成，此时算已持久；Nest 等票据完成才回复。
+//
+// 队列替身在 Ack 到达时问 unpersisted：大于 0 就是“外部已确认、本地这时掉电会丢”。
 type purchaseCommitter struct {
 	reject    atomic.Bool
 	commits   atomic.Int64
 	mu        sync.Mutex
 	persisted int64
-	waits     int
-	waitErr   error
+	ticketErr error
 }
 
-func (c *purchaseCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+func (c *purchaseCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
 	if c.reject.Load() {
 		return fmt.Errorf("injected purchase commit failure")
 	}
-	c.commits.Add(1)
+	n := c.commits.Add(1)
+	if record.Durability == dataengine.DurabilityStrict {
+		c.markPersisted(n)
+	}
 	return nil
 }
 
-func (c *purchaseCommitter) WaitEntityProjection(context.Context, int64) error {
+func (c *purchaseCommitter) Enqueue(_ context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	if c.reject.Load() {
+		return nil, fmt.Errorf("injected purchase commit failure")
+	}
+	n := c.commits.Add(1)
+	c.mu.Lock()
+	fail := c.ticketErr
+	c.mu.Unlock()
+	ticket := &purchaseTicket{lsn: uint64(n), done: make(chan struct{})}
+	go func() {
+		time.Sleep(time.Millisecond) // 组提交间隔：回复若不等票据，Ack 会落在这段时间里
+		if fail == nil {
+			c.markPersisted(n)
+		}
+		ticket.err = fail
+		close(ticket.done)
+	}()
+	return ticket, nil
+}
+
+func (c *purchaseCommitter) DurableLSN() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.waits++
-	if c.waitErr != nil {
-		return c.waitErr
+	return uint64(c.persisted)
+}
+
+func (c *purchaseCommitter) markPersisted(n int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n > c.persisted {
+		c.persisted = n
 	}
-	c.persisted = c.commits.Load()
-	return nil
 }
 
 // unpersisted 是此刻已回复、还没持久的提交数：此刻整机掉电，这些修改会丢。
@@ -75,6 +105,17 @@ func (c *purchaseCommitter) unpersisted() int64 {
 	defer c.mu.Unlock()
 	return c.commits.Load() - c.persisted
 }
+
+// purchaseTicket 是替身的 pipelined 票据：done 关闭之前记录还没持久。
+type purchaseTicket struct {
+	lsn  uint64
+	done chan struct{}
+	err  error
+}
+
+func (t *purchaseTicket) LSN() uint64           { return t.lsn }
+func (t *purchaseTicket) Done() <-chan struct{} { return t.done }
+func (t *purchaseTicket) Err() error            { <-t.done; return t.err }
 
 type purchaseFixture struct {
 	engine    *nest.NestMgr
@@ -183,7 +224,7 @@ func newPurchaseCollector(t *testing.T) (*purchaseDeps, *purchaseFixture, *purch
 			t.Errorf("orders acknowledged before the grant was persisted locally: %v", q.early)
 		}
 	})
-	return &purchaseDeps{queue: q, platform: p, sender: f.sender, persist: f.committer}, f, q, p
+	return &purchaseDeps{queue: q, platform: p, sender: f.sender}, f, q, p
 }
 func TestPurchaseCollectionWaitsForInFlightDelivery(t *testing.T) {
 	c, f, q, p := newPurchaseCollector(t)
@@ -256,9 +297,9 @@ func TestPurchaseCollectionRejectsWrongOrder(t *testing.T) {
 	}
 }
 
-// 同一批两笔都发货之后才删外部快照，而且删之前这名玩家的本地修改已经持久：async 的回复只说明记录写进了
-// WAL 文件，此刻整机掉电会丢；若队列先删了快照，掉电后 Player 的游标停在旧号、Redis 的 acked 已越过，
-// 这笔奖励丢失、下一笔永远答 purchase_sequence。
+// 每笔 Ack 到达时，这笔发货已经持久：PurchaseGrant 是 durability=pipelined，Sender 等票据完成（fsync）才返回。
+// 改回 async 的话回复只说明记录写进了 WAL 文件，此刻整机掉电会丢；队列已删了快照，掉电后 Player 的游标停在旧号、
+// Redis 的 acked 已越过，这笔奖励丢失、下一笔永远答 purchase_sequence。
 func TestPurchaseCollectionAcksOnlyAfterTheGrantsArePersisted(t *testing.T) {
 	c, f, q, p := newPurchaseCollector(t)
 	second := purchaseTestGrant(2)
@@ -280,25 +321,20 @@ func TestPurchaseCollectionAcksOnlyAfterTheGrantsArePersisted(t *testing.T) {
 	f.expect(t, 2, 200, 2)
 }
 
-// 等持久失败（投影 fatal、WAL 不健康、等到截止）时队列一条不删，答错误；本地修改已在内存里，回执照常返回。
-// 下一次补领重放同一笔（游标已到，不再写），持久之后才删快照：奖励只发一次，队列最终清空。
-func TestPurchaseCollectionUnpersistedGrantKeepsTheQueue(t *testing.T) {
+// 发货的 pipelined 票据结果未知（fsync 失败，WAL 进入 terminal）：Sender 答 ErrCommitIndeterminate，补领不当回执、
+// 一条都不 Ack，快照留在 Redis；实例恢复后由 WAL 回放决定这笔在不在，下一次补领按游标重放或重发。
+func TestPurchaseCollectionIndeterminateGrantKeepsTheQueue(t *testing.T) {
 	c, f, q, _ := newPurchaseCollector(t)
-	f.committer.waitErr = fmt.Errorf("injected: projection not confirmed")
-	first, err := c.Collect(context.Background(), 98801)
-	if err == nil || len(first) != 1 {
-		t.Fatalf("receipts=%+v err=%v, want the receipt and an error", first, err)
+	f.committer.mu.Lock()
+	f.committer.ticketErr = fmt.Errorf("%w: injected fsync failure", nest.ErrCommitIndeterminate)
+	f.committer.mu.Unlock()
+	receipts, err := c.Collect(context.Background(), 98801)
+	if !errors.Is(err, nest.ErrCommitIndeterminate) || len(receipts) != 0 {
+		t.Fatalf("receipts=%+v err=%v, want no receipt and an indeterminate commit", receipts, err)
 	}
 	if q.acks != 0 || len(q.pending) != 1 {
-		t.Fatalf("an unpersisted grant was acknowledged: acks=%d pending=%d", q.acks, len(q.pending))
+		t.Fatalf("an order whose grant may be lost was acknowledged: acks=%d pending=%d", q.acks, len(q.pending))
 	}
-	f.expect(t, 1, 100, 1)
-	f.committer.waitErr = nil
-	again, err := c.Collect(context.Background(), 98801)
-	if err != nil || !reflect.DeepEqual(first, again) || q.acks != 1 || len(q.pending) != 0 {
-		t.Fatalf("retry=%+v first=%+v acks=%d err=%v", again, first, q.acks, err)
-	}
-	f.expect(t, 1, 100, 1)
 }
 
 // purchasePlatformByOrder 按订单号回答，一批里有多笔订单时用。
