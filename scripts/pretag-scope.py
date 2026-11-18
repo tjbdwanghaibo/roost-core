@@ -149,10 +149,14 @@ def main():
     affected.add(pkgs["."])
     go_packages = sorted(affected)
     # SDK 用例的对端也算：C# 的 WebSocket / 跨 Gate 用例在 infra/network/gateway（经 test-client-dotnet.sh 带 DLL 跑），
-    # 开房间用例连 service/relay、service/lobby；TS 的 relay 用例连 Go 的 relay、lobby 与 client/relay 夹具。
-    peers = ("client/spec/", "client/wire/", "service/relay/", "service/lobby/", "infra/network/wsconn/")
-    dotnet = any(f.startswith(("client/dotnet/", "infra/network/gateway/") + peers) for f in changed)
-    ts = any(f.startswith(("client/ts/", "client/relay/") + peers) for f in changed)
+    # 开房间用例连 service/relay、service/lobby；TS 的 relay 用例连 Go 的 relay、lobby 与 client/relay 夹具，gate 用例
+    # （test-client-ts.sh 带 ROOST_TS_GATE_DRIVER 跑）也在 infra/network/gateway。client_export 的 ts 导出与 client sync
+    # --lang ts 在 codegen 包里，它们的真实工具链用例只在 ROOST_TS_FULL=1 时跑，这里只算 TS 受影响。
+    peers = ("client/spec/", "client/wire/", "service/relay/", "service/lobby/", "infra/network/wsconn/", "infra/network/gateway/")
+    ts_codegen = ("codegen/internal/roost/client_export", "codegen/internal/roost/client_sync.go",
+                  "codegen/internal/protocol/client_export", "codegen/internal/errcode/ts")
+    dotnet = any(f.startswith(("client/dotnet/",) + peers) for f in changed)
+    ts = any(f.startswith(("client/ts/", "client/relay/") + peers + ts_codegen) for f in changed)
     say(f"affected run: {len(go_packages)} of {len(set(pkgs.values()))} packages, {len(genres)} of {len(GENRE_SCRIPTS)} genre scripts, "
         f"C# {'yes' if dotnet else 'no'}, TS {'yes' if ts else 'no'}")
     emit("affected", go_packages, genres, dotnet, ts)
