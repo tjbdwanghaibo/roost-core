@@ -1,0 +1,6 @@
+ok   module cellworld: 17 passed (want 17), 0 skipped
+ok   go build ./...
+ok   go vet ./...
+ok   roost id check
+ok   roost generate --check
+verify exit=0

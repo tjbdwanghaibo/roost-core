@@ -1,0 +1,6 @@
+t=45 rss_kb= 55984 e3soak.test [45945]: 64-bit    Footprint: 43811512 B (16384 bytes per page) load={ 4.07 16.16 15.04 }
+t=120 rss_kb= 57840 e3soak.test [45945]: 64-bit    Footprint: 43942608 B (16384 bytes per page) load={ 3.42 13.39 14.08 }
+t=210 rss_kb= 58480 e3soak.test [45945]: 64-bit    Footprint: 44810960 B (16384 bytes per page) load={ 3.96 10.82 13.01 }
+t=300 rss_kb= 58576 e3soak.test [45945]: 64-bit    Footprint: 44335824 B (16384 bytes per page) load={ 3.80 8.86 12.02 }
+t=390 rss_kb= 58608 e3soak.test [45945]: 64-bit    Footprint: 44516048 B (16384 bytes per page) load={ 2.19 7.02 10.99 }
+t=465 rss_kb= 58672 e3soak.test [45945]: 64-bit    Footprint: 44974800 B (16384 bytes per page) load={ 3.25 6.25 10.36 }

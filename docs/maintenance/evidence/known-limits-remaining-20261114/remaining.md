@@ -11,7 +11,7 @@
 
 ## 当前收口状态（2026-11-14）
 
-本机功能实现 / 演练与正式性能、外部环境、维护者决定分开判定。A 的 31 段已迁入 [KNOWN-LIMITS 一](../../KNOWN-LIMITS.md#一框架本身的限制)，F 的 17 项按下表收敛；B 的结果如下。**M-1～M-19、E-1 / E-3 正式测量均未运行**，B-2 大形状成本与 B-3 checkpoint 实验不由功能冒烟关闭。E-2 完成原版 200 轮调查，实际 max load10.39，未复现不是修复。C 的 36 项继续待外部环境；D 与 N1～N4 原样保留未答。
+本机功能实现 / 演练与正式性能、外部环境、维护者决定分开判定。A 的 31 段已迁入 [KNOWN-LIMITS 一](../../KNOWN-LIMITS.md#一框架本身的限制)，F 的 17 项按下表收敛；B 的结果如下。**M-1～M-19 正式测量均未运行**，B-2 大形状成本与 B-3 checkpoint 实验不由功能冒烟关闭。E-1 / E-3 / E-2 已在第三类（2026-11-18～19）归因，见下方“第三类结果”；E-2 当年那次 200 轮（max load 10.39）未复现不是修复。C 的 36 项继续待外部环境；D 与 N1～N4 原样保留未答。
 
 | B / 对应 No. | 本机结果与证据 | 仍保留的边界 |
 | --- | --- | --- |
@@ -26,11 +26,13 @@
 | B-9 / 36、39、48 | [Room/Turn](../turn-real-20261114/README.md)：真实 portal/account→match→Room/Turn、Gate/NATS/Ingress、SIGKILL、旧 Epoch 拒绝与 timeout 只补一次；demo Robot/dev-smoke；另有正常停机 timer 档 | 两档各自范围；非 WAL-only/跨机；Q13 后续保留 |
 | B-10 / 73④ | [地形确认帧](../terrain-confirm-source-20261110/README.md)：Go entitysync 真实帧→.NET EntityViews/TerrainChunkSync 已通过 | 不经 TCP/Gate/demo Interest，Unity 仍 C-U2，坏块 N4 未答 |
 | B-11 / 74 | [地形 WAL](../terrain-wal-crash-20261114/README.md)：四块笔刷/两块建筑，strict 确认且 Mongo 空后 SIGKILL，版本/hash/占位/账本/幂等，丢 WAL 红 | 不含网络同步送达/跨机/容量；T09/T10/Unity 等仍保留 |
-| B-12 / 76 | CellWorld Runtime 六场景已合（Start/Stop、失败复位），见 [模块说明](../../../../modules/cellworld/README.md) | AddIngress 失败分支仍缺用例，业务 Entity 适配仍在 demo |
+| B-12 / 76 | CellWorld Runtime 六场景已合（Start/Stop、失败复位），见 [模块说明](../../../../modules/cellworld/README.md)；AddIngress 失败分支 2026-11-17 已补（[d-small-items §3](../d-small-items-20261117/README.md)），2026-11-19 在 v1.57.1 上复验 `module verify cellworld` 17 / 17、变异 4 / 4（[第三批 §2](../category3-batch3-20261119/README.md)） | 业务 Entity 适配的分工按 D21 后半现状；Linux race 20 轮属 C-L6 |
 | B-13 / 77 | 运行期序号上限`2^33-1`及边界回归已合；P10 删除 game-demo 未使用的重复分配器 | 不把编号修复当容量证明；最终 monster 场景计数随统一矩阵报告 |
 | B-14 / 86 | [C++跨 Gate](native-acceptance.md)：独立 C++客户端真实 TCP/NATS，两 Gate 同 Session 迟到 Bind、两绿/变异红 | Gate/Game 同 Go 测试进程；非跨机/Unity/设备全矩阵 |
-| B-15 / 87 | [C++ protobuf](native-acceptance.md)：libprotoc36.2，8/8 CTest | 与 E-2 弱网偶发调查分开 |
+| B-15 / 87 | [C++ protobuf](native-acceptance.md)：libprotoc36.2，8/8 CTest | 与 E-2 分开；E-2 已于 2026-11-19 归因为夹具计时并修正 `weak.py`（[第三批 §1](../category3-batch3-20261119/README.md)） |
 | B-16 / 103、112 | [GeneratedTCP](../v147-generated-tcp-20261114.md)：正式夹具入库，12 个 10s 配置与开环冒烟，丢 DAO 变异红 | M-17 四档正式测量 pending；客户端/服务模块同一测试进程，不是旧 10 服务 Main 拓扑 |
+
+**第三类结果（未归因偶发与调查，2026-11-18～19）**：第一批 [category3-anomalies-20261118](../category3-anomalies-20261118/README.md)（E-1 AOI 代码布局、E-3 Gate 丢拍来自 strict 往返、UGC 交付频率是夹具客户端计时）；第二批 [category3-batch2-20261118](../category3-batch2-20261118/README.md)（200 人同秒 AddExp 等 World、3s 全体超时簇）；第三批 [category3-batch3-20261119](../category3-batch3-20261119/README.md)：E-2（No.32②）load 40+ 下 200 轮未复现、注入延迟确定性复现 `send failed`，归因夹具计时并修 `weak.py`；B-12 已于 11-17 补齐、本轮复验；No.80 的“玩法联合链”拆开——PhysX 执行器联合玩法是没实现的集成（移入 KNOWN-LIMITS 一，做不做待维护者定），RSS 页来源已逐区域核对一次（8 分钟，macOS）。
 
 M-13 的 [Cluster 探针修复](../mail-cluster-probe-20261114.md)已合：仅 integration helper 装配地址，单机 / Cluster 四子项以 1x 通过，保留红绿对照；不计为正式性能。
 

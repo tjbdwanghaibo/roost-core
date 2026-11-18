@@ -1,0 +1,10 @@
+d_resident   d_dirty     res_A     res_B  type / share / mapping
+      1200         0    149281    150481  __TEXT / COW / system-lib/shared-cache
+       205         0     51302     51507  __OBJC_RO / COW / system-lib/shared-cache
+        64       160     22656     22720  VM_ALLOCATE / PRV / -
+        48         0      7344      7392  __TEXT / COW / e3soak.test
+        32        32       432       464  Stack / PRV / -
+       -32       -32       144       112  Stack / COW / -
+        32        32      8320      8352  VM_ALLOCATE / COW / -
+        16        16      9888      9904  MALLOC_SMALL / PRV / -
+      1565       208    297397    298962  TOTAL (all regions parsed)

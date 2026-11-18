@@ -1,0 +1,22 @@
+KILLED: M1 忽略 AddIngress 的错误（Start 照常成功）
+    --- FAIL: TestCellworldStartAfterInputsClosedTakesTheNodeDown (0.00s)
+    runtime_test.go:390: Start succeeded although the App no longer accepts inputs
+    FAIL
+    FAIL	example.com/cwtest/game/modules/cellworldhost	0.577s
+KILLED: M2 失败时不停 Node（去掉 cancel 与等待 done）
+    --- FAIL: TestCellworldStartAfterInputsClosedTakesTheNodeDown (0.00s)
+    runtime_test.go:401: Node.Run still holds 2 subscriptions after the refused Start
+    FAIL
+    FAIL	example.com/cwtest/game/modules/cellworldhost	0.568s
+KILLED: M3 失败时直接返回错误、不复位（不调 fail）
+    --- FAIL: TestCellworldStartAfterInputsClosedTakesTheNodeDown (0.00s)
+    runtime_test.go:404: the refused Start left the stopped Node's done / cancel behind
+    runtime_test.go:411: the refused Runtime is still attached to the host
+    FAIL
+KILLED: M4 fail 不把 Runtime 从 Host 拿下（去掉 host.detach）
+    --- FAIL: TestCellworldStartAfterInputsClosedTakesTheNodeDown (0.00s)
+    runtime_test.go:411: the refused Runtime is still attached to the host
+    FAIL
+    FAIL	example.com/cwtest/game/modules/cellworldhost	0.570s
+4/4 killed
+mutate exit=0

@@ -1,0 +1,4 @@
+before:  2:50  up 46 days, 11 hrs, 5 users, load averages: 6.18 18.64 15.80 | total = 7168.00M  used = 6209.19M  free = 958.81M  (encrypted)
+pid 45945
+test exit=0
+after:  2:58  up 46 days, 11:08, 5 users, load averages: 3.63 6.18 10.26 | total = 7168.00M  used = 6209.19M  free = 958.81M  (encrypted)

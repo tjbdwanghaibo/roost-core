@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **测试：C++ `native_weak` 的 `send_stall` 夹具不再与客户端发送期限赛跑**（2026-11-19，KNOWN-LIMITS E-2）：`client/cpp/tests/weak.py` 的服务端停读后一直持有连接到客户端进程结束，不再固定 0.8s 后关闭。原来客户端从就绪到发出 16 MiB 请求若被调度拖过约 0.5s，就会报 `send failed`（EPIPE）而不是发送超时；注入延迟可确定性复现，修后 0～2000ms 全绿。客户端代码不变，只改测试。[证据](docs/maintenance/evidence/category3-batch3-20261119/README.md)
+
 ## [v1.57.1] - 2026-11-19
 
 - **修复：Unity 包的静态成员标注 `[NoAutoStaticsCleanup]`**（2026-11-19）：`BrowserWebSocket` 的 `Live`、`JsLib.Instance` 与 `NativeLockstep` 的三个反向回调委托，在关闭“进入 Play Mode 时重载域”的工程里（如客户端模板）被 Unity 6000.7 分析器报 UAL0010 / UAL0013。按 `UNITY_6000_7_OR_NEWER` 条件编译标注，旧版 Unity 不受影响。Unity 工程重新执行 `scripts/client/build-unity.py`（或模板的同步脚本）即可。[证据](docs/maintenance/evidence/unity-statics-20261119/README.md)

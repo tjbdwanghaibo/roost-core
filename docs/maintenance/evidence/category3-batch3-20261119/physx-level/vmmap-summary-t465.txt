@@ -1,0 +1,28 @@
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+Kernel Alloc Once                   32K      16K      16K       0K       0K       0K       0K        1 
+MALLOC guard page                 3392K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                    784K     320K     320K       0K       0K       0K       0K        4 
+MALLOC_SMALL                      28.0M    9904K    9904K       0K       0K       0K       0K        7         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     176K     176K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+Memory Tag 22                     64.0M      16K      16K       0K       0K       0K       0K        1 
+STACK GUARD                       56.4M       0K       0K       0K       0K       0K       0K       25 
+Stack                            153.0M     576K     576K       0K       0K       0K       0K       25 
+VM_ALLOCATE                        1.2G    30.3M    29.0M       0K       0K       0K       0K       85 
+__AUTH                            1321K     794K       0K       0K       0K       0K       0K      148 
+__AUTH_CONST                      17.7M    10.1M       0K       0K       0K       0K       0K      340 
+__CTF                               824      824       0K       0K       0K       0K       0K        1 
+__DATA                            36.8M    2664K     586K       0K       0K       0K       0K      298 
+__DATA_CONST                      18.2M    10.4M    1616K       0K       0K       0K       0K      340 
+__DATA_DIRTY                      1320K    1034K     351K       0K       0K       0K       0K      284 
+__FONT_DATA                        2352     2352       0K       0K       0K       0K       0K        1 
+__LINKEDIT                       577.5M    18.7M       0K       0K       0K       0K       0K        3 
+__OBJC_RO                         79.1M    50.3M       0K       0K       0K       0K       0K        1 
+__OBJC_RW                         2598K    2182K      38K       0K       0K       0K       0K        1 
+__TEXT                           302.9M   155.6M       0K       0K       0K       0K       0K      349 
+__TPRO_CONST                       128K     112K      48K       0K       0K       0K       0K        2 
+page table in kernel               497K     497K     497K       0K       0K       0K       0K        1 
+shared memory                       32K      32K      32K       0K       0K       0K       0K        1 
+unused but dirty shlib __DATA       80K      80K      80K       0K       0K       0K       0K       39 
+===========                     ======= ========    =====  ======= ========   ======    =====  ======= 
+TOTAL                              2.6G   293.4M    42.9M       0K       0K       0K       0K     1962 

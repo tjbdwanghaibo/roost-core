@@ -735,7 +735,9 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 
 #### 通用 LevelComponent 首版边界
 
-`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。私有参与者状态、网络增量与 Unity UI 由宿主接入。持久模式的真实 Mongo / WAL 进程崩溃恢复已验证（`gameplay/level` 的 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`，2026-11-14），但不恢复原生物理世界；状态复制与整状态 mutation 有预算没有容量承诺；动作账本满额拒绝；长期归档要另行设计。（物理动作执行器与 LevelComponent 的联合玩法见[LevelComponent 与 UGC 物理闯关：遗留](#levelcomponent-与-ugc-物理闯关遗留)）
+`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。私有参与者状态、网络增量与 Unity UI 由宿主接入。持久模式的真实 Mongo / WAL 进程崩溃恢复已验证（`gameplay/level` 的 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`，2026-11-14），但不恢复原生物理世界；状态复制与整状态 mutation 有预算没有容量承诺；动作账本满额拒绝；长期归档要另行设计。
+
+- **没有物理动作执行器，联合玩法未实现**（2026-11-19 核对，原“二”里“玩法联合链”的前半）：仓库里没有把 LevelComponent 的动作（`PendingActions` / `RequestSettled`）接到物理房间的执行器，PhysX native ABI 也只有建 / 销毁、加位姿、步进、读、关节增删，没有传送 / 重生（直接设动态刚体位姿）和区域触发事实。所以“PhysX 动作执行器 + LevelComponent 的真实联合玩法”不是待复现的偶发，而是没做的集成：要做需要先补 native 能力和一个真实执行器，再按 Level 手册的回执 / 重试契约验收；做不做待维护者定。[证据](evidence/category3-batch3-20261119/README.md#3a-physx-动作执行器与-levelcomponent-的真实联合玩法不是偶发是没有实现的集成)
 
 #### UGC 物理闯关
 
@@ -744,7 +746,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 物理 Room 默认启用接收者分频/字段裁剪，远处规则障碍可按固定关卡轨迹显示；完整对象仍为 34 字节，RP2 明确标记省略速度，RP1 客户端须同步更新。近处/抓取关联与快速接近对象保留高频；包围球用于分频保护，AOI 仍为中心距离，不是几何遮挡或全形状相交查询。降频引入样本年龄和插值延迟，不能用量化的 5mm 误差宣称实时显示误差。指标与同帧对照见 [Room 手册](../framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。（未验收的部分见[LevelComponent 与 UGC 物理闯关：遗留](#levelcomponent-与-ugc-物理闯关遗留)）
 
 - **验证到哪一层**：可选 PhysX 房间支持运动学转轮 / 平台、动态 Box、弹簧抓取与铰链马达、固定版本关卡加载、Unity 预测 / 纠偏接法；Linux 原生功能、真实 TCP / Gate / NATS / Nest 联合链与 C# 预测核心已验证。历史单房间性能数据不覆盖新载荷 / 约束，也不是多房间容量。
-- **多房间与内存的已测口径**：物理房间已补 Linux 的 1/4/8 房间短测（每房 20 个逻辑客户端，普通/机关两类）。这是直接 Service + PhysX + Nest、预热 1 秒/采集 5 秒的证据，不含生产网络、原生内存与长稳，不能作为容量上限；普通 8 房间样本实际物理均频 49.32Hz。Go 分配已于 2026-10-29 profile 定位并削减：macOS ARM64 同机对照，机关 8 房间 81.57→31.15MB/s、普通 70.04→27.38MB/s，载荷字节不变；同日晚每帧状态索引与 AOI 索引由 map 改为切片（房间提交路径不再复制本帧状态），再降到机关 23.46、普通 19.87MB/s（同机交替 3 轮，载荷字节不变）；剩余主要是 `StateDAO.Accept` 的所有权副本（约 3MB/s，去掉要让 Nest undo 保护的权威状态与网络侧索引共用切片，判断为高风险，不做）与交给网络 / 视图账本的副本。**macOS ARM64 长稳已测**（2026-10-29，机关 8 房间 × 20 客户端连续 20 分钟）：footprint、Go 映射、goroutine、PhysX 原生堆（malloc 已分配约 9.6MiB / 8 房间，个数持平）在稳定窗口斜率都在 0 附近，没有发现无界增长；物理均频 49.85Hz（不含 vmmap 挂起窗口最低 49.93Hz）。RSS 每分钟 +0.035MB 推断为干净页换入（footprint 持平），未逐区域核对；交付频率后 8 分钟比前 8 分钟低 0.9%：2026-11-18 复现确认是夹具客户端循环的计时（定时器晚醒与 Submit / Poll 的 CPU 时间）随本机状态成台阶变化，一个已确认的触发是显示器关闭，与运行时长无关，物理频率与空 Poll 不变（[证据](evidence/category3-anomalies-20261118/README.md) §3）；长稳测量期间应 `caffeinate -d -i` 并看 `timer_late_mean`。这些外部复测与小时级边界见二和 C-S4。见 [测量口径和复跑](../framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)、[分配 profile](../framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64) 与 [长稳与原生内存](../framework/PHYSICS-ROOM-SERVICE.md#长稳rss-与原生内存2026-10-29macos-arm64)。闯关流程由通用 `gameplay/level` 承担（见上文“通用 LevelComponent 首版边界”），不另建专用检查点 / 排名 / 结算状态机；物理动作执行器与 LevelComponent 的真实联合玩法尚未验收。
+- **多房间与内存的已测口径**：物理房间已补 Linux 的 1/4/8 房间短测（每房 20 个逻辑客户端，普通/机关两类）。这是直接 Service + PhysX + Nest、预热 1 秒/采集 5 秒的证据，不含生产网络、原生内存与长稳，不能作为容量上限；普通 8 房间样本实际物理均频 49.32Hz。Go 分配已于 2026-10-29 profile 定位并削减：macOS ARM64 同机对照，机关 8 房间 81.57→31.15MB/s、普通 70.04→27.38MB/s，载荷字节不变；同日晚每帧状态索引与 AOI 索引由 map 改为切片（房间提交路径不再复制本帧状态），再降到机关 23.46、普通 19.87MB/s（同机交替 3 轮，载荷字节不变）；剩余主要是 `StateDAO.Accept` 的所有权副本（约 3MB/s，去掉要让 Nest undo 保护的权威状态与网络侧索引共用切片，判断为高风险，不做）与交给网络 / 视图账本的副本。**macOS ARM64 长稳已测**（2026-10-29，机关 8 房间 × 20 客户端连续 20 分钟）：footprint、Go 映射、goroutine、PhysX 原生堆（malloc 已分配约 9.6MiB / 8 房间，个数持平）在稳定窗口斜率都在 0 附近，没有发现无界增长；物理均频 49.85Hz（不含 vmmap 挂起窗口最低 49.93Hz）。RSS 每分钟 +0.035MB、footprint 持平：2026-11-19 用逐区域 vmmap 核对了一次（8 分钟单次），增长落在 Go 已归还但仍常驻的页（不计入 footprint）与测试二进制代码段的按需换入，PhysX 原生堆与 dylib 各段不增长，原来“全是干净文件页”的推断只对一部分（[证据](evidence/category3-batch3-20261119/README.md#3b-rss-页来源未逐区域核对本轮逐区域核对了一次macos8-分钟)）；交付频率后 8 分钟比前 8 分钟低 0.9%：2026-11-18 复现确认是夹具客户端循环的计时（定时器晚醒与 Submit / Poll 的 CPU 时间）随本机状态成台阶变化，一个已确认的触发是显示器关闭，与运行时长无关，物理频率与空 Poll 不变（[证据](evidence/category3-anomalies-20261118/README.md) §3）；长稳测量期间应 `caffeinate -d -i` 并看 `timer_late_mean`。这些外部复测与小时级边界见二和 C-S4。见 [测量口径和复跑](../framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)、[分配 profile](../framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64) 与 [长稳与原生内存](../framework/PHYSICS-ROOM-SERVICE.md#长稳rss-与原生内存2026-10-29macos-arm64)。闯关流程由通用 `gameplay/level` 承担（见上文“通用 LevelComponent 首版边界”），不另建专用检查点 / 排名 / 结算状态机；两者之间没有现成的物理动作执行器，见该节。
 
 ### 客户端
 
@@ -917,7 +919,6 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **TCP 快照的平台窗口**：非 Linux 发送缓冲假设仍为 4 MiB；调大时用例按规模不足失败。历史 Linux 全仓拖到 90s 后失活，夹具已加心跳 / 收紧期限；C-L4 需深缓冲 20 轮与同机慢套件复跑，不能由 macOS 通过关闭。
 - **独立 Gate 慢链路**：deadline 分类指标与夹具已提供，M-10 3000 帧 `LS_DRILL_RATES=256,64` 待测（单位 kB/s，十进制乘 1000；旧 262144 / 65536 是单位错误）。纯追帧通过也不关闭大快照只准入、无写出回执的既定限制。
 - **快照外部接入**：MOBA 分进程恢复 / 交接已验，但真实移动网络、跨机 / 目标负载与快照大小分布仍为 C-X3；C# SHA256 / restore 的 Unity / IL2CPP 实跑仍为 C-U1。
-- **E-2 原生弱网偶发**：原版 `native_weak` 200 轮、1000 个场景全部通过，实际 1 分钟 load 最大 10.39；没有定位 / 修复或插桩对照，不能外推到历史 load 40～55 窗口。保留[实际条件与原始证据](evidence/v147-native-weak-20261114.md)。robot 写阻塞用例的另一条偶发已按期限时序修复并经重负载 race 2600 次，不再与 E-2 混列。
 
 ### 生成器、配置与模块（遗留）
 
@@ -983,14 +984,13 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
-- **CellWorld Runtime**：模块场景 10 条已验，含 Start / Stop、三种失败复位（就绪前退出、ctx 先到、就绪后 AddIngress 失败，2026-11-17 补，[证据](evidence/d-small-items-20261117/README.md)）与 manager 托管；业务适配的模块 / demo 分工见 [CellWorld 固定分区](#cellworld-固定分区v1470)“业务适配的分工”。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
+- **CellWorld Runtime**：模块场景 10 条已验，含 Start / Stop、三种失败复位（就绪前退出、ctx 先到、就绪后 AddIngress 失败，2026-11-17 补，[证据](evidence/d-small-items-20261117/README.md)）与 manager 托管（2026-11-19 在 v1.57.1 上复验：`module verify cellworld` 17 / 17、race 全过、AddIngress 那条的 4 条变异全被杀，[证据](evidence/category3-batch3-20261119/README.md#2-b-12cellworld-addingress-失败分支的用例)）；业务适配的模块 / demo 分工见 [CellWorld 固定分区](#cellworld-固定分区v1470)“业务适配的分工”。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 
 ### 玩法组件与物理房间（遗留）
 
 #### LevelComponent 与 UGC 物理闯关：遗留
 
 - **UGC 外部验收**：新增 Unity 交互 / 编辑器、WAN 与多房间容量 C-U3 / C-X7；Linux RSS / 原生堆复测 C-L7；小时级反复建销、真实 Gate / NATS / TCP 内存与原生堆按房间分解 C-S4 未验。现成同一测试二进制 count=12 只覆盖每轮整套 Service + Host + 房间创建销毁，不覆盖长寿 Service 内房间 churn；保留全量 -v 日志并以 unix_s 拼接，TSV 不能覆盖写。
-- **玩法联合链**：PhysX 动作执行器与 LevelComponent 的真实联合玩法尚未验收；RSS 页来源未逐区域核对。
 
 ### 客户端（遗留）
 
@@ -1046,6 +1046,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-19：E-2 C++ `native_weak` 的 `send_stall` 偶发归因为夹具计时并修正**（原“二 / Lockstep：遗留”的 E-2 一条）：40 个 `yes` 把 load 推到 40+（138 轮 ≥ 40）连跑 200 轮诊断构建全过、主线程延迟 0ms，纯 CPU 负载复现不了；注入“就绪 → 发请求”延迟 550ms 确定性复现历史原文 `send failed`（EPIPE，服务端固定 0.8s 后关闭先于客户端 200ms 发送期限），客户端按 `fail()` 契约如实报对端关闭，不是缺陷。`client/cpp/tests/weak.py` 改为停读后持有连接直到客户端退出，注入 0～2000ms 全绿；历史那一次没有现场，归因属推断。[证据](evidence/category3-batch3-20261119/README.md#1-e-2c-native_weak-的-send_stall-在高负载下报-send-failed)
 - **2026-11-18：审查 RV-20261118-10～13 在 main 修复**（未发版）：CORS 白名单只收浏览器序列化出的 Origin（前导零端口、空端口、非规范数字主机拒绝并给出该写的值，RV-10）；TS Gate 在 `Connecting` 监听器里断开时不再取票、`connect()` 立即以 `GateClosedError` 结束，C# 对齐为取消后不取票（RV-11）；pretag 范围把两个 SDK 验收脚本自身列为触发项并加自检（RV-12）；WebSocket 地址按浏览器规则拒绝解析不了或会被改写的数字主机（RV-13）。[证据](evidence/rv-20261118-10-13/README.md)
 - **2026-11-18 核对：game-demo 生成依赖没发布的 `wiring/modulehost`**（原在“game-demo 接入登录链路的既定取舍”）：`wiring/modulehost` 随 v1.45.0 发布，生成物最低 core 之后逐版提高（现为 v1.56.0，`codegen/internal/roost/manifest.go` 的 `minimumVersions`），`-template game-demo` 不再需要 `--skip-deps` 加本地 `replace`。
 - **2026-11-18：Unity 托管路线打包不再要 CMake**（skill 重写时发现：`client/unity/README` 说托管路线不要 C++ 构建环境，但唯一的打包入口 `scripts/client/build-unity.py` 先检查 cmake，没有就退出）：加 `--managed-only`，只构建 `Roost.Client.dll`、带 Driver 与原生绑定的 C# 源码，不建插件、不生成原生示例（同时去掉 `package.json` 的 samples），只要 .NET SDK。修前 PATH 里没有 cmake 时退出 2；修后同样环境打出包，Unity 6000.3.12f1 batchmode 导入后 `Roost.Unity` 与引用 `RoostClientDriver` 的业务脚本编译通过。证据 [unity-managed-only-20261118](evidence/unity-managed-only-20261118/README.md)。

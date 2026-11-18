@@ -1,0 +1,29 @@
+UpdateCTestConfiguration  from :<scratch>/diag-build/DartConfiguration.tcl
+Test project <scratch>/diag-build
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 4
+    Start 4: native_weak
+
+4: Test command: /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9 "<scratch>/diag-src/tests/weak.py" "<scratch>/diag-build/roost_native_weak"
+4: Working Directory: <scratch>/diag-build
+4: Test timeout computed to be: 60
+4: PASS weak heartbeat heartbeat timeout
+4: PASS weak timeout 
+4: PASS weak truncated peer closed [diag errno=0 sent=0/0 since_ready_ms=0 since_admit_ms=-1 deadline_in_ms=4999]
+4: PASS weak overflow event queue overflow
+4: diag main ready->request ms=0
+4: diag py slept ms=800
+4: PASS weak send_stall socket send timeout: result unknown
+1/1 Test #4: native_weak ......................   Passed    1.71 sec
+
+The following tests passed:
+	native_weak
+
+100% tests passed out of 1
+
+Total Test time (real) =   1.71 sec

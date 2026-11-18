@@ -1,0 +1,19 @@
+RED-orig delay=0 try=1 rc=0 :: PASS weak send_stall socket send timeout: result unknown 
+RED-orig delay=0 try=2 rc=0 :: PASS weak send_stall socket send timeout: result unknown 
+RED-orig delay=0 try=3 rc=0 :: PASS weak send_stall socket send timeout: result unknown 
+RED-orig delay=400 try=1 rc=0 :: PASS weak send_stall socket send timeout: result unknown 
+RED-orig delay=400 try=2 rc=0 :: PASS weak send_stall socket send timeout: result unknown 
+RED-orig delay=400 try=3 rc=0 :: PASS weak send_stall socket send timeout: result unknown 
+RED-orig delay=550 try=1 rc=1 :: send failed [diag errno=32 sent=1021868/16777232 since_ready_ms=808 since_admit_ms=103 deadline_in_ms=60] subprocess.CalledProcessError: Command '['<scratch>/diag-buil
+RED-orig delay=550 try=2 rc=1 :: send failed [diag errno=32 sent=1021868/16777232 since_ready_ms=807 since_admit_ms=99 deadline_in_ms=63] subprocess.CalledProcessError: Command '['<scratch>/diag-build
+RED-orig delay=550 try=3 rc=1 :: send failed [diag errno=32 sent=1021868/16777232 since_ready_ms=808 since_admit_ms=96 deadline_in_ms=66] subprocess.CalledProcessError: Command '['<scratch>/diag-build
+RED-orig delay=650 try=1 rc=1 :: peer closed [diag errno=0 sent=327212/16777232 since_ready_ms=809 since_admit_ms=0 deadline_in_ms=162] subprocess.CalledProcessError: Command '['<scratch>/diag-build/r
+RED-orig delay=650 try=2 rc=1 :: peer closed [diag errno=0 sent=327212/16777232 since_ready_ms=812 since_admit_ms=0 deadline_in_ms=162] subprocess.CalledProcessError: Command '['<scratch>/diag-build/r
+RED-orig delay=650 try=3 rc=1 :: peer closed [diag errno=0 sent=327212/16777232 since_ready_ms=812 since_admit_ms=0 deadline_in_ms=163] subprocess.CalledProcessError: Command '['<scratch>/diag-build/r
+RED-orig delay=1000 try=1 rc=1 :: subprocess.CalledProcessError: Command '['<scratch>/diag-build/roost_native_weak', 'send_stall', '54529']' returned non-zero exit status 1. 
+RED-orig delay=1000 try=2 rc=1 :: subprocess.CalledProcessError: Command '['<scratch>/diag-build/roost_native_weak', 'send_stall', '54539']' returned non-zero exit status 1. 
+RED-orig delay=1000 try=3 rc=1 :: subprocess.CalledProcessError: Command '['<scratch>/diag-build/roost_native_weak', 'send_stall', '54549']' returned non-zero exit status 1. 
+RED-orig delay=2000 try=1 rc=1 :: subprocess.CalledProcessError: Command '['<scratch>/diag-build/roost_native_weak', 'send_stall', '54561']' returned non-zero exit status 1. 
+RED-orig delay=2000 try=2 rc=1 :: subprocess.CalledProcessError: Command '['<scratch>/diag-build/roost_native_weak', 'send_stall', '54571']' returned non-zero exit status 1. 
+RED-orig delay=2000 try=3 rc=1 :: subprocess.CalledProcessError: Command '['<scratch>/diag-build/roost_native_weak', 'send_stall', '54584']' returned non-zero exit status 1. 
+# 补充：delay=1000 / 2000 两档客户端 stderr 为 "request not admitted"（weak.cpp 的 request() 抛出；inject.sh 的 grep 没收这一行），单独复跑各一次核对。
