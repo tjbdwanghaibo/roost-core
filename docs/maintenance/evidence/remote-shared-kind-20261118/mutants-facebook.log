@@ -1,0 +1,24 @@
+== F1 game/entities/facebook/facebook_gen_wire.go: entity.DeclareRemoteSharedKind(EntityKindFacebook) -> _ = EntityKindFacebook
+RED
+--- FAIL: TestFacebookIsASharedKind (0.00s)
+    facebook_test.go:110: the Facebook kind is not declared shared (//roost:entity ownership=shared); a first claim would make it exclusive to one game
+FAIL
+FAIL	example.com/fbgame/game/modules/facebook	0.564s
+FAIL
+
+== F2 game/modules/facebook/facebook.go: if !found || !lease.Shared { -> if false && (!found || !lease.Shared) {
+RED
+--- FAIL: TestFacebookUnopenedInboxIsEmptyWithoutNest (0.00s)
+    facebook_test.go:277: unopened facebook <nil>: listed=[{Source:4611686018519548941 From:101 ExpireAt:2000000}] err=<nil> nest calls=[handlerFacebookInvites]
+FAIL
+FAIL	example.com/fbgame/game/modules/facebook	0.551s
+FAIL
+
+== F3 game/entities/facebook/entity.go: remote=managed service=game ownership=shared -> remote=managed service=game
+RED
+--- FAIL: TestFacebookIsASharedKind (0.00s)
+    facebook_test.go:110: the Facebook kind is not declared shared (//roost:entity ownership=shared); a first claim would make it exclusive to one game
+FAIL
+FAIL	example.com/fbgame/game/modules/facebook	0.529s
+FAIL
+

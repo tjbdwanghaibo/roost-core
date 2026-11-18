@@ -28,7 +28,7 @@
 | --- | --- | --- |
 | `//roost:dao` | DAO 定义 struct；生成事务化读写、持久与同步代码 | `coll`、`db`、`dbscope`、`schema`；或独立 flag `nocoll` |
 | `//roost:redisdao` | Redis DAO 定义 struct；生成 Redis 访问包装 | 必需 `key`、`prefix`；可选 `mode`、`key_type`、`version`、`ttl`、`name` |
-| `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service` |
+| `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service`、`preload`、`preload_order`、`snapshots`、`ownership` |
 | `//roost:component type=N` | 组件声明；供 ID 空间检查。组件包写法（2026-11-16 起模块统一用它）写在 `game/components/<包>/` 里，实体包的写法（`roost add component`）写在实体包里 | `type` 为组件类型号，按组件分配：同一个组件挂在几种实体上都用同一个号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
 | `//roost:listen` | 实体方法或组件方法；标成实体事件的监听，生成 `<实体>_event_gen.go` 的登记（见[实体事件](#实体事件roostlisten)） | 可选 `priority=<整数>`（-1000～1000，缺省 0，大的先执行） |
 | `//roost:mirror` | 手写只读 DTO；生成读取器 | `entityKind`、`coll`，对应拥有者 kind 与 DAO 集合 |
@@ -164,6 +164,7 @@ type Player struct {
 | `service` | 归属服务：只有这个服务写这个 kind（见下段）。不写时保持原行为，任何带 Nest 的服务都能写 |
 | `preload=startup` | 起服预加载：归属服务起服时加载持久 owner 是本 sid 的这个 kind 的全部实体并登记路由。只能写在 `remote=managed` 且声明了 `service=` 的实体上；不写就按需冷加载 |
 | `snapshots=none` | 不写、不发布 Remote 快照（缺省 `published`）：提交只写 DAO 文档，没有 `_remote_entity_snapshots` 文档、L2 条目与兴趣广播。只能写在 `remote=managed` 上；指向它的 `//roost:mirror` 在生成期被拒，运行期读它的 Mirror / RemoteViewRef 报 `entity.ErrRemoteSnapshotsDisabled`。owner 冷加载、接管、迁移、缩容都读 DAO 集合与所有权记录，不受影响；只给没有任何读方的 kind 用（game-demo 的联盟守卫 `AllianceMember`） |
+| `ownership=shared` | 共享 kind（缺省 `exclusive`）：这个 kind 的每个实体生来就是共享模式——第一次认领（写准入的首写认领、`ClaimRemoteOwnership`）一条插入就写成共享的所有权记录，没有“先独占认领、再切共享”的中间态，两个进程同时第一次写都成功；不能退出共享（`LeaveRemoteSharedMode` 拒绝）。生成的登记调 `entity.DeclareRemoteSharedKind`。只能写在 `remote=managed` 上；每次读写都走共享准入（分布式锁 + 写许可），只给“多个进程都要写、没有天然 owner”的实体用（facebook 模块的 `Facebook`）。契约见 [REMOTE_ENTITY“共享 kind”](../../docs/framework/REMOTE_ENTITY.md#共享-kindownershipshared) |
 | `comp:"CompTypeProfile"` / `comp:"bag.CompTypeBag"` | 组件类型号表达式：不带包名是实体包里的组件，带包名是组件包写法（字段类型 `*bag.Component`，类型号与工厂登记在组件包里，见下段）；可加 `,cold` 声明按需初始化 |
 | `dao:"players"` | DAO 装配名称；可加 `,cold` 声明按需初始化，不是 DAO 定义字段的能力选项 |
 

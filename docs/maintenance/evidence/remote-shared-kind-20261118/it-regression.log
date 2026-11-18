@@ -1,0 +1,7 @@
+--- PASS: TestRealRemoteOwnershipClaimAndTransfer (0.00s)
+--- PASS: TestRealSharedKindFirstWritesFromTwoProcesses (2.47s)
+--- PASS: TestRealListOwnedRemoteEntitiesFiltersByOwnerAndKind (0.58s)
+--- PASS: TestRealDeleteEmptyClaimIsGuardedByTheOwnershipGeneration (0.60s)
+--- PASS: TestRealRouteFollowsOwnershipAcrossTransferAndKill (1.04s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	5.322s

@@ -1,0 +1,3 @@
+    social_test.go:243: SOCIAL_INVITE team 4611686018427388957 on game 1000: B (game 1001) pushed &{TeamID:4611686018427388957 Inviter:100001 ExpireAtUnixMilli:1794960004598} and listed it, accepted revision 2; C invited offline, listed after relogin on game 1001, joined revision 3; D invited at once from games 1000 and 1001, listed [{TeamID:4611686018427388957 Inviter:100001 ExpireAtUnixMilli:1794960005280} {TeamID:4611686018427389981 Inviter:100004 ExpireAtUnixMilli:1794960005280}]
+--- PASS: TestAllianceE2ESocialTeamInvite (6.23s)
+alliance actual cases: passed=1, skipped=0

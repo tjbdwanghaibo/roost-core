@@ -1,0 +1,10 @@
+--- FAIL: TestSharedKindFirstWritesFromTwoProcessesBothSucceed (0.00s)
+    write_admission_test.go:1670: ownership record after A's first write: {ID:4611686018429785677 Version:1 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:} found=true; want shared from the claim (owner 1000, epoch 1, version 1)
+    write_admission_test.go:1673: B first write after A's claim: remote entity: writer fenced: entity=4611686018429785677 owner=1000 marker=1 route=1 shared=false
+        remote entity: writer fenced
+--- FAIL: TestSharedKindClaimerCrashLeavesOthersWriting (0.00s)
+    write_admission_test.go:1740: ownership record left by A's claim: {ID:4611686018429786701 Version:0 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:} found=true; want a shared record without commits
+    write_admission_test.go:1747: B write after A crashed holding the first claim: remote entity: writer fenced: entity=4611686018429786701 owner=1000
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.649s
+FAIL

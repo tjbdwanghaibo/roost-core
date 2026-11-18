@@ -61,9 +61,11 @@ func TestModuleTeamGenerated(t *testing.T) {
 	recipeMutationMustFail(t, root, "game/components/team/team.go", "current != 0 && current != id", "false && current != 0 && current != id", "./game/handler", "TestTeamMemberCannotJoinASecondTeam", "joined second team:")
 	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", "c.TeamID() != 0", "false && c.TeamID() != 0", "./game/handler", "TestWithTeamRehomeRejectsAPlayerInTeam", "team allowed rehome:")
 	recipeMutationMustFail(t, root, "game/components/team/team_rehome.go", `c.owner.Dao().GetRehome().GetPendingID() != ""`, `false && c.owner.Dao().GetRehome().GetPendingID() != ""`, "./game/handler", "TestWithTeamRehomeRejectsJoiningDuringMove", "moving player joined:")
-	// 邀请的跨 game 投递（facebook）：没打开的收件箱不经 Nest 读（否则写准入把它认领成本进程独占）、收件箱有界、
-	// 邀请提交后经 facebook 投递。真实依赖的跨进程用例是 scripts/test-alliance-e2e.sh 的 TestAllianceE2ESocialTeamInvite。
-	recipeMutationMustFail(t, root, "game/modules/facebook/facebook.go", "if !found || !lease.Shared {", "if false && (!found || !lease.Shared) {", "./game/modules/facebook", "TestFacebookInvitesNeverClaimsAnUnopenedFacebook", "unopened facebook")
+	// 邀请的跨 game 投递（facebook）：Facebook 是共享 kind（生成的登记声明它，首写一条插入就是共享记录）、没打开的收件箱
+	// 不经 Nest 读、收件箱有界、邀请提交后经 facebook 投递。真实依赖的跨进程用例是 scripts/test-alliance-e2e.sh 的
+	// TestAllianceE2ESocialTeamInvite。
+	recipeMutationMustFail(t, root, "game/entities/facebook/facebook_gen_wire.go", "entity.DeclareRemoteSharedKind(EntityKindFacebook)", "_ = EntityKindFacebook", "./game/modules/facebook", "TestFacebookIsASharedKind", "is not declared shared")
+	recipeMutationMustFail(t, root, "game/modules/facebook/facebook.go", "if !found || !lease.Shared {", "if false && (!found || !lease.Shared) {", "./game/modules/facebook", "TestFacebookUnopenedInboxIsEmptyWithoutNest", "unopened facebook")
 	recipeMutationMustFail(t, root, "game/components/facebook/facebook.go", "!renewing && dao.InvitesLen() >= MaxInvites", "!renewing && dao.InvitesLen() > MaxInvites", "./game/handler", "TestFacebookInvitesAreBoundedAndPruned", "invite beyond the bound accepted")
 	recipeMutationMustFail(t, root, "game/controllers/team.go", "if invitation.ExpireAt == 0 {", "if invitation.ExpireAt != 0 {", "./game/controllers", "TestTeamEndpointInvitationNoticeFailureDoesNotUndoAuthority", "online invitee not told")
 	runGeneratedGo(t, root, "test", "-race", "-count=2", "-run", "^TestTeam|^TestWithTeamRehome|^TestFacebook", "./game/handler", "./game/controllers", "./game/modules/facebook")

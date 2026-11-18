@@ -1,10 +1,11 @@
-// Package facebook 是每名玩家一个的伴生社交实体（Facebook，共享 Remote）在实体之外的入口：算号、确保它存在且在
-// 共享模式、把邀请投进收件箱并告知、查收件箱，以及通知的登记点与运行时订阅。
+// Package facebook 是每名玩家一个的伴生社交实体（Facebook，共享 Remote）在实体之外的入口：算号、确保它在本进程内存、
+// 把邀请投进收件箱并告知、查收件箱，以及通知的登记点与运行时订阅。
 //
 // 跨 game 投递的路径（邀请已经在来源实体上成交之后，不在任何实体锁里）：
 //
-//  1. Ensure：收件人的 Facebook 没有所有权记录就在本进程新建、认领并切到共享模式；已共享就只装进本进程内存。
-//  2. Nest 事务 [Facebook] strict：收件箱记一条（handlerFacebookNote）。
+//  1. Ensure：把收件人的 Facebook 装进本进程内存（GetOrCreate，没有就新建一个空的）。
+//  2. Nest 事务 [Facebook] strict：收件箱记一条（handlerFacebookNote）。第一次写它时 Remote 写准入一条插入就把它认领成
+//     共享（实体声明了 ownership=shared），两个 game 同时第一次投给同一个人都成功。
 //  3. 告知：本进程直接交给登记的处理（OnInvite），同时在服务间同步总线的 Topic 主题上广播；别的 game 进程的运行时
 //     （Start 订阅的）收到后交给同一个处理。处理自己判断收件人是否连在本进程，在就推送。
 //
@@ -35,13 +36,8 @@ import (
 // Topic 是服务间同步总线上告知的主题（实际主题是 syncbus.prefix 加上它）。
 const Topic = "facebook"
 
-var (
-	// ErrOpening：收件人的 Facebook 被别的 game 进程认领了、还没切到共享模式（它正确保到一半，或确保到一半停了）。
-	// 可重试；那个进程下次确保同一个 Facebook 时会把它切过去。
-	ErrOpening = errors.New("facebook: another game process is still opening this facebook; retry")
-	// ErrNotRecorded：收件箱没有记下这份邀请（已经过期、来源或邀请人不合法，或者收件箱已满）。
-	ErrNotRecorded = errors.New("facebook: the invite was not recorded")
-)
+// ErrNotRecorded：收件箱没有记下这份邀请（已经过期、来源或邀请人不合法，或者收件箱已满）。
+var ErrNotRecorded = errors.New("facebook: the invite was not recorded")
 
 // Invite 是投给一名玩家的一份邀请。To、From 是玩家号；Source 是发出邀请的实体完整号（如队伍号），它的实体种类决定
 // 告知交给哪个功能（OnInvite）；ExpireAt 是过期时刻（业务时间，Unix 毫秒）。
@@ -79,8 +75,12 @@ func OnInvite(kind entity.EntityKind, notify Notify) {
 	notifiers[kind] = notify
 }
 
-// Ensure 确保玩家 player 的 Facebook 存在、在共享模式、并装进了本进程内存，返回它的实体号。要 I/O：只能在 Nest
-// handler 之外（端点、后台）调用。顺序与建队相同：先确保实体，再进事务。
+// Ensure 把玩家 player 的 Facebook 装进本进程内存，返回它的实体号。要 I/O：只能在 Nest handler 之外（端点、后台）调用。
+// 顺序与建队相同：先确保实体，再进事务。
+//
+// 不认领、不切共享：Facebook 的 kind 声明了 ownership=shared，随后第一次写它时 Remote 写准入一条插入就把所有权记录
+// 写成共享的；别的 game 同时第一次写，插入输了的一方读回这条共享记录照常写入。所以不再有“认领了还没切共享”的中间态，
+// 也没有“别的 game 正在打开它”这种要重试的答复。
 func Ensure(ctx context.Context, registry *app.Registry, player int64) (int64, error) {
 	if registry == nil {
 		return 0, errors.New("facebook: registry required")
@@ -89,49 +89,21 @@ func Ensure(ctx context.Context, registry *app.Registry, player int64) (int64, e
 	if err != nil {
 		return 0, fmt.Errorf("facebook: lifecycle: %w", err)
 	}
-	remote, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
-	if !ok || remote == nil {
-		return 0, errors.New("facebook: remote runtime unavailable")
-	}
-	return ensure(ctx, remote, func(ctx context.Context, unique int64) error {
+	return ensure(ctx, func(ctx context.Context, unique int64) error {
 		_, _, err := lifecycle.GetOrCreate(ctx, unique)
 		return err
 	}, player)
 }
 
-// ensure 是 Ensure 的步骤（owners 与 load 由调用方给，测试换成替身）：
-//   - 先装进本进程内存（GetOrCreate：权威里有就读出来，没有就新建一个空的；号由玩家号推出，不能用 Create）；
-//   - 已经是共享模式：完成；
-//   - 没有所有权记录：认领（别的进程抢先认领了就是 ErrOpening），再切共享；
-//   - 有记录但不是共享：切共享。只有 owner 能切，所以 owner 是别的进程时同样是 ErrOpening。
-//
-// 认领了却没切成共享（切的那一步失败、进程停在中间）时，这个 Facebook 留在本进程独占，别的进程一直得到 ErrOpening，
-// 直到本进程再确保它一次。
-func ensure(ctx context.Context, owners entity.RemoteOwnershipManager, load func(context.Context, int64) error, player int64) (int64, error) {
+// ensure 是 Ensure 的步骤（load 由调用方给，测试换成替身）：GetOrCreate 装进本进程内存——权威里有就读出来，没有就新建
+// 一个空的（号由玩家号推出，不能用 Create）。新建的实例要到第一次写它才进权威；写之前进程停了，它只是没留下任何东西。
+func ensure(ctx context.Context, load func(context.Context, int64) error, player int64) (int64, error) {
 	id, err := EntityID(player)
 	if err != nil {
 		return 0, err
 	}
-	lease, found, err := owners.GetRemoteOwnership(ctx, id)
-	if err != nil {
-		return 0, fmt.Errorf("facebook %d: ownership: %w", player, err)
-	}
 	if err := load(ctx, entity.GetUniqueIDFromEntityID(id)); err != nil {
 		return 0, fmt.Errorf("facebook %d: load: %w", player, err)
-	}
-	if found && lease.Shared {
-		return id, nil
-	}
-	if !found {
-		if lease, err = owners.ClaimRemoteOwnership(ctx, id); err != nil {
-			return 0, fmt.Errorf("%w (player %d): claim: %w", ErrOpening, player, err)
-		}
-		if lease.Shared {
-			return id, nil
-		}
-	}
-	if _, err := owners.EnterRemoteSharedMode(ctx, id); err != nil {
-		return 0, fmt.Errorf("%w (player %d): enter shared mode: %w", ErrOpening, player, err)
 	}
 	return id, nil
 }
@@ -228,10 +200,12 @@ func Invites(ctx context.Context, registry *app.Registry, client nest.Client, pl
 	return invites(ctx, remote, client, player)
 }
 
-// invites 只在 Facebook 已经是共享模式时经 Nest 读它（共享模式取锁后读到的是最新权威）。没有所有权记录、或还没切到
-// 共享（别的进程确保到一半）时直接答空，不能经 Nest 读：Remote 的写准入会把没有记录的实体认领成本进程独占（读也走写
-// 准入），之后别的 game 再也确保不了它，投递全部失败。投递只在共享之后写它，所以不是共享模式时收件箱必定是空的。
-// 共享了还没有任何提交（确保了、记录还没成）时冷加载答“不存在”，同样是空。
+// invites 只在 Facebook 有共享的所有权记录时经 Nest 读它（共享模式取锁后读到的是最新权威）。没有记录时收件箱必定是空的
+// （记录随第一次写入建立），直接答空、不经 Nest：还没打开的收件箱占多数，每次查询省掉写准入里的一次元数据读与一次聚合
+// 冷加载。记录在、但不是共享时同样答空：Facebook 的 kind 声明了 ownership=shared，正常不会有这种记录（只可能是别的
+// 程序写下的），经 Nest 读时独占它的只要不是本进程就得到 ErrRemoteFenced，查询答错误码。
+// 记录在、还没有任何提交（别的 game 第一次写到一半，或认领后没提交就停了）时冷加载答“不存在”，同样答空、不报错。
+// 框架不会因为读而认领：内存与权威里都不存在的实体，写准入不认领（读写同一准入）。
 func invites(ctx context.Context, owners entity.RemoteOwnershipManager, client nest.Client, player int64) ([]view.FacebookInvite, error) {
 	if client == nil {
 		return nil, errors.New("facebook: nest client required")

@@ -199,7 +199,48 @@ func TestAllianceE2ESocialTeamInvite(t *testing.T) {
 	joined := call(c, msgid.MsgTeamAccept, &pb.TeamAcceptRequest{TeamID: id}, pb.MarshalTeamAcceptRequest, pb.UnmarshalTeamResponse)
 	requireTeam(t, joined, id, a.id, 3, a.id, b.id, c.id)
 	requireTeam(t, teamInfo(a), id, a.id, 3, a.id, b.id, c.id)
-	t.Logf("SOCIAL_INVITE team %d on game 1000: B (game 1001) pushed %+v and listed it, accepted revision 2; C invited offline, listed after relogin on game 1001, joined revision 3", id, pushed)
+
+	// 两个 game 同时第一次投给同一个人（2026-11-18，Facebook 是共享 kind）：game 1000 的 A 与 game 1001 的 E 同时邀请从没
+	// 收到过邀请的 D，两次投递都是 D 的 Facebook 的首写；一条插入就是共享记录，插入输了的一方照常写，两份都进收件箱。
+	// 修前（认领 → 切共享两步）输的一方 ErrOpening、那份邀请不进收件箱。并发由两条连接同时发出，是否真的撞在同一窗口
+	// 取决于时序，修前不保证每次都红；框架层的确定性用例是 framework/remoteentity 的 TestSharedKindFirstWritesFromTwoProcessesBothSucceed。
+	e := s.login(games[1], s.prefix+"-invite-e")
+	second := call(e, msgid.MsgTeamCreate, &pb.TeamCreateRequest{}, pb.MarshalTeamCreateRequest, pb.UnmarshalTeamResponse)
+	if second.Code != 0 || second.Info == nil || second.Info.TeamID == 0 {
+		t.Fatalf("second create: %+v", second)
+	}
+	d := s.login(games[1], s.prefix+"-invite-d")
+	results := make(chan *pb.TeamResponse, 2)
+	start := make(chan struct{})
+	for _, leader := range []*player{a, e} {
+		go func() {
+			var got *pb.TeamResponse
+			defer func() { results <- got }()
+			<-start
+			got = call(leader, msgid.MsgTeamInvite, &pb.TeamInviteRequest{Invitee: d.id}, pb.MarshalTeamInviteRequest, pb.UnmarshalTeamResponse)
+		}()
+	}
+	close(start)
+	for range 2 {
+		if got := <-results; got == nil || got.Code != 0 {
+			t.Fatalf("concurrent first invites to %d: %+v", d.id, got)
+		}
+	}
+	want := map[int64]int64{id: a.id, second.Info.TeamID: e.id}
+	var listed *pb.TeamInvitesResponse
+	s.eventually("both concurrent first invites are in the inbox", 15*time.Second, func() (bool, string) {
+		listed = call(d, msgid.MsgTeamInvites, &pb.TeamInvitesRequest{}, pb.MarshalTeamInvitesRequest, pb.UnmarshalTeamInvitesResponse)
+		if listed.Code != 0 || len(listed.Invites) != len(want) {
+			return false, fmt.Sprintf("%+v", listed)
+		}
+		for _, invite := range listed.Invites {
+			if want[invite.TeamID] != invite.Inviter {
+				return false, fmt.Sprintf("%+v", listed)
+			}
+		}
+		return true, ""
+	})
+	t.Logf("SOCIAL_INVITE team %d on game 1000: B (game 1001) pushed %+v and listed it, accepted revision 2; C invited offline, listed after relogin on game 1001, joined revision 3; D invited at once from games 1000 and 1001, listed %+v", id, pushed, listed.Invites)
 }
 
 func matchStatus(p *player) *pb.MatchmakingResponse {

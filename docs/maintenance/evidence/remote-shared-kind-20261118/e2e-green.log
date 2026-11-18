@@ -1,0 +1,31 @@
+    harness_test.go:139: prefix a5air9ayts, logs /private/tmp/claude-502/-Users-whb-roost/3919db58-1604-4ead-83ca-606db85f4c89/scratchpad/e2e-logs/TestAllianceE2ESocialTeamInvite
+    harness_test.go:423: started account (account --sid 1000) pid 81584
+    harness_test.go:423: started activity (activity --sid 1000) pid 81585
+    harness_test.go:423: started chat (chat --sid 1000) pid 81586
+    harness_test.go:423: started global (global --sid 1000) pid 81587
+    harness_test.go:423: started mail (mail --sid 1000) pid 81588
+    harness_test.go:423: started match (match --sid 1000) pid 81589
+    harness_test.go:423: started platform (platform --sid 1000) pid 81590
+    harness_test.go:423: started rank (rank --sid 1000) pid 81591
+    harness_test.go:423: started session (session --sid 1000) pid 81592
+    harness_test.go:423: started alliance-3000 (alliance --sid 3000) pid 81622
+    harness_test.go:423: started alliance-3001 (alliance --sid 3001) pid 81643
+    harness_test.go:423: started game-1000 (game --sid 1000) pid 81650
+    harness_test.go:423: started game-1001 (game --sid 1001) pid 81679
+    social_test.go:243: SOCIAL_INVITE team 4611686018427388957 on game 1000: B (game 1001) pushed &{TeamID:4611686018427388957 Inviter:100001 ExpireAtUnixMilli:1794959888366} and listed it, accepted revision 2; C invited offline, listed after relogin on game 1001, joined revision 3; D invited at once from games 1000 and 1001, listed [{TeamID:4611686018427388957 Inviter:100001 ExpireAtUnixMilli:1794959889055} {TeamID:4611686018427389981 Inviter:100004 ExpireAtUnixMilli:1794959889047}]
+    harness_test.go:476: stopped game-1000 with interrupt (<nil>)
+    harness_test.go:476: stopped game-1001 with interrupt (<nil>)
+    harness_test.go:476: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:476: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:476: stopped account with interrupt (<nil>)
+    harness_test.go:476: stopped rank with interrupt (<nil>)
+    harness_test.go:476: stopped platform with interrupt (<nil>)
+    harness_test.go:476: stopped activity with interrupt (<nil>)
+    harness_test.go:476: stopped global with interrupt (<nil>)
+    harness_test.go:476: stopped mail with interrupt (<nil>)
+    harness_test.go:476: stopped match with interrupt (<nil>)
+    harness_test.go:476: stopped session with interrupt (<nil>)
+    harness_test.go:476: stopped chat with interrupt (<nil>)
+    harness_test.go:522: all processes stopped; 0 ERROR log lines in total
+--- PASS: TestAllianceE2ESocialTeamInvite (6.19s)
+alliance actual cases: passed=1, skipped=0

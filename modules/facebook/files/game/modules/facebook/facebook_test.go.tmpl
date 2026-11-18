@@ -21,7 +21,8 @@ import (
 )
 
 // 这里的替身只验证编排：确保的步骤、投递与告知的顺序和失败答法。收件箱的事务语义由 game/handler 的场景走正式 Nest 验；
-// 真实的 Remote 认领 / 共享、Mongo 与跨进程广播由 scripts/test-alliance-e2e.sh 的 TestAllianceE2ESocialTeamInvite 验。
+// 真实的 Remote 共享认领、Mongo 与跨进程广播由 scripts/test-alliance-e2e.sh 的 TestAllianceE2ESocialTeamInvite 验
+// （共享 kind 的并发首写在框架层由 framework/remoteentity 的 TestSharedKind* 与 TestRealSharedKindFirstWritesFromTwoProcesses 验）。
 
 // facebookTestNotices 收 facebookTestKind 来源的告知（测试在 init 里登记；OnInvite 只许 init 登记）。
 var facebookTestNotices struct {
@@ -67,13 +68,11 @@ func facebookTestSource(t *testing.T, unique int64) int64 {
 	return id
 }
 
-// facebookOwners 是所有权的替身：record 是权威里的记录（nil 表示没有），claimErr / shareErr 让对应一步失败。
+// facebookOwners 是所有权查询的替身：record 是权威里的记录（nil 表示没有）。只实现查询：facebook 不认领、不切共享。
 type facebookOwners struct {
 	entity.RemoteOwnershipManager
-	record   *entity.RemoteEntityMarkerLease
-	claimErr error
-	shareErr error
-	calls    []string
+	record *entity.RemoteEntityMarkerLease
+	calls  []string
 }
 
 func (o *facebookOwners) GetRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, bool, error) {
@@ -83,80 +82,32 @@ func (o *facebookOwners) GetRemoteOwnership(context.Context, int64) (entity.Remo
 	}
 	return *o.record, true, nil
 }
-func (o *facebookOwners) ClaimRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, error) {
-	o.calls = append(o.calls, "claim")
-	if o.claimErr != nil {
-		return entity.RemoteEntityMarkerLease{}, o.claimErr
-	}
-	o.record = &entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1}
-	return *o.record, nil
-}
-func (o *facebookOwners) EnterRemoteSharedMode(context.Context, int64) (entity.RemoteEntityMarkerLease, error) {
-	o.calls = append(o.calls, "share")
-	if o.shareErr != nil {
-		return entity.RemoteEntityMarkerLease{}, o.shareErr
-	}
-	o.record.Shared = true
-	return *o.record, nil
-}
-
-func (o *facebookOwners) ensure(t *testing.T, player int64) (int64, error) {
-	t.Helper()
-	return ensure(context.Background(), o, func(_ context.Context, unique int64) error {
-		if unique != player {
-			t.Fatalf("loaded %d for player %d", unique, player)
-		}
-		o.calls = append(o.calls, "load")
-		return nil
-	}, player)
-}
-
-func requireFacebookCalls(t *testing.T, o *facebookOwners, want ...string) {
-	t.Helper()
-	if len(o.calls) != len(want) {
-		t.Fatalf("calls=%v want %v", o.calls, want)
-	}
-	for i := range want {
-		if o.calls[i] != want[i] {
-			t.Fatalf("calls=%v want %v", o.calls, want)
-		}
-	}
-}
-
-// 确保：没有记录的 Facebook 先装进内存、再认领、再切共享；已经共享的只装进内存；本进程认领了还没切共享的补切一次。
-func TestFacebookEnsureOpensSharedOnce(t *testing.T) {
+// 确保只把 Facebook 装进本进程内存（按玩家号推出的唯一号 GetOrCreate），返回它的实体号；不认领、不切共享（替身的所有权
+// 管理器连方法都没有）。装不进内存时照实返回错误，不当成没有这个人。
+func TestFacebookEnsureOnlyLoadsIntoMemory(t *testing.T) {
 	facebookTestSetup(t)
 	want, _ := EntityID(102)
-	missing := &facebookOwners{}
-	if id, err := missing.ensure(t, 102); err != nil || id != want || !missing.record.Shared {
-		t.Fatalf("missing facebook: id=%d err=%v record=%+v", id, err, missing.record)
+	var loaded []int64
+	load := func(_ context.Context, unique int64) error {
+		loaded = append(loaded, unique)
+		return nil
 	}
-	requireFacebookCalls(t, missing, "get", "load", "claim", "share")
-	shared := &facebookOwners{record: &entity.RemoteEntityMarkerLease{OwnerSid: 1001, MarkerEpoch: 1, RouteEpoch: 1, Shared: true}}
-	if id, err := shared.ensure(t, 102); err != nil || id != want {
-		t.Fatalf("shared facebook: id=%d err=%v", id, err)
+	if id, err := ensure(context.Background(), load, 102); err != nil || id != want || len(loaded) != 1 || loaded[0] != 102 {
+		t.Fatalf("ensure: id=%d err=%v loaded=%v; want %d after loading player 102", id, err, loaded, want)
 	}
-	requireFacebookCalls(t, shared, "get", "load")
-	halfOpen := &facebookOwners{record: &entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1}}
-	if id, err := halfOpen.ensure(t, 102); err != nil || id != want || !halfOpen.record.Shared {
-		t.Fatalf("half-opened facebook: id=%d err=%v", id, err)
+	unavailable := errors.New("aggregate store unavailable")
+	if _, err := ensure(context.Background(), func(context.Context, int64) error { return unavailable }, 102); !errors.Is(err, unavailable) {
+		t.Fatalf("load failure: %v", err)
 	}
-	requireFacebookCalls(t, halfOpen, "get", "load", "share")
 }
 
-// 别的进程抢先认领、或别的进程独占着还没切共享：可重试的 ErrOpening，不当成没有这个人。
-func TestFacebookEnsureReportsAnotherProcessOpening(t *testing.T) {
+// Facebook 是共享 kind（实体标记 ownership=shared，生成的登记调 entity.DeclareRemoteSharedKind）：第一次写它时 Remote
+// 写准入一条插入就把所有权记录写成共享的，两个 game 同时第一次投给同一个人都成功——Ensure 不认领、不切共享全靠这一条。
+func TestFacebookIsASharedKind(t *testing.T) {
 	facebookTestSetup(t)
-	lost := &facebookOwners{claimErr: entity.ErrRemoteFenced}
-	if _, err := lost.ensure(t, 102); !errors.Is(err, ErrOpening) || !errors.Is(err, entity.ErrRemoteFenced) {
-		t.Fatalf("lost claim: %v", err)
+	if !entity.RemoteKindShared(facebookentity.EntityKindFacebook) {
+		t.Fatal("the Facebook kind is not declared shared (//roost:entity ownership=shared); a first claim would make it exclusive to one game")
 	}
-	requireFacebookCalls(t, lost, "get", "load", "claim")
-	foreign := &facebookOwners{record: &entity.RemoteEntityMarkerLease{OwnerSid: 1001, MarkerEpoch: 1, RouteEpoch: 1}, shareErr: entity.ErrRemoteFenced}
-	if _, err := foreign.ensure(t, 102); !errors.Is(err, ErrOpening) {
-		t.Fatalf("held by another process: %v", err)
-	}
-	requireFacebookCalls(t, foreign, "get", "load", "share")
 }
 
 // facebookNest 替代 Nest：记下请求，按 answer 作答。
@@ -241,10 +192,11 @@ func TestFacebookDeliverRecordsThenTellsEveryGame(t *testing.T) {
 	if got := takeFacebookTestNotices(); len(got) != 1 {
 		t.Fatalf("full inbox suppressed the notice: %+v", got)
 	}
-	opening := func(context.Context) (int64, error) { return 0, ErrOpening }
+	unavailable := errors.New("aggregate store unavailable")
+	failedEnsure := func(context.Context) (int64, error) { return 0, unavailable }
 	calls := len(client.calls)
 	bus.fail = errors.New("bus down")
-	if err := deliver(context.Background(), registry, client, invite, opening); !errors.Is(err, ErrOpening) || len(client.calls) != calls {
+	if err := deliver(context.Background(), registry, client, invite, failedEnsure); !errors.Is(err, unavailable) || len(client.calls) != calls {
 		t.Fatalf("ensure failure: err=%v nest calls=%v", err, client.calls)
 	}
 	if got := takeFacebookTestNotices(); len(got) != 1 {
@@ -303,10 +255,9 @@ func TestFacebookNoticeFromAnotherGameReachesTheFeature(t *testing.T) {
 	}
 }
 
-// 查收件箱：Facebook 还没打开（没有所有权记录、或别的进程确保到一半还没切共享）时直接答空、不经 Nest 读——经 Nest 读
-// 会让写准入把它认领成本进程独占，之后别的 game 再也投递不进来；打开了才读，打开了还没有提交（冷加载不存在）也是空；
-// 别的失败照实返回。
-func TestFacebookInvitesNeverClaimsAnUnopenedFacebook(t *testing.T) {
+// 查收件箱：Facebook 还没打开（没有所有权记录）时直接答空、不经 Nest 读（省一次写准入）；记录不是共享的（共享 kind
+// 正常不会有，经 Nest 读会被 fence）同样答空；打开了才读，打开了还没有提交（冷加载不存在）也是空；别的失败照实返回。
+func TestFacebookUnopenedInboxIsEmptyWithoutNest(t *testing.T) {
 	facebookTestSetup(t)
 	inbox, _ := EntityID(102)
 	want := []view.FacebookInvite{{Source: facebookTestSource(t, 90001), From: 101, ExpireAt: 2000000}}

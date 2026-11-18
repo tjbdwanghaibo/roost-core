@@ -1,0 +1,9 @@
+--- FAIL: TestSharedKindFirstWritesFromTwoProcessesBothSucceed (0.00s)
+    write_admission_test.go:1670: ownership record after A's first write: {ID:4611686018429785677 Version:1 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:} found=true; want shared from the claim (owner 1000, epoch 1, version 1)
+--- FAIL: TestSharedKindClaimerCrashLeavesOthersWriting (0.00s)
+    write_admission_test.go:1740: ownership record left by A's claim: {ID:4611686018429786701 Version:0 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:} found=true; want a shared record without commits
+--- FAIL: TestSharedKindOwnershipOperations (0.00s)
+    write_admission_test.go:1771: A claim of a shared kind: {OwnerSid:1000 MarkerEpoch:1 RouteEpoch:1 Shared:false} err=<nil>; want shared at epoch 1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.567s
+FAIL

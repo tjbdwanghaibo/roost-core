@@ -1,0 +1,25 @@
+== C1 codegen/internal/entity/gen.go: 'entity.DeclareRemoteSharedKind({{.Entity.EntityKind}})' -> '// mutated'
+RED
+--- FAIL: TestOwnershipSharedDeclaresASharedKind (0.03s)
+    remote_contract_test.go:273: ownership=shared lacks "entity.DeclareRemoteSharedKind(EntityKindGuild)"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity	0.515s
+FAIL
+
+== C2 codegen/internal/entity/parse.go: 'ent.SharedOwnership = m.params["ownership"] == "shared"' -> 'ent.SharedOwnership = false'
+RED
+--- FAIL: TestOwnershipSharedDeclaresASharedKind (0.04s)
+    remote_contract_test.go:284: parsed ownership=shared: [{Name:Inbox EntityKind:EntityKindInbox Category:entity.EntityCategoryRemote BusinessPool: RemotePolicy:entity.RemotePolicyManaged Lifetime:entity.EntityLifetimeRemoteManaged NoPersist:false Sync:false SyncSet:false SyncNamespace: SubjectPacker: Components:[] Daos:[] SourceFile:/var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestOwnershipSharedDeclaresASharedKind1006130188/003/inbox.go Imports:[] ExistingMethods:map[] ViewMethods:map[] ViewAccessors:[] ViewImport: HostMethods:[] ManualHosts:[] ViewEntity:false RemoteBase:true NoSnapshots:false SharedOwnership:false Preload:false PreloadOrder:0}] err=<nil>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity	0.528s
+FAIL
+
+== C3 codegen/internal/entity/parse.go: 'if parseRemoteParam(params["remote"]) != "entity.RemotePolicyManaged" {\n\t\t\t\treturn errors.New(`ownership=shared' -> 'if false && parseRemoteParam(params["remote"]) != "entity.RemotePolicyManaged" {\n\t\t\t\treturn errors.New(`ownership=shared'
+RED
+--- FAIL: TestOwnershipSharedDeclaresASharedKind (0.05s)
+    remote_contract_test.go:295: map[ownership:shared]: err = <nil>, want "ownership=shared applies to a remote=managed entity"
+    remote_contract_test.go:295: map[ownership:shared remote:none]: err = <nil>, want "ownership=shared applies to a remote=managed entity"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity	0.538s
+FAIL
+

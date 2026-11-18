@@ -112,6 +112,10 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 
 维护者 2026-11-05（联盟守卫不再同步给 game）。`marker.Entity` 加 `snapshots` 键，[parse.go](../../../codegen/internal/entity/parse.go) `validateMarkerValues` 只认 `published`（缺省）/ `none`，`none` 只能写在 `remote=managed` 上；`EntityDef.NoSnapshots` 让 [gen.go](../../../codegen/internal/entity/gen.go) 的 `BuildRemoteCommitLocked` 不附 DAO 视图与完整快照、删除时不附失效，注册时调 `entity.DisableRemoteSnapshots(kind)` 而不登记快照解码器。[main.go](../../../codegen/internal/entity/main.go) `rejectMirrorsOfSnapshotlessKinds` 在一次扫描的全部目录里按常量名（`pkg.EntityKindX` 取 `EntityKindX`）拒绝指向它的 `//roost:mirror`。运行期守卫：登记过该 kind 的进程里 `NewRemoteMirrorReader` 与 Nest 的 RemoteViewRef 预取都报 `entity.ErrRemoteSnapshotsDisabled`。回归 [remote_contract_test.go](../../../codegen/internal/entity/remote_contract_test.go) `TestSnapshotsNoneDropsTheRemoteSnapshots`、`TestMirrorOfASnapshotlessKindIsRefused`，[remote_mirror_test.go](../../../framework/entity/remote_mirror_test.go) `TestMirrorReaderRefusesAKindThatPublishesNoSnapshots`。
 
+## 2G2. Remote 托管 kind 生来共享（ownership=shared）
+
+维护者 2026-11-18。`marker.Entity` 加 `ownership` 键，[parse.go](../../../codegen/internal/entity/parse.go) `validateMarkerValues` 只认 `exclusive`（缺省）/ `shared`，`shared` 只能写在 `remote=managed` 上；`EntityDef.SharedOwnership` 让 [gen.go](../../../codegen/internal/entity/gen.go) 在 `register<Entity>Entity` 的同一个 once 里调 `entity.DeclareRemoteSharedKind(kind)`（与 `DisableRemoteSnapshots` 同一处，互不排斥）。运行期契约（首写认领一条插入就是共享记录、并发首写读回共享记录照常准入、不能退出共享）见 [REMOTE_ENTITY“共享 kind”](../REMOTE_ENTITY.md#共享-kindownershipshared)。回归 [remote_contract_test.go](../../../codegen/internal/entity/remote_contract_test.go) `TestOwnershipSharedDeclaresASharedKind`（解析、生成、拒绝的写法），生成工程里 facebook 模块的 `TestFacebookIsASharedKind`（`codegen/internal/roost/module_team_test.go` 对生成的声明做变异）。
+
 ## 2H. 只读 Mirror Mod 与 add rpc -entity-service
 
 联盟服务方案阶段 2 第 3、4 项。

@@ -1,0 +1,46 @@
+== M1 framework/remoteentity/mongo_authority.go: 'd := mongoAuthority{ID: id, Enabled: true, Owner: owner, Shared: shared, Marker: 1, Route: 1}' -> 'd := mongoAuthority{ID: id, Enabled: true, Owner: owner, Shared: false, Marker: 1, Route: 1}'
+RED
+--- FAIL: TestSharedKindFirstWritesFromTwoProcessesBothSucceed (0.00s)
+    write_admission_test.go:1670: ownership record after A's first write: {ID:4611686018429785677 Version:1 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:} found=true; want shared from the claim (owner 1000, epoch 1, version 1)
+--- FAIL: TestSharedKindClaimerCrashLeavesOthersWriting (0.00s)
+    write_admission_test.go:1740: ownership record left by A's claim: {ID:4611686018429786701 Version:0 Enabled:true Owner:1000 Shared:false Marker:1 Route:1 Fence:0 Token:} found=true; want a shared record without commits
+--- FAIL: TestSharedKindOwnershipOperations (0.00s)
+    write_admission_test.go:1771: A claim of a shared kind: {OwnerSid:1000 MarkerEpoch:1 RouteEpoch:1 Shared:false} err=<nil>; want shared at epoch 1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.568s
+FAIL
+
+== M2 framework/remoteentity/mongo_authority.go: 'if d.Owner != owner && !(shared && d.Shared) {' -> 'if d.Owner != owner {'
+RED
+--- FAIL: TestSharedKindFirstWritesFromTwoProcessesBothSucceed (0.00s)
+    write_admission_test.go:1673: B first write after A's claim: remote entity: writer fenced: entity=4611686018429785677 owner=1000 marker=1 route=1 shared=true
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.546s
+FAIL
+
+== M3 framework/remoteentity/batch.go: 'return lease.OwnerSid == w.mgr.localSid || (lease.Shared && entity.RemoteKindShared(w.kind))' -> 'return lease.OwnerSid == w.mgr.localSid'
+RED
+--- FAIL: TestSharedKindFirstWritesFromTwoProcessesBothSucceed (0.00s)
+    write_admission_test.go:1673: B first write after A's claim: remote entity: writer fenced: invalid ownership claim for entity=4611686018429785677
+--- FAIL: TestSharedKindOwnershipOperations (0.00s)
+    write_admission_test.go:1774: B claim after A: {OwnerSid:0 MarkerEpoch:0 RouteEpoch:0 Shared:false} err=remote entity: writer fenced: entity=4611686018429787725 owner=1000 marker=1 route=1 shared=true; want A's shared record {OwnerSid:1000 MarkerEpoch:1 RouteEpoch:1 Shared:true}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.561s
+FAIL
+
+== M4 framework/remoteentity/ownership.go: 'if kind := entity.ResolveEntityID(id).Kind; entity.RemoteKindShared(kind) {' -> 'if kind := entity.ResolveEntityID(id).Kind; false && entity.RemoteKindShared(kind) {'
+RED
+--- FAIL: TestSharedKindOwnershipOperations (0.00s)
+    write_admission_test.go:1777: leave shared mode on a shared kind: <nil>; want ErrRemoteOwnerTransition
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	1.247s
+FAIL
+
+== M5 framework/remoteentity/batch.go: '\tif shared {\n\t\treturn AuthorityState{}, fmt.Errorf("%w: entity=%d kind=%d is declared ownership=shared; claiming' -> '\tif false && shared {\n\t\treturn AuthorityState{}, fmt.Errorf("%w: entity=%d kind=%d is declared ownership=shared; claiming'
+RED
+--- FAIL: TestSharedKindOwnershipOperations (0.00s)
+    write_admission_test.go:1797: shared-kind claim on a non-durable ownership store: <nil>; want ErrRemoteWriteCapabilityDisabled
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	1.231s
+FAIL
+

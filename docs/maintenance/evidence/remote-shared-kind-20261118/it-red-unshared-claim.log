@@ -1,0 +1,6 @@
+=== RUN   TestRealSharedKindFirstWritesFromTwoProcesses
+    ownership_redis_integration_test.go:153: entity 2400: concurrent first write: remote entity: writer fenced: entity=4611686018429846093 owner=1000 marker=1 route=1 shared=false
+--- FAIL: TestRealSharedKindFirstWritesFromTwoProcesses (0.28s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	0.938s
+FAIL

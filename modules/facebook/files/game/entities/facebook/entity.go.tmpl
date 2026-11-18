@@ -12,9 +12,13 @@ const EntityKindFacebook entity.EntityKind = {{ID:entity:Facebook}}
 //
 // 它是跨进程共享的 Remote 权威（与 Team 相同，归 game 服务、共享模式）：Player 只归它的承载 game 写，别的 game
 // 写不了；facebook 任何 game 都能在 Nest 事务里写，邀请因此能投给连在别的 game 上或离线的玩家。号与承载 sid
-// 无关，换服时不用搬。第一次写它之前由 game/modules/facebook 的 Ensure 认领并切到共享模式；不挂心跳。
+// 无关，换服时不用搬。不挂心跳。
 //
-//roost:entity id={{ID:entity:Facebook}} entityKind=EntityKindFacebook category=entity.EntityCategoryRemote remote=managed service={{GAME_SERVICE}}
+// ownership=shared：这个 kind 声明为共享 kind，第一次写它时 Remote 写准入一条插入就把所有权记录写成共享的——两个 game
+// 同时第一次写都成功，没有“先独占认领、再切共享”的中间态，业务不用认领、切共享（game/modules/facebook 的 Ensure
+// 只把它装进内存）。它也不能退出共享模式。
+//
+//roost:entity id={{ID:entity:Facebook}} entityKind=EntityKindFacebook category=entity.EntityCategoryRemote remote=managed service={{GAME_SERVICE}} ownership=shared
 type Facebook struct {
 	*entity.RemoteEntityBase
 	entity.ComponentManager

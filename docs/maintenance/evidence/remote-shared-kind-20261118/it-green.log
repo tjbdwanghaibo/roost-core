@@ -1,0 +1,4 @@
+=== RUN   TestRealSharedKindFirstWritesFromTwoProcesses
+--- PASS: TestRealSharedKindFirstWritesFromTwoProcesses (2.37s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	3.027s
