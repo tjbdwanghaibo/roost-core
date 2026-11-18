@@ -1,0 +1,11 @@
+https://play.example.com
+=== RUN   TestReviewPortalDefaultPort
+=== RUN   TestReviewPortalDefaultPort/https://play.example.com
+=== RUN   TestReviewPortalDefaultPort/https://play.example.com:443
+    review_origin_test.go:22: accepted configuration "https://play.example.com:443"; browser origin "https://play.example.com" gets 403
+--- FAIL: TestReviewPortalDefaultPort (0.00s)
+    --- PASS: TestReviewPortalDefaultPort/https://play.example.com (0.00s)
+    --- FAIL: TestReviewPortalDefaultPort/https://play.example.com:443 (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	0.004s
+FAIL

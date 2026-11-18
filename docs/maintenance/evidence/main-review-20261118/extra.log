@@ -1,0 +1,5 @@
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	1.109s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/webroute	1.165s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	4.347s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	34.761s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/account	1.068s

@@ -1,0 +1,26 @@
+package httpserver
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestReviewPortalDefaultPort(t *testing.T) {
+	const browserOrigin = "https://play.example.com"
+	for _, configured := range []string{browserOrigin, browserOrigin + ":443"} {
+		t.Run(configured, func(t *testing.T) {
+			origins := []string{configured}
+			if err := CheckCORSOrigins("portal.cors_origins", origins); err != nil {
+				return
+			} // rejecting a value the browser cannot emit is also correct
+			request := httptest.NewRequest(http.MethodOptions, "/portal/login", nil)
+			request.Header.Set("Origin", browserOrigin)
+			response := httptest.NewRecorder()
+			NewCORS(origins, []string{"POST"}, []string{"Content-Type"}).Preflight(response, request)
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("accepted configuration %q; browser origin %q gets %d", configured, browserOrigin, response.Code)
+			}
+		})
+	}
+}

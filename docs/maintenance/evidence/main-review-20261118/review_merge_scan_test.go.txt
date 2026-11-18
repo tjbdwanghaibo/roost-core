@@ -1,0 +1,65 @@
+package account
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+)
+
+type reviewPagingRoles struct {
+	*MemoryRoles
+	between func()
+}
+
+func (r *reviewPagingRoles) TransfersDue(ctx context.Context, until int64, offset, limit int) ([]int64, error) {
+	if offset == transferListPage && r.between != nil {
+		f := r.between
+		r.between = nil
+		f()
+	}
+	return r.MemoryRoles.TransfersDue(ctx, until, offset, limit)
+}
+
+func TestReviewMergeShrinkingIndex(t *testing.T) {
+	for _, shrink := range []bool{false, true} {
+		name := "stable"
+		if shrink {
+			name = "shrink"
+		}
+		t.Run(name, func(t *testing.T) {
+			roles := &reviewPagingRoles{MemoryRoles: NewMemoryRoles()}
+			s, _, cfg := pendingContractService(t, func(c *Config) { c.Roles = roles })
+			ctx := context.Background()
+			upsertOpen(t, s, 2, 3)
+			var first, last int64
+			for i := 0; i <= transferListPage; i++ {
+				n := fmt.Sprintf("p%d", i)
+				role, _ := roleOn(t, s, n, 3, n)
+				target := int32(1)
+				if i == transferListPage {
+					target = 2
+					last = role.PlayerID
+				}
+				mustBegin(t, s, role.PlayerID, transferTo(n, 3, target, 0))
+				if i == 0 {
+					first = role.PlayerID
+				}
+			}
+			if shrink {
+				roles.between = func() {
+					if _, err := s.AbortRoleTransfer(ctx, first, "p0", "review"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			_, err := s.MergeServer(ctx, MergeRequest{From: 2, Into: 1, Note: mergeNote})
+			if storedRole(t, cfg, last).Value.Transfer == nil {
+				t.Fatal("expected transfer continuously in flight")
+			}
+			if !errors.Is(err, ErrTransferInProgress) || storedServer(t, cfg, 2).MergedInto != 0 {
+				t.Fatalf("merge = %v, server 2 merged into %d while transfer to 2 remains", err, storedServer(t, cfg, 2).MergedInto)
+			}
+		})
+	}
+}

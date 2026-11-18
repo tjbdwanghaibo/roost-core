@@ -1,0 +1,62 @@
+=== RUN   TestReviewMergeShrinkingIndex
+=== RUN   TestReviewMergeShrinkingIndex/stable
+=== RUN   TestReviewMergeShrinkingIndex/shrink
+    review_merge_scan_test.go:61: merge = <nil>, server 2 merged into 1 while transfer to 2 remains
+--- FAIL: TestReviewMergeShrinkingIndex (0.05s)
+    --- PASS: TestReviewMergeShrinkingIndex/stable (0.02s)
+    --- FAIL: TestReviewMergeShrinkingIndex/shrink (0.02s)
+=== RUN   TestReviewMergeShrinkingIndex
+=== RUN   TestReviewMergeShrinkingIndex/stable
+=== RUN   TestReviewMergeShrinkingIndex/shrink
+    review_merge_scan_test.go:61: merge = <nil>, server 2 merged into 1 while transfer to 2 remains
+--- FAIL: TestReviewMergeShrinkingIndex (0.04s)
+    --- PASS: TestReviewMergeShrinkingIndex/stable (0.02s)
+    --- FAIL: TestReviewMergeShrinkingIndex/shrink (0.02s)
+=== RUN   TestReviewMergeShrinkingIndex
+=== RUN   TestReviewMergeShrinkingIndex/stable
+=== RUN   TestReviewMergeShrinkingIndex/shrink
+    review_merge_scan_test.go:61: merge = <nil>, server 2 merged into 1 while transfer to 2 remains
+--- FAIL: TestReviewMergeShrinkingIndex (0.03s)
+    --- PASS: TestReviewMergeShrinkingIndex/stable (0.02s)
+    --- FAIL: TestReviewMergeShrinkingIndex/shrink (0.02s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/account	0.134s
+=== RUN   TestReviewPriorSeatReport
+=== RUN   TestReviewPriorSeatReport/ordered
+=== RUN   TestReviewPriorSeatReport/ordered/memory
+=== RUN   TestReviewPriorSeatReport/ordered/redis
+=== RUN   TestReviewPriorSeatReport/late
+=== RUN   TestReviewPriorSeatReport/late/memory
+    review_new_seat_test.go:56: after reservation expired: acc-host:online acc-alice:offline
+    review_new_seat_test.go:59: rejoin = <nil>, want ErrRoomStarted
+=== RUN   TestReviewPriorSeatReport/late/redis
+--- FAIL: TestReviewPriorSeatReport (0.00s)
+    --- PASS: TestReviewPriorSeatReport/ordered (0.00s)
+    --- FAIL: TestReviewPriorSeatReport/late (0.00s)
+=== RUN   TestReviewPriorSeatReport
+=== RUN   TestReviewPriorSeatReport/ordered
+=== RUN   TestReviewPriorSeatReport/ordered/memory
+=== RUN   TestReviewPriorSeatReport/ordered/redis
+=== RUN   TestReviewPriorSeatReport/late
+=== RUN   TestReviewPriorSeatReport/late/memory
+    review_new_seat_test.go:56: after reservation expired: acc-host:online acc-alice:offline
+    review_new_seat_test.go:59: rejoin = <nil>, want ErrRoomStarted
+=== RUN   TestReviewPriorSeatReport/late/redis
+--- FAIL: TestReviewPriorSeatReport (0.00s)
+    --- PASS: TestReviewPriorSeatReport/ordered (0.00s)
+    --- FAIL: TestReviewPriorSeatReport/late (0.00s)
+=== RUN   TestReviewPriorSeatReport
+=== RUN   TestReviewPriorSeatReport/ordered
+=== RUN   TestReviewPriorSeatReport/ordered/memory
+=== RUN   TestReviewPriorSeatReport/ordered/redis
+=== RUN   TestReviewPriorSeatReport/late
+=== RUN   TestReviewPriorSeatReport/late/memory
+    review_new_seat_test.go:56: after reservation expired: acc-host:online acc-alice:offline
+    review_new_seat_test.go:59: rejoin = <nil>, want ErrRoomStarted
+=== RUN   TestReviewPriorSeatReport/late/redis
+--- FAIL: TestReviewPriorSeatReport (0.00s)
+    --- PASS: TestReviewPriorSeatReport/ordered (0.00s)
+    --- FAIL: TestReviewPriorSeatReport/late (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/lobby	0.025s
+FAIL

@@ -1,0 +1,14 @@
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.326s
+ok  	github.com/tjbdwanghaibo/roost-core/service/mail	1.368s
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	1.589s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/wsconn	2.643s
+2026/11/18 07:48:41 WARN lobby: request failed method=POST path=/rooms err="lobby: no relay instance is available for transport ws"
+--- FAIL: TestAutoSnapshotIsPushedWhileHost (0.21s)
+    host_test.go:260: peer: lobby http://127.0.0.1:35933, relay 127.0.0.1:42045, room directory memory
+    host_test.go:274: offer seq 2 state "auto-2" (pushed 3)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	11.124s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	1.027s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/session	1.075s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/scenario	1.142s
+FAIL

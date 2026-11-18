@@ -1,0 +1,38 @@
+package relay_test
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/client/relay"
+	relaysvc "github.com/tjbdwanghaibo/roost-core/service/relay"
+	"testing"
+)
+
+func TestReviewEarlierTransfer(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	opts := relay.Options{AutoHostReady: true, Compressor: gatedCompressor{func(state []byte) {
+		if string(state) == "old" {
+			close(entered)
+			<-release
+		}
+	}}}
+	a, members, _ := openRoom(t, peer, "review", opts, []relay.Options{{AutoHostReady: true}, {AutoHostReady: true}})
+	b, c := members[0], members[1]
+	done := make(chan error, 1)
+	go func() { done <- a.client.Transfer(3, []byte("old")) }()
+	<-entered
+	if err := a.client.Transfer(2, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, b.hostChanged, "B became host")
+	if err := b.client.Transfer(1, []byte("latest")); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, a.hostChanged, "A saw B")
+	recv(t, a.hostChanged, "A became host again")
+	close(release)
+	if err := <-done; err != nil {
+		return
+	}
+	offer := recv(t, c.youAreHost, "C takeover")
+	t.Fatalf("epoch %d offered to C with state %q", offer.Epoch, offer.State)
+}

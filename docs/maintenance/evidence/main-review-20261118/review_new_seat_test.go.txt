@@ -1,0 +1,64 @@
+package lobby
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestReviewPriorSeatReport(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		name := "ordered"
+		if late {
+			name = "late"
+		}
+		t.Run(name, func(t *testing.T) {
+			backends(t, time.Hour, func(t *testing.T, h *harness) {
+				id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+				join := func() {
+					t.Helper()
+					if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				join()
+				report := RoomEvent{Type: EventHeartbeat, Seq: 1, Room: id, Relay: "relay-b", Host: "acc-host", Online: []string{"acc-host", "acc-alice"}}
+				h.report(t, report)
+				report.Seq = 2
+				if !late {
+					h.report(t, report)
+				}
+				left := report
+				left.Seq = 3
+				left.Type = EventMemberLeft
+				left.Account = "acc-alice"
+				left.Reason = ReasonLeft
+				left.Online = []string{"acc-host"}
+				h.report(t, left)
+				if h.room(t, id).memberIndex("acc-alice") >= 0 {
+					t.Fatal("old seat still exists")
+				}
+				join() // reserve a new seat, never connect to relay
+				if late {
+					h.report(t, report)
+				}
+				if _, err := h.svc.SetRoomState(context.Background(), "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+					t.Fatal(err)
+				}
+				h.lapse()
+				left.Type = EventHeartbeat
+				left.Seq = 4
+				left.Reason = ""
+				left.Account = ""
+				h.report(t, left)
+				if got := seats(h.room(t, id)); got != "acc-host:online" {
+					t.Errorf("after reservation expired: %s", got)
+				}
+				if _, err := h.join("gt-alice", id, JoinRequest{}); !errors.Is(err, ErrRoomStarted) {
+					t.Errorf("rejoin = %v, want ErrRoomStarted", err)
+				}
+			})
+		})
+	}
+}

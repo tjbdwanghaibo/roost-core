@@ -1,0 +1,107 @@
+{
+  "modules": [
+    {
+      "name": "account_auth",
+      "want": 7,
+      "passed": 7,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "facebook",
+      "want": 9,
+      "passed": 9,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login",
+      "want": 34,
+      "passed": 34,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox",
+      "want": 33,
+      "passed": 33,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+rehome",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal",
+      "want": 16,
+      "passed": 16,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal+login",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 62,
+      "passed": 62,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "room",
+      "want": 34,
+      "passed": 34,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "team",
+      "want": 32,
+      "passed": 32,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "team+rehome",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "wallet",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}

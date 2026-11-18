@@ -1,0 +1,15 @@
+=== RUN   TestReviewAutoSnapshotObservation
+    review_auto_test.go:14: peer: lobby http://127.0.0.1:35311, relay 127.0.0.1:42593, room directory memory
+    review_auto_test.go:36: offer seq 2 state "auto-2" (pushed 3)
+--- FAIL: TestReviewAutoSnapshotObservation (0.24s)
+=== RUN   TestReviewAutoSnapshotObservation
+    review_auto_test.go:14: peer: lobby http://127.0.0.1:42559, relay 127.0.0.1:37919, room directory memory
+    review_auto_test.go:36: offer seq 2 state "auto-2" (pushed 3)
+--- FAIL: TestReviewAutoSnapshotObservation (0.22s)
+=== RUN   TestReviewAutoSnapshotObservation
+    review_auto_test.go:14: peer: lobby http://127.0.0.1:45113, relay 127.0.0.1:46725, room directory memory
+    review_auto_test.go:36: offer seq 2 state "auto-2" (pushed 3)
+--- FAIL: TestReviewAutoSnapshotObservation (0.24s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	0.753s
+FAIL

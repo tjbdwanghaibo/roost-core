@@ -1,0 +1,72 @@
+
+Welcome to .NET 10.0!
+---------------------
+SDK Version: 10.0.402
+
+Telemetry
+---------
+The .NET tools collect usage data in order to help us improve your experience. It is collected by Microsoft and shared with the community. You can opt-out of telemetry by setting the DOTNET_CLI_TELEMETRY_OPTOUT environment variable to '1' or 'true' using your favorite shell.
+
+Read more about .NET CLI Tools telemetry: https://aka.ms/dotnet-cli-telemetry
+
+----------------
+Installed an ASP.NET Core HTTPS development certificate.
+To trust the certificate, run 'dotnet dev-certs https --trust'
+Learn about HTTPS: https://aka.ms/dotnet-https
+
+----------------
+Write your first app: https://aka.ms/dotnet-hello-world
+Find out what's new: https://aka.ms/dotnet-whats-new
+Explore documentation: https://aka.ms/dotnet-docs
+Report issues and find source on GitHub: https://github.com/dotnet/core
+Use 'dotnet --help' to see available commands or visit: https://aka.ms/dotnet-cli
+--------------------------------------------------------------------------------------
+golden: ok
+frames across message boundaries (fake transport): ok
+unknown control op: ok
+compressors: ok
+host frames against a fake relay: ok
+2026/11/18 07:56:16 WARN lobby: request failed method=POST path=/rooms err="lobby: no relay instance is available for transport ws"
+lobby without a ws relay: ok
+  detector caught, e.g.: a continuation posted to the loop on thread 9 (thread pool)
+[single-thread] the detector catches the threaded scheduling: ok
+[single-thread] pump-driven: create, join, frames, heartbeat, reconnect, no Pump, host transfer, connect timeout, leave: ok
+[tcp] peer: lobby http://127.0.0.1:44629, relay 127.0.0.1:45047, room directory memory
+[tcp] lobby errors: ok
+[tcp] room lifecycle: ok
+[tcp] reconnect: ok
+[tcp] host transfer: ok
+[tcp] host loss → snapshot to the declared successor: ok
+[tcp] host resumed within the grace period: ok
+[tcp] host leave uses the successor order: ok
+[tcp] the last member's leave succeeds after the room closes: ok
+[tcp] snapshot pacing and rejections: ok
+[tcp] automatic snapshots: ok
+[tcp] a snapshot prepared in an earlier host term or connection is dropped: ok
+[tcp] an earlier-started snapshot is dropped once a later one is sent: ok
+[tcp] host heartbeat under host_idle_timeout: ok
+[tcp] reconnect vs lobby_unavailable / lobby_rejected: ok
+[tcp] started room: reconnect, rejoin, kick an offline seat: ok
+[tcp] welcome epoch for a late joiner and a rejoin: ok
+[tcp] presence re-sent after host changed and reconnect: ok
+[ws] peer: lobby http://127.0.0.1:36737, relay ws://127.0.0.1:41339/relay, room directory memory
+[ws] ask the lobby for ws and connect: ok
+[ws] relay reads several frames from one message: ok
+[ws] lobby errors: ok
+[ws] room lifecycle: ok
+[ws] reconnect: ok
+[ws] host transfer: ok
+[ws] host loss → snapshot to the declared successor: ok
+[ws] host resumed within the grace period: ok
+[ws] host leave uses the successor order: ok
+[ws] the last member's leave succeeds after the room closes: ok
+[ws] snapshot pacing and rejections: ok
+[ws] automatic snapshots: ok
+[ws] a snapshot prepared in an earlier host term or connection is dropped: ok
+[ws] an earlier-started snapshot is dropped once a later one is sent: ok
+[ws] host heartbeat under host_idle_timeout: ok
+[ws] reconnect vs lobby_unavailable / lobby_rejected: ok
+[ws] started room: reconnect, rejoin, kick an offline seat: ok
+[ws] welcome epoch for a late joiner and a rejoin: ok
+[ws] presence re-sent after host changed and reconnect: ok
+all 866 checks passed

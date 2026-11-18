@@ -1,0 +1,15 @@
+peer: lobby http://127.0.0.1:46501, relay ws ws://127.0.0.1:40915/relay, room directory memory
+{
+  late: undefined,
+  successorSeq: 8589934593n,
+  recovered: 'epoch-two-state'
+}
+✔ review delayed snapshot survives two host transfers (1292.914282ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1418.947146

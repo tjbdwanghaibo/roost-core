@@ -1,0 +1,6 @@
+--- FAIL: TestAutoSnapshotIsPushedWhileHost (0.23s)
+    host_test.go:260: peer: lobby http://127.0.0.1:45057, relay 127.0.0.1:33721, room directory memory
+    host_test.go:274: offer seq 2 state "auto-2" (pushed 3)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/client/relay	3.098s
+FAIL

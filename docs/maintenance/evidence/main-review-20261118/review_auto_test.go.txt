@@ -1,0 +1,48 @@
+package relay_test
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/client/relay"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	relaysvc "github.com/tjbdwanghaibo/roost-core/service/relay"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestReviewAutoSnapshotObservation(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{SnapshotMinInterval: 50 * time.Millisecond})
+	var pushed, candidatePushed atomic.Int32
+	release := make(chan struct{})
+	defer close(release)
+	state := func() []byte {
+		n := pushed.Add(1)
+		if n == 3 {
+			<-release
+		}
+		return []byte(fmt.Sprintf("auto-%d", n))
+	}
+	candidateState := func() []byte { candidatePushed.Add(1); return []byte("candidate") }
+	host, members, _ := openRoom(t, peer, "auto", relay.Options{SnapshotState: state, SnapshotInterval: 100 * time.Millisecond,
+		SnapshotMinInterval: 50 * time.Millisecond}, []relay.Options{{SnapshotState: candidateState, SnapshotInterval: 100 * time.Millisecond}})
+	waitFor(t, "a few automatic snapshots", func() bool { return pushed.Load() >= 3 })
+	waitPong(t, host)
+	if err := host.client.SendControl(wire.RelayOpLeave, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	n := pushed.Load()
+	offer := recv(t, members[0].youAreHost, "you are host")
+	if offer.Source != relay.StateSnapshot || offer.SnapshotSeq < 3 || string(offer.State) != fmt.Sprintf("auto-%d", offer.SnapshotSeq) || int32(offer.SnapshotSeq) > n {
+		t.Fatalf("offer seq %d state %q (pushed %d)", offer.SnapshotSeq, offer.State, n)
+	}
+	// 候选还没回 HostReady：不是房主，不向游戏要状态、不定时推。
+	time.Sleep(300 * time.Millisecond)
+	if got := candidatePushed.Load(); got != 0 {
+		t.Fatalf("candidate asked for %d snapshots before HostReady", got)
+	}
+	// 回 HostReady、收到 HostChanged 之后才按房主推。
+	if err := members[0].client.HostReady(offer.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the new host pushes snapshots", func() bool { return candidatePushed.Load() >= 1 })
+}
