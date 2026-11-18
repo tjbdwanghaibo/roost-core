@@ -45,7 +45,8 @@ const (
 
 // RoomEvent 是 relay 发给 lobby 的房间报告。除 closed 以外，每一条都带房间的全量快照（Online、Host、Epoch），
 // lobby 不依赖消息不丢、不乱序：
-//   - Seq：同一房间内由 relay 严格递增，从 1 开始。lobby 只用序号更大的报告改写在线名单，迟到的旧报告只续 TTL；
+//   - Seq：同一房间内由 relay 严格递增，从 1 开始。lobby 只用序号更大的报告改写在线名单，迟到的旧报告不改名单，
+//     只续 TTL、并记下其中比各成员已知事实更新的“连上过 / 主动离开”（Room.notePresence）；
 //   - Host / Epoch：relay 的当前房主与 host_epoch（建房时的房主是 epoch 0，每次换 host 加 1）。lobby 按 epoch 做 CAS，
 //     只接受更大的 epoch（§4.6.4 第 7 步），与消息类型无关——心跳也带着，丢了一条 host_changed 下一次心跳补上；
 //   - Online：此刻连在 relay 上的账号（含房主）。
@@ -61,7 +62,7 @@ type RoomEvent struct {
 	Epoch   uint64   `json:"epoch"`
 	Account string   `json:"account,omitempty"`
 	// Reason 只在 member_left / closed 上有；lobby 只认 member_left 的两种：ReasonKicked 把 Account 记进被踢名单，
-	// ReasonLeft 清掉他的 Connected（主动离开，已开始的房间也不再给他留席位）。
+	// ReasonLeft 清掉他的 Connected（主动离开，已开始的房间也不再给他留席位；按成员自己的序号收敛，见 Member.PresenceSeq）。
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -122,14 +123,11 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 		if event.Epoch > room.HostEpoch && event.Host != "" {
 			room.Host, room.HostEpoch = event.Host, event.Epoch
 		}
-		// 在线名单：只认序号更大的报告。主动离开也只认序号更大的：迟到的旧 left 不能清掉回座后又连上的人。
+		// 每个成员“连上过 / 主动离开”的事实按他自己的序号收敛，新旧报告都看（notePresence）。
+		room.notePresence(event, now)
+		// 在线名单：只认序号更大的报告。
 		if event.Seq > room.RelaySeq {
 			room.RelaySeq = event.Seq
-			if event.Type == EventMemberLeft && event.Reason == ReasonLeft {
-				if i := room.memberIndex(event.Account); i >= 0 {
-					room.Members[i].Connected = false
-				}
-			}
 			// relay 确认这个人走了（任何原因）：经 lobby 离开的记录可以清掉。
 			if event.Type == EventMemberLeft && event.Account != "" {
 				room.clearLeaving(event.Account)
@@ -139,7 +137,7 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 					stillOnline = append(stillOnline, account)
 				}
 			}
-			room.applyOnline(event.Online, now)
+			room.applyOnline(event.Online, event.Seq, now)
 		}
 		if room.memberIndex(room.Host) < 0 {
 			room.Members = append(room.Members, Member{Account: room.Host})
@@ -159,9 +157,38 @@ func (s *Service) HandleRelayEvent(ctx context.Context, event RoomEvent) error {
 	return err
 }
 
-// applyOnline 按 relay 的在线名单重算席位：在线的记下 Connected、清掉预留；不在线的按 holdsSeat 决定留不留。
-// relay 报告在线、目录里却没有的人补上（relay 是“谁连着”的权威）。
-func (r *Room) applyOnline(online []string, now time.Time) {
+// notePresence 把一条报告里关于成员连接的事实记到各自的席位上，不论这条报告比房间水位（RelaySeq）新还是旧：
+//   - 报告里在线：他在这个序号上连着，Connected 记为 true（经 lobby 离开、relay 还没确认的人除外，见 Room.Leaving）；
+//   - member_left 原因 left：他在这个序号上主动离开，Connected 记为 false；这时已不占席位（holdsSeat）就让出。
+//
+// 两种事实都只认比这个成员已记下的事实（Member.PresenceSeq）更新的：迟到的旧 left 不清掉回座后又连上的人，迟到的旧
+// 在线也不把主动离开的人记回去。不按全房水位判断，是因为 relay 的报告可以并发发出、乱序到达（service/relay.Reporter）：
+// 只剩房主在线的心跳（seq 3）先到、把水位推过 left（seq 2）时，这条 left 仍是这个成员最新的事实，不能丢。
+// 不在名单里（掉线）不是关于 Connected 的事实，不动它。席位的在线标记、预留与补人只看最新的名单（applyOnline）。
+func (r *Room) notePresence(event RoomEvent, now time.Time) {
+	if event.Type == EventMemberLeft && event.Reason == ReasonLeft {
+		if i := r.memberIndex(event.Account); i >= 0 && event.Seq > r.Members[i].PresenceSeq {
+			r.Members[i].Connected, r.Members[i].PresenceSeq = false, event.Seq
+			if !r.holdsSeat(r.Members[i], now) {
+				r.Members = append(r.Members[:i], r.Members[i+1:]...)
+			}
+		}
+	}
+	for _, account := range event.Online {
+		i := r.memberIndex(account)
+		if i < 0 || event.Seq <= r.Members[i].PresenceSeq {
+			continue
+		}
+		r.Members[i].PresenceSeq = event.Seq
+		if !r.leaving(account) {
+			r.Members[i].Connected = true
+		}
+	}
+}
+
+// applyOnline 按 relay 最新的在线名单（序号 seq）重算席位：在线的记下 Online、清掉预留；不在线的按 holdsSeat 决定
+// 留不留。relay 报告在线、目录里却没有的人补上（relay 是“谁连着”的权威）。已在目录里的人的 Connected 由 notePresence 记。
+func (r *Room) applyOnline(online []string, seq uint64, now time.Time) {
 	connected := make(map[string]bool, len(online))
 	for _, account := range online {
 		if account != "" {
@@ -173,9 +200,6 @@ func (r *Room) applyOnline(online []string, now time.Time) {
 		member.Online = connected[member.Account]
 		if member.Online {
 			member.ReservedUntilUnix = 0
-			if !r.leaving(member.Account) { // 经 lobby 离开的人（房主）：迟到的名单不把他重新记成连上过
-				member.Connected = true
-			}
 			delete(connected, member.Account)
 		}
 		if r.holdsSeat(member, now) {
@@ -185,7 +209,7 @@ func (r *Room) applyOnline(online []string, now time.Time) {
 	r.Members = kept
 	for _, account := range online {
 		if connected[account] && !r.kicked(account) && !r.leaving(account) {
-			r.Members = append(r.Members, Member{Account: account, Online: true, Connected: true})
+			r.Members = append(r.Members, Member{Account: account, Online: true, Connected: true, PresenceSeq: seq})
 			delete(connected, account)
 		}
 	}

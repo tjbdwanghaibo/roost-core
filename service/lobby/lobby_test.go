@@ -934,6 +934,85 @@ func TestStartedRoomsReleaseSeatsOnKickLeaveAndClose(t *testing.T) {
 	})
 }
 
+// 已开始的房间里经 relay 主动离开（member_left 原因 left）的人不再留座，不论这条 left 与别的报告谁先到 lobby：
+// relay 的报告可以从不同 goroutine 并发发出（service/relay.Reporter），序号更大的心跳先到、把房间水位推过 left 的
+// 序号，是实现允许的交付顺序。离席事实按成员自己的最近事实序号（Member.PresenceSeq）收敛，不按全房水位。
+// 反方向（迟到的旧 left 不清掉回座又连上的人）由 TestStartedRoomsReleaseSeatsOnKickLeaveAndClose 的 carol 段守着。
+func TestAnExplicitLeaveReleasesAStartedSeatInAnyArrivalOrder(t *testing.T) {
+	for _, order := range []string{"left_first", "heartbeat_first"} {
+		t.Run(order, func(t *testing.T) {
+			backends(t, time.Hour, func(t *testing.T, h *harness) {
+				ctx := context.Background()
+				id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+				if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+					t.Fatal(err)
+				}
+				h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 1, Host: "acc-host", Online: []string{"acc-host", "acc-alice"}})
+				if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+					t.Fatal(err)
+				}
+				// relay 上 alice 发 leave：先报 seq 2 的 left，再报 seq 3 的心跳（只剩房主在线）。
+				left := RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Account: "acc-alice", Reason: ReasonLeft,
+					Online: []string{"acc-host"}}
+				heartbeat := RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 3, Host: "acc-host", Online: []string{"acc-host"}}
+				if order == "left_first" {
+					h.report(t, left)
+					h.report(t, heartbeat)
+				} else {
+					h.report(t, heartbeat)
+					h.report(t, left)
+				}
+				h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 4, Host: "acc-host", Online: []string{"acc-host"}})
+				if got := seats(h.room(t, id)); got != "acc-host:online" {
+					t.Fatalf("seats after alice left through the relay = %q, want only the host", got)
+				}
+				if _, err := h.join("gt-alice", id, JoinRequest{}); !errors.Is(err, ErrRoomStarted) {
+					t.Fatalf("alice joining after she left a started room: err = %v, want ErrRoomStarted", err)
+				}
+				if got := h.svc.VerifyRelayConnection(ctx, RelayVerifyRequest{Room: id, Account: "acc-alice", Relay: "relay-b"}); got.Reason != VerifyNotMember {
+					t.Fatalf("relay verification for alice after she left = %+v, want %s", got, VerifyNotMember)
+				}
+			})
+		})
+	}
+}
+
+// 迟到的旧报告也带着成员“在线”的事实：已开始的房间里 alice 经 lobby 回座、在 relay 上重连（seq 4）又掉线（seq 5），
+// seq 4 那条 member_joined 晚于她更早的 left（seq 2）到达。left 先到时她的席位靠回座预留还在；seq 4 到了以后
+// 她是“连上过”的人，掉线照样留座，不能因为 seq 4 不再是房间里最新的报告就丢掉这件事实。
+func TestALateOnlineReportStillRecordsAReconnectAfterALeave(t *testing.T) {
+	backends(t, time.Hour, func(t *testing.T, h *harness) {
+		ctx := context.Background()
+		id := h.create(t, "gt-host", CreateRequest{}).Room.ID
+		if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 1, Host: "acc-host", Online: []string{"acc-host", "acc-alice"}})
+		if _, err := h.svc.SetRoomState(ctx, "gt-host", id, StateRequest{Game: "party", State: StateStarted}); err != nil {
+			t.Fatal(err)
+		}
+		// lobby 还没收到 seq 2 的 left 时 alice 是“连上过”的人，join 回座成功（预留席位）。
+		if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 3, Host: "acc-host", Online: []string{"acc-host"}})
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 5, Host: "acc-host", Account: "acc-alice", Reason: "disconnected",
+			Online: []string{"acc-host"}})
+		h.report(t, RoomEvent{Type: EventMemberLeft, Room: id, Relay: "relay-b", Seq: 2, Host: "acc-host", Account: "acc-alice", Reason: ReasonLeft,
+			Online: []string{"acc-host"}})
+		h.report(t, RoomEvent{Type: EventMemberJoined, Room: id, Relay: "relay-b", Seq: 4, Host: "acc-host", Account: "acc-alice",
+			Online: []string{"acc-host", "acc-alice"}})
+		h.lapse() // 回座的预留过期：之后只有“连上过”留得住她的座位
+		h.report(t, RoomEvent{Type: EventHeartbeat, Room: id, Relay: "relay-b", Seq: 6, Host: "acc-host", Online: []string{"acc-host"}})
+		if got := seats(h.room(t, id)); got != "acc-host:online acc-alice:offline" {
+			t.Fatalf("seats after alice reconnected (late report) and dropped = %q, want her seat kept", got)
+		}
+		if _, err := h.join("gt-alice", id, JoinRequest{}); err != nil {
+			t.Fatalf("alice returning to her kept seat: %v", err)
+		}
+	})
+}
+
 // Redis 过期：记录的寿命是 room TTL，relay 的每条报告续一次；不再报告的房间到期消失，列表与加入都看不到，
 // 索引里残留的房间号在列表时清掉。
 func TestRoomsExpireWithoutRelayReports(t *testing.T) {

@@ -229,6 +229,9 @@ type Member struct {
 	// Connected：relay 报告过他连上（之后掉线也不清）。房间已开始时，靠它把掉线的人的席位一直留着；
 	// 主动离开（lobby 的 leave、relay 报告 member_left 原因 left）清掉它，席位按没开局的规则让出。
 	Connected bool `json:"connected,omitempty"`
+	// PresenceSeq 是 Connected 依据的那条 relay 报告的序号：报告里他在线，或 member_left 原因 left 说他主动离开。
+	// relay 的报告会乱序到达，Connected 只被比它更新的事实改写（Room.notePresence），与房间水位 RelaySeq 无关。
+	PresenceSeq uint64 `json:"presence_seq,omitempty"`
 }
 
 // RoomView 是客户端看到的房间。
