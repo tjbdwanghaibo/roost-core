@@ -464,3 +464,91 @@ func TestAMergeIsRefusedWhileATransferInvolvesTheMergedServer(t *testing.T) {
 		t.Fatalf("the merge after both transfers settled changed nothing: %+v", result)
 	}
 }
+
+// indexedRoles 是带在途换服索引的角色存储（MemoryRoles 或 Redis 上的 redisRoles）。
+type indexedRoles interface {
+	versionstore.Store[int64, Role]
+	TransferIndex
+}
+
+// rolesAfterIndexRead 在第一次读在途索引返回之后执行一次 afterRead：模拟“合服预检读过索引、还没读完”时别处了结了一笔换服。
+type rolesAfterIndexRead struct {
+	indexedRoles
+	afterRead func()
+}
+
+func (r *rolesAfterIndexRead) TransfersDue(ctx context.Context, deadlineUnix int64, offset, limit int) ([]int64, error) {
+	ids, err := r.indexedRoles.TransfersDue(ctx, deadlineUnix, offset, limit)
+	if f := r.afterRead; f != nil {
+		r.afterRead = nil
+		f()
+	}
+	return ids, err
+}
+
+// 合服预检读在途索引时，别的换服在读的过程中了结（条目从索引里消失、后面的前移），不能让一笔从头到尾都在途、
+// 以被并走的服为目标的换服漏检（RV-20261118-05）。按偏移分页时，第一页之后了结一笔，下一页从原偏移读起就跳过一条；
+// 预检必须读索引的同一时刻的全集。按期限排序，被漏检的那笔排在一整页（修复前的页长 200 笔无关换服）之后。
+// 存储缺省是 Memory；ROOST_REVIEW3_BACKEND=redis 时走隔离的真实 Redis（redisRoles，索引是有序集合）。
+func TestAMergeCheckSeesEveryTransferWhileOthersSettle(t *testing.T) {
+	// scanPageBefore 是修复前列举一次读索引的条数（按偏移翻页）：多出一页加一笔，漏检才会出现。
+	const scanPageBefore = 200
+	var roles *rolesAfterIndexRead
+	s, _, cfg := pendingContractService(t, func(c *Config) {
+		roles = &rolesAfterIndexRead{indexedRoles: c.Roles.(indexedRoles)}
+		c.Roles = roles
+	})
+	ctx := context.Background()
+	const merged, host, other int32 = 2, 1, 3
+	upsertOpen(t, s, merged, other)
+	// 期限逐笔递增（索引按期限排序；同分时 Redis 按成员字符串排，不是按玩家号），两种存储排出同一个顺序。
+	players := make([]int64, scanPageBefore+1)
+	for i := range players {
+		name := fmt.Sprintf("p%d", i)
+		role, _ := roleOn(t, s, name, other, name)
+		target := host
+		if i == scanPageBefore {
+			target = merged // 期限最晚、排在最后的这一笔以被并走的服为目标
+		}
+		mustBegin(t, s, role.PlayerID, TransferRequest{ID: name, FromSID: other, To: target, TTLSeconds: int64(60 + i)})
+		players[i] = role.PlayerID
+	}
+	staying := players[scanPageBefore]
+	roles.afterRead = func() {
+		if _, err := s.AbortRoleTransfer(ctx, players[0], "p0", "settled while the merge check reads the index"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := s.MergeServer(ctx, MergeRequest{From: merged, Into: host, Note: mergeNote})
+	if roles.afterRead != nil {
+		t.Fatal("the merge check never read the transfer index; the case proves nothing")
+	}
+	if storedRole(t, cfg, staying).Value.Transfer == nil {
+		t.Fatal("the transfer onto the merged server is no longer in flight; the case proves nothing")
+	}
+	if !errors.Is(err, ErrTransferInProgress) {
+		t.Errorf("merge with a transfer onto %d in flight the whole time = %v, want ErrTransferInProgress", merged, err)
+	}
+	if got := storedServer(t, cfg, merged); got.MergedInto != 0 {
+		t.Errorf("the merge check missed the transfer onto %d and wrote the merge: %+v", merged, got)
+	}
+
+	// 列举走同一次读：读的过程中了结别的换服，仍列得出这笔。p0 已了结，补一笔期限最早的，让索引再满一页加一笔。
+	early, _ := roleOn(t, s, "early", other, "early")
+	mustBegin(t, s, early.PlayerID, TransferRequest{ID: "early", FromSID: other, To: host, TTLSeconds: 30})
+	roles.afterRead = func() {
+		if _, err := s.AbortRoleTransfer(ctx, early.PlayerID, "early", "settled while listing"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed, err := s.ListRoleTransfers(ctx, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roles.afterRead != nil {
+		t.Fatal("listing never read the transfer index")
+	}
+	if !slices.ContainsFunc(listed, func(b RoleBinding) bool { return b.PlayerID == staying }) {
+		t.Fatalf("listing while another transfer settles misses player %d (%d listed)", staying, len(listed))
+	}
+}

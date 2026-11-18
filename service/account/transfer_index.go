@@ -36,6 +36,8 @@ import (
 // wiring/account 的 Mod 用 NewRedisStores 的角色存储，它实现了这个接口。
 type TransferIndex interface {
 	// TransfersDue 返回期限不晚于 deadlineUnix 的在途换服的玩家号，期限早的在前；跳过前 offset 个，至多 limit 个。
+	// 一次调用是索引在同一时刻的读（Redis 上一条 ZRANGEBYSCORE，进程内同一把锁）：limit 取 math.MaxInt 就是那一刻的全集。
+	// 跨调用按 offset 翻页不是快照——中间有条目移出，后面的前移，下一页会跳过一条（RV-20261118-05），要全集的不要翻页。
 	TransfersDue(ctx context.Context, deadlineUnix int64, offset, limit int) ([]int64, error)
 	// DeferTransfer 把一个条目的分数挪到 untilUnix：记录读不出来、一时处理不了时用，不让它占住每一页的开头。
 	// 条目不在索引里时什么都不做。
@@ -51,8 +53,6 @@ const (
 	MaxListedTransfers = 1000
 	// MaxBindingBatch 是 RoleBindingsAway 一次至多问的玩家数。
 	MaxBindingBatch = 500
-	// transferListPage 是列举时一次读索引的条数。
-	transferListPage = 200
 	// expiredDeferSeconds 是清扫处理不了的条目往后挪多久。
 	expiredDeferSeconds = 60
 )
@@ -72,8 +72,8 @@ func transferExpired(transfer *RoleTransfer, nowUnix int64) bool {
 // fromServerID 非 0 时只列从这个服发起的（RoleTransfer.From）。每条是那个角色当前的 RoleBinding（Transfer 非空）。
 // 只读。角色存储没有索引时答 ErrNoTransferIndex。
 //
-// 列举按索引翻页、再逐条读角色记录核对：翻页期间了结的不列，期间新发起的可能漏掉——调用方要的是“此刻在途的大致全集”，
-// 定期再列一次就会看到。
+// 列举一次读出索引的全集，再逐条读角色记录核对：读索引之后了结的不列，之后才发起的不在其中——调用方要的是“此刻在途的
+// 大致全集”，定期再列一次就会看到。读索引那一刻已经在途、直到读完还在途的，一定列出。
 func (s *Service) ListRoleTransfers(ctx context.Context, fromServerID int32) ([]RoleBinding, error) {
 	if s.transferIndex() == nil {
 		return nil, ErrNoTransferIndex
@@ -88,48 +88,43 @@ func (s *Service) ListRoleTransfers(ctx context.Context, fromServerID int32) ([]
 
 // transfersInvolving 列出以 serverID 为来源或目标的全部在途换服（不设条数上限：合服要的是“一个都没有”的证明，
 // 截断的列表证明不了）。只读；角色存储没有索引时答 ErrNoTransferIndex。
+//
+// 证明靠 scanTransfers 一次读出的索引快照：读的那一刻在途的换服都在里面（索引与角色记录同一次原子写），读完之前了结的
+// 按角色记录剔除；读之后才发起的不在其中，由提交时的检查（目标服已并走则拒绝）与期限中止兜底（merge.go）。
 func (s *Service) transfersInvolving(ctx context.Context, serverID int32) ([]RoleBinding, error) {
 	return s.scanTransfers(ctx, func(transfer RoleTransfer) bool {
 		return transfer.From == serverID || transfer.To == serverID
 	}, 0)
 }
 
-// scanTransfers 按索引翻页、逐条读角色记录核对，返回 keep 认的在途换服（按期限从早到晚）；limit > 0 时至多 limit 条。
+// scanTransfers 一次读出索引的全集、逐条读角色记录核对，返回 keep 认的在途换服（按期限从早到晚）；limit > 0 时至多 limit 条。
+//
+// 索引只读一次，不按 offset 翻页：翻页之间有换服了结，后面的条目前移，下一页就跳过一条，合服预检会带着一直在途的换服
+// 放行（RV-20261118-05）。全集只是玩家号，在途的换服正常只有几十上百条；角色记录才是逐条读的大头，与翻页时相同。
 func (s *Service) scanTransfers(ctx context.Context, keep func(RoleTransfer) bool, limit int) ([]RoleBinding, error) {
 	index := s.transferIndex()
 	if index == nil {
 		return nil, ErrNoTransferIndex
 	}
-	full := func(listed []RoleBinding) bool { return limit > 0 && len(listed) >= limit }
+	ids, err := index.TransfersDue(ctx, math.MaxInt64, 0, math.MaxInt)
+	if err != nil {
+		return nil, err
+	}
 	var listed []RoleBinding
-	seen := map[int64]bool{}
-	for offset := 0; !full(listed); offset += transferListPage {
-		ids, err := index.TransfersDue(ctx, math.MaxInt64, offset, transferListPage)
+	for _, playerID := range ids {
+		role, found, err := s.cfg.Roles.Get(ctx, playerID)
 		if err != nil {
 			return nil, err
 		}
-		for _, playerID := range ids {
-			if seen[playerID] {
-				continue
-			}
-			seen[playerID] = true
-			role, found, err := s.cfg.Roles.Get(ctx, playerID)
-			if err != nil {
-				return nil, err
-			}
-			if !found || role.Value.Transfer == nil || !keep(*role.Value.Transfer) {
-				continue
-			}
-			binding, err := s.bindingOf(ctx, role.Value.clone())
-			if err != nil {
-				return nil, err
-			}
-			listed = append(listed, binding)
-			if full(listed) {
-				break
-			}
+		if !found || role.Value.Transfer == nil || !keep(*role.Value.Transfer) {
+			continue
 		}
-		if len(ids) < transferListPage {
+		binding, err := s.bindingOf(ctx, role.Value.clone())
+		if err != nil {
+			return nil, err
+		}
+		listed = append(listed, binding)
+		if limit > 0 && len(listed) >= limit {
 			break
 		}
 	}

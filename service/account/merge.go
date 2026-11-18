@@ -79,7 +79,7 @@ func transfersInFlightRefusal(from int32, flights []RoleBinding) error {
 // 列出它们，dry-run 同样拒绝；角色存储没有在途索引时答 ErrNoTransferIndex——证明不了“一个都没有”就不合）。
 // 同一对重复执行幂等成功，Changed 为 false；上次中途停下的会在这次补完。
 //
-// 在途换服的检查在写之前做一次，不与后面的写原子：检查之后才发起的换服（停服窗口里 A、B 都是 maintenance，
+// 在途换服的检查在写之前做一次（一次读出在途索引的快照，读的那一刻已在途的不漏，见 transfersInvolving），不与后面的写原子：检查之后才发起的换服（停服窗口里 A、B 都是 maintenance，
 // 发起要求目标服 open、发起方是承载服，只剩“读到合服之前的记录、写在合服之后”的竞态）照旧由提交时的检查
 // （目标服已并走则拒绝）与期限中止兜底。
 //
