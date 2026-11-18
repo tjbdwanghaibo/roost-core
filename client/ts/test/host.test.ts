@@ -260,6 +260,108 @@ test("snapshots closer than snapshotMinIntervalMs are not sent and do not use up
   client.close();
 });
 
+// 一次推送绑定发起时的连接与房主任期（epoch）：取状态（snapshot.take）或压缩还没结束时房主换了一圈（A→B→A，epoch 0→2），
+// 这份是旧任期的状态，不能拿新任期的 seq 发出去（relay 会把它当成新任期最新的一份，下一任房主恢复成旧状态）。
+// 过期的一份返回 undefined：不发、不占 seq、不触发 onSnapshotSent。任期不变时照常发出（对照）。
+for (const where of ["take", "compress"] as const) {
+  for (const changeTerm of [false, true]) {
+    test(`a snapshot whose ${where} outlives the host term is dropped (term changed: ${changeTerm})`, async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const slowCompressor: Compressor = {
+        name: "slow",
+        id: identityCompressor.id,
+        compress: async (data) => {
+          if (where === "compress") await gate;
+          return identityCompressor.compress(data);
+        },
+        decompress: (data, limit) => identityCompressor.decompress(data, limit),
+      };
+      const { client, fake } = await connect({
+        slot: 1,
+        host: true,
+        autoHostReady: true,
+        compressor: slowCompressor,
+        snapshot: {
+          intervalMs: 0,
+          take: async () => {
+            if (where === "take") await gate;
+            return text("epoch-zero-state");
+          },
+        },
+      });
+      const sent: bigint[] = [];
+      client.onSnapshotSent((s) => sent.push(s.seq));
+      try {
+        const pending = client.pushSnapshot();
+        if (changeTerm) {
+          fake.push(control(RelayOp.YouAreMember, 1, encodeEpoch(1n)));
+          fake.push(youAreHost(1, 2n, StateSource.None, 0n, new Uint8Array(0)));
+          await fake.waitFor("HostReady", () => fake.controls(RelayOp.HostReady).length > 0);
+          fake.push(control(RelayOp.HostChanged, 1, encodeHostChanged(2n, "a1")));
+          assert.equal(client.hostRole, "host");
+          assert.equal(client.epoch, 2n);
+        }
+        release();
+        const seq = await pending;
+        const frames = fake.controls(RelayOp.Snapshot);
+        if (!changeTerm) {
+          assert.equal(seq, 1n);
+          assert.equal(frames.length, 1);
+          assert.deepEqual(sent, [1n]);
+          return;
+        }
+        assert.equal(seq, undefined, "the stale snapshot is not sent");
+        assert.equal(frames.length, 0, "no Snapshot frame for the old term");
+        assert.deepEqual(sent, [], "onSnapshotSent is not called for the stale snapshot");
+        assert.equal(client.snapshotSeq, 2n << 32n, "the stale snapshot did not use up a seq");
+        assert.equal(await client.pushSnapshot(text("epoch-two-state")), (2n << 32n) + 1n, "the new term's first snapshot");
+        assert.equal(decodeSnapshot(fake.controls(RelayOp.Snapshot)[0].payload).seq, (2n << 32n) + 1n);
+      } finally {
+        client.close();
+      }
+    });
+  }
+}
+
+// 连接也绑定：等取状态时断线重连（同一任期回来仍是房主），这份不在新连接上发出、不占 seq；新连接上的下一份照常接着发。
+test("a snapshot taken on one connection is not sent on the next one", async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const lobby = new FakeLobby();
+  const sockets: FakeRelay[] = [];
+  const client = new RelayClient(lobby.client, {
+    game: "party",
+    compressor: identityCompressor,
+    reconnect: { maxAttempts: 3, minBackoffMs: 5, maxBackoffMs: 10 },
+    snapshot: {
+      intervalMs: 0,
+      take: async () => {
+        await gate;
+        return text("old-connection-state");
+      },
+    },
+    webSocket: () => {
+      const fake = new FakeRelay({ slot: 1, host: true, hostSlot: 1 });
+      sockets.push(fake);
+      return fake;
+    },
+  });
+  t.after(() => client.close());
+  await client.connect(TICKET);
+  const pending = client.pushSnapshot();
+  const back = new Promise((resolve) => client.onReconnected(resolve));
+  sockets[0].close();
+  await back;
+  assert.ok(client.isHost, "back as host in the same term");
+  release();
+  assert.equal(await pending, undefined, "the snapshot from the old connection is dropped");
+  assert.equal(sockets[0].controls(RelayOp.Snapshot).length + sockets[1].controls(RelayOp.Snapshot).length, 0);
+  assert.equal(await client.pushSnapshot(text("new-connection-state")), 1n, "the dropped one did not use up a seq");
+  client.close();
+  await client.done;
+});
+
 test("kicking an offline seat: the host's second MemberLeft{kicked} reaches the callback and the seat is gone", async () => {
   const { client, fake } = await connect({ slot: 3, autoHostReady: true });
   const left: { slot: number; reason: RelayReason }[] = [];

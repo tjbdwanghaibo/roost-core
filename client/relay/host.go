@@ -104,6 +104,9 @@ type MemberPresence struct {
 var (
 	// ErrSnapshotTooSoon：离上一份快照不到 Options.SnapshotMinInterval，这一份没有发出。
 	ErrSnapshotTooSoon = errors.New("relay: snapshot sent too soon after the previous one")
+	// ErrSnapshotStale：准备这一份（取状态、压缩）期间换了连接或房主任期（例如转出去又转回来），它是旧任期的状态，
+	// 没有发出，也没占用 seq。
+	ErrSnapshotStale = errors.New("relay: snapshot dropped: the connection or host term changed while it was being prepared")
 	// ErrStateTooBig：压缩后的快照或交接数据超过 Options.SnapshotMaxBytes，没有发出。
 	ErrStateTooBig = errors.New("relay: snapshot or handoff exceeds SnapshotMaxBytes after compression")
 	// ErrTooManySuccessors：候选顺序超过 wire.RelayMaxSuccessors 个槽位。
@@ -346,9 +349,42 @@ func (c *Client) SetSuccessors(slots []uint32) error {
 }
 
 // Snapshot 推一份快照（只有房主能发）：state 经 Options.Compressor 压缩，seq 由 SDK 递增。离上一份不到
-// SnapshotMinInterval 的不发（ErrSnapshotTooSoon）；压缩后超过 SnapshotMaxBytes 的不发（ErrStateTooBig）。
-// relay 仍可能拒收（例如它的 snapshot_min_interval 比 SDK 的大），经 OnRejected 通知。
+// SnapshotMinInterval 的不发（ErrSnapshotTooSoon）；压缩后超过 SnapshotMaxBytes 的不发（ErrStateTooBig）；压缩期间
+// 换了连接或房主任期的不发（ErrSnapshotStale，见 hostTerm）。relay 仍可能拒收（例如它的 snapshot_min_interval 比 SDK
+// 的大），经 OnRejected 通知。state 应是调用时刻的状态：SDK 只能把这一份绑定到调用时的任期。
 func (c *Client) Snapshot(state []byte) error {
+	term, err := c.hostTerm()
+	if err != nil {
+		return err
+	}
+	return c.snapshotIn(term, state)
+}
+
+// hostTerm 是一份快照所属的连接与房主任期（epoch）。取状态、压缩都在锁外，可能很慢；期间房主可能换了一圈
+// （A→B→A，epoch 0→2）或断线重连。旧任期的状态拿新任期的 seq 发出去，relay 会把它当成新任期最新的一份存下，下一任
+// 房主恢复的就是旧状态（v1.54.0 审查 RV-20261118-02）。所以准备之前记下任期，分配 seq 之前在同一把锁里核对：
+// 变了就丢弃，不发、不占 seq（与 TS / C# SDK 相同）。核对通过后 seq 已按这一任期分配，之后再换任期的话，relay
+// 按 seq 递增（新任期的 seq 不低于 epoch<<32，见 seqFloor）拒收它。
+type hostTerm struct {
+	sess  *session
+	epoch uint64
+}
+
+// hostTerm 返回此刻的连接与房主任期：不是已就绪的房主时 ErrNotRoomHost，没有连接时 ErrNotConnected。
+func (c *Client) hostTerm() (hostTerm, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case !c.role.Host:
+		return hostTerm{}, ErrNotRoomHost
+	case c.current == nil:
+		return hostTerm{}, ErrNotConnected
+	}
+	return hostTerm{sess: c.current, epoch: c.role.Epoch}, nil
+}
+
+// snapshotIn 压缩 state，核对它仍属于 term，分配 seq 后在 term 的连接上发出。
+func (c *Client) snapshotIn(term hostTerm, state []byte) error {
 	data, err := c.compressState(state)
 	if err != nil {
 		return err
@@ -359,6 +395,9 @@ func (c *Client) Snapshot(state []byte) error {
 	case !c.role.Host:
 		c.mu.Unlock()
 		return ErrNotRoomHost
+	case c.current != term.sess || c.role.Epoch != term.epoch:
+		c.mu.Unlock()
+		return ErrSnapshotStale
 	case !c.host.snapAt.IsZero() && now.Sub(c.host.snapAt) < c.opts.SnapshotMinInterval:
 		c.mu.Unlock()
 		return ErrSnapshotTooSoon
@@ -367,7 +406,12 @@ func (c *Client) Snapshot(state []byte) error {
 	c.host.snapAt = now
 	seq := c.host.snapSeq
 	c.mu.Unlock()
-	return c.SendControl(wire.RelayOpSnapshot, 0, wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: seq, Data: data}))
+	frame, err := encodeFrame(Frame{Channel: wire.RelayControl, MsgID: wire.RelayOpSnapshot,
+		Payload: wire.EncodeRelaySnapshot(wire.RelaySnapshot{Seq: seq, Data: data})}, c.frameLimit)
+	if err != nil {
+		return err
+	}
+	return c.write(term.sess, frame)
 }
 
 // compressState 把状态打成线上的字节：[压缩方式标识 1B][压缩后的字节]；空状态就是空的（不带标识，收到时也当空状态）。
@@ -412,13 +456,18 @@ func (c *Client) decompressState(data []byte, limit int) ([]byte, error) {
 }
 
 // autoSnapshot 是当房主时的定时快照（心跳 goroutine 上调用）：Options.SnapshotState 返回 nil 时这一轮不推。
+// 任期在向游戏要状态之前记下（SnapshotState 可能很慢，期间可能换了任期，见 hostTerm）。
 func (c *Client) autoSnapshot() {
 	c.mu.Lock()
 	c.host.autoAt = time.Now()
 	c.mu.Unlock()
+	term, err := c.hostTerm()
+	if err != nil {
+		return
+	}
 	state := c.opts.SnapshotState()
 	if state != nil {
-		_ = c.Snapshot(state)
+		_ = c.snapshotIn(term, state)
 	}
 }
 

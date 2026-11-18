@@ -668,17 +668,24 @@ export class RelayClient {
 
   /**
    * 推一份快照（只有房主能推）：data 缺省取 snapshot.take()，压缩后带上递增的 seq 发给 relay。返回用的 seq；
-   * 没东西可推、没有连接或已不是房主时返回 undefined；离上一份不到 snapshotMinIntervalMs 时抛 SnapshotTooSoonError
+   * 没东西可推、没有连接、已不是房主，或取状态 / 压缩期间换了连接或房主任期（这一份已过期，不发也不占 seq）时返回
+   * undefined；离上一份不到 snapshotMinIntervalMs 时抛 SnapshotTooSoonError
    * （relay 仍可能拒收，经 onRejected 通知）。之后的定时推送从现在重新计时。
    */
   async pushSnapshot(data?: Uint8Array): Promise<bigint | undefined> {
     this.requireHost("push a snapshot");
     this.restartSnapshotTimer();
+    // 这一份属于发起时的连接与房主任期（epoch）。取状态、压缩都是异步的，期间房主可能换了一圈（A→B→A，epoch 0→2）
+    // 或断线重连：旧任期的状态拿新任期的 seq 发出去，relay 会把它当成新任期最新的一份存下，下一任房主恢复的就是旧状态。
+    // 所以异步结束、分配 seq 之前核对两者，变了就丢弃：不发、不占 seq（与 Go / C# SDK 相同）。
+    const session = this.current;
+    const epoch = this.epochValue;
+    if (!session) return undefined;
     const state = data ?? (await this.opts.snapshot?.take());
     if (state === undefined) return undefined;
     const compressed = await packState(this.compressor, state);
     this.checkStateSize(compressed.length);
-    if (!this.role.host || !this.current) return undefined;
+    if (!this.role.host || this.current !== session || this.epochValue !== epoch) return undefined;
     const t = now();
     if (this.lastSnapshotAt !== undefined && t - this.lastSnapshotAt < this.opts.snapshotMinIntervalMs) throw new SnapshotTooSoonError();
     const seq = this.seq + 1n; // 压缩完再取 seq：并发的几次推送按发出顺序递增

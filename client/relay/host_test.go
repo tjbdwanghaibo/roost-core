@@ -285,6 +285,141 @@ func TestAutoSnapshotIsPushedWhileHost(t *testing.T) {
 	waitFor(t, "the new host pushes snapshots", func() bool { return candidatePushed.Load() >= 1 })
 }
 
+// 旧任期的快照不覆盖新任期（v1.54.0 审查 RV-20261118-02，三份 SDK 一致）：A 在 epoch 0 开始准备一份快照（Snapshot 的
+// 压缩，或定时快照的 SnapshotState），没准备完时房间转给 B、B 又转回 A（epoch 2），A 推出 epoch-two-state。旧的那份
+// 这时才准备好：它属于 epoch 0，返回 ErrSnapshotStale，不发、不占 seq；A 离开后 B 恢复的是 epoch-two-state。
+func TestASnapshotPreparedInAnEarlierHostTermIsDropped(t *testing.T) {
+	for _, path := range []string{"Snapshot", "SnapshotState"} {
+		t.Run(path, func(t *testing.T) {
+			peer := startPeer(t, relaysvc.Config{SnapshotMinInterval: 10 * time.Millisecond})
+			entered, release := make(chan struct{}), make(chan struct{})
+			hold := func() {
+				close(entered)
+				<-release
+			}
+			// Snapshot：卡在压缩里；SnapshotState：卡在向游戏要状态里（定时快照在心跳 goroutine 上）。
+			compressHold := func(state []byte) {
+				if path == "Snapshot" && string(state) == "epoch-zero-state" {
+					hold()
+				}
+			}
+			hostOpts := relay.Options{AutoHostReady: true, SnapshotMinInterval: time.Millisecond, Compressor: gatedCompressor{compressHold}}
+			var stale chan error
+			if path == "SnapshotState" {
+				// 定时快照只要第一份（epoch 0 的）；之后返回 nil 不推，epoch 2 的那份由测试手动推。
+				var calls atomic.Int32
+				hostOpts.SnapshotInterval = time.Hour
+				hostOpts.SnapshotState = func() []byte {
+					if calls.Add(1) > 1 {
+						return nil
+					}
+					hold()
+					return []byte("epoch-zero-state")
+				}
+			}
+			a, members, _ := openRoom(t, peer, "term-"+path, hostOpts, []relay.Options{{AutoHostReady: true}})
+			b := members[0]
+			if path == "Snapshot" {
+				stale = make(chan error, 1)
+				go func() { stale <- a.client.Snapshot([]byte("epoch-zero-state")) }()
+			}
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the epoch-0 snapshot never started")
+			}
+
+			if err := a.client.Transfer(2, []byte("first transfer")); err != nil {
+				t.Fatal(err)
+			}
+			recv(t, b.youAreHost, "B chosen")
+			recv(t, b.hostChanged, "B host")
+			if err := b.client.Transfer(1, []byte("back to A")); err != nil {
+				t.Fatal(err)
+			}
+			recv(t, a.youAreHost, "A chosen again")
+			recv(t, a.hostChanged, "A saw B as host")
+			if e := recv(t, a.hostChanged, "A host again"); e.Epoch != 2 || e.HostSlot != 1 {
+				t.Fatalf("A host again: %+v", e)
+			}
+			if err := a.client.Snapshot([]byte("epoch-two-state")); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(30 * time.Millisecond) // 过了两边的最小间隔：旧的那份若被放行，不会因间隔被拦
+			close(release)
+			if stale != nil {
+				if err := <-stale; !errors.Is(err, relay.ErrSnapshotStale) {
+					t.Errorf("the epoch-0 snapshot returned %v, want ErrSnapshotStale", err)
+				}
+			}
+			waitPong(t, a)
+			waitPong(t, a) // 定时快照在心跳 goroutine 上：再一轮 Pong 回来时它已处理完
+			none(t, a.rejected, "a rejected snapshot")
+
+			if _, err := a.client.Leave(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			offer := recv(t, b.youAreHost, "B recovers after A leaves")
+			if offer.Source != relay.StateSnapshot || offer.SnapshotSeq != 2<<32+1 || string(offer.State) != "epoch-two-state" {
+				t.Fatalf("B recovered seq %d state %q (source %d), want seq %d epoch-two-state", offer.SnapshotSeq, offer.State, offer.Source, uint64(2<<32+1))
+			}
+		})
+	}
+}
+
+// 连接也绑定：压缩时房主断线、宽限期内自动重连回来（同一任期仍是房主），旧连接上准备的那份不在新连接上发出
+// （ErrSnapshotStale）、不占 seq：新连接上的下一份是 seq 1，relay 不回 Rejected。
+func TestASnapshotPreparedOnAnEarlierConnectionIsDropped(t *testing.T) {
+	peer := startPeer(t, relaysvc.Config{HostGrace: 5 * time.Second, SnapshotMinInterval: 10 * time.Millisecond})
+	entered, release := make(chan struct{}), make(chan struct{})
+	hold := func(state []byte) {
+		if string(state) == "old-connection-state" {
+			close(entered)
+			<-release
+		}
+	}
+	reconnect := relay.ReconnectPolicy{MaxAttempts: 5, MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond}
+	host, members, _ := openRoom(t, peer, "term-conn", relay.Options{Reconnect: reconnect, SnapshotMinInterval: time.Millisecond,
+		Compressor: gatedCompressor{hold}}, []relay.Options{{}})
+	stale := make(chan error, 1)
+	go func() { stale <- host.client.Snapshot([]byte("old-connection-state")) }()
+	recv(t, entered, "the snapshot is being compressed")
+	_ = host.lastConn().Close()
+	recv(t, host.reconnected, "host reconnected")
+	recv(t, members[0].hostResumed, "host resumed")
+	mustRole(t, host, relay.Role{Slot: 1, Host: true, HostSlot: 1})
+	close(release)
+	if err := <-stale; !errors.Is(err, relay.ErrSnapshotStale) {
+		t.Fatalf("the snapshot from the old connection returned %v, want ErrSnapshotStale", err)
+	}
+	if err := host.client.Snapshot([]byte("new-connection-state")); err != nil {
+		t.Fatal(err)
+	}
+	waitPong(t, host)
+	none(t, host.rejected, "a rejected snapshot (the dropped one must not use up seq 1)")
+	if _, err := host.client.Leave(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	offer := recv(t, members[0].youAreHost, "member recovers after the host leaves")
+	if offer.SnapshotSeq != 1 || string(offer.State) != "new-connection-state" {
+		t.Fatalf("recovered seq %d state %q, want seq 1 new-connection-state", offer.SnapshotSeq, offer.State)
+	}
+}
+
+// gatedCompressor 不压缩，压缩前先调 hold（测试用它把某一份卡在压缩里）。
+type gatedCompressor struct{ hold func([]byte) }
+
+func (gatedCompressor) ID() byte { return relay.NoCompression.ID() }
+
+func (g gatedCompressor) Compress(data []byte) ([]byte, error) {
+	g.hold(data)
+	return relay.NoCompression.Compress(data)
+}
+
+func (gatedCompressor) Decompress(data []byte, limit int) ([]byte, error) {
+	return relay.NoCompression.Decompress(data, limit)
+}
+
 // 房主心跳：relay 的 host_idle_timeout 是缺省的 2s，房主不发游戏帧，只靠 SDK 的心跳（缺省 600ms）；5s 以上都不被当成
 // 断线，成员收不到任何换 host 的通知，游戏帧照常到房主。成员仍是 10s 一次的心跳。
 func TestHostHeartbeatKeepsTheHostAliveUnderTheHostIdleTimeout(t *testing.T) {

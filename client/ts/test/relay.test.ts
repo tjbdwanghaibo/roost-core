@@ -419,6 +419,51 @@ test("host disconnect: HostChanging while waiting, the snapshot goes to the succ
   for (const p of [m1, m2]) p.client.close();
 });
 
+// 旧任期的快照不覆盖新任期（v1.54.0 审查 RV-20261118-02）：A 在 epoch 0 发起一次取状态很慢的推送，期间把房间转给 B、
+// B 又转回 A（epoch 2），A 推出 epoch-two-state。旧推送这时才取到状态：它不发出、不占 seq，relay 存的仍是
+// epoch-two-state；A 离开后 B 恢复的就是它。
+test("a snapshot started in an earlier host term is dropped: the next host recovers the newest state", async () => {
+  let finish!: (data: Uint8Array) => void;
+  const a = await Player.create("ts-term-a", {
+    snapshot: { intervalMs: 0, take: () => new Promise<Uint8Array>((resolve) => (finish = resolve)) },
+  });
+  const ticket = await a.lobby.createRoom({ game: GAME, mode: "ts-term" });
+  await a.client.connect(ticket);
+  const b = await Player.create("ts-term-b");
+  await b.join(ticket.room.id);
+  await a.joined.next("B joined");
+  const sentByA: bigint[] = [];
+  a.client.onSnapshotSent((s) => sentByA.push(s.seq));
+  const rejectedForA: unknown[] = [];
+  a.client.onRejected((r) => rejectedForA.push(r));
+
+  const pending = a.client.pushSnapshot(); // epoch 0，take 还没返回
+  assert.ok(await a.client.transfer(2, text("first transfer")));
+  await b.hostChanged.next("B now host");
+  assert.ok(await b.client.transfer(1, text("handoff to A")));
+  await a.youAreHost.next("A takes over");
+  await a.hostChanged.next("A saw B as host");
+  await a.hostChanged.next("A now host again");
+  assert.equal(a.client.epoch, 2n);
+  const fresh = await a.client.pushSnapshot(text("epoch-two-state"));
+  assert.equal(fresh, (2n << 32n) + 1n);
+  await sleep(1200); // 过了 snapshot_min_interval：旧推送若被放行，SDK 与 relay 都不会以间隔为由拦下它
+  finish(text("epoch-zero-state"));
+  assert.equal(await pending, undefined, "the epoch-0 snapshot is dropped");
+  assert.deepEqual(sentByA, [fresh], "only the epoch-2 snapshot went out");
+  assert.equal(a.client.snapshotSeq, fresh, "the dropped one did not use up a seq");
+
+  assert.ok(a.client.sendLeave());
+  await b.youAreHost.next("B's first takeover");
+  const recovery = await b.youAreHost.next("B recovers after A leaves");
+  assert.deepEqual(
+    [recovery.source, recovery.snapshotSeq, recovery.state && new TextDecoder().decode(recovery.state)],
+    [StateSource.Snapshot, fresh, "epoch-two-state"],
+  );
+  assert.deepEqual(rejectedForA, []);
+  b.client.close();
+});
+
 test("host heartbeat: an idle host is not replaced within 5s", async () => {
   const { host, others } = await room("ts-idle", "ts-idle-m1");
   const [m1] = others;

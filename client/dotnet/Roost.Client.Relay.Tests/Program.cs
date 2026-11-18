@@ -92,6 +92,7 @@ internal static partial class Program
             ("the last member's leave succeeds after the room closes", LastMemberLeave),
             ("snapshot pacing and rejections", SnapshotPacing),
             ("automatic snapshots", AutoSnapshot),
+            ("a snapshot prepared in an earlier host term or connection is dropped", StaleSnapshot),
             ("host heartbeat under host_idle_timeout", HostHeartbeat),
             ("reconnect vs lobby_unavailable / lobby_rejected", ReconnectAdmission),
             ("started room: reconnect, rejoin, kick an offline seat", StartedRoom),
@@ -979,6 +980,87 @@ internal static partial class Program
         Check(members[0].Client.HostReady(offer.Epoch), "candidate host ready");
         await Until("the new host pushes snapshots", () => Task.FromResult(Volatile.Read(ref candidatePushed) >= 1));
         Dispose(host, members);
+    }
+
+    // 旧任期的快照不覆盖新任期（v1.54.0 审查 RV-20261118-02，三份 SDK 一致）：A 在 epoch 0 从工作线程调 Snapshot（Send 一类方法可以从任意
+    // 线程调），压缩没结束时房间转给 B、B 又转回 A（epoch 2），A 推出 epoch-two-state。旧的那份压缩完时属于 epoch 0：返回 Stale，不发、
+    // 不占 seq；A 离开后 B 恢复的是 epoch-two-state。断线重连（宽限期内回来仍是房主、同一任期）也一样：旧连接上准备的那份不在新连接上发。
+    private static async Task StaleSnapshot(Peer peer)
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var gated = new GatedCompressor(state =>
+        {
+            var text = Encoding.UTF8.GetString(state);
+            if (text == "epoch-zero-state" || text == "old-connection-state") { entered.Set(); release.Wait(); }
+        });
+        var (a, members, _) = await OpenRoom(peer, "cs-term", Opts(o =>
+        {
+            o.AutoHostReady = true; o.Compressor = gated; o.SnapshotMinInterval = TimeSpan.FromMilliseconds(1);
+        }), Opts(o => o.AutoHostReady = true));
+        var b = members[0];
+        var stale = Task.Run(() => a.Client.Snapshot(Encoding.UTF8.GetBytes("epoch-zero-state")));
+        Check(entered.Wait(TimeSpan.FromSeconds(5)), "the epoch-0 snapshot is being compressed");
+        Check(a.Client.Transfer(2, Encoding.UTF8.GetBytes("first transfer")), "A transfers to B");
+        await b.Next(b.YouAreHost, "B chosen");
+        await b.Next(b.HostChanged, "B host");
+        Check(b.Client.Transfer(1, Encoding.UTF8.GetBytes("back to A")), "B transfers back to A");
+        await a.Next(a.YouAreHost, "A chosen again");
+        await a.Next(a.HostChanged, "A saw B as host");
+        Check((await a.Next(a.HostChanged, "A host again")).Equals(new RelayHostEvent(2, 1, "cs-term-host")), "A is host again in epoch 2");
+        Check(a.Client.Snapshot(Encoding.UTF8.GetBytes("epoch-two-state")) == RelaySnapshotResult.Sent, "the epoch-2 snapshot");
+        await Task.Delay(1200); // 过了 relay 的 snapshot_min_interval（1s）：旧的那份若被放行，不会因间隔被拦
+        release.Set();
+        var result = await stale;
+        Check(result == RelaySnapshotResult.Stale, "the epoch-0 snapshot is dropped, got " + result);
+        await WaitPong(a);
+        Player.PumpAll();
+        Check(a.Rejected.IsEmpty, "no snapshot rejected");
+        await a.Client.LeaveAsync();
+        var offer = await b.Next(b.YouAreHost, "B recovers after A leaves");
+        Check(offer.Source == RelayStateSource.Snapshot && offer.SnapshotSeq == (2UL << 32) + 1 && Encoding.UTF8.GetString(offer.State!) == "epoch-two-state",
+            $"B recovered seq {offer.SnapshotSeq} state {(offer.State == null ? "null" : Encoding.UTF8.GetString(offer.State))}, want seq {(2UL << 32) + 1} epoch-two-state");
+        Dispose(a, members);
+
+        entered.Reset();
+        release.Reset();
+        var (host, others, _) = await OpenRoom(peer, "cs-term-conn", Opts(o =>
+        {
+            o.Compressor = gated; o.SnapshotMinInterval = TimeSpan.FromMilliseconds(1);
+            o.ReconnectAttempts = 5; o.ReconnectMinBackoff = TimeSpan.FromMilliseconds(20); o.ReconnectMaxBackoff = TimeSpan.FromMilliseconds(100);
+        }), Opts());
+        var oldConnection = Task.Run(() => host.Client.Snapshot(Encoding.UTF8.GetBytes("old-connection-state")));
+        Check(entered.Wait(TimeSpan.FromSeconds(5)), "the snapshot is being compressed on the first connection");
+        host.Client.AbortTransportForTest();
+        Check((await host.Next(host.Reconnected, "host reconnected")).IsHost, "back as host in the same term");
+        await others[0].Next(others[0].HostResumed, "host resumed");
+        release.Set();
+        result = await oldConnection;
+        Check(result == RelaySnapshotResult.Stale, "the snapshot from the old connection is dropped, got " + result);
+        Check(host.Client.Snapshot(Encoding.UTF8.GetBytes("new-connection-state")) == RelaySnapshotResult.Sent, "a snapshot on the new connection");
+        await WaitPong(host);
+        Player.PumpAll();
+        Check(host.Rejected.IsEmpty, "no snapshot rejected (the dropped one did not use up seq 1)");
+        await host.Client.LeaveAsync();
+        offer = await others[0].Next(others[0].YouAreHost, "member recovers after the host leaves");
+        Check(offer.SnapshotSeq == 1 && Encoding.UTF8.GetString(offer.State!) == "new-connection-state",
+            $"recovered seq {offer.SnapshotSeq}, want seq 1 new-connection-state");
+        Dispose(host, others);
+    }
+
+    /// <summary>不压缩（标识 0，谁都解得开），压缩前先调 hold（用它把某一份卡在压缩里）。</summary>
+    private sealed class GatedCompressor : IRelayCompressor
+    {
+        private readonly Action<byte[]> hold;
+        public GatedCompressor(Action<byte[]> hold) { this.hold = hold; }
+        public byte Id => RelayCompressors.None.Id;
+        public byte[] Compress(ReadOnlySpan<byte> data)
+        {
+            var copy = data.ToArray();
+            hold(copy);
+            return RelayCompressors.None.Compress(copy);
+        }
+        public byte[] Decompress(ReadOnlySpan<byte> data, int limit) => RelayCompressors.None.Decompress(data, limit);
     }
 
     // 房主心跳：relay 的 host_idle_timeout 是缺省的 2s，房主不发游戏帧只靠 SDK 的心跳（缺省 600ms），5s 以上不被当成断线。

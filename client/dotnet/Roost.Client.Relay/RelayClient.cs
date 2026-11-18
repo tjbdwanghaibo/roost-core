@@ -135,6 +135,8 @@ namespace Roost.Client.Relay
         TooSoon,
         /// <summary>没有连接，或写失败。</summary>
         NotConnected,
+        /// <summary>压缩期间换了连接或房主任期（例如转出去又转回来）：这一份是旧任期的状态，没有发出，也没占用 seq。</summary>
+        Stale,
     }
 
     /// <summary>LeaveAsync 的结果（三份 SDK 一致：Go LeaveResult.RoomGone、TS LeaveResult.roomGone）。</summary>
@@ -575,9 +577,41 @@ namespace Roost.Client.Relay
 
         /// <summary>
         /// 推一份快照（只有房主能发）：state 经 Compressor 压缩，seq 由 SDK 递增。离上一份不到 SnapshotMinInterval 的不发（TooSoon）；
-        /// 压缩后超过 SnapshotMaxBytes 抛 ArgumentException。relay 仍可能拒收（例如它的最小间隔更大），经 OnRejected 通知。
+        /// 压缩期间换了连接或房主任期的不发（Stale，见 HostTerm）；压缩后超过 SnapshotMaxBytes 抛 ArgumentException。relay 仍可能拒收
+        /// （例如它的最小间隔更大），经 OnRejected 通知。state 应是调用时刻的状态：SDK 只能把这一份绑定到调用时的任期。
         /// </summary>
         public RelaySnapshotResult Snapshot(ReadOnlySpan<byte> state)
+        {
+            var term = CurrentHostTerm();
+            return term.Session == null ? RelaySnapshotResult.NotConnected : SnapshotIn(term, state);
+        }
+
+        /// <summary>
+        /// 一份快照所属的连接与房主任期（epoch）。压缩（定时快照还有向游戏要状态）在锁外，可能很慢；Snapshot 可以从任意线程调，期间网络线程
+        /// 可能已经把房主换了一圈（A→B→A，epoch 0→2）或断线重连。旧任期的状态拿新任期的 seq 发出去，relay 会把它当成新任期最新的一份存下，
+        /// 下一任房主恢复的就是旧状态（v1.54.0 审查 RV-20261118-02）。所以准备之前记下任期，分配 seq 之前在同一把锁里核对：变了就丢弃，
+        /// 不发、不占 seq（与 Go / TS SDK 相同）。核对通过后 seq 已按这一任期分配，之后再换任期的话，relay 按 seq 递增（新任期的 seq
+        /// 不低于 epoch&lt;&lt;32，见 SeqFloor）拒收它。
+        /// </summary>
+        private readonly struct HostTerm
+        {
+            public readonly RelaySession? Session;
+            public readonly ulong Epoch;
+            public HostTerm(RelaySession? session, ulong epoch) { Session = session; Epoch = epoch; }
+        }
+
+        /// <summary>此刻的连接与房主任期；不是已就绪的房主时抛 InvalidOperationException，没有连接时 Session 为 null。</summary>
+        private HostTerm CurrentHostTerm()
+        {
+            lock (gate)
+            {
+                if (!role.IsHost) throw new InvalidOperationException("Only the room host may send snapshots.");
+                return new HostTerm(current, role.Epoch);
+            }
+        }
+
+        /// <summary>压缩 state，核对它仍属于 term，分配 seq 后在 term 的连接上发出。</summary>
+        private RelaySnapshotResult SnapshotIn(HostTerm term, ReadOnlySpan<byte> state)
         {
             var data = CompressState(state);
             long now = Clock.Elapsed.Ticks;
@@ -585,11 +619,13 @@ namespace Roost.Client.Relay
             lock (gate)
             {
                 if (!role.IsHost) throw new InvalidOperationException("Only the room host may send snapshots.");
+                if (current != term.Session || role.Epoch != term.Epoch) return RelaySnapshotResult.Stale;
                 if (snapshotAt >= 0 && now - snapshotAt < options.SnapshotMinInterval.Ticks) return RelaySnapshotResult.TooSoon;
                 seq = ++snapshotSeq;
                 snapshotAt = now;
             }
-            return SendControl(RelayOps.Snapshot, 0, RelayCodec.EncodeSnapshot(seq, data)) ? RelaySnapshotResult.Sent : RelaySnapshotResult.NotConnected;
+            var frame = RelayCodec.Encode(new RelayFrame(RelayChannel.Control, 0, RelayOps.Snapshot, RelayCodec.EncodeSnapshot(seq, data)), frameLimit);
+            return term.Session!.Write(frame) ? RelaySnapshotResult.Sent : RelaySnapshotResult.NotConnected;
         }
 
         /// <summary>打成线上的状态字节（[压缩方式标识][压缩后的字节]，空状态为空）；上限 SnapshotMaxBytes 算上标识。</summary>
@@ -934,13 +970,20 @@ namespace Roost.Client.Relay
             return done.Task;
         }
 
-        /// <summary>定时快照（在 Pump 里执行）：向游戏要状态，返回 null 时这一轮不推；太密或不再是房主时跳过。</summary>
+        /// <summary>
+        /// 定时快照（在 Pump 里执行）：向游戏要状态，返回 null 时这一轮不推；太密、不再是房主或换了任期时跳过。任期在向游戏要状态之前记下
+        /// （见 HostTerm）。
+        /// </summary>
         private void AutoSnapshot()
         {
             lock (gate) autoQueued = false;
+            HostTerm term;
+            try { term = CurrentHostTerm(); }
+            catch (InvalidOperationException) { return; } // 刚被换下
+            if (term.Session == null) return;
             var state = options.SnapshotState?.Invoke();
-            if (state == null || !IsHost) return;
-            try { Snapshot(state); }
+            if (state == null) return;
+            try { SnapshotIn(term, state); }
             catch (ArgumentException error) { try { Error?.Invoke(error); } catch (Exception) { } }
             catch (InvalidOperationException) { } // 刚被换下
         }
