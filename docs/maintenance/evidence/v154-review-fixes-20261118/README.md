@@ -8,9 +8,9 @@
 
 | 编号 | 结论 | 提交 |
 |---|---|---|
-| RV-20261118-03 | 已修复、已验证（内存与 Redis 目录） | `8d185a6f` |
-| RV-20261118-02 | 已修复、已验证（TS / Go / C# 三份 SDK 一致） | `017cba24` |
-| RV-20261118-04 | 测试缺陷已修（产品代码未改），macOS 与 Linux（Colima）实跑；gateway 同类用例一并修 | `531a84b0` |
+| RV-20261118-03 | 已修复、已验证（内存与 Redis 目录） | `b7bbe9f9` |
+| RV-20261118-02 | 已修复、已验证（TS / Go / C# 三份 SDK 一致） | `fe9385bc` |
+| RV-20261118-04 | 测试缺陷已修（产品代码未改），macOS 与 Linux（Colima）实跑；gateway 同类用例一并修 | `49faa89b` |
 
 ## RV-20261118-03 · 已开局房间报告乱序，主动离开的玩家仍可回座
 
@@ -192,18 +192,18 @@ peer read 一项有时是 “precondition …”（写被回调打断后客户�
 - **lobby：已开局房间里经 relay 主动离开的人，left 报告晚于后续心跳到达也不再留座**（RV-20261118-03）。relay 的报告可以
   并发发出、乱序到达；只剩房主在线的心跳先到时，原来的 lobby 把迟到的 `member_left{left}` 当成旧报告丢掉，主动离开的人被
   当成掉线、还能再 join 回原座。现在每个席位记 `presence_seq`，“连上过 / 主动离开”按成员自己的事实序号收敛，新旧报告都看；
-  迟到的旧 left 仍不清掉回座又连上的人。见 [LOBBY](docs/framework/LOBBY.md)。
+  迟到的旧 left 仍不清掉回座又连上的人。见 [LOBBY](../../../framework/LOBBY.md)。
 - **开房间 SDK（Go / TS / C#）：快照绑定准备时的连接与房主任期**（RV-20261118-02）。取状态或压缩期间房主换了一圈
   （A→B→A）或断线重连时，旧状态原来会拿新任期的 seq 发出，relay 当成最新一份存下，下一任房主恢复成旧状态。现在这一份
   丢弃、不发、不占 seq：Go 返回新增的 `ErrSnapshotStale`，C# 返回新增的 `RelaySnapshotResult.Stale`，TS `pushSnapshot`
-  返回 `undefined`；定时快照在向游戏要状态之前记任期。见 [RELAY §4A](docs/framework/RELAY.md)。
+  返回 `undefined`；定时快照在向游戏要状态之前记任期。见 [RELAY §4A](../../../framework/RELAY.md)。
 - **测试：WebSocket 旧写期限回归在 Linux 上不再误报**（RV-20261118-04）。wsconn 与 gateway 的两条用例原来把客户端接收缓冲设成
   4 KiB 再要求 5 秒内读完，Linux 建连时把窗口钳在这个大小、读不完而误报；现在显式检查“写已卡住”，客户端用缺省缓冲读完。
   产品代码未改。
 
 ## 建议写进 KNOWN-LIMITS 的文字
 
-- RV-20261118-02 / 03 / 04：改为“已修复（`017cba24` / `8d185a6f` / `531a84b0`），证据 evidence/v154-review-fixes-20261118”。
+- RV-20261118-02 / 03 / 04：改为“已修复（`fe9385bc` / `b7bbe9f9` / `49faa89b`），证据 evidence/v154-review-fixes-20261118”。
 - 遗留（待维护者定，见上“要维护者定的点”1）：开房间 SDK 同一任期内并发推快照，较早发起、较晚取完状态的那份仍会以更大 seq
   覆盖较新的一份（TS 定时推送在 `take` 慢于 `intervalMs` 时也会重叠）。
 - 限制（尚未确认）：RV-20261118-04 的 Linux 验证只在本机 Colima（arm64）上做过，amd64 实机未跑；`-race` 下 GOMAXPROCS(1)
