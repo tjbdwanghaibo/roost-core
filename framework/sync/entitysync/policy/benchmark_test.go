@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"runtime"
 	"sync/atomic"
@@ -541,22 +542,38 @@ func (s *byteSink) Push(_ context.Context, _ entitysync.SessionID, raw []byte) e
 // 大联盟互见（KNOWN-LIMITS“AOI 视野的大联盟”）：players 个玩家同在一个共享关系视野里、互相可见（players² 对订阅），
 // 经真实 Manager 的 Flush（ApplySync，政策阶段在 Flush 里）。进场全量先收敛（不计入）；之后每轮 1% 成员变化一次、
 // Flush 一次。报告每轮耗时与字节、收敛后的堆（heap-MB，订阅表与视野登记的常驻内存）与订阅对数。
+// 每 subject 订阅者上限随人数提高到 players+16：量的是联盟成本本身，超上限的路径见 BenchmarkRelationViewAllianceOverCap。
 // 测量：go test ./framework/sync/entitysync/policy -run '^$' -bench RelationViewAllianceFlush -benchtime 50x -count 3。
 func BenchmarkRelationViewAllianceFlush(b *testing.B) {
 	for _, players := range allianceSizes {
 		b.Run(fmt.Sprintf("players=%d", players), func(b *testing.B) {
-			benchAllianceFlush(b, players)
+			benchAllianceFlush(b, players, players+16)
 		})
 	}
 }
 
-func benchAllianceFlush(b *testing.B, players int) {
+// 联盟人数超过每 subject 订阅者上限（缺省 DefaultMaxSubscribersPerSubject = 1024）：2000 人互见时每个 subject 有
+// 976 个观察者订阅不上，量被拒 pair 在稳态下每轮的成本。日志全部丢弃（拒绝的告警不计入成本，也不刷屏）。
+// 测量：go test ./framework/sync/entitysync/policy -run '^$' -bench RelationViewAllianceOverCap -benchtime 20x -count 6 -timeout 0。
+func BenchmarkRelationViewAllianceOverCap(b *testing.B) {
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.DiscardHandler))
+	b.Cleanup(func() { slog.SetDefault(previous) })
+	b.Run("players=2000", func(b *testing.B) {
+		benchAllianceFlush(b, 2000, 0)
+	})
+}
+
+// benchAllianceFlush 是两个联盟基准的主体；subscriberCap 是 ManagerConfig.MaxSubscribersPerSubject，0 取缺省上限。
+func benchAllianceFlush(b *testing.B, players, subscriberCap int) {
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	transport := &byteSink{}
 	// 每个会话要容得下全体成员（缺省每会话 100 个对象）。
-	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: transport, Limits: frame.Limits{MaxObjects: players + 16}})
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+		Transport: transport, Limits: frame.Limits{MaxObjects: players + 16}, MaxSubscribersPerSubject: subscriberCap,
+	})
 	if err != nil {
 		b.Fatal(err)
 	}
