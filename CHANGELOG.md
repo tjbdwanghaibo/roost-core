@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.55.0**（2026-11-18）：生成的 Remote 登记对 `ownership=shared` 的 kind 调 `entity.DeclareRemoteSharedKind`（facebook、team），game-demo 机器人场景写 `group`，mailbox+rehome 读 mail `Summary` 的 `BroadcastsBehind`。
+
 ## [v1.55.0] - 2026-11-18
 
 - **测试：nest 完成泵饱和用例在负载下挂住整个包**（2026-11-18，v1.55.0 第一次 pretag 发现）：`TestAsyncCompletionKeepsOrderWhenPumpIsSaturated` 原来先等 3 次 Enqueue 再确认降级；泵还没取走第 1 条时是第 2 个事务降级、在本 worker 等票据，第 3 个进不了 Enqueue，用例失败后又没落定票据，`StopNest` 永远等。改为直接等降级、之后票据一律落定，失败路径也先落定票据。只改测试。并行 6 进程各 600 轮：旧版全部挂住，新版全部通过。同类写法统一修掉：测试用 `StopNest` 最多等 20s，停不下就落定本包测试提交器上的未决票据再等 20s，仍不行 panic；新增 `TestMain`，任何一次 `StopNest` 超时都判整包失败。注入失败的用例从挂到 `-timeout` 变为 20s 内 FAIL。[证据](docs/maintenance/evidence/nest-saturated-test-hang-20261118/README.md)

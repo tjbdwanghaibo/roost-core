@@ -30,6 +30,8 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // v1.53.0：生成的 Gate 装配传 wiring/gate.Options 的 GateService / GameService（RV-20261116-02）；随发版后提高。
 // v1.54.0：生成的 bootstrap 把模块配置声明交给 wiring/modulehost（R5），声明了 websocket 的 server_gen 读 trusted_proxies，
 // lobby / relay 工程装配 wiring/lobby、wiring/relay；随发版后提高。
+// v1.55.0：生成的 Remote 登记对 ownership=shared 的 kind 调 entity.DeclareRemoteSharedKind（facebook、team），game-demo 机器人场景写 group，
+// mailbox+rehome 读 mail Summary 的 BroadcastsBehind；随发版后提高。
 // v1.52.0：单实例锁存 etcd（kitetcd.SingletonStore）、entity.Publish 与实体事件登记（生成的 <实体>_event_gen.go）；随发版后提高。
 // v1.50.0：生成工程的功能包放 game/modules/<包>/（模块的 runtime.package、生成器的 skills / effects / heartbeat /
 // gameplay/attribute 都在那里）、CopyHandedOffEntity 出错时列出可能已写入的文档；随发版后提高。
@@ -68,7 +70,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.54.0",
+	Core: "v1.55.0",
 }
 
 type Manifest struct {
