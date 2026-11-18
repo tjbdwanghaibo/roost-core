@@ -1,0 +1,4 @@
+=== RUN   TestDemoRobotCapacity
+    capacity_test.go:66: count=100 state=finished stats={Scheduled:100 Started:100 Success:100 Failure:0 Canceled:0 LaunchFailed:0 DroppedCapacity:0 DroppedSchedule:0}
+--- PASS: TestDemoRobotCapacity (30.03s)
+PASS
