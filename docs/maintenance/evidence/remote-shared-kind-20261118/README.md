@@ -193,6 +193,8 @@ F1、F2 固化进 `codegen/internal/roost/module_team_test.go` 的 `recipeMutati
 2. 共享 kind 能否退出共享：A（本轮，推荐）拒绝；B 允许（与运行期切的共享实体相同）。
 3. team 是否也声明共享：A 不改（现状无缺陷）；B 声明并简化建队（见七）。
 
+> 维护者 2026-11-18：注解保持 `ownership=shared`；共享 kind 不能退出共享（保持拒绝）；Team 也声明共享并简化建队（见 team-shared-kind-20261118）。
+
 ## 十、建议文字（协调者合入时用；本 agent 未改 CHANGELOG / KNOWN-LIMITS）
 
 ### CHANGELOG `[Unreleased]`

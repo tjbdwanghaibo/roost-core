@@ -174,6 +174,8 @@ DEMO_ROBOT_MIRROR_OFFSET=20000 DEMO_ROBOT_COUNT=100 DEMO_ROBOT_MODE=burst \
 - 验证只跑了一轮、忙机。“除去 saga 组”在 100 人同秒下 8.3s 的余量是否稳定，没有多轮对照，**尚未确认**。
 - saga 排队本身（启动中继 4 并发、Mongo 步骤串行）没动，见逐步计时证据第 6 节；本轮只改统计与门槛口径，不解决 saga 慢。
 
+> 维护者 2026-11-18：两个联盟入会场景里的 3 个 saga 轮询也归 saga 组，保留。
+
 ## 7. 建议写进 CHANGELOG / KNOWN-LIMITS 的文字（协调者统一写）
 
 链接按目标文件所在目录写，原样粘贴。
