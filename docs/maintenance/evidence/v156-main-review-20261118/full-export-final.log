@@ -1,0 +1,8 @@
+=== RUN   TestGeneratedComponentFollowsTheComponentPackageRule
+=== PAUSE TestGeneratedComponentFollowsTheComponentPackageRule
+=== RUN   TestClientExportTSWithTheRealToolchain
+--- PASS: TestClientExportTSWithTheRealToolchain (34.65s)
+=== CONT  TestGeneratedComponentFollowsTheComponentPackageRule
+--- PASS: TestGeneratedComponentFollowsTheComponentPackageRule (92.01s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	126.688s

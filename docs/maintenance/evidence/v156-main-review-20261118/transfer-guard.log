@@ -1,0 +1,24 @@
+f229585ead643a6e61e69e851968c67259669e8e
+=== RUN   TestATransferPreparedInAnEarlierHostTermIsDropped
+    host_test.go:429: peer: lobby http://127.0.0.1:38587, relay 127.0.0.1:40105, room directory memory
+--- PASS: TestATransferPreparedInAnEarlierHostTermIsDropped (0.02s)
+=== RUN   TestATransferPreparedInAnEarlierHostTermIsDropped
+    host_test.go:429: peer: lobby http://127.0.0.1:42661, relay 127.0.0.1:38313, room directory memory
+--- PASS: TestATransferPreparedInAnEarlierHostTermIsDropped (0.05s)
+=== RUN   TestATransferPreparedInAnEarlierHostTermIsDropped
+    host_test.go:429: peer: lobby http://127.0.0.1:38383, relay 127.0.0.1:40495, room directory memory
+--- PASS: TestATransferPreparedInAnEarlierHostTermIsDropped (0.03s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	0.130s
+bf68b3b8cb4e040ab09eaa6fe3a0970697a05d0d
+=== RUN   TestATransferPreparedInAnEarlierHostTermIsDropped
+    host_test.go:429: peer: lobby http://127.0.0.1:39867, relay 127.0.0.1:44535, room directory memory
+--- PASS: TestATransferPreparedInAnEarlierHostTermIsDropped (0.01s)
+=== RUN   TestATransferPreparedInAnEarlierHostTermIsDropped
+    host_test.go:429: peer: lobby http://127.0.0.1:43937, relay 127.0.0.1:42561, room directory memory
+--- PASS: TestATransferPreparedInAnEarlierHostTermIsDropped (0.06s)
+=== RUN   TestATransferPreparedInAnEarlierHostTermIsDropped
+    host_test.go:429: peer: lobby http://127.0.0.1:41679, relay 127.0.0.1:40953, room directory memory
+--- PASS: TestATransferPreparedInAnEarlierHostTermIsDropped (0.02s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	0.097s

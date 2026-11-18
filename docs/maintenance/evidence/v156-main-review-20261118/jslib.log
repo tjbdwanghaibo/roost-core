@@ -1,0 +1,3 @@
+check-jslib-frames: 6 frames whole and in order with 7-byte receives
+check-jslib-frames: 6 frames whole and in order with 65536-byte receives
+check-jslib-frames: ok (split / merged / near-max frames, one frame per send, text fails the socket)

@@ -1,0 +1,24 @@
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
+)
+
+func main() {
+	configured, serialized := os.Args[1], os.Args[2]
+	origins := []string{configured}
+	if err := httpserver.CheckCORSOrigins("portal.cors_origins", origins); err != nil {
+		fmt.Printf("%s rejected: %v\n", configured, err)
+		return
+	}
+	req := httptest.NewRequest(http.MethodOptions, "/portal/login", nil)
+	req.Header.Set("Origin", serialized)
+	rr := httptest.NewRecorder()
+	httpserver.NewCORS(origins, []string{"POST"}, []string{"Content-Type"}).Preflight(rr, req)
+	fmt.Printf("%s accepted, Origin %s, preflight %d\n", configured, serialized, rr.Code)
+}

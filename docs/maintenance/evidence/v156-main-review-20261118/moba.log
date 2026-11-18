@@ -1,0 +1,72 @@
+MOBA generated consumer and logs: /workspace/work/moba
+=== RUN   TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup
+--- PASS: TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup (10.38s)
+=== RUN   TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect
+    arena_network_test.go:443: reconnected before frame 296 asking from frame 41 (history starts at 232); players 2 and 8 restored from checkpoints [288] / [288]; all ten match the reference at frame 360
+--- PASS: TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect (24.27s)
+=== RUN   TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot
+    arena_network_test.go:748: Room: reconnected before frame 296 asking from frame 41; players 2 and 8 restored from committed checkpoints [288] / [288]; all ten match the authority at frame 360
+--- PASS: TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot (47.60s)
+=== RUN   TestMOBAFivePlayerTeamsDraftAndMatchIdentity
+--- PASS: TestMOBAFivePlayerTeamsDraftAndMatchIdentity (0.01s)
+=== RUN   TestMOBAArenaTargetingThreeLanesEconomyAndRespawn
+--- PASS: TestMOBAArenaTargetingThreeLanesEconomyAndRespawn (0.00s)
+=== RUN   TestMOBAArenaReplayVersionSeedAndFogBoundary
+--- PASS: TestMOBAArenaReplayVersionSeedAndFogBoundary (0.83s)
+=== RUN   TestMOBAArenaSurrenderAndTimeLimit
+--- PASS: TestMOBAArenaSurrenderAndTimeLimit (0.00s)
+=== RUN   TestMOBAMatchmakingAdmissionCancellationAndCommit
+--- PASS: TestMOBAMatchmakingAdmissionCancellationAndCommit (0.00s)
+=== RUN   TestMOBAInputIdentityReplayAndWindow
+--- PASS: TestMOBAInputIdentityReplayAndWindow (0.00s)
+=== RUN   TestMOBADeterministicDuelHealsLostBroadcasts
+--- PASS: TestMOBADeterministicDuelHealsLostBroadcasts (0.00s)
+=== RUN   TestMOBACatchupAndSpectatorCannotControlHeroes
+--- PASS: TestMOBACatchupAndSpectatorCannotControlHeroes (0.00s)
+=== RUN   TestMOBAHistoryExpiryAndDesyncAreExplicit
+--- PASS: TestMOBAHistoryExpiryAndDesyncAreExplicit (0.00s)
+=== RUN   TestMOBALaneTowersBaseAndServerResult
+--- PASS: TestMOBALaneTowersBaseAndServerResult (0.00s)
+=== RUN   TestMOBASkillCooldownShopAndCheckpoint
+--- PASS: TestMOBASkillCooldownShopAndCheckpoint (0.00s)
+PASS
+ok  	example.com/moba-practice/game/modules/moba	84.521s
+2026/11/18 15:20:50 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=52.259µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBAKCPRobotMatchSettlementAndClientResult
+--- PASS: TestMOBAKCPRobotMatchSettlementAndClientResult (1.00s)
+=== RUN   TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom
+--- PASS: TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom (0.64s)
+=== RUN   TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID
+--- PASS: TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID (0.60s)
+=== RUN   TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity
+--- PASS: TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity (1.00s)
+=== RUN   TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable
+--- PASS: TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable (0.41s)
+=== RUN   TestMOBARoundUndoRollsBackFrameAndCheckpoint
+--- PASS: TestMOBARoundUndoRollsBackFrameAndCheckpoint (0.30s)
+=== RUN   TestMOBARoomMailboxBoundAndDrain
+--- PASS: TestMOBARoomMailboxBoundAndDrain (0.28s)
+=== RUN   TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound
+--- PASS: TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound (0.28s)
+=== RUN   TestMOBADurableReplayAndDelayedObserverBeyond64Frames
+--- PASS: TestMOBADurableReplayAndDelayedObserverBeyond64Frames (4.20s)
+=== RUN   TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts
+--- PASS: TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts (1.62s)
+=== RUN   TestMOBARoomCatchupNeverSendsUncommittedFrames
+2026/11/18 15:21:03 WARN nest handler held entity locks beyond threshold handler=handlerMOBARound hold=101.934693ms threshold=100ms
+2026/11/18 15:21:05 WARN nest handler held entity locks beyond threshold handler=handlerMOBARound hold=178.884873ms threshold=100ms
+--- PASS: TestMOBARoomCatchupNeverSendsUncommittedFrames (5.11s)
+=== RUN   TestMOBASettlementConcurrentReplayAndIdentity
+--- PASS: TestMOBASettlementConcurrentReplayAndIdentity (0.15s)
+=== RUN   TestMOBASettlementRollbackAndRetry
+--- PASS: TestMOBASettlementRollbackAndRetry (0.08s)
+=== RUN   TestMOBANoWinnerSettlementNeverPays
+--- PASS: TestMOBANoWinnerSettlementNeverPays (0.04s)
+=== RUN   TestMOBAServerReferenceSettlesTheFinishedRound
+--- PASS: TestMOBAServerReferenceSettlesTheFinishedRound (0.03s)
+PASS
+ok  	example.com/moba-practice/game/handler	17.139s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+MOBA generated consumer kept: /workspace/work/moba

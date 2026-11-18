@@ -1,0 +1,16 @@
+=== RUN   TestTheCSharpClientWorksOverWebSocket
+2026/11/18 15:18:09 INFO player tcp listener started addr=127.0.0.1:39871 max_connections=10000
+2026/11/18 15:18:09 INFO player websocket listener started addr=127.0.0.1:41475 path=/ws
+    tcp_transport_test.go:658: C# client websocket:
+        PASS websocket player access (threaded): handshake, request, clock probe, push, heartbeat past idle_timeout, reconnect with a newer generation
+        PASS websocket single-thread detector, e.g.: transport ReceiveAsync on thread 6 (thread pool)
+        PASS websocket player access (PumpDriven, one thread): handshake, request, clock probe, push, heartbeat, reconnect, request timeout, no Pump → idle close → reconnect, connect timeout
+--- PASS: TestTheCSharpClientWorksOverWebSocket (9.75s)
+=== RUN   TestTheCSharpClientWorksOverWebSocketThroughAStandaloneGate
+2026/11/18 15:18:18 INFO player tcp listener started addr=127.0.0.1:33929 max_connections=10000
+2026/11/18 15:18:18 INFO player websocket listener started addr=127.0.0.1:38503 path=/ws
+    tcp_transport_test.go:780: C# client websocket-gate:
+        PASS websocket standalone Gate (PumpDriven, one thread): handshake, request, heartbeat past idle_timeout, no Pump → idle close → reconnect
+--- PASS: TestTheCSharpClientWorksOverWebSocketThroughAStandaloneGate (3.97s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	13.723s

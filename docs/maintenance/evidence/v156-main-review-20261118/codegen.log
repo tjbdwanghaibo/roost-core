@@ -1,0 +1,22 @@
+=== RUN   TestClientExportSpecValidation
+=== PAUSE TestClientExportSpecValidation
+=== RUN   TestSDKProtobufEsVersionMatchesClientTS
+--- PASS: TestSDKProtobufEsVersionMatchesClientTS (0.00s)
+=== RUN   TestGenerateClientExportTS
+=== PAUSE TestGenerateClientExportTS
+=== RUN   TestClientExportProtocGenEsVersion
+--- PASS: TestClientExportProtocGenEsVersion (0.62s)
+=== RUN   TestClientSyncTS
+=== PAUSE TestClientSyncTS
+=== RUN   TestAddComponentInfersOnlyEntityAndRejectsAmbiguity
+=== PAUSE TestAddComponentInfersOnlyEntityAndRejectsAmbiguity
+=== CONT  TestClientExportSpecValidation
+--- PASS: TestClientExportSpecValidation (0.00s)
+=== CONT  TestAddComponentInfersOnlyEntityAndRejectsAmbiguity
+=== CONT  TestClientSyncTS
+=== CONT  TestGenerateClientExportTS
+--- PASS: TestAddComponentInfersOnlyEntityAndRejectsAmbiguity (0.97s)
+--- PASS: TestClientSyncTS (1.25s)
+--- PASS: TestGenerateClientExportTS (2.07s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	2.720s

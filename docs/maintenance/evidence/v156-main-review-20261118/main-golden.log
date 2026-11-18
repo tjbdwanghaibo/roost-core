@@ -1,0 +1,22 @@
+✔ TS encodes every relay golden frame byte for byte like Go (3.13114ms)
+✔ TS decodes the relay golden frames (2.763946ms)
+✔ TS decodes the host-change golden frames into the expected fields (1.277781ms)
+✔ presence frames and the compression marker in the golden (27.10038ms)
+✔ the stream reader does not depend on message boundaries (0.568719ms)
+✔ TS refuses the same headers as Go's ValidateRelay (0.429279ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 280.7439
+=== RUN   TestSDKHostFramesMatchRelayGolden
+--- PASS: TestSDKHostFramesMatchRelayGolden (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	0.017s
+=== RUN   TestRelayProtocolGolden
+--- PASS: TestRelayProtocolGolden (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/wire	0.041s

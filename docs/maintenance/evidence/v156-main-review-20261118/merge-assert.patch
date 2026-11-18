@@ -1,0 +1,7 @@
+--- a/service/account/merge_test.go
++++ b/service/account/merge_test.go
+@@ -535,0 +536,4 @@ func TestAMergeCheckSeesEveryTransferWhileOthersSettle(t *testing.T) {
++	if got := storedServer(t, cfg, host).MergedFrom; len(got) != 0 {
++		t.Fatalf("destination merge index changed: %v", got)
++	}
++

@@ -1,0 +1,36 @@
+✔ every packets.json row decodes and re-encodes byte for byte (7.500753ms)
+✔ pb, sync, auth and auth_generation carry the fields Go wrote (8.014509ms)
+✔ Gate header rules match client/wire: flag bits 3..7, kind 3, control flags, size (14.009807ms)
+✔ the frame reader joins split frames and splits merged ones (0.600908ms)
+✔ auth envelope rules match the server: ticket bytes, NUL, generation (0.307134ms)
+✔ connection generations are Unix ms × 1e6 and strictly increase even when the clock stands still or goes back (0.22442ms)
+✔ utf8Encode (no TextEncoder) matches TextEncoder (0.183217ms)
+✔ clock probe payload and response decode (0.269727ms)
+✔ NetworkClock rejects the samples C# rejects and slews toward the newest (8.732043ms)
+✔ push and request with protobuf-es schemas, 64-bit fields as exact bigint (105.613962ms)
+✔ heartbeats go every interval, the next one is timed from the previous ack (85.389869ms)
+✔ heartbeatIntervalMs 0 sends no heartbeat (268.775033ms)
+✔ the connect timeout covers the ticket and the handshake (28.027124ms)
+✔ the request timeout fails the request and keeps the connection (11.9271ms)
+✔ reconnect backs off with jitter, fetches a fresh ticket each attempt and reports every result (59.781869ms)
+✔ a successful reconnect bumps the version; disconnect during backoff stops reconnecting (16.181825ms)
+✔ without autoReconnect a drop ends in Disconnected and the in-flight request fails (9.452148ms)
+✔ a non-empty heartbeat acknowledgement is a protocol error that closes the connection (1.589401ms)
+✔ handshake over a split acknowledgement; auth envelope with a generation; no Origin header (252.275205ms)
+✔ a response and a push merged in one message, a frame split into 7-byte messages and a near-1 MiB frame all decode (445.721296ms)
+✔ a text message closes the connection with a protocol error (410.103523ms)
+✔ a request that timed out drops its late reply and keeps the connection (173.768727ms)
+✔ pending capacity is enforced and the heartbeat keeps its own slot (147.468737ms)
+✔ disposing inside a callback stops the rest of the message and every later notification (88.743343ms)
+✔ disconnecting inside a push callback drops the rest of that message (59.400996ms)
+✔ one subscriber per message id; a throwing handler reports to error and the connection stays (18.458976ms)
+✔ auto reconnect after the server closes: fresh ticket, newer generation, reconnected event (75.740569ms)
+✔ a non-empty handshake acknowledgement fails the connect (12.611061ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6222.621626

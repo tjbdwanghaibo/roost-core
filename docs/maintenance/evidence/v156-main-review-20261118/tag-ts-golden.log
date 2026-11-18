@@ -1,0 +1,28 @@
+
+added 5 packages in 2s
+
+> @roost/relay-client@0.1.0 build
+> tsc -p tsconfig.json
+
+✔ TS encodes every relay golden frame byte for byte like Go (1.320785ms)
+✔ TS decodes the relay golden frames (1.802323ms)
+✔ TS decodes the host-change golden frames into the expected fields (0.995033ms)
+✔ presence frames and the compression marker in the golden (13.094091ms)
+✔ the stream reader does not depend on message boundaries (0.687869ms)
+✔ TS refuses the same headers as Go's ValidateRelay (0.541548ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 109.556259
+=== RUN   TestSDKHostFramesMatchRelayGolden
+--- PASS: TestSDKHostFramesMatchRelayGolden (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	0.007s
+=== RUN   TestRelayProtocolGolden
+--- PASS: TestRelayProtocolGolden (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/wire	0.004s

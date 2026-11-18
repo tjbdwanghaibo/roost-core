@@ -1,0 +1,35 @@
+{
+  "files": [
+    {
+      "path": "configs/service/config.account.review-192.0.2.30.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "ok"
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "ok",
+  "exit_code": 0
+}
+URL valid ws://192.0.2.30:7080/ws
+{
+  "files": [
+    {
+      "path": "configs/service/config.account.review-192.0.2.300.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "ok"
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "ok",
+  "exit_code": 0
+}
+URL rejected ws://192.0.2.300:7080/ws ERR_INVALID_URL
+BrowserWebSocketTransport.connect rejected: SyntaxError TypeError: Invalid URL

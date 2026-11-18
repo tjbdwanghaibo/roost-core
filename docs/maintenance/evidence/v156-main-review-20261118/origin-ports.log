@@ -1,0 +1,12 @@
+f229585ead643a6e61e69e851968c67259669e8e
+https://play.example.com accepted, Origin https://play.example.com, preflight 204
+https://play.example.com:443 rejected: config: portal.cors_origins entry "https://play.example.com:443" names the default port, which browsers leave out of Origin; write "https://play.example.com"
+https://play.example.com:0443 accepted, Origin https://play.example.com, preflight 403
+https://play.example.com:8443 accepted, Origin https://play.example.com:8443, preflight 204
+https://play.example.com:08443 accepted, Origin https://play.example.com:8443, preflight 403
+bf68b3b8cb4e040ab09eaa6fe3a0970697a05d0d
+https://play.example.com accepted, Origin https://play.example.com, preflight 204
+https://play.example.com:443 rejected: config: portal.cors_origins entry "https://play.example.com:443" names the default port, which browsers leave out of Origin; write "https://play.example.com"
+https://play.example.com:0443 accepted, Origin https://play.example.com, preflight 403
+https://play.example.com:8443 accepted, Origin https://play.example.com:8443, preflight 204
+https://play.example.com:08443 accepted, Origin https://play.example.com:8443, preflight 403

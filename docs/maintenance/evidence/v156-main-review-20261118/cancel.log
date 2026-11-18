@@ -1,0 +1,4 @@
+{"immediate":false,"time":0,"state":"Disconnected","calls":1,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":false,"time":5000,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":true,"time":0,"state":"Disconnected","calls":1,"aborted":false,"outcome":"pending"}
+{"immediate":true,"time":5000,"aborted":true,"outcome":"GateTimeoutError"}

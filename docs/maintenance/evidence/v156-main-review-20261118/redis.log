@@ -1,0 +1,89 @@
+Redis server v=8.0.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=b843bbd074c0e1da
+>>> Performing hash slots allocation on 3 nodes...
+Master[0] -> Slots 0 - 5460
+Master[1] -> Slots 5461 - 10922
+Master[2] -> Slots 10923 - 16383
+M: 90de6e0c4b21a7e304d5477913569c71fd5e2680 127.0.0.1:19379
+   slots:[0-5460] (5461 slots) master
+M: c41a2a6f935875d2338b49e4bb6967dd2aec6b9b 127.0.0.1:19380
+   slots:[5461-10922] (5462 slots) master
+M: 89d99b714d9b8dd8661a4fcf1376a2bdf489674c 127.0.0.1:19381
+   slots:[10923-16383] (5461 slots) master
+>>> Nodes configuration updated
+>>> Assign a different config epoch to each node
+>>> Sending CLUSTER MEET messages to join the cluster
+Waiting for the cluster to join
+
+>>> Performing Cluster Check (using node 127.0.0.1:19379)
+M: 90de6e0c4b21a7e304d5477913569c71fd5e2680 127.0.0.1:19379
+   slots:[0-5460] (5461 slots) master
+M: 89d99b714d9b8dd8661a4fcf1376a2bdf489674c 127.0.0.1:19381
+   slots:[10923-16383] (5461 slots) master
+M: c41a2a6f935875d2338b49e4bb6967dd2aec6b9b 127.0.0.1:19380
+   slots:[5461-10922] (5462 slots) master
+[OK] All nodes agree about slots configuration.
+>>> Check for open slots...
+>>> Check slots coverage...
+[OK] All 16384 slots covered.
+f229585ead643a6e61e69e851968c67259669e8e
+=== RUN   TestAMergeCheckSeesEveryTransferWhileOthersSettle
+2026/11/18 15:17:56 INFO account: role transfer aborted player_id=1000001 transfer_id=p0 from=3 to=1 reason="settled while the merge check reads the index"
+2026/11/18 15:17:56 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=p0 server_id=1
+2026/11/18 15:17:56 INFO account: role transfer aborted player_id=1000202 transfer_id=early from=3 to=1 reason="settled while listing"
+2026/11/18 15:17:56 INFO account: released a transfer hold no role record stands behind player_id=1000202 transfer_id=early server_id=1
+--- PASS: TestAMergeCheckSeesEveryTransferWhileOthersSettle (0.68s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.703s
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis
+--- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave (0.00s)
+    --- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory (0.00s)
+    --- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis (0.00s)
+=== RUN   TestReviewPriorSeatReport
+=== RUN   TestReviewPriorSeatReport/ordered
+=== RUN   TestReviewPriorSeatReport/ordered/memory
+=== RUN   TestReviewPriorSeatReport/ordered/redis
+=== RUN   TestReviewPriorSeatReport/late
+=== RUN   TestReviewPriorSeatReport/late/memory
+=== RUN   TestReviewPriorSeatReport/late/redis
+--- PASS: TestReviewPriorSeatReport (0.00s)
+    --- PASS: TestReviewPriorSeatReport/ordered (0.00s)
+        --- PASS: TestReviewPriorSeatReport/ordered/memory (0.00s)
+        --- PASS: TestReviewPriorSeatReport/ordered/redis (0.00s)
+    --- PASS: TestReviewPriorSeatReport/late (0.00s)
+        --- PASS: TestReviewPriorSeatReport/late/memory (0.00s)
+        --- PASS: TestReviewPriorSeatReport/late/redis (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	0.011s
+bf68b3b8cb4e040ab09eaa6fe3a0970697a05d0d
+=== RUN   TestAMergeCheckSeesEveryTransferWhileOthersSettle
+2026/11/18 15:17:58 INFO account: role transfer aborted player_id=1000001 transfer_id=p0 from=3 to=1 reason="settled while the merge check reads the index"
+2026/11/18 15:17:58 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=p0 server_id=1
+2026/11/18 15:17:58 INFO account: role transfer aborted player_id=1000202 transfer_id=early from=3 to=1 reason="settled while listing"
+2026/11/18 15:17:58 INFO account: released a transfer hold no role record stands behind player_id=1000202 transfer_id=early server_id=1
+--- PASS: TestAMergeCheckSeesEveryTransferWhileOthersSettle (0.66s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.669s
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis
+--- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave (0.00s)
+    --- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory (0.00s)
+    --- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis (0.00s)
+=== RUN   TestReviewPriorSeatReport
+=== RUN   TestReviewPriorSeatReport/ordered
+=== RUN   TestReviewPriorSeatReport/ordered/memory
+=== RUN   TestReviewPriorSeatReport/ordered/redis
+=== RUN   TestReviewPriorSeatReport/late
+=== RUN   TestReviewPriorSeatReport/late/memory
+=== RUN   TestReviewPriorSeatReport/late/redis
+--- PASS: TestReviewPriorSeatReport (0.01s)
+    --- PASS: TestReviewPriorSeatReport/ordered (0.00s)
+        --- PASS: TestReviewPriorSeatReport/ordered/memory (0.00s)
+        --- PASS: TestReviewPriorSeatReport/ordered/redis (0.00s)
+    --- PASS: TestReviewPriorSeatReport/late (0.00s)
+        --- PASS: TestReviewPriorSeatReport/late/memory (0.00s)
+        --- PASS: TestReviewPriorSeatReport/late/redis (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	0.016s

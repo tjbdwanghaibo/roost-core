@@ -1,0 +1,90 @@
+go version go1.27.2 linux/amd64
+bf68b3b8cb4e040ab09eaa6fe3a0970697a05d0d
+=== RUN   TestAMergeCheckSeesEveryTransferWhileOthersSettle
+2026/11/18 15:17:35 INFO account: role transfer aborted player_id=1000001 transfer_id=p0 from=3 to=1 reason="settled while the merge check reads the index"
+2026/11/18 15:17:35 INFO account: released a transfer hold no role record stands behind player_id=1000001 transfer_id=p0 server_id=1
+2026/11/18 15:17:35 INFO account: role transfer aborted player_id=1000202 transfer_id=early from=3 to=1 reason="settled while listing"
+2026/11/18 15:17:35 INFO account: released a transfer hold no role record stands behind player_id=1000202 transfer_id=early server_id=1
+--- PASS: TestAMergeCheckSeesEveryTransferWhileOthersSettle (0.06s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.083s
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory
+=== RUN   TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis
+    lobby_test.go:122: ROOST_REDIS_TEST_ADDR is not set
+--- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave (0.00s)
+    --- PASS: TestALateOnlineReportStillRecordsAReconnectAfterALeave/memory (0.00s)
+    --- SKIP: TestALateOnlineReportStillRecordsAReconnectAfterALeave/redis (0.00s)
+=== RUN   TestReviewPriorSeatReport
+=== RUN   TestReviewPriorSeatReport/ordered
+=== RUN   TestReviewPriorSeatReport/ordered/memory
+=== RUN   TestReviewPriorSeatReport/ordered/redis
+    lobby_test.go:122: ROOST_REDIS_TEST_ADDR is not set
+=== RUN   TestReviewPriorSeatReport/late
+=== RUN   TestReviewPriorSeatReport/late/memory
+=== RUN   TestReviewPriorSeatReport/late/redis
+    lobby_test.go:122: ROOST_REDIS_TEST_ADDR is not set
+--- PASS: TestReviewPriorSeatReport (0.04s)
+    --- PASS: TestReviewPriorSeatReport/ordered (0.04s)
+        --- PASS: TestReviewPriorSeatReport/ordered/memory (0.00s)
+        --- SKIP: TestReviewPriorSeatReport/ordered/redis (0.00s)
+    --- PASS: TestReviewPriorSeatReport/late (0.00s)
+        --- PASS: TestReviewPriorSeatReport/late/memory (0.00s)
+        --- SKIP: TestReviewPriorSeatReport/late/redis (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/lobby	0.053s
+=== RUN   TestCORSAllowsOnlyListedOriginsThroughTheEngine
+--- PASS: TestCORSAllowsOnlyListedOriginsThroughTheEngine (0.01s)
+=== RUN   TestCheckCORSOriginsRefusesWhatABrowserNeverSends
+--- PASS: TestCheckCORSOriginsRefusesWhatABrowserNeverSends (0.00s)
+=== RUN   TestReviewPortalDefaultPort
+=== RUN   TestReviewPortalDefaultPort/https://play.example.com
+=== RUN   TestReviewPortalDefaultPort/https://play.example.com:443
+--- PASS: TestReviewPortalDefaultPort (0.00s)
+    --- PASS: TestReviewPortalDefaultPort/https://play.example.com (0.00s)
+    --- PASS: TestReviewPortalDefaultPort/https://play.example.com:443 (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	0.062s
+=== RUN   TestTransferHandsTheHandoffToTheNewHost
+    host_test.go:51: peer: lobby http://127.0.0.1:35575, relay 127.0.0.1:34483, room directory memory
+--- PASS: TestTransferHandsTheHandoffToTheNewHost (0.05s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	0.059s
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:38973, relay 127.0.0.1:44137, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.73s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:36555, relay 127.0.0.1:41763, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.71s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:42681, relay 127.0.0.1:37447, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.74s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:43427, relay 127.0.0.1:44129, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.69s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:43099, relay 127.0.0.1:45993, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.68s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:44495, relay 127.0.0.1:46603, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.71s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:44569, relay 127.0.0.1:45237, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.70s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:33033, relay 127.0.0.1:34907, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.69s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:42077, relay 127.0.0.1:36073, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.69s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:36007, relay 127.0.0.1:35293, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.70s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:33319, relay 127.0.0.1:36827, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.69s)
+=== RUN   TestAutoSnapshotIsPushedWhileHost
+    host_test.go:266: peer: lobby http://127.0.0.1:41231, relay 127.0.0.1:42601, room directory memory
+--- PASS: TestAutoSnapshotIsPushedWhileHost (0.69s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/client/relay	8.436s

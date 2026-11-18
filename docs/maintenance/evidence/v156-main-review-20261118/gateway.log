@@ -1,0 +1,20 @@
+=== RUN   TestTheTSClientWorksOverWebSocket
+2026/11/18 15:17:08 INFO player tcp listener started addr=127.0.0.1:34627 max_connections=10000
+2026/11/18 15:17:08 INFO player websocket listener started addr=127.0.0.1:42585 path=/ws
+    tcp_transport_test.go:671: TS client websocket:
+        PASS websocket: handshake, request, clock probe, push
+        PASS websocket: heartbeats held past idle_timeout (9 round trips in 2.5s)
+        PASS websocket: server close → auto reconnect with a fresh ticket and a newer generation
+        PASS websocket: request timeout, late reply dropped, connection kept
+        PASS websocket: frozen timers → idle close → no reconnect while frozen → reconnect after thawing
+        PASS websocket: connect timeout against a peer that never upgrades
+--- PASS: TestTheTSClientWorksOverWebSocket (7.20s)
+=== RUN   TestTheTSClientWorksOverWebSocketThroughAStandaloneGate
+2026/11/18 15:17:15 INFO player tcp listener started addr=127.0.0.1:38583 max_connections=10000
+2026/11/18 15:17:15 INFO player websocket listener started addr=127.0.0.1:43599 path=/ws
+    tcp_transport_test.go:788: TS client websocket-gate:
+        PASS websocket standalone Gate: handshake, request, heartbeats held past the Gate's idle_timeout (8 round trips)
+        PASS websocket standalone Gate: frozen timers → idle close → reconnect after thawing
+--- PASS: TestTheTSClientWorksOverWebSocketThroughAStandaloneGate (4.77s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	12.013s

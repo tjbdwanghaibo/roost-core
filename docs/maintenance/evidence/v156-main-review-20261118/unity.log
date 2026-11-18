@@ -1,0 +1,11 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Roost.Client -> /workspace/work/core/client/dotnet/Roost.Client/bin/Release/netstandard2.1/Roost.Client.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:38.57
+Unity package: /workspace/work/unity-package/com.roost.client
+Roost.Client.dll
