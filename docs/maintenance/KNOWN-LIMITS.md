@@ -875,6 +875,10 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **路由守卫与大形状成本**：路由守卫 ≥1h 浸泡仍为 C-S1；B-2 已提供真实成员 ≤500 与合成 1k / 5k / 10k 形状探针、精确嵌套 setKey 与开关功能验证。正式成本档待测；Go heap 不等于 RSS，空 L1 不等于冷 Mongo。见[探针报告](../performance/benchmarks/alliance-probes-20261114/README.md)。
 - **Join 1000/s 与 effect 竞争**：目标硬件容量 C-Q2 未验；M-11 待比较 effect workers 16 / 1、c256、写额度 512 与有限重试。既有额度 512 三轮 retryable / unknown 为 0，旧“来源尚未确认”已过时；不据此关闭 effect 对 RPC 的容量影响。正式 RPC 开关只改变 Info / Join，Found 初始化仍固定 1 / 16；脚本 PASS 不代替逐档 failed / slow 核对。
 
+#### DataEngine：尚未确认
+
+- **掉电后 WAL 尾部丢失而 Mongo 已有该修改**（2026-11-18 purchase / mailbox 改等持久时发现，尚未确认）：async 记录的投影不等 WAL fsync。`Projector.Commit` 写入后立即唤醒回放，`WAL.Replay` 读到已写入的末尾，所以一笔修改可能已投影进 Mongo，WAL 尾部却还没 fsync。整机掉电后，WAL 丢了这段尾部而 Mongo 已有该修改时，启动排空会不会在 `classifyNoMatch` 判 `ErrProjectionConflict` 而拒绝启动，没有核对。进程崩溃不涉及（WAL 已在页缓存）。证据 [purchase-mailbox-durable-ack-20261118](evidence/purchase-mailbox-durable-ack-20261118/README.md)。
+
 #### Saga：遗留
 
 - **目标部署验收**：Linux Mongo / NATS R3 拓扑下持续准入限流、资产守恒与追平 C-X1 / X2 未验；Linux 既有记录只有生成 Saga 两条功能场景，不能代表 SIGKILL 恢复与性能（C-L3）。兼容政策已在维护手册明确：维护者宣布上线后必须兼容，不再列为未定。
