@@ -131,7 +131,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|gate|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|gate|lobby|relay|protocol|entity|component|handler|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--native、--consumer、--group、--id；saga 用 --steps 按执行顺序列步骤、--native 选出业务是 Nest 事务的步骤（见 roost help saga）；effect 用 --consumer 选消费服务（见 roost help effect）；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
