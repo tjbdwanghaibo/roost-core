@@ -1600,7 +1600,9 @@ func captureWarnings(t *testing.T) *warningLog {
 	return logs
 }
 
-func (l *warningLog) Enabled(_ context.Context, level slog.Level) bool { return level >= slog.LevelWarn }
+func (l *warningLog) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelWarn
+}
 func (l *warningLog) Handle(_ context.Context, r slog.Record) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

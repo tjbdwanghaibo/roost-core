@@ -229,7 +229,7 @@ type Manager struct {
 	codecResyncs atomic.Uint64
 	// subscriberLimitRefused：累计被每 subject 订阅者上限拒绝（ErrSubscriberLimit）的订阅次数（subscriptions.go subscribe）。
 	subscriberLimitRefused atomic.Uint64
-	codecWarn    overLimitWarnGate
+	codecWarn              overLimitWarnGate
 
 	// resubmitMu 保护框架撤销的订阅记录（见 policy_queue.go）；叶子锁。
 	resubmitMu             sync.Mutex

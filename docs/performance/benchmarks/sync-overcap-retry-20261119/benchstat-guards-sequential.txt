@@ -1,0 +1,66 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+                                                      │ before-g-guards.txt │          after-g-guards.txt          │
+                                                      │       sec/op        │    sec/op      vs base               │
+ClusterFlushRandomWalk-10                                      201.6µ ± 13%    333.8µ ± 15%  +65.55% (p=0.002 n=6)
+RelationViewMemberChange/players=1/members=32-10               705.8n ±  9%    969.3n ± 28%  +37.33% (p=0.002 n=6)
+RelationViewMemberChange/players=1/members=1024-10             804.5n ±  5%   1272.5n ± 30%  +58.16% (p=0.002 n=6)
+RelationViewMemberChange/players=64/members=32-10              9.014µ ±  4%   12.777µ ± 13%  +41.75% (p=0.002 n=6)
+RelationViewMemberChange/players=64/members=1024-10            20.58µ ±  3%    31.06µ ± 10%  +50.94% (p=0.002 n=6)
+RelationViewMemberChange/players=1024/members=32-10            238.7µ ±  9%    273.6µ ± 20%  +14.62% (p=0.002 n=6)
+RelationViewMemberChange/players=1024/members=1024-10          1.149m ± 33%    1.605m ± 17%  +39.73% (p=0.009 n=6)
+GroupViewFlush/rooms=100/members=4-10                          270.8µ ± 23%    368.0µ ±  6%  +35.89% (p=0.002 n=6)
+GroupViewFlush/rooms=1000/members=4-10                         4.797m ± 38%    3.982m ±  5%        ~ (p=0.699 n=6)
+GroupViewFlush/rooms=100/members=50-10                         4.889m ± 35%    4.784m ±  6%        ~ (p=0.240 n=6)
+GroupViewFlush/rooms=10/members=500-10                         5.612m ± 10%    5.077m ±  7%   -9.55% (p=0.041 n=6)
+geomean                                                        131.7µ          165.5µ        +25.63%
+
+                                                      │ before-g-guards.txt │          after-g-guards.txt          │
+                                                      │        B/op         │     B/op      vs base                │
+ClusterFlushRandomWalk-10                                      48.33Ki ± 0%   48.33Ki ± 0%       ~ (p=0.584 n=6)
+RelationViewMemberChange/players=1/members=32-10                 984.0 ± 0%     984.0 ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=1/members=1024-10               984.0 ± 0%     984.0 ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=64/members=32-10              1.945Ki ± 0%   1.945Ki ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=64/members=1024-10            1.946Ki ± 0%   1.947Ki ± 0%       ~ (p=0.182 n=6)
+RelationViewMemberChange/players=1024/members=32-10            17.05Ki ± 0%   17.05Ki ± 0%       ~ (p=0.351 n=6)
+RelationViewMemberChange/players=1024/members=1024-10          17.42Ki ± 0%   17.59Ki ± 1%  +0.96% (p=0.002 n=6)
+GroupViewFlush/rooms=100/members=4-10                          168.6Ki ± 0%   168.6Ki ± 0%       ~ (p=0.067 n=6)
+GroupViewFlush/rooms=1000/members=4-10                         2.290Mi ± 0%   2.290Mi ± 0%       ~ (p=0.420 n=6)
+GroupViewFlush/rooms=100/members=50-10                         1.985Mi ± 0%   1.985Mi ± 0%       ~ (p=0.922 n=6)
+GroupViewFlush/rooms=10/members=500-10                         1.952Mi ± 0%   1.952Mi ± 0%       ~ (p=0.913 n=6)
+geomean                                                        34.43Ki        34.46Ki       +0.09%
+¹ all samples are equal
+
+                                                      │ before-g-guards.txt │         after-g-guards.txt          │
+                                                      │      allocs/op      │  allocs/op   vs base                │
+ClusterFlushRandomWalk-10                                       1.400k ± 0%   1.399k ± 0%       ~ (p=0.061 n=6)
+RelationViewMemberChange/players=1/members=32-10                 11.00 ± 0%    11.00 ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=1/members=1024-10               11.00 ± 0%    11.00 ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=64/members=32-10                11.00 ± 0%    11.00 ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=64/members=1024-10              11.00 ± 0%    11.00 ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=1024/members=32-10              11.00 ± 0%    11.00 ± 0%       ~ (p=1.000 n=6) ¹
+RelationViewMemberChange/players=1024/members=1024-10            14.00 ± 7%    15.00 ± 7%  +7.14% (p=0.011 n=6)
+GroupViewFlush/rooms=100/members=4-10                           2.034k ± 0%   2.034k ± 0%       ~ (p=1.000 n=6) ¹
+GroupViewFlush/rooms=1000/members=4-10                          25.95k ± 0%   25.95k ± 0%       ~ (p=0.561 n=6)
+GroupViewFlush/rooms=100/members=50-10                          24.75k ± 0%   24.75k ± 0%       ~ (p=1.000 n=6) ¹
+GroupViewFlush/rooms=10/members=500-10                          24.04k ± 0%   24.04k ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                          230.8         232.3       +0.62%
+¹ all samples are equal
+
+                                       │ before-g-guards.txt │            after-g-guards.txt            │
+                                       │ bytes/member-round  │ bytes/member-round  vs base              │
+GroupViewFlush/rooms=100/members=4-10             29.63 ± 0%           29.61 ± 0%  -0.07% (p=0.011 n=6)
+GroupViewFlush/rooms=1000/members=4-10            28.87 ± 2%           29.12 ± 0%       ~ (p=0.372 n=6)
+GroupViewFlush/rooms=100/members=50-10            28.95 ± 2%           29.01 ± 0%       ~ (p=0.669 n=6)
+GroupViewFlush/rooms=10/members=500-10            28.74 ± 1%           28.84 ± 1%       ~ (p=0.368 n=6)
+geomean                                           29.05                29.14       +0.33%
+
+                                       │ before-g-guards.txt │         after-g-guards.txt         │
+                                       │     bytes/round     │ bytes/round   vs base              │
+GroupViewFlush/rooms=100/members=4-10           11.57Ki ± 0%   11.56Ki ± 0%  -0.08% (p=0.006 n=6)
+GroupViewFlush/rooms=1000/members=4-10          112.8Ki ± 2%   113.8Ki ± 0%       ~ (p=0.372 n=6)
+GroupViewFlush/rooms=100/members=50-10          141.3Ki ± 2%   141.6Ki ± 0%       ~ (p=0.699 n=6)
+GroupViewFlush/rooms=10/members=500-10          140.4Ki ± 1%   140.8Ki ± 1%       ~ (p=0.394 n=6)
+geomean                                         71.34Ki        71.57Ki       +0.33%

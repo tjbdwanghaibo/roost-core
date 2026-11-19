@@ -11,6 +11,14 @@
 
 - **生成物要求的最低 core 提到 v1.57.1**（2026-11-19）：没有新接口，只为让新装模块写入的依赖与 `roost project sync` 对齐到同一发布版（v1.57.1 发版后漏提，`TestModulePortal*` 的“同步不改工程”断言因此失败）。
 
+- **修复：超过每 subject 订阅者上限的订阅改为等空位，不再每轮全量重说；玩家看自己不受这个上限**（2026-11-19，M-9 处置 B，[方案与实施结果](docs/maintenance/FEATURE-2026-11-19-sync-overcap-retry.md)，[证据](docs/performance/benchmarks/sync-overcap-retry-20261119/README.md)）：
+  - 原来被 `ErrSubscriberLimit` 拒绝的 (玩家, 实体) pair 留在 Interest 的重试表里每次 Flush 全部重说：2000 人联盟、缺省上限 1024 时 195 万个被拒 pair 让每轮 Flush 约 960 ms、分配约 600 MB，收敛期每个 pair 一条 WARN。现在按实体排队等空位，每次结算每个排队的实体只查一次空位（新增只读 `Manager.SubscriberRoom`），有观察者离开、remove 交付后的下一次 Flush 按入队先后订阅上（新来的不插队）。同一档修后每轮约 6～8 ms、分配约 1.2 MB。
+  - 修 F1：重试中的 pair 被另一个视野再次持有后，每次结算说两遍、重试表里永久留两份。现在每次结算每个 pair 至多说一次。
+  - 修 F2：钉住的订阅（Interest 的 self、SelfView）原来也会被上限拒绝，玩家可能看不到自己。现在钉住不受上限，每个实体至多超出钉住订阅的个数。
+  - GroupView 的成员被上限拒绝后同样等空位，逐成员 WARN 改为每组每 10 秒一条。
+  - **行为变化**：`InterestConfig.OnRefusal` 对等空位的 pair 只在进入队列时报告一次（`Err` 为 `ErrSubscriberLimit`），之后排队期间不再报告；其他原因仍每次结算报告。上限以外原因的重说每次政策阶段至多 4096 个（显式 `Apply()` 不限）。等空位的 pair 只在其实体此刻有空位时阻挡 `Drain`，Drain 诊断新增 `subscriber_room`。重试停滞告警由每个 pair 一条改为每个 Interest 每 10 秒一条汇总（`entitysync_interest_retry_stalled_total` 仍按 pair 计）。
+  - **新 API 与指标**：`Manager.SubscriberRoom`、`Manager.MaxSubscribersPerSubject`、`ManagerStats.SubscriberLimitRefused`；`entitysync_subscriber_limit_refused_total`、`entitysync_interest_room_waiting`、`entitysync_interest_room_waiting_subjects`、`entitysync_interest_room_refused_total`。
+  - 基准：`BenchmarkRelationViewAllianceFlush` 的上限随人数提到 players+16（量联盟本身）；新增 `BenchmarkRelationViewAllianceOverCap` 量超上限路径。不涉及协议与存储，生成物不用新 API，最低 core 不变。
 - **文档：第二类 M 系列正式测量第一批（S1 微基准、S2 心跳投递）**（2026-11-19，KNOWN-LIMITS M-1 / M-2 / M-9 / M-18）：只有测量与记录，代码不变。M-1：回调 10µs 时时间片 50µs 比现缺省 100µs 业务 p99 低约 32%、CPU 与迟到不变，组 2 / 4 无差别，是否改缺省待维护者定；热点冲突转单目标 0.004%～0.007% / 拍，该项关闭。M-2 复测一致。M-9：上限内约 0.27µs / pair 更新、1.2KB / pair 常驻；计划命令的 2000 人档撞缺省每 subject 订阅者上限 1024，被拒 pair 每轮重说使 Flush 约 960ms，记为尚未确认的疑似问题。M-18：组同步成本只随成员总数线性，约 0.6µs / 成员·轮。[证据](docs/performance/benchmarks/m-series-s1-s2-20261119/README.md)
 - **测试：C++ `native_weak` 的 `send_stall` 夹具不再与客户端发送期限赛跑**（2026-11-19，KNOWN-LIMITS E-2）：`client/cpp/tests/weak.py` 的服务端停读后一直持有连接到客户端进程结束，不再固定 0.8s 后关闭。原来客户端从就绪到发出 16 MiB 请求若被调度拖过约 0.5s，就会报 `send failed`（EPIPE）而不是发送超时；注入延迟可确定性复现，修后 0～2000ms 全绿。客户端代码不变，只改测试。[证据](docs/maintenance/evidence/category3-batch3-20261119/README.md)
 

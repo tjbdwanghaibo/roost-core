@@ -1,0 +1,46 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   3430050 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   3651192 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   5227656 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   4871452 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   3871896 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   4209665 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  15443796 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  21850275 ns/op	    729173 bytes/round	      4854 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  14685140 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  14389950 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  14247173 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  16074235 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	 963098992 ns/op	    373275 bytes/round	      3853 heap-MB	   4000000 pairs	598505861 B/op	  299872 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	 918711698 ns/op	    373275 bytes/round	      3852 heap-MB	   4000000 pairs	598505773 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	1158669904 ns/op	    373275 bytes/round	      3853 heap-MB	   4000000 pairs	598505775 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	 903741921 ns/op	    373275 bytes/round	      3852 heap-MB	   4000000 pairs	598505773 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	 889375417 ns/op	    373275 bytes/round	      3852 heap-MB	   4000000 pairs	598505772 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	1007026088 ns/op	    373275 bytes/round	      3853 heap-MB	   4000000 pairs	598505775 B/op	  299871 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   2712788 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   3256558 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   2845325 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   2764450 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   2794927 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=1000-10         	      20	   2683802 ns/op	    184523 bytes/round	      1234 heap-MB	   1000000 pairs	  738696 B/op	    6639 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  13602483 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306112 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  12721679 ns/op	    729173 bytes/round	      4854 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  20282560 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306112 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  13987571 ns/op	    729173 bytes/round	      4854 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  17049879 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceFlush/players=2000-10         	      20	  14205698 ns/op	    729173 bytes/round	      4853 heap-MB	   4000000 pairs	 2306111 B/op	   13440 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	1024723023 ns/op	    373275 bytes/round	      3852 heap-MB	   4000000 pairs	598505852 B/op	  299872 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	1046531100 ns/op	    373275 bytes/round	      3853 heap-MB	   4000000 pairs	598505773 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	1185804729 ns/op	    373275 bytes/round	      3852 heap-MB	   4000000 pairs	598505773 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	1329828088 ns/op	    373275 bytes/round	      3853 heap-MB	   4000000 pairs	598505774 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	 812929192 ns/op	    373275 bytes/round	      3853 heap-MB	   4000000 pairs	598505779 B/op	  299871 allocs/op
+BenchmarkRelationViewAllianceOverCap/players=2000-10       	      20	 757822383 ns/op	    373275 bytes/round	      3852 heap-MB	   4000000 pairs	598505772 B/op	  299871 allocs/op
+PASS

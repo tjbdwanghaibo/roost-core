@@ -1,0 +1,96 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10      	    4707	    283918 ns/op	   49482 B/op	    1400 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1000000	      1044 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	  911821	      1152 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	   96406	     11974 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   44602	     25595 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5150	    260192 ns/op	   17453 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	     985	   1138948 ns/op	   17865 B/op	      14 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    3248	    360428 ns/op	        29.60 bytes/member-round	     11842 bytes/round	  172634 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     327	   3712302 ns/op	        29.19 bytes/member-round	    116766 bytes/round	 2400772 B/op	   25949 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     324	   3584144 ns/op	        29.19 bytes/member-round	    145953 bytes/round	 2081441 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     392	   3197681 ns/op	        29.33 bytes/member-round	    146633 bytes/round	 2046714 B/op	   24039 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10      	    5886	    217040 ns/op	   49486 B/op	    1400 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1575577	       776.6 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1000000	      1180 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  128781	     10664 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   52425	     22638 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5215	    226408 ns/op	   17450 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1177	   1011830 ns/op	   17787 B/op	      14 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4582	    250009 ns/op	        29.63 bytes/member-round	     11851 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     409	   2946416 ns/op	        29.35 bytes/member-round	    117389 bytes/round	 2400757 B/op	   25948 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     391	   3169294 ns/op	        29.32 bytes/member-round	    146625 bytes/round	 2081439 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     396	   3143790 ns/op	        29.33 bytes/member-round	    146666 bytes/round	 2046714 B/op	   24039 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10      	    5562	    233257 ns/op	   49484 B/op	    1400 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1494253	       780.9 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1461685	       807.0 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  135925	      9071 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   58702	     20561 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5677	    212833 ns/op	   17442 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1425	    855311 ns/op	   17713 B/op	      13 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4992	    235210 ns/op	        29.63 bytes/member-round	     11853 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     442	   2740749 ns/op	        29.39 bytes/member-round	    117574 bytes/round	 2400752 B/op	   25948 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     423	   2832541 ns/op	        29.37 bytes/member-round	    146871 bytes/round	 2081438 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     422	   2819639 ns/op	        29.37 bytes/member-round	    146864 bytes/round	 2046713 B/op	   24039 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10      	    5961	    195563 ns/op	   49481 B/op	    1400 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1746016	       687.2 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1569094	       765.7 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  137316	      8669 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   59276	     20261 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5649	    212258 ns/op	   17444 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1382	    853093 ns/op	   17721 B/op	      13 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4970	    235529 ns/op	        29.63 bytes/member-round	     11853 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     422	   2762136 ns/op	        29.37 bytes/member-round	    117465 bytes/round	 2400754 B/op	   25948 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     421	   2850236 ns/op	        29.37 bytes/member-round	    146856 bytes/round	 2081439 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     416	   2833998 ns/op	        29.36 bytes/member-round	    146820 bytes/round	 2046713 B/op	   24039 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10      	    6109	    192923 ns/op	   49485 B/op	    1400 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1764200	       680.7 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1545324	       776.3 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  136873	      8636 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   57471	     20783 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5384	    228099 ns/op	   17448 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1214	    980768 ns/op	   17777 B/op	      14 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4528	    249590 ns/op	        29.63 bytes/member-round	     11851 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     430	   2864625 ns/op	        29.38 bytes/member-round	    117510 bytes/round	 2400754 B/op	   25948 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     404	   2885544 ns/op	        29.35 bytes/member-round	    146729 bytes/round	 2081439 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     424	   2834281 ns/op	        29.38 bytes/member-round	    146878 bytes/round	 2046713 B/op	   24039 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10      	    5854	    204613 ns/op	   49489 B/op	    1400 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1677913	       712.1 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1457635	       820.2 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  132632	      8818 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   56928	     20926 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5580	    211324 ns/op	   17445 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1341	    854262 ns/op	   17732 B/op	      13 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4882	    239415 ns/op	        29.63 bytes/member-round	     11852 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     439	   2723442 ns/op	        29.39 bytes/member-round	    117559 bytes/round	 2400751 B/op	   25948 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     414	   2850045 ns/op	        29.36 bytes/member-round	    146805 bytes/round	 2081439 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     408	   2968120 ns/op	        29.35 bytes/member-round	    146760 bytes/round	 2046713 B/op	   24039 allocs/op
+PASS

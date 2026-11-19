@@ -1,0 +1,50 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+                                            │ before-alliance.txt │          after-alliance.txt          │
+                                            │       sec/op        │    sec/op     vs base                │
+RelationViewAllianceFlush/players=1000-10            3.343m ± 26%   3.154m ± 46%        ~ (p=0.932 n=12)
+RelationViewAllianceFlush/players=2000-10            14.54m ± 17%   14.30m ± 17%        ~ (p=0.347 n=12)
+RelationViewAllianceOverCap/players=2000-10        985.063m ± 18%   6.401m ± 23%  -99.35% (p=0.000 n=12)
+geomean                                              36.31m         6.609m        -81.80%
+
+                                            │ before-alliance.txt │          after-alliance.txt           │
+                                            │     bytes/round     │ bytes/round   vs base                 │
+RelationViewAllianceFlush/players=1000-10            180.2Ki ± 0%   180.2Ki ± 0%       ~ (p=1.000 n=12) ¹
+RelationViewAllianceFlush/players=2000-10            712.1Ki ± 0%   712.1Ki ± 0%       ~ (p=1.000 n=12) ¹
+RelationViewAllianceOverCap/players=2000-10          364.5Ki ± 0%   364.5Ki ± 0%       ~ (p=1.000 n=12) ¹
+geomean                                              360.3Ki        360.3Ki       +0.00%
+¹ all samples are equal
+
+                                            │ before-alliance.txt │          after-alliance.txt           │
+                                            │       heap-B        │    heap-B     vs base                 │
+RelationViewAllianceFlush/players=1000-10            1.149Gi ± 0%   1.149Gi ± 0%       ~ (p=1.000 n=12) ¹
+RelationViewAllianceFlush/players=2000-10            4.520Gi ± 0%   4.520Gi ± 0%       ~ (p=0.590 n=12)
+RelationViewAllianceOverCap/players=2000-10          3.588Gi ± 0%   3.359Gi ± 0%  -6.37% (p=0.000 n=12)
+geomean                                              2.651Gi        2.594Gi       -2.17%
+¹ all samples are equal
+
+                                            │ before-alliance.txt │          after-alliance.txt          │
+                                            │        pairs        │    pairs     vs base                 │
+RelationViewAllianceFlush/players=1000-10             1.000M ± 0%   1.000M ± 0%       ~ (p=1.000 n=12) ¹
+RelationViewAllianceFlush/players=2000-10             4.000M ± 0%   4.000M ± 0%       ~ (p=1.000 n=12) ¹
+RelationViewAllianceOverCap/players=2000-10           4.000M ± 0%   4.000M ± 0%       ~ (p=1.000 n=12) ¹
+geomean                                               2.520M        2.520M       +0.00%
+¹ all samples are equal
+
+                                            │ before-alliance.txt │           after-alliance.txt           │
+                                            │        B/op         │     B/op      vs base                  │
+RelationViewAllianceFlush/players=1000-10            721.4Ki ± 0%   721.4Ki ± 0%        ~ (p=1.000 n=12) ¹
+RelationViewAllianceFlush/players=2000-10            2.199Mi ± 0%   2.199Mi ± 0%        ~ (p=0.640 n=12)
+RelationViewAllianceOverCap/players=2000-10        570.780Mi ± 0%   1.125Mi ± 0%  -99.80% (p=0.000 n=12)
+geomean                                              9.599Mi        1.204Mi       -87.46%
+¹ all samples are equal
+
+                                            │ before-alliance.txt │          after-alliance.txt           │
+                                            │      allocs/op      │  allocs/op   vs base                  │
+RelationViewAllianceFlush/players=1000-10             6.639k ± 0%   6.639k ± 0%        ~ (p=1.000 n=12) ¹
+RelationViewAllianceFlush/players=2000-10             13.44k ± 0%   13.44k ± 0%        ~ (p=1.000 n=12) ¹
+RelationViewAllianceOverCap/players=2000-10         299.871k ± 0%   6.937k ± 0%  -97.69% (p=0.000 n=12)
+geomean                                               29.91k        8.522k       -71.51%
+¹ all samples are equal

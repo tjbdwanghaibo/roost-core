@@ -1,0 +1,68 @@
+applied M1
+== M1
+--- FAIL: TestOverCapPairsWaitForRoomInsteadOfBeingSaidEverySettle (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.628s
+FAIL
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.495s
+applied M2
+== M2
+--- FAIL: TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed (0.12s)
+    --- FAIL: TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed/flush (0.01s)
+    --- FAIL: TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed/on_change (0.11s)
+--- FAIL: TestANewPairDoesNotJumpTheRoomQueue (0.01s)
+--- FAIL: TestOverCapWaitingHoldsDrainOnlyWhileThereIsRoom (2.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	2.671s
+FAIL
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.271s
+applied M3
+== M3
+--- FAIL: TestANewPairDoesNotJumpTheRoomQueue (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.615s
+FAIL
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.275s
+applied M4a
+== M4a
+--- FAIL: TestARetriedPairTouchedAgainIsSaidOncePerSettle (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.615s
+FAIL
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.265s
+applied M4b
+== M4b
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.619s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.262s
+applied M5
+== M5
+--- FAIL: TestPinnedSelfIsNotRefusedBySubscriberLimit (0.01s)
+--- FAIL: TestSelfViewIsNotRefusedBySubscriberLimit (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.610s
+FAIL
+--- FAIL: TestSubscriberLimitRefusesNewSessionsButNotPinnedSelf (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.504s
+FAIL
+applied M6
+== M6
+--- FAIL: TestSubscriberRoomWarnIsAggregated (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.601s
+FAIL
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.267s
+applied M7
+== M7
+--- FAIL: TestOverCapWaitingHoldsDrainOnlyWhileThereIsRoom (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.570s
+FAIL
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.236s
+applied G1
+== G1
+--- FAIL: TestGroupViewMembersWaitForSubscriberRoom (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.568s
+FAIL
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.236s

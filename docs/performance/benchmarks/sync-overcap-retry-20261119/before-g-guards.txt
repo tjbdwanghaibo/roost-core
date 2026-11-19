@@ -1,0 +1,71 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10      	    6128	    197775 ns/op	   49492 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10      	    6072	    197594 ns/op	   49483 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10      	    6296	    196850 ns/op	   49489 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10      	    6007	    227097 ns/op	   49485 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10      	    5185	    206096 ns/op	   49485 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10      	    4936	    205443 ns/op	   49494 B/op	    1400 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1668763	       714.7 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1715281	       706.2 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1703384	       693.7 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1744888	       686.5 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1755870	       769.5 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10         	 1705500	       705.4 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1450675	       815.9 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1486759	       802.7 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1555064	       769.6 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1570680	       766.9 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1478464	       810.9 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10       	 1516423	       806.4 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  120794	      9386 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  122934	      9102 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  134887	      8925 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  135666	      8720 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  136977	      8722 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10        	  134188	      9129 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   58750	     21112 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   57866	     20622 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   58170	     20530 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   58195	     20522 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   56355	     20379 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10      	   58706	     20635 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5361	    216429 ns/op	   17446 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5523	    227983 ns/op	   17445 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    5497	    241419 ns/op	   17446 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    4417	    253630 ns/op	   17467 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    4416	    235995 ns/op	   17465 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10      	    4389	    251724 ns/op	   17467 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1117	    990552 ns/op	   17804 B/op	      14 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1242	    930146 ns/op	   17765 B/op	      13 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	    1263	   1104895 ns/op	   17763 B/op	      14 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	     996	   1467876 ns/op	   17878 B/op	      14 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	     916	   1526594 ns/op	   17924 B/op	      15 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10    	     966	   1192885 ns/op	   17880 B/op	      14 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4954	    333533 ns/op	        29.63 bytes/member-round	     11852 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    3450	    305246 ns/op	        29.61 bytes/member-round	     11844 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    5026	    266339 ns/op	        29.63 bytes/member-round	     11853 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4704	    245092 ns/op	        29.63 bytes/member-round	     11851 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    4996	    243782 ns/op	        29.63 bytes/member-round	     11853 bytes/round	  172633 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=4-10                    	    5138	    275288 ns/op	        29.63 bytes/member-round	     11853 bytes/round	  172634 B/op	    2034 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     178	   6193449 ns/op	        28.54 bytes/member-round	    114165 bytes/round	 2400835 B/op	   25951 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     183	   6206382 ns/op	        28.58 bytes/member-round	    114321 bytes/round	 2400828 B/op	   25951 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     202	   5633930 ns/op	        28.71 bytes/member-round	    114843 bytes/round	 2400815 B/op	   25950 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     271	   3960508 ns/op	        29.03 bytes/member-round	    116124 bytes/round	 2400785 B/op	   25949 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     368	   3274505 ns/op	        29.28 bytes/member-round	    117112 bytes/round	 2400763 B/op	   25948 allocs/op
+BenchmarkGroupViewFlush/rooms=1000/members=4-10                   	     399	   2996252 ns/op	        29.33 bytes/member-round	    117327 bytes/round	 2400758 B/op	   25948 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     376	   4577829 ns/op	        29.30 bytes/member-round	    146495 bytes/round	 2081440 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     163	   6624173 ns/op	        28.42 bytes/member-round	    142082 bytes/round	 2081447 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     258	   4737508 ns/op	        28.99 bytes/member-round	    144951 bytes/round	 2081441 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     357	   4915978 ns/op	        29.26 bytes/member-round	    146316 bytes/round	 2081439 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     201	   5665849 ns/op	        28.71 bytes/member-round	    143555 bytes/round	 2081444 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=100/members=50-10                   	     236	   4861581 ns/op	        28.90 bytes/member-round	    144492 bytes/round	 2081443 B/op	   24751 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     214	   5574141 ns/op	        28.79 bytes/member-round	    143938 bytes/round	 2046715 B/op	   24039 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     244	   5071682 ns/op	        28.93 bytes/member-round	    144668 bytes/round	 2046714 B/op	   24039 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     200	   5650677 ns/op	        28.70 bytes/member-round	    143523 bytes/round	 2046715 B/op	   24039 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     199	   5743654 ns/op	        28.70 bytes/member-round	    143491 bytes/round	 2046713 B/op	   24039 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     236	   5413186 ns/op	        28.90 bytes/member-round	    144492 bytes/round	 2046713 B/op	   24039 allocs/op
+BenchmarkGroupViewFlush/rooms=10/members=500-10                   	     195	   5855779 ns/op	        28.67 bytes/member-round	    143360 bytes/round	 2046715 B/op	   24039 allocs/op
+PASS

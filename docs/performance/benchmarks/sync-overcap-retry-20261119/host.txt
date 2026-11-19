@@ -1,0 +1,32 @@
+Thu Nov 19 07:53:48 CST 2026
+ 7:53  up 46 days, 16:04, 5 users, load averages: 4.27 3.72 3.28
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+ 8:00  up 46 days, 16:11, 5 users, load averages: 5.00 4.98 4.13
+== after-1 alliance start 08:12:50 load averages: 4.34 5.64 5.34
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== after-1 alliance end exit=0 08:16:26 load averages: 5.94 6.12 5.63
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== before-2 alliance start 08:16:26 load averages: 5.94 6.12 5.63
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== before-2 alliance end exit=0 08:21:40 load averages: 6.33 6.99 6.21
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== after-2 alliance start 08:21:40 load averages: 6.33 6.99 6.21
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== after-2 alliance end exit=0 08:24:10 load averages: 7.89 7.25 6.43
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== before-g guards start 08:24:10 load averages: 7.89 7.25 6.43
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== before-g guards end exit=0 08:25:35 load averages: 22.71 10.69 7.73
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== after-g guards start 08:25:35 load averages: 22.71 10.69 7.73
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+== after-g guards end exit=0 08:27:02 load averages: 32.27 17.16 10.54
+vm.swapusage: total = 7168.00M  used = 6177.19M  free = 990.81M  (encrypted)
+done
+round 1 08:27:25 load averages: 26.08 16.72 10.54
+round 2 08:27:53 load averages: 18.57 15.83 10.43
+round 3 08:28:22 load averages: 22.26 16.79 10.96
+round 4 08:28:49 load averages: 15.54 15.65 10.71
+round 5 08:29:17 load averages: 10.50 14.42 10.44
+round 6 08:29:44 load averages: 7.81 13.47 10.21
+done 08:30:11 load averages: 6.31 12.56 9.99

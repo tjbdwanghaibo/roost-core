@@ -1,6 +1,6 @@
 # 方案：超过每 subject 订阅者上限后的重试（Sync，2026-11-19）
 
-**状态：已确认，实施中（维护者 2026-11-19“可以实施”，§7 决定项 D1～D8 均按推荐）。** 维护者 2026-11-19 选定 M-9 处置的 B（“改重试机制”），本文是 B 的方案。Sync 是 core 三大块之一，确认前不改代码。
+**状态：已实施（2026-11-19，维护者“可以实施”，§7 决定项 D1～D8 均按推荐；实施结果见 §9）。** 维护者 2026-11-19 选定 M-9 处置的 B（“改重试机制”），本文是 B 的方案。Sync 是 core 三大块之一，确认前不改代码。
 
 - 基线：main `ba158535`。行号均为该提交的源码。codebase-memory-mcp 本次连不上（connection closed），调用链靠直接读源码与 `rg` 整理，没有用图谱。
 - 证据来源：[M-9 测量与“疑似框架问题”](../performance/benchmarks/m-series-s1-s2-20261119/README.md)、[KNOWN-LIMITS“超过每 subject 订阅者上限时被拒 pair 每轮全量重说”](KNOWN-LIMITS.md)（第 915 行，标“尚未确认”）。
@@ -299,3 +299,26 @@ GOWORK=off go test ./framework/sync/entitysync/policy -run '^$' \
 - 不改 `MaxSubscribersPerSubject` 的缺省值与配置方式。
 - 不改超额降级（会话持有对象上限）的机制。
 - 不新建包。Manager 的改动放在 `subscriptions.go` / `manager.go`；政策侧放在 `interest.go` / `interest_queue.go`（重试相关的代码已在 `interest_queue.go` 的“重试停滞”一节，新增的等空位部分放在它旁边）。
+
+## 9. 实施结果（2026-11-19）
+
+| 批 | 提交 | 内容 |
+| --- | --- | --- |
+| 1 | `e7ae5ceb` | `BenchmarkRelationViewAllianceFlush` 的上限随人数提到 players+16；新增 `BenchmarkRelationViewAllianceOverCap`（2000 人、缺省上限，日志整段丢弃，不只是收敛期） |
+| 2 | `e5292281` | Manager：`!pinned`、`SubscriberRoom`、`MaxSubscribersPerSubject()`、`ManagerStats.SubscriberLimitRefused` 与指标。Interest：`hold.wait`、`retryItem`、`roomWait`、结算①～⑤、`queuedPending` / `drainStalls`、汇总告警、三个指标、`retryBudget`。§5.1 用例与 OBSERVABILITY 指标表 |
+| 3 | `f4117a45` | GroupView：成员 `waitsForRoom`，没有空位时跳过，每组每阶段至多查一次空位；告警每组每 10 秒一条 |
+| 4 | （本提交） | 测量、现行文档、KNOWN-LIMITS、CHANGELOG |
+
+与方案的出入：
+- Manager 多了一个只读方法 `MaxSubscribersPerSubject()`，给汇总告警带上生效的上限（方案 §4.4 要求告警里有上限，Manager 原来没有读配置的入口）。
+- `TestANewPairDoesNotJumpTheRoomQueue` 的场景改为“空位出现之后、分配空位的那次结算里新挂上观察者”。按方案原文“释放一个位置的同一次结算里新挂上”，新 pair 在那次结算里空位还没出现、本来就会被拒并排到队尾，变异 M3 不变红；改后修前与 M3 都变红。
+- 等空位的 pair 被“新来不插队”规则直接排队时（`settleUnsubscribedLocked`），同样报告一次 `Refusal`（`Err` 为 `ErrSubscriberLimit`，Manager 没有真的拒绝，不计 `SubscriberLimitRefused`）。
+- 等空位的 pair 后来含了 self（钉住）时出队立即说（I5），方案没有单列。
+- GroupView 的空位按成员 ID 顺序分配（它没有入队顺序），不是先来先得。
+- 代码量：生产代码 +465 / −59 行（方案估计约 250 行），测试 +466 / −9 行。多出的部分主要是中文契约注释、汇总告警与跨 Interest 加总的指标。
+
+验收（[证据](../performance/benchmarks/sync-overcap-retry-20261119/README.md)）：
+- 先红后绿：§5.1 全部用例修前红（`TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed` 的订阅部分修前就通过，是守卫，由 M2 证明能变红）；M1～M7 与 GroupView 的 G1 都有用例变红；M4 只去掉 `queueRetryLocked` 的重复入队守卫时没有用例变红（守卫当前不可达），去掉结算里对 `hold.wait` 的检查时 F1 用例变红。
+- §4.5 的“尚未确认”项已确认：周期类型 subject 的 remove 不等周期，空位在一次 Flush 后出现，G2 的口径不变。
+- 基准（同机交替、每侧 12 个样本，负载 4～8）：OverCap 2000 档 985 ms → 6.40 ms（−99.35%），分配 570.8 MiB → 1.125 MiB；Flush 1000 / 2000 档 `~`（单档离散度 17%～46%，测不出 ±3% 这一级，分配逐样本相同）；回归守卫交替复测全部 `~`。
+- 门禁：`go build ./...`、`go vet ./framework/sync/...`、`go test -race ./framework/sync/entitysync/...`、`go test ./framework/sync/... ./gameplay/...`、全量 `go test ./...` 与根包 `go test -count=1 .`，结果见交付报告。
