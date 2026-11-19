@@ -1,0 +1,8 @@
+roost-tag v1.57.1 exit 0
+github.com/tjbdwanghaibo/roost-core v1.57.1
+roost-tag v1.58.0 exit 0
+github.com/tjbdwanghaibo/roost-core v1.58.0
+roost v1.57.1 exit 1
+2026/11/19 09:37:37 versions.core requires >= v1.58.0 or latest; got "v1.57.1"
+roost v1.58.0 exit 0
+github.com/tjbdwanghaibo/roost-core v1.58.0

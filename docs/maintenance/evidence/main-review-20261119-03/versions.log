@@ -1,0 +1,24 @@
+=== RUN   TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor
+--- PASS: TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor (0.00s)
+=== RUN   TestFrameworkReleaseManifestStrictValidation
+=== RUN   TestFrameworkReleaseManifestStrictValidation/legacy-modules
+=== RUN   TestFrameworkReleaseManifestStrictValidation/unknown
+=== RUN   TestFrameworkReleaseManifestStrictValidation/latest
+=== RUN   TestFrameworkReleaseManifestStrictValidation/go
+=== RUN   TestFrameworkReleaseManifestStrictValidation/old-go
+=== RUN   TestFrameworkReleaseManifestStrictValidation/empty-go
+=== RUN   TestFrameworkReleaseManifestStrictValidation/schema-2
+--- PASS: TestFrameworkReleaseManifestStrictValidation (0.00s)
+    --- PASS: TestFrameworkReleaseManifestStrictValidation/legacy-modules (0.00s)
+    --- PASS: TestFrameworkReleaseManifestStrictValidation/unknown (0.00s)
+    --- PASS: TestFrameworkReleaseManifestStrictValidation/latest (0.00s)
+    --- PASS: TestFrameworkReleaseManifestStrictValidation/go (0.00s)
+    --- PASS: TestFrameworkReleaseManifestStrictValidation/old-go (0.00s)
+    --- PASS: TestFrameworkReleaseManifestStrictValidation/empty-go (0.00s)
+    --- PASS: TestFrameworkReleaseManifestStrictValidation/schema-2 (0.00s)
+=== RUN   TestCorePinScriptPrintsTheGeneratorMinimum
+--- PASS: TestCorePinScriptPrintsTheGeneratorMinimum (0.01s)
+=== RUN   TestFrameworkMinimumVersionGuard
+--- PASS: TestFrameworkMinimumVersionGuard (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.019s
