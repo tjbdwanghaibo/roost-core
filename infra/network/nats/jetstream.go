@@ -78,6 +78,9 @@ type JetStreamMsg struct {
 	StreamSeq    uint64
 	ConsumerSeq  uint64
 	NumDelivered uint64
+	// StoredAt is the broker's wall-clock time of the original append (not this delivery).
+	// Zero when stream metadata is unavailable; never use it to drive deadlines.
+	StoredAt time.Time
 	// InProgress 告诉 broker 这次投递仍在处理，重置它的 AckWait 计时（JetStream 的 +WPI）。处理时间可能超过
 	// AckWait 的消费者在处理期间定期调用它，否则 broker 会把未确认的消息重投给别的实例并发执行。
 	// 测试替身或不支持的传输为 nil。

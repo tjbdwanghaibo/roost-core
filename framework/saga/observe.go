@@ -4,11 +4,28 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // observe.go 是协调器判定之外的观察：重开、迟到成功、旧尝试 / 旧一生的结果。分区循环在判定之后调用，计数由调用方加。
+
+// observeDeliveryAge measures from the broker append until a worker takes the message.
+// Redelivery includes the previous attempts/backoff and must not be mixed with first delivery.
+// Clock skew can move broker timestamps forward. A missing/future timestamp is not a zero-latency sample.
+func observeDeliveryAge(stage string, msg *fnats.JetStreamMsg, at time.Time) {
+	if msg == nil || msg.StoredAt.IsZero() || at.Before(msg.StoredAt) || msg.NumDelivered == 0 {
+		return
+	}
+	delivery := "first"
+	if msg.NumDelivered > 1 {
+		delivery = "retry"
+	}
+	metrics.ObserveHistogram("saga.consumer.delivery_age", metrics.Labels{"stage": stage, "delivery": delivery}, at.Sub(msg.StoredAt))
+}
 
 // saga.reopened_total 的 reason 标签：重开从哪里来。取值固定三个，保持低基数。
 const (

@@ -219,6 +219,7 @@ func SubscribeNativeStep(ctx context.Context, js fnats.IJetStream, layout Layout
 		return nil, err
 	}
 	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+		observeDeliveryAge("native_step", message, time.Now())
 		command, err := decodeCommandEvent(message)
 		if err != nil {
 			logConsumerError("native step decode", message, err)
@@ -258,6 +259,7 @@ func SubscribeMongoStep(ctx context.Context, js fnats.IJetStream, layout Layout,
 		return nil, err
 	}
 	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+		observeDeliveryAge("mongo_step", message, time.Now())
 		command, err := decodeCommandEvent(message)
 		if err != nil {
 			logConsumerError("mongo step decode", message, err)
@@ -268,7 +270,9 @@ func SubscribeMongoStep(ctx context.Context, js fnats.IJetStream, layout Layout,
 		}
 		processCtx, cancel := context.WithTimeout(messageCtx, config.AckWait)
 		defer cancel()
+		started := time.Now()
 		outcome, err := inbox.Handle(processCtx, command, handler)
+		metrics.ObserveHistogram("saga.step.mongo_inbox_duration", nil, time.Since(started))
 		if err != nil {
 			logConsumerError("mongo step", message, err)
 			return err

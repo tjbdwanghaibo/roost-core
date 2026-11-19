@@ -142,7 +142,12 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 		// 逐跳计时：投影暂存 effect → 本次发布开始（轮询 / 唤醒与认领），发布本身（同步等 PubAck），Ack 删除。
 		hoptrace.SinceMark("h10.de.outbox_wait", "effect-staged/", item.Effect.ID)
 		publishStart := hoptrace.Now()
+		started := time.Now()
+		if !item.CreatedAt.IsZero() && !started.Before(item.CreatedAt) {
+			metrics.ObserveHistogram("dataengine.outbox.age_at_publish", nil, started.Sub(item.CreatedAt))
+		}
 		err := worker.publisher.Publish(ctx, item)
+		metrics.ObserveHistogram("dataengine.outbox.publish_duration", nil, time.Since(started))
 		hoptrace.Since("h10.de.outbox_publish", publishStart)
 		if err != nil {
 			worker.publishFailures.Add(1)

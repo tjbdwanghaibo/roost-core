@@ -301,6 +301,7 @@ func jetStreamMsg(msg gojs.Msg) *fnats.JetStreamMsg {
 		wrapped.StreamSeq = meta.Sequence.Stream
 		wrapped.ConsumerSeq = meta.Sequence.Consumer
 		wrapped.NumDelivered = meta.NumDelivered
+		wrapped.StoredAt = meta.Timestamp
 	}
 	return wrapped
 }
