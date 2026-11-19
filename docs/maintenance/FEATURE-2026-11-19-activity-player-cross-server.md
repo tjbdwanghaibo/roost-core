@@ -1,6 +1,6 @@
 # 方案：SLG 主堡跨服——Castle 跨服、ActivityPlayer 伴生共享、协议转发
 
-状态：**方案，未实施**（2026-11-19，维护者与 agent 讨论定稿，待按“分批”实施）。
+状态：**只做方案，不实施**（2026-11-19，维护者：“以上讨论的是方案，可以不用实施，core 底层有能力解决就可以”）。结论：除第 5 节“尚未确认”的两项外，所需能力 core 都已具备，缺的是业务模块与生成器的胶水（见 3、4.6）；第 6 节的分批只在以后真要做时参考。
 
 ## 1. 场景
 
@@ -36,7 +36,9 @@ SLG 里 A 服玩家的主堡迁到 B 服地图，一段时间后再迁回 A。�
 | 本地 Player 与 Remote 实体同一笔事务 | Remote 写与本地写进同一条 WAL 提交记录（team 模块的用法） |
 | 调用 Remote 实体当前的 owner | 路由 RPC：`WithRouteKinds` + `RouteSource`，服务端 `RPCRouteCheck` |
 | 非 owner 读 | Mirror 只读快照 |
-| 找到玩家连在哪个 game | login 的在线登记（`login.presence`） |
+| 定向发给某个服的 game | `Bus.Send(toSid, module, msg)`、`Bus.CallTo(svcType, sid, …)` |
+
+更正（2026-11-19 核对）：`login.presence` / account 的在线登记是**区服级**的（“本服连这个地址、这么忙”，给登录入口列清单用），不是“玩家连在哪个 game”。本场景不需要它：玩家只连 A，Castle 上记着主人的原服 sid，B 直接按 sid 发给 A。
 
 约束：handler 只能持久写本条消息声明的 Remote 托管实体（`refuseUndeclaredRemoteTargets`），所以 multi 消息必须把 Castle 与 ActivityPlayer 都列为目标。
 
@@ -93,13 +95,25 @@ SLG 里 A 服玩家的主堡迁到 B 服地图，一段时间后再迁回 A。�
 
 ### 4.6 协议转发（新功能，D5）
 
-客户端只连 A（Gate 一条连接只绑定一个 game，`gate_forward.go` 按 `binding.Game` 转发，没有按消息号分发的能力）。在 **game 层**做转发：
+客户端只连 A（Gate 一条连接只绑定一个 game，`gate_forward.go` 按 `binding.Game` 转发，没有按消息号分发的能力）。两种做法：
 
-- 消息声明它的目标实体种类（例如主堡相关消息的目标是 Castle）；A 的接入层收到时，目标实体的 owner 在本进程就本地派发，不在就经路由 RPC（`RouteSource`）转给 owner，应答原样带回客户端；
-- B 上的结果推送给玩家：按 `login.presence` 找到玩家连着的 game（A），定向发给它，由 A 推送，不用 facebook 那种全体广播；
-- ActivityPlayer 被 B 写了之后，A 要刷新并把变化推给客户端：B 在事务提交后定向通知 A，A 重载后经自身视图下发。**待定**：用同步总线定向主题，还是路由 RPC。
+| | **game 层转发（推荐，维护者 2026-11-19 同意先推荐这层）** | Gate 层分发 |
+| --- | --- | --- |
+| 做法 | 客户端消息照常到 A；A 发现目标 Castle 的 owner 不是自己，经路由 RPC 转给 B，应答带回客户端 | Gate 按消息号 / 目标实体把一条连接的部分消息直接送到 B |
+| core 已有 | 路由 RPC 全套（Redis 登记 → 所有权记录查找、改投、no responders 重查、按实体 ID 的接收端顺序键，见 [guide/09 §2A](../framework/guide/09-services.md#2a-路由-rpc-与改投)）；`RPCRouteCheck` / `RPCWriteAnswer`；`Bus.Send` / `CallTo` 定向发 | 没有。Gate 只有一个 `binding.Game`，票据只签一个 game |
+| 要新做 | 业务胶水：A 上主堡消息的转发 handler、B 上对应的路由 RPC handler；生成器目前只给 `service=` 的 Remote kind 接 `WithRouteKinds`，game 进程上的 Castle 要手工接（或以后让生成器支持） | Gate 多目标绑定、account 为 B 签票据、Gate 按消息分发表、两个 game 往同一连接推送的顺序、任一 game 断开 / 重连 / 换服时绑定的收拾 |
+| 代价 | 主堡消息多一跳（A → B 一次内网 RPC），A 承担转发 | 少一跳；但改的是接入层与登录链，影响所有工程 |
+| 顺序 | 同一 Castle 的请求在 B 上按实体 ID 排队（路由 RPC 的 `OrderKey`）；同一玩家发往 Player 与发往 Castle 的消息之间不保证顺序（两个实体本来就不同序） | 同左，另加 Gate 侧两路的顺序问题 |
 
-不在 Gate 层按消息号路由到多个 game：那需要 account 给 B 签票据、两边推送的顺序与重连，改动大，不在本方案内。
+game 层的完整链路：
+
+1. **请求**：A 收到主堡消息（消息声明目标是 Castle）。Castle owner 是 A：本地派发。不是：`CallRoutedChecked(Castle ID)` 发给 owner；B 的 handler 先 `RPCRouteCheck`，再进 Nest（multi：Castle + ActivityPlayer），错误经 `RPCWriteAnswer` 转成改投 / 可重试；A 把应答原样回客户端。转移进行中答可重试，A 不重试写、由客户端重发（与现有路由 RPC 语义一致）。
+2. **B 的变化推给客户端**：
+   - Castle 的变化：A 持 Castle 的 Mirror 只读快照，经 Sync 视图推给自己的客户端（Sync 视图可以挂 Mirror 实体）；或者 B 提交后 `Bus.Send(A 的 sid, …)` 定向通知 A 推送。
+   - ActivityPlayer 的变化：B 提交后 `Bus.Send(A 的 sid, …)` 定向通知；A 在下次写之前本来就会按共享模式仅内存卸载、从权威重载，收到通知时先重载再经自身视图下发。通知丢了（总线可丢）只是推送晚到，下一次 A 侧写或查询对账时补上，不丢数据。
+3. **回迁**：Castle 的路由登记随 `TransferRemoteOwnership` 换成 A，A 上的旧路由缓存靠改投 / no responders 重查自愈，不需要额外清理。
+
+不推荐 Gate 层：它解决的只是“少一跳”，代价是改接入层、票据与推送顺序，影响所有工程；只有当实测 A 的转发成为瓶颈时再议。
 
 ### 4.7 活动模块改造
 
@@ -113,11 +127,11 @@ SLG 里 A 服玩家的主堡迁到 B 服地图，一段时间后再迁回 A。�
 
 1. **一笔事务里一个独占、一个共享的 Remote 实体**：原子批次本身已支持，但没找到“独占 + 共享混在一个批次”的专门用例；实施第 4 批时先补这个用例（含 B 写时 A 正在写的竞争）。
 2. 跨服流程两步之间的崩溃续做与在途贡献被 fence 后的应答（4.4）。
-3. B 写后通知 A 刷新与推送的通道（4.6）。
+3. ~~B 写后通知 A 刷新与推送的通道~~：定为 `Bus.Send` 定向通知 + A 重载（4.6），通知可丢、靠下次对账补。
 4. Castle 到 B 地图之后与 B 的地形、建筑、视野的关系（地形按地图归属分库，D11），本方案不涉及，另行设计。
 5. 是否保留“数据在 Player 上”的旧布局给不跨服的工程（4.7）。
 
-## 6. 分批
+## 6. 分批（不排期，真要做时参考）
 
 1. **活动模块拆宿主**：`ActivityBook` 可放在伴生 Remote 实体上，定时器留在 Player；节奏 / 贡献分开（4.3）；现有个人活动用例全部改到新布局并通过。
 2. **ActivityPlayer 伴生实体与共享切换**：`Ensure`、跨服 / 回迁两步流程与续做（4.4）。
