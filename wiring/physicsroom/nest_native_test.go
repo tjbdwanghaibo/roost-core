@@ -59,11 +59,11 @@ func TestRoomCommitsThroughNest(t *testing.T) {
 	name := nest.NewHandlerName("physicsroom.test_commit")
 	err = engine.RegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
 		v := args[0].(FrameCommit)
-		if v.Frame.Tick == 2 {
+		if v.Tick.Frame.Tick == 2 {
 			close(blocked)
 			<-release
 		}
-		if err := target.state.Accept(v.Frame); err != nil {
+		if err := target.state.Accept(v.Tick.Frame); err != nil {
 			return nil, err
 		}
 		select {

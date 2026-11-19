@@ -320,5 +320,28 @@ func ObstacleLevel() Level {
 	}, Motions: []MotionTrack{
 		{ID: 4, Translation: physx.Vec3{0, 1, 0}, PeriodSeconds: 6},
 		{ID: 5, PeriodSeconds: 6, Axis: physx.Vec3{0, 1, 0}, AngularSpeed: 1},
-	}, Joints: []physx.Joint{{ID: 1, Kind: physx.Hinge, A: 6, AnchorA: physx.Vec3{0, 2, 0}, AnchorB: physx.Vec3{-6, 5, 0}, MotorSpeed: 1, MotorForce: 100, BreakForce: 10000}}}
+	}, Joints: []physx.Joint{{ID: 1, Kind: physx.Hinge, A: 6, AnchorA: physx.Vec3{0, 2, 0}, AnchorB: physx.Vec3{-6, 5, 0}, MotorSpeed: 1, MotorForce: 100, BreakForce: 10000}},
+		// 流程：掉出地面（kill）回到最近的检查点；走过两个检查点区域各记一次；进终点结算。
+		Regions: []Region{
+			{ID: "kill", Center: physx.Vec3{0, -6, 0}, HalfExtents: physx.Vec3{60, 2, 60}},
+			{ID: "checkpoint_a", Center: physx.Vec3{0, 1, 8}, HalfExtents: physx.Vec3{3, 1, 1.5}},
+			{ID: "checkpoint_b", Center: physx.Vec3{12, 1, 12}, HalfExtents: physx.Vec3{2, 1, 2}},
+			{ID: "goal", Center: physx.Vec3{-14, 1, 14}, HalfExtents: physx.Vec3{2, 1.5, 2}},
+		},
+		Spawns: []Spawn{
+			{ID: "start", Positions: []physx.Vec3{{0, .6, -3}, {1, .6, -3}}},
+			{ID: "mid_a", Positions: []physx.Vec3{{-.6, .6, 8}, {.6, .6, 8}}},
+			{ID: "mid_b", Positions: []physx.Vec3{{11.4, .6, 12}, {12.6, .6, 12}}},
+		},
+		DefaultSpawn: "start", Flow: []byte(obstacleFlow)}
 }
+
+const obstacleFlow = `{"Version":1,"Name":"ugc-obstacles","Revision":1,"TimeDomain":"tick","Initial":["run"],` +
+	`"Variables":[{"Scope":"global","Name":"falls","Default":{"Kind":"int"},"Public":true}],"Stages":[{"ID":"run","Triggers":[` +
+	`{"ID":"fall","Event":"region.enter","Conditions":[{"Left":{"EventField":"region"},"Op":"eq","Right":{"Literal":{"Kind":"string","Text":"kill"}}}],"Actions":[` +
+	`{"Kind":"add","Scope":"global","Name":"falls","Value":{"Literal":{"Kind":"int","Int":1}}},{"Kind":"request","Name":"physics_respawn","Args":{"actor":{"EventField":"actor"}}}]},` +
+	`{"ID":"reach_a","Event":"region.enter","Conditions":[{"Left":{"EventField":"region"},"Op":"eq","Right":{"Literal":{"Kind":"string","Text":"checkpoint_a"}}}],"Actions":[` +
+	`{"Kind":"request","Name":"physics_checkpoint","Args":{"actor":{"EventField":"actor"},"spawn":{"Literal":{"Kind":"string","Text":"mid_a"}}}}]},` +
+	`{"ID":"reach_b","Event":"region.enter","Conditions":[{"Left":{"EventField":"region"},"Op":"eq","Right":{"Literal":{"Kind":"string","Text":"checkpoint_b"}}}],"Actions":[` +
+	`{"Kind":"request","Name":"physics_checkpoint","Args":{"actor":{"EventField":"actor"},"spawn":{"Literal":{"Kind":"string","Text":"mid_b"}}}}]},` +
+	`{"ID":"win","Event":"region.enter","Conditions":[{"Left":{"EventField":"region"},"Op":"eq","Right":{"Literal":{"Kind":"string","Text":"goal"}}}],"Actions":[{"Kind":"finish","Result":"clear"}]}]}]}`

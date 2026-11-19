@@ -148,11 +148,27 @@ func TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow(t *testing.T) {
 	}
 	// 没有区域、出生点、流程的关卡仍然合法，Program 为 nil。
 	plain := ObstacleLevel()
+	plain.Regions, plain.Spawns, plain.DefaultSpawn, plain.Flow = nil, nil, "", nil
 	if err := plain.Validate(); err != nil {
 		t.Fatalf("level without flow refused: %v", err)
 	}
 	if program, err := plain.Program(level.Registry{}); err != nil || program != nil {
 		t.Fatalf("level without flow must have no program: %v %v", program, err)
+	}
+
+	// 内置的示例关卡自己带流程：能通过校验、编译出 Program，导出再读回后内容摘要不变。
+	sample := ObstacleLevel()
+	if program, err := sample.Program(level.Registry{}); err != nil || program == nil {
+		t.Fatalf("sample level flow: %v %v", program, err)
+	}
+	sampleData, sampleHash, err := sample.Content()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := DecodeLevel(sampleData); err != nil {
+		t.Fatal(err)
+	} else if _, hashAgain, err := again.Content(); err != nil || hashAgain != sampleHash || len(again.Regions) != 4 || len(again.Spawns) != 3 || again.DefaultSpawn != "start" {
+		t.Fatalf("sample level round trip: %v %s != %s", err, hashAgain, sampleHash)
 	}
 
 	// 旧版本与未知字段在解码时拒绝。

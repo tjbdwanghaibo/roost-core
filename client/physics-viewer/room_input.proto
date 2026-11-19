@@ -13,3 +13,19 @@ message RoomInput {
 message RoomLevel { bytes content = 1; string sha256 = 2; uint64 controlled_body = 3; }
 
 message RoomInputAck { uint64 input_generation = 1; }
+
+// 流程公开状态，由服务端按版本推送（消息号见 PlayerIngressConfig.LevelMessageID；示例进程用 0x50485904）。
+// revision 单调增加：客户端丢弃不比手上新的。phase 取 waiting / preparing / running / finishing / closing / closed。
+// 变量恰好带 value 里的一项，值为零也写出。上限 16KiB。
+message RoomLevelView {
+  message Stage { string id = 1; uint64 generation = 2; }
+  message Variable {
+    string key = 1;
+    oneof value { int64 int = 2; bool flag = 3; string text = 4; }
+  }
+  uint64 revision = 1;
+  string phase = 2;
+  string result = 3;
+  repeated Stage stages = 4;
+  repeated Variable variables = 5;
+}

@@ -154,3 +154,122 @@ dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj        
 - 批 2 之后服务端发 RP3，而仓库里的 C# 客户端仍只认 RP2，要到批 4 才更新：这两批之间分支上的服务端与 Unity 客户端不能互通。现有 C# 用例不解析帧头，所以仍然通过。
 - `ViewEntry` 多了一个字段（每个接收方每个可见对象多 8 字节账本），以及清标记多出的一次刷新，对分配与载荷的影响留到批 5 的性能对照里测。
 - 现行文档（`docs/framework/PHYSICS-ROOM-SERVICE.md`、`client/physics-viewer/README.md` 等）仍写着 RP2 与旧关卡格式，按方案在批 5 统一更新；`CHANGELOG.md` 也在批 5 写。
+
+## 批 3：房间执行器、流程挂载、业务动作与视图推送
+
+### 改动
+
+| 文件 | 内容 |
+| --- | --- |
+| `service/physicsroom/types.go` | `Spec` 增加 `Players`、`Regions`、`Spawns`、`DefaultSpawn`、`Flow`；`Delivery.Level`；新类型 `Tick`（帧 + 事实 + 回执，首帧带 `Program`）、`Settled`（待执行动作、公开视图、作废回执数）；`Commit` 签名改为 `func(ctx, Ref, Tick) (Settled, error)`；`ActionHandler`；`Config.Actions` / `ActionTimeout` / `ActionConcurrency`；错误码 `ErrLevel`（640107） |
+| `service/physicsroom/actions.go`（新） | 流程执行器：建房时校验并编译流程；每 tick 在 Step 之前执行上一笔提交交回的传送 / 检查点 / 重生；把成员进出与区域进出变成事实；提交成功后才采纳动作、区域占用与视图；业务动作在独立 goroutine 上按上限派发、按同一 ID 退避重试 |
+| `service/physicsroom/level_view.go`（新） | `RoomLevelView` 的确定性编码与严格解码，上限 16KiB |
+| `service/physicsroom/service.go` | 主循环接入上面三步；`State.Teleports` 写入帧；成员加入、主动离开、超时离开记入变更队列；`Poll` 把流程视图随帧冻结、重发、确认；流程出错记 `level_failed`；停房时取消并等待在途的业务动作 |
+| `service/physicsroom/mechanisms.go` | `updateGrabs` 不把本 tick 被传送的刚体算作想抓的一对 |
+| `gameplay/level/projection.go` | `LevelComponent.Revision()`、`Phase()` 两个只读访问器 |
+| `gameplay/physics/level.go` | 内置示例关卡 `ObstacleLevel` 带上掉落区、两个检查点、终点、三个出生点与流程（公开变量 `falls`） |
+| `wiring/physicsroom/nest.go` | `AcceptTick`：提交 handler 的全部工作（接受帧 → 首帧初始化并启动流程 → 回执 → 事实 → 按帧号推进定时器 → 状态变了才取动作与视图）；`NestCommit` 跟随新签名 |
+| `wiring/physicsroom/entity.go` | `RoomEntity` 挂 `LevelComponent`（瞬态 DAO，首帧用 `Tick.Program` 建）；`EntityHost.Commit` 返回 `Settled`；新增 `EntityHost.Level` 读流程状态 |
+| `wiring/physicsroom/host_mod.go` | `EntityHostMod.WithActions` 登记业务动作执行者 |
+| `wiring/physicsroom/relay.go`、`players.go` | `PlayerIngressConfig.LevelMessageID`；`Relay` 把 `Delivery.Level` 用这个消息号、Protobuf 载荷推在同一次交付的帧之前 |
+| `wiring/physicsroom/cmd/physicsroom-local/main.go` | 开房时带上关卡的玩家、区域、出生点与流程；流程视图消息号 `0x50485904` |
+| `client/physics-viewer/room_input.proto`、`tests/packed.json` | `RoomLevelView` 消息定义；金样 `LevelView` |
+| `scripts/physics/verify-service.sh` | `-run` 列表加 `TestRealGateLevelRespawnAndFinish`（根包 `TestPhysicsServiceRunnerCoversNativeIntegration` 要求脚本点名每个原生集成用例） |
+
+`service/physicsroom/rooms_rpc_gen.go` 重新生成后没有差异：RPC 用 JSON 传 `Spec` 与 `Delivery`，新字段随结构体走；`Tick` / `Settled` 不过 RPC。跨 NATS 的往返由 T10 实测（建房的 `Spec` 带区域、出生点、流程；`Delivery.Level` 经 Rooms RPC 回到 Game 侧）。
+
+### 与方案文字的出入
+
+- **抓取释放只保留一处。** 方案 4.4 写“先 `RemoveJoint` 释放……；在已提交帧追上传送 tick 之前不重新抓取”。实现里传送本身不拆弹簧：紧接着的 `updateGrabs`（同一个 `BeforeStep`，Step 之前）不把本 tick 被传送的刚体算作想抓的一对，于是它作为抓取者或被抓者的弹簧在那里释放，也不会按传送前的位置重新抓上。两处都写的话，前一处删掉后没有任何用例能区分，所以只留后一处。可观察的结果与方案一致（Step 之前弹簧已不在、下一帧提交前不重抓），由 `TestTeleportReleasesGrabsAndWaitsForTheFrame` 逐 tick 核对抓取表。
+- **阶段名是小写。** 方案 T10 写 `phase=Finishing`；`gameplay/level` 的取值是 `waiting / preparing / running / finishing / closing / closed`，视图里原样下发。手工编码金样时按大写写了一次，与 Go 编码器对不上才发现，金样已按实际取值改正。
+- **公开变量的键带作用域前缀。** `level.View.Variables` 的键是 `global/<名字>`、`stage/<阶段>/<名字>`、`trigger/<阶段>/<触发器>/<名字>`，视图原样下发；批 4 的 HUD 要按这个键显示。
+- **事实按流程阶段投递（方案没有写）。** `LevelComponent.Handle` 只在 running 阶段接受事实。执行器因此在准备阶段（`PrepareDelay`）把事实攒着、开始后按序补投；流程结束之后产生的事实直接丢弃。同一笔提交里前面的事实已经让流程结束时，后面的不再投递。
+- **事实积压有上限（方案只写了每 tick 64 条）。** 攒到 4096 条仍交不出去时房间停止并记 `level_failed`：那说明事实产生得持续比流程处理得快。
+- **`Settled.StaleReceipts`。** 方案说作废回执“记指标后忽略”；指标在 `service/physicsroom` 里，handler 在 `wiring` 里，所以 handler 把作废数随结果带回。
+- **`Spec.Players` 在建房时校验**（存在、不重复、是动态刚体），方案没有单列。
+- **业务事件没有投递入口。** `ActionHandler.Registry()` 里声明的业务事件能通过流程编译，但本轮没有把业务事件投给流程的接口，接口注释里写明了。
+- **`EntityHost.Level`** 是方案之外新增的只读入口，用来在用例里读流程状态（回滚、重放的比对）。
+
+### 验证
+
+HEAD 为本批提交；命令都带 `GOWORK=off`。私有 NATS：本机 `nats-server -a 127.0.0.1 -p 14377`（只给这次验证用，结束后已停）。
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...`、`go vet ./...` | 退出码 0（vet 16s） |
+| `go vet -tags "integration physx"` 于 `service/physicsroom`、`wiring/physicsroom/...`、`wiring/gate`、`gameplay/physics`、`gameplay/level`、`infra/physics/physx` | 退出码 0 |
+| `gofmt -l service wiring gameplay infra/physics` | 无输出 |
+| `go generate ./service/physicsroom` | `up to date: rooms_rpc_gen.go` |
+| `ROOST_PHYSICS_TEST_NATS_URL=nats://127.0.0.1:14377 scripts/physics/verify-service.sh`（`-race -count=3`：原生物理六个包，再加五个真实 NATS / Gate 集成用例） | 退出码 0，57s（当时本机 1 分钟负载 31，另有会话在跑别的测试） |
+| `go test -count=10 -race -tags physx ./service/physicsroom` | ok，80.7s |
+| `go test -count=6 -race -tags "integration physx" -run 'Level\|RoomEntity\|PlayerIngress\|EntityHost\|RealGate' ./wiring/physicsroom` | ok，52.3s |
+| `go test -count=120 -tags physx -run TestBusinessActionsNeverBlockThePhysicsLoop ./service/physicsroom`（仪表次序修复之后） | ok，76.4s |
+| `go test -count=1 ./...`（全仓，缺省标签、缺省 10 分钟超时） | 172 个包 ok，25 个没有测试文件，1 个失败：`codegen/internal/roost` 在 601.9s 被缺省超时终止（当时在跑 `TestModuleAllianceGenerated`，1m48s），没有任何用例报失败。见下 |
+| `go test -count=1 .`（根包门禁，证据文档写入之后） | ok，28.1s |
+| `dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj` | 3 组 PASS，退出码 0（C# 还没有改；只确认金样文件多一项不影响现有用例） |
+
+`codegen/internal/roost` 是仓库里已知的慢套件：`scripts/pretag.sh` 为它写了 `-timeout 60m`，注释里记着它在本机单独跑要 300～800s、随磁盘负载波动，全量跑时出现过同样的“timed out after 10m0s 且没有失败用例”。这个包与 `codegen/` 下的模板都不引用 `service/physicsroom`、`wiring/physicsroom`、`gameplay/physics`。按 `-timeout 60m` 单独重跑：到本批提交时已经跑了 42 分钟还没有结束（本机负载 30～45，另一个会话同时在它自己的目录里跑同一个套件），**结果未确认**；跑完后的结果补记在批 4 一节的开头。
+
+用例（T5～T10 用方案里的名字；其余是实施中补的）：
+
+| 编号 | 用例 | 断言的内容 |
+| --- | --- | --- |
+| T5 | `TestLevelActionsRunOnlyAfterTheFrameIsSettled` | 提交交回动作后，下一帧才从出生点出发（位置、朝向、速度清零、`Teleports=1`），回执与那一帧在同一次提交里；首帧带 `Program`；提交失败或流程失败时房间停止、不再提交、动作不执行，两种失败各记各的指标 |
+| T6 | `TestRepeatedPendingActionTeleportsOnce` | 同一动作在回执提交前再次出现在动作表里（含回执正随那一帧提交的那一次）只传送一次、只有一条回执 |
+| T6 | `TestTeleportReleasesGrabsAndWaitsForTheFrame` | 被传送的是被抓者或抓取者两种情况：传送那一帧及之后两帧的抓取表为空，两端都没被拖动；传送前按下的跳跃不在出生点起跳 |
+| T6 | `TestInvalidTeleportCompletesAsFailure` | 九种不合法目标各得一条失败回执、按动作序号排列、世界不变、房间继续；检查点只记不动；重生回最近的检查点，没有检查点的玩家回缺省出生点里自己的位置 |
+| T6 | `TestCancelledActionReceiptDoesNotStopTheRoom` | 作废回执只记指标 |
+| T7 | `TestBusinessActionsNeverBlockThePhysicsLoop` | `Execute` 卡住时 20 帧在 1s 内走完；同时在途恰好等于上限 2；在途期间再次交回不重复派发；每个动作一条回执、结果与返回值一致；停房时在途调用被取消且 `Destroy` 等它们返回，未了结数记指标 |
+| T7 | `TestUnknownBusinessResultIsRetriedWithTheSameID` | 返回错误、panic、超时三种“结果未知”都不产生回执，带同一 ID 重试，第四次成功才有一条成功回执；`Execute` 的期限是配置值；重试之间参数表互不影响 |
+| — | `TestLevelFactsReachTheFlowInOrder`、`TestLevelFactBacklogStopsTheRoom`、`TestExpiredMemberLeavesTheFlow` | 准备阶段不投递；开始后 102 条事实按 64 / 38 分两帧、编号连续、成员事实在前区域事实在后；结束后不投递也不积压；积压超限停房；超时离开也产生 `member.leave` |
+| — | `TestPollCarriesLevelViewOncePerRevision` | 视图每个版本每个成员一次；未确认时帧与视图原样重发；后加入的成员第一帧带最新视图；视图超 16KiB 按流程失败处理 |
+| — | `TestCreateRejectsInvalidLevelSpecs` | 八种不合法的玩家 / 出生点 / 流程 / 业务能力被拒绝（含正向对照）；没有流程的房间提交里不带流程数据 |
+| — | `TestLevelViewGoldenSharedWithCSharp`、`TestLevelViewEncodingIsDeterministicAndBounded`、`TestDecodeLevelViewRejectsMalformedInput` | 金样由 Python 按 proto 独立手工编码，不经过 Go 编码器；编码与 map 次序无关；恰好 16KiB 可以、多 1 字节拒绝；25 种畸形输入拒绝 |
+| T8 | `TestRoomEntityRollsBackFrameAndLevelTogether` | 一笔提交里第一条事实合法、第二条出错：流程状态 JSON 与提交前逐字节相同，物理帧仍是上一帧；同一帧重试成功；空闲帧不交回动作与视图；被取消的动作与从未请求过的动作的回执各记一次作废且状态不变；结算后同一笔里的事实不投递；`PrepareDelay` 按帧号到点才开始；没有流程的房间拒绝事实 |
+| T8 | `TestLevelReplayIsDeterministic` | 真实 PhysX 房间跑完“路过检查点 → 掉落 → 回检查点 → 终点”，录下每笔提交，在两个新 Entity 上重放：每笔交回的结果与最终流程状态 JSON 都相同 |
+| T9 | `TestPlayerIngressPushesLevelViewOncePerRevision` | 视图用自己的消息号与 Protobuf 载荷、紧挨在同一次交付的帧之前；每个版本一次；推送失败关连接、重连后先收到最新视图；没配消息号只推帧；消息号互不相同 |
+| T10 | `TestRealGateLevelRespawnAndFinish`（integration、physx） | 真实 TCP → Gate → NATS → GameIngress → Rooms RPC → 房间 → Relay：客户端只发输入、只看收到的包。带 `ViewTeleported` 的帧恰好一帧且球在检查点；随后收到 `phase=finishing`、`result=clear`、`global/falls=1` 的视图 |
+| — | `TestSeatCreatesTheRoomWithTheLevelFlow`（`physicsroom-local`） | 示例进程开房带上关卡的流程字段；缺省 CrowdScene 不带 |
+
+T10 五次运行的实测（50Hz 模拟、20Hz 下发）：从客户端第一次看到球低于 y=-1 到收到带标记的帧是 15～16 tick（约 0.3s），其中球还要再落 2m 才进掉落区。
+
+### 行为红
+
+本批没有做到“每个用例先红后绿”：实现先写，用例后补。留下的红有两种：
+
+- 在批 2 的提交 `14706f60` 上放入本批的测试文件：编译不过（`Tick`、`Settled`、`EncodeLevelView`、`Spec.Flow` 等都不存在），原始输出在 [mutations-batch3.txt](mutations-batch3.txt) 开头。这只说明测试依赖新接口，不说明行为。
+- 行为上的红全部来自下面的变异。
+
+### 变异（[mutations-batch3.txt](mutations-batch3.txt)）
+
+共 65 条：服务层 45 条（T5～T7、事实、视图、建房校验），接线层 20 条（T8～T10、示例进程）。第一轮 60 条变红；3 条是变异自己编译不过（删掉一行后留下未使用的变量或导入），重写后变红；2 条没有被发现，补用例后变红。原始记录里保留了两轮的全部输出。
+
+| 范围 | 条数 | 变异内容（节选） |
+| --- | --- | --- |
+| T5 提交与执行的先后 | 5 | 不检查 `Commit` 的错误；回执不随帧提交；不累计传送次数；传送后不清速度；忽略出生点朝向 |
+| T6 去重、抓取、失败回执 | 12 | 不按 ID 去重；刚传送的刚体按旧位置判断抓取；不清跳跃意图；允许传送带配置关节的刚体；不检查动态刚体；检查点 / 重生对非玩家生效；重生忽略检查点；出生点位置不错开；失败回执成成功；检查点不校验出生点；作废回执不记指标 |
+| T7 业务动作 | 7 | 在房间执行协程上同步执行；结果未知时给失败回执；不限在途数；不兜 panic；重试共用参数表；停房不等在途调用；没有期限 |
+| 事实 | 9 | 准备阶段就投递；每帧不设上限；结束后仍积压；积压不设上限；主动离开 / 超时离开 / 加入不产生事实；不采纳新的区域占用；已交付的事实不出队 |
+| 视图与建房 | 12 | 每帧都带视图；确认后不记版本；未确认的交付换用最新视图；编码不设上限、不排序；解码接受没有值的变量、未知字段；编译不带业务能力；不校验玩家刚体；首帧不带 `Program`；视图编码出错不算流程失败；两种失败共用指标 |
+| T8 提交 handler | 9 | 流程出错被吞掉；handler 不用 undo；作废回执当成错误；结束后继续投递事实；状态没变也交回结果；不推进定时器；首帧不启动流程；不给房间建流程组件；没有流程的房间收下事实 |
+| T9 视图推送 | 6 | 视图排在帧之后；推送失败被忽略；用 Sync 载荷；没配消息号也推；消息号可以重复；入口不把消息号交给中继 |
+| T10 与示例进程 | 5 | 执行器不执行重生（方案指定）；不记检查点；示例进程开房不带流程 / 不带区域；回执整段不处理 |
+
+两轮变异之后实现只再改过一处（下面第一条的仪表计数），它不在任何一条变异替换的位置上；65 条没有在那之后重跑。当时本机负载很高（另有会话在跑整套生成器测试），而服务层用例里有对时间敏感的断言，重跑容易出与变异无关的红，所以没有重跑。
+
+变异过程中发现并修掉的问题：
+
+- **实现缺陷：在途业务动作数的仪表可能停在过时的值上。** 第一轮里一条与业务动作无关的变异（视图解码）运行时，`TestBusinessActionsNeverBlockThePhysicsLoop` 也失败了一次：停房后 `depth:actions_inflight` 是 1 而不是 0。原因是计数用原子量减一、随后各自上报，两个同时结束的动作可能后减的先报。单独重复这个用例 40 次复现 1 次；改成计数与上报在同一把锁里之后重复 120 次全过。
+- **用例缺口两处**（实现没有改）：视图解码“拒绝未知字段”只测了 varint 线类型，去掉字段号上限后长度前缀类型的未知字段会被悄悄接受而用例不红，补了两条；“没配消息号不推视图”只统计了特定消息号的推送，改成断言只出现帧。
+- **测试自己的问题三处**：提交替身的 `once` 在通道被读走后会再触发一次（同一份结果交回两遍）；T10 起初一读到结算视图就断开，而同一次交付的那一帧还在途，服务端每次都记一条“出站未确认”的 WARN，改成把那一帧读完；批 2 的一条用例拿 `ObstacleLevel()` 当“没有流程的关卡”，示例关卡带上流程后前提不成立，改成显式清空。
+
+### 没有验到的
+
+- 只在 macOS ARM64 上跑过；Linux 没有跑。
+- `scripts/physics/verify-service.sh` 整个脚本已在最终代码上跑过一遍并通过（见上表），但是在别的会话占着机器、负载 31 的情况下跑的，耗时不能当作基线。
+- C# 客户端还不认 RP3、`ViewTeleported` 与 `RoomLevelView`（批 4）。金样 `LevelView` 已放进共享文件，C# 侧还没有读它。本批之后分支上的服务端与仓库里的 Unity 客户端仍不能互通。
+- 三进程（`physicsroom-local` 的 physicsroom / game / gate 各自起进程，带 etcd）没有跑；T10 的 Gate、GameIngress、房间 owner 都在测试进程内，用的是正式部件与真实 NATS / TCP。三进程演练在批 5。
+- 示例关卡 `ObstacleLevel` 的流程只验证了能校验、编译、导出再读回，以及示例进程开房时带上它；没有人在这张图上实际走过检查点与终点（T8、T10 用的是测试里的窄道关卡）。
+- 业务动作只用替身执行者测过，没有接真实的 Game 侧结算 / 发奖 handler；“进程崩溃后由业务账本按动作 ID 了结”没有演练。
+- 流程带来的每 tick 开销、`Teleports` 与视图对载荷的影响没有测量（批 5 的性能对照）。
+- 现行文档与 `CHANGELOG.md` 没有更新（批 5）：`docs/framework/PHYSICS-ROOM-SERVICE.md` 里的 `Commit` 签名、`Spec` 字段、消息号表目前与代码不一致。

@@ -90,17 +90,17 @@ func startRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool, l
 	}
 	t.Cleanup(func() { host.Close(context.Background()) })
 	l := &roomLoad{window: loadWindow{samples: make(map[domain.Ref][]loadSample)}}
-	cfg := domain.DefaultConfig(func(ctx context.Context, ref domain.Ref, f gamephysics.Frame) error {
+	cfg := domain.DefaultConfig(func(ctx context.Context, ref domain.Ref, tick domain.Tick) (domain.Settled, error) {
 		start := time.Now()
-		err := host.Commit(ctx, ref, f)
+		settled, err := host.Commit(ctx, ref, tick)
 		if err == nil {
 			l.mu.Lock()
 			if l.recording {
-				l.window.samples[ref] = append(l.window.samples[ref], loadSample{f.Tick, f.StepTime, time.Since(start), time.Now()})
+				l.window.samples[ref] = append(l.window.samples[ref], loadSample{tick.Frame.Tick, tick.Frame.StepTime, time.Since(start), time.Now()})
 			}
 			l.mu.Unlock()
 		}
-		return err
+		return settled, err
 	})
 	cfg.MaxRooms = roomCount
 	cfg.Closed = host.Forget

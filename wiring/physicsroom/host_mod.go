@@ -42,11 +42,19 @@ type hostConfig struct {
 // 停止顺序：Server.Shutdown 先排空房间；本 Mod 停止时再排空一次（幂等），成功后才关闭 Host；超时保留 Host 与引擎。
 type EntityHostMod struct {
 	cfg     hostConfig
+	actions domain.ActionHandler
 	host    *EntityHost
 	service *domain.Service
 }
 
 func NewEntityHostMod() *EntityHostMod { return &EntityHostMod{} }
+
+// WithActions 登记执行流程里业务动作的 ActionHandler；装配时（Provide 之前）调用。不调用时流程只能用物理房间
+// 自带的动作，用到业务能力的流程在建房时被拒绝。
+func (m *EntityHostMod) WithActions(actions domain.ActionHandler) *EntityHostMod {
+	m.actions = actions
+	return m
+}
 
 func (*EntityHostMod) Name() app.ModName              { return domain.CapabilityName }
 func (*EntityHostMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(hostConfig{}) }
@@ -80,6 +88,7 @@ func (m *EntityHostMod) Provide(r *app.Registry) error {
 	}
 	cfg := m.domainConfig(host.Commit)
 	cfg.Closed = host.Forget
+	cfg.Actions = m.actions
 	// 容量、时间与 AOI 的范围在 domain.New 里检查；未启用 PhysX 后端时同样在这里失败。
 	service, err := domain.New(cfg)
 	if err != nil {

@@ -31,7 +31,7 @@ func TestRealGatePhysicsRoomRelay(t *testing.T) {
 	if !ok {
 		t.Fatal("binding missing")
 	}
-	cfg := domain.DefaultConfig(func(context.Context, domain.Ref, gamephysics.Frame) error { return nil })
+	cfg := domain.DefaultConfig(func(context.Context, domain.Ref, domain.Tick) (domain.Settled, error) { return domain.Settled{}, nil })
 	s, err := domain.New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestRealGatePhysicsRoomRelay(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	poller := &jitteredRoomPoller{Rooms: s}
-	go func() { done <- roomwiring.Relay(ctx, poller, h.game, binding, member, 902) }()
+	go func() { done <- roomwiring.Relay(ctx, poller, h.game, binding, member, 902, 0) }()
 	var replica gamephysics.RoomReplica
 	for range 3 {
 		packet, err := wire.Read(conn, 8192)

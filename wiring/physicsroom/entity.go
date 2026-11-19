@@ -6,15 +6,19 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	domain "github.com/tjbdwanghaibo/roost-core/service/physicsroom"
 )
 
-// RoomEntity 只保存已提交的瞬态物理事实。Ref 创建后不变，state 仅在 Nest Guard 中读写。
+// RoomEntity 只保存已提交的瞬态事实：物理帧，以及（有流程的房间）关卡流程的状态。Ref 创建后不变，
+// state 与 flow 仅在 Nest Guard 中读写，由同一个 handler 在同一笔 undo 事务里修改。
+// flow 在 Entity 创建时用首帧带来的 Program 建好，之后不换；没有流程的房间为 nil。
 type RoomEntity struct {
 	*entity.EntityBase
 	Ref   domain.Ref
 	state gamephysics.StateDAO
+	flow  *level.LevelComponent
 }
 
 func (r *RoomEntity) Base() *entity.EntityBase { return r.EntityBase }
@@ -35,6 +39,7 @@ type EntityHost struct {
 
 var acceptFrame = nest.NewHandlerName("physicsroom.entity.accept")
 var readFrame = nest.NewHandlerName("physicsroom.entity.snapshot")
+var readLevel = nest.NewHandlerName("physicsroom.entity.level")
 
 func NewEntityHost(kind entity.EntityKind, category entity.EntityCategory, maxRooms int, options ...nest.NestOption) (*EntityHost, error) {
 	if kind == 0 || category == 0 || maxRooms < 1 || maxRooms > 1024 {
@@ -59,10 +64,20 @@ func NewEntityHost(kind entity.EntityKind, category entity.EntityCategory, maxRo
 			return nil, domain.ErrRequestInvalid
 		}
 		f, ok := args[0].(FrameCommit)
-		if !ok || f.Room != r.Ref || f.Frame.Epoch != r.Ref.Epoch {
+		if !ok || f.Room != r.Ref || f.Tick.Frame.Epoch != r.Ref.Epoch {
 			return nil, domain.ErrMissing
 		}
-		return nil, r.state.Accept(f.Frame)
+		return AcceptTick(&r.state, r.flow, r.Ref, f.Tick)
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
+	if err != nil {
+		return nil, err
+	}
+	err = h.engine.RegisterHandlerWithMeta(readLevel, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		r := es[0].(*RoomEntity)
+		if r.flow == nil {
+			return nil, domain.ErrMissing
+		}
+		return r.flow.Snapshot(), nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 	if err != nil {
 		return nil, err
@@ -79,35 +94,47 @@ func NewEntityHost(kind entity.EntityKind, category entity.EntityCategory, maxRo
 	return h, nil
 }
 
-// Commit 在首帧前创建加载完成的 Entity，再经 RequestSettled 写入 Guard。
-func (h *EntityHost) Commit(ctx context.Context, ref domain.Ref, f gamephysics.Frame) error {
-	if ref.ID == "" || ref.Epoch == 0 || f.Epoch != ref.Epoch {
-		return domain.ErrRequestInvalid
+// Commit 在首帧前创建加载完成的 Entity（有流程的房间同时建好流程组件），再经 RequestSettled 写入 Guard。
+// 返回的 Settled 来自已经提交成功的流程状态。
+func (h *EntityHost) Commit(ctx context.Context, ref domain.Ref, tick domain.Tick) (domain.Settled, error) {
+	if ref.ID == "" || ref.Epoch == 0 || tick.Frame.Epoch != ref.Epoch {
+		return domain.Settled{}, domain.ErrRequestInvalid
 	}
 	h.mu.Lock()
 	if h.closing {
 		h.mu.Unlock()
-		return domain.ErrStopping
+		return domain.Settled{}, domain.ErrStopping
 	}
 	r := h.rooms[ref]
 	if r == nil {
 		if len(h.rooms) >= h.maxRooms {
 			h.mu.Unlock()
-			return domain.ErrCapacity
+			return domain.Settled{}, domain.ErrCapacity
 		}
 		h.next++
 		id, err := entity.BuildEntityID(h.next, h.kind)
 		if err != nil {
 			h.mu.Unlock()
-			return err
+			return domain.Settled{}, err
 		}
 		r = &RoomEntity{EntityBase: entity.NewEntityBase(id, h.category, true, h.kind), Ref: ref}
+		if tick.Program != nil {
+			// 流程是瞬态的：物理世界不可恢复，流程落库后也对不上世界。
+			if r.flow, err = level.NewLevelComponent(level.NewTransientLevelDAO(id), tick.Program); err != nil {
+				h.mu.Unlock()
+				return domain.Settled{}, err
+			}
+		}
 		h.rooms[ref] = r
 		h.ids[id] = r
 	}
 	h.mu.Unlock()
-	_, err := h.engine.RequestSettled(ctx, acceptFrame, r.ID(), nest.NewParams(FrameCommit{Room: ref, Frame: f}))
-	return err
+	result, err := h.engine.RequestSettled(ctx, acceptFrame, r.ID(), nest.NewParams(FrameCommit{Room: ref, Tick: tick}))
+	if err != nil {
+		return domain.Settled{}, err
+	}
+	settled, _ := result.(domain.Settled)
+	return settled, nil
 }
 
 // Forget 只由 Service 的 Closed 回调调用：此时 Run 及在途提交均已结束。
@@ -131,6 +158,21 @@ func (h *EntityHost) Snapshot(ctx context.Context, ref domain.Ref) (gamephysics.
 		return gamephysics.Frame{}, err
 	}
 	return result.(gamephysics.Frame), nil
+}
+
+// Level 返回房间流程已提交状态的副本；房间不存在或没有流程时返回 ErrMissing。
+func (h *EntityHost) Level(ctx context.Context, ref domain.Ref) (level.State, error) {
+	h.mu.RLock()
+	r := h.rooms[ref]
+	h.mu.RUnlock()
+	if r == nil {
+		return level.State{}, domain.ErrMissing
+	}
+	result, err := h.engine.RequestSettled(ctx, readLevel, r.ID(), nil)
+	if err != nil {
+		return level.State{}, err
+	}
+	return result.(level.State), nil
 }
 func (h *EntityHost) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
 	h.mu.RLock()

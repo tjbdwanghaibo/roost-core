@@ -8,4 +8,4 @@ cd "$root"
 export GOWORK=off
 [[ $(go env CGO_ENABLED) == 1 ]] || { echo "PhysX validation requires CGO_ENABLED=1" >&2; exit 1; }
 go test -race -tags=physx -count=3 ./service/physicsroom ./wiring/physicsroom ./infra/network/servicerpc ./framework/nest ./infra/physics/physx ./gameplay/physics
-go test -tags=integration,physx -race -count=3 -run 'TestRealNATSRoomLifecycle|TestRealGatePhysicsRoomRelay|TestRealGateInputMovesRoomBodyAndStreamsChunks|TestRealGateUGCLevelAndInput' ./service/physicsroom ./wiring/gate ./wiring/physicsroom
+go test -tags=integration,physx -race -count=3 -run 'TestRealNATSRoomLifecycle|TestRealGatePhysicsRoomRelay|TestRealGateInputMovesRoomBodyAndStreamsChunks|TestRealGateUGCLevelAndInput|TestRealGateLevelRespawnAndFinish' ./service/physicsroom ./wiring/gate ./wiring/physicsroom

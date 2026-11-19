@@ -19,6 +19,11 @@ func (s *Service) updateGrabs(r *room) error {
 		if target == 0 || target == m.body || !r.dynamic[target] || now.Sub(m.inputAt) > s.cfg.InputTTL || now.Sub(m.seenAt) > s.cfg.MemberTTL {
 			continue
 		}
+		// 本 Tick 刚被传送的刚体：r.viewFrame 还是传送前的位置，按它量距离会把已经不在身边的东西重新抓上。
+		// 等下一帧提交（带着新位置）之后再判断。
+		if r.flow != nil && (r.flow.teleported[m.body] || r.flow.teleported[target]) {
+			continue
+		}
 		a, aok := r.viewFrame.State(m.body)
 		b, bok := r.viewFrame.State(target)
 		if !aok || !bok {

@@ -286,3 +286,255 @@ func waitFor(t *testing.T, ok func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// viewRooms 按服务端的契约出帧：每确认一帧给下一帧；成员没确认过当前流程版本时，这一帧带上视图。
+type viewRooms struct {
+	domain.Rooms
+	mu       sync.Mutex
+	revision uint64 // 流程当前版本，0 表示还没有视图
+	members  map[string]*viewMember
+	joins    int
+}
+type viewMember struct{ sequence, acked, pending uint64 }
+
+func (r *viewRooms) Join(_ context.Context, room domain.Ref, binding gateway.Binding, _ uint64) (domain.Member, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.joins++
+	token := "token-" + string(rune('0'+r.joins))
+	if r.members == nil {
+		r.members = map[string]*viewMember{}
+	}
+	r.members[token] = &viewMember{}
+	return domain.Member{Room: room, PlayerID: binding.PlayerID, Token: token, InputGeneration: 1}, nil
+}
+func (*viewRooms) Submit(context.Context, domain.Member, domain.Input) error { return nil }
+func (r *viewRooms) Leave(_ context.Context, m domain.Member) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.members, m.Token)
+	return nil
+}
+func (r *viewRooms) Poll(_ context.Context, m domain.Member, ack uint64) (domain.Delivery, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v := r.members[m.Token]
+	if v == nil {
+		return domain.Delivery{}, domain.ErrMember
+	}
+	if ack == v.sequence+1 { // 确认了上一次的帧，连同它带的视图
+		v.sequence = ack
+		if v.pending != 0 {
+			v.acked, v.pending = v.pending, 0
+		}
+	} else if ack != v.sequence {
+		return domain.Delivery{}, domain.ErrSequence
+	}
+	if v.pending == 0 && r.revision > v.acked {
+		v.pending = r.revision
+	}
+	d := domain.Delivery{Room: m.Room, Sequence: v.sequence + 1, Payload: []byte{'f', byte(v.sequence + 1)}}
+	if v.pending != 0 {
+		d.Level = []byte{'v', byte(v.pending)}
+	}
+	return d, nil
+}
+func (r *viewRooms) publish(revision uint64) {
+	r.mu.Lock()
+	r.revision = revision
+	r.mu.Unlock()
+}
+
+type push struct {
+	id      uint32
+	kind    wire.PayloadKind
+	payload string
+}
+
+// recordingGame 记下每次推送；failLevel 为真时流程视图的推送失败一次。
+type recordingGame struct {
+	fakeGame
+	mu        sync.Mutex
+	pushes    []push
+	failLevel bool
+}
+
+var errPushFailed = errors.New("push failed")
+
+func (g *recordingGame) PushBound(_ context.Context, _ gateway.Binding, id uint32, kind wire.PayloadKind, payload []byte) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.failLevel && id == 4 {
+		g.failLevel = false
+		return errPushFailed
+	}
+	g.pushes = append(g.pushes, push{id, kind, string(payload)})
+	return nil
+}
+func (g *recordingGame) levels() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for _, p := range g.pushes {
+		if p.id == 4 {
+			out = append(out, p.payload)
+		}
+	}
+	return out
+}
+func (g *recordingGame) frames() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := 0
+	for _, p := range g.pushes {
+		if p.id == 1 {
+			n++
+		}
+	}
+	return n
+}
+
+// 流程视图：每个版本推一次，用自己的消息号与 Protobuf 载荷，排在同一次交付的帧之前；推送失败结束这一轮，
+// 重连后先拿到最新的一份；没配置消息号时不推；消息号互不相同。
+func TestPlayerIngressPushesLevelViewOncePerRevision(t *testing.T) {
+	ctx := context.Background()
+	seat := func(context.Context, gateway.Binding) (domain.Ref, uint64, error) {
+		return domain.Ref{ID: "room", Epoch: 1}, 51, nil
+	}
+	content := func(context.Context, gateway.Binding) (RoomContent, error) { return RoomContent{}, nil }
+	for name, cfg := range map[string]PlayerIngressConfig{
+		"level = frame":   {InputMessageID: 2, FrameMessageID: 1, Seat: seat, LevelMessageID: 1},
+		"level = input":   {InputMessageID: 2, FrameMessageID: 1, Seat: seat, LevelMessageID: 2},
+		"level = content": {InputMessageID: 2, FrameMessageID: 1, Seat: seat, ContentMessageID: 3, Content: content, LevelMessageID: 3},
+	} {
+		if _, err := NewPlayerIngress(cfg); !errors.Is(err, domain.ErrRequestInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	start := func(levelMessageID uint32) (*PlayerIngress, *viewRooms, *recordingGame, fakeSession) {
+		t.Helper()
+		p, err := NewPlayerIngress(PlayerIngressConfig{InputMessageID: 2, FrameMessageID: 1, Seat: seat, ContentMessageID: 3, Content: content, LevelMessageID: levelMessageID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding := ingressBinding()
+		rooms, game := &viewRooms{}, &recordingGame{fakeGame: fakeGame{binding: binding}}
+		if err = p.Attach(rooms, game); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			stop, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = p.Close(stop)
+		})
+		session := fakeSession{id: binding.SessionID, closed: make(chan error, 1)}
+		if err = p.OnActive(binding, 1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = p.Dispatch(ctx, session, 2, 1, wire.PayloadProtobuf, inputPayload(1)); err != nil {
+			t.Fatal(err)
+		}
+		return p, rooms, game, session
+	}
+
+	p, rooms, game, session := start(4)
+	waitFor(t, func() bool { return game.frames() >= 2 })
+	if got := game.levels(); len(got) != 0 {
+		t.Fatalf("level view pushed before the flow published one: %q", got)
+	}
+	rooms.publish(3)
+	waitFor(t, func() bool { return len(game.levels()) == 1 })
+	seen := game.frames()
+	waitFor(t, func() bool { return game.frames() >= seen+3 })
+	if got := game.levels(); len(got) != 1 || got[0] != "v\x03" {
+		t.Fatalf("revision 3 pushed %d times: %q", len(got), got)
+	}
+	rooms.publish(4)
+	waitFor(t, func() bool { return len(game.levels()) == 2 })
+	seen = game.frames()
+	waitFor(t, func() bool { return game.frames() >= seen+3 })
+	// 逐条核对：视图用消息号 4、Protobuf；帧用消息号 1、Sync；视图紧挨在同一次交付的帧之前；帧号连续不重复。
+	game.mu.Lock()
+	next := byte(1)
+	for i, got := range game.pushes {
+		switch got.id {
+		case 4:
+			if got.kind != wire.PayloadProtobuf || i+1 >= len(game.pushes) || game.pushes[i+1].id != 1 {
+				t.Fatalf("push %d: level view %+v is not followed by its frame", i, got)
+			}
+		case 1:
+			if got.kind != wire.PayloadSync || got.payload != string([]byte{'f', next}) {
+				t.Fatalf("push %d: frame %q, want sequence %d", i, got.payload, next)
+			}
+			next++
+		default:
+			t.Fatalf("push %d: unexpected message %d", i, got.id)
+		}
+	}
+	levels := 0
+	for _, got := range game.pushes {
+		if got.id == 4 {
+			levels++
+		}
+	}
+	game.mu.Unlock()
+	if levels != 2 {
+		t.Fatalf("%d level pushes for 2 revisions", levels)
+	}
+
+	// 视图推送失败：这一次交付的帧不推、不确认，连接关闭。重连后重新 Join，第一帧之前先拿到最新的视图。
+	rooms.publish(5)
+	game.mu.Lock()
+	game.failLevel = true
+	game.mu.Unlock()
+	select {
+	case err := <-session.closed:
+		if !errors.Is(err, errPushFailed) {
+			t.Fatalf("session closed with %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("failed level push did not close the session")
+	}
+	game.mu.Lock()
+	if last := game.pushes[len(game.pushes)-1]; last.id != 1 {
+		t.Fatalf("last push before the failure: %+v", last)
+	}
+	before := len(game.pushes)
+	game.mu.Unlock()
+	p.OnClosed(ingressBinding(), 1)
+	if err := p.OnActive(ingressBinding(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Dispatch(ctx, session, 2, 2, wire.PayloadProtobuf, inputPayload(1)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		game.mu.Lock()
+		defer game.mu.Unlock()
+		return len(game.pushes) >= before+2
+	})
+	game.mu.Lock()
+	first, second := game.pushes[before], game.pushes[before+1]
+	game.mu.Unlock()
+	if first != (push{4, wire.PayloadProtobuf, "v\x05"}) || second != (push{1, wire.PayloadSync, "f\x01"}) {
+		t.Fatalf("after reconnect: %+v then %+v, want the latest view then frame 1", first, second)
+	}
+	rooms.mu.Lock()
+	joins := rooms.joins
+	rooms.mu.Unlock()
+	if joins != 2 {
+		t.Fatalf("joins=%d", joins)
+	}
+
+	// 没配置流程消息号：帧照常推，视图不推。
+	_, quiet, silent, _ := start(0)
+	quiet.publish(9)
+	waitFor(t, func() bool { return silent.frames() >= 3 })
+	silent.mu.Lock()
+	for _, got := range silent.pushes {
+		if got.id != 1 || got.kind != wire.PayloadSync {
+			t.Fatalf("pushed %+v without a level message id; only frames are expected", got)
+		}
+	}
+	silent.mu.Unlock()
+}

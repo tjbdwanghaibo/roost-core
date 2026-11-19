@@ -15,6 +15,13 @@ type StageView struct {
 	Generation uint64
 }
 
+// Revision 返回状态版本：每次成功的变更加一，没有变更的调用（未到期的 Advance、重复的事实或回执）不变。
+// 宿主用它判断这一次提交之后要不要重新取 PendingActions 与 Project。只读一个字段，不复制状态。
+func (c *LevelComponent) Revision() uint64 { return c.dao.state.Revision }
+
+// Phase 返回当前阶段；尚未 Initialize 时为空。只读一个字段，不复制状态。
+func (c *LevelComponent) Phase() Phase { return c.dao.state.Phase }
+
 func (c *LevelComponent) Project() View {
 	s := c.dao.state
 	out := View{Instance: s.Instance, Epoch: s.Epoch, Revision: s.Revision, Phase: s.Phase, Result: s.Result, Variables: map[string]Value{}}
