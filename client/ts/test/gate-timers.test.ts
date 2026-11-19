@@ -171,6 +171,40 @@ for (const kind of ["request", "probeClock", "notify"] as const) {
   });
 }
 
+for (const trigger of ["write", "peer-close"] as const) {
+  test(`throwing raw completions do not strand a closing connection (${trigger})`, async () => {
+    const { clock, network, client } = setup({ heartbeatIntervalMs: 0, requestTimeoutMs: 100, autoReconnect: false });
+    const conn = client.connection;
+    await conn.connect("t");
+    const reported: Error[] = [], requestErrors: (Error | undefined)[] = [], probeErrors: (Error | undefined)[] = [];
+    const failure = new Error("view disposed"), nonError = Object.create(null);
+    client.on("error", e => reported.push(e));
+    conn.beginRequest(5, 6, utf8("a"), e => { requestErrors.push(e); throw failure; });
+    conn.beginProbeClock(e => { probeErrors.push(e); throw nonError; });
+    let outcome: unknown = "pending";
+    void conn.requestAsync(7, 8, utf8("b")).then(() => { outcome = "success"; }, e => { outcome = e; });
+    const cause = new Error(trigger);
+    if (trigger === "write") {
+      network.last.send = () => { throw cause; };
+      assert.throws(() => conn.notify(9, utf8("c")), GateClosedError);
+    } else network.last.drop(cause);
+    await settle();
+    assert.ok(outcome instanceof GateClosedError, "the next request settles without waiting for its timeout");
+    await clock.advance(1000);
+    for (const errors of [requestErrors, probeErrors]) {
+      assert.equal(errors.length, 1);
+      assert.ok(errors[0] instanceof GateClosedError);
+    }
+    assert.equal(reported.length, 2);
+    assert.equal(reported[0], failure);
+    assert.equal(reported[1]?.cause, nonError);
+    assert.equal(network.last.closedByClient, true);
+    assert.equal(conn.state, ConnectionState.Disconnected);
+    assert.equal(conn.lastError, cause);
+    client.dispose();
+  });
+}
+
 test("the request timeout fails the request and keeps the connection", async () => {
   const { clock, network, client } = setup({ requestTimeoutMs: 1000, heartbeatIntervalMs: 0 });
   await client.connection.connect("t");

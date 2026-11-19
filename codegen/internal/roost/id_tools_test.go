@@ -176,13 +176,12 @@ func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 		t.Fatalf("generated config does not map main to game with the project as the Mongo database prefix:\n%s", config)
 	}
 	for project, want := range map[string]string{
-		"planet":                       "planet",
-		"star_wars":                    "star_wars",
-		"admin":                        "admin_data", // Mongo 系统库
-		"local":                        "local_data",
-		"config":                       "config_data",
-		strings.Repeat("a", 39) + "_b": strings.Repeat("a", 39), // 40 字节处截断后去掉末尾 "_"（mods.MaxMongoDatabasePrefix）
-		strings.Repeat("x", 60):        strings.Repeat("x", 40),
+		"planet":                "planet",
+		"star_wars":             "star_wars",
+		"admin":                 "admin_data", // Mongo 系统库
+		"local":                 "local_data",
+		"config":                "config_data",
+		strings.Repeat("x", 40): strings.Repeat("x", 40), // 到上限仍直接用原名。
 	} {
 		if got := daoDatabaseName(project); got != want {
 			t.Errorf("daoDatabaseName(%q) = %q, want %q", project, got, want)

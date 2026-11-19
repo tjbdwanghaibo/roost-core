@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
+	wmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 )
 
 func TestKitConfigSchemasMatchKitDeclarations(t *testing.T) {
@@ -996,6 +998,38 @@ func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 			}
 			if strings.Contains(body, "{project") || strings.Contains(body, "{PROJECT") {
 				t.Errorf("%s %s: an unreplaced name placeholder is left:\n%s", tc.project, rel, body)
+			}
+		}
+	}
+}
+
+func TestGeneratedLongProjectMongoHandles(t *testing.T) {
+	// These projects share the entire old prefix. Pin the names: changing their derivation
+	// later would silently select different databases on a fresh install of the same project.
+	common := strings.Repeat("a", 40)
+	for _, tc := range []struct{ project, prefix string }{
+		{common, common},
+		{common + "east", "aaaaaaaaaaaaaaa-44618380842e559f8c7383cf"},
+		{common + "west", "aaaaaaaaaaaaaaa-8323e734020d507c1dcdd9dd"},
+	} {
+		root := filepath.Join(t.TempDir(), tc.project)
+		if _, _, err := NewProject(NewOptions{Name: tc.project, Module: "example.com/" + tc.project, Out: root, Mods: []string{"mongo", "dataengine"}}); err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range []string{"config.game.yaml", "config.game.prod.example.yaml"} {
+			cfg := viper.New()
+			cfg.SetConfigFile(filepath.Join(root, "configs/service", file))
+			if err := cfg.ReadInConfig(); err != nil {
+				t.Fatal(err)
+			}
+			prefix, err := wmongo.DatabasePrefix(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := wmongo.WithDatabasePrefix(mongotest.NewClient(), prefix)
+			base := cfg.GetString("dataengine.databases.main")
+			if db, sid := client.Database(base).Name(), client.DatabaseForSid(base, 1000).Name(); db != tc.prefix+"_game" || sid != tc.prefix+"_game_1000" {
+				t.Errorf("%s/%s: database=%q sid=1000 database=%q, want prefix %q", tc.project, file, db, sid, tc.prefix)
 			}
 		}
 	}

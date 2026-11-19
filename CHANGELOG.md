@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **生成器 / Mongo（RV-20261119-03）**：新生成的超长工程名前缀包含完整名称的摘要，前 40 字节相同的工程不再因截断共用业务库、分服库。已有配置不自动改写；沿用旧库时保留原前缀，不要用新生成配置直接覆盖。若已撞库，升级不会拆分历史数据。
+- **TS Gate（RV-20261119-05）**：`Connection.beginRequest` / `beginProbeClock` 的完成回调抛错时，通过 `error` 事件报告，不再中断后续请求的关闭通知；`notify` 写失败仍向调用方抛出 `GateClosedError`。
+
 - **DataEngine / Mongo 恢复**：已批量投影的 async WAL 在丢尾后只剩一条时，单条回放不再把同一事务的已提交结果误报为版本冲突。仅用事务 ID 和摘要都吻合的批量标记放行；没有更改默认持久级别。[故障注入与限制](docs/maintenance/evidence/local-recovery-four/README.md)。
 
 - **生成物要求的最低 core 提到 v1.58.0**（2026-11-19）：v1.58.0 的生成物用到新接口——生成配置的 `mongo.database_prefix`、邮箱模板的 `mail.BroadcastBinding` 与 `Mail.CloseBroadcastScope`——v1.57.1 编译不了。`framework-compat` 的 minimum 组合同步钉到 v1.58.0。

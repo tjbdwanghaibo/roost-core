@@ -612,7 +612,7 @@ type EquipInfo struct {
 `kitdataengine.WithDatabaseResolver`；DataEngine Mod 启动时合成一张冻结的表，投影、冷加载、墓碑、Remote 存储与工具都经它
 换算，规则与校验见 [guide/03-dataengine §3](../../docs/framework/guide/03-dataengine.md#3-投影与幂等)。生成配置写
 `databases: {main: game}`，`dataengine.database`（Data Engine 自己的集合 receipts / transactions / outbox）也是 `game`；
-这些库名都不带前缀。工程名只写在 `mongo.database_prefix`（与系统库同名时加 `_data`，超过 40 字节截断并去掉末尾 `_`），Mongo
+这些库名都不带前缀。工程名只写在 `mongo.database_prefix`（与系统库同名时加 `_data`，超过 40 字节时用前 15 字节、`-` 和完整工程名的 SHA-256 前 24 个十六进制字符），Mongo
 Mod 交出的客户端打开库时统一加 `<前缀>_`（维护者 2026-11-19），所以工程 planet 的 DAO 文档在 `planet_game`（按 sid 分库时
 `planet_game_<sid>`）；前缀写空串时就是 `game`。业务代码要直接读写 DAO 文档时用
 `kitdataengine.DAOCollection(mongo, databases, db.NewPlayerDao(), sid)`，不要把 `db.<Type>DBName` 当库名（根包守卫

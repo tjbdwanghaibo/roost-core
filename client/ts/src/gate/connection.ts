@@ -125,11 +125,11 @@ export class Connection {
 
   /**
    * 回调形式的请求：complete 在收到应答的那个 WebSocket 事件里同步调用（与同一条消息里的推送按线上顺序），或在超时 / 断开时
-   * 调用。连接不可用、在途已满时同步抛出。GameClient.request 用它。
+   * 调用。回调自身抛错交给 error 监听者，不影响其他请求；连接不可用、在途已满时仍同步抛出。
    */
   beginRequest(messageId: number, responseId: number, payload: Uint8Array, complete: Completion, signal?: AbortSignal): void {
     if (!isMessageId(messageId) || !isMessageId(responseId)) throw new RangeError("gate: message id 0 is reserved for Gate control");
-    this.readySession().request(messageId, responseId, payload, complete, this.opts.requestTimeoutMs, signal);
+    this.readySession().request(messageId, responseId, payload, this.guardCompletion(complete), this.opts.requestTimeoutMs, signal);
   }
 
   /** 只写出、不等应答的业务消息。没有连接时抛错；不自动重发。 */
@@ -152,20 +152,21 @@ export class Connection {
   beginProbeClock(complete: (error: Error | undefined, sample: ClockSample | undefined) => void, signal?: AbortSignal): void {
     const session = this.readySession();
     const sent = this.opts.timers.now() / 1000;
+    const finish = this.guardCompletion(complete);
     session.request(
       0,
       0,
       CLOCK_PROBE,
       (error, packet) => {
-        if (error) return complete(error, undefined);
-        if (session !== this.session) return complete(new GateClosedError("gate: the clock sample belongs to a replaced connection"), undefined);
+        if (error) return finish(error, undefined);
+        if (session !== this.session) return finish(new GateClosedError("gate: the clock sample belongs to a replaced connection"), undefined);
         let sample: ClockSample;
         try {
           sample = decodeClockSample(sent, this.opts.timers.now() / 1000, packet!.payload);
         } catch (failure) {
-          return complete(failure as Error, undefined);
+          return finish(failure as Error, undefined);
         }
-        complete(undefined, sample);
+        finish(undefined, sample);
       },
       this.opts.requestTimeoutMs,
       signal,
@@ -350,6 +351,17 @@ export class Connection {
     }
   }
 
+  // 只隔离公开完成回调。会话必须继续处理同包里的后续帧，或在关闭时结清其他请求、通知连接。
+  private guardCompletion<T>(complete: (error: Error | undefined, value: T | undefined) => void): typeof complete {
+    return (error, value) => {
+      try {
+        complete(error, value);
+      } catch (cause) {
+        this.emit("error", callbackError(cause));
+      }
+    };
+  }
+
   private setState(state: ConnectionState): void {
     if (this.currentState === state) return;
     this.currentState = state;
@@ -363,9 +375,18 @@ export class Connection {
         listener(value);
       } catch (error) {
         if (event === "error") continue; // 错误观察者自身失败不能回流
-        this.emit("error", error instanceof Error ? error : new Error(String(error)));
+        this.emit("error", callbackError(error));
       }
     }
+  }
+}
+
+// throw 接受任意 JS 值，包括无法转成字符串的对象。异常上报自身也不能打断其余回调。
+function callbackError(cause: unknown): Error {
+  try {
+    return cause instanceof Error ? cause : new Error(String(cause), { cause });
+  } catch {
+    return new Error("gate: application callback threw an unprintable value", { cause });
   }
 }
 
