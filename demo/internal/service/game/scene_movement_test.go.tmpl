@@ -727,6 +727,41 @@ func TestOrdinaryShutdownDrainFencesEntriesAndSavesResidents(t *testing.T) {
 	}
 }
 
+// One resident whose leave fails must not cost the others their last point:
+// the drain keeps saving, reports the failure, and leaves the map open.
+func TestOrdinaryDrainSavesEveryResidentBeforeReportingAFailure(t *testing.T) {
+	w := newMoveWorld(t)
+	moved := map[int64]spatial.Point{}
+	players := map[int64]*player.Player{}
+	for i, at := range []spatial.Point{{X: 300, Y: 305}, {X: 380, Y: 390}} {
+		p := w.join(int64(9936+i), at)
+		to := spatial.Point{X: at.X + 20, Y: at.Y + 21}
+		if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, p.ID(), w.area.ID(), to.X, to.Y); err != nil {
+			t.Fatal(err)
+		}
+		moved[p.ID()], players[p.ID()] = to, p
+	}
+	d := playerEvictor{scene: w.bridge, manager: w.entities, nest: w.engine, ordinarySceneID: w.area.ID()}
+	ids, err := d.beginOrdinaryDrain(w.ctx)
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("snapshot: %v %v", ids, err)
+	}
+	stuck, other := ids[0], ids[1]
+	if w.saved.of(other) == moved[other] {
+		t.Fatal("precondition: the last point was already saved before the drain")
+	}
+	// The first resident in the snapshot now answers "player is on another map".
+	if _, err := w.engine.Request(w.ctx, lockedHandler, stuck, nest.NewParams(func() { players[stuck].Dao().SetSceneID(w.area.ID() + 1) })); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.finishOrdinaryDrain(w.ctx, ids); err == nil || locked(w, w.area.ID(), w.area.Dao().GetClosed) {
+		t.Fatalf("failed leave closed the map: %v", err)
+	}
+	if got := w.saved.of(other); got != moved[other] {
+		t.Fatalf("resident after the failed one lost its last point: saved %v, want %v", got, moved[other])
+	}
+}
+
 func TestOrdinaryShutdownNeverWritesPastNestFence(t *testing.T) {
 	w := newMoveWorld(t)
 	p := w.join(9933, spatial.Point{X: 345, Y: 345})

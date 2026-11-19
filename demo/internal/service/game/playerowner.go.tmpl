@@ -852,16 +852,25 @@ func (evictor playerEvictor) beginOrdinaryDrain(ctx context.Context) ([]int64, e
 
 // finishOrdinaryDrain uses the normal guarded leave/save; never unload a Player,
 // destroy durable buildings, or force a direct write when Nest is fenced. An
-// uncertain leave must not be converted into an affirmative close.
+// uncertain leave must not be converted into an affirmative close. One failed
+// leave does not stop the loop: every other resident still saves its last point,
+// and the failures are reported together with the map left open.
 func (evictor playerEvictor) finishOrdinaryDrain(ctx context.Context, members []int64) error {
+	var failed error
 	for _, id := range members {
 		if err := ctx.Err(); err != nil {
-			return err
+			return errors.Join(failed, err)
 		}
 		if err := evictor.leaveMap(ctx, id); err != nil {
-			return fmt.Errorf("drain ordinary map: leave %d: %w", id, err)
+			failed = errors.Join(failed, fmt.Errorf("drain ordinary map: leave %d: %w", id, err))
+			continue
 		}
 		evictor.scene.Leave(ctx, id)
+		// One line per resident: the real-process drill checks that its player's last point came from here.
+		slog.Info("ordinary map drain saved resident", "entity_id", id)
+	}
+	if failed != nil {
+		return failed
 	}
 	return syncsender.NewLeaveSceneSender(evictor.nest).Sync_CloseEmptyOrdinaryMap(ctx, evictor.ordinarySceneID)
 }

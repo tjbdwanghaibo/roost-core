@@ -33,6 +33,9 @@ done
 [[ -f "$out/before.json" ]] || drill_fail 'inconclusive: no resident had an unsaved last point at stop'
 sh deploy/dev/run.sh stop game >"$out/stop.log" 2>&1
 ! grep -Fq 'ordinary map drain incomplete' .dev/game.log || drill_fail 'drain incomplete'
+# A periodic save landing between the sample above and the drain would also produce [620,540];
+# require the drain itself to have saved this resident so the position check proves the drain.
+grep -F 'ordinary map drain saved resident' .dev/game.log | grep -Fq "$id" || drill_fail 'drain did not save the resident'
 grep -Fq 'server stopped' .dev/game.log || drill_fail 'normal stop not confirmed'
 position >"$out/after.json"
 jq -e '. == [620,540]' "$out/after.json" >/dev/null || drill_fail 'disconnected resident lost its last point'
