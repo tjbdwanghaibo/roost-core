@@ -17,9 +17,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
-	wmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 )
 
 func TestKitConfigSchemasMatchKitDeclarations(t *testing.T) {
@@ -1022,14 +1020,14 @@ func TestGeneratedLongProjectMongoHandles(t *testing.T) {
 			if err := cfg.ReadInConfig(); err != nil {
 				t.Fatal(err)
 			}
-			prefix, err := wmongo.DatabasePrefix(cfg)
-			if err != nil {
-				t.Fatal(err)
+			// The generator must not import the runtime (TestCoreDependencyBoundary), so this checks
+			// the generated inputs; wiring/mongo's own tests own how <prefix>_<base>_<sid> is composed.
+			prefix, base := cfg.GetString("mongo.database_prefix"), cfg.GetString("dataengine.databases.main")
+			if prefix != tc.prefix || base != "game" {
+				t.Errorf("%s/%s: database_prefix=%q main=%q, want %q and %q", tc.project, file, prefix, base, tc.prefix, "game")
 			}
-			client := wmongo.WithDatabasePrefix(mongotest.NewClient(), prefix)
-			base := cfg.GetString("dataengine.databases.main")
-			if db, sid := client.Database(base).Name(), client.DatabaseForSid(base, 1000).Name(); db != tc.prefix+"_game" || sid != tc.prefix+"_game_1000" {
-				t.Errorf("%s/%s: database=%q sid=1000 database=%q, want prefix %q", tc.project, file, db, sid, tc.prefix)
+			if sid := prefix + "_" + base + "_1000"; len(sid) > 63 {
+				t.Errorf("%s/%s: sid database %q exceeds Mongo's 63-byte limit", tc.project, file, sid)
 			}
 		}
 	}
