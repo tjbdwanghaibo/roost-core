@@ -120,6 +120,7 @@ if [[ "${ROOST_MOBA_REAL:-0}" == 1 ]]; then
     if [[ "$(grep -c '^--- PASS: TestMOBARealSettlementAcrossProcesses' "$review_root/persistence-$phase.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/persistence-$phase.log"; then exit 1; fi
   done
   go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealClientAheadAfterTailLoss$' ./game/handler | tee "$review_root/active-power-tail.log"
+  if [[ "$(grep -c '^--- PASS: TestMOBARealClientAheadAfterTailLoss' "$review_root/active-power-tail.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/active-power-tail.log"; then exit 1; fi
   go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealActiveRoundCrashRecovery$' ./game/handler | tee "$review_root/active-crash.log"
   if [[ "$(grep -c '^--- PASS: TestMOBARealActiveRoundCrashRecovery' "$review_root/active-crash.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/active-crash.log"; then exit 1; fi
   go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL$' ./game/handler | tee "$review_root/active-snapshot.log"
