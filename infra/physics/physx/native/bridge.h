@@ -23,6 +23,9 @@ int rp_add_pose(rp_world *, uint64_t id, unsigned kind, unsigned motion, const f
            float mass);
 int rp_step_control(rp_world *, float dt, const rp_command *, unsigned count);
 unsigned rp_read(rp_world *, rp_state *, unsigned capacity);
+// 传送：直接设一个动态刚体的全局位姿、线速度与角速度，清掉已累积的力和力矩并唤醒。静态、运动学（由 setKinematicTarget
+// 驱动）或未知 id 返回 0。调用方保证不在 rp_step_control 执行期间调用。
+int rp_set_pose(rp_world *, uint64_t id, const float *position, const float *rotation, const float *velocity, const float *angular_velocity);
 typedef struct {
  uint64_t id, a, b;
  unsigned kind;

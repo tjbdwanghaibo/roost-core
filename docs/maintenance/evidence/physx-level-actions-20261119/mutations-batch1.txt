@@ -1,0 +1,95 @@
+基线提交 461b73be（变异作用在工作区，跑完原样恢复）
+共 8 条，变红 6 条
+
+## native 不清线速度
+  改动 infra/physics/physx/native/bridge.cpp：`body->setLinearVelocity(PxVec3(v[0], v[1], v[2]), false);` → `（删除）`
+  命令 go test -count=1 -tags physx -run TestSetPoseMovesADynamicBodyAndClearsItsMotion ./infra/physics/physx
+  结果 退出码 1，变红
+    --- FAIL: TestSetPoseMovesADynamicBodyAndClearsItsMotion (0.00s)
+        native_test.go:427: next step does not start from the new pose: {InputGeneration:0 InputSequence:0 InputActive:false ID:1 Position:[5.2273054 2.996076 2] Rotation:[0 0.7071068 0 0.7071068] Velocity:[11.365268 -0.1962 0] AngularVelocity:[0 0 0] Sleeping:fal
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.630s
+    FAIL
+
+## native 不清角速度
+  改动 infra/physics/physx/native/bridge.cpp：`body->setAngularVelocity(PxVec3(a[0], a[1], a[2]), false);` → `（删除）`
+  命令 go test -count=1 -tags physx -run TestSetPoseMovesADynamicBodyAndClearsItsMotion ./infra/physics/physx
+  结果 退出码 1，变红
+    --- FAIL: TestSetPoseMovesADynamicBodyAndClearsItsMotion (0.00s)
+        native_test.go:434: old angular velocity survived the teleport on axis 2: {InputGeneration:0 InputSequence:0 InputActive:false ID:1 Position:[5 2.996076 2] Rotation:[0.15918298 0.6889563 -0.15918298 0.6889563] Velocity:[0 -0.1962 0] AngularVelocity:[0 0 -2
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.414s
+    FAIL
+
+## native 不唤醒
+  改动 infra/physics/physx/native/bridge.cpp：`body->wakeUp();` → `（删除）`
+  命令 go test -count=1 -tags physx -run TestSetPoseMovesADynamicBodyAndClearsItsMotion ./infra/physics/physx
+  结果 退出码 1，变红
+    --- FAIL: TestSetPoseMovesADynamicBodyAndClearsItsMotion (0.00s)
+        native_test.go:474: sleeping body was not woken by the teleport: still overlapping, gap 0.200 (two radii = 1)
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.408s
+    FAIL
+
+## Go 绑定不查运动类型（只查是否登记过）
+  改动 infra/physics/physx/native.go：`if w.ids[id] != Dynamic {
+		return ErrPoseTarget
+	}` → `if _, ok := w.ids[id]; !ok {
+		return ErrPoseTarget
+	}`
+  命令 go test -count=1 -tags physx -run TestSetPoseMovesADynamicBodyAndClearsItsMotion ./infra/physics/physx
+  结果 退出码 1，变红
+    --- FAIL: TestSetPoseMovesADynamicBodyAndClearsItsMotion (0.00s)
+        native_test.go:480: body 100: want ErrPoseTarget, got physx: set pose failed
+        native_test.go:480: body 50: want ErrPoseTarget, got physx: set pose failed
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.794s
+    FAIL
+
+## Go 绑定与 native 都不查运动学
+  改动 infra/physics/physx/native.go：`if w.ids[id] != Dynamic {
+		return ErrPoseTarget
+	}` → `if _, ok := w.ids[id]; !ok {
+		return ErrPoseTarget
+	}`
+  改动 infra/physics/physx/native/bridge.cpp：`if (body->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC)
+        return 0;
+    body->setGlobalPose` → `body->setGlobalPose`
+  命令 go test -count=1 -tags physx -run TestSetPoseMovesADynamicBodyAndClearsItsMotion ./infra/physics/physx
+  结果 退出码 1，变红
+    --- FAIL: TestSetPoseMovesADynamicBodyAndClearsItsMotion (0.00s)
+        native_test.go:480: body 100: want ErrPoseTarget, got physx: set pose failed
+        native_test.go:480: body 50: want ErrPoseTarget, got <nil>
+        native_test.go:484: rejected teleport moved the kinematic platform: [0 9 0]
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.414s
+    FAIL
+
+## 只有 native 不查运动学（Go 绑定仍查）
+  改动 infra/physics/physx/native/bridge.cpp：`if (body->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC)
+        return 0;
+    body->setGlobalPose` → `body->setGlobalPose`
+  命令 go test -count=1 -tags physx -run TestSetPoseMovesADynamicBodyAndClearsItsMotion ./infra/physics/physx
+  结果 退出码 0，没有变红（未被用例发现）
+    ok  	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.398s
+
+## native 不清力与力矩累加器
+  改动 infra/physics/physx/native/bridge.cpp：`body->clearForce(PxForceMode::eFORCE);
+    body->clearForce(PxForceMode::eVELOCITY_CHANGE);
+    body->clearTor` → `（删除）`
+  命令 go test -count=1 -tags physx -run TestSetPoseMovesADynamicBodyAndClearsItsMotion ./infra/physics/physx
+  结果 退出码 0，没有变红（未被用例发现）
+    ok  	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.420s
+
+## 原生库仍报 ABI 2（旧库）
+  改动 infra/physics/physx/native/bridge.cpp：`extern "C" unsigned rp_abi_version(void) { return 3; }` → `extern "C" unsigned rp_abi_version(void) { return 2; }`
+  命令 go test -count=1 -tags physx -run 'TestSetPoseMovesADynamicBodyAndClearsItsMotion|TestBallFallsAndContactsGround' ./infra/physics/physx
+  结果 退出码 1，变红
+    --- FAIL: TestBallFallsAndContactsGround (0.00s)
+        native_test.go:17: physx: native ABI mismatch; rebuild native library
+    --- FAIL: TestSetPoseMovesADynamicBodyAndClearsItsMotion (0.00s)
+        native_test.go:382: physx: native ABI mismatch; rebuild native library
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.412s
+    FAIL
+

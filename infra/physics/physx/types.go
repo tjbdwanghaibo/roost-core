@@ -10,6 +10,13 @@ import (
 var ErrUnavailable = errors.New("physx: build native library and enable -tags physx with cgo")
 var ErrClosed = errors.New("physx: world closed")
 
+// ErrPoseTarget 表示 SetPose 的目标不是动态刚体（静态、运动学或未知 ID）；世界没有被改动，调用方可以据此给出失败回执。
+var ErrPoseTarget = errors.New("physx: pose target is not a dynamic body")
+
+// nativeABI 是 Go 绑定要求的原生库 ABI 版本（rp_abi_version）。版本不等时 New 拒绝，要求重建原生库；不兼容旧版本。
+// 3：新增 rp_set_pose。
+const nativeABI = 3
+
 type Vec3 [3]float32
 type Quat [4]float32
 type Shape uint32
