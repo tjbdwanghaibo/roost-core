@@ -270,6 +270,7 @@ func newLoginScenario(t *testing.T) *loginScenario {
 
 	playerentity.RegisterEntity()
 	handler.RegisterEnterInitNestHandlers()
+	handler.RegisterEnterSceneNestHandlers()
 	handler.RegisterEnterCreateNestHandlers()
 	handler.RegisterEnterExistingNestHandlers()
 	handler.RegisterEnterBuiltNestHandlers()

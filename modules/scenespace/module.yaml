@@ -1,0 +1,6 @@
+name: scenespace
+summary: 普通场景空间与视野，借用宿主的同步管理器，不安装实体、会话、观察者或默认地图
+verify:
+  packages: [./game/modules/scene]
+  run: ^TestSceneSpace
+  pass: 3

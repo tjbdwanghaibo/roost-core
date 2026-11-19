@@ -218,7 +218,7 @@ func SubscribeNativeStep(ctx context.Context, js fnats.IJetStream, layout Layout
 	if err != nil {
 		return nil, err
 	}
-	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg, timing deliveryTiming) error {
 		command, err := decodeCommandEvent(message)
 		if err != nil {
 			logConsumerError("native step decode", message, err)
@@ -234,9 +234,9 @@ func SubscribeNativeStep(ctx context.Context, js fnats.IJetStream, layout Layout
 			logConsumerError("native step", message, err)
 			return err
 		}
-		return settleStepOutcome(messageCtx, js, layout, command, outcome, message)
+		return settleStepOutcome(messageCtx, js, layout, command, outcome, message, timing)
 	}
-	return subscribeStepStreams(ctx, js, layout, config, withConsumerWorkers(workers, consume))
+	return subscribeStepStreams(ctx, js, layout, config, withConsumerWorkers(workers, "native_step", config.Topic, consume))
 }
 
 // SubscribeMongoStep 订阅 Mongo 步骤命令：每条命令经
@@ -257,7 +257,7 @@ func SubscribeMongoStep(ctx context.Context, js fnats.IJetStream, layout Layout,
 	if err := inbox.EnsureInfrastructure(ctx); err != nil {
 		return nil, err
 	}
-	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg, timing deliveryTiming) error {
 		command, err := decodeCommandEvent(message)
 		if err != nil {
 			logConsumerError("mongo step decode", message, err)
@@ -268,23 +268,28 @@ func SubscribeMongoStep(ctx context.Context, js fnats.IJetStream, layout Layout,
 		}
 		processCtx, cancel := context.WithTimeout(messageCtx, config.AckWait)
 		defer cancel()
+		started := time.Now()
 		outcome, err := inbox.Handle(processCtx, command, handler)
+		metrics.ObserveHistogram("saga.step.mongo_inbox_duration", nil, time.Since(started))
 		if err != nil {
 			logConsumerError("mongo step", message, err)
 			return err
 		}
-		return settleStepOutcome(messageCtx, js, layout, command, outcome, message)
+		return settleStepOutcome(messageCtx, js, layout, command, outcome, message, timing)
 	}
-	return subscribeStepStreams(ctx, js, layout, config, withConsumerWorkers(workers, consume))
+	return subscribeStepStreams(ctx, js, layout, config, withConsumerWorkers(workers, "mongo_step", config.Topic, consume))
 }
 
 // settleStepOutcome 按一次运行的结论收尾：过期未执行直接 ack；执行或回放把结果发回命令所属分区，PubAck 后 ack。
-func settleStepOutcome(ctx context.Context, js fnats.IJetStream, layout Layout, command Command, outcome StepOutcome, message *fnats.JetStreamMsg) error {
+func settleStepOutcome(ctx context.Context, js fnats.IJetStream, layout Layout, command Command, outcome StepOutcome, message *fnats.JetStreamMsg, timing deliveryTiming) error {
 	switch outcome.Kind {
 	case StepExpired:
 		metrics.IncCounter("saga.step.expired_unexecuted_total", nil, 1)
-		slog.Info("saga: step command expired before it ran; acknowledged without executing",
-			"command_id", command.ID, "saga_id", command.SagaID, "deadline_at", command.DeadlineAt)
+		attrs := []any{"command_id", command.ID, "saga_id", command.SagaID, "deadline_at", command.DeadlineAt, "topic", command.Topic}
+		if before, local, ok := timing.split(message); ok {
+			attrs = append(attrs, "num_delivered", message.NumDelivered, "append_to_callback_ns", before.Nanoseconds(), "callback_to_worker_ns", local.Nanoseconds())
+		}
+		slog.Info("saga: step command expired before it ran; acknowledged without executing", attrs...)
 		return nil
 	case StepReplayed:
 		metrics.IncCounter("saga.step.attempt_replayed_total", nil, 1)
@@ -358,14 +363,20 @@ func validDeliveryLimits(maxDeliver, maxAckPending int, nakMin, nakMax time.Dura
 
 // withConsumerWorkers 把处理放进有界的在途槽；结算仍由原订阅负责，Drain 等待所有延迟结算。同一操作的并发由实体锁与回执
 // （原生）或 Mongo 事务写冲突（Mongo 步骤）裁决，不在这里另建按 ID 的锁或重试队列。
-func withConsumerWorkers(workers int, handler fnats.JetStreamHandler) fnats.JetStreamHandler {
+func withConsumerWorkers(workers int, stage, topic string, handle func(context.Context, *fnats.JetStreamMsg, deliveryTiming) error) fnats.JetStreamHandler {
+	run := func(ctx context.Context, msg *fnats.JetStreamMsg, received time.Time) error {
+		t := deliveryTiming{callback: received, started: time.Now()}
+		t.observe(stage, topic, msg)
+		return handle(ctx, msg, t)
+	}
 	if workers <= 1 {
-		return handler
+		return func(ctx context.Context, msg *fnats.JetStreamMsg) error { return run(ctx, msg, time.Now()) }
 	}
 	slots := make(chan struct{}, workers)
 	return func(ctx context.Context, message *fnats.JetStreamMsg) error {
+		received := time.Now() // before checking admission or waiting on the semaphore
 		if message == nil || message.DeferSettle == nil {
-			return handler(ctx, message)
+			return run(ctx, message, received)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -382,7 +393,7 @@ func withConsumerWorkers(workers int, handler fnats.JetStreamHandler) fnats.JetS
 		settle := message.DeferSettle()
 		if settle == nil {
 			defer func() { <-slots }()
-			return handler(ctx, message)
+			return run(ctx, message, received)
 		}
 		go func() {
 			var err error
@@ -393,7 +404,7 @@ func withConsumerWorkers(workers int, handler fnats.JetStreamHandler) fnats.JetS
 				settle(err)
 				<-slots
 			}()
-			err = handler(ctx, message)
+			err = run(ctx, message, received)
 		}()
 		return nil
 	}

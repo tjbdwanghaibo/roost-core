@@ -1,0 +1,236 @@
+{
+  "scope": "one game process; cumulative after minus before",
+  "pairs": [
+    {
+      "stage": "mongo_step",
+      "delivery": "first",
+      "topic": "alliance_donate.donate",
+      "append_to_callback": {
+        "n": 100,
+        "sum_ns": 14473531000,
+        "mean_ms": 144.7353,
+        "p95_le_ms": 512,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 100,
+        "sum_ns": 14707,
+        "mean_ms": 0.0001,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "mongo_step",
+      "delivery": "first",
+      "topic": "alliance_found.found",
+      "append_to_callback": {
+        "n": 100,
+        "sum_ns": 42602049000,
+        "mean_ms": 426.0205,
+        "p95_le_ms": 2048,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 100,
+        "sum_ns": 38121,
+        "mean_ms": 0.0004,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "mongo_step",
+      "delivery": "first",
+      "topic": "alliance_reward.claim",
+      "append_to_callback": {
+        "n": 100,
+        "sum_ns": 35428087000,
+        "mean_ms": 354.2809,
+        "p95_le_ms": 2048,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 100,
+        "sum_ns": 24923,
+        "mean_ms": 0.0002,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "mongo_step",
+      "delivery": "first",
+      "topic": "gift_item.deliver",
+      "append_to_callback": {
+        "n": 200,
+        "sum_ns": 74159677000,
+        "mean_ms": 370.7984,
+        "p95_le_ms": 2048,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 200,
+        "sum_ns": 46425,
+        "mean_ms": 0.0002,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "native_step",
+      "delivery": "first",
+      "topic": "alliance_donate.debit",
+      "append_to_callback": {
+        "n": 100,
+        "sum_ns": 3858102000,
+        "mean_ms": 38.581,
+        "p95_le_ms": 256,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 100,
+        "sum_ns": 516296,
+        "mean_ms": 0.0052,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "native_step",
+      "delivery": "first",
+      "topic": "alliance_found.debit",
+      "append_to_callback": {
+        "n": 100,
+        "sum_ns": 4890046000,
+        "mean_ms": 48.9005,
+        "p95_le_ms": 256,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 100,
+        "sum_ns": 968420,
+        "mean_ms": 0.0097,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "native_step",
+      "delivery": "first",
+      "topic": "alliance_reward.grant",
+      "append_to_callback": {
+        "n": 100,
+        "sum_ns": 3067679000,
+        "mean_ms": 30.6768,
+        "p95_le_ms": 128,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 100,
+        "sum_ns": 337587,
+        "mean_ms": 0.0034,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "native_step",
+      "delivery": "first",
+      "topic": "gift_item.debit",
+      "append_to_callback": {
+        "n": 200,
+        "sum_ns": 9390963000,
+        "mean_ms": 46.9548,
+        "p95_le_ms": 256,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 200,
+        "sum_ns": 3804422,
+        "mean_ms": 0.019,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "native_step",
+      "delivery": "first",
+      "topic": "gift_item.debit.compensate",
+      "append_to_callback": {
+        "n": 100,
+        "sum_ns": 4979213000,
+        "mean_ms": 49.7921,
+        "p95_le_ms": 256,
+        "gt_4096ms": 0
+      },
+      "callback_to_worker": {
+        "n": 100,
+        "sum_ns": 376546,
+        "mean_ms": 0.0038,
+        "p95_le_ms": 1,
+        "gt_4096ms": 0
+      }
+    },
+    {
+      "stage": "nest_start",
+      "delivery": "first",
+      "topic": "saga.start",
+      "append_to_callback": {
+        "n": 500,
+        "sum_ns": 1307091405000,
+        "mean_ms": 2614.1828,
+        "p95_le_ms": 8192,
+        "gt_4096ms": 100
+      },
+      "callback_to_worker": {
+        "n": 500,
+        "sum_ns": 22958685537,
+        "mean_ms": 45.9174,
+        "p95_le_ms": 256,
+        "gt_4096ms": 0
+      }
+    }
+  ],
+  "totals": [
+    {
+      "stage": "mongo_step",
+      "delivery": "first",
+      "age": {
+        "n": 500,
+        "sum_ns": 166663476000,
+        "mean_ms": 333.327,
+        "p95_le_ms": 2048,
+        "gt_4096ms": 0
+      },
+      "paired_n": 500,
+      "age_minus_pair_sum_ns": 7824
+    },
+    {
+      "stage": "native_step",
+      "delivery": "first",
+      "age": {
+        "n": 600,
+        "sum_ns": 26191990000,
+        "mean_ms": 43.6533,
+        "p95_le_ms": 256,
+        "gt_4096ms": 0
+      },
+      "paired_n": 600,
+      "age_minus_pair_sum_ns": -16271
+    },
+    {
+      "stage": "nest_start",
+      "delivery": "first",
+      "age": {
+        "n": 500,
+        "sum_ns": 1330050161000,
+        "mean_ms": 2660.1003,
+        "p95_le_ms": 8192,
+        "gt_4096ms": 106
+      },
+      "paired_n": 500,
+      "age_minus_pair_sum_ns": 70463
+    }
+  ]
+}

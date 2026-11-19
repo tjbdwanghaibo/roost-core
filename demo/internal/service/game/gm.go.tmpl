@@ -207,7 +207,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 		},
 		{
 			Name:        gmSagaGet,
-			Description: "read one saga record: {id}; the gift saga's id is what SendGift returned",
+			Description: "read one coordinator record: {id}; use the id from gm.saga.list or the robot's saga_record, not the business key returned by SendGift",
 			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
 				payload, err := admin.DecodePayload[gmSagaGetPayload](cmd)
 				if err != nil {

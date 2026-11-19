@@ -1,0 +1,76 @@
+package scene
+
+// MemberLedger is the map on the authoritative Scene DAO, not the session table or the AOI index.
+// Its generated setters participate in Nest undo. Call under the scene and member guards.
+type MemberLedger interface {
+	GetMembers(int64) (bool, bool)
+	MembersLen() int
+	SetMembers(int64, bool)
+	DelMembers(int64)
+}
+
+type Admission uint8
+
+const (
+	Admitted Admission = iota
+	AdmissionClosed
+	AdmissionFull
+)
+
+// AdmitMember leaves a refused/repeated entrant untouched. A zero capacity means the host
+// does not impose a gameplay limit. Reclaim is optional; it runs in the same transaction
+// and must not release a live member merely because its connection closed.
+func AdmitMember(ledger MemberLedger, id int64, closed bool, capacity int, reclaim func()) Admission {
+	if closed {
+		return AdmissionClosed
+	}
+	if _, present := ledger.GetMembers(id); present {
+		return Admitted
+	}
+	if reclaim != nil {
+		reclaim()
+	}
+	if capacity != 0 && ledger.MembersLen() >= capacity {
+		return AdmissionFull
+	}
+	ledger.SetMembers(id, true)
+	return Admitted
+}
+
+// ClosingLedger adds only the state needed to drain an existing map. All methods
+// are called in a Scene transaction; it is the host, not this ledger, that owns
+// the space, its actor lifecycles, and any after-commit effects.
+type ClosingLedger interface {
+	MemberLedger
+	SetClosing(bool)
+	SetClosed(bool)
+	RangeMembers(func(int64, bool) bool)
+}
+
+// BeginClosing fences new admissions before taking the snapshot. Repeating it
+// returns the remaining members, not the membership of a previous attempt.
+func BeginClosing(ledger ClosingLedger, reclaim func()) []int64 {
+	ledger.SetClosing(true)
+	if reclaim != nil {
+		reclaim()
+	}
+	var ids []int64
+	ledger.RangeMembers(func(id int64, _ bool) bool { ids = append(ids, id); return true })
+	return ids
+}
+
+// CloseIfEmpty is also safe for a direct close (without a preceding drain).
+// A refusal must not mark a previously open map closing or closed.
+func CloseIfEmpty(ledger ClosingLedger, reclaim func()) bool {
+	if reclaim != nil {
+		reclaim()
+	}
+	if ledger.MembersLen() != 0 {
+		return false
+	}
+	ledger.SetClosed(true)
+	return true
+}
+
+// DepartMember changes the ledger only. The host handles movement/sync after commit.
+func DepartMember(ledger MemberLedger, id int64) { ledger.DelMembers(id) }

@@ -1,12 +1,20 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
-	"{{MODULE}}/game/clientsync"
-	"{{MODULE}}/game/settings"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/modules/cellworldhost"
+	gamescene "{{MODULE}}/game/scene"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"{{MODULE}}/game/clientsync"
+	"{{MODULE}}/game/settings"
 )
 
 // What a client sees of a partitioned scene are the Base's mirrors, packed with the Player's and the Monster's own
@@ -49,6 +57,80 @@ func TestPartitionMirrorsDecodeAsPlayersAndMonsters(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Use the real world entity, not the two-process terrain fixture's walkScene stand-in.
+func TestWorldSceneCellBeatAndTeardown(t *testing.T) {
+	w := newMoveWorldMode(t, gamescene.DefaultConfig(), true)
+	area := w.area
+	if w.bridge.ordinary != nil || area.CellRegion() != nil {
+		t.Fatal("partition started with an ordinary Space or a premature Region")
+	}
+	grid := partitionTerrainGrid(t)
+	cell, ok := grid.CellOf(partitionSidA)
+	if !ok {
+		t.Fatal("no cell for test process")
+	}
+	owners, err := cellworld.NewOwnerRegistry(versionstore.NewMemoryStore[int64, cellworld.OwnerRecord](), func(context.Context, cellworld.OwnerProcess) (bool, error) { return true, nil }, versionstore.NewMemoryStore[uint32, cellworld.DeathBucket]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := make(chan cellworld.CellID, 1)
+	node, err := cellworld.NewNode(cellworld.NodeConfig{
+		World: "entity-life", SID: partitionSidA, Grid: grid, Cell: &cell, Scene: area.ID(), Nest: w.engine, Transport: &walkTransport{},
+		Owners: owners, Incarnation: "local", CheckLease: func() error { return nil }, ViewRadius: 800,
+		CreateActor: func(int64, cellworld.EntityKind) (cellworld.Actor, error) {
+			return nil, errors.New("unexpected actor creation")
+		},
+		Destroy: func(context.Context, entity.IThreadSafeEntity) error {
+			return errors.New("unexpected actor destruction")
+		},
+		Hooks: cellworld.Hooks{TickDone: func(c cellworld.CellID, _ time.Duration, _, _ int) {
+			select {
+			case committed <- c:
+			default:
+			}
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cellworldhost.Install(node, area.ID(), actor.Heartbeat)
+	defer cellworldhost.Uninstall(node)
+	if err := locked(w, area.ID(), func() error { return area.HostCell(node.Config().Period) }); err != nil {
+		t.Fatal(err)
+	}
+	w.clock.advance(time.Second)
+	select {
+	case got := <-committed:
+		if got != cell || locked(w, area.ID(), area.CellRegion) == nil {
+			t.Fatal("wrong cell or scene region")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the world entity did not commit a region beat")
+	}
+	// Stop dispatch (not registrations), then drain the entity's pending messages. A shared
+	// driver can retain unrelated registrations from another fixture. No automatic stale-ID
+	// sweep can now mask a missing host release; exactly spawn and cell must leave the ring.
+	if err := actor.Heartbeat.Stop(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.settle(area.ID())
+	registered := actor.Heartbeat.Registered()
+	if err := w.entities.Destroy(w.ctx, area, entity.DestroyReasonCommon, false); err != nil {
+		t.Fatal(err)
+	}
+	area.OnDestroy(entity.DestroyReasonCommon) // a late destroy must not stop the bridge or release anything twice
+	if after := actor.Heartbeat.Registered(); registered-after != 2 {
+		t.Fatalf("destroying the Cell world must remove its two heartbeats: before %d, after %d", registered, after)
+	}
+	if area.Terrain() != nil || actor.WorldTime() != nil {
+		t.Fatal("world retained its map or time domain publication")
+	}
+	if err := w.bridge.manager.OpenHeldSession(9761); err != nil {
+		t.Fatalf("entity destruction closed the bridge manager: %v", err)
+	}
+	w.bridge.manager.CloseSession(9761)
 }
 
 // A process without scene.partition publishes no partitioned scene: the endpoints take that as "ordinary scene"

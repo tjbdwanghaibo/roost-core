@@ -2,6 +2,10 @@
 
 一个“场景”是一个 Scene 实体，带自己的成员账本、视野索引和时间域。玩家（以及怪物、建筑等别的实体）进入场景之后，才有“附近的人能看到我”这回事。玩家的移动本身由依赖的 actor 模块负责（`ActorMove` / `ActorStop`），scene 给 actor 提供“在哪张图上走、谁能看见”的环境。
 
+空间层来自依赖 [scenespace](../scenespace/README.md)；生成的包仍是 `game/modules/scene`。本模块负责实体、成员账本与开关图；只接入已有地图和同步管理器的工程可以单装空间层。
+
+`game/entities/scene/life.go` 是完整模块和 game-demo 共用的实体生命周期模板。实体壳传入自己的时间 DAO 适配与资源启停；只有完整模块在这里持有并关闭自己的 `Space`，demo 不随实体关闭空间或同步管理器。该文件不分配实体号，也不启动服务。
+
 ## 能力
 
 - **客户端协议**
@@ -104,7 +108,7 @@ scene 自己的 `with/`：
 
 ## 验证范围
 
-- `roost module verify scene`：28 条场景（`^TestScene`，包 `./game/controllers`）。每一种业务拒绝都断言“controller 不返回 error、应答带着指定的业务码与原因、状态没变、同一控制器上改对之后重发成功”。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期或已关闭的 `FromID` 答 `scene_stale`、客户端不能开图（`scene_unavailable`）、有人的图不能关、满员答 `scene_full` 且不把人从原图踢掉、停机中的图答 `scene_unavailable`、事件监听的带码拒绝照样答码并整笔撤销、七个码互不相同且不带码的错误不被当成业务拒绝、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与监听失败回滚、交互按连续序号只生效一次（同号换内容、跳号、0 都答 `scene_sequence` 且不消耗序号）、不能够到别的场景（`scene_not_here`）、没开的场景（`scene_unavailable`）、不存在的对象（`scene_object_unknown`）或远处的对象（`scene_object_far`）、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
+- `roost module verify scene`：原 28 条业务场景，加 1 条实体生命周期资源归属测试（`^TestScene`，包 `./game/controllers` 与 `./game/entities/scene`）。时间域校验失败不建图，部分启动失败会回收，关图与销毁共用一次释放。每一种业务拒绝都断言“controller 不返回 error、应答带着指定的业务码与原因、状态没变、同一控制器上改对之后重发成功”。覆盖：缺省场景与 PB 入口、切换同时改两边成员、过期或已关闭的 `FromID` 答 `scene_stale`、客户端不能开图（`scene_unavailable`）、有人的图不能关、满员答 `scene_full` 且不把人从原图踢掉、停机中的图答 `scene_unavailable`、事件监听的带码拒绝照样答码并整笔撤销、七个码互不相同且不带码的错误不被当成业务拒绝、切换被拒时存档位置回滚、同一视野、不同分线互相不可见、移动在提交后才改视野、回滚不动视野、公开 packer 只含登记字段、时间域按图独立与非法倍率、重连复用成员、区域进出由位置推导与监听失败回滚、交互按连续序号只生效一次（同号换内容、跳号、0 都答 `scene_sequence` 且不消耗序号）、不能够到别的场景（`scene_not_here`）、没开的场景（`scene_unavailable`）、不存在的对象（`scene_object_unknown`）或远处的对象（`scene_object_far`）、感知只看已提交位置、停机撤离与重试、卸载角色的成员清理、依赖成员保留以便重试、单图排空。
 - 联动：`with/chat` 5 条，`with/profile` / `with/attribute` / `with/equipment` 各 2 条；combat 模块拥有的 `with/scene` 另有 2 条。各联动都实际解码快照与增量，检查公开值存在、私有值不泄露、本人仍能看到私有值。
 - 这些是离线场景：使用实际的 Controller、生成的 Sender、Nest 多实体事务、DAO、movement、Sync AOI 与时间域；提交器与同步 / 网络传输是受控的内存替身。这些单测不证明真实存储与网络；另有 2026-11-13 单机真实 Mongo / Redis / NATS / etcd 与 Portal / TCP 演练：拒绝后同连接继续切图、交互拒绝、地形查询与退场通过。未验证跨机、容量与灾难恢复。
 - 场景夹具按正式顺序先构造控制器、后启动 runtime，并检查就绪前的请求明确失败、就绪后同一控制器恢复可用。

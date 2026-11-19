@@ -74,13 +74,14 @@ func (c Config) Validate() error {
 
 // Space 只维护提交后的可见性。成员账本在 Scene DAO，不能拿 AOI 当授权或成员权威。
 type Space struct {
-	Interest   *policy.Interest
-	manager    *entitysync.Manager
-	config     Config
-	playerKind entity.EntityKind
-	positions  sync.Map // entity ID -> *committedPosition；位置锁按实体分，不串行化整个场景。
-	index      *spatial.BlockIndex
-	closed     atomic.Bool
+	Interest     *policy.Interest
+	manager      *entitysync.Manager
+	config       Config
+	playerKind   entity.EntityKind
+	metadataView policy.ViewID
+	positions    sync.Map // entity ID -> *committedPosition；位置锁按实体分，不串行化整个场景。
+	index        *spatial.BlockIndex
+	closed       atomic.Bool
 }
 
 type committedPosition struct {
@@ -99,22 +100,34 @@ func NewSpace(manager *entitysync.Manager, config Config, playerKind entity.Enti
 	}
 	config = config.Clone()
 	selfVisible := false // 玩家本人已由 access.self_sync 订阅，AOI 只给公开视图。
-	interest, err := policy.NewInterest(policy.InterestConfig{
+	return newSpace(config, playerKind, 1, Public, true, policy.InterestConfig{
 		Manager: manager, SelfVisible: &selfVisible,
 		AOI: policy.AOIConfig{Bounds: config.Bounds, BlockSize: config.BlockSize,
 			EnterRadius: config.Sight, LeaveRadius: config.Sight + config.BlockSize, MaxVisible: 128},
 		BandLayer: func(int, int) entity.SyncProfile { return Public },
 	})
+}
+
+// NewHostedSpace 使用宿主已有的 Manager 和原样的 AOI / 可见字段规则，只为这张地图登记一个 Interest。
+// 宿主拥有会话、地形与寻路；这里不创建或关闭 Manager，也不为非 Sense 使用者建立第二份站位索引。
+func NewHostedSpace(cfg policy.InterestConfig, playerKind entity.EntityKind, metadata policy.ViewID, profile entity.SyncProfile) (*Space, error) {
+	return newSpace(Config{Bounds: cfg.AOI.Bounds, BlockSize: cfg.AOI.BlockSize, Sight: cfg.AOI.EnterRadius}, playerKind, metadata, profile, false, cfg)
+}
+
+func newSpace(config Config, playerKind entity.EntityKind, metadata policy.ViewID, profile entity.SyncProfile, sense bool, cfg policy.InterestConfig) (*Space, error) {
+	interest, err := policy.NewInterest(cfg)
 	if err != nil {
 		return nil, err
 	}
-	space := &Space{Interest: interest, manager: manager, config: config, playerKind: playerKind}
-	space.index, err = spatial.NewBlockIndex(config.Bounds, config.BlockSize)
-	if err != nil {
-		interest.Close()
-		return nil, err
+	space := &Space{Interest: interest, manager: cfg.Manager, config: config, playerKind: playerKind, metadataView: metadata}
+	if sense {
+		space.index, err = spatial.NewBlockIndex(config.Bounds, config.BlockSize)
+		if err != nil {
+			interest.Close()
+			return nil, err
+		}
 	}
-	if err := interest.DefineRelationView(1, Public); err != nil {
+	if err := interest.DefineRelationView(metadata, profile); err != nil {
 		interest.Close()
 		return nil, err
 	}
@@ -126,7 +139,7 @@ func (s *Space) BindMetadata(state *entity.SubjectSyncState) error {
 	if err := s.manager.Register(state); err != nil {
 		return err
 	}
-	return s.Interest.SetViewMembers(1, []int64{state.SubjectID()})
+	return s.BindRegisteredMetadata(state.SubjectID())
 }
 
 func (s *Space) Enter(value entity.IThreadSafeEntity, at spatial.Point) error {
@@ -136,15 +149,50 @@ func (s *Space) Enter(value entity.IThreadSafeEntity, at spatial.Point) error {
 	if err := s.manager.Register(value.Base().Sync()); err != nil {
 		return err
 	}
-	s.positions.Store(value.ID(), &committedPosition{point: at, player: value.GetEntityKind() == s.playerKind})
-	s.index.Add(value.ID(), at)
-	if value.GetEntityKind() == s.playerKind {
-		if err := s.Interest.Enter(value.UniqueID(), value.ID(), at, policy.ObserverView{}); err != nil {
-			return err
-		}
-		return s.Interest.AttachView(value.UniqueID(), 1)
+	if err := s.EnterRegistered(value.ID(), at, policy.ObserverView{}); err != nil {
+		return err
 	}
-	return s.Interest.Show(value.ID(), at)
+	if value.GetEntityKind() == s.playerKind {
+		return s.AttachMetadata(value.UniqueID())
+	}
+	return nil
+}
+
+// EnterRegistered 供自己负责 RegisterAfterRetirement 的宿主使用。只登记可见性，不再注册 subject 或打开会话。
+func (s *Space) EnterRegistered(id int64, at spatial.Point, view policy.ObserverView) error {
+	if s.closed.Load() {
+		return errors.New("scene: closed")
+	}
+	isPlayer := entity.GetEntityKindFromID(id) == s.playerKind
+	var err error
+	if isPlayer {
+		err = s.Interest.Enter(entity.GetUniqueIDFromEntityID(id), id, at, view)
+	} else {
+		err = s.Interest.Show(id, at)
+	}
+	if err != nil {
+		return err
+	}
+	if s.index != nil {
+		entry, exists := s.positions.LoadOrStore(id, &committedPosition{point: at, player: isPlayer})
+		pos := entry.(*committedPosition)
+		pos.mu.Lock()
+		if exists {
+			s.index.Move(id, pos.point, at)
+		} else {
+			s.index.Add(id, at)
+		}
+		pos.point = at
+		pos.mu.Unlock()
+	}
+	return nil
+}
+
+func (s *Space) BindRegisteredMetadata(id int64) error {
+	return s.Interest.SetViewMembers(s.metadataView, []int64{id})
+}
+func (s *Space) AttachMetadata(observer int64) error {
+	return s.Interest.AttachView(observer, s.metadataView)
 }
 
 func (s *Space) Leave(value entity.IThreadSafeEntity) error { return s.Forget(value.ID()) }
@@ -167,6 +215,9 @@ func (s *Space) Forget(id int64) error {
 func (s *Space) QueueMove(value entity.IThreadSafeEntity, at spatial.Point) error {
 	if err := s.Interest.QueueMove(value, at); err != nil {
 		return err
+	}
+	if s.index == nil {
+		return nil
 	}
 	// 与 MapBasic 一样只发布成功提交；同实体的提交后回调由 Nest 保序。
 	id := value.ID()
@@ -192,7 +243,7 @@ func (s *Space) Close() { s.closed.Store(true); s.Interest.Close() }
 // Sense 用独立的块索引查询已提交站位，不读取另一个实体的 DAO、不取另一个实体锁。
 // 这只是决策候选；命中/伤害必须在参与者 Nest 事务内重新判定场景、距离与存活代际。
 func (s *Space) Sense(at spatial.Point, radius int64) []SensedActor {
-	if radius <= 0 || radius > s.config.Sight || s.closed.Load() {
+	if s.index == nil || radius <= 0 || radius > s.config.Sight || s.closed.Load() {
 		return nil
 	}
 	rect := spatial.Rect{Min: spatial.Point{X: spatial.SaturatingSub(at.X, radius), Y: spatial.SaturatingSub(at.Y, radius)},

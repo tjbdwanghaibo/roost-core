@@ -397,7 +397,11 @@ func TestConsumerWorkersBoundExecutionAndDeferSettlement(t *testing.T) {
 		unblock := sync.OnceFunc(func() { close(release) })
 		defer unblock()
 		entered, returned, settled := make(chan struct{}, 3), make(chan error, 3), make(chan error, 3)
-		handler := withConsumerWorkers(2, func(context.Context, *fnats.JetStreamMsg) error { entered <- struct{}{}; <-release; return nil })
+		handler := withConsumerWorkers(2, "native_step", "test.bound", func(context.Context, *fnats.JetStreamMsg, deliveryTiming) error {
+			entered <- struct{}{}
+			<-release
+			return nil
+		})
 		message := func() *fnats.JetStreamMsg {
 			return &fnats.JetStreamMsg{DeferSettle: func() func(error) { return func(err error) { settled <- err } }}
 		}
@@ -431,7 +435,7 @@ func TestConsumerWorkersBoundExecutionAndDeferSettlement(t *testing.T) {
 func TestConsumerWorkersSettlePanicAndFallback(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		settled := make(chan error, 1)
-		handler := withConsumerWorkers(2, func(context.Context, *fnats.JetStreamMsg) error { panic("business panic") })
+		handler := withConsumerWorkers(2, "native_step", "test.panic", func(context.Context, *fnats.JetStreamMsg, deliveryTiming) error { panic("business panic") })
 		if err := handler(context.Background(), &fnats.JetStreamMsg{DeferSettle: func() func(error) { return func(err error) { settled <- err } }}); err != nil {
 			t.Fatal(err)
 		}
@@ -439,7 +443,7 @@ func TestConsumerWorkersSettlePanicAndFallback(t *testing.T) {
 			t.Fatalf("panic settlement: %v", err)
 		}
 		expected := errors.New("business error")
-		handler = withConsumerWorkers(2, func(context.Context, *fnats.JetStreamMsg) error { return expected })
+		handler = withConsumerWorkers(2, "native_step", "test.fallback", func(context.Context, *fnats.JetStreamMsg, deliveryTiming) error { return expected })
 		if err := handler(context.Background(), &fnats.JetStreamMsg{}); err != expected {
 			t.Fatalf("synchronous fallback: %v", err)
 		}

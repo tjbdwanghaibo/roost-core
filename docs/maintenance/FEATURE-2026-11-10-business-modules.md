@@ -608,7 +608,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 3 | turn | 回合推进：命令序号、超时（持久定时器） | room；定时器类型分配 | 已实施（25 条），边界见 turn README |
 | 3 | gift | 玩家间送礼：按当前绑定扣物、邮件投递、失败退款 | bag、mailbox、rehome；声明式 Saga 与 Player 回执 | 已有，[模块说明](../../modules/gift/README.md)；game-demo 复用同一实现 |
 | 3 | transfer | 单个玩家换服（改绑 sid）：源服停写、等落库、account 改绑、目标服接管；给 saga 的“换服中”钩子提供状态 | account 服务的改绑接口与换服状态（框架内）；服务级接线点 | **已有**：模块 `rehome`（2026-11-11 一期；在途索引、恢复与清扫 2026-11-17 D7 A / D8 A），框架侧是 account 的换服接口与 DataEngine 的交出实体。原写“未做”已过时（2026-11-19 核对），见 [FEATURE-2026-11-11-player-rehome](FEATURE-2026-11-11-player-rehome.md) |
-| 3 | scene | 场景实体、进出、多地图与分线、区域交互 | actor；服务级接线 | [模块已实现](../../modules/scene/README.md)；game-demo 自有场景接线待迁 |
+| 3 | scene | 场景实体、进出、多地图与分线、区域交互 | actor；服务级接线 | [模块已实现](../../modules/scene/README.md)；demo 普通图空间与视野已接 scenespace，实体时间域与启停已共用；成员账本、开关图与分区未迁 |
 | 4 | 配方 | `roost project new -recipe <name>` | 模块组合 | 已有 casual、turn-pvp 两种配方 |
 
 安装器已支持自带实体与 Init / Shutdown 接线点（2026-11-11）；定时器类型分配已完成；还缺、按需要补的能力：配置表与模块配置、更多的登记点（通用机制已有：清单的 `with` 联动文件，见 [modules/README](../../modules/README.md)；已有的登记点是 enter 的进入钩子，chat 与 mailbox 接在上面。还缺：mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。

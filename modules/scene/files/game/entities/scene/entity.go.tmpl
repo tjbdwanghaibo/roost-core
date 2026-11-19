@@ -24,7 +24,7 @@ type Scene struct {
 	dao     *db.SceneDao            `dao:"scene"`
 	config gamescene.Config
 	space  *gamescene.Space
-	domain *timedomain.Domain
+	life   sceneLife
 	loaded func(int64) entity.IThreadSafeEntity
 }
 
@@ -46,35 +46,28 @@ type ISceneEntity interface {
 func (s *Scene) Scene() *Scene                  { return s }
 func (s *Scene) Space() *gamescene.Space        { return s.space }
 func (s *Scene) Config() gamescene.Config       { return s.config.Clone() }
-func (s *Scene) TimeDomain() *timedomain.Domain { return s.domain }
+func (s *Scene) TimeDomain() *timedomain.Domain { return s.life.domain.Load() }
 func (s *Scene) Environment() actor.Environment {
-	return actor.Environment{ID: s.ID(), Space: s.space, Ground: s.space, Surface: s.config.Surface, Time: s.domain}
+	return actor.Environment{ID: s.ID(), Space: s.space, Ground: s.space, Surface: s.config.Surface, Time: s.TimeDomain()}
 }
 
 func (s *Scene) OnInitFinish(param *entity.EntityCreateParam) error {
+	if param == nil { return fmt.Errorf("scene: missing CreateParams") }
 	config, ok := param.Param.(CreateParams)
 	if !ok {
 		return fmt.Errorf("scene: use scene/service.Open with CreateParams")
 	}
-	space, err := gamescene.NewSpace(config.Manager, config.Config, config.PlayerKind)
-	if err != nil {
-		return err
-	}
-	s.config, s.space = config.Config.Clone(), space
-	s.loaded = config.Loaded
-	s.domain, err = timedomain.New(sceneTime{s}, timedomain.Config{MinRate: 0, MaxRate: 4})
-	if err != nil {
-		space.Close()
-		return err
-	}
-	return nil
+	return s.life.start(sceneTime{s}, 4, func(*timedomain.Domain) error {
+		space, err := gamescene.NewSpace(config.Manager, config.Config, config.PlayerKind)
+		if err != nil { return err }
+		s.config, s.space, s.loaded = config.Config.Clone(), space, config.Loaded
+		return nil
+	}, func(*timedomain.Domain, entity.EntityDestroyReason) {
+		if s.space != nil { s.space.Close() }
+	})
 }
 
-func (s *Scene) OnDestroy(entity.EntityDestroyReason) {
-	if s.space != nil {
-		s.space.Close()
-	}
-}
+func (s *Scene) OnDestroy(reason entity.EntityDestroyReason) { s.life.close(reason) }
 
 type sceneTime struct{ scene *Scene }
 

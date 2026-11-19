@@ -108,4 +108,8 @@ set -e
 curl -fsS "http://$DEMO_ROBOT_OPS/metrics" >"$out/game-metrics-after.txt" || true
 [[ "$(grep -c '^--- PASS: TestDemoRobotCapacity' "$out/test.log" || true)" == 1 ]] || rc=1
 grep -q '^--- SKIP' "$out/test.log" && rc=1
+# Opt in to read-only follow-up after both the measured scenario and the metrics snapshot.
+if [[ "${DEMO_ROBOT_TRACE_GIFTS:-0}" == 1 && -s "$out/robot.log" ]]; then
+  python3 "$repo_dir/scripts/testdata/demo-robot/trace-gifts.py" "$out" "$((9100 + port_shift))" || echo 'gift readback incomplete' >&2
+fi
 exit "$rc"

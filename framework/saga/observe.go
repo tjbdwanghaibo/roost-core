@@ -4,11 +4,58 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // observe.go 是协调器判定之外的观察：重开、迟到成功、旧尝试 / 旧一生的结果。分区循环在判定之后调用，计数由调用方加。
+
+// observeDeliveryAge measures from the broker append until a worker takes the message.
+// Redelivery includes the previous attempts/backoff and must not be mixed with first delivery.
+// Clock skew can move broker timestamps forward. A missing/future timestamp is not a zero-latency sample.
+func observeDeliveryAge(stage string, msg *fnats.JetStreamMsg, at time.Time) {
+	if msg == nil || msg.StoredAt.IsZero() || at.Before(msg.StoredAt) || msg.NumDelivered == 0 {
+		return
+	}
+	delivery := "first"
+	if msg.NumDelivered > 1 {
+		delivery = "retry"
+	}
+	metrics.ObserveHistogram("saga.consumer.delivery_age", metrics.Labels{"stage": stage, "delivery": delivery}, at.Sub(msg.StoredAt))
+}
+
+// deliveryTiming is local to one invocation; a redelivery gets a new callback
+// timestamp, but retains the broker's original StoredAt. Both local timestamps
+// come from time.Now (monotonic interval). No time or ID is added to the wire.
+type deliveryTiming struct{ callback, started time.Time }
+
+func (t deliveryTiming) split(msg *fnats.JetStreamMsg) (before, local time.Duration, ok bool) {
+	if msg == nil || msg.NumDelivered == 0 || msg.StoredAt.IsZero() || t.callback.IsZero() || t.started.Before(t.callback) || t.callback.Before(msg.StoredAt) {
+		return 0, 0, false
+	}
+	return t.callback.Sub(msg.StoredAt), t.started.Sub(t.callback), true
+}
+
+// Record paired samples only once processing actually starts. A canceled slot
+// waiter isn't a zero-wait start. topic is the subscribed logical step, never
+// the raw subject (which can contain a route or partition), saga ID or player.
+func (t deliveryTiming) observe(stage, topic string, msg *fnats.JetStreamMsg) {
+	observeDeliveryAge(stage, msg, t.started) // original series and validity rules
+	before, local, ok := t.split(msg)
+	if !ok {
+		return
+	}
+	delivery := "first"
+	if msg.NumDelivered > 1 {
+		delivery = "retry"
+	}
+	labels := metrics.Labels{"stage": stage, "delivery": delivery, "topic": topic}
+	metrics.ObserveHistogram("saga.consumer.append_to_callback", labels, before)
+	metrics.ObserveHistogram("saga.consumer.callback_to_worker", labels, local)
+}
 
 // saga.reopened_total 的 reason 标签：重开从哪里来。取值固定三个，保持低基数。
 const (

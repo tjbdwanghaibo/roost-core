@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	sceneentity "{{MODULE}}/game/entities/scene"
 
 	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	player "{{MODULE}}/game/entities/player"
@@ -129,21 +128,35 @@ func (a *demoEnterAttempt) place(ctx stdcontext.Context, entered gamelogin.Enter
 	}
 	// 普通地图先落位再订阅；分区场景由 Join 经 Cell 放置，不能先写本地地图。两条路都只尝试一次。
 	var at spatial.Point
+	var arriving bool
 	if a.controller.Partition() == nil {
-		spawn := sceneentity.WorldSceneConfig().Spawn
-		var err error
-		at, err = syncsender.NewEnterSceneSender(a.controller.NestClient()).MultiSync_EnterScene(ctx, a.subject.ID(), a.controller.WorldSceneID(), spawn.X, spawn.Y)
+		sender := syncsender.NewEnterSceneSender(a.controller.NestClient())
+		placement, err := sender.MultiSync_PlaceOrdinaryPlayer(ctx, a.subject.ID(), a.controller.WorldSceneID(), a.boundSID)
 		if err != nil {
+			if errors.Is(err, apperrors.ErrSceneFull) || errors.Is(err, apperrors.ErrSceneClosing) {
+				return err
+			}
+			pending, checkErr := sender.Sync_PendingOrdinaryArrival(ctx, a.subject.ID(), a.boundSID)
+			if pending || checkErr != nil {
+				return errors.Join(err, checkErr)
+			}
 			slog.Warn("enter_game: player not placed on the map", "player_id", a.playerID, "err", err)
 			return nil
 		}
+		at, arriving = placement.At, placement.Arriving
 	}
 	scene, err := a.controller.Scene()
 	if err != nil {
+		if arriving {
+			return err
+		}
 		slog.Warn("enter_game: no scene to join", "player_id", a.playerID, "err", err)
 		return nil
 	}
 	if err := scene.Join(ctx, a.subject, at); err != nil {
+		if arriving || errors.Is(err, apperrors.ErrSceneClosing) {
+			return err
+		}
 		slog.Warn("enter_game: player did not join the replicated scene", "player_id", a.playerID, "err", err)
 	}
 	return nil

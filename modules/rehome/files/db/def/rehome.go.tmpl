@@ -21,4 +21,6 @@ type RehomeState struct {
 	LastAt int64 `store:"6"`
 	// Count 是这名玩家换过几次服（到达的次数）。
 	Count int32 `store:"7"`
+	// PlacedID is optional host progress, not arrival or ownership. Cleared with the pending intent.
+	PlacedID string `store:"8"`
 }

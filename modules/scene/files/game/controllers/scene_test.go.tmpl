@@ -430,10 +430,23 @@ func TestSceneTimeDomainIsIndependentPerMap(t *testing.T) {
 	if err := sender.NewSceneTimeSender(f.engine).Sync_SceneTime(context.Background(), f.area(1).ID(), 0); err != nil {
 		t.Fatal(err)
 	}
-	if f.area(1).TimeDomain().Rate() != 0 || other.TimeDomain().Rate() != 1 {
-		t.Fatal("time domains coupled")
+	first := f.area(1)
+	if first.UniqueID() != 1 || first.TimeDomain().Rate() != 0 || other.TimeDomain().Rate() != 1 {
+		t.Fatal("wrong default map or coupled time domains")
+	}
+	before := first.TimeDomain().State()
+	reject := errors.New("reject after setting a legal rate")
+	_, err := f.engine.Request(context.Background(), sceneTestArea, first.ID(), nest.NewParams(func(area *sceneentity.Scene) error {
+		if err := area.TimeDomain().SetRate(2); err != nil {
+			return err
+		}
+		return reject
+	}))
+	if !errors.Is(err, reject) || first.TimeDomain().State() != before || first.Dao().GetRate() != 0 {
+		t.Fatalf("rolled-back map time: %v, %v", first.TimeDomain().State(), err)
 	}
 }
+
 func TestSceneInvalidRateDoesNotChangeDomain(t *testing.T) {
 	f := newSceneFixture(t)
 	if err := sender.NewSceneTimeSender(f.engine).Sync_SceneTime(context.Background(), f.area(1).ID(), 100); err == nil {

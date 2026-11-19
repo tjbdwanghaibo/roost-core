@@ -11,6 +11,10 @@
 
 - **生成物要求的最低 core 提到 v1.58.0**（2026-11-19）：v1.58.0 的生成物用到新接口——生成配置的 `mongo.database_prefix`、邮箱模板的 `mail.BroadcastBinding` 与 `Mail.CloseBroadcastScope`——v1.57.1 编译不了。`framework-compat` 的 minimum 组合同步钉到 v1.58.0。
 
+- **game-demo 普通图**：复用 `scenespace` 的空间、视野和成员规则，以及 `scene` 的实体生命周期。`scene.player_capacity` 默认 0（不限）；断线保留名额，正式离场或卸载才释放。正常停机拒绝新进入，保存驻留玩家最后位置后排空；不新增在线关图入口。
+- **换服落点**：首次进入目标普通图时按目标出生点及地形落位，保存坐标与本次换服的落位标记同事务提交。到账前重连或冷加载不重复回出生点；同服重连、CellWorld 恢复规则不变。
+- **Saga / outbox 诊断**：按步骤主题区分消息追加至订阅回调、回调至 worker 开始两段等待，首投与重投分开。机器人可在计时结束后只读核对赠礼终态；不改业务重试、WAL 或并发默认值。[测量与证据边界](docs/performance/DEMO-WORLD-SAGA.md) · [候选版本升级说明](docs/release/v1.59.0-NOTES.md)。
+
 ## [v1.58.0] - 2026-11-19
 
 - **同步订阅槽接手**：Interest / GroupView 等待期间，若另一来源已为同一会话占槽，可以直接接手；真正需要新槽的会话仍按原规则等待。

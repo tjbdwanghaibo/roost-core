@@ -1,5 +1,7 @@
 package scene
 
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
+
 // Scene 给 SceneMembers 组件的宿主方法（view.SceneMembersHolder）：场景运行期对象（配置、AOI 空间、成员实体查找）属于实体本身，
 // 组件经它们用到。
 
@@ -12,5 +14,5 @@ func (s *Scene) MemberLoaded(id int64) bool { return s.loaded == nil || s.loaded
 // ForgetMember 让 AOI 空间忘掉成员 id。
 func (s *Scene) ForgetMember(id int64) { _ = s.space.Forget(id) }
 
-// CloseSpace 关闭 AOI 空间。
-func (s *Scene) CloseSpace() { s.space.Close() }
+// CloseSpace 在关图事务提交后释放实体拥有的空间；随后的 OnDestroy 不会再次释放。
+func (s *Scene) CloseSpace() { s.life.close(entity.DestroyReasonCommon) }

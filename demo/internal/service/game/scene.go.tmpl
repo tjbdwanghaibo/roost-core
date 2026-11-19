@@ -2,6 +2,7 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	apperrors "{{MODULE}}/internal/errors"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	modulescene "{{MODULE}}/game/modules/scene"
 	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
@@ -139,7 +141,8 @@ const SceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
 // Scene holds the manager, the interest policy and who is in the scene.
 type Scene struct {
 	manager  *entitysync.Manager
-	interest *policy.Interest
+	interest *policy.Interest   // 普通图是 ordinary.Interest 的引用；分区图为自身的 Base 政策。
+	ordinary *modulescene.Space // 只在普通图构造。成员视野、重连、移动与离开只写这个空间。
 	// sessionObjects 是一个会话可持有的玩家 / 怪 / 建筑 / 场景对象数（Manager 的 Limits.MaxObjects，sceneSessionObjects）；
 	// 开地形时地形另计 terrainMaxVisible（D15）。
 	sessionObjects int
@@ -174,6 +177,7 @@ type Scene struct {
 	// — the access layer's close notice arrives on its own goroutine — and
 	// schedules a settle).
 	transitions sync.Mutex
+	ordinaryStopping bool // under transitions: an entry committed before shutdown must not install a late session
 
 	// teamMu guards the team views. A formed match is the demo's one social
 	// relationship: its members see each other wherever they are. Each team
@@ -336,7 +340,7 @@ func (s *Service) newScene(registry *app.Registry) (*Scene, error) {
 	if terrainMap != nil {
 		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
 	}
-	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, watermark, config, config.View.MaxVisible, terrainConfig, &s.sceneSync)
+	scene, err := newSceneForMode(sceneLane{transport: transport}, transport, watermark, config, config.View.MaxVisible, terrainConfig, &s.sceneSync, partitioned.Enabled)
 	if err != nil {
 		return nil, err
 	}
@@ -455,6 +459,10 @@ func sceneTypeSchedules() map[uint32]entitysync.TypeSchedule {
 }
 
 func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig, observer *sceneSyncObserver) (*Scene, error) {
+	return newSceneForMode(lane, transport, watermark, config, maxVisible, terrainConfig, observer, false)
+}
+
+func newSceneForMode(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig, observer *sceneSyncObserver, partitioned bool) (*Scene, error) {
 	config = config.Normalize()
 	// 会话上限随主视野名额定（sceneSessionObjects）：demo 原尺度 64 → 100，即 frame.DefaultLimits，Limits 保持零值、与以前逐字节
 	// 相同；游戏尺度 128 → 164（方案 §29）。它也是每帧的对象数上限：客户端解码按自己的 maxObjects × 2 拒绝（Go frame.Decode、
@@ -525,7 +533,7 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 	// AOI work), so handlers on the Nest workers call it directly; the tick's
 	// policy phase applies the record in call order and tells the manager.
 	// What the manager refused comes back through OnRefusal.
-	interest, err := policy.NewInterest(policy.InterestConfig{
+	interestConfig := policy.InterestConfig{
 		Manager:   manager,
 		ApplyMode: policy.ApplySync,
 		OnRefusal: logRefusal,
@@ -548,22 +556,34 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 			MaxLeaveRadius: config.View.MaxLeaveRadius,
 			ViewRadiusStep: config.View.RadiusStep,
 		},
-	})
+	}
+	// 二选一：普通图的 Space 用这个 Manager 创建 Interest；CellWorld 保留自己的政策。
+	// 会话连接、Ready 和 Nest 提交观察者始终绑定同一个 manager。
+	var interest *policy.Interest
+	if partitioned {
+		interest, err = policy.NewInterest(interestConfig)
+	} else {
+		scene.ordinary, err = modulescene.NewHostedSpace(interestConfig, player.EntityKindPlayer, sceneView, coreentity.SyncProfile{})
+		if err == nil {
+			interest = scene.ordinary.Interest
+		}
+	}
 	if err != nil {
 		_ = manager.Close(context.Background())
 		return nil, fmt.Errorf("scene: interest policy: %w", err)
 	}
+	scene.manager, scene.interest = manager, interest
 	self, err := policy.NewDirect(manager, func(observer int64) entitysync.SessionID { return entitysync.SessionID(observer) })
 	if err != nil {
-		interest.Close()
+		scene.closeSpace()
 		_ = manager.Close(context.Background())
 		return nil, fmt.Errorf("scene: self binding: %w", err)
 	}
-	scene.manager, scene.interest, scene.self = manager, interest, self
+	scene.self = self
 	scene.sessionObjects = sessionObjects
 	if terrainConfig != nil {
 		if scene.terrain, err = newTerrainSync(manager, *terrainConfig); err != nil {
-			interest.Close()
+			scene.closeSpace()
 			_ = manager.Close(context.Background())
 			return nil, fmt.Errorf("scene: %w", err)
 		}
@@ -669,6 +689,14 @@ func (bridge *Scene) unbindPartitionSelf(subjectID int64) {
 	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 		slog.Debug("scene: own player state not retired", "subject_id", subjectID, "err", err)
 	}
+}
+
+func (bridge *Scene) closeSpace() {
+	if bridge.ordinary != nil {
+		bridge.ordinary.Close()
+		return
+	}
+	bridge.interest.Close()
 }
 
 // Start brings the tick up. It is separate from NewScene so a process that
@@ -791,8 +819,14 @@ func (bridge *Scene) Close(ctx context.Context) error {
 	resyncErr := bridge.stopUnloadResync(ctx)
 	bridge.unhookEntityLoads()
 	bridge.terrain.close()
-	bridge.interest.Close()
+	bridge.closeSpace()
 	return errors.Join(resyncErr, bridge.manager.Close(ctx))
+}
+
+func (bridge *Scene) stopOrdinaryJoins() {
+	bridge.transitions.Lock()
+	bridge.ordinaryStopping = true
+	bridge.transitions.Unlock()
 }
 
 // Flush runs one replication tick now. The loop does this on its own every
@@ -840,8 +874,14 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	if rt := bridge.partition.Load(); rt != nil {
 		return bridge.joinPartition(ctx, rt, subject)
 	}
+	if bridge.ordinary == nil {
+		return errors.New("scene: partition runtime is not ready")
+	}
 	bridge.transitions.Lock()
 	defer bridge.transitions.Unlock()
+	if bridge.ordinaryStopping {
+		return apperrors.ErrSceneClosing
+	}
 	bridge.sweepLocked()
 
 	subjectID := subject.ID()
@@ -882,7 +922,7 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	// A rejoin keeps the view the player last asked for; a first join takes
 	// the default.
 	view, _ := bridge.interest.ObserverView(playerID)
-	if err := bridge.interest.Enter(playerID, subjectID, at, view); err != nil {
+	if err := bridge.ordinary.EnterRegistered(subjectID, at, view); err != nil {
 		return fmt.Errorf("scene: enter interest %d: %w", subjectID, err)
 	}
 	// The terrain view starts where the player stands (nil without terrain).
@@ -892,7 +932,7 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	// A scene that was never shown (a test without one) has no view: the
 	// player just does not receive scene facts.
 	if bridge.sceneShown.Load() {
-		if err := bridge.interest.AttachView(playerID, sceneView); err != nil {
+		if err := bridge.ordinary.AttachMetadata(playerID); err != nil {
 			slog.Warn("scene: member not attached to the scene view", "player_id", playerID, "err", err)
 		}
 	}
@@ -1038,10 +1078,14 @@ func (bridge *Scene) MoveSpace() movement.Space {
 	if bridge == nil || bridge.interest == nil {
 		return actor.Nowhere{}
 	}
-	if bridge.terrain != nil {
-		return terrainMoves{Space: actor.InterestMoves{Interest: bridge.interest}, terrain: bridge.terrain}
+	moves := actor.InterestMoves{Interest: bridge.interest}
+	if bridge.ordinary != nil {
+		moves.Interest = bridge.ordinary
 	}
-	return actor.InterestMoves{Interest: bridge.interest}
+	if bridge.terrain != nil {
+		return terrainMoves{Space: moves, terrain: bridge.terrain}
+	}
+	return moves
 }
 
 // ShowScene replicates the scene's own subject — SceneDao, its time domain —
@@ -1056,10 +1100,13 @@ func (bridge *Scene) ShowScene(area *sceneentity.Scene) error {
 	if err := bridge.manager.Register(area.Sync()); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		return fmt.Errorf("scene: register the scene subject %d: %w", area.ID(), err)
 	}
-	if err := bridge.interest.DefineRelationView(sceneView, coreentity.SyncProfile{}); err != nil {
-		return fmt.Errorf("scene: scene view: %w", err)
+	var err error
+	if bridge.ordinary != nil {
+		err = bridge.ordinary.BindRegisteredMetadata(area.ID())
+	} else if err = bridge.interest.DefineRelationView(sceneView, coreentity.SyncProfile{}); err == nil {
+		err = bridge.interest.SetViewMembers(sceneView, []int64{area.ID()})
 	}
-	if err := bridge.interest.SetViewMembers(sceneView, []int64{area.ID()}); err != nil {
+	if err != nil {
 		return fmt.Errorf("scene: scene view: %w", err)
 	}
 	bridge.sceneShown.Store(true)
@@ -1137,7 +1184,7 @@ func (bridge *Scene) leaveLocked(subjectID int64) {
 		bridge.manager.CloseSession(entitysync.SessionID(playerOf(subjectID)))
 		return
 	}
-	if err := bridge.interest.Leave(playerOf(subjectID), subjectID); err != nil {
+	if err := bridge.ordinary.Forget(subjectID); err != nil {
 		slog.Debug("scene: interest did not release a leaver", "subject_id", subjectID, "err", err)
 	}
 	bridge.terrain.unwatch(playerOf(subjectID))
@@ -1172,7 +1219,13 @@ func (bridge *Scene) ShowSubject(_ context.Context, state *coreentity.SubjectSyn
 	if _, err := bridge.manager.RegisterAfterRetirement(state, registeredAfterRetirement(subjectID)); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
 	}
-	if err := bridge.interest.Show(subjectID, at); err != nil {
+	var err error
+	if bridge.ordinary != nil {
+		err = bridge.ordinary.EnterRegistered(subjectID, at, policy.ObserverView{})
+	} else {
+		err = bridge.interest.Show(subjectID, at)
+	}
+	if err != nil {
 		return fmt.Errorf("scene: show subject %d: %w", subjectID, err)
 	}
 	return nil
@@ -1198,7 +1251,13 @@ func (bridge *Scene) HideSubject(_ context.Context, subjectID int64) {
 	if bridge == nil || bridge.manager == nil {
 		return
 	}
-	if err := bridge.interest.Hide(subjectID); err != nil {
+	var err error
+	if bridge.ordinary != nil {
+		err = bridge.ordinary.Forget(subjectID)
+	} else {
+		err = bridge.interest.Hide(subjectID)
+	}
+	if err != nil {
 		slog.Debug("scene: interest did not release a subject", "subject_id", subjectID, "err", err)
 	}
 	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {

@@ -758,6 +758,7 @@ func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (
 // It does NOT delete anything persisted: the document is the authority and is
 // exactly what the next load must read. Evicting is forgetting, not deleting.
 type playerEvictor struct {
+	ordinarySceneID int64 // zero on a partitioned server
 	scene   *Scene
 	players *player.Lifecycle
 	manager *coreentity.EntityManager
@@ -824,13 +825,45 @@ func (evictor playerEvictor) leaveMap(ctx context.Context, subjectID int64) erro
 	if evictor.nest == nil || evictor.manager == nil {
 		return nil
 	}
-	if evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer)) == nil {
+	loaded := evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer)) != nil
+	sender := syncsender.NewLeaveSceneSender(evictor.nest)
+	if evictor.ordinarySceneID != 0 {
+		if !loaded {
+			return sender.Sync_ForgetUnloadedScenePlayer(ctx, evictor.ordinarySceneID, subjectID)
+		}
+		return sender.MultiSync_LeaveOrdinaryScene(ctx, subjectID, evictor.ordinarySceneID)
+	}
+	if !loaded {
 		return nil
 	}
-	if err := syncsender.NewLeaveSceneSender(evictor.nest).Sync_LeaveScene(ctx, subjectID); err != nil {
+	if err := sender.Sync_LeaveScene(ctx, subjectID); err != nil {
 		return fmt.Errorf("player evictor: save the position of player %d before it leaves: %w", coreentity.GetUniqueIDFromEntityID(subjectID), err)
 	}
 	return nil
+}
+
+// beginOrdinaryDrain closes the late-Join window as well as the transactional
+// admission gate. Only a non-partitioned Service installs this adapter. The
+// bridge transition lock is released before any blocking Nest call.
+func (evictor playerEvictor) beginOrdinaryDrain(ctx context.Context) ([]int64, error) {
+	evictor.scene.stopOrdinaryJoins()
+	return syncsender.NewLeaveSceneSender(evictor.nest).Sync_BeginOrdinaryDrain(ctx, evictor.ordinarySceneID)
+}
+
+// finishOrdinaryDrain uses the normal guarded leave/save; never unload a Player,
+// destroy durable buildings, or force a direct write when Nest is fenced. An
+// uncertain leave must not be converted into an affirmative close.
+func (evictor playerEvictor) finishOrdinaryDrain(ctx context.Context, members []int64) error {
+	for _, id := range members {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := evictor.leaveMap(ctx, id); err != nil {
+			return fmt.Errorf("drain ordinary map: leave %d: %w", id, err)
+		}
+		evictor.scene.Leave(ctx, id)
+	}
+	return syncsender.NewLeaveSceneSender(evictor.nest).Sync_CloseEmptyOrdinaryMap(ctx, evictor.ordinarySceneID)
 }
 
 // playerKindIsResident 报告 Player 这个 kind 是否声明了 lifetime=resident（`//roost:entity lifetime=resident`）。

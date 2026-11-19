@@ -26,4 +26,6 @@ DEMO_ROBOT_COUNT=100 DEMO_ROBOT_MODE=burst \
 
 日志计数有明确边界：场景 Retry 会吞掉中间失败，日志里的 `gift/alliance saga still` 主要是最终失败上下文，不能当成所有轮询次数、独立玩家数或剩余积压。WorldStats 与 RecordEnter 分别列明；AddExp 同时锁 Player/World，其超时不能单独归因于 World 锁。其余 Nest timeout 保留原日志，只有核对调用上下文后才能归为 World 热点。统计覆盖保留的启动、负载和停止日志，零匹配不证明整个运行没有等待。启动分区的 `sagas/messages/pending_inputs/last_event` 原值另列 `startup_saga_replay`，`pending_inputs:0` 不算等待。原报告缺失时 `state=not_reported`，不会伪造成零失败。
 
+已启用 Saga 分段观测的版本，可在计时结束后离线执行 `python3 scripts/testdata/demo-robot/split-waits.py "$DEMO_ROBOT_OUT"`，按逻辑主题、首投／重投复算追加到回调和回调到 worker 的样本数、均值、P95 桶上界与 >4.096s 次数；指标重置、桶不一致或两段样本不配对会报错。`DEMO_ROBOT_TRACE_GIFTS=1` 另在计时结束后按协调器记录 ID 只读查赠礼终态，不改变原档是否通过。
+
 负载子进程 5 分钟超时，Go 夹具 6 分钟；只结束本次子进程。超时或门槛失败照常保存日志、停止应用并清理私有依赖。入口不进入 pretag 默认负载；已登记在根包真实依赖入口覆盖检查。

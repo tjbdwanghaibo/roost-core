@@ -27,6 +27,7 @@ import (
 // replication (the area of interest every player, monster and building is
 // seen through).
 type Config struct {
+	PlayerCapacity int // ordinary-map resident players, independent of AOI fan-out; zero means unlimited
 	Width     int64
 	Height    int64
 	BlockSize int64

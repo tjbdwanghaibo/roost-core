@@ -5,6 +5,8 @@ type Rehome interface {
 	Prepare(move RehomeMove, nowUnixMilli int64) error
 	Arrive(sid int32, nowUnixMilli int64) (RehomeArriveResult, error)
 	Cancel(id string) bool
+	PendingArrival(sid int32) (string, bool)
+	MarkPlaced(sid int32, id string) error
 	LastAt() int64
 	Count() int32
 }

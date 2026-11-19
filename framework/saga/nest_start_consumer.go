@@ -80,7 +80,7 @@ func SubscribeNestStarts(ctx context.Context, client fnats.IJetStream, config Ne
 		MaxAckPending: config.MaxAckPending,
 		NakBackoffMin: config.NakBackoffMin,
 		NakBackoffMax: config.NakBackoffMax,
-	}, withConsumerWorkers(config.Workers, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+	}, withConsumerWorkers(config.Workers, "nest_start", StartEffectTopic, func(messageCtx context.Context, message *fnats.JetStreamMsg, _ deliveryTiming) error {
 		processCtx, cancel := context.WithTimeout(messageCtx, config.ProcessTimeout)
 		err := handleNestStart(processCtx, message, starter)
 		cancel()
@@ -109,7 +109,9 @@ func handleNestStart(ctx context.Context, message *fnats.JetStreamMsg, starter S
 	if err != nil {
 		return rejectEnvelope("start", err)
 	}
+	started := time.Now()
 	_, err = starter.StartSaga(ctx, request)
+	metrics.ObserveHistogram("saga.start.coordinator_duration", nil, time.Since(started))
 	if reason := startRefusalReason(err); reason != "" {
 		reportStartRefused(request, reason, err)
 		return kitnats.Permanent(err)

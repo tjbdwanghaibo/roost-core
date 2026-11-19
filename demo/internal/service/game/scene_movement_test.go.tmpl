@@ -21,7 +21,9 @@ import (
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/clientsync"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
@@ -30,6 +32,7 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/runtimeid"
 	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -130,6 +133,11 @@ func newMoveWorld(t *testing.T) *moveWorld {
 // replicated scene indexes the same world with the same main view.
 func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	t.Helper()
+	return newMoveWorldMode(t, config, false)
+}
+
+func newMoveWorldMode(t *testing.T, config gamescene.Config, partitioned bool) *moveWorld {
+	t.Helper()
 	ctx := context.Background()
 	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}, saved: &savedPositions{at: map[int64]spatial.Point{}}}
 	w.clock.nanos.Store(time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano())
@@ -139,7 +147,7 @@ func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	for _, register := range []func(){
 		handler.RegisterEnterSceneNestHandlers, handler.RegisterMoveTargetNestHandlers, handler.RegisterMovePlayerNestHandlers,
 		handler.RegisterPlayerPositionNestHandlers, handler.RegisterSpawnMonsterNestHandlers, handler.RegisterRootMonsterNestHandlers,
-		handler.RegisterSetSceneTimeRateNestHandlers,
+		handler.RegisterSetSceneTimeRateNestHandlers, handler.RegisterLeaveSceneNestHandlers,
 	} {
 		register()
 	}
@@ -160,7 +168,7 @@ func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	t.Cleanup(func() { _ = w.engine.Shutdown(context.Background()) })
 
 	w.recorder = newSceneRecorder()
-	bridge, err := newScene(w.recorder, nil, config)
+	bridge, err := newSceneForMode(sceneLane{transport: w.recorder}, w.recorder, nil, config, config.Normalize().View.MaxVisible, nil, nil, partitioned)
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
@@ -539,6 +547,303 @@ func TestATwiceAsFastSceneWalksTwiceAsFarAndTellsItsMembers(t *testing.T) {
 	}
 	if asInt64(sceneState["time_anchor_business"]) == 0 {
 		t.Fatalf("the member was not told the domain's anchor: %v", sceneState)
+	}
+}
+
+// The world keeps its encoded identity; a full DAO patch carries _id, the next patch inherits it.
+func TestWorldSceneTimeWireAndRollback(t *testing.T) {
+	w := newMoveWorld(t)
+	area := w.area
+	id, err := entity.BuildEntityID(1, 3)
+	if err != nil || area.ID() != id || area.UniqueID() != 1 || area.GetEntityKind() != 3 {
+		t.Fatalf("world identity: %d, want %d (%v)", area.ID(), id, err)
+	}
+	set := func(rate float64) {
+		t.Helper()
+		if _, err := syncsender.NewSetSceneTimeRateSender(w.engine).Sync_SetSceneTimeRate(w.ctx, id, rate); err != nil {
+			t.Fatal(err)
+		}
+		w.settle(id)
+	}
+	const watcher = int64(9731)
+	read := func() map[string]any {
+		t.Helper()
+		if err := w.bridge.Flush(w.ctx); err != nil {
+			t.Fatal(err)
+		}
+		return decodeSceneFrames(t, watcher, w.recorder.take(watcher))[id]
+	}
+	set(1.5)
+	w.join(watcher, spatial.Point{X: 300, Y: 300})
+	snap := read()
+	if snap["_id"] != id || snap["time_rate"] != 1.5 || asInt64(snap["time_anchor_business"]) == 0 || asInt64(snap["time_anchor_domain"]) == 0 {
+		t.Fatalf("old client could not read full scene time: %v", snap)
+	}
+	w.clock.advance(time.Second)
+	set(2)
+	delta := read()
+	if _, full := delta["_id"]; full || delta["time_rate"] != float64(2) || asInt64(delta["time_anchor_domain"]) <= asInt64(snap["time_anchor_domain"]) {
+		t.Fatalf("old client did not get a scene time delta: %v", delta)
+	}
+	before := area.TimeDomain().State()
+	reject := errors.New("rollback a valid scene rate")
+	_, err = w.engine.Request(w.ctx, sharedBodyWrite, id, nest.NewParams(func() error {
+		if err := area.SetTimeRate(3); err != nil {
+			return err
+		}
+		return reject
+	}))
+	if !errors.Is(err, reject) {
+		t.Fatal(err)
+	}
+	w.settle(id)
+	if got := locked(w, id, area.Dao().GetTimeRate); got != 2 || area.TimeDomain().State() != before {
+		t.Fatalf("rolled-back scene rate published: %v", got)
+	}
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Periodic sync may repeat restored fields. Inspect every update, not only the last one.
+	for _, push := range w.recorder.take(watcher) {
+		for _, object := range decodedPush(t, push).Objects {
+			for _, component := range object.Components {
+				u := component.Update
+				if u.SubjectID != id {
+					continue
+				}
+				fields, err := clientsync.DecodeFields(u)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for key, want := range map[string]any{"time_rate": before.Rate, "time_anchor_domain": before.AnchorDomainNano, "time_anchor_business": before.AnchorBusinessNano} {
+					if got, ok := fields[key]; ok && got != want {
+						t.Fatalf("rolled-back scene sent %s=%v, committed %v", key, got, want)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The resident slot is transactional, not a session slot: disconnect alone cannot admit a replacement.
+func TestOrdinarySceneResidentAdmission(t *testing.T) {
+	cfg := gamescene.DefaultConfig()
+	cfg.PlayerCapacity = 1
+	w := newMoveWorldOn(t, cfg)
+	present := func() int { return locked(w, w.area.ID(), w.area.Dao().MembersLen) }
+	reject := errors.New("abort after admit")
+	_, err := w.engine.Request(w.ctx, sharedBodyWrite, w.area.ID(), nest.NewParams(func() error {
+		if e := w.area.AdmitPlayer(9999); e != nil {
+			return e
+		}
+		return reject
+	}))
+	if !errors.Is(err, reject) || present() != 0 {
+		t.Fatalf("aborted admission held a slot: %v", err)
+	}
+	one := w.join(9911, cfg.Spawn)
+	w.bridge.Leave(w.ctx, one.ID())
+	two := newScenePlayer(t, 9912)
+	w.entities.Add(two)
+	enter := func(p *player.Player) error {
+		_, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_EnterScene(w.ctx, p.ID(), w.area.ID(), cfg.Spawn.X, cfg.Spawn.Y)
+		return err
+	}
+	if err := enter(two); !errors.Is(err, apperrors.ErrSceneFull) || present() != 1 {
+		t.Fatalf("disconnected player lost its slot: %v", err)
+	}
+	if locked(w, two.ID(), two.MapComp().InScene) {
+		t.Fatal("full map placed refused player")
+	}
+	if _, seen := w.bridge.ordinary.Interest.ObserverView(two.UniqueID()); seen {
+		t.Fatal("refused player published to AOI")
+	}
+	if err := enter(one); err != nil || present() != 1 {
+		t.Fatalf("reconnect took a second slot: %v", err)
+	}
+	handler.RegisterLeaveSceneNestHandlers()
+	if err := syncsender.NewLeaveSceneSender(w.engine).MultiSync_LeaveOrdinaryScene(w.ctx, one.ID(), w.area.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if err := enter(two); err != nil || present() != 1 {
+		t.Fatalf("formal exit did not release the slot: %v", err)
+	}
+}
+
+func TestOrdinaryShutdownDrainFencesEntriesAndSavesResidents(t *testing.T) {
+	w := newMoveWorld(t)
+	one := w.join(9931, spatial.Point{X: 300, Y: 305})
+	two := w.join(9932, spatial.Point{X: 380, Y: 390})
+	last := spatial.Point{X: 320, Y: 326}
+	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, one.ID(), w.area.ID(), last.X, last.Y); err != nil {
+		t.Fatal(err)
+	}
+	w.bridge.Leave(w.ctx, one.ID()) // the disconnected resident still needs a save.
+	d := playerEvictor{scene: w.bridge, manager: w.entities, nest: w.engine, ordinarySceneID: w.area.ID()}
+	sender := syncsender.NewLeaveSceneSender(w.engine)
+	abort := errors.New("abort drain")
+	_, err := w.engine.Request(w.ctx, sharedBodyWrite, w.area.ID(), nest.NewParams(func() error { w.area.BeginPlayerDrain(); return abort }))
+	if !errors.Is(err, abort) || locked(w, w.area.ID(), w.area.Dao().GetClosing) {
+		t.Fatalf("begin did not roll back: %v", err)
+	}
+	if err := sender.Sync_CloseEmptyOrdinaryMap(w.ctx, w.area.ID()); err == nil || locked(w, w.area.ID(), w.area.Dao().GetClosed) {
+		t.Fatal("closed occupied map")
+	}
+	ids, err := d.beginOrdinaryDrain(w.ctx)
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("snapshot: %v %v", ids, err)
+	}
+	if _, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_EnterScene(w.ctx, one.ID(), w.area.ID(), last.X, last.Y); !errors.Is(err, apperrors.ErrSceneClosing) {
+		t.Fatalf("closing map readmitted a resident: %v", err)
+	}
+	if err := w.bridge.Join(w.ctx, one, last); !errors.Is(err, apperrors.ErrSceneClosing) {
+		t.Fatalf("late join: %v", err)
+	}
+	cut, cancel := context.WithCancel(w.ctx)
+	cancel()
+	if err := d.finishOrdinaryDrain(cut, ids); !errors.Is(err, context.Canceled) || locked(w, w.area.ID(), w.area.Dao().GetClosed) {
+		t.Fatalf("canceled drain closed map: %v", err)
+	}
+	if err := d.finishOrdinaryDrain(w.ctx, ids[:1]); err == nil {
+		t.Fatal("partial drain closed an occupied map")
+	}
+	remaining, err := d.beginOrdinaryDrain(w.ctx)
+	if err != nil || len(remaining) != 1 {
+		t.Fatalf("retry did not see exactly one resident: %v %v", remaining, err)
+	}
+	sceneID := w.area.ID()
+	service := Service{ordinaryDrain: &d, ordinaryMap: w.area, scene: w.bridge, stopHeartbeat: actor.Heartbeat.Stop}
+	if err := service.Shutdown(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w.entities.Get(sceneID) != nil || w.area.Terrain() != nil {
+		t.Fatal("empty world runtime was not released")
+	}
+	if w.saved.of(one.ID()) != last || w.saved.of(two.ID()) != (spatial.Point{X: 380, Y: 390}) {
+		t.Fatal("shutdown lost the last position")
+	}
+	if w.entities.Get(one.ID()) != one || w.entities.Get(two.ID()) != two {
+		t.Fatal("drain destroyed a player")
+	}
+}
+
+func TestOrdinaryShutdownNeverWritesPastNestFence(t *testing.T) {
+	w := newMoveWorld(t)
+	p := w.join(9933, spatial.Point{X: 345, Y: 345})
+	w.engine.Fence(errors.New("lost ownership"))
+	s := Service{scene: w.bridge, ordinaryMap: w.area, ordinaryDrain: &playerEvictor{scene: w.bridge, nest: w.engine, manager: w.entities, ordinarySceneID: w.area.ID()}}
+	if err := s.Shutdown(w.ctx); !errors.Is(err, nest.ErrNestFenced) {
+		t.Fatalf("fenced shutdown falsely confirmed: %v", err)
+	}
+	if w.entities.Get(w.area.ID()) != w.area {
+		t.Fatal("destroyed the world after writer loss")
+	}
+	if w.saved.of(p.ID()) != (spatial.Point{}) {
+		t.Fatal("saved past the writer fence")
+	}
+}
+
+func TestOrdinaryTransferPlacementUsesTargetOnce(t *testing.T) {
+	cfg := gamescene.DefaultConfig()
+	cfg.Spawn = spatial.Point{X: 400, Y: 410}
+	cfg.PlayerCapacity = 1
+	w := newMoveWorldOn(t, cfg)
+	p := newScenePlayer(t, 9922)
+	w.entities.Add(p)
+	const sid int32 = 1001
+	source := spatial.Point{X: 620, Y: 540}
+	_, err := w.engine.Request(w.ctx, sharedBodyWrite, p.ID(), nest.NewParams(func() error {
+		p.Dao().SetSavedPosX(source.X)
+		p.Dao().SetSavedPosY(source.Y)
+		s := p.Dao().GetRehome()
+		s.SetPendingID("transfer-A")
+		s.SetPendingFrom(1000)
+		s.SetPendingTo(sid)
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	place := func() (spatial.Point, bool, error) {
+		entry, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_PlaceOrdinaryPlayer(w.ctx, p.ID(), w.area.ID(), sid)
+		return entry.At, entry.Arriving, err
+	}
+	block := w.join(9923, cfg.Spawn)
+	if _, _, err := place(); !errors.Is(err, apperrors.ErrSceneFull) {
+		t.Fatalf("full destination: %v", err)
+	}
+	if at := locked(w, p.ID(), p.MapComp().SavedPos); at != source {
+		t.Fatalf("refusal changed source save: %v", at)
+	}
+	if marked := locked(w, p.ID(), func() bool { _, v := p.RehomeComp().PendingArrival(sid); return v }); marked {
+		t.Fatal("refusal consumed placement")
+	}
+	leave := syncsender.NewLeaveSceneSender(w.engine)
+	if err := leave.MultiSync_LeaveOrdinaryScene(w.ctx, block.ID(), w.area.ID()); err != nil {
+		t.Fatal(err)
+	}
+	at, arriving, err := place()
+	if err != nil || !arriving || at != cfg.Spawn || locked(w, p.ID(), p.MapComp().SavedPos) != at {
+		t.Fatalf("arrival at %v, arriving=%t: %v", at, arriving, err)
+	}
+	// Join/OnEntered can be interrupted after placement. Move again and unload the map;
+	// retry with the still-pending transfer must use the saved destination point, not spawn again.
+	moved := spatial.Point{X: 430, Y: 450}
+	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, p.ID(), w.area.ID(), moved.X, moved.Y); err != nil {
+		t.Fatal(err)
+	}
+	if err := leave.MultiSync_LeaveOrdinaryScene(w.ctx, p.ID(), w.area.ID()); err != nil {
+		t.Fatal(err)
+	}
+	// Rebuild a fresh Player through the production DAO hydration path; no live component
+	// or in-memory arrival flag is available after a destination process restart.
+	pid := p.ID()
+	raw := locked(w, pid, p.Dao().Marshal)
+	if err := w.entities.Destroy(w.ctx, p, entity.DestroyReasonCommon, false); err != nil {
+		t.Fatal(err)
+	}
+	restored := db.NewPlayerDao()
+	if err := restored.RestorePersisted(raw, restored.SchemaVersion(), 1); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := entity.BuildEntity(&entity.EntityCreateParam{Kind: player.EntityKindPlayer, Id: pid, Dao: map[string]entity.DaoInterface{restored.CollName(): restored}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = loaded.(*player.Player)
+	w.entities.Add(p)
+	at, arriving, err = place()
+	if err != nil || !arriving || at != moved {
+		t.Fatalf("cold pending retry reset to %v: %v", at, err)
+	}
+	_, err = w.engine.Request(w.ctx, sharedBodyWrite, p.ID(), nest.NewParams(func() error {
+		result, e := p.RehomeComp().Arrive(sid, 1234)
+		if e == nil && !result.Arrived {
+			return errors.New("arrival not applied")
+		}
+		return e
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, arriving, err = place()
+	if err != nil || arriving || at != moved || locked(w, p.ID(), p.RehomeComp().Count) != 1 {
+		t.Fatalf("same-sid reconnect: %v %t %v", at, arriving, err)
+	}
+}
+
+func TestWorldSceneDestroyDoesNotOwnTheOrdinaryView(t *testing.T) {
+	w := newMoveWorld(t)
+	p := w.join(9732, spatial.Point{X: 300, Y: 300})
+	if err := w.entities.Destroy(w.ctx, w.area, entity.DestroyReasonCommon, false); err != nil {
+		t.Fatal(err)
+	}
+	w.area.OnDestroy(entity.DestroyReasonCommon)
+	if _, alive := w.bridge.ordinary.Interest.ObserverView(p.UniqueID()); !alive {
+		t.Fatal("world entity destroyed the bridge's borrowed space")
+	}
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatalf("world entity closed the bridge manager: %v", err)
 	}
 }
 
@@ -927,7 +1232,7 @@ func TestLeavingTheProcessSavesTheLastPosition(t *testing.T) {
 			}
 			w.settle(walker.ID())
 			probe := &handOffProbe{w: w}
-			evictor := playerEvictor{scene: w.bridge, players: players, manager: w.entities, nest: w.engine, handOff: probe}
+			evictor := playerEvictor{scene: w.bridge, players: players, manager: w.entities, nest: w.engine, handOff: probe, ordinarySceneID: w.area.ID()}
 			var saved spatial.Point
 			switch leave {
 			case "evict":
@@ -947,6 +1252,9 @@ func TestLeavingTheProcessSavesTheLastPosition(t *testing.T) {
 					t.Fatalf("the hand-off ran %d times, want 1", probe.calls)
 				}
 				saved = probe.saved
+			}
+			if n := locked(w, w.area.ID(), w.area.Dao().MembersLen); n != 0 {
+				t.Fatalf("%s still holds %d slots", leave, n)
 			}
 			if saved != moved {
 				t.Fatalf("%s: the saved position is %v, want the last one %v", leave, saved, moved)
