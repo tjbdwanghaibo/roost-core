@@ -965,7 +965,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 要分别核对「新工程能否安装模块」与「game-demo 是否复用模块」。[business-modules 批次表](FEATURE-2026-11-10-business-modules.md)记录原排期；当前 demo 的安装项见[生成步骤](../../codegen/internal/roost/demo.go)。
 
 - **gift：模块已拆，demo 已迁**。玩家间送礼的协议、扣物 / 退款与邮件投递由 [gift 模块](../../modules/gift/README.md) 提供；demo 只在驻留表就绪后启动模块消费者。200 人档的 Saga 排队仍是下面的压测遗留，不因模块拆分关闭。
-- **scene：普通图空间、视野、实体生命周期和普通玩家准入规则已复用，开关图／排空未迁**。demo 和[完整 scene 模块](../../modules/scene/README.md)共用 [scenespace](../../modules/scenespace/README.md) 的 `Space`。普通图的在图玩家名额由 Scene DAO 持有，断线不释放；正式离场与位置同事务，容量默认不限。玩家、怪物与建筑在一个 Interest 内登记和移动；同步管理器仍由 demo 独占，保留首帧 Ready、重连和退役重登记。场景实体复用模块的 `life.go`，保留原实体号、时间字段及编解码；地形、刷怪、CellWorld 的 Region/心跳和世界单例仍由 demo 宿主接线，不安装模块的默认图。
+- **scene：普通图空间、视野、实体生命周期、玩家准入及正常停机排空已复用**。开图仍是进程启动从配置重建唯一世界图，不支持在线维护关图／重开或客户端动态开图。停机在 Scene 事务中关准入并取驻留成员，拒绝迟到的 Join，复用离场事务保存位置，账本为空才确认关闭；Nest 被围栏时不强写。demo 和[完整 scene 模块](../../modules/scene/README.md)共用 [scenespace](../../modules/scenespace/README.md) 的 `Space`。普通图的在图玩家名额由 Scene DAO 持有，断线不释放；正式离场与位置同事务，容量默认不限。玩家、怪物与建筑在一个 Interest 内登记和移动；同步管理器仍由 demo 独占，保留首帧 Ready、重连和退役重登记。场景实体复用模块的 `life.go`，保留原实体号、时间字段及编解码；地形、刷怪、CellWorld 的 Region/心跳和世界单例仍由 demo 宿主接线，不安装模块的默认图。
 - **matchroom：模块已有且 demo 已接**。[module-duel](../../demo/README.md) 已走成局移交与回合房；旧 `duel` / `ranked` 仍走 lockstep，R11 改造按 D24 A 暂缓。不要把这条与模块缺失混为一谈。
 - **已落地、不再列为待开发**：`roost project new -recipe` 有 [casual、turn-pvp 两种配方](../../modules/recipes/catalog.yaml)；[task](../../modules/task/README.md) 已有事件上报、周期与前置、配置表、奖励及模块联动。
 

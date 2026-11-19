@@ -41,6 +41,8 @@ type Service struct {
 	giftSteps      *kitsaga.Steps
 	battles        *battleManager
 	scene          *Scene
+	ordinaryDrain  *playerEvictor // normal-stop adapter; never installed on a CellWorld process
+	ordinaryMap    *sceneentity.Scene // original instance, never resolve a replacement by numeric ID at close
 	stopSpawner    func()
 	spawner        *spawner
 	partition      *partitionRuntime
@@ -244,6 +246,13 @@ func (s *Service) Init(registry *app.Registry) error {
 	if nestClient, ok := app.Lookup[corenest.Client](registry, mods.ModNest); ok && nestClient != nil {
 		evictor.nest = nestClient
 	}
+	if !partitioned.Enabled {
+		if evictor.nest == nil {
+			return fmt.Errorf("ordinary map: Nest required for shutdown drain")
+		}
+		s.ordinaryDrain = &evictor
+		s.ordinaryMap = area
+	}
 	if dataEngine, ok := app.Lookup[*kitdataengine.Mod](registry, mods.ModDataEngine); ok && dataEngine != nil {
 		evictor.handOff = dataEngine
 	}
@@ -354,6 +363,13 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			slog.Info("{{GAME_SERVICE}}: disconnected the players this process served", "sessions_closed", closed)
 		}
 	}
+	// App has withdrawn ingress. Fence placements and late joins, but leave the
+	// shared sync manager alive until all users of it are stopped.
+	var residents []int64
+	var drainErr error
+	if s.ordinaryDrain != nil {
+		residents, drainErr = s.ordinaryDrain.beginOrdinaryDrain(ctx)
+	}
 	if s.stopMatchmaker != nil {
 		s.stopMatchmaker()
 		s.stopMatchmaker = nil
@@ -376,7 +392,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	// past it they are stopped and JetStream redelivers what was not acked.
 	if s.stopAlliance != nil {
 		if err := s.stopAlliance(ctx); err != nil {
-			return err
+			return errors.Join(drainErr, err)
 		}
 		s.stopAlliance = nil
 	}
@@ -430,6 +446,14 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		s.stopSpawner()
 		s.stopSpawner = nil
 	}
+	// Producers and idle eviction are stopped. Disconnects released sessions,
+	// not resident slots: clear those via the same leave/save as formal exit.
+	if s.ordinaryDrain != nil && drainErr == nil {
+		drainErr = s.ordinaryDrain.finishOrdinaryDrain(ctx, residents)
+	}
+	if drainErr != nil {
+		slog.Warn("ordinary map drain incomplete", "err", drainErr)
+	}
 	// The partitioned scene's node before the scene: it feeds the scene's
 	// manager (the mirrors), and nothing is taken from or sent to the other
 	// cells once it is down. The SceneActors and monsters it holds go with the
@@ -446,8 +470,17 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.scene != nil {
 		if err := s.scene.Close(ctx); err != nil {
 			slog.Warn("scene did not close cleanly", "err", err)
+			if s.ordinaryDrain != nil { // CellWorld retains its existing warning-only close.
+				drainErr = errors.Join(drainErr, err)
+			}
 		}
 		s.scene = nil
+		// Stop the world entity's own runtime after the bridge releases its
+		// published subject, before closing terrain. This is never a durable delete.
+		if drainErr == nil && s.ordinaryMap != nil {
+			drainErr = s.ordinaryDrain.manager.Destroy(ctx, s.ordinaryMap, coreentity.DestroyReasonCommon, false)
+		}
+		s.ordinaryMap, s.ordinaryDrain = nil, nil
 	}
 	// The terrain last: it is unpublished (an edit transaction still in
 	// Nest answers ErrDisabled) and its base pack closed. Nothing of it needs
@@ -458,7 +491,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		s.terrain = nil
 	}
-	return nil
+	return drainErr
 }
 
 // errServiceStopping 是停机时断开玩家连接的原因。

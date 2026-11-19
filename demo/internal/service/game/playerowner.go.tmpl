@@ -842,6 +842,30 @@ func (evictor playerEvictor) leaveMap(ctx context.Context, subjectID int64) erro
 	return nil
 }
 
+// beginOrdinaryDrain closes the late-Join window as well as the transactional
+// admission gate. Only a non-partitioned Service installs this adapter. The
+// bridge transition lock is released before any blocking Nest call.
+func (evictor playerEvictor) beginOrdinaryDrain(ctx context.Context) ([]int64, error) {
+	evictor.scene.stopOrdinaryJoins()
+	return syncsender.NewLeaveSceneSender(evictor.nest).Sync_BeginOrdinaryDrain(ctx, evictor.ordinarySceneID)
+}
+
+// finishOrdinaryDrain uses the normal guarded leave/save; never unload a Player,
+// destroy durable buildings, or force a direct write when Nest is fenced. An
+// uncertain leave must not be converted into an affirmative close.
+func (evictor playerEvictor) finishOrdinaryDrain(ctx context.Context, members []int64) error {
+	for _, id := range members {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := evictor.leaveMap(ctx, id); err != nil {
+			return fmt.Errorf("drain ordinary map: leave %d: %w", id, err)
+		}
+		evictor.scene.Leave(ctx, id)
+	}
+	return syncsender.NewLeaveSceneSender(evictor.nest).Sync_CloseEmptyOrdinaryMap(ctx, evictor.ordinarySceneID)
+}
+
 // playerKindIsResident 报告 Player 这个 kind 是否声明了 lifetime=resident（`//roost:entity lifetime=resident`）。
 func playerKindIsResident() bool {
 	return coreentity.IsEntityKindResident(player.EntityKindPlayer)

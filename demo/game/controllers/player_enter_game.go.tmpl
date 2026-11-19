@@ -133,7 +133,7 @@ func (a *demoEnterAttempt) place(ctx stdcontext.Context, entered gamelogin.Enter
 		sender := syncsender.NewEnterSceneSender(a.controller.NestClient())
 		placement, err := sender.MultiSync_PlaceOrdinaryPlayer(ctx, a.subject.ID(), a.controller.WorldSceneID(), a.boundSID)
 		if err != nil {
-			if errors.Is(err, apperrors.ErrSceneFull) {
+			if errors.Is(err, apperrors.ErrSceneFull) || errors.Is(err, apperrors.ErrSceneClosing) {
 				return err
 			}
 			pending, checkErr := sender.Sync_PendingOrdinaryArrival(ctx, a.subject.ID(), a.boundSID)
@@ -154,7 +154,7 @@ func (a *demoEnterAttempt) place(ctx stdcontext.Context, entered gamelogin.Enter
 		return nil
 	}
 	if err := scene.Join(ctx, a.subject, at); err != nil {
-		if arriving {
+		if arriving || errors.Is(err, apperrors.ErrSceneClosing) {
 			return err
 		}
 		slog.Warn("enter_game: player did not join the replicated scene", "player_id", a.playerID, "err", err)

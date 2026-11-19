@@ -147,6 +147,8 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 
 `scene.player_capacity` 是普通图的**在图玩家**容量（默认 0，不限）。Player + Scene 同笔事务登记名额和位置；满员答 `scene_full`，不 Join、不发进入通知，已有角色无需重建。最后一条连接断开只清理会话与视野；重连复用原名额，正式离场／卸载才释放。怪、建筑、CellWorld 都不占这张账本；`MaxPlayersPerView` 是视野预算，不是人数配置。
 
+正常停机时，普通图不再接受新落位和迟到的 Join；在线与断线驻留玩家都经正式离场事务保存最后位置。只有空账本能确认关图，失败或超时不算成功；遇到 fail-stop 不会越过 Nest 围栏写档。同步桥和地形资源仍由服务在原顺序收尾。重启从配置建图，不提供在线关图／重开，不删除地形或建筑存档。真实进程回归见 [`test-demo-ordinary-drain.sh`](../scripts/test-demo-ordinary-drain.sh)：先确认移动后 Mongo 仍是旧点，再停服核对新点并重启登录。
+
 换服首次进入目标**普通图**使用该地图实例的出生点（不可站立时由 `PathFind.Place` 选附近可走点），而不是带来源服的保存坐标。保存目标位置和 `PlacedID` 同笔提交；到账前重连也不会重置位置。满员不消费换服意图。CellWorld 仍按原有路由和快照恢复。
 
 普通地图安装 `scenespace` 而非完整 `scene`：模块 `game/modules/scene.Space` 使用 demo 唯一的同步管理器登记玩家、怪与建筑，接收提交后的移动，维护同一份主视野。同步桥仍负责会话和连接代际；Join 后会话暂缓，客户端 Ready 才放首帧。场景实体复用 `scene` 模块同一份 `game/entities/scene/life.go`：验证时间域、启动宿主资源，失败回收，销毁只释放一次。世界实例、原时间字段与快照／增量编码、开关图、地形、刷怪和 Cell 的 Region 仍归 demo；CellWorld 不创建普通地图的 Space。

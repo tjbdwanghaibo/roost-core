@@ -2,6 +2,7 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	apperrors "{{MODULE}}/internal/errors"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -176,6 +177,7 @@ type Scene struct {
 	// — the access layer's close notice arrives on its own goroutine — and
 	// schedules a settle).
 	transitions sync.Mutex
+	ordinaryStopping bool // under transitions: an entry committed before shutdown must not install a late session
 
 	// teamMu guards the team views. A formed match is the demo's one social
 	// relationship: its members see each other wherever they are. Each team
@@ -821,6 +823,12 @@ func (bridge *Scene) Close(ctx context.Context) error {
 	return errors.Join(resyncErr, bridge.manager.Close(ctx))
 }
 
+func (bridge *Scene) stopOrdinaryJoins() {
+	bridge.transitions.Lock()
+	bridge.ordinaryStopping = true
+	bridge.transitions.Unlock()
+}
+
 // Flush runs one replication tick now. The loop does this on its own every
 // interval; tests call it to see the result at once.
 func (bridge *Scene) Flush(ctx context.Context) error {
@@ -871,6 +879,9 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	}
 	bridge.transitions.Lock()
 	defer bridge.transitions.Unlock()
+	if bridge.ordinaryStopping {
+		return apperrors.ErrSceneClosing
+	}
 	bridge.sweepLocked()
 
 	subjectID := subject.ID()

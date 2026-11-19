@@ -10,3 +10,5 @@ var ErrScenePosition = errcode.Define(100013, "scene_position", "invalid scene p
 
 // ErrSceneFull is a retryable map refusal, not a failure of role initialization.
 var ErrSceneFull = errcode.Define(100900, "scene_full", "ordinary map has no free player slot")
+
+var ErrSceneClosing = errcode.Define(100901, "scene_closing", "ordinary map is shutting down; reconnect after restart")

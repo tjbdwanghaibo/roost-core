@@ -39,7 +39,7 @@ func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeated install changed business files")
 	}
-	recipeMutationMustFail(t, root, "game/components/scenemembers/scenemembers.go", "c.owner.Dao().MembersLen() != 0", "false && c.owner.Dao().MembersLen() != 0", "./game/controllers", "TestSceneOccupiedCloseIsRefused", "occupied map closed")
+	recipeMutationMustFail(t, root, "game/modules/scene/membership.go", "ledger.MembersLen() != 0", "false && ledger.MembersLen() != 0", "./game/controllers", "TestSceneOccupiedCloseIsRefused", "occupied map closed")
 	recipeMutationMustFail(t, root, "game/handler/scene_interact.go", "sequence == state.GetSequence()", "false && sequence == state.GetSequence()", "./game/controllers", "TestSceneInteractionIsOncePerContinuousSequence", "replayed interaction refused")
 }
 

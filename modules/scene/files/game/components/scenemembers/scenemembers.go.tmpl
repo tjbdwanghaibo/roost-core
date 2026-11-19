@@ -66,11 +66,9 @@ func (c *Component) Depart(id int64) { scenespace.DepartMember(c.owner.Dao(), id
 
 // Close 关闭已经排空的场景：还有成员时拒绝；AOI 空间在提交后关闭（不在事务里时立即关闭）。
 func (c *Component) Close() error {
-	c.purgeMissing()
-	if c.owner.Dao().MembersLen() != 0 {
+	if !scenespace.CloseIfEmpty(c.owner.Dao(), c.purgeMissing) {
 		return fmt.Errorf("scene: still has members")
 	}
-	c.owner.Dao().SetClosed(true)
 	if !nest.AfterCommit(c.owner.CloseSpace) {
 		c.owner.CloseSpace()
 	}
@@ -79,11 +77,7 @@ func (c *Component) Close() error {
 
 // BeginClosing 先关准入再排空，停机中的重试不会接进新的玩家；返回此刻的成员。
 func (c *Component) BeginClosing() []int64 {
-	c.owner.Dao().SetClosing(true)
-	c.purgeMissing()
-	var ids []int64
-	c.owner.Dao().RangeMembers(func(id int64, _ bool) bool { ids = append(ids, id); return true })
-	return ids
+	return scenespace.BeginClosing(c.owner.Dao(), c.purgeMissing)
 }
 
 // purgeMissing 去掉已不在内存里的成员（卸载或删档后不会再 Depart 的），提交后让 AOI 空间也忘掉它们。

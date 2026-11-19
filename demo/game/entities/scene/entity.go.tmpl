@@ -181,21 +181,35 @@ func (s *Scene) AdmitPlayer(id int64) error {
 	dao := s.Dao()
 	var reclaim func()
 	if s.playerCapacity > 0 && dao.MembersLen() >= s.playerCapacity {
-		reclaim = func() {
-			var gone []int64
-			dao.RangeMembers(func(id int64, _ bool) bool {
-				if actor.KnownUnloaded(id) {
-					gone = append(gone, id)
-				}
-				return true
-			})
-			for _, id := range gone {
-				s.DepartPlayer(id)
-			}
-		}
+		reclaim = s.forgetUnloadedPlayers
 	}
-	if scenespace.AdmitMember(dao, id, false, s.playerCapacity, reclaim) != scenespace.Admitted {
+	switch scenespace.AdmitMember(dao, id, dao.GetClosing() || dao.GetClosed(), s.playerCapacity, reclaim) {
+	case scenespace.Admitted:
+		return nil
+	case scenespace.AdmissionFull:
 		return apperrors.ErrSceneFull
+	default:
+		return apperrors.ErrSceneClosing
+	}
+}
+func (s *Scene) forgetUnloadedPlayers() {
+	var gone []int64
+	s.Dao().RangeMembers(func(id int64, _ bool) bool {
+		if actor.KnownUnloaded(id) {
+			gone = append(gone, id)
+		}
+		return true
+	})
+	for _, id := range gone {
+		s.DepartPlayer(id)
+	}
+}
+func (s *Scene) BeginPlayerDrain() []int64 {
+	return scenespace.BeginClosing(s.Dao(), s.forgetUnloadedPlayers)
+}
+func (s *Scene) CloseEmptyMap() error {
+	if !scenespace.CloseIfEmpty(s.Dao(), s.forgetUnloadedPlayers) {
+		return fmt.Errorf("scene: resident players remain")
 	}
 	return nil
 }
@@ -388,6 +402,8 @@ type ISceneEntity interface {
 	SpawnPoint() spatial.Point
 	AdmitPlayer(int64) error
 	DepartPlayer(int64)
+	BeginPlayerDrain() []int64
+	CloseEmptyMap() error
 	Terrain() gamescene.Terrain
 	PathFind() gamescene.PathFind
 	Refresh() gamescene.Refresh

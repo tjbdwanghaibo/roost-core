@@ -670,6 +670,79 @@ func TestOrdinarySceneResidentAdmission(t *testing.T) {
 	}
 }
 
+func TestOrdinaryShutdownDrainFencesEntriesAndSavesResidents(t *testing.T) {
+	w := newMoveWorld(t)
+	one := w.join(9931, spatial.Point{X: 300, Y: 305})
+	two := w.join(9932, spatial.Point{X: 380, Y: 390})
+	last := spatial.Point{X: 320, Y: 326}
+	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, one.ID(), w.area.ID(), last.X, last.Y); err != nil {
+		t.Fatal(err)
+	}
+	w.bridge.Leave(w.ctx, one.ID()) // the disconnected resident still needs a save.
+	d := playerEvictor{scene: w.bridge, manager: w.entities, nest: w.engine, ordinarySceneID: w.area.ID()}
+	sender := syncsender.NewLeaveSceneSender(w.engine)
+	abort := errors.New("abort drain")
+	_, err := w.engine.Request(w.ctx, sharedBodyWrite, w.area.ID(), nest.NewParams(func() error { w.area.BeginPlayerDrain(); return abort }))
+	if !errors.Is(err, abort) || locked(w, w.area.ID(), w.area.Dao().GetClosing) {
+		t.Fatalf("begin did not roll back: %v", err)
+	}
+	if err := sender.Sync_CloseEmptyOrdinaryMap(w.ctx, w.area.ID()); err == nil || locked(w, w.area.ID(), w.area.Dao().GetClosed) {
+		t.Fatal("closed occupied map")
+	}
+	ids, err := d.beginOrdinaryDrain(w.ctx)
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("snapshot: %v %v", ids, err)
+	}
+	if _, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_EnterScene(w.ctx, one.ID(), w.area.ID(), last.X, last.Y); !errors.Is(err, apperrors.ErrSceneClosing) {
+		t.Fatalf("closing map readmitted a resident: %v", err)
+	}
+	if err := w.bridge.Join(w.ctx, one, last); !errors.Is(err, apperrors.ErrSceneClosing) {
+		t.Fatalf("late join: %v", err)
+	}
+	cut, cancel := context.WithCancel(w.ctx)
+	cancel()
+	if err := d.finishOrdinaryDrain(cut, ids); !errors.Is(err, context.Canceled) || locked(w, w.area.ID(), w.area.Dao().GetClosed) {
+		t.Fatalf("canceled drain closed map: %v", err)
+	}
+	if err := d.finishOrdinaryDrain(w.ctx, ids[:1]); err == nil {
+		t.Fatal("partial drain closed an occupied map")
+	}
+	remaining, err := d.beginOrdinaryDrain(w.ctx)
+	if err != nil || len(remaining) != 1 {
+		t.Fatalf("retry did not see exactly one resident: %v %v", remaining, err)
+	}
+	sceneID := w.area.ID()
+	service := Service{ordinaryDrain: &d, ordinaryMap: w.area, scene: w.bridge, stopHeartbeat: actor.Heartbeat.Stop}
+	if err := service.Shutdown(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w.entities.Get(sceneID) != nil || w.area.Terrain() != nil {
+		t.Fatal("empty world runtime was not released")
+	}
+	if w.saved.of(one.ID()) != last || w.saved.of(two.ID()) != (spatial.Point{X: 380, Y: 390}) {
+		t.Fatal("shutdown lost the last position")
+	}
+	if w.entities.Get(one.ID()) != one || w.entities.Get(two.ID()) != two {
+		t.Fatal("drain destroyed a player")
+	}
+}
+
+func TestOrdinaryShutdownNeverWritesPastNestFence(t *testing.T) {
+	w := newMoveWorld(t)
+	p := w.join(9933, spatial.Point{X: 345, Y: 345})
+	w.engine.Fence(errors.New("lost ownership"))
+	s := Service{scene: w.bridge, ordinaryMap: w.area, ordinaryDrain: &playerEvictor{scene: w.bridge, nest: w.engine, manager: w.entities, ordinarySceneID: w.area.ID()}}
+	if err := s.Shutdown(w.ctx); !errors.Is(err, nest.ErrNestFenced) {
+		t.Fatalf("fenced shutdown falsely confirmed: %v", err)
+	}
+	if w.entities.Get(w.area.ID()) != w.area {
+		t.Fatal("destroyed the world after writer loss")
+	}
+	if w.saved.of(p.ID()) != (spatial.Point{}) {
+		t.Fatal("saved past the writer fence")
+	}
+}
+
 func TestOrdinaryTransferPlacementUsesTargetOnce(t *testing.T) {
 	cfg := gamescene.DefaultConfig()
 	cfg.Spawn = spatial.Point{X: 400, Y: 410}

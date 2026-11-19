@@ -41,6 +41,12 @@ func handlerLeaveOrdinaryScene(target view.IMapEntity, area sceneentity.ISceneEn
 	return nil
 }
 
+//roost:nest rollback=undo durability=memory
+func handlerBeginOrdinaryDrain(area sceneentity.ISceneEntity) []int64 { return area.BeginPlayerDrain() }
+
+//roost:nest rollback=undo durability=memory
+func handlerCloseEmptyOrdinaryMap(area sceneentity.ISceneEntity) error { return area.CloseEmptyMap() }
+
 // No cold load just to clean a slot. Recheck under the scene guard, so a reloaded/rejoined player wins.
 //roost:nest rollback=undo durability=async
 func handlerForgetUnloadedScenePlayer(area sceneentity.ISceneEntity, subjectID int64) error {
