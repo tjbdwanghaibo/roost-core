@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.58.0**（2026-11-19）：v1.58.0 的生成物用到新接口——生成配置的 `mongo.database_prefix`、邮箱模板的 `mail.BroadcastBinding` 与 `Mail.CloseBroadcastScope`——v1.57.1 编译不了。`framework-compat` 的 minimum 组合同步钉到 v1.58.0。
+
 ## [v1.58.0] - 2026-11-19
 
 - **同步订阅槽接手**：Interest / GroupView 等待期间，若另一来源已为同一会话占槽，可以直接接手；真正需要新槽的会话仍按原规则等待。
