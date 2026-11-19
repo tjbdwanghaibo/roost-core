@@ -73,6 +73,9 @@ type Mail interface {
 	// lazy broadcasts that are theirs. The login endpoint calls it; without a
 	// LazyBroadcast it only answers the summary. See Service.PullBroadcasts.
 	PullBroadcasts(ctx context.Context, playerID int64, profile BroadcastProfile) (summary Summary, err error)
+	// CloseBroadcastScope drains the source scope and detaches its profile in the same mailbox CAS.
+	// Binding is the account's in-flight source generation and transfer sequence.
+	CloseBroadcastScope(ctx context.Context, playerID int64, binding BroadcastBinding) (summary Summary, err error)
 	// RevokeBroadcast stops a lazy broadcast from reaching mailboxes that have
 	// not merged it yet; merged copies stay. See Service.RevokeBroadcast.
 	RevokeBroadcast(ctx context.Context, mailID string) (revoked bool, err error)

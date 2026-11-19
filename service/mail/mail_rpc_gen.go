@@ -36,16 +36,17 @@ const ServiceType = "mail"
 // The RPC method names, prefixed with the service type so a bus subject is
 // unambiguous when several services register handlers on one connection.
 const (
-	MethodSend            = "mail.Send"
-	MethodList            = "mail.List"
-	MethodSummary         = "mail.Summary"
-	MethodMarkRead        = "mail.MarkRead"
-	MethodDelete          = "mail.Delete"
-	MethodReserveClaim    = "mail.ReserveClaim"
-	MethodCommitClaim     = "mail.CommitClaim"
-	MethodCancelClaim     = "mail.CancelClaim"
-	MethodPullBroadcasts  = "mail.PullBroadcasts"
-	MethodRevokeBroadcast = "mail.RevokeBroadcast"
+	MethodSend                = "mail.Send"
+	MethodList                = "mail.List"
+	MethodSummary             = "mail.Summary"
+	MethodMarkRead            = "mail.MarkRead"
+	MethodDelete              = "mail.Delete"
+	MethodReserveClaim        = "mail.ReserveClaim"
+	MethodCommitClaim         = "mail.CommitClaim"
+	MethodCancelClaim         = "mail.CancelClaim"
+	MethodPullBroadcasts      = "mail.PullBroadcasts"
+	MethodCloseBroadcastScope = "mail.CloseBroadcastScope"
+	MethodRevokeBroadcast     = "mail.RevokeBroadcast"
 )
 
 // Methods is every method on Mail, in interface order.
@@ -62,6 +63,7 @@ var Methods = []string{
 	MethodCommitClaim,
 	MethodCancelClaim,
 	MethodPullBroadcasts,
+	MethodCloseBroadcastScope,
 	MethodRevokeBroadcast,
 }
 
@@ -249,6 +251,23 @@ type rpcPullBroadcastsResponse struct {
 	Summary Summary `json:"summary"`
 }
 
+// rpcCloseBroadcastScopeRequest is the CloseBroadcastScope request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcCloseBroadcastScopeRequest struct {
+	PlayerID int64            `json:"player_id"`
+	Binding  BroadcastBinding `json:"binding"`
+}
+
+// rpcCloseBroadcastScopeResponse is the CloseBroadcastScope response on the wire.
+type rpcCloseBroadcastScopeResponse struct {
+	rpcStatus
+	Summary Summary `json:"summary"`
+}
+
 // rpcRevokeBroadcastRequest is the RevokeBroadcast request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -352,6 +371,14 @@ func RegisterHandlers(b bus.IBus, service Mail) error {
 			}
 			summary, err := service.PullBroadcasts(ctx.Context(), wire.PlayerID, wire.Profile)
 			return rpcPullBroadcastsResponse{rpcStatus: statusOf(err), Summary: summary}, nil
+		},
+		MethodCloseBroadcastScope: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcCloseBroadcastScopeRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcCloseBroadcastScopeResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			summary, err := service.CloseBroadcastScope(ctx.Context(), wire.PlayerID, wire.Binding)
+			return rpcCloseBroadcastScopeResponse{rpcStatus: statusOf(err), Summary: summary}, nil
 		},
 		MethodRevokeBroadcast: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcRevokeBroadcastRequest
@@ -530,6 +557,18 @@ func (c *BusClient) PullBroadcasts(ctx context.Context, playerID int64, profile 
 	return resp.Summary, err
 }
 
+// CloseBroadcastScope drains the source scope and detaches its profile in the same mailbox CAS.
+// Binding is the account's in-flight source generation and transfer sequence.
+// CloseBroadcastScope implements Mail.
+func (c *BusClient) CloseBroadcastScope(ctx context.Context, playerID int64, binding BroadcastBinding) (Summary, error) {
+	var resp rpcCloseBroadcastScopeResponse
+	err := c.call(ctx, MethodCloseBroadcastScope, rpcCloseBroadcastScopeRequest{
+		PlayerID: playerID,
+		Binding:  binding,
+	}, &resp)
+	return resp.Summary, err
+}
+
 // RevokeBroadcast stops a lazy broadcast from reaching mailboxes that have
 // not merged it yet; merged copies stay. See Service.RevokeBroadcast.
 // RevokeBroadcast implements Mail.
@@ -597,6 +636,10 @@ func (c capability) CancelClaim(ctx context.Context, playerID int64, mailID stri
 
 func (c capability) PullBroadcasts(ctx context.Context, playerID int64, profile BroadcastProfile) (Summary, error) {
 	return c.inner.PullBroadcasts(ctx, playerID, profile)
+}
+
+func (c capability) CloseBroadcastScope(ctx context.Context, playerID int64, binding BroadcastBinding) (Summary, error) {
+	return c.inner.CloseBroadcastScope(ctx, playerID, binding)
 }
 
 func (c capability) RevokeBroadcast(ctx context.Context, mailID string) (bool, error) {

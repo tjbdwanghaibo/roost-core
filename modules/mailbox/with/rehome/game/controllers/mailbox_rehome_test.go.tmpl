@@ -75,7 +75,11 @@ func TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving(t *testing.T) {
 	registered := time.Now().Add(-24 * time.Hour).Unix()
 	pull := func(server int32) {
 		t.Helper()
-		if _, err := mail.PullBroadcasts(ctx, playerID, svcmail.BroadcastProfile{Scopes: []string{svcmail.ServerScope(server)}, RegisteredAtUnix: registered}); err != nil {
+		v := svcmail.BroadcastBinding{ServerID: server}
+		if server == to {
+			v.Epoch, v.Seq = 1, 1
+		}
+		if _, err := mail.PullBroadcasts(ctx, playerID, svcmail.BroadcastProfile{Binding: v, Scopes: []string{svcmail.ServerScope(server)}, RegisteredAtUnix: registered}); err != nil {
 			t.Fatalf("pull with server %d's scope: %v", server, err)
 		}
 	}
@@ -95,7 +99,7 @@ func TestWithMailboxRehomeMergesTheOldServersMailBeforeLeaving(t *testing.T) {
 	oldBeforeLeaving := send(from, "a-before-leaving")
 	newBeforeLeaving := send(to, "b-before-leaving")
 	move := gamerehome.Move{PlayerID: playerID, ID: "transfer-94301", From: from, To: to}
-	if err := mailboxPullBroadcastsOnLeave(ctx, mail, move); err != nil {
+	if err := mailboxPullBroadcastsOnLeave(ctx, mail, move, 1); err != nil {
 		t.Fatalf("leave hook: %v", err)
 	}
 	oldAfterLeaving := send(from, "a-after-leaving")
@@ -137,7 +141,11 @@ func TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged(t *testing
 	registered := time.Now().Add(-24 * time.Hour).Unix()
 	pull := func(server int32) {
 		t.Helper()
-		if _, err := mail.PullBroadcasts(ctx, playerID, svcmail.BroadcastProfile{Scopes: []string{svcmail.ServerScope(server)}, RegisteredAtUnix: registered}); err != nil {
+		v := svcmail.BroadcastBinding{ServerID: server}
+		if server == to {
+			v.Epoch, v.Seq = 1, 1
+		}
+		if _, err := mail.PullBroadcasts(ctx, playerID, svcmail.BroadcastProfile{Binding: v, Scopes: []string{svcmail.ServerScope(server)}, RegisteredAtUnix: registered}); err != nil {
 			t.Fatalf("pull with server %d's scope: %v", server, err)
 		}
 	}
@@ -171,7 +179,7 @@ func TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged(t *testing
 	newBeforeLeaving := broadcast(to, "b-before-leaving")
 	move := gamerehome.Move{PlayerID: playerID, ID: "transfer-94309", From: from, To: to}
 
-	err := mailboxPullBroadcastsOnLeave(ctx, mail, move)
+	err := mailboxPullBroadcastsOnLeave(ctx, mail, move, 1)
 	if !errors.Is(err, svcmail.ErrMailboxFull) {
 		box, _, _ := mail.Mailbox(ctx, playerID)
 		t.Fatalf("leave hook with server %d's mail not merged (mailbox full, watermark %d): err = %v; want the move refused with mail's ErrMailboxFull",
@@ -182,7 +190,7 @@ func TestWithMailboxRehomeRefusesToLeaveWithTheOldServersMailUnmerged(t *testing
 	if _, err := mail.Delete(ctx, playerID, filler); err != nil {
 		t.Fatal(err)
 	}
-	if err := mailboxPullBroadcastsOnLeave(ctx, mail, move); err != nil {
+	if err := mailboxPullBroadcastsOnLeave(ctx, mail, move, 1); err != nil {
 		t.Fatalf("leave hook after making room: %v", err)
 	}
 	pull(to) // 到 B 进入
@@ -205,7 +213,7 @@ type mailboxRehomeSummarizer struct {
 	err      error
 }
 
-func (s *mailboxRehomeSummarizer) Summary(_ context.Context, playerID int64) (svcmail.Summary, error) {
+func (s *mailboxRehomeSummarizer) CloseBroadcastScope(_ context.Context, playerID int64, _ svcmail.BroadcastBinding) (svcmail.Summary, error) {
 	s.calls++
 	s.playerID = playerID
 	return svcmail.Summary{PlayerID: playerID}, s.err
@@ -215,7 +223,7 @@ func (s *mailboxRehomeSummarizer) Summary(_ context.Context, playerID int64) (sv
 func TestWithMailboxRehomeAbortsTheMoveWhenTheMergeFails(t *testing.T) {
 	away := errors.New("mail service is away")
 	summarizer := &mailboxRehomeSummarizer{err: away}
-	err := mailboxPullBroadcastsOnLeave(context.Background(), summarizer, gamerehome.Move{PlayerID: 94302, From: 3, To: 4})
+	err := mailboxPullBroadcastsOnLeave(context.Background(), summarizer, gamerehome.Move{PlayerID: 94302, From: 3, To: 4}, 1)
 	if !errors.Is(err, away) || summarizer.calls != 1 || summarizer.playerID != 94302 {
 		t.Fatalf("err = %v after %d calls for player %d; want the mail service's error after one call for 94302", err, summarizer.calls, summarizer.playerID)
 	}

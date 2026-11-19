@@ -529,12 +529,16 @@ func (s *Service) List(ctx context.Context, playerID int64, cursor string, limit
 	if err != nil {
 		return Page{}, err
 	}
-	if mailbox.expireEntries(expiryNowUnix) || ledger != nil {
-		updated, _, err := s.refreshMailbox(ctx, playerID, nil, ledger, expiryNowUnix)
+	if mailbox.needsExpiry(expiryNowUnix) || ledger != nil {
+		updated, _, err := s.refreshMailbox(ctx, playerID, nil, ledger, expiryNowUnix, nil)
 		if err != nil {
 			return Page{}, err
 		}
 		mailbox = updated
+	}
+
+	if s.lazy != nil && mailbox.BroadcastPaused {
+		return Page{}, ErrBroadcastProfileRequired
 	}
 
 	// Order is decided here, from delivery time and then id, so it does not
@@ -1106,8 +1110,9 @@ func (s *Service) Summary(ctx context.Context, playerID int64) (Summary, error) 
 		return Summary{}, err
 	}
 	behind := false
-	if ledger != nil {
-		if mailbox, behind, err = s.refreshMailbox(ctx, playerID, nil, ledger, s.cfg.Now().Unix()); err != nil {
+	nowUnix := s.cfg.Now().Unix()
+	if ledger != nil || mailbox.needsExpiry(nowUnix) {
+		if mailbox, behind, err = s.refreshMailbox(ctx, playerID, nil, ledger, nowUnix, nil); err != nil {
 			return Summary{}, err
 		}
 	}
@@ -1138,7 +1143,7 @@ func (s *Service) PullBroadcasts(ctx context.Context, playerID int64, profile Br
 		return Summary{}, err
 	}
 	profile = profile.clone()
-	mailbox, behind, err := s.refreshMailbox(ctx, playerID, &profile, &ledger, s.cfg.Now().Unix())
+	mailbox, behind, err := s.refreshMailbox(ctx, playerID, &profile, &ledger, s.cfg.Now().Unix(), nil)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -1184,27 +1189,77 @@ func (s *Service) pendingBroadcasts(ctx context.Context, mailbox Mailbox) (*Broa
 	return &ledger, nil
 }
 
+// CloseBroadcastScope seals the cutover at the snapshotted ledger head. A full mailbox
+// commits only its partial progress, never the seal. A retry after a lost response
+// acknowledges the existing seal without consuming mail published after that boundary.
+func (s *Service) CloseBroadcastScope(ctx context.Context, playerID int64, binding BroadcastBinding) (Summary, error) {
+	if playerID <= 0 || binding.ServerID <= 0 || binding.Seq == 0 {
+		return Summary{}, ErrRequestInvalid
+	}
+	if s.lazy == nil {
+		return s.Summary(ctx, playerID)
+	}
+	ledger, err := s.lazy.index.Snapshot(ctx)
+	if err != nil {
+		return Summary{}, err
+	}
+	box, behind, err := s.refreshMailbox(ctx, playerID, nil, &ledger, s.cfg.Now().Unix(), &binding)
+	if err != nil {
+		return Summary{}, err
+	}
+	return Summary{PlayerID: playerID, Unread: box.Unread, Evicted: box.Evicted, BroadcastsBehind: behind}, nil
+}
+
 // refreshMailbox is the one compare-and-set that expires entries, records a
 // new profile (profile != nil) and merges the ledger (ledger != nil), so the
 // watermark and the entries it accounts for always move together. behind
 // reports that the committed merge stopped early because the mailbox could
 // not take one more (Summary.BroadcastsBehind).
-func (s *Service) refreshMailbox(ctx context.Context, playerID int64, profile *BroadcastProfile, ledger *BroadcastLedger, nowUnix int64) (Mailbox, bool, error) {
+func (s *Service) refreshMailbox(ctx context.Context, playerID int64, profile *BroadcastProfile, ledger *BroadcastLedger, nowUnix int64, closing *BroadcastBinding) (Mailbox, bool, error) {
 	var (
 		merged  int
 		stopped bool
 	)
 	updated, _, err := s.cfg.Mailboxes.Update(ctx, playerID, func(current Mailbox, found bool) (Mailbox, bool, error) {
 		merged, stopped = 0, false
-		if !found && profile == nil {
+		if !found && profile == nil && closing == nil {
 			return current, false, nil
 		}
 		next := current.clone()
 		next.init(playerID)
 		changed := next.expireEntries(nowUnix)
+		if closing != nil {
+			// A duplicate leave may arrive after the target has already installed its profile.
+			if next.BroadcastClosed == *closing {
+				return next, changed, nil
+			}
+			if next.BroadcastClosed.ServerID != 0 && !closing.newerThan(next.BroadcastClosed) {
+				return current, false, ErrBroadcastProfileRequired
+			}
+			p := next.BroadcastProfile
+			if p == nil {
+				// Never-pulled players have no scope to drain. Fence delayed source pulls, but
+				// do not block direct mail or guess which broadcasts they qualified for.
+				if next.BroadcastPaused {
+					return current, false, ErrBroadcastProfileRequired
+				}
+			} else if !p.covers(ServerScope(closing.ServerID)) || p.Binding.ServerID != 0 && (p.Binding.ServerID != closing.ServerID || p.Binding.Epoch != closing.Epoch || p.Binding.Seq >= closing.Seq) {
+				return current, false, ErrBroadcastProfileRequired
+			}
+		}
+		if profile != nil {
+			v := profile.Binding
+			if next.BroadcastClosed.ServerID != 0 && (v.ServerID <= 0 || !v.newerThan(next.BroadcastClosed)) {
+				return current, false, ErrBroadcastProfileRequired
+			}
+			if p := next.BroadcastProfile; p != nil && p.Binding.ServerID != 0 && (v.ServerID <= 0 || p.Binding.newerThan(v)) {
+				return current, false, ErrBroadcastProfileRequired
+			}
+		}
 		if profile != nil && (next.BroadcastProfile == nil || !next.BroadcastProfile.equal(*profile)) {
 			recorded := profile.clone()
 			next.BroadcastProfile = &recorded
+			next.BroadcastPaused = false
 			next.UpdatedAtUnix = nowUnix
 			changed = true
 		}
@@ -1215,6 +1270,13 @@ func (s *Service) refreshMailbox(ctx context.Context, playerID int64, profile *B
 				return s.lazy.admits(recorded, mail, nowUnix)
 			}, nowUnix)
 			changed = changed || merged > 0 || next.BroadcastWatermark != before
+		}
+		if closing != nil && !stopped {
+			next.BroadcastPaused = next.BroadcastProfile != nil
+			next.BroadcastProfile = nil
+			next.BroadcastClosed = *closing
+			next.UpdatedAtUnix = nowUnix
+			changed = true
 		}
 		return next, changed, nil
 	})

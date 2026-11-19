@@ -61,11 +61,25 @@ func GuildScope(guildID int64) string {
 	return "guild:" + strconv.FormatInt(guildID, 10)
 }
 
+// BroadcastBinding is an account binding snapshot. Epoch advances on a committed move;
+// Seq advances on begin and abort, so a fresh source login after abort is distinguishable
+// from a delayed pull issued before departure. The zero value is an unversioned profile.
+type BroadcastBinding struct {
+	ServerID int32  `json:"server_id"`
+	Epoch    uint64 `json:"epoch"`
+	Seq      uint64 `json:"seq"`
+}
+
+func (v BroadcastBinding) newerThan(old BroadcastBinding) bool {
+	return v.Epoch > old.Epoch || v.Epoch == old.Epoch && v.Seq > old.Seq
+}
+
 // BroadcastProfile is what a lazy broadcast needs to know about one player to
 // decide which global mails are theirs. The login endpoint passes it to
 // PullBroadcasts; the mailbox keeps the latest one so List and Summary can
 // top up without asking again.
 type BroadcastProfile struct {
+	Binding BroadcastBinding `json:"binding,omitzero"`
 	// Scopes the player belongs to besides "every player" — typically
 	// ServerScope(role's server) and GuildScope(guild) when in one.
 	Scopes []string `json:"scopes,omitempty"`
@@ -81,6 +95,9 @@ type BroadcastProfile struct {
 
 // Validate checks the bounds and the required registration time.
 func (p BroadcastProfile) Validate() error {
+	if p.Binding != (BroadcastBinding{}) && (p.Binding.ServerID <= 0 || !p.covers(ServerScope(p.Binding.ServerID))) {
+		return fmt.Errorf("%w: broadcast profile does not cover its serving server", ErrRequestInvalid)
+	}
 	if p.RegisteredAtUnix <= 0 {
 		return fmt.Errorf("%w: a broadcast profile needs the player's registration time", ErrRequestInvalid)
 	}
@@ -121,7 +138,7 @@ func (p BroadcastProfile) clone() BroadcastProfile {
 }
 
 func (p BroadcastProfile) equal(other BroadcastProfile) bool {
-	if p.RegisteredAtUnix != other.RegisteredAtUnix || !slices.Equal(p.Scopes, other.Scopes) ||
+	if p.Binding != other.Binding || p.RegisteredAtUnix != other.RegisteredAtUnix || !slices.Equal(p.Scopes, other.Scopes) ||
 		len(p.Attributes) != len(other.Attributes) {
 		return false
 	}

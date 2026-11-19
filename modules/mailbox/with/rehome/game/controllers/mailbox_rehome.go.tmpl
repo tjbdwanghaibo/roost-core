@@ -9,50 +9,51 @@ import (
 	gamerehome "{{MODULE}}/game/modules/rehome"
 )
 
-// 这个文件是 mailbox 与 rehome 两个模块的联动：两个都装着时才有。
-//
-// 换服时的全服邮件（AudienceBroadcast，mail 服务的 LazyBroadcast；维护者 2026-11-14 D11 N3 A）：离开前按旧范围拉一次，
-// 到了新服按新范围拉。mail 服务按“最近一次 PullBroadcasts 给的画像”合并全服邮件，水位是一个全局邮件号：
-//
-//   - 离开时（rehome 的离开钩子：会话已断、标记之前准入的请求都执行完了、实体还没交出）让 mail 服务按记着的画像合并一次
-//     （Summary 按记着的画像补齐）。记着的画像是他在本服进入时给的，范围是本服：在本服期间发给本服、还没合并的邮件进邮箱，
-//     水位推进到此刻；
-//   - 到了新服，进入钩子（mailbox 与 enter 的联动）按会话里新的承载服重新拉：之后发给新服的照常合并；离开之后才发给旧服的、
-//     离开之前就发给新服的都在水位以下，不再合并——那一段时间他不属于那个范围。
-//
-// 拉不成（mail 服务不可用）就返回错误、中止这一次换服：宁可留在本服，也不带着没合并的邮件走（离开钩子的约定，
-// 见 game/modules/rehome/rehome_hooks.go）。“拉成了”以追平为准，不以 Summary 成功为准：邮箱满（全是未读）时合并
-// 停在半路而 Summary 仍成功，汇总里的 BroadcastsBehind 标出这种情形，这时同样中止（带 mail 的 ErrMailboxFull），
-// 玩家清掉一些邮件后再申请（RV-20261117-01）。可以重复：源服重启后接着做换服时会再调一次，已合并的不会再合并。
-// 没有配置 LazyBroadcast 的工程，或从没拉过（没有画像）的玩家，这一步只是问一次汇总。
+// 进入时向 account 确认本进程仍承载玩家；换服中不允许刷新画像。mail 用同一份快照的代数和序号拒绝迟到的写。
+// 单装 mailbox 或 mailbox + enter 不需要换服目录。
 func init() {
+	mailboxBindingForPull = func(ctx context.Context, reg *app.Registry, player int64) (svcmail.BroadcastBinding, int32, error) {
+		self, err := gamerehome.SelfSID(reg)
+		if err != nil {
+			return svcmail.BroadcastBinding{}, 0, err
+		}
+		b, err := gamerehome.RegistryDirectory(reg).Binding(ctx, player)
+		if err != nil {
+			return svcmail.BroadcastBinding{}, 0, err
+		}
+		if b.PlayerID != player || b.Transfer != nil || b.ServingServerID != self {
+			return svcmail.BroadcastBinding{}, 0, svcmail.ErrBroadcastProfileRequired
+		}
+		return svcmail.BroadcastBinding{ServerID: self, Epoch: b.BindEpoch, Seq: b.TransferSeq}, b.ServerID, nil
+	}
 	gamerehome.OnLeaving("mailbox", func(ctx context.Context, registry *app.Registry, move gamerehome.Move) error {
 		mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
 		if !ok || mailer == nil {
-			// 起来的 game 进程里它一定在：mailbox 的启动检查（mailbox.go 的 requireAtStart）没有 mail 服务就拒绝启动。
-			// 取不到只会是没装配 mail 的 Registry（别的模块只装换服那几样的场景），那里没有全服邮件可合并。
 			return nil
+		} // isolated module fixtures do not publish mail
+		b, err := gamerehome.RegistryDirectory(registry).Binding(ctx, move.PlayerID)
+		if err != nil {
+			return err
 		}
-		return mailboxPullBroadcastsOnLeave(ctx, mailer, move)
+		if b.PlayerID != move.PlayerID || b.ServingServerID != move.From || b.BindEpoch != move.Epoch || b.Transfer == nil || b.Transfer.ID != move.ID || b.Transfer.From != move.From || b.Transfer.To != move.To {
+			return fmt.Errorf("mailbox: transfer %s is no longer current: %w", move.ID, svcmail.ErrBroadcastProfileRequired)
+		}
+		return mailboxPullBroadcastsOnLeave(ctx, mailer, move, b.TransferSeq)
 	})
 }
 
-// mailboxBroadcastSummarizer 是离开钩子用到的 mail 客户端的那一个方法。
-type mailboxBroadcastSummarizer interface {
-	Summary(ctx context.Context, playerID int64) (svcmail.Summary, error)
+type mailboxBroadcastCloser interface {
+	CloseBroadcastScope(context.Context, int64, svcmail.BroadcastBinding) (svcmail.Summary, error)
 }
 
-func mailboxPullBroadcastsOnLeave(ctx context.Context, mailer mailboxBroadcastSummarizer, move gamerehome.Move) error {
-	summary, err := mailer.Summary(ctx, move.PlayerID)
+// 旧服广播追平与停用旧画像必须在同一笔邮箱更新完成。满箱只保留已经合并的进度，不停用，换服中止。
+func mailboxPullBroadcastsOnLeave(ctx context.Context, mailer mailboxBroadcastCloser, move gamerehome.Move, seq uint64) error {
+	summary, err := mailer.CloseBroadcastScope(ctx, move.PlayerID, svcmail.BroadcastBinding{ServerID: move.From, Epoch: move.Epoch, Seq: seq})
 	if err != nil {
-		return fmt.Errorf("mailbox: merge player %d's server-wide mail of server %d before moving to server %d: %w", move.PlayerID, move.From, move.To, err)
+		return fmt.Errorf("mailbox: close broadcast scope for player %d leaving %d: %w", move.PlayerID, move.From, err)
 	}
 	if summary.BroadcastsBehind {
-		// 邮箱满（全是未读）时 mail 的合并停在放不下的那封之前，Summary 照样成功（正常背压）。这时旧服的全服邮件
-		// 没有合并完：换走之后按新服范围合并，旧服那封再也补不回来，离开前发给新服的反而会在腾出位置后合并进来
-		// （RV-20261117-01）。所以中止这一次换服，玩家留在本服；读完 / 删掉一些邮件后重新申请即可。
-		return fmt.Errorf("mailbox: player %d's mailbox is full, so server %d's server-wide mail is not all merged; clear some mail before moving to server %d: %w",
-			move.PlayerID, move.From, move.To, svcmail.ErrMailboxFull)
+		return fmt.Errorf("mailbox: clear space before moving player %d: %w", move.PlayerID, svcmail.ErrMailboxFull)
 	}
 	return nil
 }
