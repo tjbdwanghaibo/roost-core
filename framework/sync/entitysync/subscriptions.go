@@ -461,7 +461,8 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 	m.traceSnapshotRequest(subj, m.sessions[session])
 	m.markPending(subjectID)
 	m.WakeSync()
-	return m.nextStamp(), nil
+	subj.lastSlotAdded = m.nextStamp()
+	return subj.lastSlotAdded, nil
 }
 
 // Unsubscribe 只释放默认来源。其他来源仍持有时不会发送 remove。
@@ -564,6 +565,25 @@ func (m *Manager) SubscriberRoom(subjectID int64) int {
 	subj.mu.Lock()
 	defer subj.mu.Unlock()
 	return max(0, m.config.MaxSubscribersPerSubject-len(subj.subscribers))
+}
+
+// SubscriberSlotsSince 给等订阅的政策一次一致的快照：新会话的空位数、最近分配槽的戳，以及仅当戳不同于 seen 时
+// 按 ID 排列的占位会话（含待 remove 的项，同一会话可以重新使用它）。持有列表是调用方的副本；稳态不复制。
+// 戳来自整个 Manager 的时钟，subject 注销再登记不会与旧戳相撞。删除只增加空位，不需要唤醒寻找同会话的等待者。
+func (m *Manager) SubscriberSlotsSince(subjectID int64, seen SubscriptionStamp) (free int, stamp SubscriptionStamp, occupied []SessionID) {
+	if m == nil {
+		return 0, 0, nil
+	}
+	subj := m.subject(subjectID)
+	if subj == nil {
+		return 0, 0, nil
+	}
+	subj.mu.Lock()
+	defer subj.mu.Unlock()
+	if subj.lastSlotAdded != seen {
+		occupied = subj.sessionsLocked()
+	}
+	return max(0, m.config.MaxSubscribersPerSubject-len(subj.subscribers)), subj.lastSlotAdded, occupied
 }
 
 // MaxSubscribersPerSubject 返回实际生效的每 subject 订阅者上限（配置为 0 时是 DefaultMaxSubscribersPerSubject）。

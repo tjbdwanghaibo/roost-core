@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.58.0**（2026-11-19）：v1.58.0 的生成物用到新接口——生成配置的 `mongo.database_prefix`、邮箱模板的 `mail.BroadcastBinding` 与 `Mail.CloseBroadcastScope`——v1.57.1 编译不了。`framework-compat` 的 minimum 组合同步钉到 v1.58.0。
+
+## [v1.58.0] - 2026-11-19
+
+- **同步订阅槽接手**：Interest / GroupView 等待期间，若另一来源已为同一会话占槽，可以直接接手；真正需要新槽的会话仍按原规则等待。
+- **TypeScript Gate 客户端**：写入失败关闭连接时，已登记请求只收到一次失败回调；没有回调的 `notify` 仍向调用方抛出写入错误。
+
 - **换服、邮件与活动修复**：旧换服任务不跨绑定代数清理，保护实体交出句柄及副本删除凭据；邮箱离开时追平并停用旧范围，新服拉取失败后开列表可以重试，过期未读数无需先开列表即更新。错过相对活动不再阻塞首次进入，日历活动按实际本地日界和相邻期排期。邮件升级须暂停换服、先升级全部 mail，再升级 game；不自动补发旧游标已越过的邮件。见 [mailbox](modules/mailbox/README.md) 和 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)。
 
 - **gift 业务模块**：`roost module add gift` 安装玩家送礼（扣物、邮件投递、退款与状态查询）。game-demo 改用同一套实现，保留原消息号、Saga 类型、回执键、消费者名和重试预算。见 [gift](modules/gift/README.md)。

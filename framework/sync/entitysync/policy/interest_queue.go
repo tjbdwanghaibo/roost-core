@@ -672,8 +672,9 @@ func (in *Interest) queuedPending() bool {
 			return true
 		}
 	}
-	for subject := range in.roomWait {
-		if in.subscriberRoom(subject) > 0 {
+	for subject, q := range in.roomWait {
+		free, _, shared := in.roomOffers(subject, q)
+		if free > 0 || len(shared) != 0 {
 			return true
 		}
 	}
@@ -813,11 +814,11 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 		add(stall)
 	}
 	for _, subject := range slices.Sorted(maps.Keys(in.roomWait)) {
-		room := in.subscriberRoom(subject)
-		if room == 0 {
+		queue := in.roomWait[subject]
+		room, _, shared := in.roomOffers(subject, queue)
+		if room == 0 && len(shared) == 0 {
 			continue
 		}
-		queue := in.roomWait[subject]
 		add(entitysync.DrainStall{Source: "interest", Subject: subject, Reason: "subscriber_room",
 			Detail: fmt.Sprintf("%d pair(s) wait for subscriber room, %d free", len(queue.seq), room), Waited: in.now().Sub(queue.since)})
 	}
@@ -826,15 +827,9 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 
 // ---- 等空位 ----
 //
-// 被每 subject 订阅者上限（entitysync.ErrSubscriberLimit）拒绝的 pair 等的是这个 subject 出现空位：某个订阅者
-// 退订、remove 交付之后（Manager.SubscriberRoom 把欠 remove 的项也算作占位）。所以它们不进重试表，按 subject
-// 排队，每次结算对每个有人排队的 subject 查一次空位，没有空位就什么也不做，成本只与等待的 subject 数有关，与被拒
-// pair 数无关；有空位时按入队先后（先来先得）重说至多“空位数”个。空位在第 k 次 Flush 交付 remove 时出现，第 k+1
-// 次 Flush 的政策阶段就订阅上。
-//
-// 已知边角（KNOWN-LIMITS 框架限制）：pair 排队之后，会话经另一个非钉住来源订阅上了同一个 subject，这个 pair 其实
-// 已经可以加入（同会话已有订阅项，不受上限），但要等 subject 再出现空位才会被重说。现有接线里能与 Interest 在同一
-// (会话, 实体) 上重叠的来源只有钉住的 self / SelfView，不排队，所以目前没有触发路径。
+// 因每 subject 订阅者上限被拒的 pair 按 subject 排队，不进普通重试表。两种机会能让它继续：
+// 另一来源已替同一会话占槽时，策略可直接接手，不耗空位；需要新槽的会话则按入队先后分配实际空位。
+// 待交付的 remove 仍占槽。槽与等待者都没有新增时，满员队列只查 subject 的戳和空位，不逐个重试。
 
 // waitForRoomLocked 把被上限拒绝的 pair 排进它的 subject 的等空位队列（已在排队的不变），调用方持有 in.mu。
 func (in *Interest) waitForRoomLocked(key pair, current *hold) {
@@ -853,6 +848,7 @@ func (in *Interest) waitForRoomLocked(key pair, current *hold) {
 	}
 	in.roomSeq++
 	queue.seq[key.observer] = in.roomSeq
+	queue.slotsSeen = 0 // 新等待者可能已通过其他来源占槽，即使上次快照后没有新槽。
 	in.roomPairs++
 	in.roomNew++
 	metrics.IncCounter(roomRefusedMetric, nil, 1)
@@ -877,8 +873,22 @@ func (in *Interest) leaveRoomQueueLocked(key pair) {
 
 // roomQueue 是一个 subject 的等空位队列：观察者 → 入队序号（越小越早），since 是这个 subject 开始有人排队的时刻。
 type roomQueue struct {
-	seq   map[int64]uint64
-	since time.Time
+	seq       map[int64]uint64
+	since     time.Time
+	slotsSeen entitysync.SubscriptionStamp
+}
+
+// roomOffers 不消费戳：Drain 的就绪检查不能抢走下一次结算的通知。只在槽或等待者有新增时
+// 比对已占槽与队列；一直满员的稳态既不复制订阅表，也不扫等待的 pair。
+func (in *Interest) roomOffers(subject int64, q *roomQueue) (int, entitysync.SubscriptionStamp, []int64) {
+	free, stamp, occupied := in.subscriberSlots(subject, q.slotsSeen)
+	var shared []int64
+	for _, sid := range occupied {
+		if _, waits := q.seq[int64(sid)]; waits {
+			shared = append(shared, int64(sid))
+		}
+	}
+	return free, stamp, shared
 }
 
 // oldest 返回最早入队的至多 n 个观察者，按入队先后。
@@ -895,29 +905,50 @@ func (in *Interest) settleRoomLocked(refusals *[]Refusal) {
 	if len(in.roomWait) == 0 {
 		return
 	}
-	var ready []int64
-	for subject := range in.roomWait {
-		if in.subscriberRoom(subject) > 0 {
-			ready = append(ready, subject)
+	type offer struct {
+		subject int64
+		free    int
+		shared  []int64
+	}
+	var ready []offer
+	for subject, q := range in.roomWait {
+		free, stamp, shared := in.roomOffers(subject, q)
+		q.slotsSeen = stamp
+		if free > 0 || len(shared) > 0 {
+			ready = append(ready, offer{subject, free, shared})
 		}
 	}
-	slices.Sort(ready)
-	for _, subject := range ready {
-		queue := in.roomWait[subject]
-		for _, observer := range queue.oldest(in.subscriberRoom(subject)) {
-			key := pair{observer: observer, subject: subject}
+	slices.SortFunc(ready, func(a, b offer) int { return cmp.Compare(a.subject, b.subject) })
+	for _, r := range ready {
+		queue := in.roomWait[r.subject]
+		try := func(observer int64) bool {
+			key := pair{observer: observer, subject: r.subject}
 			current := in.held[key]
 			err := in.say(key, current)
 			if errors.Is(err, entitysync.ErrSubscriberLimit) {
-				*refusals = append(*refusals, Refusal{Observer: observer, Subject: subject, Retry: true, Err: err})
-				break
+				*refusals = append(*refusals, Refusal{Observer: observer, Subject: r.subject, Retry: true, Err: err})
+				return false
 			}
 			in.leaveRoomQueueLocked(key)
 			current.wait = waitNone
 			if err != nil {
 				in.queueRetryLocked(key, current)
 				in.noteRefusedLocked(key, err)
-				*refusals = append(*refusals, Refusal{Observer: observer, Subject: subject, Retry: true, Err: err})
+				*refusals = append(*refusals, Refusal{Observer: observer, Subject: r.subject, Retry: true, Err: err})
+			}
+			return true
+		}
+		// 合并来源不消耗空位。即使其中一项因并发变化被拒，其他已占槽的会话仍能合并。
+		for _, observer := range r.shared {
+			if !try(observer) {
+				r.free = 0
+			}
+		}
+		if r.free > 0 {
+			for _, observer := range queue.oldest(r.free) {
+				if !try(observer) {
+					break
+				}
 			}
 		}
 	}

@@ -87,6 +87,7 @@ type groupActual struct {
 	members    map[int64]*groupMember
 	// roomWarnAt 是上一次“成员等空位”汇总告警的时刻（每组每 groupRoomWarnInterval 至多一条）。
 	roomWarnAt time.Time
+	slotsSeen  entitysync.SubscriptionStamp
 }
 
 // groupMember 是一名成员在 Manager 里的订阅状态。
@@ -95,8 +96,7 @@ type groupMember struct {
 	subscribed bool                         // 本来源的订阅在位（被框架丢掉时 released 置回 false）
 	stamp      entitysync.SubscriptionStamp // 最近一次成功订阅的戳，释放通知只删除戳更早的
 	failure    error                        // 上一次拒绝的原因，只在原因变化时记日志
-	// waitsForRoom：上一次被每 subject 订阅者上限拒绝（ErrSubscriberLimit）。组实体没有空位（Manager.SubscriberRoom
-	// 为 0）时不再重说，空位出现后的那个阶段再说；日志按组汇总（align）。
+	// 上次被上限拒绝：等新空位，或等其他来源先为同一会话占到槽；日志按组汇总（align）。
 	waitsForRoom bool
 }
 
@@ -411,9 +411,9 @@ func (v *GroupView) align(step groupStep) {
 	}
 	complete := true
 	waitingForRoom := 0
-	// room 是组实体此刻的空位：第一次遇到等空位的成员时查一次（Manager.SubscriberRoom），之后按本阶段的订阅与拒绝
-	// 自己扣减，所以每个阶段每组至多查一次；-1 表示还没查。空位按成员 ID 顺序分配。
+	// 每组每阶段至多取一次槽快照。其他来源刚刚占到的同一会话可以直接合并，不消耗空位。
 	room := -1
+	var occupied []entitysync.SessionID
 	for _, id := range slices.Sorted(maps.Keys(step.members)) {
 		member := group.members[id]
 		if member == nil {
@@ -423,29 +423,29 @@ func (v *GroupView) align(step groupStep) {
 		if member.subscribed {
 			continue
 		}
-		if member.waitsForRoom {
-			if room < 0 {
-				room = v.manager.SubscriberRoom(step.subject)
-			}
-			if room == 0 {
-				// 上次被订阅者上限拒绝、组实体仍没有空位：不再说给 Manager，等空位出现的那个阶段。
-				complete = false
-				waitingForRoom++
-				continue
-			}
+		if member.waitsForRoom && room < 0 {
+			room, group.slotsSeen, occupied = v.manager.SubscriberSlotsSince(step.subject, group.slotsSeen)
+		}
+		_, shares := slices.BinarySearch(occupied, member.session)
+		if member.waitsForRoom && room == 0 && !shares {
+			complete = false
+			waitingForRoom++
+			continue
 		}
 		stamp, err := v.source.SubscribeStamped(member.session, step.subject, v.profile)
 		if err != nil {
 			complete = false
 			v.refused(step.subject, id, member, err)
 			if member.waitsForRoom {
-				room = 0
+				if room >= 0 { // 尚未看过槽快照时保留 -1，不能跳过后续成员已有的槽。
+					room = 0
+				}
 				waitingForRoom++
 			}
 			continue
 		}
 		member.subscribed, member.stamp, member.failure, member.waitsForRoom = true, stamp, nil, false
-		if room > 0 {
+		if room > 0 && !shares {
 			room--
 		}
 	}

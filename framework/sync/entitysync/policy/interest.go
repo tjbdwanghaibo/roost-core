@@ -145,7 +145,7 @@ func ParseApplyMode(s string) (ApplyMode, error) {
 // 与之后的重说，调用方据此决定日志的轻重。拒绝不是对 pair 的裁决：只要 pair 还被持有，Interest 就继续争取，按原因等待：
 //
 //   - 被每 subject 订阅者上限拒绝（Err 是 entitysync.ErrSubscriberLimit）：pair 进入这个 subject 的等空位队列，
-//     只在进入时报告一次；之后每次结算只查一次这个 subject 的空位（Manager.SubscriberRoom），有空位时按入队先后
+//     只在进入时报告一次；之后每次结算只查一次这个 subject 的槽快照。可复用其他来源的槽时直接合并；有空位时按入队先后
 //     重说至多“空位数”个，重说又被拒（空位被别的来源抢先）时以 Retry 再报告。subject 已有人排队时，新被持有的
 //     pair 不先说、直接排到队尾（也报告一次，Err 同样是 ErrSubscriberLimit）。钉住的 pair（含 self）不受上限。
 //   - 其他原因（会话没开、subject 未登记或正在退役、视图不合法……）：pair 进入重试表，之后每次结算重说一次并以 Retry
@@ -247,8 +247,8 @@ type Interest struct {
 	stalledNew    int
 	stalledSample []pair
 	stallWarnAt   time.Time
-	// subscriberRoom / subscriberLimit 是 Manager.SubscriberRoom 与生效的每 subject 订阅者上限（构造后不变）。
-	subscriberRoom  func(int64) int
+	// 等空位队列用的订阅槽快照与生效上限（构造后不变）。
+	subscriberSlots func(int64, entitysync.SubscriptionStamp) (int, entitysync.SubscriptionStamp, []entitysync.SessionID)
 	subscriberLimit int
 	// applied 是已应用到 AOI、还没结算的事实（发布屏障仍持有，计入预算）；appliedAt 是其中最早一批应用完成的时刻；
 	// applyErr 是应用时攒下的错误，由下一次政策阶段返回。
@@ -365,7 +365,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	in.blockLayer = config.BlockLayer.Normalize()
 	in.blockFollows = config.BlockLayer == (entity.SyncProfile{})
 	in.subscriptions = config.Manager.NewSubscriptionSourceWithHooks(entitysync.SubscriptionSourceHooks{Resubmit: in.resubmit, Deferred: in.deferred})
-	in.subscriberRoom = config.Manager.SubscriberRoom
+	in.subscriberSlots = config.Manager.SubscriberSlotsSince
 	in.subscriberLimit = config.Manager.MaxSubscribersPerSubject()
 	in.compareProfiles = config.Manager.CompareProfiles
 	in.validatePriority = config.Manager.ValidateViewPriority
