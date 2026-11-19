@@ -1,6 +1,8 @@
 # 评审：Mongo 库名前缀与 WAL 回放、运维工具选库不一致
 
-**状态：待评审，未修复。** 基线：`main@b05af487`（2026-11-19，引入 `mongo.database_prefix`）。两个定向断言均已在独立分支复现；未连接真实 Mongo，未运行线上迁移。
+**状态：已处理（2026-11-19）。** B 已修（`a4ff59d9`：`DAODatabaseFile` 与合服按加了前缀的实际库名选库）；A 按维护者决定不修（前缀在项目初定下，正常不改），只在配置帮助、[13-wiring §2.2](../framework/guide/13-wiring.md#22-mongo-库名前缀mongodatabase_prefix) 与 KNOWN-LIMITS（DAO 库名映射 ⑧）留警告，见[证据](evidence/mongo-database-prefix-20261119/README.md#评审-ab-处理)。以下为评审时的原文。
+
+基线：`main@b05af487`（2026-11-19，引入 `mongo.database_prefix`）。两个定向断言均已在独立分支复现；未连接真实 Mongo，未运行线上迁移。
 
 **评审结论：游戏进程在打开数据库时才加前缀，但 WAL 的重启检查和部分裸驱动工具在更早一层就把库名当作最终值。** 两处影响不同：第一处可能把历史写入回放到另一套库；第二处即使没有崩溃、没有改配置，也会让工具选错库。
 
