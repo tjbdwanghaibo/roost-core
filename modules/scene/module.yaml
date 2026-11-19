@@ -1,6 +1,6 @@
 name: scene
 summary: 场景实体、多图与分线、原子切换、区域 AOI 与公开字段同步、独立时间域
-requires: [actor]
+requires: [actor, scenespace]
 needs:
   mods: [nest, heartbeat]
   features: [entity, dao, protocol, errcode]

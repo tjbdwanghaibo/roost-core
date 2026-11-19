@@ -1,0 +1,67 @@
+package scene
+
+import (
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"testing"
+)
+
+func hostedFixture(t *testing.T) (*Space, *entitysync.Manager) {
+	t.Helper()
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
+	s, err := NewHostedSpace(policy.InterestConfig{Manager: m, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 50, EnterRadius: 90, LeaveRadius: 120}}, 1, 42, entity.SyncProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, m
+}
+
+func TestSceneSpaceBorrowsTheHostManager(t *testing.T) {
+	s, m := hostedFixture(t)
+	if s.manager != m {
+		t.Fatal("hosted space replaced its manager")
+	}
+	s.Close()
+	if err := m.OpenHeldSession(19); err != nil {
+		t.Fatalf("closing the space closed the host manager: %v", err)
+	}
+	m.CloseSession(19)
+}
+
+func TestSceneSpaceRejoinAndForgetUseTheSameMainView(t *testing.T) {
+	s, _ := hostedFixture(t)
+	defer s.Close()
+	const observer int64 = 19
+	id := observer<<entity.UniqueIDShift | 1<<entity.EntityKindShift | 1
+	for _, at := range []spatial.Point{{X: 20, Y: 20}, {X: 80, Y: 20}} {
+		if err := s.EnterRegistered(id, at, policy.ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.Interest.ObserverView(observer); !ok {
+			t.Fatal("no observer in the owned interest")
+		}
+		if err := s.AttachMetadata(observer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Forget(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Interest.ObserverView(observer); ok {
+		t.Fatal("observer still registered after leave")
+	}
+}
+
+func TestSceneSpaceNoNewManagerOrDefaultMapOnInvalidHost(t *testing.T) {
+	s, err := NewHostedSpace(policy.InterestConfig{}, 1, 42, entity.SyncProfile{})
+	if err == nil || s != nil {
+		t.Fatal("hosted space supplied its own manager")
+	}
+}
