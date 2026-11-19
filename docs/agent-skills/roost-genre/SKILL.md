@@ -100,7 +100,7 @@ set -euo pipefail
 export GOWORK=off
 V=<roost-core 版本>
 WORK=/path/to/work                        # 放 CLI 与工程的目录
-NAME=mygame; MOD=example.com/mygame       # 工程名与自定 Go module
+NAME=mygame; MOD=example.com/mygame       # 工程名与自定 Go module；同一台机器上的工程不能重名（Mongo 库名前缀等由它派生，见 compose 第 0 节）
 mkdir -p "$WORK"
 CORE=$(go mod download -json "github.com/tjbdwanghaibo/roost-core@$V" | python3 -c 'import json,sys;print(json.load(sys.stdin)["Dir"])')
 GOBIN="$WORK/bin" go install "github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@$V"

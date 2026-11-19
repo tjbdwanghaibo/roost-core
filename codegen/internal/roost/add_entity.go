@@ -575,7 +575,7 @@ type %[1]sHolder interface{ %[1]s() %[1]s }
 }
 
 // defaultDAODatabase 是 DAO 骨架 db= 的逻辑库名（D9 修订版 A）：代码里写固定的逻辑名，物理库名交给部署配置
-// dataengine.databases（生成配置写 main: <daoDatabaseName(工程名)>，新工程开箱的物理库名与工程名派生的规则一致）。
+// dataengine.databases（生成配置写 main: game，Mongo 里再加 mongo.database_prefix，即 <工程名>_game）。
 const defaultDAODatabase = "main"
 
 // remoteManagedEntitySource 报告实体源码的 //roost:entity 标记是不是 remote=managed。
@@ -605,19 +605,19 @@ func renderDAODefinition(collection, typeName string, serverScoped bool) string 
 	return fmt.Sprintf("package dbdef\n\n// %s is stored in collection %q of the logical database %q (db=, the\n// constant db.%sDBName). The Mongo database it lands in is deployment\n// configuration: dataengine.databases maps %s to a physical database (the\n// generated config maps it to one named after the project).\n%s// Each document's _id is the full EntityID, not the bare player id: convert\n// with `roost id entity --unique <player-id> --entity <Entity>` and back with\n// `roost id entity <_id>`.\n//\n//roost:dao coll=%s db=%s%s\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `store:\"name\" dao:\"persist,sync\"`\n\t// store:\"...\" is the required stable field key; missing or duplicate keys fail generation.\n\t// Write it on every generated field: renaming the Go field then keeps the\n\t// stored data, as long as the store key stays.\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", typeName, collection, defaultDAODatabase, typeName, defaultDAODatabase, note, collection, defaultDAODatabase, scope, typeName)
 }
 
-// daoDatabaseName 是按工程名派生的 Mongo 物理库名（生成配置的 {project_db}：dataengine.database 与
-// dataengine.databases 里 main 的映射）：工程名（roost.yaml project.name，已满足 ^[a-z][a-z0-9_]*$，
-// 本身就是合法的 Mongo 库名）。两条修正：
-//   - Mongo 保留库 admin / local / config 加后缀 "_data"，业务集合不能写进系统库；
-//   - 截到 52 字节并去掉末尾的 "_"：Mongo 库名上限 63 字节，dbscope=sid 还要追加 "_<sid>"（最长 11 字节）。
+// daoDatabaseName 是按工程名派生的 Mongo 库名前缀（生成配置的 {project_db}：mongo.database_prefix，维护者 2026-11-19）：
+// 工程名（roost.yaml project.name，已满足 ^[a-z][a-z0-9_]*$）。两条修正：
+//   - 与 Mongo 系统库同名（admin / local / config）时加后缀 "_data"（前缀不能是系统库名）；
+//   - 截到 40 字节（mods.MaxMongoDatabasePrefix）并去掉末尾的 "_"：Mongo 库名上限 63 字节，要放下
+//     <前缀>_<库名>_<sid>。
 func daoDatabaseName(project string) string {
 	name := strings.ToLower(strings.TrimSpace(project))
 	switch name {
 	case "admin", "local", "config":
 		name += "_data"
 	}
-	if len(name) > 52 {
-		name = strings.TrimRight(name[:52], "_")
+	if len(name) > 40 {
+		name = strings.TrimRight(name[:40], "_")
 	}
 	return name
 }

@@ -28,6 +28,8 @@ type MongoMod struct {
 	client     fmongo.IMongo
 	cfg        *fmongo.Config
 	policy     mongodriver.IndexMigrationPolicy
+	// databasePrefix 是 mongo.database_prefix：Provide 交出的客户端经 WithDatabasePrefix 封装；client 字段仍是驱动客户端。
+	databasePrefix string
 }
 
 func NewMongoMod() *MongoMod {
@@ -41,6 +43,7 @@ func (m *MongoMod) Name() app.ModName { return mods.ModMongo }
 // 连接串与账号可以从环境变量读（R11）：mongo.uri / username / password 各有 `_env` 伴随键，规则见 wiring/mods 的 EnvValues
 // （docs/framework/guide/13-wiring.md §2.1）。账号也可以写在 mongo.uri 的 userinfo 里，二选一，见 connection。
 type config struct {
+	mods.MongoDatabasePrefix
 	URI                string        `config:"mongo.uri" default:"mongodb://localhost:27017" example:"mongodb://127.0.0.1:27017/?replicaSet=rs0"`
 	URIEnv             string        `config:"mongo.uri_env" help:"从这个环境变量读 mongo.uri（变量必须已设置且非空，取代 mongo.uri）"`
 	Username           string        `config:"mongo.username" help:"账号（与 mongo.password 同时写），不写在 mongo.uri 里时用"`
@@ -66,11 +69,11 @@ func (c *config) endpoint(env *mods.EnvValues) (uri, username, password string) 
 		env.String("mongo.password", c.Password, c.PasswordEnv)
 }
 
-// ValidateConfig 只检查 `_env` 的变量名（配置检查不读环境变量）。
+// ValidateConfig 只检查 `_env` 的变量名（配置检查不读环境变量）与库名前缀。
 func (c *config) ValidateConfig(bool) error {
 	env := mods.CheckEnvNames()
 	c.endpoint(env)
-	return env.Err()
+	return errors.Join(env.Err(), c.CheckDatabasePrefix())
 }
 
 // connection 读环境变量、合成连接配置（Init 与运维工具的 Connection 共用）。账号规则与 cube 相同并补上与 URI 的关系：
@@ -130,6 +133,7 @@ func (m *MongoMod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("mongo mod: %w", err)
 	}
 	m.cfg = conn
+	m.databasePrefix = settings.DatabasePrefix
 	m.policy = mongodriver.IndexMigrationPolicy{AllowRecreate: settings.Index.AllowRecreate}
 	return nil
 }
@@ -173,7 +177,8 @@ func (m *MongoMod) Provide(r *app.Registry) error {
 		}
 		return health.Result{Status: health.StatusOK, Message: "connected"}
 	}))
-	return r.Register(mods.ModMongo, fmongo.IMongo(m.client))
+	// 交给其他 Mod 的是带库名前缀的使用层（mongo.database_prefix 为空时就是驱动客户端本身）。
+	return r.Register(mods.ModMongo, WithDatabasePrefix(m.client, m.databasePrefix))
 }
 
 func (m *MongoMod) Start() error {

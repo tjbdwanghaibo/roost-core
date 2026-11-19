@@ -327,16 +327,17 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | --- | --- | --- |
 | `nats.prefix` | `planet` | `roost` |
 | `syncbus.prefix`（流名由它推出） | `planet.sync`（流 `PLANET_SYNC`） | `roost.sync` |
-| `dataengine.database` | `planet` | `game` |
-| `dataengine.databases`（DAO 逻辑库 → 物理库，D9 修订版 A） | `{main: planet}`：骨架 DAO 写逻辑库 `db=main`，物理库按工程名派生 | `{}`：没有映射的逻辑库物理名就是逻辑名本身 |
+| `mongo.database_prefix`（Mongo 库名前缀，维护者 2026-11-19） | `planet`：每个业务库在 Mongo 里是 `planet_<库名>` | 空：库名不加前缀 |
+| `dataengine.database` | `game`（Mongo 里 `planet_game`） | `game` |
+| `dataengine.databases`（DAO 逻辑库 → 库名，D9 修订版 A） | `{main: game}`：骨架 DAO 写逻辑库 `db=main`，与 Data Engine 自己的集合同库（Mongo 里 `planet_game`，按 sid 分库时 `planet_game_<sid>`） | `{}`：没有映射的逻辑库库名就是逻辑名本身 |
 | `dataengine.effects.subject_prefix` / `stream` | `planet.effect` / `PLANET_EFFECTS` | `roost.effect` / `ROOST_EFFECTS` |
-| `saga.database` | `planet_saga` | `saga` |
+| `saga.database` | `saga`（Mongo 里 `planet_saga`） | `saga` |
 | `saga.subject_prefix` / `stream` | `planet.saga` / `PLANET_SAGA` | `roost.saga` / `ROOST_SAGA` |
 | `saga.start_effect_prefix` / `start_effect_stream` | 不写：取 `dataengine.effects.subject_prefix` / `stream`（效果流只配一处） | 同左 |
-| `remote_entity.mongo.database` | `planet_remote` | `remote_entity` |
+| `remote_entity.mongo.database` | `remote_entity`（Mongo 里 `planet_remote_entity`） | `remote_entity` |
 | `etcd.service_prefix` | `/planet/services/` | etcd 包的缺省 |
 
-规则写在各 Wiring Mod 配置声明的 `example` 里（`{project}` 工程名、`{PROJECT}` 大写、`{project_db}` 库名：系统库 `admin` / `local` / `config` 加 `_data`、截到 52 字节），新建与之后 `roost add mod` / `add saga` / `add access` 追加的段同一规则（`codegen/internal/roost/catalog.go` 的 `projectNameVars`）。只影响生成器写出的配置，Mod 的运行期缺省值不变；同一工程的所有服务按同一工程名得到同一组值。已有工程的配置归业务、不改写：旧工程仍是 `roost` / `game` / `ROOST_*`，而此后追加的段会写新名字，与已有段不一致时手工统一（升级说明见 CHANGELOG）。
+规则写在各 Wiring Mod 配置声明的 `example` 里（`{project}` 工程名、`{PROJECT}` 大写、`{project_db}` Mongo 库名前缀：与系统库同名时加 `_data`、截到 40 字节）。Mongo 库名只在 `mongo.database_prefix` 一处派生：各处配置与业务代码写不带前缀的库名，Mongo Mod 交给其他 Mod 的客户端打开库时统一加 `<前缀>_`（`wiring/mongo.WithDatabasePrefix`，系统库不加）；把前缀写成空串即全部用业务自己写的库名，新建与之后 `roost add mod` / `add saga` / `add access` 追加的段同一规则（`codegen/internal/roost/catalog.go` 的 `projectNameVars`）。只影响生成器写出的配置，Mod 的运行期缺省值不变；同一工程的所有服务按同一工程名得到同一组值。已有工程的配置归业务、不改写：旧工程仍是 `roost` / `game` / `ROOST_*`，而此后追加的段会写新名字，与已有段不一致时手工统一（升级说明见 CHANGELOG）。
 
 **按服务区分的端口：端口块**（维护者 2026-10-19 决定）。开发配置集的服务在同一台机器上一起运行（`deploy/dev/run.sh`），每个服务要有自己的 ops 端口与 `etcd.advertise_addr`。每个服务在 `roost.yaml` 里有一个端口块号 `services.<name>.port_block`（0～99），由生成器分配并写入，**一经分配不再改变**：
 

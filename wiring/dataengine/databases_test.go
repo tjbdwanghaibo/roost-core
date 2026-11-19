@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
@@ -279,5 +280,37 @@ func TestDataEngineModBindsTheFrozenMapToRemoteStorageAndPublishesIt(t *testing.
 	published, err := Databases(registry)
 	if err != nil || store.bound == nil || store.bound != mod.cfg.mongo.Databases || published != store.bound {
 		t.Fatalf("bound=%p published=%p (%v) frozen=%p; want the one frozen map everywhere", store.bound, published, err, mod.cfg.mongo.Databases)
+	}
+}
+
+// mongo.database_prefix 加在每个业务库前面（wiring/mongo.WithDatabasePrefix），DAO 逻辑库映射出的库名与 dataengine.database
+// 加上前缀（按 sid 分库再加 _<sid>）后不能超过 Mongo 的 63 字节：Init 与配置检查都拒绝并点名 mongo.database_prefix。
+// 映射表本身仍是不带前缀的名字（前缀只在 Mongo 使用层加一次）。
+func TestDatabaseNamesMustFitWithTheMongoPrefix(t *testing.T) {
+	coredata.DeclareDatabases(coredata.LogicalDatabase{Name: "wiring_prefix_main", ServerScoped: true})
+	prefix := strings.Repeat("p", 40)
+	newCfg := func(physical string) *viper.Viper {
+		cfg := newModConfig(t)
+		cfg.Set("sid", 1000)
+		cfg.Set("mongo.database_prefix", prefix)
+		cfg.Set("dataengine.database", "game")
+		cfg.Set("dataengine.databases", map[string]any{"wiring_prefix_main": physical})
+		return cfg
+	}
+	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := mod.Init(newCfg("game")); err != nil {
+		t.Fatalf("40-byte prefix + _game_1000 is 50 bytes: %v", err)
+	}
+	if got := mod.cfg.mongo.Databases.Physical("wiring_prefix_main"); got != "game" {
+		t.Fatalf("the frozen map holds %q; want the unprefixed game (the prefix is added once, by the Mongo client)", got)
+	}
+	long := strings.Repeat("g", 20) // 40 + 1 + 20 + 5 = 66
+	err := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager()))).Init(newCfg(long))
+	if err == nil || !strings.Contains(err.Error(), "mongo.database_prefix") || !strings.Contains(err.Error(), "wiring_prefix_main") {
+		t.Fatalf("40-byte prefix + 20-byte database + _1000: Init = %v; want a refusal naming the logical database and mongo.database_prefix", err)
+	}
+	var settings config
+	if err := app.LoadConfig(newCfg(long), &settings); err == nil || !strings.Contains(err.Error(), "mongo.database_prefix") {
+		t.Fatalf("config check: %v; want the same refusal as Init", err)
 	}
 }

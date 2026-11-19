@@ -66,6 +66,15 @@ redis:
 
 **不进日志与错误**：Mongo 的 “connected” 日志只记脱敏后的 URI（口令换成 `***`），单独写的口令不进日志；NATS 的连接失败错误、“connected” / “reconnected” 日志里的地址整段盖掉 userinfo（token 在用户名位置，用户名一并盖掉）；Redis / etcd 只记地址。
 
+### 2.2 Mongo 库名前缀（`mongo.database_prefix`）
+
+维护者 2026-11-19：同一台机器上共用一个 Mongo 的不同工程不撞库，做成框架层的一个使用能力，统一配在 `mongo.database_prefix` 一个键里；roost-genre / 生成器生成的工程写成工程名。
+
+- **加在哪一层**：Mongo 驱动与 `infra/storage/mongo` 不知道前缀。Mongo Mod 把驱动客户端用 `wiring/mongo.WithDatabasePrefix` 封装后交给其他 Mod：`Database(name)` 打开 `<前缀>_<name>`，`DatabaseForSid(base, sid)` 打开 `<前缀>_<base>_<sid>`，系统库 `admin` / `local` / `config` 原样。DataEngine、Remote、saga 与业务代码都经这个客户端，所以只加一次。
+- **库名怎么写**：各处配置（`dataengine.database`、`dataengine.databases`、`saga.database`、`remote_entity.mongo.database`）与业务代码写不带前缀的名字；前缀为空（运行期缺省）时它们就是 Mongo 里的库名。
+- **直接用驱动的工具**：合服（`wiring/sidmerge`）不经封装的客户端，用 `wiring/mongo.DatabasePrefix(cfg)` 读前缀、`mods.PrefixedDatabase` 算库名，与进程同一规则。
+- **校验**：前缀只用字母、数字、`_`、`-`，不是系统库名，至多 40 字节；DataEngine 按加了前缀之后的名字核对 63 字节上限（`--check-config` 与 Init）。改前缀等于换库，先迁移数据。
+
 生成器 catalog 的14个基础设施 Mod 名是特定目录口径，不是全仓 Mod 类型总数；RemoteMirror 与 service 装配不应被错误计入或排除能力范围。
 
 ## 3. 接入顺序

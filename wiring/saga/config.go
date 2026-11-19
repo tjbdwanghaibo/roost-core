@@ -47,7 +47,7 @@ type config struct {
 	// singleton.enabled 与 App 共用一份声明：协调器进程在生产必须启用单实例锁（ValidateConfig）。
 	Singleton app.SingletonSwitch `config:"singleton"`
 	Saga      struct {
-		Database     string           `config:"database" shared:"saga.database" default:"saga" example:"{project_db}_saga" help:"Mongo 步骤收件箱（按操作的回执）与冷副本（saga.cold_copy）所在的库"`
+		Database     string           `config:"database" shared:"saga.database" default:"saga" example:"saga" help:"Mongo 步骤收件箱（按操作的回执）与冷副本（saga.cold_copy）所在的库"`
 		StepDefaults stepBudgetConfig `config:"step_defaults,closed" help:"Step timeout and retry budget. Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect."`
 		// Steps 按 <saga type>.<step name> 覆盖，优先于定义与 step_defaults；类型与步骤名要对应已注册的定义。
 		Steps         map[string]map[string]stepBudgetConfig `config:"steps" example:"{}" help:"Per-step overrides, winning over the definition and step_defaults:\nsteps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>."`

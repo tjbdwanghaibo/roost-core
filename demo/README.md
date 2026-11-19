@@ -96,15 +96,15 @@ make dev-run
 go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 ```
 
-总线前缀、Data Engine / saga 的库、effects / saga 的主题与流在生成配置里都按工程名派生（工程 planet：`nats.prefix: planet`、`dataengine.database: planet`、
-`dataengine.effects.stream: PLANET_EFFECTS`、`saga.database: planet_saga`……），与 DAO 库名同一规则，所以不同名字的工程共用这套环境不撞库撞流，不用再改前缀；
+总线前缀、effects / saga 的主题与流、Mongo 库名前缀在生成配置里都按工程名派生（工程 planet：`nats.prefix: planet`、`dataengine.effects.stream: PLANET_EFFECTS`、
+`mongo.database_prefix: planet`……；库名本身写 `game` / `saga` / `remote_entity`，Mongo 里是 `planet_game`、`planet_saga`、`planet_remote_entity`），所以不同名字的工程共用这套环境不撞库撞流，不用再改前缀；
 `cmd/loadtest` 的 `-nats-prefix` 缺省也是工程名。
 
 `dataengine.effects.max_bytes` 要调小是因为隔离集群只预留了 1GB 存储，默认 8GB 会报 `insufficient storage`。
 
 ### 验证跑通了
 
-- `player` 集合在 DAO 逻辑库 `db=main` 经 `dataengine.databases` 映射到的物理库里（生成配置把 main 映射到工程名，工程 planet 即 `planet.player`；不是 `dataengine.database`，也不是名为 `main` 的库）；文档 `_id` 是完整 EntityID，按玩家 ID 查用 `roost id entity --unique <玩家ID> --entity Player` 换算；重启 game 再跑一轮，items 与 level 在原值上累加；
+- `player` 集合在 DAO 逻辑库 `db=main` 经 `dataengine.databases` 映射到的库里（生成配置把 main 映射到 `game`，再加库名前缀，工程 planet 即 `planet_game.player`，DAO 按 sid 分库时是 `planet_game_<sid>.player`；不是名为 `main` 的库）；文档 `_id` 是完整 EntityID，按玩家 ID 查用 `roost id entity --unique <玩家ID> --entity Player` 换算；重启 game 再跑一轮，items 与 level 在原值上累加；
 - mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键；`db.world` 的 `players_entered` / `matches_formed` 随每轮增长；
 - 怪物不落库——工程库里没有怪的集合（`MonsterDao` 是 `//roost:dao nocoll`），GM `gm.scene.population` 才是看它们的地方；
 - chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个机器人多一句 hello；
@@ -119,8 +119,8 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
   别的测试建的流、且它的 subject 过滤覆盖 `roost.rpc.>`，JetStream 会用 PubAck 回应每一个 RPC 请求、与真正的服务端抢先，于是读调用大面积失败、写调用偶尔成功
   （Wiring 集成测试留下的 `ROOST_IT_RPC_REQ_*` 流就是一例）。换前缀即可，无需删流。
 - **同一个 Mongo 上用同一个工程名重新生成后重跑，game 就绪后几秒 fail-stop：`dataengine outbox: hard backlog limit exceeded`**：库名与流名按工程名派生，
-  同名的新工程会接着用上一轮的库（planet 工程是 `planet`）；上一轮留下的 effect outbox 行没有消费者会 ack，超过 30 分钟触发 Data Engine 的硬积压熔断——这是它该有的行为。
-  处置：`mongosh --eval 'db.getSiblingDB("planet").dropDatabase()'`（saga 库是 `planet_saga`），或换一个工程名。
+  同名的新工程会接着用上一轮的库（planet 工程是 `planet_game` 等 `planet_` 开头的库）；上一轮留下的 effect outbox 行没有消费者会 ack，超过 30 分钟触发 Data Engine 的硬积压熔断——这是它该有的行为。
+  处置：删掉 `planet_` 开头的库（`mongosh --eval 'db.adminCommand({listDatabases:1,nameOnly:true}).databases.filter(d=>d.name.startsWith("planet_")).forEach(d=>db.getSiblingDB(d.name).dropDatabase())'`），或换一个工程名。
 - **同名工程重跑后日志里有 `saga: consumer processing failed … kind=completion … err="saga: not found"`**：同名工程共用 `saga.stream` 与 effects 流，
   上一轮的完成消息对应的 saga 记录已随库删除，协调器答 not found、重投几次后丢弃，不影响本轮。要干净就在删库之外再删这两条流
   （`nats stream rm PLANET_SAGA`、`PLANET_EFFECTS`）。这次改动（CHANGELOG [Unreleased]）之前建的工程，配置里仍是所有工程共用的

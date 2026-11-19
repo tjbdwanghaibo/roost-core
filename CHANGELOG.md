@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- **Mongo 库名前缀：框架层统一加，生成工程写工程名**（2026-11-19，维护者：同一台机器上的数据库撞名，“在框架层加一个前缀能力，这个前缀统一配置在配置中，对于 skill 生成的模式这个配置变成项目名”，并且不放在 MongoDB 客户端底层）：
+  - 新配置键 `mongo.database_prefix`：非空时 Mongo Mod 交给其他 Mod 的客户端（`wiring/mongo.WithDatabasePrefix` 封装，驱动与 `infra/storage/mongo` 不变）打开每个业务库都是 `<前缀>_<库名>`，按 sid 分库时 `<前缀>_<库名>_<sid>`，系统库 `admin` / `local` / `config` 不加；为空（运行期缺省）时库名就是配置与代码里写的名字。前缀只用字母、数字、`_`、`-`，至多 40 字节；DataEngine 在 `--check-config` 与 Init 按加了前缀之后的名字核对 63 字节上限。合服工具（`wiring/sidmerge`，直接用驱动）按同一规则 `mods.PrefixedDatabase` 算库名。
+  - **生成配置**：`mongo.database_prefix` 写工程名（与系统库同名时加 `_data`，截到 40 字节），库名改写不带工程名的名字：`dataengine.database: game`、`dataengine.databases: {main: game}`、`saga.database: saga`、`remote_entity.mongo.database: remote_entity`。工程 planet 在 Mongo 里的库因此从 `planet`、`planet_saga`、`planet_remote` 变成 `planet_game`、`planet_saga`、`planet_remote_entity`（DAO 按 sid 分库时 `planet_game_<sid>`）。
+  - **升级**（不兼容，线上未部署）：已有工程要么照新生成配置改（加 `mongo.database_prefix: <工程名>`，库名去掉工程名部分），并把数据迁到新库名；要么不加前缀、保持原有库名不变。不要两边都写工程名，否则成了 `<工程名>_<工程名>`。roost-genre 写明：同一台机器上的工程名不能重复，库名不手写工程名，要完全用业务库名时把前缀写成空串。[约定](docs/framework/guide/13-wiring.md#22-mongo-库名前缀mongodatabase_prefix)
+
 - **审查修复 RV-20261119-01～02**（2026-11-19 审查报告的两项新问题，先红后绿，[证据](docs/maintenance/evidence/rv-20261119-01-02/README.md)）：
   - RV-20261119-01（P2）：Unity 包的 `BrowserWebSocket` 收到调用前已取消的令牌时，SDK 用 `token.Register(transport.Dispose)` 先 Dispose 了它，`ConnectAsync` 随后仍打开浏览器连接、加入轮询；句柄没人关，PumpDriven `RelayClient.ConnectAsync` 永远挂起。现在已取消 / 已 Dispose 时不打开句柄、以取消 / `ObjectDisposedException` 结束；连接中途令牌取消时下一次 `PollAll` 以取消结束并关句柄；同一实例第二次连接抛 `InvalidOperationException`。Gate 经 `GameClient` 本来不受影响（取票前已检查令牌），公开的 `TcpSession.ConnectAsync` 同样挂起，一并修好。`IGateTransport` / `IRelayTransport` 的约定注释写明 Dispose 可能先于 ConnectAsync。新用例 `TestBrowserBridgeCancellation`；另在 Unity 6000.7 WebGL（IL2CPP）+ Chromium 里用 `unity-webgl-smoke` 新增的取消阶段补跑最小链路，修前两个“调用前已取消”场景挂起、修后都以取消结束且之后的端到端照常通过。
   - RV-20261119-02（P3）：`svcaccount.CheckWebSocketAddr`（`portal.websocket_servers`、`login.presence.ws_addr`、account 收上报）接受不带方括号的 IPv6 地址 `ws://2001:db8::1:7080/ws`，浏览器解析不了。规则在 `httpserver.BrowserHost`：不在方括号里的主机含冒号就拒绝并提示写成 `[…]`。CORS Origin 在 go1.27 缺省设置下已被 `url.Parse` 拒绝，`GODEBUG=urlstrictcolons=0` 时也会漏过，同样由这条规则挡住。

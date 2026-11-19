@@ -1,6 +1,7 @@
 package dataengine
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -119,4 +120,31 @@ func Databases(registry *app.Registry) (*coredata.DatabaseMap, error) {
 		return nil, fmt.Errorf("dataengine databases: capability %q not found (the dataengine Mod provides it)", mods.ModDataEngineDatabases)
 	}
 	return databases, nil
+}
+
+// checkPrefixedDatabases 核对加了 mongo.database_prefix 之后的库名（维护者 2026-11-19 的库名前缀能力）：映射表与
+// dataengine.database 都是不带前缀的名字，Mongo Mod 交出的客户端打开时才加 <前缀>_（wiring/mongo.WithDatabasePrefix），
+// 所以 Mongo 的 63 字节上限要按加了前缀、按 sid 分库再加 _<sid> 之后的名字算。前缀为空时映射表自己的校验已经覆盖。
+func checkPrefixedDatabases(prefix string, entries []coredata.DatabaseMapping, control string, sid int32) error {
+	if prefix == "" {
+		return nil
+	}
+	scoped := make(map[string]bool)
+	for _, database := range coredata.DeclaredDatabases() {
+		scoped[database.Name] = database.ServerScoped
+	}
+	var errs []error
+	for _, entry := range entries {
+		name := mods.PrefixedDatabase(prefix, entry.Physical)
+		if err := coredata.ValidPhysicalDatabaseName(name, scoped[entry.Logical], sid); err != nil {
+			errs = append(errs, fmt.Errorf("logical database %q is %q in Mongo with mongo.database_prefix: %w; shorten the prefix or map it to a shorter name in dataengine.databases", entry.Logical, name, err))
+		}
+	}
+	if control != "" {
+		name := mods.PrefixedDatabase(prefix, control)
+		if err := coredata.ValidPhysicalDatabaseName(name, false, 0); err != nil {
+			errs = append(errs, fmt.Errorf("dataengine.database is %q in Mongo with mongo.database_prefix: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
 }

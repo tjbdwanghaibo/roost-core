@@ -28,6 +28,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
@@ -58,9 +59,10 @@ type Server struct {
 type side struct {
 	sid        int32
 	mongoConn  *fmongo.Config // 与 game 进程同一条规则读出的连接串与账号（kitmongo.Connection）
+	dbPrefix   string         // mongo.database_prefix（kitmongo.DatabasePrefix）：库在 Mongo 里是 <前缀>_<库名>
 	mongo      string         // 归一化的 Mongo 地址（主机列表 + 副本集），不含凭据
 	databases  *coredata.DatabaseMap
-	controlDB  string              // dataengine.database：receipts / transactions / outbox
+	controlDB  string              // dataengine.database 加上 mongo.database_prefix 后的物理库：receipts / transactions / outbox
 	saga       kitsaga.Participant // saga.*：分区布局（流、前缀、分区数）与副本数
 	natsURL    string              // 实际连接的 nats.url（kitnats.ServerURL，含 nats.url_env）：saga 分区日志所在的 NATS
 	natsConfig *viper.Viper        // 这一侧的配置，离线读 saga 分区时按它连 NATS
@@ -99,6 +101,9 @@ func resolveSide(server Server) (side, error) {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
 	result.mongoConn = conn
+	if result.dbPrefix, err = kitmongo.DatabasePrefix(cfg); err != nil {
+		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
+	}
 	location, err := mongoLocation(conn.URI)
 	if err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
@@ -110,6 +115,7 @@ func resolveSide(server Server) (side, error) {
 	if result.controlDB, _, result.effects, err = kitdataengine.EffectSettings(cfg); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
+	result.controlDB = mods.PrefixedDatabase(result.dbPrefix, result.controlDB)
 	result.walDir = server.WALDir
 	if result.walDir == "" {
 		if result.walDir, err = kitdataengine.WALDir(cfg, server.SID); err != nil {
@@ -229,4 +235,10 @@ func withContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+// physical 是这一侧逻辑库在 Mongo 里的实际库名：映射表给出的库名再加 mongo.database_prefix（与 game 进程经
+// Mongo Mod 交出的带前缀客户端打开的库同一规则）。合服直接用驱动客户端拷数据，不经那个客户端，所以库名在这里算全。
+func (s side) physical(logical string) string {
+	return mods.PrefixedDatabase(s.dbPrefix, s.databases.Physical(logical))
 }

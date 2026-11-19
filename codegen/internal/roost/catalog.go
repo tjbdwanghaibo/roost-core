@@ -37,8 +37,9 @@ func frameworkConfigSection(name, project string) string {
 // 一套开发用 Mongo / NATS / etcd 时不撞库撞流：
 //   - {project}：工程名本身（已满足 ^[a-z][a-z0-9_]*$，是合法的 NATS 主题 token），用于主题前缀与键前缀；
 //   - {PROJECT}：工程名大写，用于 JetStream 流名（沿用 ROOST_EFFECTS 一类的大写写法）；
-//   - {project_db}：Mongo 库名，与 DAO 骨架的 db= 同一规则（daoDatabaseName：系统库加 _data、截到 52 字节），
-//     saga / Remote 的库在它后面加 _saga / _remote（仍不超过 Mongo 63 字节上限）。
+//   - {project_db}：Mongo 库名前缀 mongo.database_prefix（daoDatabaseName：系统库名加 _data、截到 40 字节）。各处的库名
+//     （dataengine.database、dataengine.databases、saga / Remote 的库）写不带前缀的名字，Mongo 使用层统一加
+//     <前缀>_（维护者 2026-11-19），所以它们不再各自派生工程名。
 //
 // 只影响生成器写出的配置；Mod 的运行期缺省值（default）不变。已有工程的配置归业务，生成器不改写已有的值。
 func projectNameVars(project string) map[string]string {

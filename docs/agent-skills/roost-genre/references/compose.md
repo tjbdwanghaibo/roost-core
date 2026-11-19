@@ -54,6 +54,8 @@ ROOST="$WORK/bin/roost"; DIR="$WORK/$NAME"
 
 CLI、工程依赖与 skill 正文必须是同一个 `$V`。维护者用 roost-core 本地检出时的写法见[附录 C](#附录-c维护者用本地检出时)。
 
+**工程名决定共享资源的名字**：生成配置按 `$NAME` 派生 NATS / 流 / etcd 前缀与 Mongo 库名前缀 `mongo.database_prefix`，所以同一台机器上共用一套开发用 Mongo / NATS / etcd 的工程**名字不能重复**。Mongo 库名只在这个前缀一处带工程名：`dataengine.database`、`dataengine.databases`、`saga.database`、`remote_entity.mongo.database` 与业务代码自己打开的库都写不带工程名的名字（生成值是 `game`、`saga`、`remote_entity`），框架打开库时统一加 `<前缀>_`（工程 planet 的 DAO 文档在 `planet_game`）。不要再手写带工程名的库名，否则成了 `planet_planet_…`。要库名完全按业务写的来，把 `mongo.database_prefix` 写成空串（共用一个 Mongo 的工程就可能撞库，写进报告）。约定见 [13-wiring §2.2](../../../framework/guide/13-wiring.md#22-mongo-库名前缀mongodatabase_prefix)。
+
 ## 1. 问清需求
 
 **开场一次问完**，用白话，不用框架术语：

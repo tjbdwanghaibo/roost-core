@@ -316,7 +316,7 @@ func firstNonEmpty(values ...string) string {
 // 两侧基础库不同、且 A 的基础库里没有任何集合时，说明这部分没有数据，放行。
 func (r *run) coLocation(ctx context.Context, database coredata.LogicalDatabase) (Check, error) {
 	check := Check{Name: "co-location:" + database.Name}
-	fromPhysical, intoPhysical := r.from.databases.Physical(database.Name), r.into.databases.Physical(database.Name)
+	fromPhysical, intoPhysical := r.from.physical(database.Name), r.into.physical(database.Name)
 	if r.from.mongo == r.into.mongo && strings.EqualFold(fromPhysical, intoPhysical) {
 		check.Status, check.Detail = StatusOK, fmt.Sprintf("both map %q to %s on %s", database.Name, fromPhysical, r.from.mongo)
 		return check, nil
@@ -429,8 +429,8 @@ func busCheck(items []BusItem) Check {
 func (r *run) scopedDatabase(logical string) ScopedDatabase {
 	return ScopedDatabase{
 		Logical:     logical,
-		Source:      serverScopedDatabase(r.from.databases.Physical(logical), r.from.sid),
-		Target:      serverScopedDatabase(r.into.databases.Physical(logical), r.into.sid),
+		Source:      serverScopedDatabase(r.from.physical(logical), r.from.sid),
+		Target:      serverScopedDatabase(r.into.physical(logical), r.into.sid),
 		SourceMongo: r.from.mongo, TargetMongo: r.into.mongo,
 	}
 }

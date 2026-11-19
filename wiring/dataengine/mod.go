@@ -131,13 +131,14 @@ type EffectsConfig struct {
 type config struct {
 	app.ServiceIdentity
 	mods.PersistenceConfig
-	Database              string          `config:"dataengine.database" default:"game" example:"{project_db}" help:"Data Engine 自己的集合（receipts / transactions / outbox）所在的 Mongo 库。生成配置按工程名填写；共用一个 Mongo 的不同工程必须不同"`
-	Databases             DatabasesConfig `config:"dataengine.databases" example:"{main: {project_db}}" help:"DAO 逻辑库（标记里的 db=）→ Mongo 物理库。没写的逻辑库物理名就是逻辑名本身；生成配置把骨架的 main 映射到按工程名派生的库。\n只认代码声明过的逻辑库；物理名不能是系统库，按 sid 分库时加上 _<sid> 不超过 63 字节；两个逻辑库不能映射到同一个物理库。\nWAL 里有未投影记录时改映射会拒绝启动：先停写排空 WAL、迁移数据再改（docs/framework/PLAYER-MIGRATION.md）"`
-	StartupTimeout        time.Duration   `config:"dataengine.startup_timeout" default:"60s" min:"1ns" example:"60s" help:"启动排空（把 WAL 里未投影的记录写进 Mongo）的期限，期限内遇到写冲突等错误会退避重试。\n被 kill -9 的进程留下的 Mongo 事务最晚在 1.5 × transactionLifetimeLimitSeconds 才被服务端回收\n（部署要求 20s，即最晚 30s），缺省 60s 在此之上留 30s 余量。生成的部署启动等待按它计算：调大时同步调大"`
-	ShutdownTimeout       time.Duration   `config:"dataengine.shutdown_timeout" default:"30s" min:"1ns" example:"30s" help:"Stop budget declared to the App for draining WAL and projection; granted from\nshutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\nonly when the rest cannot cover it). The generated shutdown.total_timeout counts it:\nraise that too when raising this."`
-	TransactionReceiptTTL time.Duration   `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
-	ReceiptTTL            time.Duration   `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
-	WAL                   struct {
+	mods.MongoDatabasePrefix                 // mongo.database_prefix：与 Mongo Mod 同一份声明，这里只用来核对加前缀后的库名长度
+	Database                 string          `config:"dataengine.database" default:"game" example:"game" help:"Data Engine 自己的集合（receipts / transactions / outbox）所在的库。写不带前缀的名字：Mongo 里是 <mongo.database_prefix>_<库名>，\n生成配置的前缀是工程名，所以共用一个 Mongo 的不同工程不撞库"`
+	Databases                DatabasesConfig `config:"dataengine.databases" example:"{main: game}" help:"DAO 逻辑库（标记里的 db=）→ 库名（不带前缀，Mongo 里再加 mongo.database_prefix）。没写的逻辑库库名就是逻辑名本身；生成配置把骨架的 main 映射到 game。\n只认代码声明过的逻辑库；物理名不能是系统库，按 sid 分库时加上 _<sid> 不超过 63 字节；两个逻辑库不能映射到同一个物理库。\nWAL 里有未投影记录时改映射会拒绝启动：先停写排空 WAL、迁移数据再改（docs/framework/PLAYER-MIGRATION.md）"`
+	StartupTimeout           time.Duration   `config:"dataengine.startup_timeout" default:"60s" min:"1ns" example:"60s" help:"启动排空（把 WAL 里未投影的记录写进 Mongo）的期限，期限内遇到写冲突等错误会退避重试。\n被 kill -9 的进程留下的 Mongo 事务最晚在 1.5 × transactionLifetimeLimitSeconds 才被服务端回收\n（部署要求 20s，即最晚 30s），缺省 60s 在此之上留 30s 余量。生成的部署启动等待按它计算：调大时同步调大"`
+	ShutdownTimeout          time.Duration   `config:"dataengine.shutdown_timeout" default:"30s" min:"1ns" example:"30s" help:"Stop budget declared to the App for draining WAL and projection; granted from\nshutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\nonly when the rest cannot cover it). The generated shutdown.total_timeout counts it:\nraise that too when raising this."`
+	TransactionReceiptTTL    time.Duration   `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
+	ReceiptTTL               time.Duration   `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
+	WAL                      struct {
 		Dir                 string        `config:"dir" help:"不写取 data/wal/<服务>/<sid>；显式写时只给一个进程用（见 dataengine.wal）"`
 		SegmentBytes        int64         `config:"segment_bytes" min:"0" example:"268435456"`
 		MaxDiskBytes        int64         `config:"max_disk_bytes" min:"0" example:"8589934592"`
@@ -192,6 +193,21 @@ func (c *config) ValidateConfig(production bool) error {
 		return err
 	}
 	if err := coredata.ValidateDatabaseConfig(coredata.DeclaredDatabases(), c.Databases, c.Sid); err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
+	}
+	if err := c.CheckDatabasePrefix(); err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
+	}
+	// 回调在配置检查时不调用：没有配置映射的逻辑库按逻辑名核对（回调给的名字在 Init 合成映射表后再核对一次）。
+	configured := make([]coredata.DatabaseMapping, 0, len(c.Databases))
+	for _, database := range coredata.DeclaredDatabases() {
+		physical, ok := c.Databases[database.Name]
+		if !ok {
+			physical = database.Name
+		}
+		configured = append(configured, coredata.DatabaseMapping{Logical: database.Name, Physical: physical})
+	}
+	if err := checkPrefixedDatabases(c.DatabasePrefix, configured, c.Database, c.Sid); err != nil {
 		return fmt.Errorf("dataengine mod: %w", err)
 	}
 	if c.Projection.MaxUnackedRecords > 0 && c.Projection.WarnUnackedRecords > c.Projection.MaxUnackedRecords {
@@ -280,6 +296,9 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	databases, err := NewDatabaseMap(settings.Databases, sid, mod.resolver)
 	if err != nil {
 		return err
+	}
+	if err := checkPrefixedDatabases(settings.DatabasePrefix, databases.Entries(), settings.Database, sid); err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
 	}
 	effects := settings.Effects
 	prefix := effects.subjectPrefix()

@@ -163,7 +163,7 @@ func BuildChecklist(server Server, declared []coredata.LogicalDatabase) (Checkli
 	list := Checklist{SID: resolved.sid, Control: resolved.controlDB, Saga: resolved.saga.Layout.Stream,
 		Bus: busChecklist(resolved), Business: businessChecklist}
 	for _, database := range declared {
-		item := DatabaseItem{Logical: database.Name, ServerScoped: database.ServerScoped, Physical: resolved.databases.Physical(database.Name)}
+		item := DatabaseItem{Logical: database.Name, ServerScoped: database.ServerScoped, Physical: resolved.physical(database.Name)}
 		if database.ServerScoped {
 			item.Handling = "dbscope=sid DAOs: sidmerge migrate copies <physical>_<A> into <physical>_<B> (B's mapping); the source stays as a read-only archive. " +
 				"Non-sid DAOs of the same logical database must be co-located like any shared database"

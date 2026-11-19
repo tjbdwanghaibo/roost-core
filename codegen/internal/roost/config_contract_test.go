@@ -938,9 +938,9 @@ func TestFreshlyGeneratedConfigsHaveEveryModSection(t *testing.T) {
 	}
 }
 
-// 生成配置里决定“与谁共享”的名字（总线主题前缀、Data Engine 库、effects / saga / sync 的主题与流、saga 与 Remote 的库、
-// etcd 服务注册前缀）按工程名派生：两个工程共用一套开发用 Mongo / NATS / etcd 时不撞库撞流。库名与 DAO 骨架同一规则
-// （daoDatabaseName）。新建时写进的段与之后 roost add mod 追加的段派生规则相同，saga 读的 effects 流与 Data Engine
+// 生成配置里决定“与谁共享”的名字（总线主题前缀、effects / saga / sync 的主题与流、etcd 服务注册前缀、Mongo 库名前缀）
+// 按工程名派生：两个工程共用一套开发用 Mongo / NATS / etcd 时不撞库撞流。Mongo 只派生一处：mongo.database_prefix 是工程名
+// （daoDatabaseName），各处的库名写不带前缀的名字，Mongo 使用层统一加 <前缀>_（维护者 2026-11-19）。新建时写进的段与之后 roost add mod 追加的段派生规则相同，saga 读的 effects 流与 Data Engine
 // 写的那条一致：saga 不另写效果流，取 dataengine.effects 的值。
 func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 	t.Parallel()
@@ -949,13 +949,14 @@ func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 		return map[string]string{
 			"nats.prefix":                       project,
 			"syncbus.prefix":                    project + ".sync",
-			"dataengine.database":               db,
+			"mongo.database_prefix":             db,
+			"dataengine.database":               "game",
 			"dataengine.effects.subject_prefix": project + ".effect",
 			"dataengine.effects.stream":         upper + "_EFFECTS",
-			"saga.database":                     db + "_saga",
+			"saga.database":                     "saga",
 			"saga.subject_prefix":               project + ".saga",
 			"saga.stream":                       upper + "_SAGA",
-			"remote_entity.mongo.database":      db + "_remote",
+			"remote_entity.mongo.database":      "remote_entity",
 			"etcd.service_prefix":               "/" + project + "/services/",
 		}
 	}

@@ -171,8 +171,9 @@ func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(config), "  databases: {main: planet}\n") {
-		t.Fatalf("generated config does not map the logical database main to the project database:\n%s", config)
+	// main 映射到不带前缀的 game；工程名只在 mongo.database_prefix 一处（Mongo 里是 planet_game）。
+	if !strings.Contains(string(config), "  databases: {main: game}\n") || !strings.Contains(string(config), "  database_prefix: planet\n") {
+		t.Fatalf("generated config does not map main to game with the project as the Mongo database prefix:\n%s", config)
 	}
 	for project, want := range map[string]string{
 		"planet":                       "planet",
@@ -180,8 +181,8 @@ func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 		"admin":                        "admin_data", // Mongo 系统库
 		"local":                        "local_data",
 		"config":                       "config_data",
-		strings.Repeat("a", 51) + "_b": strings.Repeat("a", 51), // 52 字节处截断后去掉末尾 "_"
-		strings.Repeat("x", 60):        strings.Repeat("x", 52),
+		strings.Repeat("a", 39) + "_b": strings.Repeat("a", 39), // 40 字节处截断后去掉末尾 "_"（mods.MaxMongoDatabasePrefix）
+		strings.Repeat("x", 60):        strings.Repeat("x", 40),
 	} {
 		if got := daoDatabaseName(project); got != want {
 			t.Errorf("daoDatabaseName(%q) = %q, want %q", project, got, want)
