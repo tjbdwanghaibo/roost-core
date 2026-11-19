@@ -44,7 +44,7 @@ func TestRehomeStartupCheckDropsTheCopyLeftByACrashAfterTheCommit(t *testing.T) 
 	}
 	f.expectEvents(t, "bindings away from 1000: [94301 94302]")
 	f.driver.settleDeparted(context.Background())
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301",
+	f.expectEvents(t, "binding 94301", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"copy 7094301 to 1001 overwrite=false", "drop 7094301 copied to 1001 at 1000")
 	where, tracked := f.residency.Where(rehomePlayer)
 	want := Move{PlayerID: rehomePlayer, EntityID: rehomeEntity, ID: "t-7", From: rehomeSelf, To: rehomeTarget, Epoch: 3}
@@ -67,7 +67,7 @@ func TestRehomeStartupCheckKeepsTheCopyWhenTheNewServerHoldsAnotherVersion(t *te
 		t.Fatalf("admitted %v (%v), want none", admitted, err)
 	}
 	f.driver.settleDeparted(context.Background())
-	f.expectEvents(t, "bindings away from 1000: [94301]", "close 94301: rehome: the player is changing servers", "handoff 7094301",
+	f.expectEvents(t, "bindings away from 1000: [94301]", "binding 94301", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"copy 7094301 to 1001 overwrite=false")
 	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != rehomeTarget {
 		t.Fatalf("the table says %+v (%v), want departed to 1001 with the barrier held", where, tracked)
@@ -149,7 +149,7 @@ func TestRehomeStartupCheckListsTheStoredPlayersWhenPlayerIsNotPreloaded(t *test
 	}
 	f.expectEvents(t, "bindings away from 1000: [94300 94301]", "bindings away from 1000: [94302]")
 	f.driver.settleDeparted(context.Background())
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301",
+	f.expectEvents(t, "binding 94301", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"copy 7094301 to 1001 overwrite=false", "drop 7094301 copied to 1001 at 1000")
 }
 
@@ -227,7 +227,7 @@ func TestRehomeRecoveryLoopChecksOnceThenFollowsTheTransfersInFlight(t *testing.
 	if err := registry.Register(DriverCapability, f.driver); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bindings away from 1000: [94301]", "close 94301: rehome: the player is changing servers", "handoff 7094301",
+	want := []string{"bindings away from 1000: [94301]", "binding 94301", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"copy 7094301 to 1001 overwrite=false", "drop 7094301 copied to 1001 at 1000", "transfers from 1000"}
 	deadline := time.Now().Add(5 * time.Second)
 	for len(f.events.peek()) < len(want) && time.Now().Before(deadline) {

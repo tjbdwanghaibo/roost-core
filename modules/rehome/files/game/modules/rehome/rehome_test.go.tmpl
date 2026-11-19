@@ -235,7 +235,8 @@ type rehomeDocuments struct {
 	drops    []string
 }
 
-func (d *rehomeDocuments) Copy(_ context.Context, entityID int64, to int32, overwrite bool) (Copied, error) {
+func (d *rehomeDocuments) Copy(_ context.Context, move Move, overwrite bool) (Copied, error) {
+	entityID, to := move.EntityID, move.To
 	call := fmt.Sprintf("copy %d to %d overwrite=%v", entityID, to, overwrite)
 	d.copies = append(d.copies, call)
 	if d.f.documentEvents {
