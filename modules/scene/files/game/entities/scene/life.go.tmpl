@@ -1,0 +1,53 @@
+package scene
+
+import (
+	"errors"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+)
+
+// sceneLife belongs to one entity instance, never to the map ID (which may be reused).
+// Only the host knows which resources it owns. In particular this code never opens a
+// map, registers a subject, or closes a borrowed Space or Manager.
+type sceneLife struct {
+	mu      sync.Mutex // serialize acquisition and release; readers never take this lock
+	used    bool
+	domain  atomic.Pointer[timedomain.Domain]
+	release func(entity.EntityDestroyReason)
+}
+
+// start validates the DAO-backed time domain before acquiring host resources. Once open
+// is entered, stop must be able to unwind even a partially opened host. Neither callback
+// may re-enter start/close. The published domain remains readable after a successful close.
+func (l *sceneLife) start(fields timedomain.Fields, maxRate float64, open func(*timedomain.Domain) error, stop func(*timedomain.Domain, entity.EntityDestroyReason)) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.used {
+		return errors.New("scene: entity lifecycle already started or destroyed")
+	}
+	l.used = true
+	domain, err := timedomain.New(fields, timedomain.Config{MinRate: 0, MaxRate: maxRate})
+	if err != nil {
+		return err
+	}
+	if err := open(domain); err != nil {
+		stop(domain, entity.DestroyReasonCommon)
+		return err
+	}
+	l.release = func(reason entity.EntityDestroyReason) { stop(domain, reason) }
+	l.domain.Store(domain)
+	return nil
+}
+
+func (l *sceneLife) close(reason entity.EntityDestroyReason) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.used = true
+	if l.release != nil {
+		l.release(reason)
+		l.release = nil
+	}
+}

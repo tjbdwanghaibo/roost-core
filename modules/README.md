@@ -45,7 +45,7 @@
 | [rehome](rehome/README.md) | 单个玩家换服（改绑 game sid）：申请协议 `RehomeApply` 与服务端入口 `Move`；account 的发起 / 提交 / 中止，结论按它带回的当前绑定判定；源服从“离开中”的标记起在写闸门拒绝这名玩家新的请求，受理之后断开会话、等在途的请求执行完、复核检查、跑离开钩子，再交出实体（之后拒写），目标服首次进入时到达；可去的服与冷却写在 `game/modules/rehome/rehome_rules.go`；三个登记点（换服前检查、离开时、到达后）；给 saga 准入用的 `rehome.Binding`（这名玩家现在绑定在哪个服、是否正在换服）；受理之后的后台步骤在 manager `NewRehomeBackground` 里执行，停机时取消、按崩溃处理。game-demo 用的就是它 | 无（要求业务服务 `uses: [account]`） | `PlayerDao.Rehome`（只落库） | 50 |
 | [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 14 |
 | [scenespace](scenespace/README.md) | 普通地图的空间与视野，借用宿主的同步管理器，不自建会话或默认图 | 无 | 无 | 3 |
-| [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor、scenespace | SceneDao；Player 场景交互回执 | 28 |
+| [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor、scenespace | SceneDao；Player 场景交互回执 | 29 |
 | [monster](monster/README.md) | 正式实体生命周期、AI/actionflow 巡逻追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 27 |
 | [cellworld](cellworld/README.md) | 固定 Cell 分区、共享授权、持久出生目录与停机排空；自带玩家在格上的 SceneActor 实体、分区状态映射与 Node 安装点；Player / 场景 / 怪物的接线见 game-demo | nest、redis、nats | `PlayerDao.CellworldBase`（恢复快照、死亡回执）；Player 的路由 / 快照 / 面板字段由业务按模块 README 声明 | 17 |
 | [attribute](attribute/README.md) | 生成的属性 profile 与 Container：基础/装备/最终三层、升级成长 | profile | AttributeBase / AttributeGear / AttributeFinal | 20 |

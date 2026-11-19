@@ -1,0 +1,54 @@
+package scene
+
+import (
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+)
+
+type lifeFields struct{ state timedomain.State }
+
+func (f *lifeFields) TimeDomain() timedomain.State     { return f.state }
+func (f *lifeFields) SetTimeDomain(s timedomain.State) { f.state = s }
+
+func TestSceneLifeOwnsOnlyAcquiredResources(t *testing.T) {
+	var invalid, partial, live sceneLife
+	fields := &lifeFields{}
+	var opens, releases atomic.Int32
+	open := func(*timedomain.Domain) error { opens.Add(1); return nil }
+	stop := func(*timedomain.Domain, entity.EntityDestroyReason) { releases.Add(1) }
+	if err := invalid.start(nil, 4, open, stop); err == nil {
+		t.Fatal("accepted missing time fields")
+	}
+	invalid.close(entity.DestroyReasonCommon)
+	if opens.Load() != 0 || releases.Load() != 0 {
+		t.Fatal("invalid time touched host resources")
+	}
+	fail := errors.New("failed after acquiring a resource")
+	if err := partial.start(fields, 4, func(*timedomain.Domain) error { opens.Add(1); return fail }, stop); !errors.Is(err, fail) {
+		t.Fatal(err)
+	}
+	partial.close(entity.DestroyReasonCommon)
+	if partial.domain.Load() != nil || releases.Load() != 1 {
+		t.Fatal("partial start published a domain, leaked, or cleaned up twice")
+	}
+	if err := live.start(fields, 4, open, stop); err != nil {
+		t.Fatal(err)
+	}
+	if live.domain.Load() == nil || live.domain.Load().Rate() != 1 {
+		t.Fatal("no live time domain")
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() { defer wg.Done(); live.close(entity.DestroyReasonCommon) }()
+	}
+	wg.Wait()
+	if err := live.start(fields, 4, open, stop); err == nil || releases.Load() != 2 || opens.Load() != 2 {
+		t.Fatal("closed entity reacquired resources or released more than once")
+	}
+}

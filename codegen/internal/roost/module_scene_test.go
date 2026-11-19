@@ -21,7 +21,7 @@ func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify scene: %v %+v", err, report)
 	}
-	want := map[string]int{"actor": 14, "scenespace": 3, "scene": 28}
+	want := map[string]int{"actor": 14, "scenespace": 3, "scene": 29}
 	for _, result := range report.Modules {
 		if !result.OK || result.Skipped != 0 || result.Passed != want[result.Name] {
 			t.Fatalf("%+v", result)
@@ -72,7 +72,7 @@ func TestModuleSceneGluesUseExplicitPublicViewsAndNearbyChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify scene glues: %v %+v", err, report)
 	}
-	want := map[string]int{"scene": 28, "chat": 10, "scene+chat": 5, "chat+enter": 2, "scene+profile": 2, "scene+attribute": 2, "scene+equipment": 2}
+	want := map[string]int{"scene": 29, "chat": 10, "scene+chat": 5, "chat+enter": 2, "scene+profile": 2, "scene+attribute": 2, "scene+equipment": 2}
 	if len(report.Modules) != len(want) {
 		t.Fatalf("unexpected glues %+v", report.Modules)
 	}

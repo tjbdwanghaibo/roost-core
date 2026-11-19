@@ -16,9 +16,9 @@ protocols: [SceneChange, SceneInteract]
 errcodes: [scene_unavailable, scene_full, scene_stale, scene_not_here, scene_object_unknown, scene_object_far, scene_sequence]
 runtime: {package: game/modules/scene/service, start: Start}
 verify:
-  packages: [./game/controllers]
+  packages: [./game/controllers, ./game/entities/scene]
   run: ^TestScene
-  pass: 28
+  pass: 29
 with:
   chat:
     summary: 同进程同场景附近即时聊天，无历史和补发
