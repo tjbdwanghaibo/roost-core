@@ -1,0 +1,36 @@
+baseline aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeast
+  database_prefix: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  database: game
+  databases: {main: game}
+baseline aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaawest
+  database_prefix: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  database: game
+  databases: {main: game}
+baseline atlas_a
+  database_prefix: atlas_a
+  database: game
+  databases: {main: game}
+baseline atlas_b
+  database_prefix: atlas_b
+  database: game
+  databases: {main: game}
+main aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeast
+  database_prefix: aaaaaaaaaaaaaaa-44618380842e559f8c7383cf
+  database: game
+  databases: {main: game}
+  database and sid 1000: aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game_1000
+main aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaawest
+  database_prefix: aaaaaaaaaaaaaaa-8323e734020d507c1dcdd9dd
+  database: game
+  databases: {main: game}
+  database and sid 1000: aaaaaaaaaaaaaaa-8323e734020d507c1dcdd9dd_game aaaaaaaaaaaaaaa-8323e734020d507c1dcdd9dd_game_1000
+main atlas_a
+  database_prefix: atlas_a
+  database: game
+  databases: {main: game}
+  database and sid 1000: atlas_a_game atlas_a_game_1000
+main atlas_b
+  database_prefix: atlas_b
+  database: game
+  databases: {main: game}
+  database and sid 1000: atlas_b_game atlas_b_game_1000

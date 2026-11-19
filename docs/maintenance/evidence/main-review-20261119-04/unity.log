@@ -1,0 +1,21 @@
+Determining projects to restore...
+  Restored /workspace/work/r4src/client/dotnet/Roost.Client/Roost.Client.csproj (in 1.5 sec).
+  Roost.Client -> /workspace/work/r4src/client/dotnet/Roost.Client/bin/Release/netstandard2.1/Roost.Client.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:05.99
+  Determining projects to restore...
+  Restored /workspace/work/r4src/client/dotnet/Roost.Client.Relay/Roost.Client.Relay.csproj (in 205 ms).
+  Roost.Client.Relay -> /workspace/work/r4src/client/dotnet/Roost.Client.Relay/bin/Release/netstandard2.1/Roost.Client.Relay.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:03.30
+Unity package: /workspace/work/r4/unity/com.roost.client
+cancelBefore=False status=Canceled open=1 close=1 polls=0
+cancelBefore=True status=Canceled open=0 close=0 polls=0

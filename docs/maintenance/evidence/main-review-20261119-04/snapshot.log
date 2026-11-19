@@ -1,0 +1,3 @@
+project=rhd123456 handles=['rhd123456_game_1000', 'rhd123456_game_1001'] snapshot=['rhd123456_game_1000', 'rhd123456_game_1001'] match=True
+project=local handles=['local_data_game_1000', 'local_data_game_1001'] snapshot=['local_game_1000', 'local_game_1001'] match=False
+project=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeast handles=['aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game_1000', 'aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game_1001'] snapshot=['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeast_game_1000', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeast_game_1001'] match=False

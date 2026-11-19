@@ -1,0 +1,53 @@
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-0
+    power_tail_integration_test.go:110: survived=0 replayed=0 Mongo v=3 marker count=2
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-1
+    power_tail_integration_test.go:110: survived=1 replayed=1 Mongo v=3 marker count=2
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-2
+    power_tail_integration_test.go:110: survived=2 replayed=2 Mongo v=3 marker count=2
+--- PASS: TestRealMongoShorterWALAfterProjectedBatch (1.41s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-0 (0.40s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-1 (0.51s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-2 (0.50s)
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=false
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=true
+--- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint (1.37s)
+    --- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=false (0.61s)
+    --- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=true (0.76s)
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-0
+    power_tail_integration_test.go:110: survived=0 replayed=0 Mongo v=3 marker count=2
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-1
+    power_tail_integration_test.go:110: survived=1 replayed=1 Mongo v=3 marker count=2
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-2
+    power_tail_integration_test.go:110: survived=2 replayed=2 Mongo v=3 marker count=2
+--- PASS: TestRealMongoShorterWALAfterProjectedBatch (1.70s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-0 (0.62s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-1 (0.56s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-2 (0.53s)
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=false
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=true
+--- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint (1.20s)
+    --- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=false (0.69s)
+    --- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=true (0.51s)
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-0
+    power_tail_integration_test.go:110: survived=0 replayed=0 Mongo v=3 marker count=2
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-1
+    power_tail_integration_test.go:110: survived=1 replayed=1 Mongo v=3 marker count=2
+=== RUN   TestRealMongoShorterWALAfterProjectedBatch/survives-2
+    power_tail_integration_test.go:110: survived=2 replayed=2 Mongo v=3 marker count=2
+--- PASS: TestRealMongoShorterWALAfterProjectedBatch (1.03s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-0 (0.33s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-1 (0.34s)
+    --- PASS: TestRealMongoShorterWALAfterProjectedBatch/survives-2 (0.35s)
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=false
+=== RUN   TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=true
+--- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint (0.77s)
+    --- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=false (0.36s)
+    --- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint/background=true (0.41s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	7.505s

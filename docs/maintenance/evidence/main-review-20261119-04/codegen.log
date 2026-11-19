@@ -1,0 +1,4 @@
+=== RUN   TestGeneratedLongProjectMongoHandles
+--- PASS: TestGeneratedLongProjectMongoHandles (0.23s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.239s

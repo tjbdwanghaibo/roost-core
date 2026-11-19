@@ -1,0 +1,3 @@
+AddExp calls=286, players=200, first ack=86, later ack=86
+server ok=177, error=109, lock hold count=177
+among 114 first-step failures: committed=5, no handler write=109

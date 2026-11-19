@@ -1,0 +1,70 @@
+2001:db8::1 3 {
+  "files": [
+    {
+      "path": "configs/service/config.account.audit.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "failed",
+      "cross_mod_errors": [
+        "2026/11/19 12:41:22 ERROR server exit err=\"mod modules.account: module portal: config: portal.websocket_servers.1: the websocket address: host \\\"2001:db8::1\\\" has a colon outside brackets, which browsers cannot parse; write an IPv6 address in brackets, like [2001:db8::1]:7080\""
+      ]
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "cross_mod_errors",
+  "exit_code": 3
+} 2026/11/19 12:41:22 config check: cross_mod_errors (exit 3); details above
+[2001:db8::1] 0 {
+  "files": [
+    {
+      "path": "configs/service/config.account.audit.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "ok"
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "ok",
+  "exit_code": 0
+}
+127.0.0.1 0 {
+  "files": [
+    {
+      "path": "configs/service/config.account.audit.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "ok"
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "ok",
+  "exit_code": 0
+}
+192.0.2.300 3 {
+  "files": [
+    {
+      "path": "configs/service/config.account.audit.yaml",
+      "service": "account",
+      "keys": "ok",
+      "cross_mod": "failed",
+      "cross_mod_errors": [
+        "2026/11/19 12:41:38 ERROR server exit err=\"mod modules.account: module portal: config: portal.websocket_servers.1: the websocket address: host \\\"192.0.2.300\\\" ends in a number, so browsers read it as an IPv4 address, and it is not one: the last part \\\"300\\\" is 256 or more\""
+      ]
+    }
+  ],
+  "cross_service": {
+    "checked": false,
+    "reason": "only with --all"
+  },
+  "status": "cross_mod_errors",
+  "exit_code": 3
+} 2026/11/19 12:41:38 config check: cross_mod_errors (exit 3); details above

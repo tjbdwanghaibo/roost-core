@@ -1,0 +1,8 @@
+=== RUN   TestCoreDependencyBoundary
+--- PASS: TestCoreDependencyBoundary (0.11s)
+=== RUN   TestGeneratedProjectRealDependencyTestsHaveAnEntry
+--- PASS: TestGeneratedProjectRealDependencyTestsHaveAnEntry (0.63s)
+=== RUN   TestRealProcessDependencyEntriesRemainReachable
+--- PASS: TestRealProcessDependencyEntriesRemainReachable (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core	0.743s

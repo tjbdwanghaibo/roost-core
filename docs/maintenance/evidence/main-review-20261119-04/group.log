@@ -1,0 +1,35 @@
+=== RUN   TestReviewGroupMemberPromotion
+2026/11/19 12:38:08 WARN group view: members wait for subscriber room on the group subject; they subscribe as soon as a subscriber leaves subject_id=5000001 waiting=1 max_subscribers_per_subject=1
+    review_group_profile_test.go:56: cap=1 member=true groupHolds=true deliveredProfile="room"
+    review_group_profile_test.go:56: cap=2 member=true groupHolds=true deliveredProfile="room"
+--- PASS: TestReviewGroupMemberPromotion (0.00s)
+=== RUN   TestGroupViewSharesSlotTakenBetweenPhases
+2026/11/19 12:38:08 WARN group view: members wait for subscriber room on the group subject; they subscribe as soon as a subscriber leaves subject_id=5000001 waiting=1 max_subscribers_per_subject=1
+--- PASS: TestGroupViewSharesSlotTakenBetweenPhases (0.00s)
+=== RUN   TestInterestSharesOccupiedSlotWithoutSkippingFIFO
+2026/11/19 12:38:08 WARN entitysync/policy: subscriptions wait for subscriber room; each subject has reached ManagerConfig.MaxSubscribersPerSubject, the waiting pairs subscribe in arrival order as soon as a subscriber of that subject leaves pairs=2 subjects=1 new=2 busiest=[900000:2] max_subscribers_per_subject=1
+--- PASS: TestInterestSharesOccupiedSlotWithoutSkippingFIFO (0.28s)
+=== RUN   TestReviewGroupMemberPromotion
+2026/11/19 12:38:08 WARN group view: members wait for subscriber room on the group subject; they subscribe as soon as a subscriber leaves subject_id=5000001 waiting=1 max_subscribers_per_subject=1
+    review_group_profile_test.go:56: cap=1 member=true groupHolds=true deliveredProfile="room"
+    review_group_profile_test.go:56: cap=2 member=true groupHolds=true deliveredProfile="room"
+--- PASS: TestReviewGroupMemberPromotion (0.00s)
+=== RUN   TestGroupViewSharesSlotTakenBetweenPhases
+2026/11/19 12:38:08 WARN group view: members wait for subscriber room on the group subject; they subscribe as soon as a subscriber leaves subject_id=5000001 waiting=1 max_subscribers_per_subject=1
+--- PASS: TestGroupViewSharesSlotTakenBetweenPhases (0.01s)
+=== RUN   TestInterestSharesOccupiedSlotWithoutSkippingFIFO
+2026/11/19 12:38:08 WARN entitysync/policy: subscriptions wait for subscriber room; each subject has reached ManagerConfig.MaxSubscribersPerSubject, the waiting pairs subscribe in arrival order as soon as a subscriber of that subject leaves pairs=2 subjects=1 new=2 busiest=[900000:2] max_subscribers_per_subject=1
+--- PASS: TestInterestSharesOccupiedSlotWithoutSkippingFIFO (0.20s)
+=== RUN   TestReviewGroupMemberPromotion
+2026/11/19 12:38:08 WARN group view: members wait for subscriber room on the group subject; they subscribe as soon as a subscriber leaves subject_id=5000001 waiting=1 max_subscribers_per_subject=1
+    review_group_profile_test.go:56: cap=1 member=true groupHolds=true deliveredProfile="room"
+    review_group_profile_test.go:56: cap=2 member=true groupHolds=true deliveredProfile="room"
+--- PASS: TestReviewGroupMemberPromotion (0.01s)
+=== RUN   TestGroupViewSharesSlotTakenBetweenPhases
+2026/11/19 12:38:09 WARN group view: members wait for subscriber room on the group subject; they subscribe as soon as a subscriber leaves subject_id=5000001 waiting=1 max_subscribers_per_subject=1
+--- PASS: TestGroupViewSharesSlotTakenBetweenPhases (0.00s)
+=== RUN   TestInterestSharesOccupiedSlotWithoutSkippingFIFO
+2026/11/19 12:38:09 WARN entitysync/policy: subscriptions wait for subscriber room; each subject has reached ManagerConfig.MaxSubscribersPerSubject, the waiting pairs subscribe in arrival order as soon as a subscriber of that subject leaves pairs=2 subjects=1 new=2 busiest=[900000:2] max_subscribers_per_subject=1
+--- PASS: TestInterestSharesOccupiedSlotWithoutSkippingFIFO (0.19s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	1.761s

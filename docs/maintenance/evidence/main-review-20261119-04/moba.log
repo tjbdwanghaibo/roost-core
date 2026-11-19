@@ -1,0 +1,99 @@
+MOBA generated consumer and logs: /workspace/work/r4/moba-verified
+=== RUN   TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup
+--- PASS: TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup (1.90s)
+=== RUN   TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect
+    arena_network_test.go:443: reconnected before frame 296 asking from frame 41 (history starts at 232); players 2 and 8 restored from checkpoints [288] / [288]; all ten match the reference at frame 360
+--- PASS: TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect (4.59s)
+=== RUN   TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot
+    arena_network_test.go:748: Room: reconnected before frame 296 asking from frame 41; players 2 and 8 restored from committed checkpoints [288] / [288]; all ten match the authority at frame 360
+--- PASS: TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot (3.98s)
+=== RUN   TestMOBAFivePlayerTeamsDraftAndMatchIdentity
+--- PASS: TestMOBAFivePlayerTeamsDraftAndMatchIdentity (0.00s)
+=== RUN   TestMOBAArenaTargetingThreeLanesEconomyAndRespawn
+--- PASS: TestMOBAArenaTargetingThreeLanesEconomyAndRespawn (0.00s)
+=== RUN   TestMOBAArenaReplayVersionSeedAndFogBoundary
+--- PASS: TestMOBAArenaReplayVersionSeedAndFogBoundary (0.07s)
+=== RUN   TestMOBAArenaSurrenderAndTimeLimit
+--- PASS: TestMOBAArenaSurrenderAndTimeLimit (0.00s)
+=== RUN   TestMOBAMatchmakingAdmissionCancellationAndCommit
+--- PASS: TestMOBAMatchmakingAdmissionCancellationAndCommit (0.00s)
+=== RUN   TestMOBAInputIdentityReplayAndWindow
+--- PASS: TestMOBAInputIdentityReplayAndWindow (0.00s)
+=== RUN   TestMOBADeterministicDuelHealsLostBroadcasts
+--- PASS: TestMOBADeterministicDuelHealsLostBroadcasts (0.00s)
+=== RUN   TestMOBACatchupAndSpectatorCannotControlHeroes
+--- PASS: TestMOBACatchupAndSpectatorCannotControlHeroes (0.00s)
+=== RUN   TestMOBAHistoryExpiryAndDesyncAreExplicit
+--- PASS: TestMOBAHistoryExpiryAndDesyncAreExplicit (0.00s)
+=== RUN   TestMOBALaneTowersBaseAndServerResult
+--- PASS: TestMOBALaneTowersBaseAndServerResult (0.00s)
+=== RUN   TestMOBASkillCooldownShopAndCheckpoint
+--- PASS: TestMOBASkillCooldownShopAndCheckpoint (0.00s)
+PASS
+ok  	example.com/moba-practice/game/modules/moba	11.593s
+2026/11/19 12:39:00 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=78.138µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBAKCPRobotMatchSettlementAndClientResult
+--- PASS: TestMOBAKCPRobotMatchSettlementAndClientResult (0.19s)
+=== RUN   TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom
+--- PASS: TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom (0.10s)
+=== RUN   TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID
+--- PASS: TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID (0.07s)
+=== RUN   TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity
+--- PASS: TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity (0.13s)
+=== RUN   TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable
+--- PASS: TestMOBAAwardRepliesOnlyAfterItsRecordIsDurable (0.16s)
+=== RUN   TestMOBARoundUndoRollsBackFrameAndCheckpoint
+--- PASS: TestMOBARoundUndoRollsBackFrameAndCheckpoint (0.09s)
+=== RUN   TestMOBARoomMailboxBoundAndDrain
+--- PASS: TestMOBARoomMailboxBoundAndDrain (0.04s)
+=== RUN   TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound
+--- PASS: TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound (0.05s)
+=== RUN   TestMOBADurableReplayAndDelayedObserverBeyond64Frames
+--- PASS: TestMOBADurableReplayAndDelayedObserverBeyond64Frames (0.53s)
+=== RUN   TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts
+--- PASS: TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts (0.25s)
+=== RUN   TestMOBARoomCatchupNeverSendsUncommittedFrames
+--- PASS: TestMOBARoomCatchupNeverSendsUncommittedFrames (0.71s)
+=== RUN   TestMOBASettlementConcurrentReplayAndIdentity
+--- PASS: TestMOBASettlementConcurrentReplayAndIdentity (0.01s)
+=== RUN   TestMOBASettlementRollbackAndRetry
+--- PASS: TestMOBASettlementRollbackAndRetry (0.01s)
+=== RUN   TestMOBANoWinnerSettlementNeverPays
+--- PASS: TestMOBANoWinnerSettlementNeverPays (0.00s)
+=== RUN   TestMOBAServerReferenceSettlesTheFinishedRound
+--- PASS: TestMOBAServerReferenceSettlesTheFinishedRound (0.01s)
+PASS
+ok  	example.com/moba-practice/game/handler	3.378s
+IDs are valid
+generated files are up to date
+module verify: wallet 17/17 skipped=0
+2026/11/19 12:39:47 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=340.644µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBARealSettlementAcrossProcesses
+--- PASS: TestMOBARealSettlementAcrossProcesses (0.30s)
+PASS
+ok  	example.com/moba-practice/game/handler	1.374s
+2026/11/19 12:39:52 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=129.085µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBARealSettlementAcrossProcesses
+--- PASS: TestMOBARealSettlementAcrossProcesses (0.24s)
+PASS
+ok  	example.com/moba-practice/game/handler	1.261s
+2026/11/19 12:39:55 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=49.745µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBARealClientAheadAfterTailLoss
+    moba_power_tail_test.go:143: old client 2; retained authority 1; epoch 2 reused frame 2: stale digest differs, rebased digest matches
+--- PASS: TestMOBARealClientAheadAfterTailLoss (0.48s)
+PASS
+ok  	example.com/moba-practice/game/handler	1.506s
+2026/11/19 12:39:59 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=40.972µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBARealActiveRoundCrashRecovery
+    moba_crash_test.go:225: SIGKILL recovery: WAL backlog=45, frame 20 -> 40, epoch 1 -> 2, 10 original Player sids retained
+--- PASS: TestMOBARealActiveRoundCrashRecovery (0.97s)
+PASS
+ok  	example.com/moba-practice/game/handler	1.991s
+2026/11/19 12:40:03 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=174.544µs changed=0 added=0 removed=0 unchanged=0 members=[]
+=== RUN   TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL
+    moba_snapshot_test.go:117: async WAL Sender latency diagnostic: n=100 p50_us=14188 p99_us=38875 max_us=75999 (100 sequential frame commits; functional run, not capacity evidence)
+    moba_snapshot_test.go:319: SIGKILL snapshot recovery: 125 unprojected WAL records (25 after setup + 100 frames); cold load epoch 1 -> 2; seats 1 (from frame 1) and 7 (from frame 21) restored from committed checkpoint 100 via one fetch (2886 bytes), continued to head 112 with 16 page frames; metric deltas map[bytes:2886 failed:0 frames:112 pages:16 snapshot:2 unservable:0]
+--- PASS: TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL (2.82s)
+PASS
+ok  	example.com/moba-practice/game/handler	3.856s
+MOBA generated consumer kept: /workspace/work/r4/moba-verified

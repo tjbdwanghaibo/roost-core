@@ -1,0 +1,16 @@
+PASS pretag-scope selection
+{"immediate":false,"time":0,"state":"Disconnected","calls":1,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":false,"time":5000,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":true,"time":0,"state":"Disconnected","calls":0,"aborted":false,"outcome":"GateClosedError"}
+{"immediate":true,"time":5000,"aborted":false,"outcome":"GateClosedError"}
+=== RUN   TestCheckCORSOriginsAcceptsOnlyWhatTheBrowserSerializes
+--- PASS: TestCheckCORSOriginsAcceptsOnlyWhatTheBrowserSerializes (0.00s)
+=== RUN   TestBrowserHostRefusesIPv6WithoutBrackets
+--- PASS: TestBrowserHostRefusesIPv6WithoutBrackets (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	0.011s
+=== RUN   TestCheckWebSocketAddrRefusesNumericHostsBrowsersCannotUse
+--- PASS: TestCheckWebSocketAddrRefusesNumericHostsBrowsersCannotUse (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.008s
+Unity relay, BrowserWebSocket and Unity package builder byte-identical since 1397ee400
