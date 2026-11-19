@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.58.0] - 2026-11-19
+
 - **Mongo 库名前缀：框架层统一加，生成工程写工程名**（2026-11-19，维护者：同一台机器上的数据库撞名，“在框架层加一个前缀能力，这个前缀统一配置在配置中，对于 skill 生成的模式这个配置变成项目名”，并且不放在 MongoDB 客户端底层）：
   - 新配置键 `mongo.database_prefix`：非空时 Mongo Mod 交给其他 Mod 的客户端（`wiring/mongo.WithDatabasePrefix` 封装，驱动与 `infra/storage/mongo` 不变）打开每个业务库都是 `<前缀>_<库名>`，按 sid 分库时 `<前缀>_<库名>_<sid>`，系统库 `admin` / `local` / `config` 不加；为空（运行期缺省）时库名就是配置与代码里写的名字。前缀只用字母、数字、`_`、`-`，至多 40 字节；DataEngine 在 `--check-config` 与 Init 按加了前缀之后的名字核对 63 字节上限。合服工具（`wiring/sidmerge`，直接用驱动）按同一规则 `mods.PrefixedDatabase` 算库名。
   - **生成配置**：`mongo.database_prefix` 写工程名（与系统库同名时加 `_data`，截到 40 字节），库名改写不带工程名的名字：`dataengine.database: game`、`dataengine.databases: {main: game}`、`saga.database: saga`、`remote_entity.mongo.database: remote_entity`。工程 planet 在 Mongo 里的库因此从 `planet`、`planet_saga`、`planet_remote` 变成 `planet_game`、`planet_saga`、`planet_remote_entity`（DAO 按 sid 分库时 `planet_game_<sid>`）。
