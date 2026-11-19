@@ -143,17 +143,22 @@ func newSelfFixture(t *testing.T) *selfFixture {
 
 func newSelfFixtureOn(t *testing.T, lane *selfLane) *selfFixture {
 	t.Helper()
+	return newSelfFixtureWith(t, lane, entitysync.ManagerConfig{})
+}
+
+// newSelfFixtureWith 同 newSelfFixtureOn，Manager 另按 config 配置（Transport 与 SessionLost 由夹具接上）。
+func newSelfFixtureWith(t *testing.T, lane *selfLane, config entitysync.ManagerConfig) *selfFixture {
+	t.Helper()
 	fixture := &selfFixture{lane: lane, memory: &memory{}}
 	var view atomic.Pointer[SelfView]
-	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
-		Transport: lane,
-		// Manager 在 SelfView 之前构造，SessionLost 经转发接上（正式接线 wiring/selfsync 同样如此）。
-		SessionLost: func(session entitysync.SessionID, cause error) {
-			if current := view.Load(); current != nil {
-				current.SessionLost(session, cause)
-			}
-		},
-	})
+	config.Transport = lane
+	// Manager 在 SelfView 之前构造，SessionLost 经转发接上（正式接线 wiring/selfsync 同样如此）。
+	config.SessionLost = func(session entitysync.SessionID, cause error) {
+		if current := view.Load(); current != nil {
+			current.SessionLost(session, cause)
+		}
+	}
+	manager, err := entitysync.NewManager(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +225,27 @@ func TestSelfViewSendsAFullSnapshotThenDeltas(t *testing.T) {
 	if len(frames) != 1 || frames[0].kind != frame.Delta || len(frames[0].objects) != 1 || frames[0].objects[0].full {
 		t.Fatalf("after a change: %+v, want one Delta carrying the change", frames)
 	}
+}
+
+// 自身视图是钉住的订阅，不受每 subject 订阅者上限：玩家实体已被别的会话占满上限（上限 2）时，玩家照样收到自己的全量。
+// 原来上限检查在钉住处理之前，SelfView 的订阅被拒，玩家看不到自己。
+func TestSelfViewIsNotRefusedBySubscriberLimit(t *testing.T) {
+	f := newSelfFixtureWith(t, &selfLane{}, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2})
+	state := f.loaded(t, 7)
+	if err := f.manager.Register(state); err != nil {
+		t.Fatal(err)
+	}
+	for _, other := range []entitysync.SessionID{1, 2} {
+		if err := f.manager.OpenSession(other); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.manager.Subscribe(other, state.SubjectID(), entity.SyncProfile{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.view.Activate(7, "c1")
+	f.flush(t)
+	requireFull(t, f.lane.take(7), 7)
 }
 
 // 登录时实体常常还不在内存里（首登新建、第一次请求才冷加载）：会话照开，实体一出现就送全量，

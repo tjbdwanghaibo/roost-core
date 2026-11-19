@@ -436,7 +436,11 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 		m.WakeSync()
 		return m.nextStamp(), nil
 	}
-	if subj.subscribers[session] == nil && len(subj.subscribers) >= m.config.MaxSubscribersPerSubject {
+	// 每 subject 订阅者上限只拦新会话（同一会话已被别的来源订阅时走上面的分支）。钉住的订阅（玩家看自己）不受上限：
+	// 它的契约是永不暂缓，现有钉住来源都是“会话看自己的实体”，所以每个 subject 至多超出钉住订阅的个数。
+	if !pinned && subj.subscribers[session] == nil && len(subj.subscribers) >= m.config.MaxSubscribersPerSubject {
+		m.subscriberLimitRefused.Add(1)
+		metrics.IncCounter(subscriberLimitRefusedMetric, nil, 1)
 		return 0, ErrSubscriberLimit
 	}
 	if old := subj.subscribers[session]; old != nil {
@@ -539,6 +543,31 @@ func (m *Manager) Subscribers(subjectID int64) []SessionID {
 	defer subj.mu.Unlock()
 	return subj.sessionsLocked()
 }
+
+// subscriberLimitRefusedMetric 是被每 subject 订阅者上限拒绝的订阅次数（ManagerStats.SubscriberLimitRefused 的指标）。
+const subscriberLimitRefusedMetric = "entitysync_subscriber_limit_refused_total"
+
+// SubscriberRoom 报告 subject 此刻还能接受几个新会话的非钉住订阅：MaxSubscribersPerSubject 减去已有的订阅项，不小于 0。
+// 已退订、remove 还没交付的项（客户端仍持有对象）照样占位，remove 交付后空位才出现；钉住的订阅不受上限，可能让
+// 订阅项多于上限，此时为 0。subject 未登记时为 0（重新登记后是新的 subject，空位从上限算起）。
+//
+// 给被 ErrSubscriberLimit 拒绝的政策判断何时重说（policy.Interest 的等空位队列）：只读，只取 subject.mu，
+// 与 Subscribers 相同；结果只是此刻的快照，重说时仍可能被别的来源抢先而再次被拒。
+func (m *Manager) SubscriberRoom(subjectID int64) int {
+	if m == nil {
+		return 0
+	}
+	subj := m.subject(subjectID)
+	if subj == nil {
+		return 0
+	}
+	subj.mu.Lock()
+	defer subj.mu.Unlock()
+	return max(0, m.config.MaxSubscribersPerSubject-len(subj.subscribers))
+}
+
+// MaxSubscribersPerSubject 返回实际生效的每 subject 订阅者上限（配置为 0 时是 DefaultMaxSubscribersPerSubject）。
+func (m *Manager) MaxSubscribersPerSubject() int { return m.config.MaxSubscribersPerSubject }
 
 // sessionSubjectsLocked 在 Manager.mu 内复制；调用方必须解锁后再访问 subject。
 func sessionSubjectsLocked(sess *session) []*subject {

@@ -1,0 +1,41 @@
+=== RUN   TestSubscriberLimitRefusesNewSessionsButNotPinnedSelf
+    subscription_test.go:661: pinned self refused by the subscriber limit: entitysync: subscriber limit reached for this subject
+--- FAIL: TestSubscriberLimitRefusesNewSessionsButNotPinnedSelf (0.00s)
+=== RUN   TestSubscriberRoomCountsLeavingSubscriptions
+--- PASS: TestSubscriberRoomCountsLeavingSubscriptions (0.00s)
+=== RUN   TestTypeScheduleRemoveFreesSubscriberRoomWithoutWaitingForTheInterval
+--- PASS: TestTypeScheduleRemoveFreesSubscriberRoomWithoutWaitingForTheInterval (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.290s
+FAIL
+=== RUN   TestOverCapPairsWaitForRoomInsteadOfBeingSaidEverySettle
+    interest_test.go:1441: flushes without room reported 20 refusals, want none: [{Observer:3 Subject:900000 Retry:true Err:entitysync: subscriber limit reached for this subject} {Observer:4 Subject:900000 Retry:true Err:entitysync: subscriber limit reached for this subject} {Observer:5 Subject:900000 Retry:true Err:entitysync: subscriber limit reached for this subject} {Observer:6 Subject:900000 Retry:true Err:entitysync: subscriber limit reached for this subject}]
+--- FAIL: TestOverCapPairsWaitForRoomInsteadOfBeingSaidEverySettle (0.01s)
+=== RUN   TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed
+=== RUN   TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed/flush
+    interest_test.go:1469: drain stalls with room free = [interest subject 900000 session 3: subscribe_refused (observer 3, refused 2 time(s)), waited 0s: entitysync: subscriber limit reached for this subject interest subject 900000 session 4: subscribe_refused (observer 4, refused 2 time(s)), waited 0s: entitysync: subscriber limit reached for this subject], want a subscriber_room entry for the crowd subject
+=== RUN   TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed/on_change
+--- FAIL: TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed (0.02s)
+    --- FAIL: TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed/flush (0.01s)
+    --- PASS: TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed/on_change (0.01s)
+=== RUN   TestANewPairDoesNotJumpTheRoomQueue
+    interest_test.go:1517: subscribers [10 30]: the room went to 10, want 40 (queued first)
+--- FAIL: TestANewPairDoesNotJumpTheRoomQueue (0.01s)
+=== RUN   TestPinnedSelfIsNotRefusedBySubscriberLimit
+    interest_test.go:1532: player 3 does not see itself: subscribers of 3 = [1 2]
+--- FAIL: TestPinnedSelfIsNotRefusedBySubscriberLimit (0.01s)
+=== RUN   TestSubscriberRoomWarnIsAggregated
+    interest_test.go:1554: 198 warnings over 30 flushes, want 1 aggregated warning; first: [{2026-11-19 08:07:05.83526 +0800 CST m=+0.058706626 entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain WARN 4312825513 [{observer {[] 3 4}} {subject {[] 900000 4}} {session {[] 0 3}} {attempts {[] 10 4}} {err {[] 0 0x101561570}}] 5 []} {2026-11-19 08:07:05.835262 +0800 CST m=+0.058708835 entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain WARN 4312825513 [{observer {[] 4 4}} {subject {[] 900000 4}} {session {[] 0 4}} {attem
+--- FAIL: TestSubscriberRoomWarnIsAggregated (0.01s)
+=== RUN   TestOverCapWaitingHoldsDrainOnlyWhileThereIsRoom
+    interest_test.go:1575: Drain with no room: entitysync drain stalled after 201ms with 2 entries: interest subject 900000 session 3: subscribe_refused (observer 3, refused 5 time(s)), waited 201ms: entitysync: subscriber limit reached for this subject; interest subject 900000 session 4: subscribe_refused (observer 4, refused 5 time(s)), waited 201ms: entitysync: subscriber limit reached for this subject: context deadline exceeded, want an immediate return
+--- FAIL: TestOverCapWaitingHoldsDrainOnlyWhileThereIsRoom (0.21s)
+=== RUN   TestARetriedPairTouchedAgainIsSaidOncePerSettle
+    policy_test.go:300: apply 0 after the pair was touched again = 2 refusals [{Observer:1001 Subject:7 Retry:false Err:entitysync: subject is not registered} {Observer:1001 Subject:7 Retry:true Err:entitysync: subject is not registered}], want 1
+--- FAIL: TestARetriedPairTouchedAgainIsSaidOncePerSettle (0.00s)
+=== RUN   TestSelfViewIsNotRefusedBySubscriberLimit
+    self_view_test.go:248: player 7 received nothing, want a full snapshot of itself
+--- FAIL: TestSelfViewIsNotRefusedBySubscriberLimit (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.546s
+FAIL

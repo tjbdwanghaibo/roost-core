@@ -275,6 +275,36 @@ func TestARefusedSubscribeIsSaidAgainUntilItIsTaken(t *testing.T) {
 	}
 }
 
+// 重试中的 pair 被另一个视野再次持有（本轮又变过）：每次结算仍只说一次、重试表里只有一项。原来本轮变过的 pair
+// 先在结算里说一遍、再在重试里说一遍，并在重试表里永久留两份。
+func TestARetriedPairTouchedAgainIsSaidOncePerSettle(t *testing.T) {
+	manager := newManager(t)
+	interest := newInterest(t, manager)
+	player(t, manager, watcherID)
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 100, Y: 100}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	// 实体 7 没在 Manager 登记：经距离看见它时被拒，进入重试。
+	if err := interest.Show(7, spatial.Point{X: 110, Y: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if refusals := interest.Apply(); len(refusals) != 1 || refusals[0].Retry {
+		t.Fatalf("first apply = %+v, want one first refusal", refusals)
+	}
+	if refusals := interest.Apply(); len(refusals) != 1 || !refusals[0].Retry {
+		t.Fatalf("second apply = %+v, want one retry", refusals)
+	}
+	setRelation(t, interest, watcherID, 7) // 第二个视野也持有 (watcher, 7)
+	for round := range 3 {
+		if refusals := interest.Apply(); len(refusals) != 1 {
+			t.Fatalf("apply %d after the pair was touched again = %d refusals %+v, want 1", round, len(refusals), refusals)
+		}
+	}
+	if got := retryLen(interest); got != 1 {
+		t.Fatalf("retry list holds %d entries for one pair, want 1", got)
+	}
+}
+
 // 在拒绝到达之前已经释放的 pair 不重试、也不撤订阅——Manager 从未接受过它。
 func TestARefusedSubscribeForAReleasedPairIsDropped(t *testing.T) {
 	manager := newManager(t)

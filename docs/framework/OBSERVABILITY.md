@@ -89,6 +89,10 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_over_limit_waiting{namespace}` | Gauge | 此刻处于超额暂缓的订阅数（进程内所有 Manager 按命名空间加总，每次 Flush 末尾与 Close 时更新）；大于 0 时对应 Manager 的 `CheckHealth` 为 degraded（消息带 `over_limit_waiting=N`）。用了 Interest 时通常在秒级回到 0（Interest 收紧视野后被暂缓的对象离开；地形用例约 2 秒）；Group / Direct 这类没有距离的政策不收紧，暂缓会一直留到有空位 |
 | `entitysync_interest_over_limit_total{action}` | Counter | Interest 对超额暂缓通知的反应：`tighten`（收紧一个空间视野的可见上限，从最远的开始退订）、`raise`（冷却到期上调一档）、`lift`（撤掉收紧，回到 `MaxVisible`）、`untightened`（通知里的 pair 不来自任何空间视野、玩家也没有主视野，没有可收紧的） |
 | `entitysync_interest_limited_views` | Gauge | 此刻收紧着可见上限的空间视野数（进程内所有 Interest 之和）。拥挤时不为 0 是正常的降级；拥挤散去后应在冷却（1～32 秒）内回到 0 |
+| `entitysync_subscriber_limit_refused_total` | Counter | 被每 subject 订阅者上限（`ManagerConfig.MaxSubscribersPerSubject`，缺省 1024）拒绝的订阅次数（`ManagerStats.SubscriberLimitRefused`）。钉住的订阅（玩家看自己）不受上限。Interest 对被拒的 pair 等到该 subject 有空位才重说，所以稳态下不随 Flush 增长；持续增长说明有政策在没有空位时反复重说 |
+| `entitysync_interest_room_waiting` | Gauge | 此刻因每 subject 订阅者上限而等空位的 (玩家, 实体) pair 数（进程内所有 Interest 之和）。不为 0 = 有实体的观察者多于上限（典型是大联盟 / 公会互见），多出来的观察者看不到它，直到有观察者离开；看汇总 Warn `entitysync/policy: subscriptions wait for subscriber room` 里的 `busiest` 与 `max_subscribers_per_subject`，按需调大上限 |
+| `entitysync_interest_room_waiting_subjects` | Gauge | 此刻有 pair 在等空位的实体数（进程内所有 Interest 之和）；每次结算对每个这样的实体查一次空位 |
+| `entitysync_interest_room_refused_total` | Counter | pair 进入等空位队列的次数（每次进入计一次，排队期间不再计） |
 | `entitysync.self_view.stranded_players` | Gauge | 自身视图里在线（至少一条连接）却超过 3 个同步周期没有打开的同步会话的玩家数，每个政策阶段由 `wiring/selfsync` 写入（`SelfView.Stranded`）。**正常为 0**；持续不为 0 = 有连接活着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（会话数上限）。玩家实体的帧编码失败 2026-10-22 起断开该玩家（见 `player.sync.session_lost_disconnect.total`），不再滞留 |
 | `player.sync.push_refused.total{outcome}` | Counter | `wiring/selfsync.PushPlayerFrame`（自身视图与 game-demo 场景共用）处理的 Sync 推送拒收：`closed` = 活着的连接拒收、关闭了该玩家的全部连接；`retried` = 整个进程的驻留预算耗尽、交还 `ErrRetryLater` 重试（只作废没交付到的 subject，下一轮从被拒会话轮转）。接入层未就绪与玩家没有连接不计 |
 | `player.sync.session_lost_disconnect.total{reason}` | Counter | `wiring/selfsync.DisconnectLostPlayer`（自身视图与 game-demo 场景共用）因同步会话被 Manager 丢掉、而原因不是推送拒收（连接仍活着）断开玩家的次数，只计确实关掉了连接的（维护者 2026-10-22 决定 A）。`reason`：`too_large`（单实体超过帧 / 组件上限）、`encode_failed`（其他编码错误）、`unknown`（原因不是 Manager 给出的）；持有对象超过 `MaxObjects` 自 2026-11-08 起不再丢会话（超额降级，见 `entitysync_over_limit_*`），原先的 `object_limit` 不再出现。**正常为 0**；持续增长 = 同一原因让玩家反复被踢、重连，看限频 Warn `selfsync: a player's sync session was lost …` 里的 `player_id` 与 `reason`，查 `MaxVisible` 与实体大小 |
@@ -390,12 +394,16 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `entitysync_interest_limited_views` | Gauge | `sync/entitysync/policy/interest_over_limit.go:SetGauge` |
 | `entitysync_interest_over_limit_total` | Counter | `sync/entitysync/policy/interest_over_limit.go:IncCounter` |
 | `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
+| `entitysync_interest_room_refused_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
+| `entitysync_interest_room_waiting` | Gauge | `sync/entitysync/policy/interest_queue.go:SetGauge` |
+| `entitysync_interest_room_waiting_subjects` | Gauge | `sync/entitysync/policy/interest_queue.go:SetGauge` |
 | `entitysync_interest_settle_delay` | Histogram | `sync/entitysync/policy/interest_queue.go:ObserveHistogram` |
 | `entitysync_interest_view_limit_rejected_total` | Counter | `sync/entitysync/policy/view.go:IncCounter` |
 | `entitysync_interest_view_rejected_total` | Counter | `sync/entitysync/policy/interest.go:IncCounter` |
 | `entitysync_over_limit_deferred_total` | Counter | `sync/entitysync/over_limit.go:IncCounter` |
 | `entitysync_over_limit_waiting` | Gauge | `sync/entitysync/over_limit.go:SetGauge` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
+| `entitysync_subscriber_limit_refused_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
 | `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `entitytimer.overdue_ms` | Gauge | `nest/entitytimer/driver.go:SetGauge` |
 | `entitytimer.delivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |

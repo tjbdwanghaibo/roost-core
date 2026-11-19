@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1362,4 +1364,267 @@ func TestApplyModeDecidesWhenACommittedMoveIsVisible(t *testing.T) {
 			t.Fatal("ApplyAsync: Drain returned before the committed move was applied and settled")
 		}
 	})
+}
+
+// ---- 超过每 subject 订阅者上限：等空位 ----
+
+// crowdSubject 是超上限用例里被众多观察者经关系视野持有的实体（不是玩家，ID 不与玩家撞）。
+const crowdSubject = int64(900_000)
+
+// newCrowdInterest 构造一个按 config 配置的 Manager（Transport 缺省为 sink）与一个宽地图上的 Interest，并登记
+// crowdSubject。holdCrowd 让玩家彼此相距 300 进场（空间视野里只有自己），再经各自的关系视野持有 crowdSubject。
+func newCrowdInterest(t *testing.T, config entitysync.ManagerConfig, onRefusal func(Refusal)) (*entitysync.Manager, *Interest) {
+	t.Helper()
+	if config.Transport == nil {
+		config.Transport = &sink{}
+	}
+	m, err := entitysync.NewManager(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
+	in, err := NewInterest(InterestConfig{Manager: m, OnRefusal: onRefusal, AOI: AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: 100_000, Y: 100_000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(in.Close)
+	if err := m.Register(subjectState(t, crowdSubject)); err != nil {
+		t.Fatal(err)
+	}
+	return m, in
+}
+
+func holdCrowd(t *testing.T, m *entitysync.Manager, in *Interest, observers ...int64) {
+	t.Helper()
+	for _, id := range observers {
+		player(t, m, id)
+		mustEnter(t, in, id, spatial.Point{X: (id%300)*300 + 150, Y: (id/300)*300 + 150})
+		setRelation(t, in, id, crowdSubject)
+	}
+}
+
+func mustFlush(t *testing.T, m *entitysync.Manager) {
+	t.Helper()
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// crowdHas 报告 observer 此刻是否订阅着 crowdSubject（不 Flush）。
+func crowdHas(m *entitysync.Manager, observer int64) bool {
+	return slices.Contains(m.Subscribers(crowdSubject), entitysync.SessionID(observer))
+}
+
+// 被上限拒绝的 pair 等空位，不在每次结算重说：上限 2、6 个观察者，第一次 Flush 报告 4 条首次拒绝，之后没有空位的
+// Flush 不再报告，也不再让 Manager 拒绝（成本与被拒 pair 数无关）。原来每次 Flush 4 条 Retry。
+func TestOverCapPairsWaitForRoomInsteadOfBeingSaidEverySettle(t *testing.T) {
+	var got []Refusal
+	m, in := newCrowdInterest(t, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2}, func(r Refusal) { got = append(got, r) })
+	holdCrowd(t, m, in, 1, 2, 3, 4, 5, 6)
+	mustFlush(t, m)
+	if len(got) != 4 {
+		t.Fatalf("first flush reported %d refusals, want 4: %+v", len(got), got)
+	}
+	for _, refusal := range got {
+		if refusal.Subject != crowdSubject || refusal.Retry || !errors.Is(refusal.Err, entitysync.ErrSubscriberLimit) {
+			t.Fatalf("first flush refusal %+v, want a first ErrSubscriberLimit refusal of the crowd subject", refusal)
+		}
+	}
+	refused := m.Stats().SubscriberLimitRefused
+	got = nil
+	for range 5 {
+		mustFlush(t, m)
+	}
+	if len(got) != 0 {
+		t.Fatalf("flushes without room reported %d refusals, want none: %+v", len(got), got[:min(len(got), 4)])
+	}
+	if grew := m.Stats().SubscriberLimitRefused - refused; grew != 0 {
+		t.Fatalf("flushes without room were refused %d more times by the manager, want 0", grew)
+	}
+	if subs := m.Subscribers(crowdSubject); !slices.Equal(subs, []entitysync.SessionID{1, 2}) {
+		t.Fatalf("crowd subscribers = %v, want [1 2]", subs)
+	}
+}
+
+// 空位出现后，排在最前的等待者在下一次政策阶段订阅上：remove 在第 k 次 Flush 交付，第 k+1 次 Flush 订阅上。
+// on_change 下第 k+1 次 Flush 由兜底 ticker 触发，从 remove 交付起 2 个 Interval 内订阅上。
+func TestOverCapPairSubscribesInTheSettleAfterRoomIsFreed(t *testing.T) {
+	t.Run("flush", func(t *testing.T) {
+		m, in := newCrowdInterest(t, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2}, nil)
+		holdCrowd(t, m, in, 1, 2, 3, 4)
+		mustFlush(t, m)
+		setRelation(t, in, 1) // 观察者 1 不再持有
+		removes := m.Stats().RemovesAdmitted
+		mustFlush(t, m) // 第 k 次：退订、交付 remove
+		if m.Stats().RemovesAdmitted-removes != 1 || crowdHas(m, 1) {
+			t.Fatalf("setup: the remove of observer 1 was not delivered in this flush (subscribers %v)", m.Subscribers(crowdSubject))
+		}
+		if crowdHas(m, 3) {
+			t.Fatal("observer 3 subscribed before the room was freed")
+		}
+		stalls, _ := in.drainStalls(entitysync.DrainStallLimit)
+		if !slices.ContainsFunc(stalls, func(s entitysync.DrainStall) bool { return s.Reason == "subscriber_room" && s.Subject == crowdSubject }) {
+			t.Fatalf("drain stalls with room free = %+v, want a subscriber_room entry for the crowd subject", stalls)
+		}
+		mustFlush(t, m) // 第 k+1 次
+		if !crowdHas(m, 3) || crowdHas(m, 4) {
+			t.Fatalf("after the next flush: subscribers %v, want 3 (first in line) and not 4", m.Subscribers(crowdSubject))
+		}
+	})
+	t.Run("on_change", func(t *testing.T) {
+		const interval = 50 * time.Millisecond
+		m, in := newCrowdInterest(t, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2, Mode: entitysync.ModeOnChange, Interval: interval}, nil)
+		m.BindSyncProducer()
+		holdCrowd(t, m, in, 1, 2, 3, 4)
+		if err := m.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, 2*time.Second, "observers 1 and 2 subscribed", func() bool { return crowdHas(m, 1) && crowdHas(m, 2) })
+		removes := m.Stats().RemovesAdmitted
+		setRelation(t, in, 1)
+		waitFor(t, 2*time.Second, "the remove of observer 1 delivered", func() bool { return m.Stats().RemovesAdmitted > removes })
+		waitFor(t, 2*interval, "observer 3 subscribed within 2 intervals of the remove", func() bool { return crowdHas(m, 3) })
+		if crowdHas(m, 4) {
+			t.Fatalf("subscribers %v: one room, two subscribed", m.Subscribers(crowdSubject))
+		}
+	})
+}
+
+func waitFor(t *testing.T, limit time.Duration, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatalf("not within %v: %s", limit, what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// 空位按入队先后分配：空位出现之后、分配空位的那次结算里新挂上一个 ID 更小的观察者 10，空位给最早排队的 40，
+// 不给 10。原来本轮新出现的 pair 先于重试结算，新来的拿到空位。
+func TestANewPairDoesNotJumpTheRoomQueue(t *testing.T) {
+	m, in := newCrowdInterest(t, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2}, nil)
+	holdCrowd(t, m, in, 20, 30, 40, 50)
+	mustFlush(t, m)
+	setRelation(t, in, 20)
+	mustFlush(t, m) // 第 k 次：20 退订、remove 交付，空位出现
+	holdCrowd(t, m, in, 10)
+	mustFlush(t, m) // 第 k+1 次：10 是本轮新出现的 pair，排到队尾；空位给队首
+	if !crowdHas(m, 40) || crowdHas(m, 10) {
+		t.Fatalf("subscribers %v: the room went to %s, want 40 (queued first)", m.Subscribers(crowdSubject), map[bool]string{true: "10", false: "neither"}[crowdHas(m, 10)])
+	}
+}
+
+// 钉住的订阅（玩家看自己）不受每 subject 订阅者上限：上限 2，4 个玩家互相看见，每个玩家都看得见自己；
+// 原来按（观察者，subject）升序结算，玩家 3、4 的实体被 1、2 占满，玩家 4 看不到自己。
+func TestPinnedSelfIsNotRefusedBySubscriberLimit(t *testing.T) {
+	m, in := newCrowdInterest(t, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2}, nil)
+	for id := int64(1); id <= 4; id++ {
+		player(t, m, id)
+		mustEnter(t, in, id, spatial.Point{X: 100 + id*10, Y: 100})
+	}
+	mustFlush(t, m)
+	for id := int64(1); id <= 4; id++ {
+		if !slices.Contains(m.Subscribers(id), entitysync.SessionID(id)) {
+			t.Fatalf("player %d does not see itself: subscribers of %d = %v", id, id, m.Subscribers(id))
+		}
+	}
+}
+
+// 等空位的 pair 不在每个 pair 上告警：上限 2、200 个观察者，30 次 Flush（超过重试停滞上界）只有一条汇总告警，
+// 带等待的 pair 数；时钟走过告警间隔后再来一条。原来每个 pair 连续被拒第 10 次时各一条，共 198 条。
+func TestSubscriberRoomWarnIsAggregated(t *testing.T) {
+	logs := captureWarnings(t)
+	m, in := newCrowdInterest(t, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2}, nil)
+	clock := time.Unix(1800000000, 0)
+	in.now = func() time.Time { return clock }
+	observers := make([]int64, 200)
+	for i := range observers {
+		observers[i] = int64(i + 1)
+	}
+	holdCrowd(t, m, in, observers...)
+	for range 30 {
+		mustFlush(t, m)
+	}
+	warnings := logs.warnings()
+	if len(warnings) != 1 {
+		t.Fatalf("%d warnings over 30 flushes, want 1 aggregated warning; first: %v", len(warnings), warnings[:min(len(warnings), 2)])
+	}
+	if got := recordAttr(warnings[0], "pairs"); got != "198" {
+		t.Fatalf("aggregated warning pairs=%s, want 198: %v", got, warnings[0])
+	}
+	clock = clock.Add(waitWarnInterval)
+	mustFlush(t, m)
+	if got := len(logs.warnings()); got != 2 {
+		t.Fatalf("%d warnings after the warn interval passed, want 2", got)
+	}
+}
+
+// 等空位的 pair 只在它的 subject 有空位时让 Drain 等待：没有空位时 Drain 立即返回（在等外部事件，与超额暂缓一致）；
+// 有空位时 Drain 等到它订阅上。原来被拒不到 10 次的 pair 都让 Drain 等待。
+func TestOverCapWaitingHoldsDrainOnlyWhileThereIsRoom(t *testing.T) {
+	m, in := newCrowdInterest(t, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2}, nil)
+	holdCrowd(t, m, in, 1, 2, 3, 4)
+	mustFlush(t, m)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := m.Drain(ctx); err != nil {
+		t.Fatalf("Drain with no room: %v, want an immediate return", err)
+	}
+	setRelation(t, in, 1)
+	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := m.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !crowdHas(m, 3) {
+		t.Fatalf("Drain returned before the room went to the first in line: subscribers %v", m.Subscribers(crowdSubject))
+	}
+}
+
+// warningLog 收集 slog 的 Warn 及以上记录（测试替换默认 logger，结束时恢复；本包用例不并行）。
+type warningLog struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func captureWarnings(t *testing.T) *warningLog {
+	t.Helper()
+	logs := &warningLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return logs
+}
+
+func (l *warningLog) Enabled(_ context.Context, level slog.Level) bool { return level >= slog.LevelWarn }
+func (l *warningLog) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.records = append(l.records, r.Clone())
+	return nil
+}
+func (l *warningLog) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *warningLog) WithGroup(string) slog.Handler      { return l }
+
+func (l *warningLog) warnings() []slog.Record {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.records)
+}
+
+// recordAttr 返回记录里名为 key 的属性值的文本，没有为空串。
+func recordAttr(r slog.Record, key string) string {
+	var value string
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			value = a.Value.String()
+			return false
+		}
+		return true
+	})
+	return value
 }

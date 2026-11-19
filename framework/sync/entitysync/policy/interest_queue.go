@@ -1,9 +1,13 @@
 package policy
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -588,7 +592,7 @@ func (in *Interest) settleQueued() error {
 		settleFrom = in.runSyncStepsLocked(started)
 	}
 	units := in.unsettledUnits
-	refusals := in.applyLocked()
+	refusals := in.applyLocked(false)
 	if in.onRefusal != nil {
 		for _, refusal := range refusals {
 			in.onRefusal(refusal)
@@ -647,7 +651,9 @@ func (in *Interest) releaseAppliedLocked() {
 }
 
 // queuedPending 告诉 Drain 政策还有没做完的事：日志里的条目、应用中与已应用未结算的事实、应用方已执行但还没结算的
-// 条目（unsettled），以及还没停滞的重试 pair。登记侧的计数取 backlog 快照，unsettled / retry 是应用侧状态（持 mu）。
+// 条目（unsettled）、还没停滞的重试 pair，以及此刻有空位的 subject 上等空位的 pair（下一次政策阶段就会说它们；
+// 没有空位的不阻挡，它们在等外部事件，与 Manager 超额暂缓的订阅不让 Drain 等待一致）。登记侧的计数取 backlog
+// 快照，unsettled / retry / roomWait 是应用侧状态（持 mu）。
 func (in *Interest) queuedPending() bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -661,8 +667,13 @@ func (in *Interest) queuedPending() bool {
 	if backlog.entries > 0 || backlog.facts > 0 || in.unsettled {
 		return true
 	}
-	for _, key := range in.retry {
-		if in.refused[key].count < retryStallAfter {
+	for _, item := range in.retry {
+		if in.retryLiveLocked(item) && in.refused[item.key].count < retryStallAfter {
+			return true
+		}
+	}
+	for subject := range in.roomWait {
+		if in.subscriberRoom(subject) > 0 {
 			return true
 		}
 	}
@@ -671,14 +682,55 @@ func (in *Interest) queuedPending() bool {
 
 // ---- 重试停滞 ----
 //
-// 被拒的订阅留在 retry 里，每次结算重说，直到被接受或 pair 被释放（拒绝不是对 pair 的裁决）。
+// 因上限以外的原因被拒的订阅留在 retry 里，每次结算重说，直到被接受或 pair 被释放（拒绝不是对 pair 的裁决）。
+// 被每 subject 订阅者上限拒绝的不在这里，见下一节“等空位”。
 // 不能把整个 retry 计入 queuedPending：一个永远不会被接受的 pair（观察者会话已关闭且不再重开、subject 已注销
 // 而政策没 Hide……）会让 Drain 永不结束，只能等 ctx 超时，停机走不到 Close。
 //
-// 同一 pair 连续被拒 retryStallAfter 次即判定为停滞：计数 entitysync_interest_retry_stalled_total、Warn 一次，
-// 不再计入 queuedPending。它仍留在 retry 里照旧重说——会话重开、容量释放后照常订阅，计数随成功清零。
-// 上界按 Flush 轮次计，默认周期 50ms 下约 500ms：足够覆盖“本轮 remove 释放容量、下一轮接受”这类暂时拒绝。
-const retryStallAfter = 10
+// 同一 pair 连续被拒 retryStallAfter 次即判定为停滞：计数 entitysync_interest_retry_stalled_total（每个 pair 一次），
+// 不再计入 queuedPending；告警按周期汇总（reportWaitsLocked，每 waitWarnInterval 至多一条）。它仍留在 retry 里
+// 照旧重说——会话重开后照常订阅，计数随成功清零。
+// 上界按 Flush 轮次计，默认周期 50ms 下约 500ms：足够覆盖“本轮 remove 释放、下一轮接受”这类暂时拒绝。
+//
+// 政策阶段每次至多重说 retryBudget 个（大批会话关闭而业务没 Leave 时，重试表可能很长）；没轮到的按原顺序留到
+// 下一次。显式 Apply 一次重说全部（测试与工具要一次排空）。
+const (
+	retryStallAfter = 10
+	retryBudget     = 4096
+)
+
+// waitWarnInterval 是等待类汇总告警（等空位、重试停滞）的最小间隔：每个 Interest 每种告警每个间隔至多一条。
+const waitWarnInterval = 10 * time.Second
+
+// queueRetryLocked 把被拒的 pair 放进重试表（已在等待的不重复放），调用方持有 in.mu。
+func (in *Interest) queueRetryLocked(key pair, current *hold) {
+	if current.wait != waitNone {
+		return
+	}
+	current.wait = waitRetry
+	in.retry = append(in.retry, retryItem{key: key, hold: current})
+}
+
+// takeRetriesLocked 取走本次结算要重说的重试：all 为真时全部，否则至多 retryBudget 个，其余留在表里。
+func (in *Interest) takeRetriesLocked(all bool) []retryItem {
+	n := len(in.retry)
+	if !all {
+		n = min(n, retryBudget)
+	}
+	taken := in.retry[:n:n]
+	if n == len(in.retry) {
+		in.retry = nil
+	} else {
+		in.retry = slices.Clone(in.retry[n:])
+	}
+	return taken
+}
+
+// retryLiveLocked 报告重试表的一项是否仍有效：pair 仍以同一个 hold 被持有、还在重试表里。
+func (in *Interest) retryLiveLocked(item retryItem) bool {
+	current := in.held[item.key]
+	return current != nil && current == item.hold && current.wait == waitRetry
+}
 
 // refusal 是一个 pair 的连续拒绝记录：次数、第一次拒绝的时间与最后一次的错误（Drain 诊断用）。
 type refusal struct {
@@ -703,9 +755,10 @@ func (in *Interest) noteRefusedLocked(key pair, err error) {
 		return
 	}
 	metrics.IncCounter("entitysync_interest_retry_stalled_total", nil, 1)
-	slog.Warn("entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain",
-		"observer", key.observer, "subject", key.subject, "session", sessionOf(key.observer),
-		"attempts", retryStallAfter, "err", err)
+	in.stalledNew++
+	if len(in.stalledSample) < waitWarnSamples {
+		in.stalledSample = append(in.stalledSample, key)
+	}
 }
 
 // drainStalls 是 Drain 超时诊断（entitysync.PolicyHooks.Stalls）：列出仍让 queuedPending 为真的条目——
@@ -747,17 +800,203 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 		add(entitysync.DrainStall{Source: "interest", Reason: "applied_unsettled", Detail: "applied commands wait for the next settle"})
 	}
 	now := time.Now()
-	for _, key := range in.retry {
-		record := in.refused[key]
-		if record.count >= retryStallAfter {
+	for _, item := range in.retry {
+		record := in.refused[item.key]
+		if !in.retryLiveLocked(item) || record.count >= retryStallAfter {
 			continue
 		}
-		stall := entitysync.DrainStall{Source: "interest", Subject: key.subject, Session: sessionOf(key.observer), Reason: "subscribe_refused",
-			Detail: fmt.Sprintf("observer %d, refused %d time(s)", key.observer, record.count), Err: record.err}
+		stall := entitysync.DrainStall{Source: "interest", Subject: item.key.subject, Session: sessionOf(item.key.observer), Reason: "subscribe_refused",
+			Detail: fmt.Sprintf("observer %d, refused %d time(s)", item.key.observer, record.count), Err: record.err}
 		if !record.since.IsZero() {
 			stall.Waited = now.Sub(record.since)
 		}
 		add(stall)
 	}
+	for _, subject := range slices.Sorted(maps.Keys(in.roomWait)) {
+		room := in.subscriberRoom(subject)
+		if room == 0 {
+			continue
+		}
+		queue := in.roomWait[subject]
+		add(entitysync.DrainStall{Source: "interest", Subject: subject, Reason: "subscriber_room",
+			Detail: fmt.Sprintf("%d pair(s) wait for subscriber room, %d free", len(queue.seq), room), Waited: in.now().Sub(queue.since)})
+	}
 	return stalls, total
+}
+
+// ---- 等空位 ----
+//
+// 被每 subject 订阅者上限（entitysync.ErrSubscriberLimit）拒绝的 pair 等的是这个 subject 出现空位：某个订阅者
+// 退订、remove 交付之后（Manager.SubscriberRoom 把欠 remove 的项也算作占位）。所以它们不进重试表，按 subject
+// 排队，每次结算对每个有人排队的 subject 查一次空位，没有空位就什么也不做，成本只与等待的 subject 数有关，与被拒
+// pair 数无关；有空位时按入队先后（先来先得）重说至多“空位数”个。空位在第 k 次 Flush 交付 remove 时出现，第 k+1
+// 次 Flush 的政策阶段就订阅上。
+//
+// 已知边角（KNOWN-LIMITS 框架限制）：pair 排队之后，会话经另一个非钉住来源订阅上了同一个 subject，这个 pair 其实
+// 已经可以加入（同会话已有订阅项，不受上限），但要等 subject 再出现空位才会被重说。现有接线里能与 Interest 在同一
+// (会话, 实体) 上重叠的来源只有钉住的 self / SelfView，不排队，所以目前没有触发路径。
+
+// waitForRoomLocked 把被上限拒绝的 pair 排进它的 subject 的等空位队列（已在排队的不变），调用方持有 in.mu。
+func (in *Interest) waitForRoomLocked(key pair, current *hold) {
+	if current.wait == waitRoom {
+		return
+	}
+	current.wait = waitRoom
+	delete(in.refused, key)
+	if in.roomWait == nil {
+		in.roomWait = make(map[int64]*roomQueue)
+	}
+	queue := in.roomWait[key.subject]
+	if queue == nil {
+		queue = &roomQueue{seq: make(map[int64]uint64), since: in.now()}
+		in.roomWait[key.subject] = queue
+	}
+	in.roomSeq++
+	queue.seq[key.observer] = in.roomSeq
+	in.roomPairs++
+	in.roomNew++
+	metrics.IncCounter(roomRefusedMetric, nil, 1)
+}
+
+// leaveRoomQueueLocked 把 pair 移出等空位队列（pair 被释放，或含了 self 而改为立即说）；队列空了就删掉。
+// 不改 hold.wait，由调用方设置。
+func (in *Interest) leaveRoomQueueLocked(key pair) {
+	queue := in.roomWait[key.subject]
+	if queue == nil {
+		return
+	}
+	if _, queued := queue.seq[key.observer]; !queued {
+		return
+	}
+	delete(queue.seq, key.observer)
+	in.roomPairs--
+	if len(queue.seq) == 0 {
+		delete(in.roomWait, key.subject)
+	}
+}
+
+// roomQueue 是一个 subject 的等空位队列：观察者 → 入队序号（越小越早），since 是这个 subject 开始有人排队的时刻。
+type roomQueue struct {
+	seq   map[int64]uint64
+	since time.Time
+}
+
+// oldest 返回最早入队的至多 n 个观察者，按入队先后。
+func (q *roomQueue) oldest(n int) []int64 {
+	observers := slices.Collect(maps.Keys(q.seq))
+	slices.SortFunc(observers, func(a, b int64) int { return cmp.Compare(q.seq[a], q.seq[b]) })
+	return observers[:min(n, len(observers))]
+}
+
+// settleRoomLocked 是结算的第④步：对每个有人排队、此刻有空位的 subject（按 ID 升序，结果确定）按入队先后重说
+// 至多“空位数”个。重说又被上限拒绝（空位被别的来源抢先）时留在原位、以 Retry 报告，停止处理这个 subject；成功的
+// 出队；被别的原因拒绝的出队、转入重试表。调用方持有 in.mu。
+func (in *Interest) settleRoomLocked(refusals *[]Refusal) {
+	if len(in.roomWait) == 0 {
+		return
+	}
+	var ready []int64
+	for subject := range in.roomWait {
+		if in.subscriberRoom(subject) > 0 {
+			ready = append(ready, subject)
+		}
+	}
+	slices.Sort(ready)
+	for _, subject := range ready {
+		queue := in.roomWait[subject]
+		for _, observer := range queue.oldest(in.subscriberRoom(subject)) {
+			key := pair{observer: observer, subject: subject}
+			current := in.held[key]
+			err := in.say(key, current)
+			if errors.Is(err, entitysync.ErrSubscriberLimit) {
+				*refusals = append(*refusals, Refusal{Observer: observer, Subject: subject, Retry: true, Err: err})
+				break
+			}
+			in.leaveRoomQueueLocked(key)
+			current.wait = waitNone
+			if err != nil {
+				in.queueRetryLocked(key, current)
+				in.noteRefusedLocked(key, err)
+				*refusals = append(*refusals, Refusal{Observer: observer, Subject: subject, Retry: true, Err: err})
+			}
+		}
+	}
+}
+
+// 等空位的指标名。两个 Gauge 是进程内所有 Interest 之和（与 limitedViews 同一做法），Counter 每个 pair 每次进入
+// 等待计一次。
+const (
+	roomWaitingMetric         = "entitysync_interest_room_waiting"
+	roomWaitingSubjectsMetric = "entitysync_interest_room_waiting_subjects"
+	roomRefusedMetric         = "entitysync_interest_room_refused_total"
+)
+
+// roomWaiting 是进程里所有 Interest 等空位的 pair 数与 subject 数之和；加总与写指标在同一把锁里。
+var roomWaiting struct {
+	mu              sync.Mutex
+	pairs, subjects int64
+}
+
+// publishRoomWaitLocked 把本 Interest 等空位的 pair 数与 subject 数的变化计入 roomWaiting 并发布；调用方持有 in.mu。
+func (in *Interest) publishRoomWaitLocked() {
+	now := [2]int{in.roomPairs, len(in.roomWait)}
+	if now == in.roomReported {
+		return
+	}
+	pairs, subjects := now[0]-in.roomReported[0], now[1]-in.roomReported[1]
+	in.roomReported = now
+	roomWaiting.mu.Lock()
+	roomWaiting.pairs += int64(pairs)
+	roomWaiting.subjects += int64(subjects)
+	metrics.SetGauge(roomWaitingMetric, nil, roomWaiting.pairs)
+	metrics.SetGauge(roomWaitingSubjectsMetric, nil, roomWaiting.subjects)
+	roomWaiting.mu.Unlock()
+}
+
+// waitWarnSamples 是汇总告警里列出的样本数（等待最多的 subject、停滞的 pair）。
+const waitWarnSamples = 3
+
+// reportWaitsLocked 是结算的第⑤步：发布等空位的指标，并按 waitWarnInterval 汇总告警——有 pair 在等空位时一条
+// （等待的 pair 数、subject 数、上次告警以来新进入的数目、等待最多的几个 subject 与上限），有新停滞的重试 pair 时
+// 一条（数目与前几个样本）。日志量与等待的 pair 数无关。调用方持有 in.mu。
+func (in *Interest) reportWaitsLocked() {
+	in.publishRoomWaitLocked()
+	now := in.now()
+	if in.roomPairs > 0 && (in.roomWarnAt.IsZero() || now.Sub(in.roomWarnAt) >= waitWarnInterval) {
+		in.roomWarnAt = now
+		slog.Warn("entitysync/policy: subscriptions wait for subscriber room; each subject has reached ManagerConfig.MaxSubscribersPerSubject, "+
+			"the waiting pairs subscribe in arrival order as soon as a subscriber of that subject leaves",
+			"pairs", in.roomPairs, "subjects", len(in.roomWait), "new", in.roomNew, "busiest", in.busiestRoomLocked(),
+			"max_subscribers_per_subject", in.subscriberLimit)
+		in.roomNew = 0
+	}
+	if in.stalledNew > 0 && (in.stallWarnAt.IsZero() || now.Sub(in.stallWarnAt) >= waitWarnInterval) {
+		in.stallWarnAt = now
+		samples := make([]string, 0, len(in.stalledSample))
+		for _, key := range in.stalledSample {
+			record := in.refused[key]
+			samples = append(samples, fmt.Sprintf("%d→%d: %v", key.observer, key.subject, record.err))
+		}
+		slog.Warn("entitysync/policy: subscriptions refused repeatedly; still retried but no longer hold Drain",
+			"pairs", in.stalledNew, "attempts", retryStallAfter, "samples", samples)
+		in.stalledNew = 0
+		in.stalledSample = in.stalledSample[:0]
+	}
+}
+
+// busiestRoomLocked 列出等待的 pair 最多的 waitWarnSamples 个 subject（“subject:人数”，人数相同按 ID 升序）。
+// 只在汇总告警时调用，遍历全部等待的 subject。
+func (in *Interest) busiestRoomLocked() []string {
+	subjects := slices.Collect(maps.Keys(in.roomWait))
+	slices.SortFunc(subjects, func(a, b int64) int {
+		if order := cmp.Compare(len(in.roomWait[b].seq), len(in.roomWait[a].seq)); order != 0 {
+			return order
+		}
+		return cmp.Compare(a, b)
+	})
+	busiest := make([]string, 0, waitWarnSamples)
+	for _, subject := range subjects[:min(waitWarnSamples, len(subjects))] {
+		busiest = append(busiest, fmt.Sprintf("%d:%d", subject, len(in.roomWait[subject].seq)))
+	}
+	return busiest
 }

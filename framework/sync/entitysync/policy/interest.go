@@ -70,6 +70,7 @@ type InterestConfig struct {
 	MaxSpatialViews int
 	// OnRefusal 收到 Manager 政策阶段里结算时被拒绝的订阅（显式 Apply 的拒绝由它的返回值给出，不再重复）：
 	// 在政策阶段、持 Interest 的应用侧锁调用，不得阻塞、不得调用本 Interest。nil 不报告（指标与 Drain 诊断照旧）。
+	// 被每 subject 订阅者上限拒绝（entitysync.ErrSubscriberLimit）的 pair 等空位期间不再报告，见 Refusal。
 	OnRefusal func(Refusal)
 }
 
@@ -140,10 +141,15 @@ func ParseApplyMode(s string) (ApplyMode, error) {
 	return 0, fmt.Errorf("%w: apply mode %q (want sync or async)", ErrInterestConfig, s)
 }
 
-// Refusal is a subscribe the manager did not take. Observer 是玩家 ID（会话 ID），Subject 是实体 ID。 Interest keeps asking on
-// every Apply until it is taken or the pair is released; the caller only
-// decides how loudly to log it — Retry tells the first refusal from the ones
-// after it.
+// Refusal 是 Manager 没有接受的一次订阅。Observer 是玩家 ID（会话 ID），Subject 是实体 ID；Retry 区分第一次拒绝
+// 与之后的重说，调用方据此决定日志的轻重。拒绝不是对 pair 的裁决：只要 pair 还被持有，Interest 就继续争取，按原因等待：
+//
+//   - 被每 subject 订阅者上限拒绝（Err 是 entitysync.ErrSubscriberLimit）：pair 进入这个 subject 的等空位队列，
+//     只在进入时报告一次；之后每次结算只查一次这个 subject 的空位（Manager.SubscriberRoom），有空位时按入队先后
+//     重说至多“空位数”个，重说又被拒（空位被别的来源抢先）时以 Retry 再报告。subject 已有人排队时，新被持有的
+//     pair 不先说、直接排到队尾（也报告一次，Err 同样是 ErrSubscriberLimit）。钉住的 pair（含 self）不受上限。
+//   - 其他原因（会话没开、subject 未登记或正在退役、视图不合法……）：pair 进入重试表，之后每次结算重说一次并以 Retry
+//     报告，每次政策阶段至多重说 retryBudget 个（显式 Apply 不限）。
 type Refusal struct {
 	Observer int64
 	Subject  int64
@@ -226,9 +232,24 @@ type Interest struct {
 	// the manager has been told about it. touched 是自上次结算以来贡献变过的 pair。
 	held    map[pair]*hold
 	touched map[pair]struct{}
-	// retry holds the pairs whose subscribe the manager refused, waiting
-	// for the next settle to say them again.
-	retry []pair
+	// retry 是因上限以外的原因被拒、等下一次结算重说的 pair（按被拒先后）；每项带被拒时的 hold，pair 释放后又被
+	// 持有（新的 hold）时旧项作废。等空位的 pair 不在这里，在 roomWait（interest_queue.go“等空位”一节）。
+	retry []retryItem
+	// roomWait 是被每 subject 订阅者上限拒绝、等空位的 pair：subject → 等它的观察者队列。roomSeq 是入队序号的来源，
+	// roomPairs 是全部队列的 pair 数；roomNew / roomWarnAt / roomReported 给汇总告警与指标用。
+	roomWait     map[int64]*roomQueue
+	roomSeq      uint64
+	roomPairs    int
+	roomNew      int
+	roomWarnAt   time.Time
+	roomReported [2]int
+	// stalledNew / stalledSample / stallWarnAt：自上次汇总告警以来新停滞的重试 pair 数、前几个样本与上次告警时刻。
+	stalledNew    int
+	stalledSample []pair
+	stallWarnAt   time.Time
+	// subscriberRoom / subscriberLimit 是 Manager.SubscriberRoom 与生效的每 subject 订阅者上限（构造后不变）。
+	subscriberRoom  func(int64) int
+	subscriberLimit int
 	// applied 是已应用到 AOI、还没结算的事实（发布屏障仍持有，计入预算）；appliedAt 是其中最早一批应用完成的时刻；
 	// applyErr 是应用时攒下的错误，由下一次政策阶段返回。
 	applied   []queuedInterestFact
@@ -268,6 +289,24 @@ type hold struct {
 	profile    entity.SyncProfile
 	// pinned：告知 Manager 时钉住了（pair 含 self 贡献，玩家看自己，SubscribePinned）。
 	pinned bool
+	// wait 是没订阅上的 pair 正在哪种等待里。只在从 waitNone 变成等待时入队，所以一个 pair 在重试表或等空位队列里
+	// 至多一项；结算时正在等待的 pair 不由 settlePair 直接说，交给对应的队列（每次结算只说一次）。
+	wait waitKind
+}
+
+// waitKind 区分没订阅上的 pair 在等什么。
+type waitKind uint8
+
+const (
+	waitNone  waitKind = iota
+	waitRetry          // 在重试表里：上限以外的原因被拒，下一次结算重说
+	waitRoom           // 在等空位队列里：被每 subject 订阅者上限拒绝，等这个 subject 有空位
+)
+
+// retryItem 是重试表的一项：被拒的 pair 与被拒时的 hold（pair 释放后又被持有时，旧项与新的 hold 对不上而作废）。
+type retryItem struct {
+	key  pair
+	hold *hold
 }
 
 func NewInterest(config InterestConfig) (*Interest, error) {
@@ -326,6 +365,8 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	in.blockLayer = config.BlockLayer.Normalize()
 	in.blockFollows = config.BlockLayer == (entity.SyncProfile{})
 	in.subscriptions = config.Manager.NewSubscriptionSourceWithHooks(entitysync.SubscriptionSourceHooks{Resubmit: in.resubmit, Deferred: in.deferred})
+	in.subscriberRoom = config.Manager.SubscriberRoom
+	in.subscriberLimit = config.Manager.MaxSubscribersPerSubject()
 	in.compareProfiles = config.Manager.CompareProfiles
 	in.validatePriority = config.Manager.ValidateViewPriority
 	in.viewSets = make(map[string]*entity.SyncViewSet, len(config.ViewSets))
@@ -786,7 +827,7 @@ func (in *Interest) resubscribeLocked(observer int64) {
 			continue
 		}
 		current.subscribed = false
-		in.retry = append(in.retry, key)
+		in.queueRetryLocked(key, current)
 	}
 }
 
@@ -794,7 +835,7 @@ func (in *Interest) resubscribeLocked(observer int64) {
 // 的订阅，同 ID 实体又重新登记后，Manager 在 Flush 的政策阶段把这些订阅交还这里。与 Resubscribe 同一种修补：
 // Manager 忘了，Interest 没忘。仍持有的 pair 按 Interest 自己的规则重新订阅（层级合并、ViewSets 校验、
 // Manager 的优先级与字段白名单）；缺席期间已释放的 pair（视野走远、解除挂接、Hide）不在 held 里，不恢复。
-// 被拒绝的 pair 进入重试表，下一次结算以 Retry 报告并继续重说。
+// 被拒绝的 pair 按原因进入重试表（下一次结算以 Retry 报告并继续重说）或等空位队列（见 Refusal）。
 func (in *Interest) resubmit(retracted []entitysync.RetractedSubscription) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -866,19 +907,20 @@ func (in *Interest) Apply() []Refusal {
 		return nil
 	}
 	in.drainLogLocked()
-	return in.applyLocked()
+	return in.applyLocked(true)
 }
 
 // applyLocked 是结算：把 AOI 事件与关系变更归并进 held 并说给 Manager，然后释放已应用事实的发布屏障。调用方持有 mu。
-func (in *Interest) applyLocked() []Refusal {
+// 顺序：① 取走本轮要重说的重试（allRetries 为假时至多 retryBudget 个，显式 Apply 为真、全部取走）；② 结算本轮变过
+// 的 pair；③ 重说①取走的重试；④ 等空位的 subject 有空位时按入队先后重说（settleRoomLocked）；⑤ 汇总告警与指标，
+// 释放发布屏障。每个 pair 在一次结算里至多说一次（正在等待的 pair 只由③或④说）。
+func (in *Interest) applyLocked(allRetries bool) []Refusal {
 	if in.closed {
 		return nil
 	}
 	var refusals []Refusal
-	// Take the retry list first: a refusal during this settle goes on the list
-	// for the NEXT one, not for a second attempt a few lines further down.
-	queued := in.retry
-	in.retry = nil
+	// 先取走重试表：本轮结算里新被拒的 pair 留给下一次，不在几行之后再说一遍。
+	queued := in.takeRetriesLocked(allRetries)
 	in.unsettled = false
 	in.unsettledUnits = 0
 	// 到期的收紧视野逐步放宽（interest_over_limit.go）；产生的 AOI 事件在下面一并结算。
@@ -901,18 +943,17 @@ func (in *Interest) applyLocked() []Refusal {
 	}
 	clear(in.departedPlayers)
 	clear(in.departedSubjects)
-	// Retries after the events, so that a pair a view already spoke
-	// for in this settle is not said twice.
-	for _, key := range queued {
-		hold := in.held[key]
-		if hold == nil || hold.subscribed {
-			if hold == nil {
-				delete(in.refused, key)
-			}
-			continue
+	// 重试在事件之后：settlePair 不说正在等待的 pair，所以本轮被改动过的重试 pair 也只在这里说一次。
+	for _, item := range queued {
+		current := in.held[item.key]
+		if current != item.hold || current.wait != waitRetry {
+			continue // 已释放（释放后又被持有的是新的 hold），或已不在重试表里
 		}
-		in.subscribe(key, hold, true, &refusals)
+		current.wait = waitNone
+		in.subscribe(item.key, current, true, &refusals)
 	}
+	in.settleRoomLocked(&refusals)
+	in.reportWaitsLocked()
 	in.releaseAppliedLocked()
 	return refusals
 }
@@ -948,6 +989,9 @@ func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
 	if len(current.layers) == 0 {
 		delete(in.held, key)
 		delete(in.refused, key)
+		if current.wait == waitRoom {
+			in.leaveRoomQueueLocked(key)
+		}
 		err := in.subscriptions.Unsubscribe(sessionOf(key.observer), key.subject)
 		if err != nil && !errors.Is(err, entitysync.ErrSubscriptionNotFound) && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 			*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Err: err})
@@ -956,7 +1000,7 @@ func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
 	}
 	switch {
 	case !current.subscribed:
-		in.subscribe(key, current, false, refusals)
+		in.settleUnsubscribedLocked(key, current, refusals)
 	case in.departedLocked(key):
 		// 撤除后又在同一次结算里被持有：让 Manager 看到一次离开和一次进入（目标可能已重新登记、会话可能已重开）。
 		_ = in.subscriptions.Unsubscribe(sessionOf(key.observer), key.subject)
@@ -974,12 +1018,47 @@ func (in *Interest) departedLocked(key pair) bool {
 	return gone
 }
 
-// subscribe says one pair to the manager. The pair counts as subscribed from
-// here — that is what makes the view counting work — and a refusal puts it
-// on the retry list instead.
-//
-// pair 含 self 贡献（玩家看自己）时钉住（SubscribePinned）：会话里同类对象已满时 Manager 永不暂缓它。
+// settleUnsubscribedLocked 结算一个被持有、还没订阅上的 pair：
+//   - 正在等空位、但现在含 self（钉住，不受上限）：出队，立即说；
+//   - 正在等待（重试表或等空位队列）：这里不说，由本轮稍后的重试或空位处理说，每次结算只说一次；
+//   - subject 已有人在等空位（且不钉住）：不先说，排到队尾，空位按入队先后分配，新来的不插队；
+//   - 其余：说给 Manager。
+func (in *Interest) settleUnsubscribedLocked(key pair, current *hold, refusals *[]Refusal) {
+	switch {
+	case current.wait == waitRoom && selfHeld(current):
+		in.leaveRoomQueueLocked(key)
+		current.wait = waitNone
+		in.subscribe(key, current, true, refusals)
+	case current.wait != waitNone:
+	case !selfHeld(current) && in.roomWait[key.subject] != nil:
+		in.waitForRoomLocked(key, current)
+		*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Err: entitysync.ErrSubscriberLimit})
+	default:
+		in.subscribe(key, current, false, refusals)
+	}
+}
+
+// subscribe 把一个 pair 说给 Manager；被拒时按原因进入重试表或等空位队列并报告（retry 区分第一次拒绝与重说）。
 func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]Refusal) {
+	err := in.say(key, current)
+	if err == nil {
+		return
+	}
+	if errors.Is(err, entitysync.ErrSubscriberLimit) {
+		in.waitForRoomLocked(key, current)
+	} else {
+		in.queueRetryLocked(key, current)
+		in.noteRefusedLocked(key, err)
+	}
+	*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Retry: retry, Err: err})
+}
+
+// say 按 pair 此刻的层级把它说给 Manager，返回 Manager（或视图校验）的错误。pair 从这里起算作已订阅——视野计数
+// 靠这一点——被拒时改回未订阅；成功时清掉拒绝记录。不改 wait，由调用方决定被拒的 pair 去哪里等。
+//
+// pair 含 self 贡献（玩家看自己）时钉住（SubscribePinned）：会话里同类对象已满时 Manager 永不暂缓它，也不受每
+// subject 订阅者上限。
+func (in *Interest) say(key pair, current *hold) error {
 	current.profile = in.selectedProfile(current)
 	current.pinned = selfHeld(current)
 	current.subscribed = true
@@ -991,14 +1070,12 @@ func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]R
 			err = in.subscriptions.Subscribe(sessionOf(key.observer), key.subject, current.profile)
 		}
 	}
-	if err == nil {
-		delete(in.refused, key)
-		return
+	if err != nil {
+		current.subscribed = false
+		return err
 	}
-	current.subscribed = false
-	in.retry = append(in.retry, key)
-	in.noteRefusedLocked(key, err)
-	*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Retry: retry, Err: err})
+	delete(in.refused, key)
+	return nil
 }
 
 func (in *Interest) reband(key pair, current *hold, refusals *[]Refusal) {
@@ -1057,6 +1134,9 @@ func (in *Interest) Close() {
 	in.touched = nil
 	in.retry = nil
 	in.refused = nil
+	in.roomWait = nil
+	in.roomPairs = 0
+	in.publishRoomWaitLocked()
 	in.limits = nil
 	in.publishLimitedViewsLocked()
 }

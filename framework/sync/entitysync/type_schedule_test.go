@@ -343,3 +343,33 @@ func TestTypeScheduleHeldSnapshotDoesNotRepackWhileWaiting(t *testing.T) {
 		t.Fatalf("ready session snapshot: %+v", u)
 	}
 }
+
+// 周期类型 subject 的空位不等周期：remove 不受类型节奏影响（TestTypeScheduleRemoveAndDrainBypassDelay），所以退订之后
+// 下一次 Flush 交付 remove、空位随即出现，等空位的政策在再下一次政策阶段就能订阅上，不必等到周期到期。
+func TestTypeScheduleRemoveFreesSubscriberRoomWithoutWaitingForTheInterval(t *testing.T) {
+	tr := newRecordingTransport()
+	m := newTestManager(t, tr, ManagerConfig{Mode: ModeOnChange, MaxSubscribersPerSubject: 1,
+		TypeSchedules: map[uint32]TypeSchedule{2: {Mode: ModePeriodic, Interval: time.Hour}}})
+	now := time.Unix(1800000000, 0)
+	m.cadenceClock = func() time.Time { return now }
+	var value byte
+	packs := 0
+	s := cadenceSubject(103, 2, &value, &packs)
+	if err := m.Register(s); err != nil {
+		t.Fatal(err)
+	}
+	open(t, m, 1, 2)
+	mustSubscribe(t, m, 1, 103, entity.SyncProfile{})
+	mustFlush(t, m)
+	if err := m.Subscribe(2, 103, entity.SyncProfile{}); !errors.Is(err, ErrSubscriberLimit) {
+		t.Fatalf("second session: %v, want ErrSubscriberLimit", err)
+	}
+	if err := m.Unsubscribe(1, 103); err != nil {
+		t.Fatal(err)
+	}
+	mustFlush(t, m)
+	if got := m.SubscriberRoom(103); got != 1 {
+		t.Fatalf("room after one flush (cadence clock not advanced) = %d, want 1", got)
+	}
+	mustSubscribe(t, m, 2, 103, entity.SyncProfile{})
+}

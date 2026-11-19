@@ -629,3 +629,73 @@ func TestPartialSessionRetryContinuesAfterTheLastAdmittedFrame(t *testing.T) {
 		t.Fatalf("admitted frames = %d, want initial 1 + partial 1 + retry 1", got)
 	}
 }
+
+// 每 subject 订阅者上限：只拦新会话（同一会话的其他来源照常加入），被拒计入 SubscriberLimitRefused；
+// 钉住的订阅（玩家看自己）不受上限，上限已满时照样订阅上（原来上限检查在钉住处理之前，玩家可能看不到自己）。
+func TestSubscriberLimitRefusesNewSessionsButNotPinnedSelf(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{MaxSubscribersPerSubject: 2})
+	if got := manager.MaxSubscribersPerSubject(); got != 2 {
+		t.Fatalf("MaxSubscribersPerSubject() = %d, want 2", got)
+	}
+	packs := 0
+	if err := manager.Register(testSubject(t, 4, &packs)); err != nil {
+		t.Fatal(err)
+	}
+	open(t, manager, 1, 2, 3, 4)
+	mustSubscribe(t, manager, 1, 4, entity.SyncProfile{})
+	mustSubscribe(t, manager, 2, 4, entity.SyncProfile{})
+	before := manager.Stats().SubscriberLimitRefused
+	if err := manager.Subscribe(3, 4, entity.SyncProfile{}); !errors.Is(err, ErrSubscriberLimit) {
+		t.Fatalf("third session: %v, want ErrSubscriberLimit", err)
+	}
+	if got := manager.Stats().SubscriberLimitRefused - before; got != 1 {
+		t.Fatalf("SubscriberLimitRefused grew by %d, want 1", got)
+	}
+	// 同一会话经另一个来源加入不受上限。
+	if err := manager.NewSubscriptionSource().Subscribe(1, 4, entity.SyncProfile{}); err != nil {
+		t.Fatalf("a second source of an admitted session: %v", err)
+	}
+	// 玩家 4 看自己：钉住，不受上限。
+	if _, err := manager.NewSubscriptionSource().SubscribePinned(4, 4, entity.SyncProfile{}); err != nil {
+		t.Fatalf("pinned self refused by the subscriber limit: %v", err)
+	}
+	mustFlush(t, manager)
+	if got := manager.Subscribers(4); len(got) != 3 || got[2] != 4 {
+		t.Fatalf("subscribers = %v, want [1 2 4]", got)
+	}
+	if got := manager.SubscriberRoom(4); got != 0 {
+		t.Fatalf("room over the limit = %d, want 0", got)
+	}
+}
+
+// SubscriberRoom 把已退订、remove 还没交付的项算作占位：客户端仍持有对象，remove 交付之后空位才出现。
+// subject 未登记时为 0。
+func TestSubscriberRoomCountsLeavingSubscriptions(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{MaxSubscribersPerSubject: 2})
+	if got := manager.SubscriberRoom(9); got != 0 {
+		t.Fatalf("room of an unregistered subject = %d, want 0", got)
+	}
+	packs := 0
+	if err := manager.Register(testSubject(t, 9, &packs)); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.SubscriberRoom(9); got != 2 {
+		t.Fatalf("room of a fresh subject = %d, want 2", got)
+	}
+	open(t, manager, 1, 2)
+	mustSubscribe(t, manager, 1, 9, entity.SyncProfile{})
+	mustSubscribe(t, manager, 2, 9, entity.SyncProfile{})
+	mustFlush(t, manager)
+	if err := manager.Unsubscribe(1, 9); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.SubscriberRoom(9); got != 0 {
+		t.Fatalf("room before the remove is delivered = %d, want 0", got)
+	}
+	mustFlush(t, manager)
+	if got := manager.SubscriberRoom(9); got != 1 {
+		t.Fatalf("room after the remove is delivered = %d, want 1", got)
+	}
+}
