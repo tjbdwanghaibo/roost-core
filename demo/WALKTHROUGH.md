@@ -700,14 +700,14 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
   -d '{"name":"gm.mail.send","operator":"ops","trace_id":"t3","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","attachment":{"type":"coins","amount":100},"request_id":"incident-coins-1","note":"故障补偿"}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.world.stats"}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.list","payload":{"status":"manual_required","limit":20}}'
-curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.get","payload":{"id":"gift-100866-demo-100866-1789-15"}}'
+curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.get","payload":{"id":"<上一步列表中记录的 id>"}}'
 ```
 
 - 配置表重载不是 GM 命令：configdata Mod 自带 `configdata.reload` / `configdata.rollback` / `configdata.status`（框架注册，与 `hotcode.*` 同一套 token 与审计）。
   `curl ... -d '{"name":"configdata.reload","payload":{"reason":"改价"}}'` 回答新版本号与哪些表变了；重载只读 `configs/data` 下的 JSON，
   只改了 `configs/table` 的 CSV 却没 `roost generate` 时回答 `changed=false`、message 写 `no table changed`。开关表（`feature_flag.json`）也经这条生效，并覆盖 `gm.flag.set` 的进程内改动。
 - `gm.player.rehome {player_id, to, note}` 把一名玩家换到另一个服（rehome 模块的服务端入口，见“把一名玩家换到另一个服”）：要在他当前绑定的服的进程上执行，别的服答 `rehome_elsewhere`；不受玩家的冷却与可去列表约束，登记的换服前检查（公会 / 队伍成员、分区场景）与 account 的条件照常生效。回答 `accepted=true` 与换服 ID 表示已受理、后台在继续，结论用 `cmd/accountctl show-role` 看。
-- `gm.saga.list` / `gm.saga.get` 读 saga 协调器的记录（状态、当前步、最后一次错误、状态数据）；`manual_required` 是需要人的那一类。
+- `gm.saga.get` 要填**协调器记录 ID**：取 `gm.saga.list` 应答中的 `id`，或机器人失败行的 `saga_record`。`SendGift` 回给客户端的 `SagaID` 是**业务键**，用于该发送者的 `GiftStatus` 请求，不是 GM `get` 的 `id`。列表按 `manual_required` 筛选时只看需要人工介入的记录；两种只读查询都不会重发赠礼。
 
 - `player_id` 两种形式都收：客户端看到的唯一 id（`EnterGameResponse.PlayerID`，也是邮件的收件人 id），或 Mongo 里 Player 文档的 `_id`（完整实体 id，多了 kind / category 位）。
   两者不同：把 `_id` 当唯一 id 再包一层会得到一个不存在的实体（`entity aggregate not found`）。响应里同时给出 `player_id`（唯一 id）与 `entity_id`。
