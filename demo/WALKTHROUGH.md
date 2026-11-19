@@ -820,7 +820,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
 - **`EnterGame` 的协议与 controller 域来自 enter 业务模块**：`-template game-demo` 生成时装 [enter 模块](../modules/README.md)
   （`demo.go` 的 `demoModuleSteps`），协议绑在 `enter` 域上。demo 的进入流程比“加载或创建 Player”多得多（绑定的服、登录预算、
   场景、已付订单、公会、公告），所以它覆盖模块的两个文件：`protocol/def/enter_game.go` 与 `game/controllers/enter.go`，
-  后者的 `HandleEnterGame` 只把请求交给 `game/controllers/player_enter_game.go` 的 `EnterGame`。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
+  后者的 `HandleEnterGame` 只把请求交给 demo 适配层；它调用 `gamelogin.EnterSessionWithPlacement`，不再手动调用检查与钩子。模块的首次初始化仍然跑：`GetOrCreate` 之后发一次
   `EnterInit`，响应里的 `First` 说明这一次是不是首次。demo 的新玩家初始化写在 `game/modules/login/enter_first.go`（D25，覆盖模块的
   缺省版本）：新玩家落库的位置写成世界场景的出生点，与“建成了”的标记同一笔事务，加载或创建与新建两条路都经过它，只执行一次；
   demo 不发初始道具或金币。
@@ -910,18 +910,18 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
 
 协议、“先新建”的规则、会话激活后的告知都是模块的；demo 覆盖 enter 模块的 `game/controllers/enter.go`，把两个端点（`HandleEnterGame`、
 `HandleEnterCreate`）要装载 Player 的两件事交给 demo 的玩家端点（`game/controllers/player_enter_game.go`、`player_enter_create.go`），
-因为在这个 demo 里装载 Player 之前有自己的规矩：
+`EnterGame` 的顺序由 `EnterSessionWithPlacement` 统一管理，新建仍用 `Create`。demo 提供两个加载适配和一次进场步骤：
 
 1. **归属（`boundHere`）**：会话记的承载服不是本进程的 sid 答 `player_elsewhere` 并带 `owner_sid`，没有记答 `player_elsewhere`（`owner_sid=0`）。
    在任何别的检查之前，不问驻留表、不装载。两个端点相同。
 2. **进入前检查**（`gamelogin.RunEntering`）：rehome 模块的“正在换服 / 已经换走”，以及登录模块与 enter 的联动（与第 1 步是同一个比较）。
 3. **接入服务**：驻留表 `Serve`，在登录预算内（`player_access.tcp.login_timeout`）等上一份副本的卸载、复核迁出表。
-4. **装载**，按会话走两条路之一，判断只调模块的 `gamelogin.CreateFirst`（规则是登录模块与 enter 的联动登记的：进服票据握手的会话）：
+4. **装载**，由 `enter` 模块按会话选一路，不在 demo 里再判断 `CreateFirst`（规则是登录模块与 enter 的联动登记的：进服票据握手的会话）：
    - 会话令牌握手的会话：`EnterGame` 加载或创建并做首次初始化——与接入登录模块之前相同，机器人的缺省方式与演练脚本不用改。
    - 进服票据握手的会话：`EnterGame` 只装载、不创建。没有档、或者有档而没建成，答 `enter_need_create`，什么都不写；客户端发
      `EnterCreate{name}`：名字先过档案模块的规则（enter 与 profile 的联动，不合规在建档之前被拒），然后建档，名字、首次初始化与
      “建成了”的标记一笔事务。再发 `EnterGame`，这一次 `first=true`。已经建成的再发新建答 `enter_created`，名字不变。
-5. 之后是这个游戏登录时顺带做的事（世界计数、进场景、补单、公会、进入钩子、公告），两条路相同。
+5. **初始化之后**：World 计数只投递；请求已过期则答 `login_timeout`，不通知。否则普通地图先落位再 `Join`，CellWorld 直接 `Join`。落位或 `Join` 失败按原约定只告警。模块随后执行进入后钩子，最后 demo 投递登录公告，两条加载路径相同。
 
 写闸门（`PlayerOwners.AdmitMessage`）原来只豁免 `EnterGame`，现在也豁免 `EnterCreate`：新号在建成之前，它是第一条要装载 Player 的消息。
 豁免不建立驻留记录，记录仍然只由端点里的 `Serve` 在核对归属之后建立。

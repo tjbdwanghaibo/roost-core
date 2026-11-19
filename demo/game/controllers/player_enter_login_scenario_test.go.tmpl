@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -296,8 +297,8 @@ func newLoginScenario(t *testing.T) *loginScenario {
 	cfg.Set("sid", scenarioSID)
 	s.registry = app.NewRegistry(cfg)
 	for name, value := range map[app.ModName]any{
-		app.ModName("nest"):                nest.Client(nestEngine),
-		mods.ModEntityRuntime:              access,
+		app.ModName("nest"):              nest.Client(nestEngine),
+		mods.ModEntityRuntime:            access,
 		app.ModName("access.player.tcp"): s.transport,
 	} {
 		if err := s.registry.Register(name, value); err != nil {
@@ -353,7 +354,7 @@ func (s *loginScenario) context(session scenarioSession, messageID uint32) *play
 
 func (s *loginScenario) enterGame(session scenarioSession) *pb.EnterGameResponse {
 	s.t.Helper()
-	response, err := s.controller.EnterGame(s.context(session, msgid.MsgEnterGame), &pb.EnterGameRequest{ClientVersion: "scenario"})
+	response, err := s.controller.HandleEnterGame(s.context(session, msgid.MsgEnterGame), &pb.EnterGameRequest{ClientVersion: "scenario"})
 	if err != nil {
 		s.t.Fatalf("EnterGame returned a transport error instead of an answer: %v", err)
 	}
@@ -362,7 +363,7 @@ func (s *loginScenario) enterGame(session scenarioSession) *pb.EnterGameResponse
 
 func (s *loginScenario) enterCreate(session scenarioSession, name string) *pb.EnterCreateResponse {
 	s.t.Helper()
-	response, err := s.controller.EnterCreate(s.context(session, msgid.MsgEnterCreate), &pb.EnterCreateRequest{Name: name})
+	response, err := s.controller.HandleEnterCreate(s.context(session, msgid.MsgEnterCreate), &pb.EnterCreateRequest{Name: name})
 	if err != nil {
 		s.t.Fatalf("EnterCreate returned a transport error instead of an answer: %v", err)
 	}
@@ -426,10 +427,10 @@ func TestEnterTicketLoginCreatesFirstThenEntersThroughTheDemoLogin(t *testing.T)
 
 	// 名字不合规：在建档之前被拒（档案模块的名字规则），没有被接入服务、没有档、没有提交。
 	for name, want := range map[string]int32{
-		"":                               apperrors.ErrProfileNameEmpty.Code(),
-		"   ":                            apperrors.ErrProfileNameEmpty.Code(),
+		"":                                     apperrors.ErrProfileNameEmpty.Code(),
+		"   ":                                  apperrors.ErrProfileNameEmpty.Code(),
 		"a-name-far-longer-than-a-name-may-be": apperrors.ErrProfileNameLong.Code(),
-		"bad\xffbytes":                    apperrors.ErrProfileNameInvalid.Code(),
+		"bad\xffbytes":                         apperrors.ErrProfileNameInvalid.Code(),
 	} {
 		if answer := s.enterCreate(session, name); answer.Code != want {
 			t.Fatalf("EnterCreate with the name %q = %+v, want code %d", name, answer, want)
@@ -775,12 +776,14 @@ func TestEnterGameAnswersLoginTimeoutWhenTheDeadlinePassedBeforeTheSceneJoin(t *
 	}
 	session := s.handshake(gamelogin.Ticket(role.PlayerID, selected.Token))
 
+	notified := 0
+	gamelogin.OnEntered("deadline-test", func(context.Context, *app.Registry, gamelogin.Entered) error { notified++; return nil })
 	restore := playerctl.HoldBeforePlacementForTest(func(requestCtx context.Context) { <-requestCtx.Done() })
 	request := s.context(session, msgid.MsgEnterGame)
 	deadlineCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	request.BaseCtx = deadlineCtx
-	late, err := s.controller.EnterGame(request, &pb.EnterGameRequest{ClientVersion: "scenario"})
+	late, err := s.controller.HandleEnterGame(request, &pb.EnterGameRequest{ClientVersion: "scenario"})
 	restore()
 	if err != nil {
 		t.Fatalf("EnterGame returned a transport error: %v", err)
@@ -789,9 +792,68 @@ func TestEnterGameAnswersLoginTimeoutWhenTheDeadlinePassedBeforeTheSceneJoin(t *
 		t.Fatalf("an EnterGame whose deadline passed before the scene join answered %+v, want login_timeout (%d): "+
 			"the client must retry instead of believing it is in the scene", late, apperrors.ErrLoginTimeout.Code())
 	}
+	if notified != 0 {
+		t.Fatalf("expired placement sent %d entered notifications", notified)
+	}
 	retried := s.enterGame(session)
-	if retried.Code != 0 || retried.PlayerID != role.PlayerID || retried.Created || retried.First {
+	if notified != 1 || retried.Code != 0 || retried.PlayerID != role.PlayerID || retried.Created || retried.First {
 		t.Fatalf("the retried EnterGame = %+v, want the player entered (created and initialized by the timed-out attempt)", retried)
+	}
+}
+
+func TestDemoScenePlacementPrecedesEnteredOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name                             string
+		partition, placeFails, joinFails bool
+		want                             []string
+	}{
+		{"ordinary", false, false, false, []string{"place", "join", "entered"}},
+		{"partition", true, false, false, []string{"join", "entered"}},
+		{"place warns", false, true, false, []string{"place", "entered"}},
+		{"join warns", false, false, true, []string{"place", "join", "entered"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newLoginScenario(t)
+			session := s.handshake(s.enterTicket("scene-login", scenarioSID))
+			if answer := s.enterCreate(session, "scene"); answer.Code != 0 {
+				t.Fatal(answer)
+			}
+			var order []string
+			standing := spatial.Point{X: 17, Y: 23}
+			err := s.controller.SetLoginSceneForTest(tc.partition, func() (spatial.Point, error) {
+				order = append(order, "place")
+				if tc.placeFails {
+					return spatial.Point{}, errors.New("no ground")
+				}
+				return standing, nil
+			}, func(at spatial.Point) error {
+				order = append(order, "join")
+				want := standing
+				if tc.partition {
+					want = spatial.Point{}
+				}
+				if at != want {
+					t.Errorf("join point=%v want %v", at, want)
+				}
+				if tc.joinFails {
+					return errors.New("replication unavailable")
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gamelogin.OnEntered("scene-order-test", func(_ context.Context, _ *app.Registry, event gamelogin.Entered) error {
+				order = append(order, "entered")
+				if event.PlayerID != session.principal.PlayerID || !event.First {
+					t.Errorf("entered=%+v", event)
+				}
+				return nil
+			})
+			if got := s.enterGame(session); got.Code != 0 || !got.First || got.Created || got.PlayerID != session.principal.PlayerID || !slices.Equal(order, tc.want) {
+				t.Fatalf("response=%+v order=%v want %v", got, order, tc.want)
+			}
+		})
 	}
 }
 

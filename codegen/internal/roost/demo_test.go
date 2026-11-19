@@ -822,7 +822,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if glue := read("game/controllers/mailbox_rehome.go"); !strings.Contains(glue, `gamerehome.OnLeaving("mailbox"`) || !strings.Contains(glue, "mailer.Summary(ctx, move.PlayerID)") {
 		t.Errorf("the mailbox+rehome glue was not written into the demo:\n%s", glue)
 	}
-	if login := read("game/controllers/player_enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "claims := context.Session.Principal().Claims") || !strings.Contains(login, "InitResult: entered, Claims: claims,") {
+	if login := read("game/controllers/player_enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "Claims: context.Session.Principal().Claims") {
 		t.Errorf("the demo's enter flow still pulls server-wide mail by hand, or does not hand the session claims to the enter hooks:\n%s", login)
 	}
 	if controller := read("game/controllers/player.go"); strings.Contains(controller, "svcmail") {
@@ -1122,17 +1122,20 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if !strings.Contains(flow, "Sync_EnterInit(") {
 		t.Errorf("the demo's enter flow does not run the enter module's first-time init:\n%s", flow)
 	}
-	// rehome 与 enter 都装着：联动登记了进入前检查与到达。demo 的进入流程在把玩家接入服务（Serve）、装载实体之前
-	// 跑检查，并把拒绝里的目标服带进应答。
-	check, serve := strings.Index(flow, "gamelogin.RunEntering("), strings.Index(flow, "owners.Serve(")
-	if check < 0 || serve < 0 || check > serve || !strings.Contains(flow, "gamerehome.OwnerSID(err)") {
-		t.Errorf("the demo's enter flow does not run the checks before entering ahead of taking the player into service:\n%s", flow)
+	// demo 必须用 enter 的同一条骨架，不得另做会话选路或自己发通知。实际顺序由生成工程的登录场景测试验证。
+	if !strings.Contains(flow, "gamelogin.EnterSessionWithPlacement(") || !strings.Contains(flow, "gamerehome.OwnerSID(err)") {
+		t.Errorf("demo does not use the shared enter flow or lost the owner redirect: %s", flow)
+	}
+	for _, duplicate := range []string{"gamelogin.CreateFirst(", "gamelogin.RunEntering(", "gamelogin.RunEntered("} {
+		if strings.Contains(flow, duplicate) {
+			t.Errorf("demo duplicates module orchestration with %s", duplicate)
+		}
 	}
 	if glue := read("game/controllers/rehome_enter.go"); !strings.Contains(glue, `gamelogin.OnEntering("rehome"`) || !strings.Contains(glue, `gamelogin.OnEntered("rehome"`) {
 		t.Errorf("the rehome+enter glue was not written into the demo:\n%s", glue)
 	}
 	// enter 与 chat 都装着：chat 的联动文件登记了进入钩子，demo 的进入流程执行钩子而不是自己加在线名单。
-	if !strings.Contains(flow, "gamelogin.RunEntered(") || strings.Contains(flow, "Presence().Add(") {
+	if strings.Contains(flow, "Presence().Add(") {
 		t.Errorf("the demo's enter flow does not go through the enter hooks:\n%s", flow)
 	}
 	if glue := read("game/modules/chat/chat_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("chat"`) {

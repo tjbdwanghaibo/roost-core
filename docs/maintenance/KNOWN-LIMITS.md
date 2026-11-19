@@ -481,7 +481,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **联动文件的边界**：只在一对模块里第二个装上的那一次写；两个都早已装好（用旧版本的 roost 装的）不补。联动文件引用双方已装的源码：已装的模块被业务改过、或装的是另一版时，联动文件可能编译不过，`roost module add` 不编译工程，要靠随后的 `roost module verify` 发现。联动文件不能申请新号、不能加状态字段。
 - **shop 的边界**：样例目录装上就在卖（10 金币买道具 1001），上线前必须换掉；请求键只在该玩家最近 64 次成功购买内去重，更早的键重发会再扣一次钱、再发一次货（受限购约束）；没有“期望价格”校验，客户端目录与服务端不一致时按服务端价格成交；背包放不下时靠事务回滚把已扣的钱退回，调用方不能吞掉 `Buy` 的错误；目录删行或复用商品号会清掉或串用终身限购计数（要保留计数用下架）；目录使用 shop_goods 配置表，统一 rules 快照不承诺跨请求冻结成交价格。
 - **task 的边界**：支持配置表、每日/每周/永久与前置链。业务目录接受 ID 1～4096，ID/周期/前置发布后固定，退役保留永久领奖事实；无效行不可推进。Report/Advance 不自带跨消息去重，事件提供方在首次事实提交时调用；排行榜提交是跨服务后的尽力通知，重复提交也计数，不能拿来发恰好一次奖励。奖励按领取时配置读取。跨日/周未推进时同步记录仍是旧周期，客户端按周期戳判断。见[任务模块](../../modules/task/README.md)。
-- **进入钩子不是事务的一部分**：钩子在首次初始化提交之后、事务之外执行，失败只记 Warn，下一次进入再调；必须成功的事（初始发放）仍写在 `enter_first.go` 的事务里。mailbox 的钩子缺省把“首次进入游戏的时间”当注册时间、范围只有“所有玩家”；会话 claims 里有 account 的 `role_created_at` / `server_id` / `origin_server_id` 时自动采用（角色创建时间、本服与合服前的原服范围），公会范围仍要工程自己加。`role_created_at` 缺失时退回首次进入的时间照拉（只会少收，不会多收）。`Entered.Claims` 与会话共用同一个 map，约定只读。工程改写进入端点（game-demo 就改写了）时要自己在同一位置调 `gamelogin.RunEntered`，否则钩子不执行。
+- **进入钩子不是事务的一部分**：钩子在首次初始化提交之后、事务之外执行，失败只记 Warn，下一次进入再调；必须成功的事（初始发放）仍写在 `enter_first.go` 的事务里。mailbox 的钩子缺省把“首次进入游戏的时间”当注册时间、范围只有“所有玩家”；会话 claims 里有 account 的 `role_created_at` / `server_id` / `origin_server_id` 时自动采用（角色创建时间、本服与合服前的原服范围），公会范围仍要工程自己加。`role_created_at` 缺失时退回首次进入的时间照拉（只会少收，不会多收）。`Entered.Claims` 与会话共用同一个 map，约定只读。模块编排统一调 `RunEntered`，包括 game-demo 的 `EnterSessionWithPlacement`；只有绕开这套编排的端点才要自己运行钩子。
 - **leaderboard 的边界**：提交与改总分的事务不是原子的，提交失败时榜上暂时落后，靠重试或下一次分数变动补上（提交的是快照加 UpdateMax，本身幂等，不带请求键）；只升不降，一个错的大数提交上去之后压不下来（所以有分数上限的检查）；缺省是改 `leaderboard_board.go` 里 `CurrentSeason()` 的返回值后发版来换周期，也可以按业务时钟算，没有清榜协议；只有一张榜——读榜的两条协议固定读 `CurrentBoard()`，写入侧 `SubmitSeason` 只能选周期不能选榜，多张榜、读历史周期要手写。
 - **bag 的边界**：表名 `item` 是固定的，工程已有 `configs/schema/item.go` 或 `configs/table/item.csv` 时装不了（落点被占用），要先把自己的表挪开、装完再合并列；进程里没装载配置时背包拒绝一切放入（有意如此：不退回“正数就行”），模块场景所在的包由安装器写的公共夹具 `roost_config_data_test.go` 先按正式启动装载工程的 `configs/data`（v1.53.0 起，只在安装模块那一次写，已有工程要手抄一份），工程自己另起的测试进程（不在这些包里）仍要自己装道具表，否则一律 `bag_item_invalid`；每次变化同步的是整份背包（至多 200 种），不是按键增量；道具从表里删掉后能数、能丢、不能再放，单种上限调小到持有量以下时只拒放入、不扣已有；没有格子、装备与过期。
 - **模块装进 game-demo 之后靠提交观察者同步**：模块的 handler 不调 demo 的 `PublishSyncDirty`，靠 Nest 的提交观察者复制（bag、profile 各有一条按生产接线的用例钉住）；没装观察者的夹具里模块的写入不会被推送。
@@ -569,7 +569,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
-- **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player_enter_game.go`、`player_enter_create.go`），demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
+- **game-demo 的进入适配**：`EnterGame` 经模块 `EnterSessionWithPlacement` 统一做进入前检查、选择加载路径、初始化后的进场与通知；`EnterCreate` 经模块 `Create`。demo 保留驻留表与登录预算、World 只投递计数、普通地图 / CellWorld 的落位和协议回包适配。请求在进场前已过期则不通知、答 `login_timeout`，已提交的初始化不撤销；实际落位或 `Join` 失败则沿用只告警、继续通知的边界。场景、同步与换服落点还没有迁到 scene 模块。demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
 
 #### account：一套服务多个游戏（2026-11-18）
 
@@ -654,7 +654,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
   - **Redis Cluster 上 account 的 `key_prefix` 必须带 hash tag**（如 `{acct}`）：在途换服索引与角色记录同一个脚本维护，否则 Mod 初始化报错。
   - 验证范围见[单个玩家换服（模块 rehome 与 game-demo 接线）](#单个玩家换服模块-rehome-与-game-demo-接线)。
 - **换服前邮箱满会被拒（mailbox + rehome，2026-11-18）**：邮箱全是未读、还有属于他的旧服全服邮件没合并进来时，离开钩子中止换服（`ErrMailboxFull`），要玩家先清邮件；中止原因只在 rehome 的 Warn 日志与向 account 中止时带的 reason 里，客户端没有专门的提示码。没有做“持久保留旧范围的待合并义务”。[证据](evidence/v153-review-fixes-20261118/README.md)
-- **没装 enter 的工程要自己接两处**：加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive`，否则换走的玩家仍能进旧服、目标服不做到达。工程改写了进入端点（game-demo 就改写了）时要自己调 `gamelogin.RunEntering`。
+- **没装 enter 的工程要自己接两处**：加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive`，否则换走的玩家仍能进旧服、目标服不做到达。装了 enter 且经模块编排的端点（含 game-demo）会自动跑联动登记的检查与通知，不要再手动调一次。
 - **费用不在模块里**：模块不依赖货币，没有实现费用；规则文件里写了做法。
 
 - **game-demo 换服前的检查**：队伍经双向事务内准入阻止成员换服，本服开着分区场景时也拒绝；坐在本进程 lockstep 对战座位上的玩家拒绝换服，离开中的玩家不再被撮合；旧 lockstep 匹配票据与副本 run 不拦；新 matchmaking 模块的非空 Phase 会拒绝换服（理由见 `rehome_checks.go`）。联盟成员可以换服，HomeSID 按入盟批次与旧 SID 条件刷新、进入时对账（尽力通知，不是 account 的线性一致副本）。地形块、建筑与地形编辑账本 `TerrainEditor` 归地图（普通场景按服分库），换服时留在原服，只交出 Player；全服邮件离开前按旧范围合并一次（mailbox 与 rehome 的联动），见[地形的库范围按地图归属](#地形的库范围按地图归属d11-q17-a--n3-a)。

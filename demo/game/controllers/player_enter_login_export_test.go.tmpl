@@ -3,9 +3,10 @@ package controllers
 import (
 	stdcontext "context"
 
-	playerentity "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	playerentity "{{MODULE}}/game/entities/player"
 )
 
 // 这个文件只在测试里编译。登录的整条链路场景（player_enter_login_scenario_test.go）在外部测试包 controllers_test 里：
@@ -43,6 +44,37 @@ func (controller *Controller) UseWorldForTest(worldID int64) {
 	}
 	deps.worldID = worldID
 	state.deps.Store(&deps)
+}
+
+// 只替换场景边界：Player 加载、首次初始化和请求分派仍走登录场景的 Nest。
+type loginSceneNest struct {
+	corenest.Client
+	place func() (spatial.Point, error)
+}
+
+func (n loginSceneNest) RequestMulti(ctx stdcontext.Context, name corenest.HandlerName, ids []int64, params corenest.Params, opts ...corenest.SendOpt) (any, error) {
+	if name.String() == "handlerEnterScene" {
+		return n.place()
+	}
+	return n.Client.RequestMulti(ctx, name, ids, params, opts...)
+}
+
+type loginSceneJoin struct {
+	sceneJoiner
+	join func(spatial.Point) error
+}
+
+func (s loginSceneJoin) Join(_ stdcontext.Context, _ *playerentity.Player, at spatial.Point) error {
+	return s.join(at)
+}
+func (c *Controller) SetLoginSceneForTest(partition bool, place func() (spatial.Point, error), join func(spatial.Point) error) error {
+	c.nestClient = loginSceneNest{Client: c.nestClient, place: place}
+	if partition {
+		if err := c.registry.Register(partitionCapability, struct{ scenePartition }{}); err != nil {
+			return err
+		}
+	}
+	return c.registry.Register(sceneCapability, loginSceneJoin{join: join})
 }
 
 // HoldBeforePlacementForTest 让 EnterGame 在检查分发期限、进场景之前先执行 hold（例如等请求的期限过去）；
