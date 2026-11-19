@@ -37,13 +37,24 @@ text = replace_once(text, 'func (p *Projector) waitProjectedRecordsConfirmed(ctx
  started := time.Now()
  defer func() { slog.Info("rehome drill: checkpoint wait", "elapsed_us", time.Since(started).Microseconds()) }()''')
 text = replace_once(text, '\tticker := time.NewTicker(handOffCheckpointPoll)', ''' if dir := os.Getenv("DRILL_REHOME_FAULT_DIR"); dir != "" {
-  if err := os.WriteFile(filepath.Join(dir, "checkpoint-waiting"), []byte("projected records still unconfirmed"), 0600); err != nil { panic(err) }
+  var ids []string; for _, id := range unconfirmed { ids = append(ids, id.String()) }; tmp := filepath.Join(dir,"checkpoint-waiting.tmp"); if err := os.WriteFile(tmp, []byte(strings.Join(ids," ")), 0600); err != nil { panic(err) }; if err := os.Rename(tmp,filepath.Join(dir,"checkpoint-waiting")); err != nil { panic(err) }
  }
 \tticker := time.NewTicker(handOffCheckpointPoll)''')
 if mutant:
     start = text.index('\t// 3. 等 checkpoint。')
     end = text.index('\t// 4. 卸载', start)
-    text = text[:start] + '\t// MUTANT: checkpoint wait removed.\n' + text[end:]
+    # Give the ack writer the CPU before bypassing the wait. This is a rendezvous with
+    # the fault injector (ack still held), not a wait for acknowledgement or release.
+    # Without it the mutant can finish before the injector runs: inconclusive, not a kill.
+    text = text[:start] + '''
+ if dir := os.Getenv("DRILL_REHOME_FAULT_DIR"); dir != "" {
+  if _, err := os.Stat(filepath.Join(dir,"hold-checkpoint")); err == nil {
+   deadline := time.Now().Add(3*time.Second)
+   for time.Now().Before(deadline) { if _, err := os.Stat(filepath.Join(dir,"checkpoint-held")); err == nil { break }; select {case <-ctx.Done():return nil,context.Cause(ctx);case <-time.After(time.Millisecond):} }
+  }
+ }
+ // MUTANT: skip the actual wait for checkpoint confirmation.
+''' + text[end:]
 text += '''
 // rehomeDrillHoldAck 只由临时 overlay 的 ReplayPass 调用。
 func rehomeDrillHoldAck(ctx context.Context, records []coredata.CommitRecord) error {
@@ -53,16 +64,16 @@ func rehomeDrillHoldAck(ctx context.Context, records []coredata.CommitRecord) er
  if os.IsNotExist(err) { return nil } else if err != nil { return err }
  var target int64
  if _, err := fmt.Sscan(string(raw), &target); err != nil { return err }
- matched := false
+ var matched string
  for _, record := range records {
   // demo 在交出前最后一笔 Player 写入是 LeaveScene（保存位置）。Prepare 之后还有这笔写入，不能提前堵住回放。
   if !strings.HasSuffix(record.Handler, "LeaveScene") { continue }
-  for _, mutation := range record.Mutations { if mutation.Key.ID == target { matched = true } }
+  for _, mutation := range record.Mutations { if mutation.Key.ID == target { matched = record.ID.String(); break } }
  }
- if !matched { return nil }
+ if matched == "" { return nil }
+ tmp:=filepath.Join(dir,"checkpoint-held.tmp"); if err:=os.WriteFile(tmp, []byte(matched),0600); err!=nil{return err}; if err:=os.Rename(tmp,filepath.Join(dir,"checkpoint-held"));err!=nil{return err}
  for {
   if _, err := os.Stat(filepath.Join(dir, "hold-checkpoint")); os.IsNotExist(err) { return nil } else if err != nil { return err }
-  if err := os.WriteFile(filepath.Join(dir, "checkpoint-held"), []byte("Mongo projected; before WAL Ack"), 0600); err != nil { return err }
   select { case <-ctx.Done(): return ctx.Err(); case <-time.After(10*time.Millisecond): }
  }
 }

@@ -599,7 +599,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 2 | profile | 名字、等级、经验与升级；只检查不执行的入口；给服务端读的名片；状态分“别人可见”与“只给本人”两个字段 | — | 已有（19 条）；game-demo 的档案在用 |
 | 2 | bag | 道具背包：增减、上限、按道具号堆叠；自带道具表（道具是否存在、每种的单种上限） | — | 已有（17 条）；game-demo 的背包在用 |
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 已有（25 条） |
-| 2 | task | 任务系统（原名 quest，维护者 2026-11-11 改名：“task 是一个比较核心的系统，很多业务需求可以加到 task 中去”）。这一版：每日任务的进度、领奖、按业务日清零 | wallet | 已有（18 条）；签到推进经 task+checkin 联动。**扩成核心系统是下一步**，见本节末尾 |
+| 2 | task | 任务系统（原名 quest，维护者 2026-11-11 改名：“task 是一个比较核心的系统，很多业务需求可以加到 task 中去”）。现状（2026-11-12 扩成核心系统，`35153b75`）：按事件推进、每日 / 每周 / 永久与前置链、任务配置表、可登记的奖励种类 | wallet | 已有（29 条）；与 bag、checkin、dungeon、leaderboard、profile、shop、stamina、wallet 八组联动（共 25 条），见本节末尾与 [task README](../../modules/task/README.md) |
 | 2 | leaderboard | 排行：提交分数（可分周期）、一次请求查前 N 名与自己的名次；榜的规则是业务文件 | 托管 rank 服务 | 已有（20 条）；game-demo 的通关榜在用 |
 | 2 | mailbox | 邮件：列表、领附件、发件入口 `SendTo`；附件种类是登记点，金币内置，道具经 mailbox + bag 联动 | 托管 mail 服务；wallet | 已有（32 条；联动 mailbox+bag 9 条、mailbox+enter 5 条）；game-demo 的邮件在用 |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 已有（17 条）（目录是业务文件，没有用配置表） |
@@ -613,13 +613,15 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 
 安装器已支持自带实体与 Init / Shutdown 接线点（2026-11-11）；定时器类型分配已完成；还缺、按需要补的能力：配置表与模块配置、更多的登记点（通用机制已有：清单的 `with` 联动文件，见 [modules/README](../../modules/README.md)；已有的登记点是 enter 的进入钩子，chat 与 mailbox 接在上面。还缺：mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
 
-task 要扩成核心系统的方向（未实施，按先后）：
+task 要扩成核心系统的方向（2026-11-11 定的计划；**2026-11-12 已全部实施**，`35153b75`，现行说明见 [task README](../../modules/task/README.md)，2026-11-19 核对时补记状态）：
 
 1. **按事件推进**：别的功能只上报“发生了什么”（签到、消费、升级、通关、购买……），不认识任务号；任务表里写“哪个事件推进哪条任务”。入口 `TaskComp().Report(事件, 次数, nowUnixMilli)`，现有的 `Advance(任务号, …)` 保留。加一个业务需求 = 任务表加一行 + 在那个功能里上报一次事件。
 2. **周期与种类**：每日之外加每周、永久（成就）、有前置的任务链（主线）；清零规则按种类走。
 3. **奖励种类**：现在只有金币；改成（种类、号、数量），与 mailbox 的附件用同一种表达，装了 bag 就能发道具。
 4. **任务表做成配置表**（照 bag 的道具表）。
 5. **联动**：各模块在自己成功的那一刻上报事件——wallet 消费、profile 升级、shop 购买、stamina 消耗；它们要先留出登记点（现在只有 checkin 有）。
+
+实施结果与上面的出入：事件不设登记表，事件名就是任务表 `event` 列的字符串；奖励种类用 `RegisterTaskReward` 登记（金币内置，bag 联动登记道具）；联动做成 task 自己的八组 `with/`（bag、checkin、dungeon、leaderboard、profile、shop、stamina、wallet），由事件提供方在事实第一次生效时上报。
 
 每个新模块的验收不变：全新工程上单独安装、与已有模块一起安装、重复安装无变化、`roost module verify` 的场景数；写进 `scripts/test-modules-generated.sh`。每批做完用一个只凭 skill 的 agent 按一段不重合的需求实测一遍。
 
