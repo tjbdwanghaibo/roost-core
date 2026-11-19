@@ -207,7 +207,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	} else if saga := slices.IndexFunc(steps, func(step demoScaffoldStep) bool { return step.add != nil && step.add.Kind == "saga" }); saga >= 0 && first > saga {
 		t.Error("cellworld is installed after the GiftItem saga step, whose full refresh needs the module's nested types on disk")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime room turn matchroom matchmaking gift"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime room turn matchroom matchmaking gift scenespace"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	modules = append([]string{"cellworld"}, modules...)

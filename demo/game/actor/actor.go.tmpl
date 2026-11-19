@@ -250,7 +250,10 @@ func Surface() movement.Surface {
 // a reason to refuse a step. The Join reads the position it is given; a move
 // in that window is picked up by the next one.
 type InterestMoves struct {
-	Interest *policy.Interest
+	// 普通图交给模块 Space，分区图交给自己的 Interest；登录 Join 之前的未知实体仍不记 AOI。
+	Interest interface {
+		QueueMove(entity.IThreadSafeEntity, spatial.Point) error
+	}
 }
 
 func (s InterestMoves) Enter(entity.IThreadSafeEntity, spatial.Point) error { return nil }
