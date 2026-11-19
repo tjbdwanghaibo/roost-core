@@ -862,7 +862,7 @@ func TestDoctorNamesTheConfigSectionsAManifestAddedModLacks(t *testing.T) {
 		}
 	}
 	// 单实例锁存 etcd（2026-11-16）：开锁的服务缺的是锁用的 etcd: 段，不再是 redis:。
-	for _, want := range []string{"nest:", "dataengine:", "mongo:", "nats:", "etcd:", "\nmongo:\n  uri: mongodb://127.0.0.1", "\n    mongo:\n", "CHANGE_ME", "singleton.enabled is not true"} {
+	for _, want := range []string{"nest:", "dataengine:", "mongo:", "nats:", "etcd:", "\nmongo:\n", "\n  database_prefix: ", "\n  uri: mongodb://127.0.0.1", "\n    mongo:\n", "CHANGE_ME", "singleton.enabled is not true"} {
 		if !strings.Contains(item.Detail, want) {
 			t.Errorf("the WARN lacks %q:\n%s", want, item.Detail)
 		}
