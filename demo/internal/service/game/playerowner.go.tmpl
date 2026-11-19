@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+	giftruntime "{{MODULE}}/game/modules/gift/runtime"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -277,14 +278,7 @@ func (owners *PlayerOwners) Serve(ctx context.Context, playerID int64, boundSID 
 }
 
 // Admission 是 AdmitBound 的回答。
-type Admission struct {
-	// Local 为 true：这名玩家归本服，可以在本进程执行（err 非 nil 时是“归本服，但副本正在卸载”）。
-	Local bool
-	// Moving 为 true：他正在换服，结论未定。哪个服都不要执行，稍后再问。
-	Moving bool
-	// SID 是他当前绑定的服；Local 为 false 且不在换服时，调用方把工作交给它。
-	SID int32
-}
+type Admission = giftruntime.Admission
 
 // AdmitBound 是后台工作（赠礼步骤之类）的准入，按玩家**当前**的绑定回答，不看命令里携带的 sid
 // （那只是发起时的服，用于最初的路由）：

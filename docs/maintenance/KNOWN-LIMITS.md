@@ -956,15 +956,16 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **Unity 里没有跑过**：导出的 C# 只在 .NET 上编译和运行，IL2CPP 裁剪安全是按“不用反射、不用 JsonUtility / UnityEngine”推断的，没有实跑，见[客户端：遗留](#客户端遗留)。
 
-#### 业务模块拆分：未做的模块（已决定待实施）
+<a id="业务模块拆分未做的模块已决定待实施"></a>
 
-维护者 2026-11-10 / 11-11 定的方向是把 game-demo、玩法夹具里反复手写的业务拆成模块（只要求新生成的工程能直接用）。清单与状态见 [business-modules 批次表](FEATURE-2026-11-10-business-modules.md)，2026-11-19 核对后还没做的：
+#### 业务模块拆分：模块缺口与 demo 迁移
 
-- **gift**（玩家间送礼 saga）：仍在 game-demo 里（`game/gift` 与 `internal/service/game/gift_saga.go`）。原来卡的服务级接线点已有（A1），可以拆；旧的半成品暂存已删除。
-- **scene**（场景实体、进出场景、移动与视野、刷怪、心跳驱动与同步接线）：仍是 game-demo 里约 2900 行的参考实现。维护者 2026-11-11 同意的顺序是先拆成模块，再加多场景管理、区域触发等功能。
-- **matchroom**（匹配成局到房间的移交）：未做；与 R11（demo 的锁步匹配改成回合房，D24 A 暂缓）相关。
-- **配方**（`roost project new -recipe <name>`）：未做，排在模块够用之后。
-- **task 扩成核心系统**（按事件推进、周期与种类、奖励种类、配置表、各模块上报）：方案里的 5 步都未开始。
+要分别核对「新工程能否安装模块」与「game-demo 是否复用模块」。[business-modules 批次表](FEATURE-2026-11-10-business-modules.md)记录原排期；当前 demo 的安装项见[生成步骤](../../codegen/internal/roost/demo.go)。
+
+- **gift：模块已拆，demo 已迁**。玩家间送礼的协议、扣物 / 退款与邮件投递由 [gift 模块](../../modules/gift/README.md) 提供；demo 只在驻留表就绪后启动模块消费者。200 人档的 Saga 排队仍是下面的压测遗留，不因模块拆分关闭。
+- **scene：模块已有，demo 待迁**。[scene 模块](../../modules/scene/README.md)已提供多地图、分线、区域与交互；demo 的进入、移动、视野、刷怪与心跳仍有自己的接线。遗留是迁移到模块路径，不是新建 scene。
+- **matchroom：模块已有且 demo 已接**。[module-duel](../../demo/README.md) 已走成局移交与回合房；旧 `duel` / `ranked` 仍走 lockstep，R11 改造按 D24 A 暂缓。不要把这条与模块缺失混为一谈。
+- **已落地、不再列为待开发**：`roost project new -recipe` 有 [casual、turn-pvp 两种配方](../../modules/recipes/catalog.yaml)；[task](../../modules/task/README.md) 已有事件上报、周期与前置、配置表、奖励及模块联动。
 
 <a id="生成工程目录遗留"></a>
 

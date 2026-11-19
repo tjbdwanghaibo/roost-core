@@ -1,0 +1,45 @@
+package gift
+
+import (
+	"context"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"{{MODULE}}/game/modules/rehome"
+)
+
+// Ownership 是扣物、退款和发起送礼共用的当前归属查询。不能直接相信 Saga 当初的路由或旧会话的 sid。
+type Ownership interface {
+	AdmitBound(context.Context, int64) (Admission, error)
+}
+type Admission struct {
+	Local, Moving bool
+	SID           int32
+}
+
+const OwnershipCapability app.ModName = "game.gift.ownership"
+
+// SenderSID 在发起事务和冷加载 Player 前调用：当前绑定和认证会话必须同属本服。
+func SenderSID(ctx context.Context, registry *app.Registry, id int64, sessionSID int32) (int32, error) {
+	self, err := rehome.SelfSID(registry)
+	if err != nil {
+		return 0, err
+	}
+	if sessionSID != self {
+		return 0, rehome.Elsewhere(id, sessionSID)
+	}
+	owners, ok := app.Lookup[Ownership](registry, OwnershipCapability)
+	if !ok || owners == nil {
+		return 0, fmt.Errorf("gift: player ownership unavailable")
+	}
+	a, err := owners.AdmitBound(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if a.Moving {
+		return 0, rehome.Moving(id, a.SID)
+	}
+	if !a.Local || a.SID != self {
+		return 0, rehome.Elsewhere(id, a.SID)
+	}
+	return self, nil
+}

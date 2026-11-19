@@ -1,0 +1,22 @@
+name: gift
+summary: 玩家间送礼：按发送者当前服扣物与退款，邮件按步骤幂等投递，发送者按业务键查结果
+requires: [bag, mailbox, rehome]
+needs:
+  mods: [nest, saga, mongo, dataengine]
+  features: [protocol, entity, dao, errcode, saga]
+  uses: [mail, account]
+runtime:
+  package: game/modules/gift/runtime
+  start: Start
+sagas:
+  - name: gift_item
+    steps: [debit, deliver]
+    routed: [debit]
+    receipts: [Player]
+protocols: [SendGift, GiftStatus]
+verify:
+  packages: [./game/modules/gift, ./game/modules/gift/runtime]
+  run: ^TestGift
+  pass: 7
+next:
+  - "按发送服重启预算配置 saga.steps.gift_item.debit.max_attempts；game-demo 的 5s 单次超时、15 次尝试覆盖约 95s 重启窗口。"

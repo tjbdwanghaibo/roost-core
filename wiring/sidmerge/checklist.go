@@ -48,7 +48,7 @@ func busChecklist(from side) []BusItem {
 			AddressedToSID: false,
 			AfterMerge:     "a routed step (game-demo: the gift's debit and refund, the guild sagas' Player steps) is delivered only to the sid the saga was started with (saga.StartRequest.Route): a saga still routed to A would never advance past its timeouts; once every saga is terminal A's routed durables are idle leftovers",
 			Action:         fmt.Sprintf("every saga must be terminal before the merge (checked: saga:<stream>); after the merge delete A's routed durables on every saga stream: nats consumer ls %s_G<g> | grep -- '-%s$' ; nats consumer rm %s_G<g> <name>", from.saga.Layout.Stream, sid, from.saga.Layout.Stream),
-			Source:         "framework/saga/step_consumer.go (StepConsumerConfig.Route); demo/internal/service/game/gift_saga.go.tmpl (register, admitBound)",
+			Source:         "framework/saga/step_consumer.go (StepConsumerConfig.Route); modules/gift/files/game/modules/gift/runtime/gift_saga.go.tmpl (register, Admit)",
 		},
 	}
 	syncbus := BusItem{

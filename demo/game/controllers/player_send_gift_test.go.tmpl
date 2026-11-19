@@ -3,14 +3,15 @@ package controllers
 import (
 	"context"
 	"testing"
+	"{{MODULE}}/game/modules/gift"
 
-	playerentity "{{MODULE}}/game/entities/player"
-	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	playeraccess "github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
 )
 
 // recordingNest is a Nest client that answers every Request and remembers the
@@ -37,6 +38,10 @@ func (client *recordingNest) Request(_ context.Context, name corenest.HandlerNam
 // sidOwners is the ownership table of a process with sid 1300.
 type sidOwners struct{ recordingOwners }
 
+func (sidOwners) AdmitBound(context.Context, int64) (gift.Admission, error) {
+	return gift.Admission{SID: 1300, Local: true}, nil
+}
+
 func (sidOwners) SID() int32 { return 1300 }
 
 // 静态绑定：send_gift 把本进程的 sid
@@ -45,8 +50,12 @@ func (sidOwners) SID() int32 { return 1300 }
 func TestSendGiftWritesThisProcessSidAsTheSendersSid(t *testing.T) {
 	playerentity.RegisterEntity()
 	nest := &recordingNest{}
-	controller := &Controller{registry: app.NewRegistry(viper.New()), nestClient: nest}
-	useLoginForTest(controller, nil, &sidOwners{})
+	cfg := viper.New()
+	cfg.Set("sid", 1300)
+	controller := &Controller{registry: app.NewRegistry(cfg), nestClient: nest}
+	if err := controller.registry.Register(gift.OwnershipCapability, &sidOwners{}); err != nil {
+		t.Fatal(err)
+	}
 	response, err := controller.HandleSendGift(&playeraccess.Context{BaseCtx: context.Background(), Session: boundTo(1300), PlayerID: stuckPlayerID, MsgID: msgid.MsgSendGift, Seq: 7}, &pb.SendGiftRequest{ToPlayerID: 43, ItemID: 1001, Count: 2})
 	if err != nil || response.Code != 0 {
 		t.Fatalf("send_gift = %+v, %v", response, err)

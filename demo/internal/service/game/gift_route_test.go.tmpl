@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"{{MODULE}}/game/gift"
 	"{{MODULE}}/game/modules/alliance"
 	allianceruntime "{{MODULE}}/game/modules/alliance/runtime"
+	"{{MODULE}}/game/modules/gift"
+	giftruntime "{{MODULE}}/game/modules/gift/runtime"
 	gamerehome "{{MODULE}}/game/modules/rehome"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/msgid"
@@ -82,9 +83,9 @@ func giftCommand(t *testing.T, from int64, fromSID int32, route int32) saga.Comm
 // (empty — nobody has logged in). It has no binding authority: a player it
 // has no record of counts as bound here. The tests that are about the binding
 // use routeWorld instead.
-func routeSteps(local int32) (giftSteps, *PlayerOwners) {
+func routeSteps(local int32) (*PlayerOwners, *PlayerOwners) {
 	owners := newPlayerOwners(local, nil, nil)
-	return giftSteps{owners: owners}, owners
+	return owners, owners
 }
 
 // routeWorld is the account service with servers 1000 and 1001 open and one
@@ -112,10 +113,10 @@ func newRouteWorld(t *testing.T) *routeWorld {
 	w.accounts, err = svcaccount.New(svcaccount.Config{
 		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
 		AccountIDs: svcaccount.NewMemoryAccountIDs(), Games: []svcaccount.GameSpec{{Name: "main"}},
-		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
-		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
-		Names:    names,
-		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Roles:   versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Names:   names,
+		Slots:   versionstore.NewMemoryStore[string, svcaccount.Slot](),
 		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
 			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
 		}),
@@ -164,7 +165,7 @@ type routeServer struct {
 	registry *app.Registry
 	owners   *PlayerOwners
 	departer *routeDeparter
-	gifts    giftSteps
+	gifts    *PlayerOwners
 }
 
 func (w *routeWorld) server(t *testing.T, sid int32) *routeServer {
@@ -187,7 +188,7 @@ func (w *routeWorld) server(t *testing.T, sid int32) *routeServer {
 	if err := registry.Register(alliance.PlayerBindingCapability, alliancePlayerBinding{owners: owners}); err != nil {
 		t.Fatal(err)
 	}
-	return &routeServer{registry: registry, owners: owners, departer: departer, gifts: giftSteps{owners: owners}}
+	return &routeServer{registry: registry, owners: owners, departer: departer, gifts: owners}
 }
 
 // debit is a gift debit command for the world's player that reached this
@@ -244,7 +245,7 @@ func TestAdmitRunsTheOwnersOwnStep(t *testing.T) {
 	if err := owners.Serve(context.Background(), 42, routeLocalSID); err != nil {
 		t.Fatal(err)
 	}
-	if err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
+	if err := giftruntime.Admit(context.Background(), steps, giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
 		t.Fatalf("the owner was refused its own step: %v", err)
 	}
 }
@@ -261,7 +262,7 @@ func TestAnOfflineSendersStepRunsOnTheSidTheyAreBoundTo(t *testing.T) {
 	if home.owners.Resident(world.player) {
 		t.Fatal("precondition: the sender is offline and not resident")
 	}
-	if err := home.gifts.admitBound(context.Background(), world.debit(t, routeLocalSID, routeLocalSID)); err != nil {
+	if err := giftruntime.Admit(context.Background(), home.gifts, world.debit(t, routeLocalSID, routeLocalSID)); err != nil {
 		t.Fatalf("the step of an offline sender bound to this sid was refused: %v", err)
 	}
 	if !home.owners.Resident(world.player) {
@@ -279,7 +280,7 @@ func TestAnOfflineSendersStepRunsOnTheSidTheyAreBoundTo(t *testing.T) {
 func TestAStepForASenderBoundElsewhereIsBouncedToHisSid(t *testing.T) {
 	world := newRouteWorld(t)
 	other := world.server(t, routeOtherSID)
-	err := other.gifts.admitBound(context.Background(), world.debit(t, routeOtherSID, routeOtherSID))
+	err := giftruntime.Admit(context.Background(), other.gifts, world.debit(t, routeOtherSID, routeOtherSID))
 	expectBounce(t, "a step for a sender bound to sid 1000 that reached 1001", err, saga.SidRoute(routeLocalSID))
 	if other.owners.Resident(world.player) {
 		t.Fatal("bouncing the step took a player bound to another sid into service here")
@@ -291,7 +292,7 @@ func TestAStepForASenderBoundElsewhereIsBouncedToHisSid(t *testing.T) {
 	// plain error (redelivered here), neither a bounce nor a rejection.
 	unreachable := world.server(t, routeOtherSID)
 	unreachable.owners.bound = func(context.Context, int64) (int32, bool, error) { return 0, false, errors.New("account is away") }
-	err = unreachable.gifts.admitBound(context.Background(), world.debit(t, routeLocalSID, routeOtherSID))
+	err = giftruntime.Admit(context.Background(), unreachable.gifts, world.debit(t, routeLocalSID, routeOtherSID))
 	var bounce *saga.StepBounce
 	var rejection *saga.StepRejection
 	if err == nil || errors.As(err, &bounce) || errors.As(err, &rejection) || unreachable.owners.Resident(world.player) {
@@ -317,9 +318,9 @@ func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
 	if _, err := world.accounts.BeginRoleTransfer(ctx, world.player, svcaccount.TransferRequest{ID: "move-1", FromSID: routeLocalSID, To: routeOtherSID}); err != nil {
 		t.Fatal(err)
 	}
-	expectBounce(t, "a step for a moving sender on the sid he is still bound to", old.gifts.admitBound(ctx, command), "")
+	expectBounce(t, "a step for a moving sender on the sid he is still bound to", giftruntime.Admit(ctx, old.gifts, command), "")
 	expectBounce(t, "a alliance step for a moving player", allianceruntime.AdmitPlayerStep(ctx, old.registry, allianceCommand), "")
-	expectBounce(t, "a step for a moving sender on the sid he is moving to", next.gifts.admitBound(ctx, command), "")
+	expectBounce(t, "a step for a moving sender on the sid he is moving to", giftruntime.Admit(ctx, next.gifts, command), "")
 	if old.owners.Resident(world.player) || next.owners.Resident(world.player) {
 		t.Fatal("bouncing the step of a moving sender took him into service")
 	}
@@ -328,12 +329,12 @@ func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
 	if _, err := world.accounts.CommitRoleTransfer(ctx, world.player, "move-1"); err != nil {
 		t.Fatal(err)
 	}
-	expectBounce(t, "the step on the old sid after the commit", old.gifts.admitBound(ctx, command), saga.SidRoute(routeOtherSID))
+	expectBounce(t, "the step on the old sid after the commit", giftruntime.Admit(ctx, old.gifts, command), saga.SidRoute(routeOtherSID))
 	expectBounce(t, "the alliance step on the old sid after the commit", allianceruntime.AdmitPlayerStep(ctx, old.registry, allianceCommand), saga.SidRoute(routeOtherSID))
 	if old.owners.Resident(world.player) {
 		t.Fatal("the old sid took a player who moved away into service")
 	}
-	if err := next.gifts.admitBound(ctx, command); err != nil {
+	if err := giftruntime.Admit(ctx, next.gifts, command); err != nil {
 		t.Fatalf("the same command on the new sid = %v, want it admitted", err)
 	}
 	if !next.owners.Resident(world.player) {
@@ -366,7 +367,7 @@ func TestAStepForAPlayerThisProcessIsMovingOutIsBounced(t *testing.T) {
 	if err := home.owners.Reserve(move); !errors.Is(err, apperrors.ErrRehomeMoving) {
 		t.Fatalf("a second reservation = %v, want rehome_moving", err)
 	}
-	expectBounce(t, "a step for a player with the leaving mark", home.gifts.admitBound(ctx, command), "")
+	expectBounce(t, "a step for a player with the leaving mark", giftruntime.Admit(ctx, home.gifts, command), "")
 	// From the mark on the write gate refuses his new requests (RV-20261111-BM-05):
 	// a request admitted after the checks could undo what they checked. The
 	// login message is exempt — the check before entering answers it.
@@ -384,7 +385,7 @@ func TestAStepForAPlayerThisProcessIsMovingOutIsBounced(t *testing.T) {
 	if err := home.owners.Settle(ctx, move, gamerehome.Aborted); err != nil {
 		t.Fatal(err)
 	}
-	if err := home.gifts.admitBound(ctx, command); err != nil || len(home.departer.handed) != 0 {
+	if err := giftruntime.Admit(ctx, home.gifts, command); err != nil || len(home.departer.handed) != 0 {
 		t.Fatalf("after the abort the step = %v (handed off %v), want it admitted", err, home.departer.handed)
 	}
 	if err := home.owners.Admit(world.player); err != nil {
@@ -404,11 +405,11 @@ func TestAStepForAPlayerThisProcessIsMovingOutIsBounced(t *testing.T) {
 	if !errors.Is(home.owners.Admit(world.player), apperrors.ErrRehomeMoving) || home.owners.Resident(world.player) {
 		t.Fatal("after the hand-off the write gate still admits the player")
 	}
-	expectBounce(t, "a step after the hand-off, before the commit", home.gifts.admitBound(ctx, command), "")
+	expectBounce(t, "a step after the hand-off, before the commit", giftruntime.Admit(ctx, home.gifts, command), "")
 	if err := home.owners.Settle(ctx, move, gamerehome.Committed); err != nil {
 		t.Fatal(err)
 	}
-	expectBounce(t, "a step after the commit", home.gifts.admitBound(ctx, command), saga.SidRoute(routeOtherSID))
+	expectBounce(t, "a step after the commit", giftruntime.Admit(ctx, home.gifts, command), saga.SidRoute(routeOtherSID))
 	if home.owners.Resident(world.player) || len(home.departer.released) != 0 {
 		t.Fatalf("after the commit: resident=%v released=%v, want neither", home.owners.Resident(world.player), home.departer.released)
 	}
@@ -516,11 +517,11 @@ func TestAStepThatNamesNoSenderSidIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rejection *saga.StepRejection
-	if err := steps.admitBound(context.Background(), giftCommand(t, 42, 0, routeLocalSID)); !errors.As(err, &rejection) {
+	if err := giftruntime.Admit(context.Background(), steps, giftCommand(t, 42, 0, routeLocalSID)); !errors.As(err, &rejection) {
 		t.Fatalf("a step whose payload names no sender sid = %v, want a rejection", err)
 	}
 	quiet, quietOwners := routeSteps(routeLocalSID)
-	if err := quiet.admitBound(context.Background(), giftCommand(t, 77, 0, routeLocalSID)); !errors.As(err, &rejection) {
+	if err := giftruntime.Admit(context.Background(), quiet, giftCommand(t, 77, 0, routeLocalSID)); !errors.As(err, &rejection) {
 		t.Fatalf("a step whose payload names no sender sid = %v, want a rejection", err)
 	}
 	if quietOwners.Resident(77) {
@@ -540,7 +541,7 @@ func TestAStepForASenderBeingUnloadedIsRetriedHere(t *testing.T) {
 	owners.mu.Lock()
 	owners.evictions[42] = &eviction{done: make(chan struct{})}
 	owners.mu.Unlock()
-	err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID))
+	err := giftruntime.Admit(context.Background(), steps, giftCommand(t, 42, routeLocalSID, routeLocalSID))
 	var bounce *saga.StepBounce
 	var rejection *saga.StepRejection
 	if !errors.Is(err, ErrNotServedHere) || errors.As(err, &bounce) || errors.As(err, &rejection) {

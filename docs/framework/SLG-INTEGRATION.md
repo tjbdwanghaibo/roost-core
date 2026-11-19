@@ -176,7 +176,7 @@ SLG 后续学习以“跨服联盟活动 / 国战”为主线，串起三件事�
 - 视野：空间候选不等于侦察权限；退盟只撤关系来源，别的来源仍命中时保留对象，最后一个来源撤销才退订；不可见单位的敏感字段不能先下发再让客户端隐藏。
 - 活动：窗口身份、参与服集合、阶段推进、贡献身份、累计榜乱序、结算确认、邮件与最终领奖各在何时完成；服离线、重启与人工补发怎样收口。
 
-**跨服学习顺序**：先标出每个状态的 owner sid，再读 Remote 正式写与 Mirror 读取，之后从 [gift_item](../../demo/saga/gift_item/) 学原服事务与跨服 Saga。`scripts/test-remote-generated.sh` 验证 Remote 路径，[MMO 双 sid 赠礼](MMORPG-INTEGRATION.md#13-双-sid-跨服赠礼)验证另一条多进程协作路径，两者不能互相代替。
+**跨服学习顺序**：先标出每个状态的 owner sid，再读 Remote 正式写与 Mirror 读取，之后从 [gift_item](../../modules/gift/README.md) 学原服事务与跨服 Saga。`scripts/test-remote-generated.sh` 验证 Remote 路径，[MMO 双 sid 赠礼](MMORPG-INTEGRATION.md#13-双-sid-跨服赠礼)验证另一条多进程协作路径，两者不能互相代替。
 
 **视野学习顺序**：权威位置 / 权限 → 空间候选 → 各来源归并 → Profile 字段白名单 → 提交后发布 → 客户端 Full / 增量。`SpatialComponent.MoveWithObservedBlocks` 表达“位置唯一、额外多块被观察”，本身不实现战争迷雾。先读 [interest_test](../../framework/sync/entitysync/policy/interest_test.go) 的来源交接、回滚与发布屏障，再跑 `ROOST_NEST_GAME_RACE=1 bash scripts/perf/nest-game.sh --check-spatial` 学正式生成 DAO 的接法。
 
@@ -329,7 +329,7 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 | 城建、研究、行军与离线收益 | 上面的纵切；[业务时间与实体定时器](guide/10-time.md#4-按实体的持久定时器) | `roost add timer --entity Player`；期限与资源同事务 | 队列、速度、消耗、加速、离线补算与库存上限 |
 | 地图、寻路与行军可见性 | [Map 组件](../../demo/game/components/mapview/mapview.go.tmpl)、[地图 runtime](../../demo/game/scene/runtime/)、[Block AOI](INTEREST-BLOCK-AOI.md)、[Sync](guide/04-sync.md) | 位置 / 行军事实存 DAO；地形验证与兴趣索引分开；Tile 竞争纵切 | 地块所有权、寻路限制、战争迷雾、侦察与联盟视野；空间索引不充当持久权威 |
 | 联盟、公会与跨服观察 | game-demo 的 alliance 服务（[Alliance RPC](../../modules/alliance/files/internal/rpc/alliance/alliance.go.tmpl)、[game 侧入口](../../modules/alliance/files/game/modules/alliance/alliance.go.tmpl)）、[Remote 指南](guide/05-remote-mirror.md) | 联盟由 alliance 服务独占写（owner / lease / fence + 路由 RPC）；game 只装只读 Mirror，读镜像展示、写一律走 RPC 或 saga；联合链路见 §7.4 | 联盟权限、名称唯一、成员上限 |
-| 多人协作、交易与跨服赠礼 | [gift_item saga](../../demo/saga/gift_item/)、[Saga 指南](guide/06-saga.md) | 同进程已知实体用多实体 Nest；跨服务用原生步骤 / effect，失败补偿，结果未知按身份查询 | 收件人路由与人工补偿政策 |
+| 多人协作、交易与跨服赠礼 | [gift_item saga](../../modules/gift/README.md)、[Saga 指南](guide/06-saga.md) | 同进程已知实体用多实体 Nest；跨服务用原生步骤 / effect，失败补偿，结果未知按身份查询 | 收件人路由与人工补偿政策 |
 | 联盟活动与世界事件 | [World 定时组件](../../demo/game/entities/world/timer_component.go.tmpl)、[活动接线](../../demo/internal/service/game/activity.go.tmpl) | World 是手写接入 `entitytimer.Host` / `Driver` 的参考实现；基础 `game` 工程用 `roost add timer`；生成器不搬入 demo 业务 | 活动窗口与阶段规则；跨服联盟活动的贡献意图、阶段屏障与原服奖励见 §7 |
 | 副本、赛季奖励与排行 | [ClaimDungeon](../../demo/game/handler/claim_dungeon.go.tmpl)、[FinishDungeon](../../demo/game/controllers/player_finish_dungeon.go.tmpl) | 通关账本、奖励与每赛季累计次数同事务；排行提交累计快照（`UpdateMax`），不依赖短期去重环做增量 | 奖励额度、赛季切换、补发政策 |
 | 活动贡献与结算榜 | [活动接线](../../demo/internal/service/game/activity.go.tmpl) | 只在首次真实付款时贡献；结算榜保留较大的累计值 | 活动尽力贡献失败不自动补报是已接受取舍，不能借重放把旧奖励贡献到新窗口 |

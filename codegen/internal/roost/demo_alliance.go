@@ -13,7 +13,7 @@ const demoAllianceService = "alliance"
 func demoAllianceSteps(gameService string) []demoScaffoldStep {
 	return []demoScaffoldStep{
 		{write: "internal/service/game/alliance.go", why: "alliance module start after demo PlayerOwners is ready"},
-		{run: demoAllianceRuntime, why: "demo owns alliance startup order, module owns all business logic"},
+		{run: demoOwnedSagaRuntimes, why: "start alliance and gift after the demo publishes its residency table"},
 		{run: demoAllianceConfig, why: "demo alliance limits and isolated development WAL"},
 		{run: enableDemoAllianceAdmin, why: "demo alliance operator endpoint"},
 		{run: demoGameMirrorStaleness, why: "demo Mirror refresh bound"},
@@ -105,8 +105,8 @@ func demoAllianceConfig(root, _ string) error {
 	return writeAtomic(filepath.Join(root, filepath.FromSlash(activityGroupsFile)), []byte(renderActivityGroups(m)), 0o644)
 }
 
-// demo 在 Service.Init 中先发布自有驻留表，再启动联盟消费者；关闭缺省自动启动，避免启动两份消费者。
-func demoAllianceRuntime(root, _ string) error {
+// demo 在 Service.Init 中先发布驻留表，再启动联盟与送礼消费者；关闭自动启动，避免重复订阅。
+func demoOwnedSagaRuntimes(root, _ string) error {
 	before, err := os.ReadFile(filepath.Join(root, ManifestName))
 	if err != nil {
 		return err
@@ -115,8 +115,10 @@ func demoAllianceRuntime(root, _ string) error {
 	if err != nil {
 		return err
 	}
-	record := m.Modules["alliance"]
-	record.Runtime = nil
-	m.Modules["alliance"] = record
+	for _, name := range []string{"alliance", "gift"} {
+		record := m.Modules[name]
+		record.Runtime = nil
+		m.Modules[name] = record
+	}
 	return commitManifestSync(root, before, m)
 }

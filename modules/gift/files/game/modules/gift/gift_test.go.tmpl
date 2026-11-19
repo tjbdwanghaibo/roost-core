@@ -8,7 +8,7 @@ import (
 )
 
 // 使用真实认证器的会话格式：长玩家 ID 会把时间戳挤出旧的 16 字符前缀。
-func TestSagaIDDistinguishesDemoLogins(t *testing.T) {
+func TestGiftSagaIDDistinguishesDemoLogins(t *testing.T) {
 	const playerID int64 = 123456789
 	first := fmt.Sprintf("demo-%d-%d", playerID, int64(1_800_000_000_000_000_000))
 	second := fmt.Sprintf("demo-%d-%d", playerID, int64(1_800_000_001_000_000_000))
@@ -18,7 +18,7 @@ func TestSagaIDDistinguishesDemoLogins(t *testing.T) {
 }
 
 // 身份必须包含整个会话，不能因截断或把不同字符替换成同一字符而合并请求。
-func TestSagaIDUsesTheCompleteSession(t *testing.T) {
+func TestGiftSagaIDUsesTheCompleteSession(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"session-00000000-A", "session-00000000-B"},
 		{"session.a", "session*a"},
@@ -30,7 +30,7 @@ func TestSagaIDUsesTheCompleteSession(t *testing.T) {
 	}
 }
 
-func TestSagaIDIsStableScopedAndSubjectSafe(t *testing.T) {
+func TestGiftSagaIDIsStableScopedAndSubjectSafe(t *testing.T) {
 	const session = "session.with * unsafe > bytes 和中文"
 	id := SagaID(math.MaxInt64, session, math.MaxUint32)
 	if id != SagaID(math.MaxInt64, session, math.MaxUint32) {

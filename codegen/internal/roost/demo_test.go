@@ -207,7 +207,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	} else if saga := slices.IndexFunc(steps, func(step demoScaffoldStep) bool { return step.add != nil && step.add.Kind == "saga" }); saga >= 0 && first > saga {
 		t.Error("cellworld is installed after the GiftItem saga step, whose full refresh needs the module's nested types on disk")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime room turn matchroom matchmaking"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment gm purchase team alliance login portal servertime room turn matchroom matchmaking gift"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	modules = append([]string{"cellworld"}, modules...)
@@ -254,7 +254,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	}
 	// demo 只写自己的跨模块玩法。联盟、邮件和付费发货 handler 由各自模块提供。
 	for _, rel := range []string{
-		"game/handler/add_item.go", "game/handler/start_gift.go", "game/handler/gift_debit.go", "game/handler/gift_refund.go",
+		"game/handler/add_item.go",
 		"game/handler/purchase_balance.go",
 		"game/handler/add_exp.go", "game/handler/claim_dungeon.go",
 	} {
@@ -744,14 +744,14 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/controllers/player_enter_dungeon.go", "game/controllers/player_finish_dungeon.go",
 		"game/modules/skills/fireball.json", "game/modules/skills/catalog.go", "protocol/def/skillbook_catalog.go", "game/controllers/skillbook.go",
 		"internal/service/game/gm.go",
-		"saga/gift_item/definition.go", "game/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
-		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player_send_gift.go", "game/controllers/player_gift_status.go",
-		"internal/service/game/gift_saga.go", "internal/errors/bag.go", "internal/service/game/bag_sync_test.go",
+		"saga/gift_item/definition.go", "game/modules/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
+		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/gift.go",
+		"game/modules/gift/runtime/gift_saga.go", "internal/errors/bag.go", "internal/service/game/bag_sync_test.go",
 		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
 		"game/controllers/player_battle_input.go", "internal/service/game/battle.go",
 		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go",
 		"internal/service/game/battle_test.go", "game/handler/claim_harness_test.go",
-		"game/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/alliance_test.go"} {
+		"game/modules/gift/gift_test.go", "game/handler/add_exp_test.go", "game/controllers/alliance_test.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -802,9 +802,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// 发件方都走模块的 SendTo，附件是模块的编码；升级奖励的幂等键是 EffectID（见下面事件链那一段）。
 	for rel, call := range map[string]string{
-		"game/modules/gm/mailbox.go":         "Attachment: payload.Attachment",
-		"internal/service/game/activity.go":  "gamemailbox.Item(reward.ItemID, int64(reward.Count))",
-		"internal/service/game/gift_saga.go": "gamemailbox.Item(state.ItemID, int64(state.Count))",
+		"game/modules/gm/mailbox.go":             "Attachment: payload.Attachment",
+		"internal/service/game/activity.go":      "gamemailbox.Item(reward.ItemID, int64(reward.Count))",
+		"game/modules/gift/runtime/gift_saga.go": "gamemailbox.Item(state.ItemID, int64(state.Count))",
 	} {
 		if body := read(rel); !strings.Contains(body, "gamemailbox.SendTo(") || !strings.Contains(body, call) || strings.Contains(body, "svcmail.SendRequest{") {
 			t.Errorf("%s does not send through the mailbox module's SendTo with the module's attachment (%s)", rel, call)
@@ -970,8 +970,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if definition := read("saga/gift_item/definition.go"); strings.Contains(definition, "func Subscribe") || !strings.Contains(definition, "TopicDebitCompensation") {
 		t.Errorf("generated saga definition must carry the step topics and no Subscribe* helpers:\n%s", definition)
 	}
-	if steps := read("saga/gift_item/steps.go"); strings.Contains(steps, "func StartSteps(") || !strings.Contains(steps, "gift_saga.go") {
-		t.Errorf("the demo's saga/gift_item/steps.go must point at gift_saga.go instead of a second registration:\n%s", steps)
+	if _, err := os.Stat(filepath.Join(target, "saga/gift_item/steps.go")); !os.IsNotExist(err) {
+		t.Fatal("unexpected duplicate gift step registration", err)
+	}
+	if !strings.Contains(read("protocol/def/send_gift.go"), "id=10013") || !strings.Contains(read("protocol/def/gift_status.go"), "id=10014") {
+		t.Fatal("gift client protocol IDs changed")
 	}
 	// Two step shapes, one per kind of work: the Nest-transaction steps bind
 	// their receipt and emit their completion inside the transaction (the
@@ -979,15 +982,15 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// service's own RequestID dedupe.
 	// The glue (inboxes, publisher, durables, drain) is the framework's step
 	// runtime (D12 方向 A); the demo registers step bodies by name.
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, `runtime.Native("debit", giftitem.TopicDebit, steps.debit, kitsaga.WithSidRoute()`) || !strings.Contains(steps, "runtime.Mongo(\"deliver\", giftitem.TopicDeliver") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
+	if steps := read("game/modules/gift/runtime/gift_saga.go"); !strings.Contains(steps, `runtime.Native("debit", giftitem.TopicDebit, steps.debit, kitsaga.WithSidRoute()`) || !strings.Contains(steps, "runtime.Mongo(\"deliver\", giftitem.TopicDeliver") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
 		t.Errorf("gift saga does not run the Nest steps natively while keeping the mail step on the Mongo inbox")
 	}
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "kitsaga.NewSteps(registry, giftSagaSteps)") || !strings.Contains(steps, "saga.BounceStep(saga.SidRoute(admission.SID)") || strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
+	if steps := read("game/modules/gift/runtime/gift_saga.go"); !strings.Contains(steps, "kitsaga.NewSteps(registry, giftSagaSteps)") || !strings.Contains(steps, "saga.BounceStep(saga.SidRoute(admission.SID)") || strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
 		t.Errorf("gift saga does not assemble its consumers through the framework's step runtime, or does not bounce a step for a sender bound elsewhere")
 	}
 	// 准入按玩家当前的绑定（rehome 模块）：换服中的退回不带路由，绑定别处的退回并给出当前 sid；
 	// 载荷里的 sid 不再决定，旧的 playerMoving 钩子与它的 TODO 已经删掉。公会的玩家步骤走同一个函数。
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "owners.AdmitBound(ctx, playerID)") || !strings.Contains(steps, `saga.BounceStep("", `) || strings.Contains(steps, "playerMoving") || strings.Contains(steps, "notMoving") {
+	if steps := read("game/modules/gift/runtime/gift_saga.go"); !strings.Contains(steps, "owners.AdmitBound(ctx, playerID)") || !strings.Contains(steps, `saga.BounceStep("", `) || strings.Contains(steps, "playerMoving") || strings.Contains(steps, "notMoving") {
 		t.Errorf("gift saga does not admit its Player steps by the sender's current binding")
 	}
 	if steps := read("game/modules/alliance/runtime/runtime.go"); !strings.Contains(steps, "alliance.Binding(ctx, registry, playerID, sid)") || strings.Contains(steps, "playerMoving") {
@@ -1019,7 +1022,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if debit := read("game/handler/gift_debit.go"); !strings.Contains(debit, "step saga.NativeStep)") {
 		t.Errorf("the debit handler does not take the framework's native step")
 	}
-	if contract := read("game/gift/gift.go"); strings.Contains(contract, "NativeStep struct") {
+	if contract := read("game/modules/gift/gift.go"); strings.Contains(contract, "NativeStep struct") {
 		t.Errorf("the gift contract still carries its own native step; it is saga.NativeStep now")
 	}
 	// A step's topics come from the generated definition, so a durable and
@@ -1377,11 +1380,11 @@ func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "internal", "service", "game")); !os.IsNotExist(err) {
 		t.Fatalf("internal/service/game exists in a project whose game service is arena (err=%v)", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(target, "internal", "service", "arena", "gift_saga.go"))
+	raw, err := os.ReadFile(filepath.Join(target, "game", "modules", "gift", "runtime", "gift_saga.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"package " + defaultServicePackage("arena"), `"arena-gift"`} {
+	for _, want := range []string{"package giftruntime", `"arena-gift"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("gift_saga.go lacks %q:\n%s", want, raw)
 		}

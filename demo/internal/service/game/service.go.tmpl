@@ -1,15 +1,16 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
-	"{{MODULE}}/game/announce"
-	playerentity "{{MODULE}}/game/entities/player"
-	sceneentity "{{MODULE}}/game/entities/scene"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"{{MODULE}}/game/announce"
+	playerentity "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 
 	world "{{MODULE}}/game/entities/world"
+	giftruntime "{{MODULE}}/game/modules/gift/runtime"
 	gamerehome "{{MODULE}}/game/modules/rehome"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
@@ -262,7 +263,7 @@ func (s *Service) Init(registry *app.Registry) error {
 	s.stopMatchmaker = stop
 	// The gift saga's step consumers (gift_saga.go): the saga Mod has
 	// started, so the stream exists and the coordinator is running.
-	giftSteps, err := startGiftSaga(context.Background(), registry)
+	giftSteps, err := giftruntime.StartSteps(context.Background(), registry, owners)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}

@@ -24,6 +24,6 @@ type GiftStatusResponse struct {
 
 //roost:protocol group=game handler=player
 type GiftStatusProtocol interface {
-	//roost:msg id=10014
+	//roost:msg id={{ID:protocol:GiftStatus}}
 	GiftStatus(GiftStatusRequest) GiftStatusResponse
 }

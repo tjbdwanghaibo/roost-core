@@ -76,7 +76,7 @@ if err := steps.Start(ctx); err != nil { ... }                   // 登记错误
   `ev.to.<sid>.<topic>`，只有那个 sid 的 durable 收到，非属主进程收不到，结果一次投递就发出，不再受 nak 退避控制。属主仍用 `WithAdmit` 核对实体
   归属：不在本服（或正在换服）时 `saga.BounceStep` 退回协调器（不执行、零写入，可带新地址；退回不算重试，不消耗尝试次数，正向受 saga 截止约束），永远不能执行的 `saga.RejectStep` 拒收，
   暂时不能执行的返回普通错误（nak 回到同一 sid）。细则与 JetStream 资源变化见 [SAGA §按 sid 确切路由](../SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③)。
-  game-demo 的赠礼 saga（`internal/service/game/gift_saga.go`）与公会 saga（`alliance_saga.go`）是完整样例。
+  [gift 模块](../../../modules/gift/README.md)的 `game/modules/gift/runtime/gift_saga.go` 和 [alliance 模块](../../../modules/alliance/README.md)的 `game/modules/alliance/runtime` 是完整样例。
 - 底层 API（`SubscribeNativeStep` / `SubscribeMongoStep` / `RunNativeStep` / `NewLoadPublisher`）公开，只在需要自定义消费者参数时直接用。
 
 **生成器**：上面的写法由 `roost add saga` 与 `roost add effect` 生成骨架，生成物都是业务文件、只建一次，服务的 Init / Shutdown 归业务、生成器不改写：
@@ -96,8 +96,7 @@ roost add effect player.level_up -consumer game
 - 骨架默认拒绝：写完业务之前不会报告成功。`roost project doctor` 的 `saga-steps:<name>` / `effect-consumer:<service>/<func>`（只读 WARN）在生成了却没有
   服务启动时提示。
 - `-routed` 必须是 `-steps` 的子集：这些步骤在定义里 `Routed: true`，生成的登记加 `kitsaga.WithSidRoute()`，`EmitStart` / `Start` 多一个 `route` 参数。
-- game-demo 的赠礼 saga 保留手写接线（`gift_saga.go`：属主核对要用服务 Init 里才有的玩家驻留表），PlayerDao 的回执字段与
-  `saga_receipts.go` 也是手写的参考实现。
+- `gift` 模块声明 Saga 定义和 Player 原生步骤回执，安装器生成 `saga_receipts.go`，与联盟步骤共用同一个回执表。game-demo 只定启动顺序：先建驻留表，再把它传给模块的 `StartSteps`；不再自行实现步骤。
 
 ## 3. 幂等与结果未知
 
