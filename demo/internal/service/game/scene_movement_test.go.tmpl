@@ -22,6 +22,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/clientsync"
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
@@ -539,6 +540,81 @@ func TestATwiceAsFastSceneWalksTwiceAsFarAndTellsItsMembers(t *testing.T) {
 	}
 	if asInt64(sceneState["time_anchor_business"]) == 0 {
 		t.Fatalf("the member was not told the domain's anchor: %v", sceneState)
+	}
+}
+
+// The world keeps its encoded identity; a full DAO patch carries _id, the next patch inherits it.
+func TestWorldSceneTimeWireAndRollback(t *testing.T) {
+	w := newMoveWorld(t)
+	area := w.area
+	id, err := entity.BuildEntityID(1, 3)
+	if err != nil || area.ID() != id || area.UniqueID() != 1 || area.GetEntityKind() != 3 {
+		t.Fatalf("world identity: %d, want %d (%v)", area.ID(), id, err)
+	}
+	set := func(rate float64) {
+		t.Helper()
+		if _, err := syncsender.NewSetSceneTimeRateSender(w.engine).Sync_SetSceneTimeRate(w.ctx, id, rate); err != nil {
+			t.Fatal(err)
+		}
+		w.settle(id)
+	}
+	const watcher = int64(9731)
+	read := func() map[string]any {
+		t.Helper()
+		if err := w.bridge.Flush(w.ctx); err != nil {
+			t.Fatal(err)
+		}
+		return decodeSceneFrames(t, watcher, w.recorder.take(watcher))[id]
+	}
+	set(1.5)
+	w.join(watcher, spatial.Point{X: 300, Y: 300})
+	snap := read()
+	if snap["_id"] != id || snap["time_rate"] != 1.5 || asInt64(snap["time_anchor_business"]) == 0 || asInt64(snap["time_anchor_domain"]) == 0 {
+		t.Fatalf("old client could not read full scene time: %v", snap)
+	}
+	w.clock.advance(time.Second)
+	set(2)
+	delta := read()
+	if _, full := delta["_id"]; full || delta["time_rate"] != float64(2) || asInt64(delta["time_anchor_domain"]) <= asInt64(snap["time_anchor_domain"]) {
+		t.Fatalf("old client did not get a scene time delta: %v", delta)
+	}
+	before := area.TimeDomain().State()
+	reject := errors.New("rollback a valid scene rate")
+	_, err = w.engine.Request(w.ctx, sharedBodyWrite, id, nest.NewParams(func() error {
+		if err := area.SetTimeRate(3); err != nil {
+			return err
+		}
+		return reject
+	}))
+	if !errors.Is(err, reject) {
+		t.Fatal(err)
+	}
+	w.settle(id)
+	if got := locked(w, id, area.Dao().GetTimeRate); got != 2 || area.TimeDomain().State() != before {
+		t.Fatalf("rolled-back scene rate published: %v", got)
+	}
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Periodic sync may repeat restored fields. Inspect every update, not only the last one.
+	for _, push := range w.recorder.take(watcher) {
+		for _, object := range decodedPush(t, push).Objects {
+			for _, component := range object.Components {
+				u := component.Update
+				if u.SubjectID != id {
+					continue
+				}
+				fields, err := clientsync.DecodeFields(u)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for key, want := range map[string]any{"time_rate": before.Rate, "time_anchor_domain": before.AnchorDomainNano, "time_anchor_business": before.AnchorBusinessNano} {
+					if got, ok := fields[key]; ok && got != want {
+						t.Fatalf("rolled-back scene sent %s=%v, committed %v", key, got, want)
+					}
+				}
+			}
+		}
 	}
 }
 
