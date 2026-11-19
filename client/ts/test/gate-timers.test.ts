@@ -147,6 +147,30 @@ test("disconnect while connecting ends connect at once with GateClosedError, eve
   }
 });
 
+for (const kind of ["request", "probeClock", "notify"] as const) {
+  test(`write failure settles pending callbacks once (${kind})`, async () => {
+    const { network, client } = setup({ heartbeatIntervalMs: 0 });
+    await client.connection.connect("t");
+    const pending: Error[] = [], origin: Error[] = [];
+    let successes = 0;
+    const unexpected = () => { successes++; };
+    client.request(5, 6, utf8("pending"), text, unexpected, (e) => pending.push(e));
+    const cause = new Error("scripted write failure");
+    network.last.send = () => { throw cause; };
+    if (kind === "request") client.request(7, 8, utf8("x"), text, unexpected, (e) => origin.push(e));
+    else if (kind === "probeClock") client.probeClock(unexpected, (e) => origin.push(e));
+    else assert.throws(() => client.connection.notify(7, utf8("x")), GateClosedError);
+    await settle(); // include failures queued by GameClient.begin
+    assert.equal(successes, 0);
+    assert.equal(pending.length, 1);
+    assert.equal(origin.length, kind === "notify" ? 0 : 1);
+    assert.ok([...pending, ...origin].every((e) => e instanceof GateClosedError));
+    assert.equal(client.connection.lastError, cause);
+    assert.equal(client.connection.state, ConnectionState.Disconnected);
+    client.dispose();
+  });
+}
+
 test("the request timeout fails the request and keeps the connection", async () => {
   const { clock, network, client } = setup({ requestTimeoutMs: 1000, heartbeatIntervalMs: 0 });
   await client.connection.connect("t");
