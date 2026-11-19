@@ -293,7 +293,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		BacklogInterval: settings.Outbox.BacklogInterval,
 		OnHardLimit:     mod.onFatal,
 	}
-	databases, err := NewDatabaseMap(settings.Databases, sid, mod.resolver)
+	databases, err := NewDatabaseMap(settings.Databases, settings.DatabasePrefix, sid, mod.resolver)
 	if err != nil {
 		return err
 	}

@@ -240,5 +240,5 @@ func withContext(ctx context.Context) context.Context {
 // physical 是这一侧逻辑库在 Mongo 里的实际库名：映射表给出的库名再加 mongo.database_prefix（与 game 进程经
 // Mongo Mod 交出的带前缀客户端打开的库同一规则）。合服直接用驱动客户端拷数据，不经那个客户端，所以库名在这里算全。
 func (s side) physical(logical string) string {
-	return mods.PrefixedDatabase(s.dbPrefix, s.databases.Physical(logical))
+	return s.databases.Effective(logical) // 映射表由 LoadDatabaseMap 按同一份配置的前缀合成
 }

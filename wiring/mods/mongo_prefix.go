@@ -14,7 +14,7 @@ const MaxMongoDatabasePrefix = 40
 // 业务与框架各处写的库名（dataengine.database、dataengine.databases、saga.database、remote_entity.mongo.database、
 // 业务代码里的库名）都不带前缀；前缀为空时它们就是 Mongo 里的库名。
 type MongoDatabasePrefix struct {
-	DatabasePrefix string `config:"mongo.database_prefix" example:"{project_db}" help:"库名前缀：非空时每个业务库在 Mongo 里是 <前缀>_<库名>（按 sid 分库时 <前缀>_<库名>_<sid>），系统库 admin / local / config 不加；\n为空时库名就是配置与代码里写的名字。生成配置写工程名，同一台机器上共用一个 Mongo 的不同工程因此不撞库。\n各处配置的库名都不带前缀。至多 40 字节，只用字母、数字、_ 与 -；改它等于换库，先迁移数据"`
+	DatabasePrefix string `config:"mongo.database_prefix" example:"{project_db}" help:"库名前缀：非空时每个业务库在 Mongo 里是 <前缀>_<库名>（按 sid 分库时 <前缀>_<库名>_<sid>），系统库 admin / local / config 不加；\n为空时库名就是配置与代码里写的名字。生成配置写工程名，同一台机器上共用一个 Mongo 的不同工程因此不撞库。\n各处配置的库名都不带前缀。至多 40 字节，只用字母、数字、_ 与 -；警告：改它等于换库：先停写并排空 WAL（没有未投影记录）、迁移数据，再改；有未投影记录时改它，重启不会拒绝，积压记录会投影进新前缀的库"`
 }
 
 // CheckDatabasePrefix 校验前缀：可以为空；非空时只用字母、数字、_ 与 -，不是系统库名，至多 MaxMongoDatabasePrefix 字节。

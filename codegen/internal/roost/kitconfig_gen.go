@@ -107,7 +107,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "sync.entity.max_frozen_bytes", Kind: "int", Min: "0"},
 		{Name: "server_type", Kind: "string", Help: "服务类型，App 按启动的子命令写入"},
 		{Name: "sid", Kind: "int", Help: "服务实例号（正整数），同一服务类型内唯一；也可以用 --sid 覆盖"},
-		{Name: "mongo.database_prefix", Kind: "string", Help: "库名前缀：非空时每个业务库在 Mongo 里是 <前缀>_<库名>（按 sid 分库时 <前缀>_<库名>_<sid>），系统库 admin / local / config 不加；\n为空时库名就是配置与代码里写的名字。生成配置写工程名，同一台机器上共用一个 Mongo 的不同工程因此不撞库。\n各处配置的库名都不带前缀。至多 40 字节，只用字母、数字、_ 与 -；改它等于换库，先迁移数据", Starter: true, Example: "{project_db}"},
+		{Name: "mongo.database_prefix", Kind: "string", Help: "库名前缀：非空时每个业务库在 Mongo 里是 <前缀>_<库名>（按 sid 分库时 <前缀>_<库名>_<sid>），系统库 admin / local / config 不加；\n为空时库名就是配置与代码里写的名字。生成配置写工程名，同一台机器上共用一个 Mongo 的不同工程因此不撞库。\n各处配置的库名都不带前缀。至多 40 字节，只用字母、数字、_ 与 -；警告：改它等于换库：先停写并排空 WAL（没有未投影记录）、迁移数据，再改；有未投影记录时改它，重启不会拒绝，积压记录会投影进新前缀的库", Starter: true, Example: "{project_db}"},
 		{Name: "dataengine.database", Kind: "string", Default: "game", Help: "Data Engine 自己的集合（receipts / transactions / outbox）所在的库。写不带前缀的名字：Mongo 里是 <mongo.database_prefix>_<库名>，\n生成配置的前缀是工程名，所以共用一个 Mongo 的不同工程不撞库", Starter: true, Example: "game"},
 		{Name: "dataengine.databases", Kind: "map", Help: "DAO 逻辑库（标记里的 db=）→ 库名（不带前缀，Mongo 里再加 mongo.database_prefix）。没写的逻辑库库名就是逻辑名本身；生成配置把骨架的 main 映射到 game。\n只认代码声明过的逻辑库；物理名不能是系统库，按 sid 分库时加上 _<sid> 不超过 63 字节；两个逻辑库不能映射到同一个物理库。\nWAL 里有未投影记录时改映射会拒绝启动：先停写排空 WAL、迁移数据再改（docs/framework/PLAYER-MIGRATION.md）", Starter: true, Example: "{main: game}"},
 		{Name: "dataengine.databases.*", Kind: "string"},
@@ -226,7 +226,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "match.call_timeout", Kind: "duration", Min: "0", Help: "timeout of one call; 0 keeps DefaultCallTimeout (3s)"},
 	}},
 	"mongo": {Keys: []configschema.Key{
-		{Name: "mongo.database_prefix", Kind: "string", Help: "库名前缀：非空时每个业务库在 Mongo 里是 <前缀>_<库名>（按 sid 分库时 <前缀>_<库名>_<sid>），系统库 admin / local / config 不加；\n为空时库名就是配置与代码里写的名字。生成配置写工程名，同一台机器上共用一个 Mongo 的不同工程因此不撞库。\n各处配置的库名都不带前缀。至多 40 字节，只用字母、数字、_ 与 -；改它等于换库，先迁移数据", Starter: true, Example: "{project_db}"},
+		{Name: "mongo.database_prefix", Kind: "string", Help: "库名前缀：非空时每个业务库在 Mongo 里是 <前缀>_<库名>（按 sid 分库时 <前缀>_<库名>_<sid>），系统库 admin / local / config 不加；\n为空时库名就是配置与代码里写的名字。生成配置写工程名，同一台机器上共用一个 Mongo 的不同工程因此不撞库。\n各处配置的库名都不带前缀。至多 40 字节，只用字母、数字、_ 与 -；警告：改它等于换库：先停写并排空 WAL（没有未投影记录）、迁移数据，再改；有未投影记录时改它，重启不会拒绝，积压记录会投影进新前缀的库", Starter: true, Example: "{project_db}"},
 		{Name: "mongo.uri", Kind: "string", Default: "mongodb://localhost:27017", Starter: true, Example: "mongodb://127.0.0.1:27017/?replicaSet=rs0"},
 		{Name: "mongo.uri_env", Kind: "string", Help: "从这个环境变量读 mongo.uri（变量必须已设置且非空，取代 mongo.uri）"},
 		{Name: "mongo.username", Kind: "string", Help: "账号（与 mongo.password 同时写），不写在 mongo.uri 里时用"},

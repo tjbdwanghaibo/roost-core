@@ -35,3 +35,24 @@ FAIL
 
 - 真实 Mongo 上的端到端（生成工程起服后库名为 `<工程名>_game` 等）只由生成器整包里的真实依赖用例覆盖；本机隔离环境的手动起服没做。
 - 已有工程的数据迁移不提供工具（线上未部署，不做兼容）：照 CHANGELOG 升级说明手工处理。
+
+## 评审 A/B 处理
+
+同日评审（分支 `review/main-server-followup` 上的 `REVIEW-2026-11-19-mongo-database-prefix.md`）指出 b05af487 的两处偏差：前缀只在 Mongo Mod 交出的客户端里加，WAL 映射核对与裸驱动工具仍把不带前缀的映射库名当最终库名。
+
+- **B（修）**：前缀非空时 `DAODatabaseFile` 返回 `game` / `game_1000`，`schemamigrate` 与 `sidmove players` 不传 `-db` 会打开不带前缀的库。缺省路径就触发。修法：`coredata.DatabaseMapConfig` 新增 `Effective`，`DatabaseMap.Effective` / `Effectives` 给出实际库名；`wiring/dataengine.NewDatabaseMap` 注入 `mods.PrefixedDatabase(prefix, ·)`；`DAODatabaseFile` 返回实际库名再接 sid，合服 `side.physical` 用实际库名。显式 `-db` 不再加工。运行期客户端仍只加一次前缀。
+- **A（不修，留警告）**：复用同一 WAL 目录、仍有未投影记录、只改 `mongo.database_prefix` 时，`reconcileDatabaseMapping` 只比映射库名（`main → game`），放行；积压记录回放进新前缀的库。维护者：前缀在项目初定下，正常不改，“A 不用修，留一个警告即可”。警告写在 `mongo.database_prefix` 的配置帮助、[13-wiring §2.2](../../../framework/guide/13-wiring.md#22-mongo-库名前缀mongodatabase_prefix)、[03-dataengine](../../../framework/guide/03-dataengine.md) 与 KNOWN-LIMITS（DAO 库名映射 ⑧）。`databases.json` 与停机 WAL 核对保持原样（映射库名）。
+
+### 修前（变异核对：在独立工作树里把 B 的修复退回原样）
+
+```
+$ GOWORK=off go test -count=1 -run TestToolsResolveThePrefixedDatabaseLikeTheProcess ./wiring/dataengine/
+--- FAIL: TestToolsResolveThePrefixedDatabaseLikeTheProcess (0.00s)
+    databases_test.go:333: DAODatabaseFile({global:true}) = "game", <nil>; want "atlas_game" (the database the process opens)
+    databases_test.go:333: DAODatabaseFile({global:false}) = "game_1000", <nil>; want "atlas_game_1000" (the database the process opens)
+FAIL
+```
+
+### 修后
+
+新用例 `TestToolsResolveThePrefixedDatabaseLikeTheProcess`（共享 / 按服 DAO，非空前缀；`LoadDatabaseMapFile` 的 Physical 与 Effective）与改写后的 `TestSidePhysicalAddsTheMongoDatabasePrefix`（空 / 非空前缀的 `physical`，`walCheck` 仍比映射库名）通过；原有无前缀对照 `TestToolsResolveTheDAODatabaseLikeTheProcess` 照常通过。`GOWORK=off go test -count=1 ./framework/dataengine/... ./wiring/... ./infra/storage/mongo/...` 全部 ok，根门禁 `GOWORK=off go test -count=1 .` ok。

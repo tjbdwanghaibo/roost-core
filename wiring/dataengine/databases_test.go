@@ -314,3 +314,27 @@ func TestDatabaseNamesMustFitWithTheMongoPrefix(t *testing.T) {
 		t.Fatalf("config check: %v; want the same refusal as Init", err)
 	}
 }
+
+// 直接用驱动的运维工具（demo 的 schemamigrate、sidmove players）拿 DAODatabaseFile 的结果打开库，后面没有 Mongo Mod 的
+// 前缀封装，所以它返回的必须是实际库名：<mongo.database_prefix>_<映射库名>[_<sid>]，与进程打开的同一个库；
+// LoadDatabaseMapFile 的 Effective 同一规则（合服检查与 WAL 记录用它比对）。
+func TestToolsResolveThePrefixedDatabaseLikeTheProcess(t *testing.T) {
+	coredata.DeclareDatabases(coredata.LogicalDatabase{Name: "wiring_main"})
+	path := filepath.Join(t.TempDir(), "config.game.yaml")
+	if err := os.WriteFile(path, []byte("sid: 1000\nmongo:\n  database_prefix: atlas\ndataengine:\n  databases: {wiring_main: game}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		dao  DAOStore
+		want string
+	}{{scopedDAO{global: true}, "atlas_game"}, {scopedDAO{}, "atlas_game_1000"}} {
+		got, err := DAODatabaseFile(path, 0, c.dao, nil)
+		if err != nil || got != c.want {
+			t.Errorf("DAODatabaseFile(%+v) = %q, %v; want %q (the database the process opens)", c.dao, got, err, c.want)
+		}
+	}
+	databases, err := LoadDatabaseMapFile(path, 0, nil)
+	if err != nil || databases.Physical("wiring_main") != "game" || databases.Effective("wiring_main") != "atlas_game" {
+		t.Fatalf("LoadDatabaseMapFile: Physical %q Effective %q, %v; want game / atlas_game", databases.Physical("wiring_main"), databases.Effective("wiring_main"), err)
+	}
+}

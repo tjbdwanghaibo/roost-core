@@ -16,9 +16,13 @@ import (
 // init 里登记）、配置 dataengine.databases 与回调 resolver（可为 nil，每个声明的逻辑库调用一次；同一逻辑库只能有
 // 一个来源，回调对配置已写的逻辑库返回不同的非空物理名即拒绝启动，返回空串或相同的值沿用配置）。
 // 任何一项不合法即返回错误（调用方拒绝启动）；结果与告警写启动日志。
-func NewDatabaseMap(configured map[string]string, sid int32, resolver coredata.DatabaseResolver) (*coredata.DatabaseMap, error) {
+//
+// prefix 是 mongo.database_prefix：表里仍是不带前缀的库名（Mongo Mod 交出的客户端打开时加一次），Effective 按
+// mods.PrefixedDatabase 给出实际库名，供 WAL 映射记录、合服检查与直接用驱动的工具使用。
+func NewDatabaseMap(configured map[string]string, prefix string, sid int32, resolver coredata.DatabaseResolver) (*coredata.DatabaseMap, error) {
 	databases, warnings, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
 		Declared: coredata.DeclaredDatabases(), Configured: configured, Resolver: resolver, ServerID: sid,
+		Effective: func(name string) string { return mods.PrefixedDatabase(prefix, name) },
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataengine mod: dataengine.databases: %w", err)
@@ -35,7 +39,8 @@ func NewDatabaseMap(configured map[string]string, sid int32, resolver coredata.D
 // databasesKeys 是工具读映射时用到的键：与 Mod 声明里的同名键是同一份（sid 决定按 sid 分库的长度校验）。
 type databasesKeys struct {
 	app.ServiceIdentity
-	Databases DatabasesConfig `config:"dataengine.databases"`
+	mods.MongoDatabasePrefix                 // mongo.database_prefix：工具算出的实际库名与进程打开的相同
+	Databases                DatabasesConfig `config:"dataengine.databases"`
 }
 
 // LoadDatabaseMap 从服务配置读 dataengine.databases 并按与 Mod 相同的规则合成映射表，给运维工具用
@@ -48,7 +53,7 @@ func LoadDatabaseMap(cfg *viper.Viper, resolver coredata.DatabaseResolver) (*cor
 			return nil, fmt.Errorf("dataengine databases: %w", err)
 		}
 	}
-	return NewDatabaseMap(keys.Databases, keys.Sid, resolver)
+	return NewDatabaseMap(keys.Databases, keys.DatabasePrefix, keys.Sid, resolver)
 }
 
 // LoadDatabaseMapFile 读一个服务配置文件（例如 configs/config.game.yaml）里的映射；sid 不为 0 时覆盖文件里的 sid
@@ -64,8 +69,9 @@ func LoadDatabaseMapFile(path string, sid int32, resolver coredata.DatabaseResol
 	return LoadDatabaseMap(cfg, resolver)
 }
 
-// DAODatabaseFile 给直接读 DAO 文档的运维工具（cmd/sidmove players、cmd/schemamigrate）算出 dao 文档所在的
-// 物理库名：读服务配置文件（与 LoadDatabaseMapFile 同一条规则），逻辑库换成物理库，dbscope=sid 的 DAO 再加 _<sid>
+// DAODatabaseFile 给直接读 DAO 文档的运维工具（cmd/sidmove players、cmd/schemamigrate）算出 dao 文档在 Mongo 里的
+// 实际库名：读服务配置文件（与 LoadDatabaseMapFile 同一条规则），逻辑库换成映射库名再加 mongo.database_prefix
+// （工具用驱动原生客户端，没有 Mongo Mod 的前缀封装；2026-11-19 评审 B），dbscope=sid 的 DAO 再加 _<sid>
 // （与 DAOCollection、DataEngine 投影同一规则；v1.47.0 起本地实体的 DAO 缺省按服分库）。sid 不为 0 时覆盖文件里的
 // sid；DAO 按服分库而两处都没有 sid 时返回错误。
 func DAODatabaseFile(path string, sid int32, dao DAOStore, resolver coredata.DatabaseResolver) (string, error) {
@@ -80,11 +86,11 @@ func DAODatabaseFile(path string, sid int32, dao DAOStore, resolver coredata.Dat
 	if err := app.LoadConfig(cfg, &keys); err != nil {
 		return "", fmt.Errorf("dataengine databases: %w", err)
 	}
-	databases, err := NewDatabaseMap(keys.Databases, keys.Sid, resolver)
+	databases, err := NewDatabaseMap(keys.Databases, keys.DatabasePrefix, keys.Sid, resolver)
 	if err != nil {
 		return "", err
 	}
-	physical := databases.Physical(dao.DbName())
+	physical := databases.Effective(dao.DbName())
 	if coredata.ResolveDatabaseScope(dao) != coredata.DatabaseServer {
 		return physical, nil
 	}

@@ -120,6 +120,11 @@ type DatabaseMapConfig struct {
 	Resolver DatabaseResolver
 	// ServerID 是本进程 sid，校验按 sid 分库的物理名长度时用。
 	ServerID int32
+	// Effective 把表里的库名换成 Mongo 里实际打开的库名（按 sid 分库时调用方再加 _<sid>）：使用层在打开库时还会加工
+	// 库名（wiring 的 mongo.database_prefix：<前缀>_<库名>）时由装配方给出同一条规则，nil 即原样。表里的 Physical 仍是
+	// 不带前缀的名字（交给那个使用层打开，只加一次）；WAL 目录记下与核对的映射、直接用驱动的工具用 Effective，
+	// 否则只改前缀时看不出库变了（2026-11-19 评审）。
+	Effective func(physical string) string
 }
 
 // DatabaseMapping 是表里的一项。Source 说明物理名来自哪里：config、resolver，或 identity（没有映射，
@@ -140,8 +145,9 @@ const (
 // （映射核对、工具输出用）；但 DataEngine 投影存储与 Remote 存储没有表时拒绝读写带库名的 DAO 文档
 // （ErrDatabaseMapNotBound），不把 nil 当成“逻辑名直用”。
 type DatabaseMap struct {
-	entries  []DatabaseMapping // 按逻辑名排序
-	physical map[string]string
+	entries   []DatabaseMapping // 按逻辑名排序
+	physical  map[string]string
+	effective func(string) string // DatabaseMapConfig.Effective；nil 即原样
 }
 
 // ValidateDatabaseConfig 只校验配置本身（不调用回调，所以 --check-config 与 doctor 发现不了回调与配置的冲突，
@@ -164,7 +170,7 @@ func NewDatabaseMap(cfg DatabaseMapConfig) (*DatabaseMap, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	databases := &DatabaseMap{entries: entries, physical: make(map[string]string, len(entries))}
+	databases := &DatabaseMap{entries: entries, physical: make(map[string]string, len(entries)), effective: cfg.Effective}
 	for _, entry := range entries {
 		databases.physical[entry.Logical] = entry.Physical
 	}
@@ -286,7 +292,29 @@ func (m *DatabaseMap) Entries() []DatabaseMapping {
 	return slices.Clone(m.entries)
 }
 
-// Physicals 返回逻辑名 → 物理名（含 identity 项），用于与上次启动的映射比较。
+// Effective 返回逻辑库在 Mongo 里实际打开的库名：Physical 再按 DatabaseMapConfig.Effective 换算（按 sid 分库时调用方
+// 再加 _<sid>）。直接用驱动的工具、WAL 目录记下的映射与合服检查用它；经使用层客户端打开库的代码用 Physical。
+func (m *DatabaseMap) Effective(logical string) string {
+	physical := m.Physical(logical)
+	if m == nil || m.effective == nil || physical == "" {
+		return physical
+	}
+	return m.effective(physical)
+}
+
+// Effectives 返回逻辑名 → 实际库名（Effective），用于记在 WAL 目录、与上次启动的映射比较。
+func (m *DatabaseMap) Effectives() map[string]string {
+	out := make(map[string]string)
+	if m == nil {
+		return out
+	}
+	for _, entry := range m.entries {
+		out[entry.Logical] = m.Effective(entry.Logical)
+	}
+	return out
+}
+
+// Physicals 返回逻辑名 → 物理名（含 identity 项，不带使用层的前缀）。与上次启动的映射比较用 Effectives。
 func (m *DatabaseMap) Physicals() map[string]string {
 	out := make(map[string]string)
 	if m == nil {
