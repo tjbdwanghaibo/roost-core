@@ -42,6 +42,22 @@ namespace Roost.PhysicsViewer
         long bytes;
         float receivedAt, interval = .05f;
         public ulong Frames { get; private set; }
+        // 自己的刚体被服务端传送（含重生）的次数，以及最近收到的关卡流程公开状态；没有流程的房间一直是 null。
+        public int Teleports { get; private set; }
+        public RoomLevelView Level => levelView;
+        volatile RoomLevelView levelView;
+        static string LevelSummary(RoomLevelView view)
+        {
+            var stages = new List<string>();
+            foreach (var stage in view.Stages) stages.Add(stage.Id + "#" + stage.Generation);
+            return $"flow: {view.Phase}" + (view.Result.Length == 0 ? "" : " result=" + view.Result) + $" | stages: {string.Join(", ", stages)} | revision {view.Revision}";
+        }
+        static string LevelVariables(RoomLevelView view)
+        {
+            var values = new List<string>();
+            foreach (var variable in view.Variables) values.Add(variable.Key + "=" + variable);
+            return values.Count == 0 ? "" : string.Join("   ", values);
+        }
         public ulong Tick => replica.Tick;
         public string Status => failure ?? (Frames > 0 ? "Connected" : "Connecting");
         public string Summary => $"frames={Frames} tick={Tick} bodies={replica.Bodies.Count} bytes={Interlocked.Read(ref bytes)}";
@@ -217,6 +233,14 @@ namespace Roost.PhysicsViewer
                         continue;
                     }
                     byte[] payload = decoded.Payload.ToArray();
+                    if (ControlRoom && UseGate && decoded.MessageId == 0x50485904)
+                    {
+                        // 关卡流程的公开状态：推在同一次交付的帧之前，每个版本一次。
+                        if (!decoded.IsPush || decoded.Kind != PayloadKind.Protobuf)
+                            throw new InvalidDataException("Unexpected level view packet");
+                        levelView = RoomLevelView.Advance(levelView, payload);
+                        continue;
+                    }
                     if (decoded.MessageId != 0x50485901 || decoded.Kind != PayloadKind.Sync || !decoded.IsPush)
                         throw new InvalidDataException("Unexpected crowd packet");
                     if (Interlocked.Increment(ref pending) > 128) throw new InvalidDataException("Observer queue full");
@@ -245,7 +269,8 @@ namespace Roost.PhysicsViewer
                     foreach(var pair in replica.Bodies) {
                         if(pair.Value.Trajectory&&!motionDescriptions.ContainsKey(pair.Key)) throw new InvalidDataException("Trajectory requires fixed level metadata");
                         if(!playback.TryGetValue(pair.Key,out var display)) { display=new SparsePosePlayback();playback[pair.Key]=display; }
-                        display.Sample(Pose(pair.Value),pair.Value.SampleTick,Time.unscaledTime);
+                        // 传送标记只对随这一帧到达的状态有效；带标记的对象直接放到新位置，不从旧位置插值过去。
+                        display.Sample(Pose(pair.Value),pair.Value.SampleTick,Time.unscaledTime,pair.Value.Teleported&&pair.Value.SampleTick==replica.Tick);
                     }
                     if (!ControlRoom && replica.Bodies.Count != 71) throw new InvalidDataException("Expected 71 bodies");
                     foreach (var id in replica.Bodies.Keys)
@@ -255,7 +280,9 @@ namespace Roost.PhysicsViewer
                     Frames++;
                     if(ControlRoom&&UseGate&&replica.Bodies.TryGetValue(controlledBody,out var self)&&replica.InputGeneration!=0&&replica.InputGeneration==unchecked((ulong)Interlocked.Read(ref inputGeneration))) {
                         predictionReady=true;
-                        prediction.Reconcile(replica.InputSequence,replica.InputActive,new PredictedState{Position=N(self.Position),Velocity=N(self.Velocity)},clock.Elapsed.TotalSeconds);
+                        bool teleported=self.Teleported&&self.SampleTick==replica.Tick;
+                        if(teleported)Teleports++;
+                        prediction.Reconcile(replica.InputSequence,replica.InputActive,new PredictedState{Position=N(self.Position),Velocity=N(self.Velocity)},clock.Elapsed.TotalSeconds,teleported);
                     }
                 }
                 if (ControlRoom)
@@ -307,6 +334,13 @@ namespace Roost.PhysicsViewer
                 GUI.Box(new Rect(12, 12, Screen.width-24, 85), "Roost Room Entity / server-authoritative physics");
                 GUI.Label(new Rect(24, 38, Screen.width-48, 25), $"{Status} | player {PlayerSlot} | {Summary} | sync 20Hz");
                 GUI.Label(new Rect(24, 62, Screen.width-48, 25), $"WASD / arrows: move   Space: jump  E: hold grab   travel={HorizontalTravel:F1}m rise={VerticalRise:F1}m");
+                var flow = levelView;
+                if (flow != null)
+                {
+                    GUI.Box(new Rect(12, 102, Screen.width-24, 60), "");
+                    GUI.Label(new Rect(24, 108, Screen.width-48, 25), LevelSummary(flow));
+                    GUI.Label(new Rect(24, 132, Screen.width-48, 25), LevelVariables(flow));
+                }
                 float y = Screen.height - 170;
                 bool up=GUI.RepeatButton(new Rect(92,y,70,60), "Forward");
                 bool left=GUI.RepeatButton(new Rect(16,y+66,70,60), "Left");

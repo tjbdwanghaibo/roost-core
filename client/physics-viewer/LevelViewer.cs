@@ -75,7 +75,7 @@ namespace Roost.PhysicsViewer
         void BuildLevel()
         {
             var l=JsonUtility.FromJson<LevelDocument>(Encoding.UTF8.GetString(levelContent));
-            if(l.Version!=1||l.Revision==0||l.Bodies==null||l.Bodies.Length>256)throw new InvalidDataException("Level schema");
+            if(l.Version!=2||l.Revision==0||l.Bodies==null||l.Bodies.Length>256)throw new InvalidDataException("Level schema");
             bool found=false;
             foreach(var b in l.Bodies)
             {
@@ -100,8 +100,35 @@ namespace Roost.PhysicsViewer
                 if(body==null||body.Motion!=3||motionDescriptions.ContainsKey(m.ID)||m.Translation==null||m.Translation.Length!=3||m.Axis==null||m.Axis.Length!=3||m.PeriodSeconds<.1f||m.PeriodSeconds>3600||float.IsNaN(m.PeriodSeconds)) throw new InvalidDataException("Level motion");
                 motionDescriptions[m.ID]=new MotionDescription {Translation=new NVector(m.Translation[0],m.Translation[1],m.Translation[2]),Axis=new NVector(m.Axis[0],m.Axis[1],m.Axis[2]),PeriodSeconds=m.PeriodSeconds,AngularSpeed=m.AngularSpeed};
             }
+            BuildMarkers(Encoding.UTF8.GetString(levelContent));
             levelReady=true;
         }
+        // 区域画成线框，出生点画成小球；都没有碰撞体，不影响本地预测的碰撞查询。
+        void BuildMarkers(string level)
+        {
+            LevelMarkers.Parse(level,out var regions,out var spawns,out string fallback);
+            foreach(var region in regions)
+            {
+                var line=new GameObject("Region "+region.Id).AddComponent<LineRenderer>();
+                line.useWorldSpace=true;line.widthMultiplier=.06f;line.positionCount=BoxPath.Length;
+                var shader=Shader.Find("Sprites/Default");
+                line.sharedMaterial=new Material(shader!=null?shader:Shader.Find("Standard")){color=new Color(1f,.55f,.1f)};
+                for(int i=0;i<BoxPath.Length;i++)
+                    line.SetPosition(i,U(region.Center+NVector.Transform(BoxPath[i]*region.HalfExtents,region.Rotation)));
+            }
+            foreach(var spawn in spawns)
+                for(int i=0;i<spawn.Positions.Length;i++)
+                {
+                    var marker=Primitive(PrimitiveType.Sphere,"Spawn "+spawn.Id+" "+(i+1),spawn.Id==fallback?new Color(.2f,.9f,.3f,.45f):new Color(.3f,.6f,1f,.45f));
+                    marker.position=U(spawn.Positions[i]);
+                    marker.localScale=Vector3.one*.3f;
+                }
+        }
+        // 一笔画过长方体 12 条棱的顶点序列（个别棱走两遍），坐标是半边长的倍数。
+        static readonly NVector[] BoxPath={
+            new NVector(-1,-1,-1),new NVector(1,-1,-1),new NVector(1,-1,1),new NVector(-1,-1,1),new NVector(-1,-1,-1),new NVector(-1,1,-1),
+            new NVector(1,1,-1),new NVector(1,-1,-1),new NVector(1,1,-1),new NVector(1,1,1),new NVector(1,-1,1),new NVector(1,1,1),
+            new NVector(-1,1,1),new NVector(-1,-1,1),new NVector(-1,1,1),new NVector(-1,1,-1)};
         static NVector N(Vector3 v)=>new NVector(v.x,v.y,v.z);
         static Vector3 U(NVector v)=>new Vector3(v.X,v.Y,v.Z);
         PredictedState PredictStep(PredictedState state,PredictedInput input,float dt)

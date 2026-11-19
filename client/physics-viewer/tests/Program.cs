@@ -31,8 +31,13 @@ static class Program
   byte[] invalid=(byte[])full.Clone();invalid[0]=32;bool bad=false;try{PackedBodyCodec.Apply(baseline,invalid);}catch(InvalidDataException){bad=true;}Check(bad,"unknown mask");
   byte[] flags=(byte[])baseline.Clone();flags[33]=7;
   var profiled=PackedBodyCodec.Decode(flags,0,-1);
-  Check(profiled.Sleeping&&profiled.DisplayOnly&&profiled.Trajectory,"RP2 profile flags");
-  foreach(byte invalidFlag in new byte[]{4,8}) {flags[33]=invalidFlag;bool rejected=false;try{PackedBodyCodec.Decode(flags,0,-1);}catch(InvalidDataException){rejected=true;}Check(rejected,"invalid profile flags");}
+  Check(profiled.Sleeping&&profiled.DisplayOnly&&profiled.Trajectory&&!profiled.Teleported,"profile flags");
+  // RP3：bit3 是传送标记，可以与其余三位任意组合；轨迹位仍然要求仅显示位，更高的位仍然拒绝。
+  flags[33]=8;profiled=PackedBodyCodec.Decode(flags,0,-1);
+  Check(profiled.Teleported&&!profiled.Sleeping&&!profiled.DisplayOnly&&!profiled.Trajectory,"teleported flag alone");
+  flags[33]=15;profiled=PackedBodyCodec.Decode(flags,0,-1);
+  Check(profiled.Teleported&&profiled.Sleeping&&profiled.DisplayOnly&&profiled.Trajectory,"teleported flag with the profile flags");
+  foreach(byte invalidFlag in new byte[]{4,12,16,24,128}) {flags[33]=invalidFlag;bool rejected=false;try{PackedBodyCodec.Decode(flags,0,-1);}catch(InvalidDataException){rejected=true;}Check(rejected,"invalid profile flags "+invalidFlag);}
   Console.WriteLine("PASS packed body: Go/C# golden, delta, truncation, missing baseline and immutable history");
  }
  static void Playback()
@@ -87,6 +92,7 @@ static class Program
  {
   Packed();
   Playback();
+  LevelTests.Run();
   var p=new InputPrediction();
   p.Record(new PredictedInput{Sequence=1,At=0,Acceleration=Vector3.UnitX*10,Jump=true});
   p.Reconcile(0,false,new PredictedState(),.01);

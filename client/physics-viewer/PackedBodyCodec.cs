@@ -13,6 +13,8 @@ namespace Roost.PhysicsViewer
             public Vector3 Position, Velocity, AngularVelocity;
             public Quaternion Rotation;
             public bool Sleeping, DisplayOnly, Trajectory;
+            // 状态字节 bit3（RP3 的 ViewTeleported）：这个对象自上次发给本接收方以来被传送过，直接放到新位置。
+            public bool Teleported;
         }
         public static byte[] Apply(byte[] baseline, byte[] patch)
         {
@@ -46,8 +48,8 @@ namespace Roost.PhysicsViewer
             q[largest]=(float)Math.Sqrt(1-sum);
             var velocity=new Vector3(r.ReadInt32()/100f,r.ReadInt32()/100f,r.ReadInt32()/100f);
             var angular=new Vector3(r.ReadInt16()/100f,r.ReadInt16()/100f,r.ReadInt16()/100f);
-            byte sleeping=r.ReadByte();if(sleeping>7||(sleeping&4)!=0&&(sleeping&2)==0)throw new InvalidDataException("Packed sleeping flag");
-            return new State{Position=new Vector3(chunkX*25f+x,y,chunkZ*25f+z),Rotation=new Quaternion(q[0],q[1],q[2],q[3]),Velocity=velocity,AngularVelocity=angular,Sleeping=(sleeping&1)!=0,DisplayOnly=(sleeping&2)!=0,Trajectory=(sleeping&4)!=0};
+            byte sleeping=r.ReadByte();if(sleeping>15||(sleeping&4)!=0&&(sleeping&2)==0)throw new InvalidDataException("Packed sleeping flag");
+            return new State{Position=new Vector3(chunkX*25f+x,y,chunkZ*25f+z),Rotation=new Quaternion(q[0],q[1],q[2],q[3]),Velocity=velocity,AngularVelocity=angular,Sleeping=(sleeping&1)!=0,DisplayOnly=(sleeping&2)!=0,Trajectory=(sleeping&4)!=0,Teleported=(sleeping&8)!=0};
         }
     }
 }

@@ -19,7 +19,8 @@ const MaxLevelViewBytes = 16 << 10
 //	message Stage    { string id=1; uint64 generation=2; }
 //	message Variable { string key=1; oneof value { int64 int=2; bool flag=3; string text=4; } }
 //
-// 只有 level.View 里对客户端有意义的部分：实例名与 Epoch 不下发。Revision 单调增加，客户端丢弃不比手上新的。
+// 只有 level.View 里对客户端有意义的部分：实例名与 Epoch 不下发。Revision 在一条连接上只增加：
+// 客户端收到相同的保留手上的，收到更小的按协议错误断开（client/physics-viewer RoomLevelView.Advance）。
 type LevelView struct {
 	Revision  uint64
 	Phase     level.Phase

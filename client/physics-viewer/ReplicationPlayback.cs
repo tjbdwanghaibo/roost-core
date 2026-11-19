@@ -15,9 +15,11 @@ namespace Roost.PhysicsViewer
         double received, serverTime;
         ulong tick;
         bool initialized;
-        public void Sample(DisplayPose pose, ulong sampleTick, double now)
+        // discontinuity：这个样本之前对象被传送过。丢掉已有的样本，从新位置重新开始，不在两地之间插值。
+        public void Sample(DisplayPose pose, ulong sampleTick, double now, bool discontinuity = false)
         {
             if (initialized && sampleTick <= tick) return;
+            if (discontinuity) snapshots.Clear();
             // 这里是物理模拟 tick（20ms 步长），不是 EntitySync 的每连接发送序号。
             double timestamp = sampleTick * .02;
             if (!snapshots.Add(timestamp, now, pose)) return;

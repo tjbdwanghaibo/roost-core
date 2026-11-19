@@ -2,8 +2,11 @@ package physics
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -316,5 +319,48 @@ func TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow(t *testing.T) {
 	FlowRegistry().Actions[ActionRespawn] = level.ActionSpec{}
 	if _, err := valid.Program(level.Registry{}); err != nil {
 		t.Fatalf("registry copy leaked: %v", err)
+	}
+}
+
+// 区域与出生点的显示数据与 C# 客户端共用一份金样（packed.json 的 Level，是 Content() 的原样字节）：
+// C# 的 LevelMarkers 自己读这份 JSON，这里断言的值就是它要读出来的值。
+func TestLevelMarkersGoldenSharedWithCSharp(t *testing.T) {
+	l := Level{Version: LevelVersion, Name: "markers", Revision: 3,
+		Bodies: []physx.Body{
+			{ID: 1, Shape: physx.Sphere, Motion: physx.Dynamic, Position: physx.Vec3{0, .5, 0}, Rotation: physx.Quat{0, 0, 0, 1}, Dimensions: physx.Vec3{.5}, Mass: 1},
+			{ID: 2, Shape: physx.Box, Motion: physx.Static, Position: physx.Vec3{0, -.5, 0}, Rotation: physx.Quat{0, 0, 0, 1}, Dimensions: physx.Vec3{20, .5, 20}},
+		},
+		Players: []uint64{1},
+		Regions: []Region{
+			{ID: "kill", Center: physx.Vec3{0, -6, 0}, HalfExtents: physx.Vec3{60, 2, 60}},
+			{ID: "goal", Center: physx.Vec3{8, 1, 8}, HalfExtents: physx.Vec3{1, 1.5, 2}, Rotation: physx.Quat{0, .38268343, 0, .92387953}, Watch: []uint64{1}},
+		},
+		Spawns: []Spawn{
+			{ID: "start", Positions: []physx.Vec3{{0, .6, -3}, {1, .6, -3}}},
+			{ID: "mid", Positions: []physx.Vec3{{4, .6, 0}}, Rotation: physx.Quat{0, 1, 0, 0}},
+		},
+		DefaultSpawn: "start",
+		Flow:         []byte(flowJSON),
+	}
+	content, _, err := l.Content()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("../../client/physics-viewer/tests/packed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden struct{ Level string }
+	if err = json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	if got := base64.StdEncoding.EncodeToString(content); got != golden.Level {
+		t.Fatalf("level content differs from the golden shared with C#:\n got %s\nwant %s", got, golden.Level)
+	}
+	decoded, err := DecodeLevel(content)
+	if err != nil || len(decoded.Regions) != 2 || len(decoded.Spawns) != 2 || decoded.DefaultSpawn != "start" ||
+		decoded.Regions[1].ID != "goal" || decoded.Regions[1].HalfExtents != (physx.Vec3{1, 1.5, 2}) || decoded.Regions[1].Rotation != (physx.Quat{0, .38268343, 0, .92387953}) ||
+		decoded.Regions[0].Rotation != (physx.Quat{}) || decoded.Spawns[0].Positions[1] != (physx.Vec3{1, .6, -3}) || decoded.Spawns[1].Rotation != (physx.Quat{0, 1, 0, 0}) {
+		t.Fatalf("decoded %+v %v", decoded, err)
 	}
 }

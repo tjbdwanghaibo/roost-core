@@ -12,6 +12,7 @@ cp "$root/gameplay/physics/terrain.json" "$project/Assets/Roost/Resources/Physic
 cp "$root/client/physics-viewer/"*.cs "$project/Assets/Roost/"
 cp "$root/client/physics-viewer/Editor/ViewerProject.cs" "$project/Assets/Roost/Editor/"
 cp "$root/client/dotnet/Roost.Client/Packet.cs" "$project/Assets/Roost/Client/"
+cp "$root/client/dotnet/Roost.Client/GateTransport.cs" "$project/Assets/Roost/Client/" # Packet.ReadAsync 的参数类型
 cp "$root/client/dotnet/Roost.Client/PredictionHistory.cs" "$project/Assets/Roost/Client/"
 cp "$root/client/dotnet/Roost.Client/SnapshotBuffer.cs" "$project/Assets/Roost/Client/"
 cp "$root/client/dotnet/Roost.Client/NetworkClock.cs" "$project/Assets/Roost/Client/"

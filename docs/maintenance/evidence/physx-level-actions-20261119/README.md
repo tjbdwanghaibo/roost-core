@@ -208,7 +208,7 @@ HEAD 为本批提交；命令都带 `GOWORK=off`。私有 NATS：本机 `nats-se
 | `go test -count=1 .`（根包门禁，证据文档写入之后） | ok，28.1s |
 | `dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj` | 3 组 PASS，退出码 0（C# 还没有改；只确认金样文件多一项不影响现有用例） |
 
-`codegen/internal/roost` 是仓库里已知的慢套件：`scripts/pretag.sh` 为它写了 `-timeout 60m`，注释里记着它在本机单独跑要 300～800s、随磁盘负载波动，全量跑时出现过同样的“timed out after 10m0s 且没有失败用例”。这个包与 `codegen/` 下的模板都不引用 `service/physicsroom`、`wiring/physicsroom`、`gameplay/physics`。按 `-timeout 60m` 单独重跑：到本批提交时已经跑了 42 分钟还没有结束（本机负载 30～45，另一个会话同时在它自己的目录里跑同一个套件），**结果未确认**；跑完后的结果补记在批 4 一节的开头。
+`codegen/internal/roost` 是仓库里已知的慢套件：`scripts/pretag.sh` 为它写了 `-timeout 60m`，注释里记着它在本机单独跑要 300～800s、随磁盘负载波动，全量跑时出现过同样的“timed out after 10m0s 且没有失败用例”。这个包与 `codegen/` 下的模板都不引用 `service/physicsroom`、`wiring/physicsroom`、`gameplay/physics`。按 `-timeout 60m` 单独重跑：到本批提交时已经跑了 42 分钟还没有结束（本机负载 30～45，另一个会话同时在它自己的目录里跑同一个套件），**结果未确认**；跑完后的结果补记在批 4 一节的开头。（补记：3404s 后以 3 个用例失败结束，这 3 个用例在分支基线上同样失败，见批 4 一节开头。）
 
 用例（T5～T10 用方案里的名字；其余是实施中补的）：
 
@@ -273,3 +273,82 @@ T10 五次运行的实测（50Hz 模拟、20Hz 下发）：从客户端第一次
 - 业务动作只用替身执行者测过，没有接真实的 Game 侧结算 / 发奖 handler；“进程崩溃后由业务账本按动作 ID 了结”没有演练。
 - 流程带来的每 tick 开销、`Teleports` 与视图对载荷的影响没有测量（批 5 的性能对照）。
 - 现行文档与 `CHANGELOG.md` 没有更新（批 5）：`docs/framework/PHYSICS-ROOM-SERVICE.md` 里的 `Commit` 签名、`Spec` 字段、消息号表目前与代码不一致。
+
+## 批 4：C# 客户端认 RP3、传送标记与流程视图
+
+### 批 3 留下的一项：`codegen/internal/roost`
+
+批 3 提交时这个慢套件按 `-timeout 60m` 的重跑还没有结束。它在 3404s 后以 3 个用例失败结束（不是超时）：`TestModulePortalInstallsOnALobbyProjectWithoutGame`、`TestModulePortalInstallsOnTheHostedAccountService`、`TestModuleAddDeclaresTheFrameworkServicesItUses`，失败文本都是“再次 `project sync` 之后工程变了”。
+
+| 在哪个提交上单独跑这三条 | 结果 |
+| --- | --- |
+| `51974e4d`（批 3），冻结的临时检出 | 3 条都失败，退出码 1 |
+| `2d15a1e5`（分支基线） | 3 条都失败，退出码 1，失败文本相同 |
+| 当时的 main 顶端（不在本分支的历史里，提交号见原始输出的 `main=` 一行） | 通过，94s |
+
+结论：这三条在分支基线上就失败，基线之后已经在 main 上修掉；本分支没有改 `codegen/`。本分支没有变基（基线是维护者定的 `2d15a1e5`），所以**在本分支上全仓 `go test ./...` 仍有这三条失败**，合入或变基到 main 之后才会消失；这一点没有在变基后的代码上验证过。原始输出在 [mutations-batch4.txt](mutations-batch4.txt) 末尾。
+
+### 改动
+
+| 文件 | 内容 |
+| --- | --- |
+| `client/physics-viewer/PackedBodyCodec.cs` | 状态字节接受 bit3，读成 `State.Teleported`；更高的位仍拒绝，轨迹位仍要求仅显示位 |
+| `client/physics-viewer/ChunkReplica.cs` | 房间帧头只认 RP3（RP2 在帧头拒绝）；`BodyState.Teleported` |
+| `client/physics-viewer/ReplicationPlayback.cs` | `SparsePosePlayback.Sample` 多一个参数 `discontinuity`：丢掉已有样本，从新位置重新开始 |
+| `client/physics-viewer/InputPrediction.cs` | `Reconcile` 多一个参数 `discontinuity`：没有更新的输入可重放时不再拿已确认的输入外推；下一帧恢复 |
+| `client/physics-viewer/RoomLevelView.cs`（新） | `RoomLevelView` 的严格解码（与 Go 的 `DecodeLevelView` 同样的拒绝规则，另外拒绝非法 UTF-8）；`Advance`：版本相同保留手上的，变小按协议错误 |
+| `client/physics-viewer/LevelMarkers.cs`（新） | 从关卡 JSON 读区域与出生点。Unity 的 `JsonUtility` 读不了数组的数组（`Spawn.Positions`），所以带一个只够读关卡文档的 JSON 读取器 |
+| `client/physics-viewer/CrowdViewer.cs` | 收 `0x50485904`（推送、Protobuf）；带标记的对象直接放置；自己的刚体带标记时按不连续纠偏；HUD 显示阶段、结果、各阶段及其代数、公开变量；`Teleports`、`Level` 两个只读属性 |
+| `client/physics-viewer/LevelViewer.cs` | 关卡只认版本 2；区域画橙色线框，出生点画半透明小球（缺省出生点绿色），都没有碰撞体 |
+| `client/physics-viewer/tests/` | `LevelTests.cs`（5 组新用例）；`UnityShim.cs`（`UnityEngine.Vector3` / `Quaternion` 的最小替身，让 dotnet 测试编译并运行真正的 `ChunkReplica.cs`）；`packed.json` 新增 `Level` |
+| `gameplay/physics/level_test.go` | `TestLevelMarkersGoldenSharedWithCSharp`：钉住 `packed.json` 的 `Level` 就是 `Content()` 的字节，并断言 C# 要读出的值 |
+| `scripts/physics/create-viewer.sh` | 多复制 `GateTransport.cs`。**这是基线上就有的问题**：`Packet.cs` 自提交 `d9ad1d3a` 起引用 `IGateTransport`，脚本没有跟着改，新建的工程编译不过 |
+| `service/physicsroom/level_view.go` | 只改注释：客户端对相同 / 更小版本的处理 |
+
+### 与方案文字的出入
+
+- **“丢弃该帧 `InputSequence` 及以前的历史”本来就是 `Reconcile` 的行为**（`PredictionHistory.Acknowledge`）。传送帧新增的只有一件事：没有更新的输入可重放时不外推。实现与用例按这个写。
+- **版本相同的视图不报错。** 方案写“拒绝 revision 回退”；实现里更小的拒绝、相同的保留手上的。同一条连接上服务端每个版本只推一次，相同版本不该出现，出现了也无害。
+- **金样 `Level` 是 Go 导出的字节**，不像 `LevelView` 那样独立手工编码：这个用例要证明的就是“C# 读得了 Go 写出来的关卡”。
+- **`UnityShim.cs`** 是方案没有提的测试手段。它只替身两个值类型；Unity 下的行为由批处理编译与批 5 的联机演练覆盖。
+
+### 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj` | 8 组 PASS（原有 3 组 + 新 5 组），退出码 0；`dotnet build` 无警告 |
+| `GOWORK=off CGO_ENABLED=1 go test -count=1 -race -tags physx ./gameplay/physics ./service/physicsroom` | ok（6.9s、10.0s） |
+| `GOWORK=off go build ./...`、`go vet`（上面两个包）、`gofmt -l gameplay service` | 退出码 0，无输出 |
+| `TMPDIR=/tmp/rpx scripts/physics/create-viewer.sh <新目录>`（Unity 6000.3.12f1，`-batchmode -nographics -quit`） | 退出码 0，11s：全部脚本编译通过，生成 `PhysicsComparison` / `Crowd` / `Room` 三个场景，日志有 `ROOST_VIEWER_SCENE_READY`。警告 2 条，都在 `GateTransport.cs`（可空注解），不在本批的文件里 |
+| `GOWORK=off go test -count=1 .`（根包门禁，证据写入之后） | ok，15.8s |
+
+`TMPDIR=/tmp/rpx` 只和我跑命令的环境有关：那个环境的临时目录路径很长，Unity 的构建工具在里面建 unix 套接字时超过了路径长度上限（`ArgumentOutOfRangeException: ... invalid length for use with domain socket`）。在普通终端里不需要。
+
+新用例（T11）：
+
+| 组 | 断言的内容 |
+| --- | --- |
+| room frame | `RoomFull`、`RoomTeleport` 两个金样经真正的 `ChunkReplica` 解码，位置、速度、帧号、输入确认与 Go 用例断言的值相同；传送帧里刚体 1 带标记，没有随帧更新的刚体 2 保持旧的采样帧号；RP2、RP4 帧头拒绝；状态字节带未知位的整帧拒绝；传送帧的每个截断都被拒绝且副本不变 |
+| playback discontinuity | 带标记的样本立即显示在新位置并保持；之后的样本从新位置继续插值，不回到旧位置；旧帧号的样本即使带标记也忽略。对照：不带标记时同样的样本会被插值 |
+| prediction discontinuity | 传送帧之后不外推；之后按下的输入从新位置重放；下一帧恢复外推；传送帧确认之前的历史（含跳跃）不重放。对照：不带标记时已确认的输入会被外推 |
+| level view | 金样解码出的版本、阶段、结果、两个阶段、四个变量（负整数、false、中文文本、零）；版本次序；34 种坏包；截断只会以 `InvalidDataException` 拒绝；恰好 16KiB 接受、多 1 字节拒绝 |
+| level markers | 金样里两个区域（零旋转读成单位旋转、带旋转的一个）、两个出生点（两个位置的一个、带朝向的一个）、缺省出生点；没有标记的关卡；24 种坏文档；金样的每个截断都拒绝 |
+
+### 变异（[mutations-batch4.txt](mutations-batch4.txt)）
+
+共 38 条，在定稿后的代码上完整跑一遍，全部变红：帧与状态字节 6 条（含方案指定的“C# 忽略 bit3”）、回放 2 条、预测 3 条、流程视图 15 条、关卡标记 12 条。
+
+第一轮有 2 条没有被发现，处理如下：
+
+- **C12 视图接受未知字段号**：我写的变异没有效果。字段号大于 5 在 `Tag` 里已经被归零，`Decode` 里又检查了一次，两处任意去掉一处行为都不变。把 `Tag` 里的那一处改成只防整数溢出，范围检查只留在调用方；变异改成“像普通 Protobuf 解码器那样跳过未知字段”，变红。
+- **C36 嵌套深度不设上限**：用例写错了。用来测深度的文档顶层是数组，它是因为“顶层不是对象”被拒的。改成把深层嵌套放在对象的一个字段里，并加一条“限度以内接受”的对照，变红。
+
+### 没有验到的
+
+- 只在 macOS ARM64 上跑过。
+- **`CrowdViewer.cs` 与 `LevelViewer.cs` 里的接线没有被任何自动用例执行过**：把传送标记交给回放与预测、收 `0x50485904`、HUD、区域线框与出生点小球。它们只经过了 Unity 的编译。实际在 Play Mode 里连上带流程的房间、看到重生与结算，留给批 5 的联机演练。
+- Unity 的 `JsonUtility` 读 schema 2 关卡（多出 `Regions` / `Spawns` / `Flow` 等它不认识的字段）没有实际跑过，同上。
+- dotnet 测试里 `ChunkReplica` 用的是替身类型，不是 Unity 的 `Vector3` / `Quaternion`。
+- 没有跑 `scripts/physics/verify-viewer.sh`（PhysX 与 Unity 的对照验收）：本批没有改它覆盖的 RC1 路径。
+- 现行文档（`client/physics-viewer/README.md` 等）没有更新（批 5）。
+
