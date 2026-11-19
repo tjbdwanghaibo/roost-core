@@ -1,0 +1,42 @@
+L1 淘汰不执行
+    gameplay/level/component.go: RED
+    --- FAIL: TestForgetSettledActionsKeepsOnlyPendingOnes (0.00s)
+        ledger_test.go:59: round 1: ledger map[instance:18446744073709551615:1:{ID:instance:18446744073709551615:1 Instance:instance Epoch:18446744073709551615 Sequence:1 Stage:a Generation:1 Name:spawn Args:map[] LevelLifetime:false 
+    --- FAIL: TestForgettingRollsBackWithTheTransaction (0.00s)
+        ledger_test.go:128: the settled action is still in the ledger inside the transaction
+    --- FAIL: TestRoomFlowLedgerHoldsOnlyUnsettledActions (0.00s)
+L2 连 pending 也淘汰
+    gameplay/level/component.go: RED
+    --- FAIL: TestForgetSettledActionsKeepsOnlyPendingOnes (0.00s)
+        ledger_test.go:53: round 1: pending [] (IDs so far map[])
+    --- FAIL: TestForgettingRollsBackWithTheTransaction (0.00s)
+    panic: runtime error: index out of range [0] with length 0 [recovered, repanicked]
+L3 只淘汰 done，不淘汰 cancelled
+    gameplay/level/component.go: RED
+    --- FAIL: TestForgetSettledActionsKeepsOnlyPendingOnes (0.00s)
+        ledger_test.go:106: cancelled actions stayed in the ledger: map[instance:18446744073709551615:12:{ID:instance:18446744073709551615:12 Instance:instance Epoch:18446744073709551615 Sequence:12 Stage:a Generation:1 Name:spawn Arg
+L4 缺省也淘汰（改了别的宿主的契约）
+    gameplay/level/component.go: RED
+    --- FAIL: TestSettledActionsStayInTheLedgerByDefault (0.00s)
+        ledger_test.go:29: level: stale instance, stage or source sequence
+    --- FAIL: TestTwoConfiguredConsumersUseTheSameComponent (0.00s)
+        --- FAIL: TestTwoConfiguredConsumersUseTheSameComponent/obstacle (0.00s)
+L5 淘汰放在 drain 之前（action.done 还没分派）
+    gameplay/level/component.go: RED
+    --- FAIL: TestForgetSettledActionsKeepsOnlyPendingOnes (0.00s)
+        ledger_test.go:106: cancelled actions stayed in the ledger: map[instance:18446744073709551615:12:{ID:instance:18446744073709551615:12 Instance:instance Epoch:18446744073709551615 Sequence:12 Stage:a Generation:1 Name:spawn Arg
+L6 淘汰直接改已提交的状态而不是草稿
+    gameplay/level/component.go: RED
+    --- FAIL: TestForgettingRollsBackWithTheTransaction (0.00s)
+        ledger_test.go:135: after rollback: map[]
+L7 物理房间不打开淘汰
+    wiring/physicsroom/entity.go: RED
+    --- FAIL: TestRoomFlowLedgerHoldsOnlyUnsettledActions (0.00s)
+        entity_test.go:347: after fall 1: effects=map[room-fe14010b4fe83303:5:1:{ID:room-fe14010b4fe83303:5:1 Instance:room-fe14010b4fe83303 Epoch:5 Sequence:1 Stage:run Generation:1 Name:physics_respawn Args:map[actor:{Kind:int Int:1
+L8 淘汰时把 NextEffect 归零（ID 会复用）
+    gameplay/level/component.go: RED
+    --- FAIL: TestForgetSettledActionsKeepsOnlyPendingOnes (0.00s)
+        ledger_test.go:59: round 1: ledger map[] next=0 view=map[global/done:{Kind:int Int:1 Text: Bool:false}]
+    --- FAIL: TestRoomEntityRollsBackFrameAndLevelTogether (0.00s)
+        entity_test.go:211: receipt: {Actions:[] View:<nil> StaleReceipts:0} physicsroom: level flow failed: level: invalid state or transition
+    --- FAIL: TestRoomFlowLedgerHoldsOnlyUnsettledActions (0.00s)

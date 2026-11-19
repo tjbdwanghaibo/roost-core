@@ -1,0 +1,292 @@
+基线提交 51974e4d（变异作用在工作区，每条跑完原样恢复）
+命令 dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj（从仓库根运行；每条变异后跑全部 8 组）
+共 38 条。下面“最终代码上的一轮”是全部实现与用例定稿之后完整跑的一遍：38 条全部变红。
+此前的第一轮是 36 条变红、2 条没有被发现（C12、C36），原因与处理见 README；第一轮的原始输出附在最后。
+
+每条的格式：编号与说明 / 被改的文件：结论、退出码、耗时、失败前已通过的组数 / 失败文本。
+退出码 134 是测试程序抛出未处理的异常（用例的断言失败就是抛异常）。
+C03、C05 把代码改回批 3 时的写法（状态字节上限 7、帧头只认 RP2），相当于本批的行为红。
+
+## 最终代码上的一轮
+C01 副本忽略 bit3（方案 T11 指定的变异）
+    ChunkReplica.cs: RED exit=134 3s groups passed before the failure=2
+    Unhandled exception. System.Exception: teleported body carries the flag and the new position
+C02 量化解码不读出 bit3
+    PackedBodyCodec.cs: RED exit=134 2s groups passed before the failure=0
+    Unhandled exception. System.Exception: teleported flag alone
+C03 状态字节上限仍是 7（RP2 的写法）
+    PackedBodyCodec.cs: RED exit=134 2s groups passed before the failure=0
+    Unhandled exception. System.IO.InvalidDataException: Packed sleeping flag
+C04 状态字节接受 bit4
+    PackedBodyCodec.cs: RED exit=134 2s groups passed before the failure=0
+    Unhandled exception. System.Exception: invalid profile flags 16
+C05 帧头仍然只认 RP2
+    ChunkReplica.cs: RED exit=134 3s groups passed before the failure=2
+    Unhandled exception. System.IO.InvalidDataException: Room version
+C06 帧头不检查版本
+    ChunkReplica.cs: RED exit=134 2s groups passed before the failure=2
+    Unhandled exception. System.Exception: accepted: RP2 frame
+C07 回放遇传送不清缓冲
+    ReplicationPlayback.cs: RED exit=134 1s groups passed before the failure=3
+    Unhandled exception. System.Exception: teleported pose is shown at once and held
+C08 回放遇传送连旧帧号的样本也收
+    ReplicationPlayback.cs: RED exit=134 2s groups passed before the failure=3
+    Unhandled exception. System.Exception: a stale marked sample is ignored
+C09 预测忽略传送标记
+    InputPrediction.cs: RED exit=134 1s groups passed before the failure=4
+    Unhandled exception. System.Exception: a teleported frame is not extrapolated with the old input
+C10 传送后连之后的输入也不重放
+    InputPrediction.cs: RED exit=134 1s groups passed before the failure=4
+    Unhandled exception. System.Exception: inputs after the teleport replay from the new position
+C11 传送标记不随下一帧清掉
+    InputPrediction.cs: RED exit=134 1s groups passed before the failure=4
+    Unhandled exception. System.Exception: extrapolation resumes on the next frame
+C12 视图跳过未知字段（普通 Protobuf 解码器的做法）
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: unknown field
+C13 视图允许标量字段重复
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: revision twice
+C14 视图版本回退也接受
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: revision going backwards
+C15 相同版本也换成新对象
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: a repeated revision keeps the current view
+C16 变量可以带多个值
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: variable with two values
+C17 变量可以没有值
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: variable without value
+C18 布尔值不限 0/1
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: flag out of range
+C19 视图不设字节上限
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view over the byte limit
+C20 同名阶段可以重复
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: stage repeated
+C21 同名变量可以重复
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: variable repeated
+C22 阶段可以没有名字
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: stage without id
+C23 可以没有 phase
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: empty
+C24 整数按无符号显示
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: negative integer variable
+C25 不校验 UTF-8
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: invalid UTF-8
+C26 varint 第 10 字节不查溢出
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: varint overflow
+C27 关卡零旋转不当成单位旋转
+    LevelMarkers.cs: RED exit=134 1s groups passed before the failure=6
+    Unhandled exception. System.Exception: zero rotation reads as identity
+C28 关卡旋转不要求单位长度
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: region rotation not unit
+C29 区域尺寸可以是零
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: region with zero size
+C30 出生点可以没有位置
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: spawn without positions
+C31 文档后面可以有多余内容
+    LevelMarkers.cs: RED exit=134 1s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: trailing content
+C32 JSON 对象允许重复的键
+    LevelMarkers.cs: RED exit=134 1s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: duplicate key
+C33 字符串转义按普通字符读
+    LevelMarkers.cs: RED exit=134 1s groups passed before the failure=6
+    Unhandled exception. System.IO.InvalidDataException: Level JSON separator
+C34 数量不设上限
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: too many regions
+C35 数值不设范围
+    LevelMarkers.cs: RED exit=134 3s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: region number out of range
+C36 嵌套深度不设上限
+    LevelMarkers.cs: RED exit=134 1s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: nesting too deep
+C37 出生点只读第一个位置
+    LevelMarkers.cs: RED exit=134 1s groups passed before the failure=6
+    Unhandled exception. System.Exception: spawn with two positions
+C38 缺省出生点不读
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: marker counts
+
+## 第一轮（定稿之前；C12、C36 没有被发现）
+C01 副本忽略 bit3（方案 T11 指定的变异）
+    ChunkReplica.cs: RED exit=134 4s groups passed before the failure=2
+    Unhandled exception. System.Exception: teleported body carries the flag and the new position
+C02 量化解码不读出 bit3
+    PackedBodyCodec.cs: RED exit=134 4s groups passed before the failure=0
+    Unhandled exception. System.Exception: teleported flag alone
+C03 状态字节上限仍是 7（RP2 的写法）
+    PackedBodyCodec.cs: RED exit=134 4s groups passed before the failure=0
+    Unhandled exception. System.IO.InvalidDataException: Packed sleeping flag
+C04 状态字节接受 bit4
+    PackedBodyCodec.cs: RED exit=134 4s groups passed before the failure=0
+    Unhandled exception. System.Exception: invalid profile flags 16
+C05 帧头仍然只认 RP2
+    ChunkReplica.cs: RED exit=134 4s groups passed before the failure=2
+    Unhandled exception. System.IO.InvalidDataException: Room version
+C06 帧头不检查版本
+    ChunkReplica.cs: RED exit=134 4s groups passed before the failure=2
+    Unhandled exception. System.Exception: accepted: RP2 frame
+C07 回放遇传送不清缓冲
+    ReplicationPlayback.cs: RED exit=134 3s groups passed before the failure=3
+    Unhandled exception. System.Exception: teleported pose is shown at once and held
+C08 回放遇传送连旧帧号的样本也收
+    ReplicationPlayback.cs: RED exit=134 2s groups passed before the failure=3
+    Unhandled exception. System.Exception: a stale marked sample is ignored
+C09 预测忽略传送标记
+    InputPrediction.cs: RED exit=134 3s groups passed before the failure=4
+    Unhandled exception. System.Exception: a teleported frame is not extrapolated with the old input
+C10 传送后连之后的输入也不重放
+    InputPrediction.cs: RED exit=134 2s groups passed before the failure=4
+    Unhandled exception. System.Exception: inputs after the teleport replay from the new position
+C11 传送标记不随下一帧清掉
+    InputPrediction.cs: RED exit=134 2s groups passed before the failure=4
+    Unhandled exception. System.Exception: extrapolation resumes on the next frame
+C12 视图接受未知字段号 6、7
+    RoomLevelView.cs: GREEN (not detected) exit=0 2s groups passed before the failure=8
+    
+C13 视图允许标量字段重复
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: revision twice
+C14 视图版本回退也接受
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: revision going backwards
+C15 相同版本也换成新对象
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: a repeated revision keeps the current view
+C16 变量可以带多个值
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: variable with two values
+C17 变量可以没有值
+    RoomLevelView.cs: RED exit=134 3s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: variable without value
+C18 布尔值不限 0/1
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: flag out of range
+C19 视图不设字节上限
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view over the byte limit
+C20 同名阶段可以重复
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: stage repeated
+C21 同名变量可以重复
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: variable repeated
+C22 阶段可以没有名字
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: stage without id
+C23 可以没有 phase
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: empty
+C24 整数按无符号显示
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: negative integer variable
+C25 不校验 UTF-8
+    RoomLevelView.cs: RED exit=134 1s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: invalid UTF-8
+C26 varint 第 10 字节不查溢出
+    RoomLevelView.cs: RED exit=134 2s groups passed before the failure=5
+    Unhandled exception. System.Exception: accepted: level view: varint overflow
+C27 关卡零旋转不当成单位旋转
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: zero rotation reads as identity
+C28 关卡旋转不要求单位长度
+    LevelMarkers.cs: RED exit=134 3s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: region rotation not unit
+C29 区域尺寸可以是零
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: region with zero size
+C30 出生点可以没有位置
+    LevelMarkers.cs: RED exit=134 3s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: spawn without positions
+C31 文档后面可以有多余内容
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: trailing content
+C32 JSON 对象允许重复的键
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: duplicate key
+C33 字符串转义按普通字符读
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.IO.InvalidDataException: Level JSON separator
+C34 数量不设上限
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: too many regions
+C35 数值不设范围
+    LevelMarkers.cs: RED exit=134 1s groups passed before the failure=6
+    Unhandled exception. System.Exception: accepted: level markers: region number out of range
+C36 嵌套深度不设上限
+    LevelMarkers.cs: GREEN (not detected) exit=0 1s groups passed before the failure=8
+    
+C37 出生点只读第一个位置
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: spawn with two positions
+C38 缺省出生点不读
+    LevelMarkers.cs: RED exit=134 2s groups passed before the failure=6
+    Unhandled exception. System.Exception: marker counts
+
+## Unity 批处理编译（scripts/physics/create-viewer.sh，Unity 6000.3.12f1，新建工程）
+  第一次（脚本未改）：Assets/Roost/Client/Packet.cs(76,48): error CS0246: The type or namespace name 'IGateTransport' could not be found
+  脚本补上 GateTransport.cs 之后，日志里与编译、结果有关的行：
+  Assets/Roost/Client/GateTransport.cs(118,51): warning CS8632: The annotation for nullable reference types should only be used in code within a '#nullable' annotations context.
+  Assets/Roost/Client/GateTransport.cs(45,30): warning CS8632: The annotation for nullable reference types should only be used in code within a '#nullable' annotations context.
+  Assets/Roost/Client/GateTransport.cs(118,51): warning CS8632: The annotation for nullable reference types should only be used in code within a '#nullable' annotations context.
+  Assets/Roost/Client/GateTransport.cs(45,30): warning CS8632: The annotation for nullable reference types should only be used in code within a '#nullable' annotations context.
+  AssetDatabase: script compilation time: 5.766366s
+  ROOST_VIEWER_SCENE_READY
+  Exiting batchmode successfully now!
+
+## codegen/internal/roost 的三个失败用例（与本分支无关的对照）
+  批 3 提交时按 -timeout 60m 在工作目录里跑的那一遍（3404s 后结束）：
+  --- FAIL: TestModulePortalInstallsOnALobbyProjectWithoutGame (43.06s)
+      module_portal_test.go:225: installing portal again or project sync changed the lobby project
+  --- FAIL: TestModulePortalInstallsOnTheHostedAccountService (130.45s)
+      module_portal_test.go:152: project sync after the install changed the project (the hosted module mod or the shutdown budget drifted)
+  --- FAIL: TestModuleAddDeclaresTheFrameworkServicesItUses (161.57s)
+      module_test.go:1205: project sync after the install changed the project
+  FAIL
+  FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	3404.377s
+  FAIL
+  exit=1 seconds=3405
+
+  在 51974e4d 的冻结检出里单独跑这三条：
+  --- FAIL: TestModulePortalInstallsOnALobbyProjectWithoutGame (61.76s)
+      module_portal_test.go:225: installing portal again or project sync changed the lobby project
+  --- FAIL: TestModulePortalInstallsOnTheHostedAccountService (112.07s)
+      module_portal_test.go:152: project sync after the install changed the project (the hosted module mod or the shutdown budget drifted)
+  --- FAIL: TestModuleAddDeclaresTheFrameworkServicesItUses (118.01s)
+      module_test.go:1205: project sync after the install changed the project
+  FAIL
+  FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	119.736s
+  FAIL
+  exit=1 seconds=129 load=41.93 28.06 25.05
+
+  在分支基线 2d15a1e5 的检出里单独跑这三条：
+  --- FAIL: TestModulePortalInstallsOnALobbyProjectWithoutGame (21.19s)
+      module_portal_test.go:225: installing portal again or project sync changed the lobby project
+  --- FAIL: TestModulePortalInstallsOnTheHostedAccountService (54.22s)
+      module_portal_test.go:152: project sync after the install changed the project (the hosted module mod or the shutdown budget drifted)
+  --- FAIL: TestModuleAddDeclaresTheFrameworkServicesItUses (58.70s)
+      module_test.go:1205: project sync after the install changed the project
+  FAIL
+  FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	59.062s
+  FAIL
+  exit=1 seconds=60 load=27.63 26.61 24.79
+
+  在当时的 main 顶端的检出里单独跑这三条：
+  ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	94.088s
+  main=a4ff59d9 exit=0 seconds=97

@@ -325,8 +325,174 @@ func checkRoomReplicationPipeline(t *testing.T, reuse bool) {
 			t.Fatalf("scenario does not cover %s: %v", need, coverage)
 		}
 	}
-	const want = "f862c6e98746cdb23e8e98b7bb9d5421cb824cbaea64027eb8d552d5d1d34790"
+	// RP3 只改了私有头的版本字节：把 roomMagic 临时改回 "RP\x02" 时，这里得到的仍是 RP2 时期的摘要
+	// f862c6e98746cdb23e8e98b7bb9d5421cb824cbaea64027eb8d552d5d1d34790（2026-11-19 实测）。
+	// 场景里没有传送，所以对象字节、分档与账本都不变。
+	const want = "dea81b0bf0f155580923890568e3b8b84c03ed1760e01b1b789d823e7ce6ca0c"
 	if got := hex.EncodeToString(digest.Sum(nil)); got != want {
 		t.Fatalf("replication bytes changed: %s", got)
+	}
+}
+
+// 传送标记按接收方各自的视图账本置位：近 / 中 / 远三档接收方、以及传送那一帧没有收帧的接收方，
+// 都在传送后发给它的第一帧里看到 ViewTeleported 和当前位置，下一帧清掉，之后不再出现；
+// 没被确认的计划不改账本，重新计划时标记还在。
+func TestTeleportMarkReachesEveryReceiverOnce(t *testing.T) {
+	const target = 1
+	bodies := []physx.Body{{ID: target, Shape: physx.Sphere, Dimensions: physx.Vec3{.5}}}
+	states := []physx.State{{ID: target, Rotation: physx.Quat{0, 0, 0, 1}, Velocity: physx.Vec3{0, 0, 1.5}}}
+	// 观察者离目标 3m / 8m / 20m，分别落在近、中、远档；late 也在远档，但传送那一帧不收帧。
+	observers := []struct {
+		name  string
+		id    uint64
+		x     float32
+		class string
+	}{{"near", 10, 3, "near"}, {"middle", 11, 8, "middle"}, {"far", 12, 20, "far"}, {"late", 13, -20, "far"}}
+	for _, o := range observers {
+		bodies = append(bodies, physx.Body{ID: o.id, Shape: physx.Sphere, Dimensions: physx.Vec3{.5}})
+		states = append(states, physx.State{ID: o.id, Rotation: physx.Quat{0, 0, 0, 1}, Position: physx.Vec3{o.x, 0, 0}})
+	}
+	scene := NewReplicationScene(bodies, nil)
+	type receiver struct {
+		ledger  map[uint64]ViewEntry // 已确认的视图账本
+		cursor  chunksync.Cursor
+		replica RoomReplica
+		marks   int // 客户端解码后看到目标带 ViewTeleported 的帧数
+	}
+	receivers := map[uint64]*receiver{}
+	for _, o := range observers {
+		receivers[o.id] = &receiver{}
+	}
+	plan := func(tick, observer uint64) ViewPlan {
+		t.Helper()
+		snapshot, err := QuantizedSnapshot(Frame{Epoch: 1, Tick: tick, States: states})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := scene.Frame(states).Plan(snapshot, observer, nil, receivers[observer].ledger, DefaultReplicationPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// deliver 走完整的下发与确认：字段增量、RP3 私有头、客户端副本解码，然后才采纳账本。
+	deliver := func(tick, observer uint64) ViewEntry {
+		t.Helper()
+		r := receivers[observer]
+		p := plan(tick, observer)
+		fields, err := r.cursor.PlanFields(p.Snapshot, QuantizedLayout())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = r.replica.Apply(RoomPayload(fields.Data, InputAck{})); err != nil {
+			t.Fatal(err)
+		}
+		if err = r.cursor.Commit(fields); err != nil {
+			t.Fatal(err)
+		}
+		r.ledger = p.Entries
+		if r.replica.Profiles[target]&ViewTeleported != 0 {
+			r.marks++
+		}
+		return p.Entries[target]
+	}
+	marked := func(e ViewEntry) bool { return e.Object.Data[33]&ViewTeleported != 0 }
+	position := func(observer uint64) physx.Vec3 { return receivers[observer].replica.States[target].Position }
+
+	for _, o := range observers {
+		if e := deliver(1, o.id); e.Class != o.class || marked(e) {
+			t.Fatalf("%s: first sight must be class %s without a mark, got %s %v", o.name, o.class, e.Class, marked(e))
+		}
+	}
+	// tick 2：目标被传送（同一 Chunk、各观察者的档位不变，排除跨 Chunk 与升档这两条已有的刷新路径）。
+	states[0].Position, states[0].Velocity, states[0].Teleports = physx.Vec3{1, 0, 1}, physx.Vec3{}, 1
+	for _, o := range observers[:3] {
+		// 计划了但没确认（Poll 的响应丢了）：账本不变，再计划一次标记仍在，账本本身没被改。
+		lost := plan(2, o.id)
+		if !marked(lost.Entries[target]) || lost.Entries[target].Tick != 2 {
+			t.Fatalf("%s: unacknowledged plan lacks the mark", o.name)
+		}
+		if base := receivers[o.id].ledger[target]; marked(base) || base.Teleports != 0 || base.Tick != 1 {
+			t.Fatalf("%s: planning modified the acknowledged ledger: %+v", o.name, base)
+		}
+		e := deliver(2, o.id)
+		if !marked(e) || e.Tick != 2 || e.Class != o.class {
+			t.Fatalf("%s: teleport frame must refresh with the mark: tick %d class %s mark %v", o.name, e.Tick, e.Class, marked(e))
+		}
+		if got := position(o.id); got != (physx.Vec3{1, 0, 1}) {
+			t.Fatalf("%s: marked frame carries position %v", o.name, got)
+		}
+		if receivers[o.id].replica.Profiles[target]&ViewDisplayOnly != 0 != (o.class != "near") {
+			t.Fatalf("%s: the mark changed the profile bits: %b", o.name, receivers[o.id].replica.Profiles[target])
+		}
+	}
+	// tick 3：标记清掉（远档本来要等到 tick 11 才刷新，这里为了清标记刷新一次），位置不变。
+	for _, o := range observers[:3] {
+		if e := deliver(3, o.id); marked(e) || e.Tick != 3 {
+			t.Fatalf("%s: mark not cleared on the next frame: tick %d mark %v", o.name, e.Tick, marked(e))
+		}
+		if receivers[o.id].replica.Profiles[target]&ViewTeleported != 0 {
+			t.Fatalf("%s: client still sees the mark", o.name)
+		}
+	}
+	// tick 4：一切照旧——远档与中档回到各自的周期（暂缓），不再因为那次传送多发。
+	states[0].Position[2] = 1.25
+	for _, o := range observers[:3] {
+		e := deliver(4, o.id)
+		if marked(e) || (e.Tick == 4) != (o.class == "near") {
+			t.Fatalf("%s: after the mark, tick %d mark %v", o.name, e.Tick, marked(e))
+		}
+	}
+	// late 从 tick 1 之后一直没收帧，期间目标又被传送了一次：它的下一帧带一次标记和最新位置。
+	states[0].Position, states[0].Teleports = physx.Vec3{2, 0, 2}, 2
+	if e := deliver(5, 13); !marked(e) || e.Tick != 5 || position(13) != (physx.Vec3{2, 0, 2}) {
+		t.Fatalf("late receiver missed the teleport: tick %d mark %v position %v", e.Tick, marked(e), position(13))
+	}
+	if e := deliver(6, 13); marked(e) {
+		t.Fatal("late receiver: mark repeated")
+	}
+	// 其余接收方也各自再看到第二次传送，一次。
+	for _, o := range observers[:3] {
+		if e := deliver(5, o.id); !marked(e) {
+			t.Fatalf("%s: second teleport not marked", o.name)
+		}
+		for tick := uint64(6); tick <= 30; tick++ {
+			if e := deliver(tick, o.id); marked(e) {
+				t.Fatalf("%s: mark came back at tick %d", o.name, tick)
+			}
+		}
+	}
+	for tick := uint64(7); tick <= 30; tick++ {
+		deliver(tick, 13)
+	}
+	for _, o := range observers {
+		want := 2
+		if o.name == "late" {
+			want = 1 // 两次传送之间没收过帧，只需要知道“位置不连续”一次。
+		}
+		if got := receivers[o.id].marks; got != want {
+			t.Fatalf("%s: client saw the mark in %d frames, want %d", o.name, got, want)
+		}
+	}
+	// 新进入视野的接收方没有旧位置，不需要标记。
+	receivers[99] = &receiver{}
+	bodies = append(bodies, physx.Body{ID: 99, Shape: physx.Sphere, Dimensions: physx.Vec3{.5}})
+	states = append(states, physx.State{ID: 99, Rotation: physx.Quat{0, 0, 0, 1}, Position: physx.Vec3{4, 0, 0}})
+	scene = NewReplicationScene(bodies, nil)
+	if e := deliver(31, 99); marked(e) || e.Teleports != 2 {
+		t.Fatalf("newcomer: mark %v, ledger count %d", marked(e), e.Teleports)
+	}
+	// 关闭分档（policy.Enabled=false）时同样置位、同样只一次。
+	states[0].Teleports = 3
+	off := ReplicationPolicy{}
+	snapshot, _ := QuantizedSnapshot(Frame{Epoch: 1, Tick: 32, States: states})
+	first, err := scene.Frame(states).Plan(snapshot, 99, nil, receivers[99].ledger, off)
+	if err != nil || !marked(first.Entries[target]) {
+		t.Fatalf("mark missing with tiers disabled: %v", err)
+	}
+	snapshot.Tick = 33
+	second, err := scene.Frame(states).Plan(snapshot, 99, nil, first.Entries, off)
+	if err != nil || marked(second.Entries[target]) {
+		t.Fatalf("mark repeated with tiers disabled: %v", err)
 	}
 }

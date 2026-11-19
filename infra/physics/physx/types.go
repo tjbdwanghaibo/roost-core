@@ -10,6 +10,13 @@ import (
 var ErrUnavailable = errors.New("physx: build native library and enable -tags physx with cgo")
 var ErrClosed = errors.New("physx: world closed")
 
+// ErrPoseTarget 表示 SetPose 的目标不是动态刚体（静态、运动学或未知 ID）；世界没有被改动，调用方可以据此给出失败回执。
+var ErrPoseTarget = errors.New("physx: pose target is not a dynamic body")
+
+// nativeABI 是 Go 绑定要求的原生库 ABI 版本（rp_abi_version）。版本不等时 New 拒绝，要求重建原生库；不兼容旧版本。
+// 3：新增 rp_set_pose。
+const nativeABI = 3
+
 type Vec3 [3]float32
 type Quat [4]float32
 type Shape uint32
@@ -53,6 +60,7 @@ type State struct {
 	InputGeneration           uint64 // 成员代际，防止重连后的序列复用确认旧输入。
 	InputSequence             uint64 // 房间附加：此已提交帧实际采样的输入序列；不是 RPC 接收确认。
 	InputActive               bool   // TTL 内仍在施力；过期帧仍携带最后采样序列以终止客户端预测。
+	Teleports                 uint32 // 房间附加：这个刚体累计被传送的次数。不进 native、不上线，只用来按接收方判断位置是否不连续。
 	ID                        uint64
 	Position                  Vec3
 	Rotation                  Quat

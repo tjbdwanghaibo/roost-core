@@ -1,0 +1,7 @@
+2026/11/19 12:34:40 WARN slow dispatch trace title=nest handler=physicsroom.entity.accept type=Single key=4033 cost_ms=209 cost=209.49775ms result=running msg_info="map[context_valid:true cost_pool:false groups:[] groups_count:0 handler:physicsroom.entity.accept has_ret_chan:true key:4033 msg:Msg{Name:physicsroom.entity.accept,Type:Single,Tid:4033} param_samples:[<physicsroom.FrameCommit>] param_t
+2026/11/19 12:34:41 WARN slow dispatch title=nest handler=physicsroom.entity.accept type=Single key=4033 tid=4033 tids=0 groups=0 cost_ms=300 cost=300.017708ms result=ok cost_pool=false remote=false
+    load_native_test.go:465: physicsroom: room missing or stale
+--- FAIL: TestPhysicsRoomSoak (330.04s)
+FAIL
+exit=1
+(另有 368 行 'nest handler held entity locks beyond threshold' WARN，略)

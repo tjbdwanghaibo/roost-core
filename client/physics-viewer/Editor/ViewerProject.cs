@@ -99,6 +99,20 @@ public static class ViewerProject
         if(File.Exists("Artifacts/room.png")) File.Delete("Artifacts/room.png");
         EditorApplication.isPlaying=true;
     }
+    // 带流程的关卡（game --level，导出的示例关卡）：1 号槽自动向 +x 走出地面，要求收到流程视图、自己被重生、
+    // 公开变量 falls 至少为 1，并且读出了关卡里的区域与出生点。不截图，可以带 -nographics 运行。
+    public static void VerifyLevel()
+    {
+        EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+        var viewer=new GameObject("Roost UGC Controller").AddComponent<CrowdViewer>();
+        viewer.ControlRoom=true;viewer.UseGate=true;viewer.Port=19093;viewer.PlayerSlot=1;viewer.VerifyControls=true;
+        Directory.CreateDirectory("Assets/Scenes");
+        EditorSceneManager.SaveScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene(), "Assets/Scenes/UGC.unity");
+        SessionState.SetBool(Verification+"Level",true);
+        SessionState.SetBool(Verification,true);
+        SessionState.SetString(Verification+"Deadline",DateTime.UtcNow.AddSeconds(60).ToString("O"));
+        EditorApplication.isPlaying=true;
+    }
     static void CheckVerification()
     {
         if (!SessionState.GetBool(Verification, false))
@@ -108,11 +122,23 @@ public static class ViewerProject
         if (DateTime.UtcNow > deadline)
         {
             var room = UnityEngine.Object.FindFirstObjectByType<CrowdViewer>();
-            Finish(false, "Unity verification timeout " + (room == null ? "no viewer" : $"{room.Summary} travel={room.HorizontalTravel} rise={room.VerticalRise} jumps={room.JumpRequests}"));
+            Finish(false, "Unity verification timeout " + (room == null ? "no viewer" : $"{room.Summary} travel={room.HorizontalTravel} rise={room.VerticalRise} jumps={room.JumpRequests} teleports={room.Teleports} regions={room.RegionMarkers} spawns={room.SpawnMarkers} hud=[{room.LevelHud}]"));
             return;
         }
         if (!EditorApplication.isPlaying || EditorApplication.isCompiling)
             return;
+        if (SessionState.GetBool(Verification+"Level",false))
+        {
+            var room=UnityEngine.Object.FindFirstObjectByType<CrowdViewer>();
+            if(room==null)return;
+            if(room.Status!="Connected"&&room.Status!="Connecting"){Finish(false,room.Status);return;}
+            var flow=room.Level;
+            long falls=0;
+            if(flow!=null) foreach(var variable in flow.Variables) if(variable.Key=="global/falls")falls=variable.Int;
+            if(room.Frames>=200&&room.Teleports>=1&&falls>=1&&room.RegionMarkers>0&&room.SpawnMarkers>0)
+                Finish(true,$"{room.Summary} teleports={room.Teleports} regions={room.RegionMarkers} spawns={room.SpawnMarkers} travel={room.HorizontalTravel:F1} hud=[{room.LevelHud}]");
+            return;
+        }
         if (SessionState.GetBool(Verification+"Room",false))
         {
             var room=UnityEngine.Object.FindFirstObjectByType<CrowdViewer>();
@@ -184,6 +210,7 @@ public static class ViewerProject
     {
         SessionState.SetBool(Verification, false);
         SessionState.SetBool(Verification+"Room",false);
+        SessionState.SetBool(Verification+"Level",false);
         SessionState.SetBool(Verification+"Capture",false);
         SessionState.SetBool(Verification + "Crowd", false);
         Debug.Log((ok ? "ROOST_VIEWER_TCP_PHYSICS_PASS " : "ROOST_VIEWER_TCP_PHYSICS_FAIL ") + result);

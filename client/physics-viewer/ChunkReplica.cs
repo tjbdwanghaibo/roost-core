@@ -12,9 +12,11 @@ namespace Roost.PhysicsViewer
         public Vector3 Position, Velocity, AngularVelocity;
         public Quaternion Rotation;
         public bool Sleeping, DisplayOnly, Trajectory;
+        // 只在 SampleTick 等于副本当前 Tick 的那一帧有意义：服务端在下一帧把标记清掉，但没有随帧更新的对象保留旧值。
+        public bool Teleported;
     }
 
-    // 对应 Go RC1 无损对照及 Room RP2/RC2 字段增量。整帧校验成功才替换对象表，迁移按稳定 ID 覆盖。
+    // 对应 Go RC1 无损对照及 Room RP3/RC2 字段增量（RP2 在帧头就拒绝）。整帧校验成功才替换对象表，迁移按稳定 ID 覆盖。
     public sealed class ChunkReplica
     {
         public ulong Epoch, Sequence, Tick;
@@ -32,7 +34,7 @@ namespace Roost.PhysicsViewer
             bool room=payload[0]=='R'&&payload[1]=='P';
             ulong inputSequence=0,inputGeneration=0;bool inputActive=false;
             if(room) {
-                if(payload.Length<56||r.ReadByte()!='R'||r.ReadByte()!='P'||r.ReadByte()!=2)throw new InvalidDataException("Room version");
+                if(payload.Length<56||r.ReadByte()!='R'||r.ReadByte()!='P'||r.ReadByte()!=3)throw new InvalidDataException("Room version");
                 byte active=r.ReadByte();if(active>1)throw new InvalidDataException("Input flag");inputActive=active==1;
                 inputSequence=r.ReadUInt64();inputGeneration=r.ReadUInt64();
                 if(inputSequence!=0&&inputGeneration==0||inputActive&&inputSequence==0)throw new InvalidDataException("Input acknowledgement");
@@ -81,7 +83,7 @@ namespace Roost.PhysicsViewer
                         state=new BodyState{Id=id,Position=new Vector3(value.Position.X,value.Position.Y,value.Position.Z),
                             Rotation=new Quaternion(value.Rotation.X,value.Rotation.Y,value.Rotation.Z,value.Rotation.W),
                             Velocity=new Vector3(value.Velocity.X,value.Velocity.Y,value.Velocity.Z),
-                            AngularVelocity=new Vector3(value.AngularVelocity.X,value.AngularVelocity.Y,value.AngularVelocity.Z),Sleeping=value.Sleeping,DisplayOnly=value.DisplayOnly,Trajectory=value.Trajectory};
+                            AngularVelocity=new Vector3(value.AngularVelocity.X,value.AngularVelocity.Y,value.AngularVelocity.Z),Sleeping=value.Sleeping,DisplayOnly=value.DisplayOnly,Trajectory=value.Trajectory,Teleported=value.Teleported};
                         nextPacked[id]=complete;nextChunks[id]=(x,z);
                     } else {
                         // Comparison/Crowd 的无损对照入口继续使用 RC1，不混入量化误差。

@@ -736,15 +736,22 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 
 #### 通用 LevelComponent 首版边界
 
-`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。私有参与者状态、网络增量与 Unity UI 由宿主接入。持久模式的真实 Mongo / WAL 进程崩溃恢复已验证（`gameplay/level` 的 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`，2026-11-14），但不恢复原生物理世界；状态复制与整状态 mutation 有预算没有容量承诺；动作账本满额拒绝；长期归档要另行设计。
+`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。`gameplay/level` 自己的 checkpoint／spawn_wave／settle 示例是能力替身，不提供完整多人闯关或永久奖励；Registry 只是宿主能力类型表。物理重生、检查点与区域触发由物理房间作为宿主提供（见下一条）。私有参与者状态、网络增量与 Unity UI 由宿主接入。持久模式的真实 Mongo / WAL 进程崩溃恢复已验证（`gameplay/level` 的 `TestRealMongoLevelComponentRecoversFromACrashFromTheWAL`，2026-11-14），但不恢复原生物理世界；状态复制与整状态 mutation 有预算没有容量承诺；动作账本缺省不淘汰、满额拒绝（1024 是实例一生里的动作总数），动作频繁的长时间实例要由宿主打开 `ForgetSettledActions()`（只留未完成的动作，代价是重复回执不再区分幂等与冲突，[手册](../framework/LEVEL-COMPONENT.md#预算与验证范围)）；长期归档要另行设计。
 
-- **没有物理动作执行器，联合玩法未实现**（2026-11-19 核对，原“二”里“玩法联合链”的前半）：仓库里没有把 LevelComponent 的动作（`PendingActions` / `RequestSettled`）接到物理房间的执行器，PhysX native ABI 也只有建 / 销毁、加位姿、步进、读、关节增删，没有传送 / 重生（直接设动态刚体位姿）和区域触发事实。所以“PhysX 动作执行器 + LevelComponent 的真实联合玩法”不是待复现的偶发，而是没做的集成：要做需要先补 native 能力和一个真实执行器，再按 Level 手册的回执 / 重试契约验收；做不做待维护者定。[证据](evidence/category3-batch3-20261119/README.md#3a-physx-动作执行器与-levelcomponent-的真实联合玩法不是偶发是没有实现的集成)
+- **物理房间 + LevelComponent 联合玩法的边界**（2026-11-19 实现，[方案](FEATURE-2026-11-19-physx-level-actions.md)、[证据](evidence/physx-level-actions-20261119/README.md)、[手册](../framework/PHYSICS-ROOM-SERVICE.md#关卡流程区域检查点重生与流程视图2026-11-19)；原条目“没有物理动作执行器，联合玩法未实现”由它关闭）：房间能判定区域进出、执行传送 / 检查点 / 重生、把业务动作交给登记的执行者、把流程公开状态推给客户端。设计上不做或没有做的：
+  - 流程是瞬态的，跟房间一起结束，不落库、不恢复；流程出错（预算、冲突）时房间停止、全房间掉线（指标 `level_failed`），UGC 流程要在发布前编译并试玩。
+  - 区域按刚体中心点判定，只有有向包围盒；不是形状相交，没有公开的碰撞事件。被 `Spec.Joints` 连着的刚体不能传送。
+  - 动作在提交成功之后才执行，触发到效果隔一个 Tick；客户端 20Hz 收帧，通常看不到“球在掉落区里”的那一帧。
+  - 业务动作至少执行一次、按动作 ID 幂等是执行者的责任；房间结束时没有结果的动作只记 `action_unsettled`，对账由业务做。没有把业务事件投给流程的入口。
+  - 流程视图是整份推送（上限 16KiB），不是增量；每次公开变量变化推给房间里每个人。
+  - 成本（macOS ARM64，机关场景 8 房间 × 20 逻辑客户端，32 个区域、每客户端约每 4 秒重生一次，交替 3 轮）：物理均频不变；Go 分配约 +21%，每客户端下行载荷约 +17%（传送后的强制刷新）；不带流程的房间与改前相比没有回退。数字见[手册](../framework/PHYSICS-ROOM-SERVICE.md#流程的成本2026-11-19macos-arm64)。
+  - 只在 macOS ARM64 上验证过；Unity 侧只有批处理 Play Mode 的接线验收，没有人看过画面与手感（见[遗留](#levelcomponent-与-ugc-物理闯关遗留)）。
 
 #### UGC 物理闯关
 
-UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、编辑器、发布审核、CDN、运行期刚体增删、公开碰撞事件、检查点/通关/奖励或物理跨机接管。抓取按中心距离，无视线检查。近似客户端预测不保证移动平台摩擦或跨版本 PhysX 一致；输入邮箱不是逐命令帧同步。Room 为 RP2 私有确认 + RC2 字段增量（完整量化对象 34 字节）；Comparison/Crowd 对照仍为 RC1/70 字节。native ABI 2，先停旧再同步更新服务与客户端。同帧编码样本载荷降低约 51.7%，位置单轴量化误差约 5mm；不是 WAN 或容量验收。
+UGC 数据是有限基础几何与轨迹描述，加上可选的区域、出生点与声明式流程（检查点、重生、终点，见上一条），不含网格烘焙、脚本、编辑器、发布审核、CDN、运行期刚体增删、公开碰撞事件、永久奖励的发放或物理跨机接管。抓取按中心距离，无视线检查。近似客户端预测不保证移动平台摩擦或跨版本 PhysX 一致；输入邮箱不是逐命令帧同步。Room 为 RP3 私有确认 + RC2 字段增量（完整量化对象 34 字节；2026-11-19 由 RP2 升到 RP3，状态字节多了传送标记，客户端只认 RP3）；Comparison/Crowd 对照仍为 RC1/70 字节。native ABI 3、Level schema 2，都不兼容旧版本：先停旧再同步更新原生库、服务、关卡文件与客户端。同帧编码样本载荷降低约 51.7%，位置单轴量化误差约 5mm；不是 WAN 或容量验收。
 
-物理 Room 默认启用接收者分频/字段裁剪，远处规则障碍可按固定关卡轨迹显示；完整对象仍为 34 字节，RP2 明确标记省略速度，RP1 客户端须同步更新。近处/抓取关联与快速接近对象保留高频；包围球用于分频保护，AOI 仍为中心距离，不是几何遮挡或全形状相交查询。降频引入样本年龄和插值延迟，不能用量化的 5mm 误差宣称实时显示误差。指标与同帧对照见 [Room 手册](../framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。（未验收的部分见[LevelComponent 与 UGC 物理闯关：遗留](#levelcomponent-与-ugc-物理闯关遗留)）
+物理 Room 默认启用接收者分频/字段裁剪，远处规则障碍可按固定关卡轨迹显示；完整对象仍为 34 字节，状态字节明确标记省略速度（RP2 引入，RP3 沿用），旧帧头的客户端须同步更新。近处/抓取关联与快速接近对象保留高频；包围球用于分频保护，AOI 仍为中心距离，不是几何遮挡或全形状相交查询。降频引入样本年龄和插值延迟，不能用量化的 5mm 误差宣称实时显示误差。指标与同帧对照见 [Room 手册](../framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。（未验收的部分见[LevelComponent 与 UGC 物理闯关：遗留](#levelcomponent-与-ugc-物理闯关遗留)）
 
 - **验证到哪一层**：可选 PhysX 房间支持运动学转轮 / 平台、动态 Box、弹簧抓取与铰链马达、固定版本关卡加载、Unity 预测 / 纠偏接法；Linux 原生功能、真实 TCP / Gate / NATS / Nest 联合链与 C# 预测核心已验证。历史单房间性能数据不覆盖新载荷 / 约束，也不是多房间容量。
 - **多房间与内存的已测口径**：物理房间已补 Linux 的 1/4/8 房间短测（每房 20 个逻辑客户端，普通/机关两类）。这是直接 Service + PhysX + Nest、预热 1 秒/采集 5 秒的证据，不含生产网络、原生内存与长稳，不能作为容量上限；普通 8 房间样本实际物理均频 49.32Hz。Go 分配已于 2026-10-29 profile 定位并削减：macOS ARM64 同机对照，机关 8 房间 81.57→31.15MB/s、普通 70.04→27.38MB/s，载荷字节不变；同日晚每帧状态索引与 AOI 索引由 map 改为切片（房间提交路径不再复制本帧状态），再降到机关 23.46、普通 19.87MB/s（同机交替 3 轮，载荷字节不变）；剩余主要是 `StateDAO.Accept` 的所有权副本（约 3MB/s，去掉要让 Nest undo 保护的权威状态与网络侧索引共用切片，判断为高风险，不做）与交给网络 / 视图账本的副本。**macOS ARM64 长稳已测**（2026-10-29，机关 8 房间 × 20 客户端连续 20 分钟）：footprint、Go 映射、goroutine、PhysX 原生堆（malloc 已分配约 9.6MiB / 8 房间，个数持平）在稳定窗口斜率都在 0 附近，没有发现无界增长；物理均频 49.85Hz（不含 vmmap 挂起窗口最低 49.93Hz）。RSS 每分钟 +0.035MB、footprint 持平：2026-11-19 用逐区域 vmmap 核对了一次（8 分钟单次），增长落在 Go 已归还但仍常驻的页（不计入 footprint）与测试二进制代码段的按需换入，PhysX 原生堆与 dylib 各段不增长，原来“全是干净文件页”的推断只对一部分（[证据](evidence/category3-batch3-20261119/README.md#3b-rss-页来源未逐区域核对本轮逐区域核对了一次macos8-分钟)）；交付频率后 8 分钟比前 8 分钟低 0.9%：2026-11-18 复现确认是夹具客户端循环的计时（定时器晚醒与 Submit / Poll 的 CPU 时间）随本机状态成台阶变化，一个已确认的触发是显示器关闭，与运行时长无关，物理频率与空 Poll 不变（[证据](evidence/category3-anomalies-20261118/README.md) §3）；长稳测量期间应 `caffeinate -d -i` 并看 `timer_late_mean`。这些外部复测与小时级边界见二和 C-S4。见 [测量口径和复跑](../framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)、[分配 profile](../framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64) 与 [长稳与原生内存](../framework/PHYSICS-ROOM-SERVICE.md#长稳rss-与原生内存2026-10-29macos-arm64)。闯关流程由通用 `gameplay/level` 承担（见上文“通用 LevelComponent 首版边界”），不另建专用检查点 / 排名 / 结算状态机；两者之间没有现成的物理动作执行器，见该节。
@@ -1002,6 +1009,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### LevelComponent 与 UGC 物理闯关：遗留
 
+- **关卡流程的外部验收**（2026-11-19）：Unity 里双客户端实际试玩带流程的关卡——重生时画面是否干净、HUD、被抓着时被传送、弱网与移动设备——归 C-U3；Linux 上重建 ABI 3 原生库后跑 `scripts/physics/verify-service.sh`、`scripts/physics/verify-level.sh` 与流程开 / 关的多房间测量归 C-L7。本机（macOS ARM64）已有的是 Go 与 Unity 批处理客户端的三进程接线验收，不能代替这两项。
 - **UGC 外部验收**：新增 Unity 交互 / 编辑器、WAN 与多房间容量 C-U3 / C-X7；Linux RSS / 原生堆复测 C-L7；小时级反复建销、真实 Gate / NATS / TCP 内存与原生堆按房间分解 C-S4 未验。现成同一测试二进制 count=12 只覆盖每轮整套 Service + Host + 房间创建销毁，不覆盖长寿 Service 内房间 churn；保留全量 -v 日志并以 unix_s 拼接，TSV 不能覆盖写。
 
 ### 客户端（遗留）

@@ -44,15 +44,18 @@ type RoomContent struct {
 // PlayerIngressConfig 的消息号属于客户端协议，由业务分配（不能为 0，也不能相同）。
 // 输入载荷是 Protobuf RoomInput：uint64 sequence=1; float acceleration_x=2; float acceleration_z=3; bool jump=4;
 // uint64 grab_target=5（0 松手，可否抓取由房间服务校验）。输入应答是 RoomInputAck：uint64 input_generation=1
-// （成员代际；实际采样序列随已提交帧的 RP2 私有头下发，不能用应答裁剪客户端预测历史）。
+// （成员代际；实际采样序列随已提交帧的 RP3 私有头下发，不能用应答裁剪客户端预测历史）。
 // ContentMessageID 与 Content 可选、同时设置：空载荷请求返回 RoomLevel：bytes content=1; string sha256=2;
 // uint64 controlled_body=3。
+// LevelMessageID 可选：非 0 时把流程的公开状态（Protobuf RoomLevelView，见 domain.LevelView）用这个消息号推给
+// 客户端，每个版本一次，重连后先收到最新的一份；为 0 时不推送。
 type PlayerIngressConfig struct {
 	InputMessageID   uint32
 	FrameMessageID   uint32
 	Seat             Seat
 	ContentMessageID uint32
 	Content          Content
+	LevelMessageID   uint32
 }
 
 // PlayerIngress 是 Game 进程里把已认证连接接到物理房间的正式接线（PHYSICS-ROOM-SERVICE「装配」第 6 步）：
@@ -90,6 +93,9 @@ func NewPlayerIngress(cfg PlayerIngressConfig) (*PlayerIngress, error) {
 		return nil, domain.ErrRequestInvalid
 	}
 	if (cfg.ContentMessageID == 0) != (cfg.Content == nil) || cfg.ContentMessageID != 0 && (cfg.ContentMessageID == cfg.InputMessageID || cfg.ContentMessageID == cfg.FrameMessageID) {
+		return nil, domain.ErrRequestInvalid
+	}
+	if cfg.LevelMessageID != 0 && (cfg.LevelMessageID == cfg.InputMessageID || cfg.LevelMessageID == cfg.FrameMessageID || cfg.LevelMessageID == cfg.ContentMessageID) {
 		return nil, domain.ErrRequestInvalid
 	}
 	return &PlayerIngress{cfg: cfg, conns: make(map[gateway.Binding]*playerConn)}, nil
@@ -233,7 +239,7 @@ func (p *PlayerIngress) join(ctx context.Context, rooms domain.Rooms, game Game,
 	c.member, c.joined = member, true
 	go func() {
 		defer p.relays.Done()
-		err := Relay(c.ctx, rooms, game, c.binding, member, p.cfg.FrameMessageID)
+		err := Relay(c.ctx, rooms, game, c.binding, member, p.cfg.FrameMessageID, p.cfg.LevelMessageID)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("physicsroom relay ended", "player", c.binding.PlayerID, "room", member.Room.ID, "error", err)
 			_ = session.Close(err)

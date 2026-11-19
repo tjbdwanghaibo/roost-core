@@ -16,6 +16,10 @@ func QuantizedLayout() chunksync.FieldLayout { return chunksync.FieldLayout{8, 7
 const QuantizedBodyBytes = 34
 const RoomHeaderBytes = 20
 
+// roomMagic 是房间帧私有头的标识与版本（RP3）。相对 RP2 只有语义变化：对象状态字节可以带 ViewTeleported。
+// 版本写在帧头是为了让旧客户端在第一帧就明确拒绝，而不是等到第一次传送时才解码失败。不兼容 RP2。
+const roomMagic = "RP\x03"
+
 type InputAck struct {
 	Sequence, Generation uint64
 	Active               bool
@@ -99,7 +103,7 @@ func DecodeQuantized(o chunksync.Object) (physx.State, error) {
 	var s physx.State
 	s.ID = o.ID
 	d := o.Data
-	if len(d) != QuantizedBodyBytes || d[8] > 3 || d[33] > 7 || d[33]&ViewTrajectory != 0 && d[33]&ViewDisplayOnly == 0 {
+	if len(d) != QuantizedBodyBytes || d[8] > 3 || d[33] > 1|ViewDisplayOnly|ViewTrajectory|ViewTeleported || d[33]&ViewTrajectory != 0 && d[33]&ViewDisplayOnly == 0 {
 		return s, errors.New("physics: quantized body format")
 	}
 	i16 := func(at int) float32 { return float32(int16(binary.LittleEndian.Uint16(d[at:]))) / 100 }
@@ -132,7 +136,7 @@ func DecodeQuantized(o chunksync.Object) (physx.State, error) {
 // RoomPayload 只附带当前接收成员的采样确认，和 Chunk 一起冻结/重发。
 func RoomPayload(chunk []byte, ack InputAck) []byte {
 	out := make([]byte, RoomHeaderBytes+len(chunk))
-	copy(out, "RP\x02")
+	copy(out, roomMagic)
 	if ack.Active {
 		out[3] = 1
 	}
@@ -147,12 +151,13 @@ type RoomReplica struct {
 	chunksync.Replica
 	Ack    InputAck
 	States map[uint64]physx.State
-	// Profiles 的标志位说明速度是否被省略；展示档的零值不得作为物理事实。
+	// Profiles 的标志位说明速度是否被省略（展示档的零值不得作为物理事实），以及这一帧里对象是否带着
+	// ViewTeleported（位置不连续，直接放到新位置）。
 	Profiles map[uint64]byte
 }
 
 func (r *RoomReplica) Apply(data []byte) error {
-	if len(data) < RoomHeaderBytes+36 || len(data) > chunksync.MaxPayload || string(data[:3]) != "RP\x02" || data[3] > 1 {
+	if len(data) < RoomHeaderBytes+36 || len(data) > chunksync.MaxPayload || string(data[:3]) != roomMagic || data[3] > 1 {
 		return errors.New("physics: room frame format")
 	}
 	ack := InputAck{Sequence: binary.LittleEndian.Uint64(data[4:]), Generation: binary.LittleEndian.Uint64(data[12:]), Active: data[3] == 1}
@@ -171,7 +176,7 @@ func (r *RoomReplica) Apply(data []byte) error {
 			return err
 		}
 		states[id] = s
-		profiles[id] = o.Data[33] & (ViewDisplayOnly | ViewTrajectory)
+		profiles[id] = o.Data[33] & (ViewDisplayOnly | ViewTrajectory | ViewTeleported)
 	}
 	r.Replica = next
 	r.Ack = ack

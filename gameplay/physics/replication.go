@@ -11,9 +11,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
 )
 
-// RP2 的状态字节 bit0 是休眠，bit1 表示展示档（速度省略），bit2 表示轨迹档。
+// RP3 的状态字节 bit0 是休眠，bit1 表示展示档（速度省略），bit2 表示轨迹档，bit3 表示位置不连续。
 const ViewDisplayOnly byte = 2
 const ViewTrajectory byte = 4
+
+// ViewTeleported：这个对象自接收方上次收到它以来被传送过，客户端要直接放到新位置，不能当成高速移动去插值或纠偏。
+// 它按接收方各自的视图账本置位：只出现在传送后发给该接收方的第一帧里，下一帧清掉。
+const ViewTeleported byte = 8
 
 // ReplicationPolicy 只裁剪接收者网络视图，不改变物理步长或 AOI。
 // 零值禁用；距离按包围球表面计算，另预留相对速度 * 0.2s 的接近距离。
@@ -40,6 +44,9 @@ type ViewEntry struct {
 	Object chunksync.Object
 	Tick   uint64
 	Class  string
+	// Teleports 是这个对象上次发给该接收方时的传送计数（physx.State.Teleports）。与当前帧不等说明
+	// 期间发生过传送：不管它在哪一档、该档的周期到没到，这一帧都刷新并带 ViewTeleported。
+	Teleports uint32
 }
 type ViewPlan struct {
 	Snapshot          chunksync.Snapshot
@@ -48,7 +55,8 @@ type ViewPlan struct {
 }
 
 // PlanView 基线必须来自已 ACK 的计划；调用方在 ACK 时才替换 Entries。
-// 暂缓更新保留旧对象而不是删除；新可见/跨区/升档立即刷新。退出视野不延迟。
+// 暂缓更新保留旧对象而不是删除；新可见/跨区/升档/被传送立即刷新。退出视野不延迟。
+// 传送标记跟着基线走：计划没被 ACK（调用方重发同一份已冻结的载荷）时基线不变，标记不会丢，也不会多发。
 func PlanView(snapshot chunksync.Snapshot, states []physx.State, bodies []physx.Body, tracks []MotionTrack, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
 	return NewReplicationScene(bodies, tracks).Frame(states).Plan(snapshot, observer, grabs, previous, policy)
 }
@@ -205,7 +213,11 @@ func (f *ReplicationFrame) PlanInto(objects []chunksync.Object, entries map[uint
 				return 3
 			}
 		}
-		refresh := !exists || old.Object.Chunk != object.Chunk || rank(class) < rank(old.Class) || snapshot.Tick < old.Tick || snapshot.Tick-old.Tick >= period
+		// 传送过：即使是 5Hz 的远档也要在这一帧带着标记刷新，不能等周期。上一帧带过标记的，这一帧要刷新一次把它清掉，
+		// 否则暂缓期间客户端手里的对象一直带着“刚被传送”。新可见的对象客户端没有旧位置，不需要标记。
+		teleported := exists && old.Teleports != s.Teleports
+		marked := exists && old.Object.Data[33]&ViewTeleported != 0
+		refresh := !exists || teleported || marked || old.Object.Chunk != object.Chunk || rank(class) < rank(old.Class) || snapshot.Tick < old.Tick || snapshot.Tick-old.Tick >= period
 		if !refresh {
 			out.Entries[object.ID] = old
 			out.Snapshot.Objects = append(out.Snapshot.Objects, old.Object)
@@ -220,7 +232,10 @@ func (f *ReplicationFrame) PlanInto(objects []chunksync.Object, entries map[uint
 				object.Data[33] |= ViewTrajectory
 			}
 		} // 展示档显式清零速度，升档重新携带当前权威速度。
-		entry := ViewEntry{Object: object, Tick: snapshot.Tick, Class: class}
+		if teleported {
+			object.Data[33] |= ViewTeleported
+		}
+		entry := ViewEntry{Object: object, Tick: snapshot.Tick, Class: class, Teleports: s.Teleports}
 		out.Entries[object.ID] = entry
 		out.Snapshot.Objects = append(out.Snapshot.Objects, object)
 		if !exists || old.Object.Chunk != object.Chunk || !bytes.Equal(old.Object.Data, object.Data) {

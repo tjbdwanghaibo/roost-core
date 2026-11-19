@@ -18,8 +18,12 @@ type Pusher interface {
 // Relay 在 Game 侧运行，Binding 必须来自已认证连接且与 Join 相同。
 // 每成员只能运行一个 Relay。PushBound 成功表示可靠出站准入，不是客户端收包确认。
 // 任何出站失败立即结束本轮订阅；重连必须 Leave/Join，不能沿用旧 Cursor。
-func Relay(ctx context.Context, rooms domain.Rooms, game Pusher, binding gateway.Binding, member domain.Member, messageID uint32) error {
-	if rooms == nil || game == nil || messageID == 0 || binding.Validate() != nil || member.PlayerID != binding.PlayerID {
+//
+// levelMessageID 非 0 时，Delivery.Level（流程公开状态 RoomLevelView）用这个消息号、Protobuf 载荷推送，
+// 排在同一次 Delivery 的帧之前；两者都推出去才确认这次 Delivery，任何一个失败都由服务端原样重发。
+// 为 0 时不推送流程状态。
+func Relay(ctx context.Context, rooms domain.Rooms, game Pusher, binding gateway.Binding, member domain.Member, messageID, levelMessageID uint32) error {
+	if rooms == nil || game == nil || messageID == 0 || messageID == levelMessageID || binding.Validate() != nil || member.PlayerID != binding.PlayerID {
 		return domain.ErrRequestInvalid
 	}
 	timer := time.NewTimer(50 * time.Millisecond)
@@ -52,7 +56,12 @@ func Relay(ctx context.Context, rooms domain.Rooms, game Pusher, binding gateway
 			return domain.ErrSequence
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, time.Second)
-		err = game.PushBound(sendCtx, binding, messageID, wire.PayloadSync, frame.Payload)
+		if levelMessageID != 0 && len(frame.Level) != 0 {
+			err = game.PushBound(sendCtx, binding, levelMessageID, wire.PayloadProtobuf, frame.Level)
+		}
+		if err == nil {
+			err = game.PushBound(sendCtx, binding, messageID, wire.PayloadSync, frame.Payload)
+		}
 		cancel()
 		if err != nil {
 			return err

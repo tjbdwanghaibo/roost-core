@@ -30,6 +30,10 @@ type Service struct {
 	retired  map[string]retiredRoom
 	stopping bool
 	metrics  servicemetrics.Sink
+	// 全部房间在途的业务动作数，只用于指标。计数与上报在同一把锁里：分开做的话，两个同时结束的动作
+	// 可能后减的先报，仪表就停在一个过时的值上。
+	inflightMu sync.Mutex
+	inflight   int64
 }
 type retiredRoom struct {
 	ref   Ref
@@ -56,6 +60,13 @@ type room struct {
 	// Cursor.PlanFields 返回后它们不再被引用（游标与视图账本都复制对象值），
 	// 清零后留给本房间下一次 Poll；Poll 串行持有 r.mu，不会两次规划同时使用。
 	visibleObjects, viewObjects []chunksync.Object
+	// flow 是关卡流程的执行状态，没有流程的房间为 nil（建房后不变）。memberFacts 是成员加入 / 离开的
+	// 变更队列，只在有流程时记录；levelView 是流程公开状态的最新编码，每次整体换新、不原地修改。
+	// memberFacts、levelView、levelRevision 在 r.mu 下读写。
+	flow          *flow
+	memberFacts   []memberFact
+	levelView     []byte
+	levelRevision uint64
 }
 type memberState struct {
 	member                          Member
@@ -74,6 +85,9 @@ type memberState struct {
 	// 只由本成员在 r.mu 下持有，下一次规划清空后复用；交给规划后即成为 next*。
 	spareVisible map[uint64]bool
 	spareView    map[uint64]gamephysics.ViewEntry
+	// levelRevision 是这个成员已经确认收到的流程视图版本；pendingLevel 随 pending 帧一起冻结、重发、确认。
+	levelRevision, pendingLevelRevision uint64
+	pendingLevel                        []byte
 }
 
 func New(cfg Config) (*Service, error) {
@@ -91,7 +105,9 @@ func New(cfg Config) (*Service, error) {
 	case cfg.Commit == nil,
 		cfg.InputTTL <= 0 || cfg.InputTTL > time.Second,
 		cfg.MemberTTL < cfg.InputTTL || cfg.MemberTTL > time.Minute,
-		cfg.MaxLifetime < time.Second || cfg.MaxLifetime > 24*time.Hour:
+		cfg.MaxLifetime < time.Second || cfg.MaxLifetime > 24*time.Hour,
+		cfg.ActionTimeout < 0 || cfg.ActionTimeout > time.Minute,
+		cfg.ActionConcurrency < 0 || cfg.ActionConcurrency > 1024:
 		return nil, ErrRequestInvalid
 	case cfg.Radius <= 0 || cfg.Margin < 0,
 		math.IsNaN(cfg.Radius+cfg.Margin) || math.IsInf(cfg.Radius+cfg.Margin, 0),
@@ -137,6 +153,11 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 		return Ref{}, ErrRequestInvalid
 	}
 	if err := gamephysics.ValidateMechanisms(spec.Bodies, spec.Motions, spec.Joints); err != nil {
+		return Ref{}, err
+	}
+	// 流程在准入锁之外校验与编译：它只读 spec，编译一份 256KiB 以内的定义不该挡住别的房间。
+	levelFlow, err := newFlow(spec, s.cfg.Actions)
+	if err != nil {
 		return Ref{}, err
 	}
 	s.mu.Lock()
@@ -212,7 +233,20 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 	spec.Bodies = slices.Clone(spec.Bodies)
 	spec.Motions = slices.Clone(spec.Motions)
 	spec.Joints = slices.Clone(spec.Joints)
-	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial, dynamic: make(map[uint64]bool), grabs: make(map[uint64]uint64)}
+	spec.Players = slices.Clone(spec.Players)
+	spec.Regions = slices.Clone(spec.Regions)
+	for i := range spec.Regions {
+		spec.Regions[i].Watch = slices.Clone(spec.Regions[i].Watch)
+	}
+	spec.Spawns = slices.Clone(spec.Spawns)
+	for i := range spec.Spawns {
+		spec.Spawns[i].Positions = slices.Clone(spec.Spawns[i].Positions)
+	}
+	spec.Flow = slices.Clone(spec.Flow)
+	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial, dynamic: make(map[uint64]bool), grabs: make(map[uint64]uint64), flow: levelFlow}
+	if levelFlow != nil {
+		levelFlow.instance = LevelInstance(ref)
+	}
 	for _, b := range spec.Bodies {
 		if b.MotionType() == physx.Dynamic {
 			r.dynamic[b.ID] = true
@@ -244,6 +278,14 @@ func (s *Service) run(ctx context.Context, r *room) {
 		r.stopped = true
 		r.members = nil
 		r.mu.Unlock()
+		if r.flow != nil {
+			// ctx 已取消（下面的 defer r.cancel() 先执行）：在途的业务动作各自返回后房间才算结束。
+			r.flow.workers.Wait()
+			if left := len(r.flow.waiting); left > 0 {
+				s.metrics.Dropped("action_unsettled", left)
+				slog.Warn("physicsroom: business actions never dispatched before room end", "room", r.ref.ID, "epoch", r.ref.Epoch, "count", left)
+			}
+		}
 		r.world.Close()
 		if s.cfg.Closed != nil {
 			s.cfg.Closed(r.ref)
@@ -261,7 +303,14 @@ func (s *Service) run(ctx context.Context, r *room) {
 	sampled := make(map[uint64]uint64)
 	generations := make(map[uint64]uint64)
 	active := make(map[uint64]bool)
-	err := gamephysics.Run(ctx, r.world, gamephysics.RunConfig{Epoch: r.ref.Epoch, Step: 20 * time.Millisecond, BeforeStep: func(uint64) error { return s.updateGrabs(r) }, Input: func(tick uint64) []physx.Command {
+	err := gamephysics.Run(ctx, r.world, gamephysics.RunConfig{Epoch: r.ref.Epoch, Step: 20 * time.Millisecond, BeforeStep: func(uint64) error {
+		if r.flow != nil {
+			if err := s.runActions(r); err != nil {
+				return err
+			}
+		}
+		return s.updateGrabs(r)
+	}, Input: func(tick uint64) []physx.Command {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		now := time.Now()
@@ -270,6 +319,7 @@ func (s *Service) run(ctx context.Context, r *room) {
 		for player, m := range r.members {
 			if now.Sub(m.seenAt) > s.cfg.MemberTTL {
 				delete(r.members, player)
+				r.memberChanged(m.body, false)
 				s.metrics.Dropped("member_expired", 1)
 				continue
 			}
@@ -297,26 +347,53 @@ func (s *Service) run(ctx context.Context, r *room) {
 			f.States[i].InputSequence = sampled[f.States[i].ID]
 			f.States[i].InputGeneration = generations[f.States[i].ID]
 			f.States[i].InputActive = active[f.States[i].ID]
+			if r.flow != nil {
+				f.States[i].Teleports = r.flow.teleports[f.States[i].ID]
+			}
 		}
-		if err := s.cfg.Commit(ctx, r.ref, f); err != nil {
+		// f.States 是本 Tick World.Step 新建的切片：Commit 按契约不修改它（DAO 复制自己的一份），
+		// 量化快照与 AOI 索引也复制所需值，之后没有人再修改它，所以本帧只读索引直接引用，不再复制。
+		viewFrame := r.replication.AdoptFrame(f.States)
+		tick := Tick{Frame: f}
+		var occupancy gamephysics.RegionOccupancy
+		if r.flow != nil {
+			var err error
+			if tick, occupancy, err = s.flowTick(r, f, viewFrame); err != nil {
+				return err
+			}
+		}
+		settled, err := s.cfg.Commit(ctx, r.ref, tick)
+		if err != nil {
 			return err
+		}
+		// 从这里开始才是“已提交”：流程交回的动作、新的区域占用、流程视图都只在提交成功后采纳。
+		var levelView []byte
+		var levelRevision uint64
+		if r.flow != nil {
+			if levelView, levelRevision, err = s.flowSettled(ctx, r, tick, occupancy, settled); err != nil {
+				return err
+			}
 		}
 		frame, err := gamephysics.NewQuantizedSpatialFrame(f, 10)
 		if err != nil {
 			return err
 		}
-		// f.States 是本 Tick World.Step 新建的切片：Commit 已返回且按契约不再修改它（DAO 复制了自己的一份），
-		// 量化快照与 AOI 索引也已复制所需值，之后没有人再修改它，所以本帧只读索引直接引用，不再复制。
-		viewFrame := r.replication.AdoptFrame(f.States)
 		r.mu.Lock()
 		r.latest = frame
 		r.viewFrame = viewFrame
+		if levelView != nil {
+			r.levelView, r.levelRevision = levelView, levelRevision
+		}
 		r.mu.Unlock()
 		return nil
 	})
 	if err != nil && ctx.Err() == nil {
-		s.metrics.Dropped("room_failed", 1)
-		slog.Error("physicsroom: simulation or commit failed", "room", r.ref.ID, "epoch", r.ref.Epoch, "error", err)
+		reason := "room_failed"
+		if errors.Is(err, ErrLevel) {
+			reason = "level_failed"
+		}
+		s.metrics.Dropped(reason, 1)
+		slog.Error("physicsroom: simulation or commit failed", "room", r.ref.ID, "epoch", r.ref.Epoch, "reason", reason, "error", err)
 	}
 }
 func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bodyID uint64) (Member, error) {
@@ -355,8 +432,16 @@ func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bo
 	}
 	m := Member{InputGeneration: epoch(), Room: ref, PlayerID: binding.PlayerID, Token: token()}
 	r.members[m.PlayerID] = &memberState{member: m, binding: binding, body: bodyID, seenAt: time.Now()}
+	r.memberChanged(bodyID, true)
 	s.metrics.Accepted("join")
 	return m, nil
+}
+
+// memberChanged 记下一次成员加入或离开，供流程当事实用；调用方持有 r.mu。没有流程的房间不记。
+func (r *room) memberChanged(body uint64, join bool) {
+	if r.flow != nil {
+		r.memberFacts = append(r.memberFacts, memberFact{body: body, join: join})
+	}
 }
 func (r *room) member(m Member) (*memberState, error) {
 	if r.stopped {
@@ -440,6 +525,10 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		v.sequence = ack
 		v.spareVisible, v.visible = v.visible, v.nextVisible
 		v.nextVisible = nil
+		if v.pendingLevelRevision != 0 {
+			v.levelRevision = v.pendingLevelRevision
+		}
+		v.pendingLevel, v.pendingLevelRevision = nil, 0
 	} else if ack != v.sequence {
 		return Delivery{}, ErrSequence
 	}
@@ -481,6 +570,10 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 			own = gamephysics.InputAck{Sequence: state.InputSequence, Generation: state.InputGeneration, Active: state.InputActive}
 		}
 		v.pendingPayload = gamephysics.RoomPayload(p.Data, own)
+		// 流程视图搭这一帧走：成员还没确认过当前版本就带上，和帧一起冻结，确认后才算送达。
+		if r.levelRevision > v.levelRevision {
+			v.pendingLevel, v.pendingLevelRevision = r.levelView, r.levelRevision
+		}
 		v.nextVisible = visible
 		v.sentAt = time.Now()
 	}
@@ -489,7 +582,7 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		kind = "retry"
 	}
 	metrics.IncCounter("physics.room.payload_bytes.total", metrics.Labels{"kind": kind}, int64(len(v.pendingPayload)))
-	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pendingPayload)}, nil
+	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pendingPayload), Level: slices.Clone(v.pendingLevel)}, nil
 }
 func (s *Service) Leave(ctx context.Context, m Member) error {
 	if err := ctx.Err(); err != nil {
@@ -504,10 +597,12 @@ func (s *Service) Leave(ctx context.Context, m Member) error {
 	if r.members[m.PlayerID] == nil {
 		return nil
 	}
-	if _, err = r.member(m); err != nil {
+	v, err := r.member(m)
+	if err != nil {
 		return err
 	}
 	delete(r.members, m.PlayerID)
+	r.memberChanged(v.body, false)
 	return nil
 }
 func (s *Service) Destroy(ctx context.Context, ref Ref) error {

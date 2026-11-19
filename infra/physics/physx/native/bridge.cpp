@@ -230,6 +230,28 @@ extern "C" unsigned rp_read(rp_world *w, rp_state *out, unsigned capacity) {
     }
     return n;
 }
+// 传送不经过求解器：位姿与速度直接写入，下一次 simulate 从新状态出发。各 set 调用都不自动唤醒，最后统一 wakeUp，
+// 否则休眠体被放到空中后会悬停。力与力矩的两组累加器（力 / 加速度共用一组，冲量 / 速度变化共用一组）都清：
+// 目前力只在 rp_step_control 内累积并在同一次 simulate 消耗，这里清零是让“传送后不带旧运动”不依赖调用次序。
+extern "C" int rp_set_pose(rp_world *w, uint64_t id, const float *p, const float *q, const float *v, const float *a) {
+    if (!w || !w->scene)
+        return 0;
+    auto found = w->bodies.find(id);
+    if (found == w->bodies.end())
+        return 0;
+    auto *body = found->second;
+    if (body->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC)
+        return 0;
+    body->setGlobalPose(PxTransform(PxVec3(p[0], p[1], p[2]), PxQuat(q[0], q[1], q[2], q[3])), false);
+    body->setLinearVelocity(PxVec3(v[0], v[1], v[2]), false);
+    body->setAngularVelocity(PxVec3(a[0], a[1], a[2]), false);
+    body->clearForce(PxForceMode::eFORCE);
+    body->clearForce(PxForceMode::eVELOCITY_CHANGE);
+    body->clearTorque(PxForceMode::eFORCE);
+    body->clearTorque(PxForceMode::eVELOCITY_CHANGE);
+    body->wakeUp();
+    return 1;
+}
 extern "C" const char *rp_version() { return "PhysX 4.1.2 / a2c0428acab643e60618c681b501e86f7fd558cc"; }
 
 extern "C" int rp_joint_add(rp_world *w, const rp_joint *j) {
@@ -260,4 +282,5 @@ extern "C" void rp_joint_remove(rp_world *w, uint64_t id) {
  it->second->release(); w->joints.erase(it);
 }
 
-extern "C" unsigned rp_abi_version(void) { return 2; }
+// ABI 3：新增 rp_set_pose；结构体布局未变。Go 绑定只认这一个版本。
+extern "C" unsigned rp_abi_version(void) { return 3; }

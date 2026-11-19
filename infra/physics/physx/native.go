@@ -34,7 +34,7 @@ func New(gravity float32, workers int) (*World, error) {
 	if err := fctx.BlockingError("physx.New"); err != nil {
 		return nil, err
 	}
-	if C.rp_abi_version() != 2 {
+	if C.rp_abi_version() != nativeABI {
 		return nil, errors.New("physx: native ABI mismatch; rebuild native library")
 	}
 	if !finite(gravity) || workers < 1 || workers > 64 {
@@ -150,6 +150,32 @@ func (w *World) Step(dt float32, commands []Command) ([]State, error) {
 		}
 	}
 	return states, nil
+}
+
+// SetPose 把一个动态刚体直接放到指定位姿并设定速度（传送 / 重生），下一次 Step 从这个状态出发；休眠体会被唤醒。
+// 与 Step 共用 w.mu，所以不会落在一次模拟中间；只能由房间执行器或可信业务调用，不能来自玩家输入。
+// 静态、运动学（由 Command.Target 驱动）或未知 ID 返回 ErrPoseTarget，世界不变。关节不在这里处理：被关节连着的
+// 刚体由调用方先决定拒绝还是先 RemoveJoint。
+func (w *World) SetPose(id uint64, position Vec3, rotation Quat, velocity, angularVelocity Vec3) error {
+	if err := fctx.BlockingError("physx.SetPose"); err != nil {
+		return err
+	}
+	if !validVec(position) || !validQuat(rotation) || !validVec(velocity) || !validVec(angularVelocity) {
+		return errors.New("physx: invalid pose")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.native == nil {
+		return ErrClosed
+	}
+	if w.ids[id] != Dynamic {
+		return ErrPoseTarget
+	}
+	if C.rp_set_pose(w.native, C.uint64_t(id), (*C.float)(unsafe.Pointer(&position[0])), (*C.float)(unsafe.Pointer(&rotation[0])), (*C.float)(unsafe.Pointer(&velocity[0])), (*C.float)(unsafe.Pointer(&angularVelocity[0]))) == 0 {
+		// Go 账本认为它是动态刚体而 native 拒绝：两边状态不一致，按 native 故障处理。
+		return errors.New("physx: set pose failed")
+	}
+	return nil
 }
 func (w *World) Close() {
 	fctx.AssertBlockingAllowed("physx.Close")

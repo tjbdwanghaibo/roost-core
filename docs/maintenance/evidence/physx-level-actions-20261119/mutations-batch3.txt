@@ -1,0 +1,275 @@
+基线提交 14706f60（变异作用在工作区，每条跑完原样恢复）
+命令（S 开头）GOWORK=off CGO_ENABLED=1 go test -count=1 -timeout 100s -tags physx -run 'Level|Teleport|Business|Pending|Cancelled|Poll|Create|Expired' ./service/physicsroom
+命令（W 开头）ROOST_PHYSICS_TEST_NATS_URL=nats://127.0.0.1:14377 GOWORK=off CGO_ENABLED=1 go test -count=1 -timeout 100s -tags "integration physx" -run 'TestRoomEntityRollsBack|TestLevelReplay|TestPlayerIngressPushesLevelView|TestRealGateLevelRespawnAndFinish|TestEntityHost|TestSeat' ./wiring/physicsroom/...
+共 65 条。第一轮：变红 60 条，变异本身编译不过 3 条（无效），没有被发现 2 条。
+第二轮：重写那 3 条无效变异、给没被发现的 2 条补用例后重跑这 5 条，变红 5 条。合计 65 条都有一次变红的记录。
+
+每条的格式：编号与说明 / 被改的文件：结论、退出码、耗时、失败的用例 / 第一条失败文本。
+failing=[] 而结论是 RED 的，是测试进程 panic 或超时（看第三行）。
+
+说明：
+- 两轮变异跑完之后，实现还改过一处：在途业务动作数的计数与上报放进同一把锁（service.go 的字段、actions.go 的
+  actionsInflight）。这处改动不在任何一条变异替换的位置上，下面的记录没有在改动之后重跑。
+- 第一轮 S40 的失败用例里出现了 TestBusinessActionsNeverBlockThePhysicsLoop，与那条变异无关：这就是上面那处
+  仪表次序问题的第一次露头（见 README 的“变异过程中发现并修掉的问题”）。
+- W20（回执整段不处理）原本想确认重放用例对处理次序敏感，实际效果是回执丢失，三个用例都红；它证明的是
+  “回执必须被处理”，不是次序。回执与事实的先后次序没有单独的变异。
+
+## 弱红：批 2 的提交 14706f60 上放入本批的测试文件
+  做法：临时检出 14706f60，复制本批的 7 个测试文件与 packed.json 进去
+  命令 GOWORK=off CGO_ENABLED=1 go test -count=1 -tags "integration physx" ./service/physicsroom ./wiring/physicsroom/...
+  结果：三个包都编译不过（下面是前 40 行）。这只说明测试依赖本批的新接口，不是行为上的红。
+  # github.com/tjbdwanghaibo/roost-core/service/physicsroom [github.com/tjbdwanghaibo/roost-core/service/physicsroom.test]
+  service/physicsroom/service_native_test.go:551:10: undefined: Tick
+  service/physicsroom/service_native_test.go:552:13: undefined: Tick
+  service/physicsroom/service_native_test.go:552:20: undefined: Settled
+  service/physicsroom/service_native_test.go:556:53: undefined: Settled
+  service/physicsroom/service_native_test.go:583:64: undefined: Tick
+  service/physicsroom/service_native_test.go:583:71: undefined: Settled
+  service/physicsroom/service_native_test.go:595:55: undefined: Tick
+  service/physicsroom/service_native_test.go:626:33: undefined: Tick
+  service/physicsroom/level_view_test.go:36:14: undefined: EncodeLevelView
+  service/physicsroom/level_view_test.go:43:15: undefined: DecodeLevelView
+  service/physicsroom/level_view_test.go:43:15: too many errors
+  FAIL	github.com/tjbdwanghaibo/roost-core/service/physicsroom [build failed]
+  # github.com/tjbdwanghaibo/roost-core/wiring/physicsroom/cmd/physicsroom-local [github.com/tjbdwanghaibo/roost-core/wiring/physicsroom/cmd/physicsroom-local.test]
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:98:57: got.Players undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Players)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:98:107: got.Regions undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Regions)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:99:26: got.Spawns undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Spawns)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:99:55: got.DefaultSpawn undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method DefaultSpawn)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:99:90: got.Flow undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Flow)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:100:105: got.Players undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Players)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:100:122: got.Regions undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Regions)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:100:140: got.Spawns undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Spawns)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:100:153: got.DefaultSpawn undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method DefaultSpawn)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:100:175: got.Flow undefined (type "github.com/tjbdwanghaibo/roost-core/service/physicsroom".Spec has no field or method Flow)
+  wiring/physicsroom/cmd/physicsroom-local/main_test.go:100:175: too many errors
+  # github.com/tjbdwanghaibo/roost-core/wiring/physicsroom [github.com/tjbdwanghaibo/roost-core/wiring/physicsroom.test]
+  wiring/physicsroom/level_native_test.go:37:17: undefined: domain.Tick
+  wiring/physicsroom/level_native_test.go:38:17: undefined: domain.Settled
+  wiring/physicsroom/entity_test.go:37:14: assignment mismatch: 2 variables but h.Commit returns 1 value
+  wiring/physicsroom/entity_test.go:37:38: undefined: domain.Tick
+  wiring/physicsroom/entity_test.go:42:14: assignment mismatch: 2 variables but h.Commit returns 1 value
+  wiring/physicsroom/entity_test.go:42:38: undefined: domain.Tick
+  wiring/physicsroom/entity_test.go:59:14: assignment mismatch: 2 variables but h.Commit returns 1 value
+  wiring/physicsroom/entity_test.go:59:38: undefined: domain.Tick
+  wiring/physicsroom/entity_test.go:74:14: assignment mismatch: 2 variables but h.Commit returns 1 value
+  wiring/physicsroom/entity_test.go:74:38: undefined: domain.Tick
+  wiring/physicsroom/entity_test.go:74:14: too many errors
+  FAIL	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom [build failed]
+  FAIL	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom/cmd/physicsroom-local [build failed]
+  FAIL
+
+## 第一轮
+S01 不检查 Commit 的错误就继续（动作在失败的提交后仍被采纳）
+    service/physicsroom/service.go: RED exit=1 8s failing=['TestLevelActionsRunOnlyAfterTheFrameIsSettled']
+    service_native_test.go:774: commit failed: room kept running
+S02 回执不随帧提交
+    service/physicsroom/actions.go: RED exit=1 16s failing=['TestBusinessActionsNeverBlockThePhysicsLoop', 'TestInvalidTeleportCompletesAsFailure', 'TestLevelActionsRunOnlyAfterTheFrameIsSettled', 'TestRepeatedPendingActionTeleportsOnce', 'TestUnknownBusinessResultIsRetriedWithTheSameID']
+    service_native_test.go:727: receipt must be committed with the frame that shows the teleport: []
+S03 不累计传送次数（帧里没有传送标记的来源）
+    service/physicsroom/actions.go: RED exit=1 6s failing=['TestInvalidTeleportCompletesAsFailure', 'TestLevelActionsRunOnlyAfterTheFrameIsSettled', 'TestRepeatedPendingActionTeleportsOnce']
+    service_native_test.go:720: tick 6 does not start from the spawn: {InputGeneration:0 InputSequence:0 InputActive:false Teleports:0 ID:1 Position:[-6 0.5 -6] Rotation:[0 1 0 0] Velocity:[0 0 0] AngularVelocity:[0 0 0] Sleeping:fals
+S04 传送后不清速度
+    service/physicsroom/actions.go: RED exit=1 6s failing=['TestInvalidTeleportCompletesAsFailure', 'TestLevelActionsRunOnlyAfterTheFrameIsSettled', 'TestRepeatedPendingActionTeleportsOnce', 'TestTeleportReleasesGrabsAndWaitsForTheFrame']
+    service_native_test.go:720: tick 6 does not start from the spawn: {InputGeneration:0 InputSequence:0 InputActive:false Teleports:1 ID:1 Position:[-6 0.616076 -6] Rotation:[0 1 0 0] Velocity:[0 5.8038 0] AngularVelocity:[0 0 0] Sle
+S05 忽略出生点朝向
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestLevelActionsRunOnlyAfterTheFrameIsSettled']
+    service_native_test.go:723: spawn rotation not applied: [0 0 0 1]
+S06 不按动作 ID 去重
+    service/physicsroom/actions.go: RED exit=1 12s failing=['TestBusinessActionsNeverBlockThePhysicsLoop', 'TestRepeatedPendingActionTeleportsOnce']
+    service_native_test.go:810: body teleported 2 times
+S07 刚传送的刚体仍按旧位置判断抓取
+    service/physicsroom/mechanisms.go: RED exit=1 7s failing=['TestTeleportReleasesGrabsAndWaitsForTheFrame']
+    service_native_test.go:875: grabbed body: tick 2 (teleport at 2) still holds map[1:3]
+S08 传送不清跳跃意图
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestTeleportReleasesGrabsAndWaitsForTheFrame']
+    service_native_test.go:929: tick 22: the jump pressed before the teleport fired at the spawn: {InputGeneration:9056652748210485839 InputSequence:2 InputActive:true Teleports:1 ID:1 Position:[-6 0.636076 -6] Rotation:[0 1 0 0] Velo
+S09 允许传送被配置关节连着的刚体
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:969: receipt 0 = {Instance:room Epoch:1 ID:room:1:1 Success:true}, want the failure of room:1:1 in sequence order
+S10 不检查目标是不是动态刚体
+    service/physicsroom/actions.go: RED exit=1 10s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:963: tick 2 was never committed
+S11 检查点对非玩家也生效
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:969: receipt 6 = {Instance:room Epoch:1 ID:room:1:7 Success:true}, want the failure of room:1:7 in sequence order
+S12 重生对非玩家也生效
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:969: receipt 8 = {Instance:room Epoch:1 ID:room:1:9 Success:true}, want the failure of room:1:9 in sequence order
+S13 重生忽略检查点，总回缺省出生点
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:999: player 1 must return to its checkpoint b: {InputGeneration:0 InputSequence:0 InputActive:false Teleports:1 ID:1 Position:[6 0.5 6] Rotation:[0 0 0 1] Velocity:[0 0 0] AngularVelocity:[0 0 0] Sleeping:fa
+S14 多人传到同一出生点不错开位置
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:1002: player 2 must take its own slot of the default spawn: {InputGeneration:0 InputSequence:0 InputActive:false Teleports:1 ID:2 Position:[6 0.5 6] Rotation:[0 0 0 1] Velocity:[0 0 0] AngularVelocity:[0 0 0
+S15 失败的动作回执成功
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:969: receipt 0 = {Instance:room Epoch:1 ID:room:1:1 Success:true}, want the failure of room:1:1 in sequence order
+S16 检查点不校验出生点是否存在
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestInvalidTeleportCompletesAsFailure']
+    service_native_test.go:969: receipt 7 = {Instance:room Epoch:1 ID:room:1:8 Success:true}, want the failure of room:1:8 in sequence order
+S17 作废回执不记指标
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestCancelledActionReceiptDoesNotStopTheRoom']
+    service_native_test.go:1023: accepted:create=1, depth:rooms=1
+S18 业务动作在房间执行协程上同步执行
+    service/physicsroom/actions.go: RED exit=1 12s failing=['TestBusinessActionsNeverBlockThePhysicsLoop']
+    service_native_test.go:1093: one action started twice
+S19 结果未知时给出失败回执
+    service/physicsroom/actions.go: RED exit=1 11s failing=['TestBusinessActionsNeverBlockThePhysicsLoop', 'TestUnknownBusinessResultIsRetriedWithTheSameID']
+    service_native_test.go:1156: unsettled=1 want 3 (2 in flight, 1 never dispatched): accepted:action=7, accepted:create=1, depth:actions_inflight=0, depth:rooms=0, dropped:action_unsettled=1
+S20 不限制同时在途的业务动作数
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestBusinessActionsNeverBlockThePhysicsLoop']
+    service_native_test.go:1106: room:1:1 started beyond the concurrency limit of 2
+S21 业务动作 panic 不兜住
+    service/physicsroom/actions.go: RED exit=1 4s failing=[]
+    panic: handler bug
+S22 重试共用同一份参数表
+    service/physicsroom/actions.go: RED exit=1 11s failing=['TestUnknownBusinessResultIsRetriedWithTheSameID']
+    service_native_test.go:1202: condition not reached
+S23 停房不等在途的业务动作返回
+    service/physicsroom/service.go: RED exit=1 7s failing=['TestBusinessActionsNeverBlockThePhysicsLoop']
+    service_native_test.go:1153: Destroy returned while 2 of 2 business calls were still running
+S24 业务动作没有期限
+    service/physicsroom/actions.go: RED exit=1 12s failing=['TestUnknownBusinessResultIsRetriedWithTheSameID']
+    service_native_test.go:1202: condition not reached
+S25 准备阶段就投递事实
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestLevelFactsReachTheFlowInOrder']
+    service_native_test.go:1260: tick 2 delivered facts before the flow was running: [{Instance:room-0694aacb66d62e74 Epoch:10885567511740868729 Source:physics Sequence:1 Kind:member.join Stage: Generation:0 Fields:map[actor:{Kind:int
+S26 每帧事实不设上限
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestLevelFactsReachTheFlowInOrder']
+    service_native_test.go:1267: facts per tick 102/0/0, want 64/38/0
+S27 结束后仍然积压事实
+    service/physicsroom/actions.go: RED exit=1 10s failing=['TestLevelFactBacklogStopsTheRoom']
+    service_native_test.go:1356: tick 7 was never committed
+S28 事实积压不设上限
+    service/physicsroom/actions.go: RED exit=1 12s failing=['TestLevelFactBacklogStopsTheRoom']
+    service_native_test.go:1334: condition not reached
+S29 主动离开不产生事实
+    service/physicsroom/service.go: BUILD FAILED (mutation invalid) exit=1 0s failing=[]
+    service/physicsroom/service.go:598:2: declared and not used: v
+S30 超时离开不产生事实
+    service/physicsroom/service.go: RED exit=1 12s failing=['TestExpiredMemberLeavesTheFlow']
+    service_native_test.go:1383: condition not reached
+S31 加入不产生事实
+    service/physicsroom/service.go: RED exit=1 17s failing=['TestExpiredMemberLeavesTheFlow', 'TestLevelFactBacklogStopsTheRoom', 'TestLevelFactsReachTheFlowInOrder']
+    service_native_test.go:1267: facts per tick 52/0/0, want 64/38/0
+S32 提交后不采纳新的区域占用（同一次进入反复上报）
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestLevelFactsReachTheFlowInOrder']
+    service_native_test.go:1267: facts per tick 64/49/0, want 64/38/0
+S33 已交付的事实不出队（重复投递）
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestExpiredMemberLeavesTheFlow', 'TestLevelFactsReachTheFlowInOrder']
+    service_native_test.go:1267: facts per tick 64/64/64, want 64/38/0
+S34 每帧都带流程视图
+    service/physicsroom/service.go: RED exit=1 7s failing=['TestPollCarriesLevelViewOncePerRevision']
+    service_native_test.go:1457: revision 4 delivered again at sequence 4
+S35 确认后不记已送达的视图版本
+    service/physicsroom/service.go: RED exit=1 8s failing=['TestPollCarriesLevelViewOncePerRevision']
+    service_native_test.go:1457: revision 4 delivered again at sequence 4
+S36 未确认的交付换用最新视图（不冻结）
+    service/physicsroom/service.go: RED exit=1 7s failing=['TestPollCarriesLevelViewOncePerRevision']
+    service_native_test.go:1448: unacknowledged delivery changed: <nil>
+S37 视图编码不设字节上限
+    service/physicsroom/level_view.go: RED exit=1 12s failing=['TestLevelViewEncodingIsDeterministicAndBounded', 'TestPollCarriesLevelViewOncePerRevision']
+    level_view_test.go:96: encoded 16385 bytes above the limit
+S38 视图变量不排序
+    service/physicsroom/level_view.go: BUILD FAILED (mutation invalid) exit=1 0s failing=[]
+    service/physicsroom/level_view.go:5:2: "slices" imported and not used
+S39 视图解码接受没有值的变量
+    service/physicsroom/level_view.go: RED exit=1 7s failing=['TestDecodeLevelViewRejectsMalformedInput']
+    level_view_test.go:153: variable without value: accepted as {Revision:0 Phase:Running Result: Stages:[] Variables:map[k:{Kind: Int:0 Text: Bool:false}]}
+S40 视图解码接受未知字段
+    service/physicsroom/level_view.go: GREEN (not detected) exit=0 7s failing=[]
+    
+S41 编译流程时不带业务能力声明
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestCreateRejectsInvalidLevelSpecs']
+    service_native_test.go:1528: declared business action rejected: physicsroom: invalid request: physics: level flow: level: invalid definition or unsupported capability: stage run trigger pay action request
+S42 建房不校验玩家刚体
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestCreateRejectsInvalidLevelSpecs']
+    service_native_test.go:1512: player is not a body: <nil>
+S43 首帧不带 Program
+    service/physicsroom/actions.go: RED exit=1 6s failing=['TestLevelActionsRunOnlyAfterTheFrameIsSettled']
+    service_native_test.go:705: first tick of a room with a flow must carry the compiled program
+S44 视图编码出错不算流程失败
+    service/physicsroom/actions.go: RED exit=1 12s failing=['TestPollCarriesLevelViewOncePerRevision']
+    service_native_test.go:1487: condition not reached
+S45 流程失败与普通失败用同一个指标
+    service/physicsroom/service.go: RED exit=1 17s failing=['TestLevelActionsRunOnlyAfterTheFrameIsSettled', 'TestLevelFactBacklogStopsTheRoom', 'TestPollCarriesLevelViewOncePerRevision']
+    service_native_test.go:783: flow failed: accepted:create=1, depth:rooms=0, dropped:room_failed=1
+W01 流程出错被吞掉
+    wiring/physicsroom/nest.go: BUILD FAILED (mutation invalid) exit=1 1s failing=[]
+    wiring/physicsroom/nest.go:10:2: "github.com/tjbdwanghaibo/roost-core/infra/base/errcode" imported and not used
+W02 提交 handler 不用 undo
+    wiring/physicsroom/entity.go: RED exit=1 3s failing=['TestEntityHostIsolationAndCleanup', 'TestLevelReplayIsDeterministic', 'TestRealGateLevelRespawnAndFinish', 'TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:38: physics: StateDAO requires Nest undo transaction
+W03 作废回执当成错误
+    wiring/physicsroom/nest.go: RED exit=1 10s failing=['TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:221: stale receipts: {Actions:[] View:<nil> StaleReceipts:0} physicsroom: level flow failed: level: stale instance, stage or source sequence
+W04 结束后同一笔里的事实继续投递
+    wiring/physicsroom/nest.go: RED exit=1 10s failing=['TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:247: finish: {Actions:[] View:<nil> StaleReceipts:0} physicsroom: level flow failed: level: invalid state or transition
+W05 状态没变也交回动作与视图
+    wiring/physicsroom/nest.go: RED exit=1 10s failing=['TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:203: idle tick: {Actions:[{ID:room-da25480fb483e6ce:77:1 Instance:room-da25480fb483e6ce Epoch:77 Sequence:1 Stage:run Generation:1 Name:physics_respawn Args:map[actor:{Kind:int Int:1 Text: Bool:false}] LevelLifetime
+W06 不按帧号推进定时器
+    wiring/physicsroom/nest.go: RED exit=1 9s failing=['TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:277: phases per tick [preparing - - - -], want [preparing - running - -]
+W07 首帧不启动流程
+    wiring/physicsroom/nest.go: RED exit=1 43s failing=['TestLevelReplayIsDeterministic', 'TestRealGateLevelRespawnAndFinish', 'TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:163: first tick: {Actions:[] View:0x6a9d38ef62a0 StaleReceipts:0} <nil>
+W08 首帧不给房间建流程组件
+    wiring/physicsroom/entity.go: RED exit=1 18s failing=['TestLevelReplayIsDeterministic', 'TestRealGateLevelRespawnAndFinish', 'TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:163: first tick: {Actions:[] View:<nil> StaleReceipts:0} <nil>
+W09 没有流程的房间也收下事实与回执
+    wiring/physicsroom/nest.go: RED exit=1 9s failing=['TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:292: facts for a room without a flow: <nil>
+W10 流程视图排在帧之后推
+    wiring/physicsroom/relay.go: RED exit=1 6s failing=['TestPlayerIngressPushesLevelViewOncePerRevision', 'TestRealGateLevelRespawnAndFinish']
+    2026/11/19 10:21:03 WARN gate closed binding after channel failure receiver=1 game_sid=22 err="player tcp: connection cannot take the frame: writev tcp 127.0.0.1:62657->127.0.0.1:62658: writev: broken pipe"
+W11 流程视图推送失败被忽略
+    wiring/physicsroom/relay.go: RED exit=1 11s failing=['TestPlayerIngressPushesLevelViewOncePerRevision']
+    players_test.go:496: failed level push did not close the session
+W12 流程视图用 Sync 载荷类型
+    wiring/physicsroom/relay.go: RED exit=1 6s failing=['TestPlayerIngressPushesLevelViewOncePerRevision', 'TestRealGateLevelRespawnAndFinish']
+    2026/11/19 10:21:21 WARN gate closed binding after channel failure receiver=1 game_sid=22 err="player tcp: connection cannot take the frame: writev tcp 127.0.0.1:62672->127.0.0.1:62673: writev: broken pipe"
+W13 没配置消息号也推流程视图
+    wiring/physicsroom/relay.go: GREEN (not detected) exit=0 9s failing=[]
+    
+W14 流程消息号可以和别的消息号相同
+    wiring/physicsroom/players.go: RED exit=1 10s failing=['TestPlayerIngressPushesLevelViewOncePerRevision']
+    players_test.go:411: level = input: <nil>
+W15 入口不把流程消息号交给中继
+    wiring/physicsroom/players.go: RED exit=1 7s failing=['TestPlayerIngressPushesLevelViewOncePerRevision', 'TestRealGateLevelRespawnAndFinish']
+    players_real_test.go:408: the first frame arrived before the level view of a running flow
+W16 执行器不执行重生（T10 指定的变异）
+    service/physicsroom/actions.go: RED exit=1 43s failing=['TestLevelReplayIsDeterministic', 'TestRealGateLevelRespawnAndFinish']
+    level_native_test.go:114: condition not reached: body {InputGeneration:14761261287714385447 InputSequence:1413 InputActive:true Teleports:0 ID:1 Position:[-861.521 -937.6717 0] Rotation:[0 0 0.999803 -0.01984711] Velocity:[-117.24
+W17 不记检查点（重生回起点）
+    service/physicsroom/actions.go: RED exit=1 7s failing=['TestLevelReplayIsDeterministic', 'TestRealGateLevelRespawnAndFinish']
+    level_native_test.go:120: respawned at [-0.0022930284 0.5 0], want the checkpoint near x=-2
+W18 示例进程开房不带流程
+    wiring/physicsroom/cmd/physicsroom-local/main.go: RED exit=1 10s failing=['TestSeatCreatesTheRoomWithTheLevelFlow']
+    main_test.go:100: room spec lost level fields: players=[1 2] regions=4 spawns=3 default="start" flow=0 bytes
+W19 示例进程开房不带区域
+    wiring/physicsroom/cmd/physicsroom-local/main.go: RED exit=1 9s failing=['TestSeatCreatesTheRoomWithTheLevelFlow']
+    main_test.go:100: room spec lost level fields: players=[1 2] regions=0 spawns=3 default="start" flow=1357 bytes
+W20 事实先于回执处理（次序颠倒不应影响录制重放以外的断言；用来确认重放用例对次序敏感）
+    wiring/physicsroom/nest.go: RED exit=1 23s failing=['TestLevelReplayIsDeterministic', 'TestRealGateLevelRespawnAndFinish', 'TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:211: receipt: {Actions:[] View:<nil> StaleReceipts:0} <nil>
+
+## 第二轮（重写的无效变异 S29、S38、W01；补用例后的 S40、W13）
+S29 主动离开不产生事实
+    service/physicsroom/service.go: RED exit=1 12s failing=['TestLevelFactBacklogStopsTheRoom', 'TestLevelFactsReachTheFlowInOrder']
+    service_native_test.go:1267: facts per tick 52/0/0, want 64/38/0
+S38 视图变量不排序
+    service/physicsroom/level_view.go: RED exit=1 7s failing=['TestLevelViewEncodingIsDeterministicAndBounded', 'TestLevelViewGoldenSharedWithCSharp']
+    level_view_test.go:41: level view differs from the shared golden:
+S40 视图解码接受未知字段
+    service/physicsroom/level_view.go: RED exit=1 7s failing=['TestBusinessActionsNeverBlockThePhysicsLoop', 'TestDecodeLevelViewRejectsMalformedInput']
+    level_view_test.go:155: unknown bytes field: accepted as {Revision:0 Phase:Running Result: Stages:[] Variables:map[]}
+W01 流程出错被吞掉
+    wiring/physicsroom/nest.go: RED exit=1 10s failing=['TestRoomEntityRollsBackFrameAndLevelTogether']
+    entity_test.go:181: failing commit: <nil>
+W13 没配置消息号也推流程视图
+    wiring/physicsroom/relay.go: RED exit=1 9s failing=['TestPlayerIngressPushesLevelViewOncePerRevision']
+    players_test.go:536: pushed {id:0 kind:0 payload:v	} without a level message id; only frames are expected

@@ -73,7 +73,7 @@ core 工程的 `.run/` 提供 Physics Service、Physics Game、Physics Gate 三�
 
 ### Gate + 物理房间服务（当前默认）
 
-本机需要 NATS `127.0.0.1:4222`、Redis `127.0.0.1:6379`（App 单实例锁）与 etcd `127.0.0.1:2379`（Gate 发现 Game）。GoLand Debug **Physics Stack**（或分别 Debug 三个配置，顺序不限），看到 `physics gate ready` 后 Unity Play。命令行等价写法与配置见 [物理房间 service §本机三进程](../../docs/framework/PHYSICS-ROOM-SERVICE.md#本机三进程正式装配2026-10-26)。
+本机需要 NATS `127.0.0.1:4222` 与 etcd `127.0.0.1:2379`（App 单实例锁与 Gate 发现 Game；2026-11-16 起锁也存 etcd，不再要 Redis）。GoLand Debug **Physics Stack**（或分别 Debug 三个配置，顺序不限），看到 `physics gate ready` 后 Unity Play。命令行等价写法与配置见 [物理房间 service §本机三进程](../../docs/framework/PHYSICS-ROOM-SERVICE.md#本机三进程正式装配2026-10-26)。
 
 - Physics Service：`physicsroom` 子命令，sid 7801；EntityHostMod 承载房间执行、PhysX、RoomEntity / Nest，经 NATS 提供 Rooms RPC。
 - Physics Game：`game` 子命令，sid 22；GameIngressMod + PlayerIngress，首个输入时建一个 CrowdScene 房间（寿命 1h，停服时销毁），slot N 控制刚体 50+N，内部 RPC 为 MessagePack。
@@ -96,7 +96,7 @@ Gate Room 现在先获取服务器固定的 Level JSON、SHA-256 和认证绑定
 # 先构建 native（需要 CMake、Ninja、C/C++ 编译器）与本机三进程入口。
 bash scripts/physics/build-native.sh
 GOWORK=off go build -tags physx -o artifacts/physicsroom-local ./wiring/physicsroom/cmd/physicsroom-local
-# 导出可编辑的示例：两玩家球、可抓球、升降台、转杆、马达锤。
+# 导出可编辑的示例：两玩家球、可抓球、升降台、转杆、马达锤；带掉落区、两个检查点、终点与流程。
 artifacts/physicsroom-local export-level artifacts/obstacles.json
 # 三个终端（或 GoLand Physics Stack，给 Physics Game 加 --level）；依赖见上文 Gate + 物理房间服务。
 cfg=wiring/physicsroom/cmd/physicsroom-local/configs
@@ -105,22 +105,46 @@ artifacts/physicsroom-local game --level artifacts/obstacles.json --config $cfg/
 artifacts/physicsroom-local gate --config $cfg/config.gate.yaml
 ```
 
-编辑 JSON 的 `Bodies` / `Motions` / `Joints`，修改 `Revision` 后重启 game 开新房；不要只改 Unity 资源而保留旧服务器碰撞世界。去掉 `--level` 使用原 Crowd 关卡，但也通过内容握手加载。SHA-256 用于确认精确内容，不是作者认证或内容审核。发布权限、存储、CDN 和编辑器由游戏工程接入。
+编辑 JSON 的 `Bodies` / `Motions` / `Joints` / `Regions` / `Spawns` / `Flow`，修改 `Revision` 后重启 game 开新房；不要只改 Unity 资源而保留旧服务器碰撞世界。去掉 `--level` 使用原 Crowd 关卡，但也通过内容握手加载。SHA-256 用于确认精确内容，不是作者认证或内容审核。发布权限、存储、CDN 和编辑器由游戏工程接入。
 
 Unity 新工程沿用 `scripts/physics/create-viewer.sh`。已有工程把 `client/physics-viewer/*.cs`、Editor 文件和 `client/dotnet/Roost.Client/Packet.cs` 同步到原位置；本轮 native 与身体载荷不兼容旧版本，不能只更新一侧。在 Unity 中调用 `ViewerProject.OpenUGCInteractive`，或给新 GameObject 挂 `CrowdViewer`，设置 `ControlRoom=true`、`UseGate=true`、`Port=19093`、`PlayerSlot=1`。第二客户端用槽 2；示例只定义两个槽，原 Room 场景默认槽 13 不适用。
 
 - WASD/方向键移动，Space 跳跃，按住 E 抓最近对象、松开 E 释放；最终是否可抓由服务器检查。此演示选目标没有射线遮挡，不是完整商业抓取规则。
 - `PredictLocalInput` 开关对比预测与纯插值。预测仅作用于自己，其他对象保留服务器快照插值；本地胶囊扫掠不向服务器回写坐标。断线不自动重连，重新启动连接会重新取内容并获取成员代际。
-- 协议 `0x50485903` 返回 `RoomLevel`；`0x50485902` 输入新增 `grab_target`，响应 `RoomInputAck` 返回成员代际。真正输入采样确认在 RP2 私有帧头中，不能用 RPC 响应裁剪预测历史。
+- 协议 `0x50485903` 返回 `RoomLevel`；`0x50485902` 输入新增 `grab_target`，响应 `RoomInputAck` 返回成员代际。真正输入采样确认在 RP3 私有帧头中，不能用 RPC 响应裁剪预测历史。
 - 本轮 Linux native、房间和真实 Gate/NATS/TCP 功能回归已运行；C# 预测核心已编译执行。**Unity 编辑器编译、场景交互与移动网络延迟验收尚未执行**，请在目标 Unity 工程复验。它是近似预测和权威纠偏，不是把服务器完整 PhysX 世界搬到客户端做确定性重演。
 
 
-Room 同步已使用 RP2 + RC2：每帧只包含自身输入确认，对象先量化再按位置/旋转/速度/角速度/休眠分字段发送。完整对象 34 字节，位置精度 1cm；重新连接、跨 Chunk 或重新可见必须重建完整对象。同步复制 `PackedBodyCodec.cs`、`ChunkReplica.cs`、`CrowdViewer.cs`，服务与客户端先停旧再更新。Comparison 保留 RC1 无损对照，不能用旧 crowd 测速脚本证明 Room 优化收益。
+Room 同步使用 RP3 + RC2（2026-11-19 起只认 RP3，见下文“关卡流程”）：每帧只包含自身输入确认，对象先量化再按位置/旋转/速度/角速度/休眠分字段发送。完整对象 34 字节，位置精度 1cm；重新连接、跨 Chunk 或重新可见必须重建完整对象。同步复制 `PackedBodyCodec.cs`、`ChunkReplica.cs`、`CrowdViewer.cs`，服务与客户端先停旧再更新。Comparison 保留 RC1 无损对照，不能用旧 crowd 测速脚本证明 Room 优化收益。
 
 `dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj` 从仓库根运行，同时验证预测核心和 `tests/packed.json` 的 Go/C# 共享量化金样。协议、实测载荷和测量范围见 [Room 同步压缩](../../docs/framework/PHYSICS-ROOM-SERVICE.md#room-同步压缩与复测2026-10-26)。此核心测试不代替 Unity 编辑器验收。
 
 
-分频版本还需同步 `ReplicationPlayback.cs` 和 `LevelViewer.cs`。Room 使用 RP2，34 字节对象状态位标明展示档/轨迹档；展示档速度不是物理测量值。客户端按对象采样 tick 插值，远处规则平台/转轮读取 Level.Motions 并用服务器姿态校准，停收帧后停止外推。近处对象保留高频状态，动态马达或抓取物不使用固定轨迹。完整参数、关闭对照与统计见 [接收者分频](../../docs/framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。C# 核心测试包含 `tests/motion.json` 的 Go/C# 相位金样和稀疏插值；Unity 编辑器与移动网络仍须复验。
+分频版本还需同步 `ReplicationPlayback.cs` 和 `LevelViewer.cs`。Room 使用 RP3，34 字节对象状态位标明展示档/轨迹档；展示档速度不是物理测量值。客户端按对象采样 tick 插值，远处规则平台/转轮读取 Level.Motions 并用服务器姿态校准，停收帧后停止外推。近处对象保留高频状态，动态马达或抓取物不使用固定轨迹。完整参数、关闭对照与统计见 [接收者分频](../../docs/framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。C# 核心测试包含 `tests/motion.json` 的 Go/C# 相位金样和稀疏插值；Unity 编辑器与移动网络仍须复验。
 
 
 多房间服务测量入口为 `ROOST_PHYSICS_LOAD=1 go test -tags physx -run '^TestMultiRoomReplicationLoad$' -count=1 -timeout=2m -v ./wiring/physicsroom`。它运行真实 Room/PhysX/Nest 和独立逻辑客户端，不启动 Unity 或 Gate/TCP；不能当作真实玩家容量。场景、原始统计含义和共享索引基准见 [服务测量](../../docs/framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)。
+
+## 关卡流程：重生、检查点与 HUD（2026-11-19）
+
+带流程的关卡（`export-level` 导出的示例就是）在客户端多三样东西，服务端契约见 [物理房间 service §关卡流程](../../docs/framework/PHYSICS-ROOM-SERVICE.md#关卡流程区域检查点重生与流程视图2026-11-19)：
+
+- **传送。** 帧里对象的状态字节 bit3 表示这一帧位置不连续。`ChunkReplica` 读成 `Teleported`；`SparsePosePlayback.Sample` 收到它就把对象直接放到新位置，不从旧位置插过去；自己的刚体被传送时，`InputPrediction.Reconcile` 丢弃已确认的历史、这一帧不拿旧输入外推，之后按下的输入照常重放。示例关卡里走出地面掉下去，约 1 秒后回到最近的检查点（没经过检查点就回起点）。
+- **流程视图。** 消息 `0x50485904`（`room_input.proto` 的 `RoomLevelView`，`RoomLevelView.cs` 解码）：阶段、结果、活动的阶段、公开变量。HUD 多两行，例如 `flow: running | stages: run#1 | revision 6` 与 `global/falls=1`；到终点后第一行以 `flow: finishing result=clear` 开头（这一句是按代码里的格式写的，Unity 里没有实际走到过终点）。`CrowdViewer.Level` / `LevelHud` 可以在代码里读。
+- **关卡标记。** `LevelMarkers.cs` 从关卡 JSON 读 `Regions` 与 `Spawns`（`JsonUtility` 读不了数组的数组，所以单独写了解析）；`LevelViewer` 把区域画成线框、出生点画成小球，都没有碰撞体，不影响本地预测。
+
+协议只认 RP3 帧头与 schema 2 关卡：服务端与 Unity 工程必须一起更新（`create-viewer.sh` 复制的源码多了 `RoomLevelView.cs`、`LevelMarkers.cs`、`GateTransport.cs`）。旧工程连新服务会在第一帧报 `Room version`（帧头不是 RP3）。
+
+### 批处理联机验收
+
+```sh
+# 三进程 + Go 客户端：过检查点 → 掉落 → 重生 → 终点结算，再依次停三个进程，要求日志没有 WARN / ERROR
+ROOST_PHYSICS_TEST_NATS_URL=nats://127.0.0.1:4222 ROOST_PHYSICS_TEST_ETCD=127.0.0.1:2379 scripts/physics/verify-level.sh
+# 同样的三进程，客户端换成 Unity（批处理 Play Mode，ViewerProject.VerifyLevel）
+ROOST_PHYSICS_TEST_NATS_URL=… ROOST_PHYSICS_TEST_ETCD=… scripts/physics/verify-level.sh /绝对路径/Unity工程
+```
+
+`ViewerProject.VerifyLevel` 建一个 `UseGate=true`、1 号槽的场景进 Play Mode，自动向 +x 走出地面，要求 60 秒内：收到至少 200 帧、自己被传送至少 1 次、流程视图里 `global/falls ≥ 1`、从关卡读出了区域与出生点。通过时日志里有一行 `ROOST_VIEWER_TCP_PHYSICS_PASS … teleports=1 regions=4 spawns=6 … hud=[…]`。
+
+2026-11-19 在 macOS ARM64、Unity 6000.3.12f1（`-batchmode -nographics`）上跑通；把“服务端不执行重生”“`ChunkReplica` 忽略 bit3”“观察器不收 `0x50485904`”三处分别改坏，这条验收都失败。它证明的是接线（传送标记到达回放与预测、流程视图到达 HUD 的文字、关卡标记被读出），**不是画面与手感**：没有截图，没有人看过重生时的画面是否跳变得干净、HUD 是否好读，也没有双客户端、弱网、移动设备。这些仍要人在 Unity 里试玩。
+

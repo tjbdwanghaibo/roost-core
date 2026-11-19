@@ -46,6 +46,7 @@ const (
 	frameMessageID   uint32 = 0x50485901
 	inputMessageID   uint32 = 0x50485902
 	contentMessageID uint32 = 0x50485903
+	levelMessageID   uint32 = 0x50485904 // 流程公开状态 RoomLevelView；关卡没有流程时不会推送
 	roomLifetime            = 3600
 	rpcTimeout              = 2 * time.Second
 )
@@ -53,7 +54,7 @@ const (
 func main() {
 	players := newSeats()
 	ingress, err := roomwiring.NewPlayerIngress(roomwiring.PlayerIngressConfig{InputMessageID: inputMessageID, FrameMessageID: frameMessageID, Seat: players.seat,
-		ContentMessageID: contentMessageID, Content: players.content})
+		ContentMessageID: contentMessageID, Content: players.content, LevelMessageID: levelMessageID})
 	if err != nil {
 		slog.Error("physicsroom-local", "error", err)
 		os.Exit(1)
@@ -131,7 +132,7 @@ func newSeats() *seats { return &seats{} }
 
 // load 在 game 服务 Init 时调用一次：读取并校验关卡，固定内容字节与摘要。
 func (s *seats) load() error {
-	level := gamephysics.Level{Version: 1, Name: "crowd", Revision: 1, Bodies: gamephysics.CrowdScene()}
+	level := gamephysics.Level{Version: gamephysics.LevelVersion, Name: "crowd", Revision: 1, Bodies: gamephysics.CrowdScene()}
 	for i := 1; i <= gamephysics.CrowdPlayers; i++ {
 		level.Players = append(level.Players, uint64(gamephysics.CrowdCapsules+i))
 	}
@@ -200,12 +201,13 @@ func (s *seats) seat(ctx context.Context, binding gateway.Binding) (domain.Ref, 
 	if err != nil {
 		return domain.Ref{}, 0, fmt.Errorf("physicsroom owner (sid %d) unavailable: %w", ownerSID, err)
 	}
-	ref, err := s.rooms.Create(ctx, domain.Spec{Instance: instance, ID: "unity-" + token(), Bodies: s.level.Bodies, Motions: s.level.Motions, Joints: s.level.Joints, LifetimeSeconds: roomLifetime})
+	ref, err := s.rooms.Create(ctx, domain.Spec{Instance: instance, ID: "unity-" + token(), Bodies: s.level.Bodies, Motions: s.level.Motions, Joints: s.level.Joints, LifetimeSeconds: roomLifetime,
+		Players: s.level.Players, Regions: s.level.Regions, Spawns: s.level.Spawns, DefaultSpawn: s.level.DefaultSpawn, Flow: s.level.Flow})
 	if err != nil {
 		return domain.Ref{}, 0, err
 	}
 	s.room = ref
-	slog.Info("physics room created", "room", ref.ID, "owner", ownerSID, "level", s.level.Name, "revision", s.level.Revision, "lifetime_seconds", roomLifetime)
+	slog.Info("physics room created", "room", ref.ID, "owner", ownerSID, "level", s.level.Name, "revision", s.level.Revision, "lifetime_seconds", roomLifetime, "flow", len(s.level.Flow) != 0)
 	return ref, body, nil
 }
 

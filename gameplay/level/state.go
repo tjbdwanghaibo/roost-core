@@ -45,7 +45,7 @@ type Effect struct {
 	Name            string
 	Args            map[string]Value
 	LevelLifetime   bool
-	Status          string // pending/done/cancelled；回执留存到实例关闭，不淘汰以复用 ID。
+	Status          string // pending/done/cancelled；回执留存到实例关闭，不淘汰以复用 ID（宿主打开 ForgetSettledActions 时只留 pending）。
 	Success         bool
 }
 type Event struct {

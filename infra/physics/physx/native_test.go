@@ -374,3 +374,137 @@ func TestDistanceGrabReleaseAndHingeMotor(t *testing.T) {
 		t.Fatal("unknown actor accepted")
 	}
 }
+
+// 传送：下一步从新位姿出发、不带旧的线速度与角速度；给定的速度生效；休眠体被唤醒；不是动态刚体的目标被拒绝且世界不变。
+func TestSetPoseMovesADynamicBodyAndClearsItsMotion(t *testing.T) {
+	w, err := New(-9.81, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	const ball, sleeper, neighbor, platform, ground = 1, 2, 3, 50, 100
+	for _, b := range []Body{
+		{ID: ground, Shape: Box, Position: Vec3{0, -.5, 0}, Dimensions: Vec3{40, .5, 40}},
+		{ID: ball, Shape: Sphere, Position: Vec3{0, .5, 0}, Dimensions: Vec3{.5}, Mass: 1},
+		{ID: sleeper, Shape: Sphere, Position: Vec3{0, .5, 12}, Dimensions: Vec3{.5}, Mass: 1},
+		{ID: neighbor, Shape: Sphere, Position: Vec3{6, .5, 12}, Dimensions: Vec3{.5}, Mass: 1},
+		{ID: platform, Shape: Box, Motion: Kinematic, Position: Vec3{20, 3, 0}, Dimensions: Vec3{1, .2, 1}, Mass: 10},
+	} {
+		if err = w.Add(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step := func(commands ...Command) map[uint64]State {
+		t.Helper()
+		states, err := w.Step(.02, commands)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byID := make(map[uint64]State, len(states))
+		for _, s := range states {
+			byID[s.ID] = s
+		}
+		return byID
+	}
+	near := func(got, want, tolerance float32) bool { return math.Abs(float64(got-want)) <= float64(tolerance) }
+	identity := Quat{0, 0, 0, 1}
+
+	// 先让球带上水平速度和滚动角速度，否则“不带旧运动”无从验证。
+	var before map[uint64]State
+	for range 40 {
+		before = step(Command{ID: ball, Acceleration: Vec3{20, 0, 0}})
+	}
+	if before[ball].Velocity[0] < 2 || math.Abs(float64(before[ball].AngularVelocity[2])) < 1 {
+		t.Fatalf("ball is not moving before the teleport: %+v", before[ball])
+	}
+	quarterTurn := Quat{0, float32(math.Sqrt2 / 2), 0, float32(math.Sqrt2 / 2)}
+	if err = w.SetPose(ball, Vec3{5, 3, 2}, quarterTurn, Vec3{}, Vec3{}); err != nil {
+		t.Fatal(err)
+	}
+	after := step()[ball]
+	// 一步只有重力：v = g·dt，y = y0 + v·dt。
+	if !near(after.Position[0], 5, 1e-4) || !near(after.Position[2], 2, 1e-4) || !near(after.Position[1], 3-9.81*.02*.02, 1e-3) {
+		t.Fatalf("next step does not start from the new pose: %+v", after)
+	}
+	if !near(after.Velocity[0], 0, 1e-4) || !near(after.Velocity[2], 0, 1e-4) || !near(after.Velocity[1], -9.81*.02, 1e-3) {
+		t.Fatalf("old linear velocity survived the teleport: %+v", after)
+	}
+	for axis, v := range after.AngularVelocity {
+		if !near(v, 0, 1e-4) {
+			t.Fatalf("old angular velocity survived the teleport on axis %d: %+v", axis, after)
+		}
+	}
+	for i, q := range after.Rotation {
+		if !near(q, quarterTurn[i], 1e-4) {
+			t.Fatalf("rotation not applied: %+v", after)
+		}
+	}
+
+	// 给定的速度生效（角速度有 0.05 的阻尼，一步内变化小于 1%）。
+	if err = w.SetPose(ball, Vec3{-5, 10, 0}, identity, Vec3{3, 0, 0}, Vec3{0, 2, 0}); err != nil {
+		t.Fatal(err)
+	}
+	after = step()[ball]
+	if !near(after.Position[0], -5+3*.02, 1e-3) || !near(after.Velocity[0], 3, 1e-3) || !near(after.AngularVelocity[1], 2, .02) {
+		t.Fatalf("requested velocity not applied: %+v", after)
+	}
+
+	// 休眠体必须被唤醒。能区分的场景是“沿地面传送到另一个休眠体身上、速度为零”：与地面的接触没有断开，
+	// 两个休眠体之间的新接触也不会唤醒谁，不显式唤醒就会一直重叠在一起。（放到空中或带非零速度时 PhysX
+	// 自己会唤醒，证明不了传送的唤醒。）
+	var resting map[uint64]State
+	for range 500 {
+		if resting = step(); resting[sleeper].Sleeping && resting[neighbor].Sleeping {
+			break
+		}
+	}
+	if !resting[sleeper].Sleeping || !resting[neighbor].Sleeping {
+		t.Fatal("resting balls never fell asleep; the wake-up check would prove nothing")
+	}
+	overlapping := resting[neighbor].Position
+	overlapping[0] += .2
+	if err = w.SetPose(sleeper, overlapping, identity, Vec3{}, Vec3{}); err != nil {
+		t.Fatal(err)
+	}
+	var apart map[uint64]State
+	for range 50 {
+		apart = step()
+	}
+	if gap := apart[sleeper].Position[0] - apart[neighbor].Position[0]; gap < .9 {
+		t.Fatalf("sleeping body was not woken by the teleport: still overlapping, gap %.3f (two radii = 1)", gap)
+	}
+
+	// 静态、运动学、未知 ID：拒绝，运动学平台留在原处。逐个报告，不在第一个失败处停下。
+	for _, id := range []uint64{ground, platform, 999} {
+		if err = w.SetPose(id, Vec3{0, 9, 0}, identity, Vec3{}, Vec3{}); !errors.Is(err, ErrPoseTarget) {
+			t.Errorf("body %d: want ErrPoseTarget, got %v", id, err)
+		}
+	}
+	if p := step()[platform].Position; p != (Vec3{20, 3, 0}) {
+		t.Fatalf("rejected teleport moved the kinematic platform: %v", p)
+	}
+	// 非法参数：零四元数不是单位旋转（SetPose 不像 Body 那样把零值当单位旋转），NaN 与越界值拒绝。
+	nan := float32(math.NaN())
+	for name, call := range map[string]func() error{
+		"zero rotation":     func() error { return w.SetPose(ball, Vec3{}, Quat{}, Vec3{}, Vec3{}) },
+		"nan position":      func() error { return w.SetPose(ball, Vec3{nan, 0, 0}, identity, Vec3{}, Vec3{}) },
+		"huge velocity":     func() error { return w.SetPose(ball, Vec3{}, identity, Vec3{2e6, 0, 0}, Vec3{}) },
+		"nan angular":       func() error { return w.SetPose(ball, Vec3{}, identity, Vec3{}, Vec3{0, nan, 0}) },
+		"unnormalized quat": func() error { return w.SetPose(ball, Vec3{}, Quat{0, 0, 0, 2}, Vec3{}, Vec3{}) },
+	} {
+		if err = call(); err == nil || errors.Is(err, ErrPoseTarget) {
+			t.Fatalf("%s: want an invalid-pose error, got %v", name, err)
+		}
+	}
+	// 业务 worker 上不能碰原生世界；关闭后返回 ErrClosed。
+	_, release := fctx.NewContext(fctx.WithShortWorker())
+	err = w.SetPose(ball, Vec3{0, 9, 0}, identity, Vec3{}, Vec3{})
+	release()
+	if !errors.Is(err, fctx.ErrBlockingInBusinessWorker) {
+		t.Fatalf("teleport from a business worker must fail before touching the world: %v", err)
+	}
+	w.Close()
+	if err = w.SetPose(ball, Vec3{0, 9, 0}, identity, Vec3{}, Vec3{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed world: %v", err)
+	}
+}

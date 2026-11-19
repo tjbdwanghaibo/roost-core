@@ -19,7 +19,18 @@ type LevelComponent struct {
 	entity.ComponentBase
 	dao     *LevelDAO
 	program *Program
+	forget  bool // 见 ForgetSettledActions
 }
+
+// ForgetSettledActions 让动作账本只保留未完成的动作：动作一旦有了回执（done）或被取消（cancelled），
+// 在同一次变更结束时（action.done 已经分派之后）就从账本里删除。Limits.Effects 于是只限制同时未完成的动作数，
+// 账本与状态的大小不再随实例运行的时间增长。动作 ID 由 NextEffect 递增生成，删除之后也不会复用。
+//
+// 代价是晚到的重复回执：缺省时同结论的重复回执是幂等成功、结论不同是 ErrConflict，打开之后两者都是 ErrStale
+// （与被取消的动作一样）。所以只适合宿主自己保证每个动作至多给一次结论、并且把 ErrStale 当作“已经结算”的场合，
+// 比如长时间运行、动作很频繁的房间。在组件收到第一次变更之前调用；之后的每次变更都会清掉已结算的记录，
+// 包括打开之前留下的。
+func (c *LevelComponent) ForgetSettledActions() { c.forget = true }
 
 func NewLevelComponent(dao *LevelDAO, program *Program) (*LevelComponent, error) {
 	if dao == nil || program == nil {
@@ -55,6 +66,13 @@ func (c *LevelComponent) mutate(now int64, fn func(*runtime) error) error {
 	}
 	if err := r.drain(); err != nil {
 		return err
+	}
+	if c.forget {
+		for id, e := range draft.Effects {
+			if e.Status != "pending" {
+				delete(draft.Effects, id)
+			}
+		}
 	}
 	if draft.Revision == math.MaxUint64 {
 		return ErrBudget

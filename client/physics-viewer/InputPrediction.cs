@@ -24,7 +24,7 @@ namespace Roost.PhysicsViewer
         PredictedInput acknowledged;
         PredictedState authority;
         double receivedAt;
-        bool ready, active;
+        bool ready, active, discontinuous;
         public const double Horizon = .25;
         public bool Held
         {
@@ -43,7 +43,10 @@ namespace Roost.PhysicsViewer
                 history.Record(input.Sequence, input);
             }
         }
-        public void Reconcile(ulong sequence, bool inputActive, PredictedState state, double now)
+        // discontinuity：这一帧里自己的刚体带传送标记（被传送或重生）。权威状态照常成为基线，这一帧确认的输入
+        // 及更早的历史照常删去，之后的输入照常重放；不同的是没有更新的输入可重放时，不再拿已确认的那条输入
+        // 往前外推：它是在旧位置上按下的，而服务端传送时已经把速度清零。下一帧不带标记，恢复外推。
+        public void Reconcile(ulong sequence, bool inputActive, PredictedState state, double now, bool discontinuity = false)
         {
             lock (mutex)
             {
@@ -53,6 +56,7 @@ namespace Roost.PhysicsViewer
                 receivedAt = now;
                 ready = true;
                 active = inputActive;
+                discontinuous = discontinuity;
             }
         }
         public PredictedState Predict(double now, Func<PredictedState, PredictedInput, float, PredictedState> step)
@@ -74,7 +78,7 @@ namespace Roost.PhysicsViewer
                     Integrate(ref state, input, span, step);
                     budget -= span;
                 }
-                if (history.Count == 0)
+                if (history.Count == 0 && !discontinuous)
                 {
                     var input = acknowledged;
                     input.Jump = false;

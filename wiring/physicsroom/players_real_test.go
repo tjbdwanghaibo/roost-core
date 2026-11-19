@@ -11,12 +11,14 @@ import (
 	"math"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
@@ -32,6 +34,7 @@ import (
 const (
 	testInputMessageID uint32 = 0x50485902
 	testFrameMessageID uint32 = 0x50485901
+	testLevelMessageID uint32 = 0x50485904
 )
 
 // 原 cmd/physics-viewer 的 Gate 链路由正式部件承担：客户端 TCP → Gate → NATS → GameIngress → PlayerIngress
@@ -305,6 +308,154 @@ func TestRealGateUGCLevelAndInput(t *testing.T) {
 		}
 	}
 	t.Logf("UGC content=%s bodies=%d tick=%d generation=%d", hash, len(level.Bodies), replica.Tick, generation)
+}
+
+// 关卡流程走完整链路：客户端 TCP → Gate → NATS → GameIngress → PlayerIngress → Rooms RPC（Spec 带区域、出生点、流程）
+// → EntityHostMod 的房间（PhysX → 区域事实 → Nest Guard 里的流程 → 传送）→ Relay（流程视图 + 帧）→ Gate → 客户端。
+// 客户端只发输入、只看收到的包：把受控球推下窄道，收到带 ViewTeleported 的帧且球在检查点；再推到终点，
+// 收到 phase=finishing、result=clear 的流程视图。
+func TestRealGateLevelRespawnAndFinish(t *testing.T) {
+	url := os.Getenv("ROOST_PHYSICS_TEST_NATS_URL")
+	if url == "" {
+		t.Skip("private NATS URL not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, rooms := startRoomOwner(t, ctx, url)
+	instance, err := rooms.Describe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := rooms.Create(ctx, courseSpec("level", instance))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const body uint64 = 1
+	players, err := NewPlayerIngress(PlayerIngressConfig{InputMessageID: testInputMessageID, FrameMessageID: testFrameMessageID, LevelMessageID: testLevelMessageID,
+		Seat: func(context.Context, gateway.Binding) (domain.Ref, uint64, error) { return ref, body, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	game, addr := startGateForPlayers(t, url, players)
+	if err = players.Attach(rooms, game); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(25 * time.Second))
+	if err = wire.Write(conn, []*wire.Packet{{MsgID: 0, Seq: 1, Payload: []byte("ticket")}}, 8192); err != nil {
+		t.Fatal(err)
+	}
+	if ack, err := wire.Read(conn, 8192); err != nil || ack.MsgID != 0 || ack.Seq != 1 {
+		t.Fatalf("auth ack=%v err=%v", ack, err)
+	}
+	// 输入每 50ms 一条，x 方向的加速度由读循环按收到的内容切换。
+	var direction atomic.Int32
+	direction.Store(-1)
+	inputCtx, stopInput := context.WithCancel(ctx)
+	inputDone := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for seq := uint32(2); ; seq++ {
+			payload := protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), uint64(seq))
+			payload = protowire.AppendFixed32(protowire.AppendTag(payload, 2, protowire.Fixed32Type), math.Float32bits(8*float32(direction.Load())))
+			if err := wire.Write(conn, []*wire.Packet{{MsgID: testInputMessageID, Seq: seq, Payload: payload}}, 8192); err != nil {
+				inputDone <- err
+				return
+			}
+			select {
+			case <-inputCtx.Done():
+				inputDone <- nil
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	var replica gamephysics.RoomReplica
+	var view domain.LevelView
+	views, frames, teleportFrames := 0, 0, 0
+	var fellAt, respawnedAt uint64
+	// 结算视图排在同一次交付的帧之前：读到它之后把紧跟着的那一帧也读完再结束，不在服务端推到一半时断开。
+	for settledFrames := 0; view.Phase != level.Finishing || frames == settledFrames; {
+		if view.Phase != level.Finishing {
+			settledFrames = frames
+		}
+		packet, err := wire.Read(conn, 1<<20)
+		if err != nil {
+			t.Fatalf("frames=%d views=%d teleports=%d view=%+v body=%+v: %v", frames, views, teleportFrames, view, replica.States[body], err)
+		}
+		switch packet.MsgID {
+		case testInputMessageID:
+		case testLevelMessageID:
+			if packet.Flags != wire.FlagPush {
+				t.Fatalf("level view flags=%d, want a protobuf push", packet.Flags)
+			}
+			next, err := domain.DecodeLevelView(packet.Payload)
+			if err != nil {
+				t.Fatalf("level view %x: %v", packet.Payload, err)
+			}
+			if next.Revision <= view.Revision {
+				t.Fatalf("level view revision %d after %d", next.Revision, view.Revision)
+			}
+			view = next
+			views++
+		case testFrameMessageID:
+			if views == 0 {
+				t.Fatal("the first frame arrived before the level view of a running flow")
+			}
+			if err = replica.Apply(packet.Payload); err != nil {
+				t.Fatal(err)
+			}
+			frames++
+			state, ok := replica.States[body]
+			if !ok {
+				t.Fatal("controlled body missing")
+			}
+			if fellAt == 0 && state.Position[1] < -1 {
+				fellAt = replica.Tick
+			}
+			if replica.Profiles[body]&gamephysics.ViewTeleported == 0 {
+				continue
+			}
+			teleportFrames++
+			if teleportFrames > 1 {
+				t.Fatalf("frame %d: ViewTeleported delivered twice for one teleport", frames)
+			}
+			// 带标记的这一帧里球已经在检查点（出生点 cp 的第一个位置），不在下落途中。
+			if fellAt == 0 || state.Position[1] < .3 || state.Position[1] > .8 || state.Position[0] < -2.6 || state.Position[0] > -1.4 {
+				t.Fatalf("teleport frame at tick %d: fell at %d, body %+v, want it at the checkpoint (-2, .5, 0)", replica.Tick, fellAt, state)
+			}
+			respawnedAt = replica.Tick
+			direction.Store(1)
+		default:
+			t.Fatalf("unexpected packet %+v", packet)
+		}
+	}
+	stopInput()
+	if err = <-inputDone; err != nil {
+		t.Fatal(err)
+	}
+	if teleportFrames != 1 || view.Result != "clear" || view.Variables["global/falls"] != level.Int(1) || len(view.Stages) != 0 && view.Stages[0].ID != "run" {
+		t.Fatalf("teleports=%d view=%+v", teleportFrames, view)
+	}
+	if state := replica.States[body]; state.Position[0] < 1.5 {
+		t.Fatalf("finished with the body at %v, short of the goal", state.Position)
+	}
+	// 按次序收尾：先断连接（Relay 退出并 Leave），排空入口，再销毁房间；这样没有输入落在已销毁的房间上。
+	_ = conn.Close()
+	drain, drainCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer drainCancel()
+	if err = players.Close(drain); err != nil {
+		t.Fatal(err)
+	}
+	if err = rooms.Destroy(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("frames=%d views=%d fell_tick=%d respawn_tick=%d finish_tick=%d revision=%d", frames, views, fellAt, respawnedAt, replica.Tick, view.Revision)
 }
 
 // startRoomOwner 在私有命名空间里按 owner 进程的正式装配起 EntityHostMod 与 Server，返回固定 owner 的房间客户端。
