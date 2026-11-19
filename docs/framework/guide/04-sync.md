@@ -214,7 +214,7 @@ sync:
 - `Stalls` 最多列 `DrainStallLimit`（8）项、`Total` 是全部条目数。每项有来源（`subject` 待捕获、`snapshot` 等冷创建预算、`policy` / `interest` 政策阶段）、subject 与会话、最后一次暂缓或拒绝的原因（`commit_pending`、`durability_wait`、`prepare_failed`、`snapshot_budget`、`subscribe_refused`、`subscriber_room`、`policy_pending` 等）、补充说明、已连续等待的时长和最后一次错误；
 - 同时计 `entitysync_drain_timeout_total`，并把剩余条目数写入 `entitysync_drain_remaining_entries`（成功排空写 0）。
 
-自定义政策用 `Manager.RegisterPolicy(entitysync.PolicyHooks{Apply, Pending, Stalls})` 登记；`Stalls` 可选，不提供时超时错误只报告“该政策仍有待处理事实”。Interest 的被拒订阅连续 10 次后不再阻挡 Drain（`entitysync_interest_retry_stalled_total`），所以出现在列表里的 `subscribe_refused` 都还在这个上界之内；超过订阅者上限、等空位的 pair 只在该实体此刻有空位时阻挡 Drain（`subscriber_room`，下一次政策阶段就会订阅上），没有空位时不阻挡（在等外部事件，与超额暂缓一致）。
+自定义政策用 `Manager.RegisterPolicy(entitysync.PolicyHooks{Apply, Pending, Stalls})` 登记；`Stalls` 可选，不提供时超时错误只报告“该政策仍有待处理事实”。Interest 的被拒订阅连续 10 次后不再阻挡 Drain（`entitysync_interest_retry_stalled_total`），所以出现在列表里的 `subscribe_refused` 都还在这个上界之内；超过订阅者上限、等空位的 pair 只在该实体有空位或同一会话可复用其他来源的槽时阻挡 Drain（`subscriber_room`，下一次政策阶段重试）；两者都没有时不阻挡（在等外部事件，与超额暂缓一致）。
 
 ## 5. 服务间总线与流
 

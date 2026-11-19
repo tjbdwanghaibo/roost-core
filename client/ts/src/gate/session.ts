@@ -212,7 +212,9 @@ export class GateSession {
       // 写失败：连接不可用，整条关掉（在途请求包括这一个都失败）。
       const reason = error instanceof Error ? error : new Error(String(error));
       this.close(reason);
-      throw new GateClosedError("gate: write failed", reason);
+      // 已登记的请求由 close 结算；再抛错会让 GameClient.begin 再投递一次失败。
+      // notify 没有回调，写失败仍须同步通知调用方。
+      if (!complete) throw new GateClosedError("gate: write failed", reason);
     }
   }
 
