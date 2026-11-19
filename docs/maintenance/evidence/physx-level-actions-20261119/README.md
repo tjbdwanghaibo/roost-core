@@ -422,3 +422,106 @@ GOWORK=off CGO_ENABLED=1 go test -count=1 -tags physx ./gameplay/... ./service/p
 - 持久化的流程（`NewLevelDAO`）打开淘汰没有专门的用例：淘汰只是从要写入的状态里少了几项，走的是原有的整状态写入；物理房间用的是瞬态 DAO。
 - 业务动作（`ActionHandler`，独立 goroutine、同 ID 重试）在打开淘汰后的晚到结果没有新增用例；批 3 的 `TestUnknownBusinessResultIsRetriedWithTheSameID` 等仍然通过，房间侧在回执提交前不会对同一个 ID 给第二个结论。
 - 长稳只跑了 8 分钟、每客户端约每 6 秒重生一次这一种负载。
+
+## 批 5：三进程联机验收、性能对照、现行文档
+
+### 改动
+
+| 文件 | 内容 |
+| --- | --- |
+| `scripts/physics/level-drill/main.go`（新） | 联机演练的 Go 客户端：以 `physics-slot-N` 经真实 Gate 登录，内容握手取关卡并核对摘要，只发输入、只看收到的包，在示例关卡上走“过检查点 A → 走出地面掉落 → 重生到检查点 A → 到终点结算”，逐项核对 |
+| `scripts/physics/verify-level.sh`（新） | 起 `physicsroom-local` 的 physicsroom / game / gate 三个进程（game 用 `export-level` 导出的示例关卡），跑演练客户端，再依次 SIGTERM gate、game、physicsroom；要求三个进程退出码都是 0、日志没有 WARN / ERROR。给一个 Unity 工程路径时客户端换成 Unity 批处理 Play Mode。NATS 与 etcd 地址由环境变量给，键前缀与 subject 前缀带本次运行的进程号 |
+| `client/physics-viewer/Editor/ViewerProject.cs` | `ViewerProject.VerifyLevel`：1 号槽、`UseGate`，自动走出地面，要求收到流程视图、自己被传送、`global/falls ≥ 1`、读出区域与出生点 |
+| `client/physics-viewer/CrowdViewer.cs`、`LevelViewer.cs` | 只读属性 `LevelHud`、`RegionMarkers`、`SpawnMarkers`，给上面的验收读 |
+| `docs/framework/PHYSICS-ROOM-SERVICE.md` | 新增“关卡流程”一节（调用链、关卡字段、事件与动作、业务动作、客户端、预算与停止、成本）；调用链、装配步骤、指标、UGC 一节里 schema / RP / ABI 的过时表述改正 |
+| `docs/framework/LEVEL-COMPONENT.md` | 写明物理房间是已有的真实宿主 |
+| `client/physics-viewer/README.md` | 新增“关卡流程：重生、检查点与 HUD”与批处理联机验收；RP2 → RP3；依赖里去掉 Redis |
+| `docs/maintenance/KNOWN-LIMITS.md` | “没有物理动作执行器，联合玩法未实现”换成已实现后的边界一条；UGC 一节的协议版本；遗留里加外部验收 |
+| `docs/maintenance/evidence/known-limits-remaining-20261114/external.md` | C-U3、C-L7 两行补关卡流程要验的内容与入口 |
+| `docs/maintenance/FEATURE-2026-11-19-physx-level-actions.md` | 状态改为已在分支上实施完 |
+| `CHANGELOG.md` | Unreleased 一条，含升级步骤 |
+| `docs/performance/benchmarks/physx-level-actions-20261119/` | 交替测量与长稳的脚本、原始数据、汇总、说明 |
+
+### 与方案文字的出入
+
+- **“从进入掉落区到收到 bit3 帧的 tick 数”不能直接量。** 进入掉落区到重生只隔一两个物理步，比下发间隔（2.5 步）还短，客户端通常收不到“球在区域里”的那一帧。演练客户端改用重生前最后一帧按抛体推算球心到达区域顶面的时刻，要求带标记的帧不早于它、也不晚于它 10 步以上。实测 1.6～3.0 步（8 次）。
+- **“Unity batchmode 编译 + EditMode 跑编解码金样”。** 编解码金样仍由 dotnet 跑（批 4 的 8 组）；Unity 工程没有装 Test Framework，没有 EditMode 用例。本批多做的是方案留给维护者的那一项里能自动化的部分：Unity 批处理 Play Mode 实际连上三进程（见下）。它不看画面。
+- **“每客户端约每 5s 掉落重生一次”。** 夹具里逻辑客户端的输入是缓慢转向的固定加速度，重生频率靠摆放会重生的区域来调：5 秒短测里约每 3.8 秒一次，长稳里约每 5.9 秒一次。
+- **“写进 EXTERNAL-VERIFICATION”。** 那个文件是服务端 E1～E28 的清单；Unity 与 Linux 物理的外部项在[外部清单](../known-limits-remaining-20261114/external.md)的 C-U3、C-L7，写在了那里，KNOWN-LIMITS 的遗留一节指过去。
+- **改前的二进制。** 方案写与 `ba158535` 对照。那个提交的原生库是 ABI 2，本机没有现成的：用同一份 PhysX 静态库与该提交的 `bridge.cpp` 另链了一个。
+- **批 5a** 整个是方案之外的，见上一节。
+
+### 验证
+
+三进程联机（私有 NATS `127.0.0.1:14377`、私有 etcd `127.0.0.1:14379`，Gate 用入口写死的 `127.0.0.1:19093`）：
+
+```
+ROOST_PHYSICS_TEST_NATS_URL=nats://127.0.0.1:14377 ROOST_PHYSICS_TEST_ETCD=127.0.0.1:14379 scripts/physics/verify-level.sh
+LEVEL_DRILL_PASS slot=1 body=1 frames=204 views=7 checkpoint_tick=267 left_ground_tick=381 last_seen_falling_tick=411 last_seen_y=-3.93
+  kill_entry_tick_estimate=411.4 respawn_frame_tick=414 ticks_from_entry_to_respawn_frame=2.6 finish_tick=516 phase=finishing result=clear falls=1 revision=13
+gate exit=0
+game exit=0
+physicsroom exit=0
+```
+
+- 定稿后连续 5 次、2 号槽 1 次、批 5a 之后在最终代码上再 2 次，共 8 次全部通过。每次约 18 秒。
+- 客户端核对的内容：鉴权应答；内容握手的 SHA-256；第一帧之前先收到流程视图，视图的版本号严格递增、是普通推送；帧是 Sync 推送；沿路线到达检查点 A；离开地面后 5 秒内恰好收到一帧带传送标记，这一帧里球在检查点 A 自己槽位的出生点 0.3m 以内、速度不超过 1.5 m/s，并且此时 `global/falls` 已经是 1；之后到终点，视图是 `finishing / clear`，结束时球在终点区域里，`falls` 仍是 1。
+- 服务端核对的内容：三个进程收到 SIGTERM 后都以 0 退出；三份日志里没有 `level=WARN`、`level=ERROR`、`panic:`。
+
+演练客户端自己有两处判定写错过，第一次运行时暴露，改的都是客户端的假设，服务端行为没有改：
+
+1. 要求带标记的那一帧速度不超过 0.5 m/s。实际是 0.6～1.2 m/s：传送时速度清零，但这一帧是传送之后 1～3 个物理步才采样的，重力与仍然生效的输入已经作用了几步。门槛改成 1.5（下落 4m 以上的速度超过 9 m/s，足以区分）。
+2. 等“球心低于 −4”再认为进入了掉落区。这一帧通常不存在（见上面的出入第一条），于是传送帧到的时候客户端还以为在走向边缘。改成离开地面就进入“下落”状态，并用抛体推算进入时刻。
+
+Unity 客户端（Unity 6000.3.12f1，`-batchmode -nographics`，工程由 `create-viewer.sh` 用本批源码新建）：
+
+```
+scripts/physics/verify-level.sh <Unity 工程>
+ROOST_VIEWER_TCP_PHYSICS_PASS frames=200 tick=525 bodies=5 bytes=43796 teleports=1 regions=4 spawns=6 travel=31.5 hud=[flow: running | stages: run#1 | revision 6 | global/falls=1]
+gate exit=0 / game exit=0 / physicsroom exit=0
+```
+
+3 次通过（定稿 1 次、变异恢复后 1 次、最终代码 1 次），每次约 30 秒。这关掉了批 4 留下的两项：`CrowdViewer` / `LevelViewer` 里的接线（传送标记交给回放与预测、收 `0x50485904`、HUD 文字、区域与出生点标记）在 Play Mode 里实际执行了；Unity 的 `JsonUtility` 读 schema 2 关卡（多出它不认识的字段）实际跑过。Unity 日志里仍有编辑器自己的 QuickSearch 异常（`SearchDatabase.EnumerateAll`，与工程无关，`client/physics-viewer/README.md` 早有记录）。这条验收只到“球掉下去、被重生、HUD 文字里 `falls=1`”，没有走到终点。
+
+性能对照与长稳：见[基准目录](../../../performance/benchmarks/physx-level-actions-20261119/README.md)。对照方案 6.3 的三条判定：
+
+| 方案的判定 | 结果 |
+| --- | --- |
+| 流程开相对关，物理均频下降不超过 1% | 达到：1 / 4 / 8 房间交替 3 轮的中位数差 −0.4% / 0% / 0% |
+| 流程开 8 分钟长稳，没有新的无界增长 | 批 5a 之前不成立（约 330 秒停房）；批 5a 之后达到：goroutine 不变、原生内存斜率每分钟不到 0.01MB、Go 堆与提交 p50 没有上升趋势，每房间重生约 1630 次 |
+| 流程关与改前（`ba158535`）对照不回退 | 达到：分配 +0.1%～+0.5%、载荷持平，在轮次波动以内；长稳的内存与 goroutine 与改前相同 |
+
+分配与载荷“如实报”：流程开时 Go 分配 +21%～+22%，每客户端下行载荷 +16%～+18.5%。**测量期间机器被别的会话占用**（1 分钟负载 7～32），Step / 提交 p99 与长稳里的物理均频带着噪声，不作结论；基准目录的说明逐条标了哪些结论受影响。
+
+最终代码上的其余检查：
+
+```
+gofmt -l gameplay service wiring scripts infra client                               # 无输出
+GOWORK=off go build ./...                                                           # 通过
+GOWORK=off go vet（带与不带 -tags physx）./gameplay/... ./service/physicsroom/... ./wiring/physicsroom/... ./scripts/... ./infra/physics/...   # 通过
+GOWORK=off CGO_ENABLED=1 go test -count=1 -race -tags physx ./gameplay/level ./wiring/physicsroom ./service/physicsroom   # ok（批 5a 提交前；之后这三个包没有再改）
+ROOST_PHYSICS_TEST_NATS_URL=nats://127.0.0.1:14377 scripts/physics/verify-service.sh   # 通过，55s
+dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj             # 8 组 PASS
+GOWORK=off go test -count=1 .                                                       # 根包门禁 ok
+GOWORK=off go test -count=1 <除 codegen/internal/roost 以外的全部包>                    # 171 个包 ok，1 个包失败一次，见下
+```
+
+全仓默认测试里失败的一个：`client/relay` 的 `TestTransferHandsTheHandoffToTheNewHost`（`unexpected game frames dropped during the migration`）。本分支没有改 `client/relay`（相对分支基线没有差异）；单独重跑 20 次、整包重跑 1 次都通过。当时机器在高负载下同时跑 170 多个包，判断是对调度敏感，**没有进一步定位**，不计为本分支的问题，也不算全仓通过。`codegen/internal/roost` 没有跑：它在分支基线上就有 3 个用例失败（批 4 一节开头）。
+
+### 变异（[mutations-batch5.txt](mutations-batch5.txt)）
+
+8 条，全部变红。
+
+三进程 + Go 客户端 5 条：房间执行器不执行重生（5 秒内没有重生）；示例进程不配置流程视图的消息号（第一帧之前没有视图）；不记检查点（传送帧里球在起点而不是检查点 A）；示例进程开房不带流程（没有视图）；房间里多打一条 WARN（演练本身通过，日志检查失败——证明日志检查是生效的）。
+
+三进程 + Unity 客户端 3 条：服务端不执行重生（`teleports=0`，60 秒超时）；Unity 工程里的 `ChunkReplica` 忽略 bit3（`teleports=0`）；观察器不收 `0x50485904`（`Unexpected crowd packet`）。后两条改的是 Unity 工程里的副本，证明验收执行的确实是 Unity 里编译的那份代码。恢复后再跑一次通过。
+
+### 没有验到的
+
+- **只在 macOS ARM64 上跑过。** Linux 上没有重建 ABI 3 的原生库，没有跑任何一条；归外部清单 C-L7。
+- **Unity 的画面与手感没有人看过。** 批处理验收用 `-nographics`，没有截图；重生时画面是否干净、重生后立刻移动的手感、HUD 是否好读、抓着或被抓着时被传送的表现、双客户端互相看、弱网、移动设备，都没有验；归 C-U3。
+- Unity 验收没有走到终点，结算时的 HUD 文字（`flow: finishing result=clear …`）没有在 Unity 里出现过；结算视图的协议内容只由 Go 客户端核对。
+- 三进程演练只有一个客户端在房间里；两个真实客户端同房（互相的传送标记、同一出生点错开位置）只有批 3 的进程内用例覆盖。
+- 性能只测了一种流程负载、一台被占用的机器；没有带 Gate / NATS / TCP 的流程成本，没有 20 分钟以上的长稳。
+- `client/relay` 那一次失败没有定位（见上）。
+- 没有重跑 `scripts/physics/verify-viewer.sh`（PhysX 与 Unity 的数值对照）：本轮没有改它覆盖的 RC1 路径与对照宿主。

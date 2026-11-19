@@ -103,10 +103,13 @@ namespace Roost.PhysicsViewer
             BuildMarkers(Encoding.UTF8.GetString(levelContent));
             levelReady=true;
         }
+        public int RegionMarkers { get; private set; }
+        public int SpawnMarkers { get; private set; }
         // 区域画成线框，出生点画成小球；都没有碰撞体，不影响本地预测的碰撞查询。
         void BuildMarkers(string level)
         {
             LevelMarkers.Parse(level,out var regions,out var spawns,out string fallback);
+            RegionMarkers=regions.Length;
             foreach(var region in regions)
             {
                 var line=new GameObject("Region "+region.Id).AddComponent<LineRenderer>();
@@ -122,6 +125,7 @@ namespace Roost.PhysicsViewer
                     var marker=Primitive(PrimitiveType.Sphere,"Spawn "+spawn.Id+" "+(i+1),spawn.Id==fallback?new Color(.2f,.9f,.3f,.45f):new Color(.3f,.6f,1f,.45f));
                     marker.position=U(spawn.Positions[i]);
                     marker.localScale=Vector3.one*.3f;
+                    SpawnMarkers++;
                 }
         }
         // 一笔画过长方体 12 条棱的顶点序列（个别棱走两遍），坐标是半边长的倍数。

@@ -1,0 +1,58 @@
+D1 执行器不执行重生
+    service/physicsroom/actions.go: RED exit=1
+    LEVEL_DRILL_FAIL no respawn within 5s of leaving the ground (tick 386, now 638, body [-1.5 -142 26])
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+D2 示例进程不配置流程视图的消息号
+    wiring/physicsroom/cmd/physicsroom-local/main.go: RED exit=1
+    LEVEL_DRILL_FAIL the first frame arrived before the level view of a running flow
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+D3 不记检查点（重生回起点）
+    service/physicsroom/actions.go: RED exit=1
+    LEVEL_DRILL_FAIL teleport frame at tick 413: body {InputGeneration:0 InputSequence:0 InputActive:false Teleports:0 ID:1 Position:[0 0.6 -3] Rotation:[0 0 0 1] Velocity:[0.01 -0.2 -0.11] AngularVelocity:[0 0 0] Sleeping:false}, want it just placed at [-0.6 0.6 8]
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+D4 示例进程开房不带流程
+    wiring/physicsroom/cmd/physicsroom-local/main.go: RED exit=1
+    LEVEL_DRILL_FAIL the first frame arrived before the level view of a running flow
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+D5 房间里出现一条 WARN 日志（检验日志检查本身）
+    service/physicsroom/actions.go: RED exit=1
+    LEVEL_DRILL_PASS slot=1 body=1 frames=197 views=7 checkpoint_tick=268 left_ground_tick=383 last_seen_falling_tick=412 last_seen_y=-3.74 kill_entry_tick_estimate=413.4 respawn_frame_tick=415 ticks_from_entry_to_respawn_frame=1.6 finish_tick=517 phase=finishing result=clear falls=1 revision=13
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+    WARN / ERROR in the service logs:
+    $WORK/wt-physx/artifacts/physics-level-drill/20261119-120639/physicsroom.log:16:time=2026-11-19T12:07:03.195222+08:00 level=WARN goId=69 frame=0 server_time_ms=1795061223195 msg="drill contro
+
+===== Unity 客户端（scripts/physics/verify-level.sh <Unity 工程>）=====
+U1 服务端执行器不执行重生
+    RED exit=1
+    ROOST_VIEWER_TCP_PHYSICS_FAIL Unity verification timeout frames=1100 tick=2929 bodies=1 bytes=147536 travel=706.49 rise=2.39 jumps=2 teleports=0 regions=4 spawns=6 hud=[flow: running | stages: run#1 | revision 9 | global/falls=2]
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+U2 Unity 工程里的副本忽略 bit3
+    RED exit=1
+    ROOST_VIEWER_TCP_PHYSICS_FAIL Unity verification timeout frames=880 tick=2751 bodies=6 bytes=177636 travel=31.15 rise=2.43 jumps=2 teleports=0 regions=4 spawns=6 hud=[flow: running | stages: run#1 | revision 9 | global/falls=2]
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+U3 Unity 工程里的观察器不收流程视图消息
+    RED exit=1
+    ROOST_VIEWER_TCP_PHYSICS_FAIL Unexpected crowd packet
+    gate exit=0
+    game exit=0
+    physicsroom exit=0
+恢复之后
+    exit=0
+    ROOST_VIEWER_TCP_PHYSICS_PASS frames=200 tick=546 bodies=5 bytes=43690 teleports=1 regions=4 spawns=6 travel=31.9 hud=[flow: running | stages: run#1 | revision 6 | global/falls=1]
+    gate exit=0
+    game exit=0
+    physicsroom exit=0

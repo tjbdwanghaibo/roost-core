@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+- **物理房间可以带关卡流程：区域触发、检查点、掉落重生、终点与流程视图**（2026-11-19，分支 `feat/physx-level-actions`，[方案](docs/maintenance/FEATURE-2026-11-19-physx-level-actions.md)、[证据](docs/maintenance/evidence/physx-level-actions-20261119/README.md)、[手册](docs/framework/PHYSICS-ROOM-SERVICE.md#关卡流程区域检查点重生与流程视图2026-11-19)；关闭 KNOWN-LIMITS“没有物理动作执行器，联合玩法未实现”）：
+  - 关卡文件（`physics.Level`）新增区域、出生点、缺省出生点与流程（`gameplay/level` 的定义，时间用物理 Tick）。房间在服务器上按刚体中心点判定区域进出，流程按规则请求动作：`physics_teleport` / `physics_checkpoint` / `physics_respawn` 由房间在下一个 Tick 的 Step 之前执行，其余动作交给业务登记的 `ActionHandler`（独立 goroutine、按动作 ID 幂等、结果未知时同 ID 重试）。物理帧、流程状态与动作回执在同一笔 Nest undo 事务里提交。
+  - 客户端：帧里对象的状态字节 bit3 标记“这一帧位置不连续”，回放直接放到新位置、本地预测不拿旧输入外推；流程的公开状态（阶段、结果、公开变量）用新消息推给房间里每个人。C# 观察器加了解码、HUD 与区域 / 出生点标记。
+  - `LevelComponent.ForgetSettledActions()`（新）：动作账本只留未完成的动作。缺省不变（完成的也留着、计入 1024 的上限）；物理房间打开了它——长稳测量发现不打开时重生累计约 1000 次后房间停止、提交耗时随累计次数上涨。
+  - 验收入口：`scripts/physics/verify-level.sh`（真实三进程 + Go 客户端走完“检查点 → 掉落 → 重生 → 终点”，可选换成 Unity 批处理客户端）；`scripts/physics/verify-service.sh` 多一条真实 Gate 的流程用例；压测夹具多一个“流程开”场景（`ROOST_PHYSICS_SOAK_FLOW=1`）。
+  - 成本（macOS ARM64，机关场景 1 / 4 / 8 房间 × 20 逻辑客户端，32 个区域、每客户端约每 4 秒重生一次，与流程关交替 3 轮）：物理均频不变；Go 分配约 +21%、每客户端下行载荷约 +17%。不带流程的房间与改前（`ba158535`）相比没有回退。
+  - **升级（不兼容，三处一起升）**：native ABI 2 → 3（新增 `rp_set_pose`，要用 `scripts/physics/build-native.sh` 重建原生库）；Level schema 1 → 2（关卡文件把 `Version` 改成 2 重新发布）；房间帧头 RP2 → RP3（客户端只认 RP3，Unity 工程用 `scripts/physics/create-viewer.sh` 同步全部源码）。`service/physicsroom` 的 `Commit` 签名改为 `func(ctx, Ref, Tick) (Settled, error)`：自己写提交 handler 的装配改用 `physicsroom.AcceptTick` 并把它的结果原样返回；自己建 `LevelComponent` 的要调用 `ForgetSettledActions()`。不用流程的房间除了这些升级不需要别的改动。
+  - 没有验到的：只在 macOS ARM64 上跑过，Linux 未跑；Unity 侧是批处理 Play Mode 的接线验收，没有人看过画面与手感，没有双客户端与弱网；性能测量期间机器被别的会话占用，频率类数字的噪声见基准目录的说明。
+  - 顺带修复：`scripts/physics/create-viewer.sh` 漏复制 `GateTransport.cs`，新建的 Unity 工程编译不过（`CS0246 IGateTransport`）。
 - **文档：第二类 M 系列正式测量第一批（S1 微基准、S2 心跳投递）**（2026-11-19，KNOWN-LIMITS M-1 / M-2 / M-9 / M-18）：只有测量与记录，代码不变。M-1：回调 10µs 时时间片 50µs 比现缺省 100µs 业务 p99 低约 32%、CPU 与迟到不变，组 2 / 4 无差别，是否改缺省待维护者定；热点冲突转单目标 0.004%～0.007% / 拍，该项关闭。M-2 复测一致。M-9：上限内约 0.27µs / pair 更新、1.2KB / pair 常驻；计划命令的 2000 人档撞缺省每 subject 订阅者上限 1024，被拒 pair 每轮重说使 Flush 约 960ms，记为尚未确认的疑似问题。M-18：组同步成本只随成员总数线性，约 0.6µs / 成员·轮。[证据](docs/performance/benchmarks/m-series-s1-s2-20261119/README.md)
 - **测试：C++ `native_weak` 的 `send_stall` 夹具不再与客户端发送期限赛跑**（2026-11-19，KNOWN-LIMITS E-2）：`client/cpp/tests/weak.py` 的服务端停读后一直持有连接到客户端进程结束，不再固定 0.8s 后关闭。原来客户端从就绪到发出 16 MiB 请求若被调度拖过约 0.5s，就会报 `send failed`（EPIPE）而不是发送超时；注入延迟可确定性复现，修后 0～2000ms 全绿。客户端代码不变，只改测试。[证据](docs/maintenance/evidence/category3-batch3-20261119/README.md)
 

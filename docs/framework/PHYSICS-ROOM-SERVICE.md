@@ -8,12 +8,14 @@
 已认证的 Game 入口
   → 固定 owner SID 的 Rooms RPC（Core NATS / MessagePack）
   → 房间的输入邮箱 → 独立 World，物理 50Hz
-  → NestCommit → 业务房间 Entity Guard → StateDAO.Accept
+  → NestCommit → 业务房间 Entity Guard → AcceptTick（StateDAO.Accept；有流程时同一笔里处理事实与回执）
   → 已提交快照 → XYZ AOI → Chunk Plan
   → Game Relay（20Hz Poll / ack）→ PushBound → Gate → TCP 客户端
 ```
 
 领域实现与生成传输保持一个包，按 types/service/client/server 分文件；接线单独放 wiring，不新建额外 manager 包。RPC 请求/响应与 handler 从 `Rooms` 接口生成。普通服务的生成装配使用随机实例客户端，因此此处装配显式固定 owner；不会手工修改生成的协议文件。
+
+房间可以带一份关卡流程（区域触发、检查点、重生、终点、公开变量），见[关卡流程](#关卡流程区域检查点重生与流程视图2026-11-19)；不带流程的房间行为与成本不变。
 
 本阶段房间为瞬态状态，进程退出意味着房间结束。这是实时物理权威的正式内存状态，不是模拟持久存储的内存替身。没有经济事务、掉线恢复快照、跨机物理迁移或接管。基础 SDK 的 Foundation/PxPhysics 共享，各 Scene 独立；每房一个 native worker，上限由 MaxRooms 控制。
 
@@ -32,8 +34,8 @@
 ## 装配
 
 1. 编译 native 库，再用 `-tags physx` 构建服务；未启用后端时 `domain.New` 明确失败，不发布一个不能创建世界的服务。
-2. 创建业务 Nest 房间 Entity/Getters，登记处理 `wiring/physicsroom.FrameCommit` 的 handler。检查 Room Ref，调用 Entity 的 `gameplay/physics.StateDAO.Accept`；handler 用 `RollbackUndo`、`DurabilityMemory`。创建物理房间前，该目标必须已经加载。
-3. `commit := physicsroom.NestCommit(engine, handlerName, resolveRoomEntityID)`。等待 RequestSettled 在房间执行器上，物理模拟不占 Nest short/long/io worker。提交失败停止该房间，不继续推进不可回滚的原生状态。
+2. 创建业务 Nest 房间 Entity/Getters，登记处理 `wiring/physicsroom.FrameCommit` 的 handler。检查 Room Ref，调用 `physicsroom.AcceptTick(state, flow, ref, tick)`（它调用 Entity 的 `gameplay/physics.StateDAO.Accept`，有流程时在同一笔里处理事实与回执），把它返回的 `domain.Settled` 原样作为 handler 的结果；没有流程的房间 `flow` 传 nil。handler 用 `RollbackUndo`、`DurabilityMemory`。创建物理房间前，该目标必须已经加载。
+3. `commit := physicsroom.NestCommit(engine, handlerName, resolveRoomEntityID)`。`domain.Commit` 的签名是 `func(ctx, Ref, Tick) (Settled, error)`（2026-11-19 起；原来是只带帧、只返回 error）。等待 RequestSettled 在房间执行器上，物理模拟不占 Nest short/long/io worker。提交失败停止该房间，不继续推进不可回滚的原生状态。
 4. `cfg := domain.DefaultConfig(commit)`，按部署显式调整容量；用 `physicsroom.NewMod(cfg, nestModName)` 注册能力，依赖名保证停房先于 Nest 停止。没有自己的房间 Entity 时改用 `physicsroom.NewEntityHostMod()`：按 `physicsroom.*` 配置（`entity_kind` / `entity_category` 必填，容量、TTL、AOI 有缺省）建下文的 EntityHost 与房间 Service，范围只在 `domain.New` 检查一次，Provide 时带 `physicsroom config:` 前缀报出；停止时先排空房间，成功后才关闭 Host。两者提供同一能力名，一个进程只装一个。`physicsroom.NewServer()` 实现 app.Service，可与现有 NATS Mod 装入独立进程。进程入口与 SID 由业务部署仓决定。
 5. Game 侧用 `domain.NewOwnerClient(bus, ownerSID, timeout)`，或 `physicsroom.NewClientMod(ownerSID, timeout)`（它依赖 NATS Mod；2026-10-26 前写成能力名 `bus`，经 App 装配会在启动时报 unknown mod dependency，现由 `TestEveryModDependencyNamesAKitMod` 覆盖）；先 Describe 并保留进程代际到 Create；所有房间后续调用固定同一 SID。不要直接使用通用生成的 NewBusClient/NewDiscovered 路由。多个 owner 时，由业务维护 Room Ref → owner SID 的映射。
 6. Game 完成 Join 后，每个 Member 仅运行一个 `physicsroom.Relay(ctx, client, gameIngress, binding, member, messageID)`。输入由认证处理器取服务端保存的 Member，调用 Submit；不信任客户端传来的成员令牌。这一步的正式接线是 `physicsroom.NewPlayerIngress(PlayerIngressConfig{InputMessageID, FrameMessageID, Seat})`：它同时是 Mod（依赖 GameIngressMod 与房间能力，Provide 时接上，停止时先于二者排空），把 `Dispatch` / `Ready` / `OnActive` / `OnClosed` 交给 `wiring/gate.NewGameIngressMod`。连接的首个输入调用业务的 `Seat(binding)` 选房选刚体并 Join，为该成员启动唯一 Relay；之后的输入 Submit；连接关闭取消 Relay（Relay 负责 Leave）；Relay 因出站或 RPC 错误结束时关闭连接。输入载荷是 Protobuf `RoomInput`（`client/physics-viewer/room_input.proto`），解码拒绝重复、未知字段与非 0/1 的 jump；其他消息号返回 ErrRequestInvalid，业务有自己的协议分发时把输入消息号转给它。
@@ -54,7 +56,7 @@ Relay 在可靠出站准入成功后，于下一次 Poll 确认帧；此 ack 不
 
 默认值是准入限制，不是容量承诺。建房按最坏每非静态对象 57 字节加 56 字节头检查整帧预算，保证分散到不同 Chunk 也不越界；待确认载荷的预算基数为 MaxRooms×MaxPlayers×MaxFrameBytes；实际内存还包括编码计划与其载荷副本、已确认/待确认的视图账本、世界、快照和临时分配，不能把该乘积当进程内存上界。NATS bus 自身 WorkerNum/QueueCap、Gate 出站预算需要部署方配置。
 
-Shutdown 先封闭服务准入，取消所有房间，然后等待各自 done。若业务 Commit 不返回，Shutdown 超时必须保留依赖和 native 资源；Mod 提供 StopWithContext，供 app 执行这个契约。指标通过 servicemetrics 报 create/input/join、create 重放/容量拒绝、成员过期、房间失败与房间深度，不使用 RoomID/PlayerID 标签。
+Shutdown 先封闭服务准入，取消所有房间，然后等待各自 done。若业务 Commit 不返回，Shutdown 超时必须保留依赖和 native 资源；Mod 提供 StopWithContext，供 app 执行这个契约。指标通过 servicemetrics 报 create/input/join、create 重放/容量拒绝、成员过期、房间失败与房间深度，不使用 RoomID/PlayerID 标签。带流程的房间另报：流程出错停房 `level_failed`（与 `room_failed` 分开）、动作 accepted / refused（含 `retry`）、`receipt_stale`、`action_unsettled`、在途业务动作数 `actions_inflight`。
 
 ## 验证与边界
 
@@ -151,19 +153,19 @@ GoLand：`.run/` 下 Physics Service / Physics Game / Physics Gate 三个配置�
 
 ## Unity UGC 多人闯关：运动、抓取、关卡与预测
 
-本节是当前扩展契约。业务入口仍负责认证、开房权限、关卡发布审核、检查点、终点、淘汰及永久奖励；物理只产生权威运动事实，不能把客户端宣称通关当成奖励依据。
+本节是当前扩展契约。业务入口仍负责认证、开房权限、关卡发布审核、淘汰及永久奖励；物理只产生权威运动事实，不能把客户端宣称通关当成奖励依据。检查点、掉落重生与到达终点可以写进关卡自带的流程，由房间在服务器上判定和执行，见[关卡流程](#关卡流程区域检查点重生与流程视图2026-11-19)；发奖这类业务动作由流程请求、业务登记的执行者完成。
 
 | 玩法 | 框架接口及接法 | 权威边界 |
 | --- | --- | --- |
 | 转杆、升降台、往复平台 | `physx.Body.Motion=Kinematic`，`Spec.Motions` 填 `physics.MotionTrack`；每 20ms 由服务器 tick 求姿态，`setKinematicTarget` 让碰撞求解器处理接触 | 客户端不能指定目标位置；网络 AOI 隐藏对象也不会从物理世界移除 |
 | 摆锤、转轴马达 | 动态 Box + `Spec.Joints` 中的 `physx.Hinge`；锚点局部 X 为旋转轴，B=0 表示世界锚点，`MotorSpeed` 为 rad/s，`MotorForce` 为驱动力上限 | 关节来自可信建房配置，不是玩家远程创建接口 |
 | 按住抓取／松手 | `Input.GrabTarget`，0 松手；每控制者最多一条 Distance 弹簧，当前实现中心距离 ≤2.5m、绳长 1.2m、刚度 100、阻尼 10、断裂力 300 | 服务器排除自身、静态和运动学目标；依据上一已提交帧检查。输入过期、距离越界、Leave、成员过期释放；无视线遮挡检查，规则可在业务入口继续收紧 |
-| 玩家自建关卡 | `physics.Level` → `DecodeLevel` / `Validate` → `Content` → SHA-256 → `Spec{Bodies,Motions,Joints}` | 关卡只允许已知字段与基础几何，不执行用户代码；房间创建后配置固定，修改版本需新开房 |
+| 玩家自建关卡 | `physics.Level` → `DecodeLevel` / `Validate` → `Level.Program(业务能力表)` → `Content` → SHA-256 → `Spec{Bodies,Motions,Joints,Players,Regions,Spawns,DefaultSpawn,Flow}` | 关卡只允许已知字段与基础几何，不执行用户代码；流程是声明式规则，只能用登记过的事件与动作；房间创建后配置固定，修改版本需新开房 |
 | Unity 本地预测／纠偏 | `InputPrediction.Record` 保存输入，`Reconcile` 用已提交快照中的实际采样序列重置基线并重放未确认输入；Unity 适配器做胶囊扫掠与地面检测 | RPC 接收响应只返回成员 `InputGeneration`。只有快照里相同代际的 `InputSequence` 才确认模拟；服务器不接收预测后的坐标 |
 
 `MotionDefault` 保持原调用方语义：Box 静态，其余动态；新关卡可显式指定 Static/Dynamic/Kinematic。快照及预算均包含动态和运动学对象，控制成员只能绑定动态对象。通用 World 提供 `AddJoint` / `RemoveJoint`，与 Step 共用锁；Room 对它们的调用只发生在物理执行器上。最多 128 个配置运动轨迹和 128 个配置关节；抓取关节 ID 使用高位保留区，房间刚体及配置关节 ID 必须小于 2^63。
 
-Level schema 1 要求非空 Name、非零 Revision、最多 256 个刚体、20 个控制槽、256KiB 精确发布字节。槽到 Body 的映射由认证后的 Game 使用 `Players` 决定；Unity 不再固定要求 71 个对象。发布验证还限制坐标绝对值 ≤1000m、形状尺寸 ≤100m、有效半径/Box 半厚度 ≥0.05m、非静态质量 0.01～10000；这些是拒绝异常配置的预算，不能替代关卡试玩和性能测试。几何仅 Box/Capsule/Sphere，未含网格碰撞烘焙、脚本沙盒、资源商店、CDN、关卡在线编辑或运行期刚体增删。
+Level schema 2（2026-11-19 起只认 2，schema 1 的文件要把 `Version` 改成 2 重新发布）要求非空 Name、非零 Revision、最多 256 个刚体、20 个控制槽、256KiB 精确发布字节；可选的区域、出生点与流程见[关卡流程](#关卡流程区域检查点重生与流程视图2026-11-19)。槽到 Body 的映射由认证后的 Game 使用 `Players` 决定；Unity 不再固定要求 71 个对象。发布验证还限制坐标绝对值 ≤1000m、形状尺寸 ≤100m、有效半径/Box 半厚度 ≥0.05m、非静态质量 0.01～10000；这些是拒绝异常配置的预算，不能替代关卡试玩和性能测试。几何仅 Box/Capsule/Sphere，未含网格碰撞烘焙、脚本沙盒、资源商店、CDN、关卡在线编辑或运行期刚体增删。
 
 跳跃修复：基线 ce49b3c3 在慢 Commit 期间持续收到移动时，会用移动时间续期 `jumpPending`，使已过期跳跃迟到执行。现在 `jumpAt` 独立记录跳跃期限，Submit 和消费点都校验；相同序号重试不重新触发、不刷新期限。默认测试用虚拟时钟验证邮箱；native 测试实际阻塞提交后确认不发生迟到起跳。
 
@@ -171,9 +173,10 @@ Level schema 1 要求非空 Name、非零 Revision、最多 256 个刚体、20 �
 
 - 成员每次重新 Join 都分配新的 `InputGeneration`。旧连接的快照可能短暂仍在视图中，但客户端不拿旧代际的序列确认新输入。
 - 每帧在输入采样后记下 Sequence，只有 PhysX Step 和 Nest 提交成功后才发布；`InputActive=false` 表示该帧没有继续施加该成员输入。输入邮箱仍只保留最新状态，不承诺逐条模拟每条收到的输入。
-- Room 使用 RP2 私有帧头与 RC2 字段增量；完整量化对象 34 字节，输入确认只给当前接收成员。Comparison 对照（`scripts/physics/comparison-host`）仍使用 RC1、70 字节无损对象，不作为新 Room 带宽测量入口。
+- Room 使用 RP3 私有帧头（2026-11-19 起；布局与 RP2 相同，状态字节多了 bit3 传送标记，客户端只认 RP3）与 RC2 字段增量；完整量化对象 34 字节，输入确认只给当前接收成员。Comparison 对照（`scripts/physics/comparison-host`）仍使用 RC1、70 字节无损对象，不作为新 Room 带宽测量入口。
 
 - Native ABI 升到 2，`rp_add_pose` / command 布局变化；必须先停旧服务、重建 native 库和 Go 程序、同步更新 Unity 的全部 viewer 源码及采集脚本，再启动。未部署阶段不兼容混跑旧版本；本功能没有持久房间数据迁移。
+- 2026-11-19：Native ABI 升到 3（新增 `rp_set_pose`，结构体布局未变；Go 侧只认 ABI 3）、Level schema 2、RP3 三处一起升级，都不兼容旧版本。升级步骤同上：停旧服务，`scripts/physics/build-native.sh` 重建原生库，重建 Go 程序，重新发布关卡，Unity 工程用 `scripts/physics/create-viewer.sh` 同步全部 viewer 源码。旧客户端连新服务会在第一帧报帧格式错误。
 
 ### 已验证与仍需验证
 
@@ -412,3 +415,97 @@ GOWORK=off go test -tags physx -c -o /tmp/soak.test ./wiring/physicsroom
 docs/performance/benchmarks/physicsroom-soak-20261029/run.sh /tmp/soak.test /tmp/soak20 20   # 约 20 分钟
 python3 docs/performance/benchmarks/physicsroom-soak-20261029/summ.py /tmp/soak20/go.tsv /tmp/soak20/proc.tsv 300
 ```
+
+## 关卡流程：区域、检查点、重生与流程视图（2026-11-19）
+
+房间可以带一份 [LevelComponent](LEVEL-COMPONENT.md) 流程：关卡声明区域与出生点，房间在服务器上判定“谁进了哪个区域”，流程按规则请求动作，房间执行其中的物理动作（传送、记检查点、重生），业务登记的执行者执行其余动作（发奖等），公开状态推给客户端。方案与逐批证据：[FEATURE-2026-11-19-physx-level-actions](../maintenance/FEATURE-2026-11-19-physx-level-actions.md)、[证据](../maintenance/evidence/physx-level-actions-20261119/README.md)。
+
+### 调用链
+
+```
+每个物理 Tick（房间执行器上，50Hz）
+  → 执行上一笔提交交回的物理动作（World.SetPose）→ Step
+  → 区域判定（上一已提交帧 → 本帧）得到进入 / 离开事实，加上成员加入 / 离开事实
+  → Commit(Tick{帧, 事实, 回执})：Nest undo 事务里 StateDAO.Accept + LevelComponent（回执 → 事实 → 定时器）
+  → 提交成功后才采纳 Settled{待执行动作, 公开视图}
+       物理动作：排到下一个 Tick 的 Step 之前
+       业务动作：独立 goroutine 调 ActionHandler.Execute，结果作为之后某个 Tick 的回执
+       公开视图：随下一次 Poll 交付，Relay 推在同一次交付的帧之前
+```
+
+物理帧、流程状态、回执三者在同一笔事务里生效或一起撤回；提交失败时房间停止，不会出现“帧已提交但流程没动”或反过来。动作只在提交成功之后才执行，所以从触发（比如掉进区域）到效果（重生后的位置出现在已提交帧里）隔一个 Tick；三进程实测客户端从球心进入掉落区到收到带传送标记的帧是 1.6～3.0 个物理步（20Hz 下发，一帧 2.5 步）。
+
+### 关卡里写什么
+
+`physics.Level`（schema 2）新增四个可选字段，房间的 `Spec` 有同名字段：
+
+| 字段 | 内容 | 限制 |
+| --- | --- | --- |
+| `Regions` | 有向包围盒：`ID`、`Center`、`HalfExtents`、`Rotation`（零值按单位旋转）、`Watch`（只看这些刚体；空 = 全部 `Players`） | 最多 64 个；半尺寸 0.05～100m |
+| `Spawns` | 命名出生点：`ID`、`Positions`（按玩家在 `Players` 里的下标取，超出则回绕）、可选朝向 | 最多 64 个，每个最多 20 个位置 |
+| `DefaultSpawn` | 没有记过检查点时重生到哪里 | 有出生点就必须写，没有就不能写 |
+| `Flow` | `gameplay/level.Definition` 的 JSON，`TimeDomain` 必须是 `tick`（时间就是物理 Tick 序号） | 256KiB |
+
+ID 是 1～64 位的字母、数字、`_`、`-`。区域按刚体**中心点**判定：进入看区域本身，离开要走出外扩 0.25m 的范围；两帧都在外面但连线穿过区域时，同一帧给进入、离开各一条；被传送的刚体只按终点判定。
+
+流程能用的事件与动作（`gameplay/physics/flow.go`）：
+
+| 名字 | 参数 | 含义 |
+| --- | --- | --- |
+| 事件 `region.enter` / `region.leave` | `actor:int`、`region:string` | 刚体进入 / 离开区域 |
+| 事件 `member.join` / `member.leave` | `actor:int` | 成员加入 / 离开（含超时回收），`actor` 是它控制的刚体 |
+| 动作 `physics_teleport` | `actor:int`、`spawn:string` | 放到命名出生点，线速度与角速度清零 |
+| 动作 `physics_checkpoint` | `actor:int`、`spawn:string` | 只记检查点，不移动 |
+| 动作 `physics_respawn` | `actor:int` | 回到最近记下的检查点，没有就用 `DefaultSpawn` |
+
+`Level.Program(业务能力表)`（或 `physics.CompileFlow`）把这些声明与业务能力合并后编译流程，并核对流程里写死的出生点名与区域名；`DecodeLevel` / `Validate` 只查流程能否解码与时间域。建房时 `Create` 会再编译一次，编译不过拒绝建房。内置示例 `physics.ObstacleLevel()`（`physicsroom-local export-level` 导出）带一个掉落区、两个检查点、一个终点、三个出生点和公开变量 `falls`，可以照着改。
+
+动作的限制：传送的目标必须是动态刚体，被 `Spec.Joints` 连着的刚体不能传送；记检查点与重生只对 `Spec.Players` 里的玩家刚体有效；出生点不存在同样不行。不满足时动作以失败回执结束（流程可以用 `action.done` 的 `success` 分支处理），房间不停。被传送的刚体如果正抓着别人或被抓着，弹簧在同一个 Tick 的 Step 之前释放，下一帧提交前不会按旧位置重新抓上；传送前按下还没生效的跳跃作废。
+
+### 业务动作
+
+流程里请求的、不是上面三个物理动作的动作，交给 `Config.Actions`（`ActionHandler`）：`Registry()` 声明业务动作的名字与参数类型，`Execute(ctx, room, effect)` 执行并给出成败。`EntityHostMod.WithActions(handler)` 登记。
+
+- `Execute` 在独立的 goroutine 上调用，可以阻塞，不影响物理频率；每个房间同时在途最多 `ActionConcurrency` 个（缺省 16），每次调用期限 `ActionTimeout`（缺省 5s）。
+- **必须按 `effect.ID` 幂等。** 超时或返回错误表示结果未知：房间不给失败回执，带着同一个 ID 退避重试，直到拿到明确结果或房间结束。ID 的形式是 `<实例>:<Epoch>:<序号>`，同一个房间里不复用。
+- 房间结束时取消并等待在途的调用；还没有结果的动作记 `action_unsettled`，由业务按 ID 对账。
+- 本轮没有把业务事件投给流程的入口：`Registry()` 里声明的业务事件能通过编译，但不会被触发。
+
+### 客户端看到什么
+
+- **传送标记。** 帧里每个对象的状态字节 bit3（`ViewTeleported`）表示“这一帧相对上一帧位置不连续”。只在传送后发给该接收方的第一帧里出现；远档 5Hz 的接收方即使错过传送那一 Tick，下一次收到这个对象时也带标记。客户端收到标记就直接放到新位置，不插值；自己的刚体被传送后，本地预测丢弃已确认的历史、不拿旧输入外推，之后的输入照常重放（`SparsePosePlayback.Sample`、`InputPrediction.Reconcile` 的不连续参数）。
+- **流程视图。** `PlayerIngressConfig.LevelMessageID` 非零时，Relay 把流程的公开状态（`RoomLevelView`，Protobuf，定义在 `client/physics-viewer/room_input.proto`，上限 16KiB）作为普通推送发给房间里的每个成员：加入后的第一帧之前一定先有一份，之后每次流程状态变化（版本号 `Revision` 递增）推一份，与帧走同一条确认与重发路径。内容是阶段（`waiting / preparing / running / finishing / closing / closed`）、结果、活动的阶段与公开变量；变量的键带作用域前缀（`global/falls`）。私有变量、动作账本不下发。
+- 示例进程的消息号：帧 `0x50485901`、输入 `0x50485902`、内容握手 `0x50485903`、流程视图 `0x50485904`。
+
+### 预算与停止
+
+| 项 | 值 |
+| --- | --- |
+| 每笔提交交给流程的事实 | 最多 64 条，超出的按序留到之后的 Tick，不丢 |
+| 事实积压 | 4096 条仍交不完时房间停止（`level_failed`） |
+| 流程自身的预算 | `gameplay/level` 的缺省：每次操作 512 步、128 个定时器、1024 个**同时未完成的**动作、64 个来源 |
+| 流程视图 | 编码后 16KiB |
+
+流程出错（预算、冲突、未声明的事件）时提交返回带 `ErrLevel`（640107）的错误，房间按提交失败的既有契约停止，指标记 `level_failed`。流程走到终局（`finish`）之后房间继续模拟，事实不再投递；何时销毁房间由业务决定。
+
+**动作账本只留未完成的。** `LevelComponent` 缺省把完成了的动作也留在账本里并计入 1024 的上限；房间给自己的流程组件打开了 `ForgetSettledActions()`（见 [LEVEL-COMPONENT §预算与验证范围](LEVEL-COMPONENT.md#预算与验证范围)），否则重生累计 1024 次之后房间就会停，提交耗时也随累计次数上涨（批 5 的长稳实测到这两件事，[证据 §批 5a](../maintenance/evidence/physx-level-actions-20261119/README.md)）。自己建房间 Entity、自己建 `LevelComponent` 的装配也要调用它。
+
+流程是瞬态的，跟房间一起结束：物理世界不可恢复，流程落库后也对不上世界。
+
+### 流程的成本（2026-11-19，macOS ARM64）
+
+同机、同一夹具（`TestMultiRoomReplicationLoad`，机关场景每房 83 个非静态刚体、20 个逻辑客户端，不含 Gate / NATS / TCP），改前（main `ba158535`）、流程关、流程开交替 3 轮。“流程开”是 32 个区域铺满围场，每个客户端约每 3.8 秒重生一次、每次重生给全房间推一次流程视图。原始数据与全部三档：[physx-level-actions-20261119](../performance/benchmarks/physx-level-actions-20261119/README.md)。
+
+| 8 房间 × 20 客户端（中位数） | 改前 | 流程关 | 流程开 |
+| --- | ---: | ---: | ---: |
+| 物理均频 Hz | 49.82 | 50.00 | 50.00 |
+| 交付 Hz / 客户端 | 19.79 | 19.76 | 19.80 |
+| Go 分配 MB/s | 23.63 | 23.70 | 28.72 |
+| 载荷 KB/s / 客户端 | 5.99 | 5.99 | 6.96 |
+| 提交 p50 ms | — | 0.025 | 0.038 |
+
+- 不带流程的房间不付成本：与改前相比分配 +0.1%～+0.5%、载荷持平，在轮次波动以内（1 / 4 / 8 房间三档）。
+- 带流程：物理均频不变（三档的中位数差 −0.4%～0%）；Go 分配 +21%～+22%；每客户端下行载荷 +16%～+18.5%，多出来的是传送后的强制刷新（每次传送每个接收方两帧）。重生越少，这两项越接近流程关。
+- 8 分钟长稳（8 房间 × 20，流程开，每房间累计重生约 1630 次）：goroutine 数不变，PhysX 原生内存与改前、流程关一样在 13.8～13.9MB、斜率每分钟不到 0.01MB，Go 堆没有上升趋势，提交 p50 没有随时间的趋势。
+- 测量时这台机器同时被别的会话占用（1 分钟负载 7～32）。Step p99、提交 p99 与长稳里的物理均频（三次都在 48.9～49.4Hz）带着这个噪声，不作为流程成本的结论，也不是容量数据。只测了 macOS ARM64；Linux 归外部清单 C-L7。
+

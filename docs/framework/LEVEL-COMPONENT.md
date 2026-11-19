@@ -1,6 +1,6 @@
 # 通用 LevelComponent：配置驱动的关卡阶段
 
-`gameplay/level` 是实体拥有的通用关卡组件，供 UGC 闯关、合作 PvE 等玩法复用。它提供固定版本定义、多活动阶段、事件／条件／动作、作用域变量、逻辑定时器和外部动作回执。区域资格、物理重生、刷怪与永久奖励由业务宿主提供，框架不写专用检查点或排名状态机。
+`gameplay/level` 是实体拥有的通用关卡组件，供 UGC 闯关、合作 PvE 等玩法复用。它提供固定版本定义、多活动阶段、事件／条件／动作、作用域变量、逻辑定时器和外部动作回执。区域资格、物理重生、刷怪与永久奖励由宿主提供，组件自己不写专用检查点或排名状态机。仓库里已有一个真实宿主：物理房间把区域进出变成事实、执行传送 / 检查点 / 重生（[PHYSICS-ROOM-SERVICE §关卡流程](PHYSICS-ROOM-SERVICE.md#关卡流程区域检查点重生与流程视图2026-11-19)）。
 
 ## 从 ssr 学什么，如何映射到 core
 
@@ -79,7 +79,7 @@ flow  *level.LevelComponent  `comp:"CompTypeLevel"`
 
 **合作 PvE 波次示例**：stage.start 请求 spawn_wave 并设置超时；enemy.dead 累计本阶段 kills；第一波完成后重入 wave，清除阶段计数而保留全局 wave；第二波完成生成 settle 请求。超时进入失败终局，旧波次回执不能影响新波次。victory 规则放在 next 规则前，避免同一事件中 wave 被更新后误判胜利。
 
-两个例子的 checkpoint、spawn_wave、settle 均用测试替身，不表示 native PhysX 已具备传送／重生或永久奖励已到账。真实 UGC 关卡的形状、关节、移动平台仍由 [Physics Room](PHYSICS-ROOM-SERVICE.md) 加载；LevelComponent 负责流程，物理关卡描述负责世界，两份固定版本配置由业务一起绑定。
+这两个例子的 checkpoint、spawn_wave、settle 均用测试替身，不表示永久奖励已到账。真实的物理宿主是 [Physics Room](PHYSICS-ROOM-SERVICE.md#关卡流程区域检查点重生与流程视图2026-11-19)（2026-11-19）：关卡文件（`physics.Level` schema 2）同时带世界（形状、关节、移动平台）与流程（`Flow` 字段，本组件的 `Definition`），一份文件一个版本；房间登记了 `region.enter / region.leave / member.join / member.leave` 四个事件与 `physics_teleport / physics_checkpoint / physics_respawn` 三个动作，时间域用物理 Tick，流程组件是瞬态的并打开了 `ForgetSettledActions()`。
 
 ## 时间、去重、恢复与同步
 
@@ -99,6 +99,6 @@ flow  *level.LevelComponent  `comp:"CompTypeLevel"`
 
 每次有效写操作先复制状态，在草稿上完整执行成功后才替换 DAO；即使 handler 吞掉组件返回的错误也不会泄漏半个事件。复制和整状态序列化适合有界流程，尚无大规模吞吐承诺；不要每个物理接触点都建持久流程事件，可先由宿主汇聚语义事实。
 
-已验证的入口：包级 race 回归覆盖配置、两种玩法、两种回滚模式、提交拒绝、版本恢复、定时器取消／重设、心跳迟到、重入／旧代际拒绝、事件重试和回执、公开投影与预算；生成消费者覆盖真实工厂、DAO 装配、生成 Sender、Nest 回滚、到期终局、动作回执和关闭。真实 UGC 物理动作执行器、Unity UI、网络弱网、持久崩溃恢复、多人完整玩法与容量仍需各自验收。
+已验证的入口：包级 race 回归覆盖配置、两种玩法、两种回滚模式、提交拒绝、版本恢复、定时器取消／重设、心跳迟到、重入／旧代际拒绝、事件重试和回执、公开投影与预算；生成消费者覆盖真实工厂、DAO 装配、生成 Sender、Nest 回滚、到期终局、动作回执和关闭。物理房间作为宿主的验证（真实 PhysX、Nest 提交、Gate / NATS 三进程、Unity 批处理客户端，macOS ARM64）见 [PHYSICS-ROOM-SERVICE](PHYSICS-ROOM-SERVICE.md#关卡流程区域检查点重生与流程视图2026-11-19) 与[证据](../maintenance/evidence/physx-level-actions-20261119/README.md)。Unity 里的实际试玩、网络弱网、多人完整玩法与容量仍需各自验收。
 
 本轮检查（2026-10-26）：`go test -race -count=1 ./gameplay/level`、`bash scripts/test-level-generated.sh`、`go test -count=1 .`、全仓 `go build ./...` 与 `go vet ./...` 通过。全仓 `go test ./...` 未通过：Lockstep 的 `TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive` 在本机 Linux 出现停读未溢出与快照未完成，和 [此前 main 对照记录](PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)相同；没有修改该用例或将全仓检查记为通过。

@@ -45,6 +45,8 @@ namespace Roost.PhysicsViewer
         // 自己的刚体被服务端传送（含重生）的次数，以及最近收到的关卡流程公开状态；没有流程的房间一直是 null。
         public int Teleports { get; private set; }
         public RoomLevelView Level => levelView;
+        // HUD 上的两行流程文字；没有流程时为空。自动验收也读它。
+        public string LevelHud { get { var view = levelView; return view == null ? "" : LevelSummary(view) + " | " + LevelVariables(view); } }
         volatile RoomLevelView levelView;
         static string LevelSummary(RoomLevelView view)
         {
