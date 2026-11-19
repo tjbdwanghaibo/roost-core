@@ -25,7 +25,8 @@
 
 - `game/controllers/enter.go` 的 `HandleEnterGame`、`HandleEnterCreate`：两个协议的端点。
 - `game/modules/login/enter.go` 的 `Enter(ctx, registry, entering, load)`：一次进入的骨架，顺序是进入前检查 → `load` → 进入钩子。工程改写进入端点时把自己的加载与初始化包成 `load` 交给它。
-- `game/modules/login/enter_create.go` 的 `EnterSession(ctx, registry, entering, Loads{LoadOrCreate, Existing})`：端点实际调的入口，按 `CreateFirst` 选一种 `load` 再走 `Enter`。
+- `game/modules/login/enter_create.go` 的 `EnterSession(ctx, registry, entering, Loads{LoadOrCreate, Existing})`：普通端点的入口，按 `CreateFirst` 选一种 `load`，检查放行后执行，成功后通知。
+- `EnterSessionWithPlacement(ctx, registry, entering, loads, place)`：同一流程，在初始化已提交、`RunEntered` 尚未调用时执行本次请求的 `place(ctx, entered)`。它拿到原请求上下文和同一份 claims。返回错误则本次不通知、不答成功，**不会撤销已经提交的首次初始化**；重试必须安全。只想记日志的进场错误应在 `place` 内处理并返回 nil。没有这一步继续用 `EnterSession`。
 - `game/modules/login/enter_create.go` 的 `Create(ctx, registry, creating, CreateSteps{Ensure, Commit})`：一次新建的骨架，六步见下面“一致性”。
 - `game/modules/login/enter_create.go` 的 `Assess(ctx, registry, entering, built)`：算出该告诉客户端什么（`Status{Code, Reason, NeedCreate}`），不推送、不断开。
 - `game/controllers/enter.go` 的 `Announce(ctx, registry, entering, sessionID)`：调 `Assess`，把结果作为 `EnterStatus` 推给这条会话；进入前检查拒绝时推完等 `StatusCloseDelay`（300 毫秒）再断开这名玩家在本进程的全部会话。
@@ -84,9 +85,9 @@
   - 经 `EnterCreate` 建成之后的第一次 `EnterGame` 报 `First=true`；这一次的应答丢了、客户端重发时 `First` 已经是 false。
   - 装了 naming 时名字先于“建成了”落定：占了名而新建事务没成的玩家，下一次换名字由 naming 释放旧名。
 - **前提：** 需要 nest Mod，实体 `Player` 与它的 lifecycle；只在承载这名玩家的 game 进程内有效。进入前检查若要问别的进程，要用传进来的 `ctx`，占的是登录请求的时间预算。
-- **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md` 的“enter 模块的边界”“进入钩子不是事务的一部分”“game-demo 只用了 enter 模块的协议、域与首次初始化”“game-demo 接入登录链路的边界”）：
+- **已知限制**（详见 `docs/maintenance/KNOWN-LIMITS.md` 的“enter 模块的边界”“进入钩子不是事务的一部分”“game-demo 的进入适配”“game-demo 接入登录链路的边界”）：
   - 握手之后不进入就断开的已有玩家，`EnterStatus` 读档时装载的那份内存副本不经工程自己的驻留表（game-demo 的情形），到进程重启才释放。
-  - 工程改写进入端点时要自己在同样的位置调 `RunEntering` 与 `RunEntered`，否则检查与钩子不执行。
+  - 经 `Enter` / `EnterSession` / `EnterSessionWithPlacement` 的端点不要再手动运行检查或钩子；绕开模块编排的工程才须自行保证顺序与次数。
   - 与真实 naming 的建角、跨 sid 重名拒绝、改名后旧名释放已由 `scripts/test-demo-login.sh` 的 casual + naming 阶段验证；故障窗口逐步恢复仍以 naming 的离线状态机场景为准。
 
 ## 复用方式
@@ -98,7 +99,7 @@
 - **要让某类会话先起名再进入：** `gamelogin.RequireCreateFirst("名字", func(claims map[string]string) bool {...})`（全工程一条；装了 login 时它已经登记，不能再登记）；名字的格式用 `gamelogin.OnCreating`，要先有档的事务外步骤用 `gamelogin.OnCreatePrepare`，写进档在自己的组件上监听 `event.EnterCreate`（只改同一个 Player）。
 - **用自己的认证器、又想要 `EnterStatus`：** 在自己的会话激活回调里后台调包 `game/controllers`（`enter.go`）的 `Announce(ctx, registry, gamelogin.Entering{PlayerID, Claims}, sessionID)`，并自己限制同时在跑的数量、给 `ctx` 带上期限。
 - **不要改的文件：** `game/modules/login/enter.go`、`game/modules/login/enter_create.go`（顺序与“被拒绝的进入什么都没碰”靠它们保证）、`game/components/enter/enter.go` 里标记与发放同一笔事务的写法。
-- **只适合借鉴的情形：** 进入流程要加自己的步骤（排队、选角、驻留表）时可以整个改写端点——game-demo 就改写了 `game/controllers/enter.go` 与 `protocol/def/enter_game.go`，只保留协议、域与首次初始化（它的新玩家初始化写在自己覆盖的 `game/modules/login/enter_first.go` 里）。值得借鉴的是“做过没有记在档里、每次进入都问一遍”的首次初始化，以及“检查 → load → 钩子”的骨架。
+- **自有协议与场景：** game-demo 保留旧请求、回包字段与消息号；适配层把两种加载方式及进场步骤交给 `EnterSessionWithPlacement`，不复制会话选路、不重复发通知。`Serve` 与冷加载共享登录时限，首次初始化与进场用原请求时限；新号出生点只在 `enter_first.go` 的首次初始化事务里写一次。
 
 ## 联动
 

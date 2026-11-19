@@ -18,12 +18,12 @@
 package login
 
 import (
-	"{{MODULE}}/game/view"
 	"context"
 	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
+	"{{MODULE}}/game/view"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
@@ -121,6 +121,10 @@ func RunEntering(ctx context.Context, registry *app.Registry, entering Entering)
 // 工程改写进入端点（加自己的登录步骤）时，要么仍然把加载与初始化包成 load 交给 Enter，
 // 要么自己按这个顺序调 RunEntering 与 RunEntered。
 func Enter(ctx context.Context, registry *app.Registry, entering Entering, load func(context.Context) (InitResult, error)) (Entered, error) {
+	return enterWithPlacement(ctx, registry, entering, load, nil)
+}
+
+func enterWithPlacement(ctx context.Context, registry *app.Registry, entering Entering, load func(context.Context) (InitResult, error), place func(context.Context, Entered) error) (Entered, error) {
 	if load == nil {
 		return Entered{}, fmt.Errorf("enter: Enter needs a load step")
 	}
@@ -132,6 +136,11 @@ func Enter(ctx context.Context, registry *app.Registry, entering Entering, load 
 		return Entered{}, err
 	}
 	entered := Entered{PlayerID: entering.PlayerID, InitResult: result, Claims: entering.Claims}
+	if place != nil {
+		if err := place(ctx, entered); err != nil {
+			return Entered{}, err
+		}
+	}
 	RunEntered(ctx, registry, entered)
 	return entered, nil
 }

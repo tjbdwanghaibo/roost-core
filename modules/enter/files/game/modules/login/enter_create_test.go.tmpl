@@ -281,6 +281,42 @@ func TestEnterCreateFirstSessionsEnterOnlyBuiltPlayers(t *testing.T) {
 	if want := []string{"load-or-create", "existing", "load-or-create"}; !reflect.DeepEqual(calls, want) || hooked != 1 {
 		t.Fatalf("loads called %v, %d enter hooks; want %v and the hook once", calls, hooked, want)
 	}
+	t.Run("宿主准备完成才通知，拒绝或准备失败不通知", func(t *testing.T) {
+		withChecks(t)
+		withHooks(t)
+		var order []string
+		var checkErr, loadErr, placeErr error
+		OnEntering("gate", func(context.Context, *app.Registry, Entering) error { order = append(order, "check"); return checkErr })
+		OnEntered("notify", func(context.Context, *app.Registry, Entered) error { order = append(order, "notify"); return nil })
+		load := func(context.Context) (InitResult, error) {
+			order = append(order, "init")
+			return InitResult{First: true}, loadErr
+		}
+		sentinel := errors.New("denied")
+		for _, tc := range []struct {
+			name               string
+			check, init, place error
+			want               string
+		}{
+			{"ok", nil, nil, nil, "check init place notify"},
+			{"refused", sentinel, nil, nil, "check"},
+			{"init failed", nil, sentinel, nil, "check init"},
+			{"place failed", nil, nil, sentinel, "check init place"},
+		} {
+			order = nil
+			checkErr, loadErr, placeErr = tc.check, tc.init, tc.place
+			result, err := EnterSessionWithPlacement(context.Background(), nil, Entering{PlayerID: 94001, Claims: ticket}, Loads{Existing: load, LoadOrCreate: func(context.Context) (InitResult, error) { t.Fatal("ticket auto-created"); return InitResult{}, nil }}, func(_ context.Context, entered Entered) error {
+				if !entered.First || entered.PlayerID != 94001 || entered.Claims["handshake"] != "ticket" {
+					t.Fatalf("placement lost session facts: %+v", entered)
+				}
+				order = append(order, "place")
+				return placeErr
+			})
+			if (tc.name == "ok" && (err != nil || !result.First)) || (tc.name != "ok" && err != sentinel) || strings.Join(order, " ") != tc.want {
+				t.Errorf("%s: order=%v result=%+v err=%v", tc.name, order, result, err)
+			}
+		}
+	})
 	if _, err := EnterSession(context.Background(), nil, Entering{PlayerID: 94001}, Loads{LoadOrCreate: loads.LoadOrCreate}); err == nil {
 		t.Fatal("EnterSession accepted a missing load")
 	}

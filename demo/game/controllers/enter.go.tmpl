@@ -19,10 +19,8 @@ import (
 )
 
 // HandleEnterGame 是登录边界。协议、它的分组与“先新建”的规则都是 enter 模块的；game-demo 覆盖这个文件
-// （模块的 game/controllers/enter.go），因为 demo 的登录不只是“加载或创建 Player”：角色绑定在哪个服、登录预算、
-// 进场景、已付订单、公会与公告都在 demo 的玩家端点上，所以两个要装载 Player 的端点交给它们——
-// EnterGame（player_enter_game.go）与 EnterCreate（player_enter_create.go）。别的模块在进入时做的事（聊天上线、
-// 拉全服邮件）不在这里：那些是 enter 的进入钩子，由 EnterGame 带着会话的 claims 执行。
+// （模块的 game/controllers/enter.go）以保留旧回包和宿主适配。EnterGame 把驻留加载与进场操作交给模块
+// EnterSessionWithPlacement，EnterCreate 继续用模块 Create。两条路都不另发进入检查或通知。
 //
 // 本文件其余部分（会话激活后的告知 EnterStatus：Announce、enterAnnounce、enterBuilt、enterFind）与模块的
 // 原文件相同。

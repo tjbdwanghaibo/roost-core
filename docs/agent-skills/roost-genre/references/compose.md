@@ -955,7 +955,7 @@ func init() {
 }
 ```
 
-（`gamelogin` 是 `<module>/game/modules/login`。）这个登记点在事务之外，失败只记日志、下次进入再调；必须成功的写在 `enter_first.go` 或监听 `event.EnterFirst`。
+（`gamelogin` 是 `<module>/game/modules/login`。）这个登记点在事务之外，失败只记日志、下次进入再调；必须成功的初始发放写在 `enter_first.go` 或监听 `event.EnterFirst`。如果宿主要在初始化提交后、进入通知前放置玩家，用 `EnterSessionWithPlacement(ctx, registry, entering, loads, place)`；`place` 失败不通知，但不会撤销已提交的初始化。不要再手动执行 `RunEntering` / `RunEntered`。
 
 **两条路**：用进服票据握手的会话（装了 login），玩家没建成之前 `EnterGame` 答 `enter_need_create`、什么都不写，客户端先发 `EnterCreate{name}`，建档、名字、首次初始化、“建成了”的标记同一笔事务。别的会话 `EnterGame` 加载或创建并做首次初始化。两条路的首次初始化是同一段代码。要在新建这一步加检查或写入，用 enter 的登记点（`OnCreating`、`OnCreatePrepare`）或监听 `event.EnterCreate`，不改它的端点。
 

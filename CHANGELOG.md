@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **game-demo 复用 enter 的进入编排**：新增可选的 `EnterSessionWithPlacement`，在初始化提交后、进入后通知前运行宿主进场步骤。demo 保留旧协议、登录时限、错服回包以及普通地图与 CellWorld 的落位语义；不改 `Scene`、同步和存档。普通工程原 `EnterSession` / `Enter` API 不变。见 [enter 模块](modules/enter/README.md)。
+
 ## [v1.58.0] - 2026-11-19
 
 - **Mongo 库名前缀：框架层统一加，生成工程写工程名**（2026-11-19，维护者：同一台机器上的数据库撞名，“在框架层加一个前缀能力，这个前缀统一配置在配置中，对于 skill 生成的模式这个配置变成项目名”，并且不放在 MongoDB 客户端底层）：

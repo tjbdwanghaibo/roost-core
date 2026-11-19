@@ -70,6 +70,13 @@ type Loads struct {
 // “先新建”的会话（CreateFirst）用 Existing，别的会话用 LoadOrCreate——没有登记规则的工程永远是后者，
 // 与直接调 Enter(…, LoadOrCreate) 相同。
 func EnterSession(ctx context.Context, registry *app.Registry, entering Entering, loads Loads) (Entered, error) {
+	return EnterSessionWithPlacement(ctx, registry, entering, loads, nil)
+}
+
+// EnterSessionWithPlacement 与 EnterSession 走同一条路，只在初始化提交后、RunEntered 之前多一个宿主步骤。
+// place 只针对本次请求，不是全局登记的钩子。返回错误会拒绝这次进入、不发通知，但不会回滚已提交的初始化；
+// 宿主要允许重试。只需告警的进场问题由宿主记录后返回 nil。没有进场要求的工程继续用 EnterSession。
+func EnterSessionWithPlacement(ctx context.Context, registry *app.Registry, entering Entering, loads Loads, place func(context.Context, Entered) error) (Entered, error) {
 	if loads.LoadOrCreate == nil || loads.Existing == nil {
 		return Entered{}, fmt.Errorf("enter: EnterSession needs both loads")
 	}
@@ -77,7 +84,7 @@ func EnterSession(ctx context.Context, registry *app.Registry, entering Entering
 	if CreateFirst(entering.Claims) {
 		load = loads.Existing
 	}
-	return Enter(ctx, registry, entering, load)
+	return enterWithPlacement(ctx, registry, entering, load, place)
 }
 
 // Creating 是一次还没有被受理的新建：会话已经认证，这名玩家还没有建成。
