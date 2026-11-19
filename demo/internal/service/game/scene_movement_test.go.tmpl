@@ -31,6 +31,7 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/runtimeid"
 	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
@@ -623,6 +624,51 @@ func TestWorldSceneTimeWireAndRollback(t *testing.T) {
 	}
 }
 
+// The resident slot is transactional, not a session slot: disconnect alone cannot admit a replacement.
+func TestOrdinarySceneResidentAdmission(t *testing.T) {
+	cfg := gamescene.DefaultConfig()
+	cfg.PlayerCapacity = 1
+	w := newMoveWorldOn(t, cfg)
+	present := func() int { return locked(w, w.area.ID(), w.area.Dao().MembersLen) }
+	reject := errors.New("abort after admit")
+	_, err := w.engine.Request(w.ctx, sharedBodyWrite, w.area.ID(), nest.NewParams(func() error {
+		if e := w.area.AdmitPlayer(9999); e != nil {
+			return e
+		}
+		return reject
+	}))
+	if !errors.Is(err, reject) || present() != 0 {
+		t.Fatalf("aborted admission held a slot: %v", err)
+	}
+	one := w.join(9911, cfg.Spawn)
+	w.bridge.Leave(w.ctx, one.ID())
+	two := newScenePlayer(t, 9912)
+	w.entities.Add(two)
+	enter := func(p *player.Player) error {
+		_, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_EnterScene(w.ctx, p.ID(), w.area.ID(), cfg.Spawn.X, cfg.Spawn.Y)
+		return err
+	}
+	if err := enter(two); !errors.Is(err, apperrors.ErrSceneFull) || present() != 1 {
+		t.Fatalf("disconnected player lost its slot: %v", err)
+	}
+	if locked(w, two.ID(), two.MapComp().InScene) {
+		t.Fatal("full map placed refused player")
+	}
+	if _, seen := w.bridge.ordinary.Interest.ObserverView(two.UniqueID()); seen {
+		t.Fatal("refused player published to AOI")
+	}
+	if err := enter(one); err != nil || present() != 1 {
+		t.Fatalf("reconnect took a second slot: %v", err)
+	}
+	handler.RegisterLeaveSceneNestHandlers()
+	if err := syncsender.NewLeaveSceneSender(w.engine).MultiSync_LeaveOrdinaryScene(w.ctx, one.ID(), w.area.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if err := enter(two); err != nil || present() != 1 {
+		t.Fatalf("formal exit did not release the slot: %v", err)
+	}
+}
+
 func TestWorldSceneDestroyDoesNotOwnTheOrdinaryView(t *testing.T) {
 	w := newMoveWorld(t)
 	p := w.join(9732, spatial.Point{X: 300, Y: 300})
@@ -1023,7 +1069,7 @@ func TestLeavingTheProcessSavesTheLastPosition(t *testing.T) {
 			}
 			w.settle(walker.ID())
 			probe := &handOffProbe{w: w}
-			evictor := playerEvictor{scene: w.bridge, players: players, manager: w.entities, nest: w.engine, handOff: probe}
+			evictor := playerEvictor{scene: w.bridge, players: players, manager: w.entities, nest: w.engine, handOff: probe, ordinarySceneID: w.area.ID()}
 			var saved spatial.Point
 			switch leave {
 			case "evict":
@@ -1043,6 +1089,9 @@ func TestLeavingTheProcessSavesTheLastPosition(t *testing.T) {
 					t.Fatalf("the hand-off ran %d times, want 1", probe.calls)
 				}
 				saved = probe.saved
+			}
+			if n := locked(w, w.area.ID(), w.area.Dao().MembersLen); n != 0 {
+				t.Fatalf("%s still holds %d slots", leave, n)
 			}
 			if saved != moved {
 				t.Fatalf("%s: the saved position is %v, want the last one %v", leave, saved, moved)

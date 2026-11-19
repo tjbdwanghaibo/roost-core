@@ -37,6 +37,7 @@ type Config struct {
 // terrain. Without their keys every process runs the ordinary scene and has no
 // terrain.
 type Scene struct {
+	PlayerCapacity int `config:"player_capacity" default:"0" min:"0" help:"ordinary-map resident player slots (0: unlimited); disconnect alone does not release a slot"`
 	Partition ScenePartition `config:"partition"`
 	Terrain   SceneTerrain   `config:"terrain"`
 }
@@ -103,13 +104,16 @@ func LoadActivity(registry *app.Registry) (app.ServiceIdentity, Activity, error)
 
 // LoadPartition reads only the partitioned-scene keys.
 func LoadPartition(registry *app.Registry) (ScenePartition, error) {
+	s, err := LoadScene(registry)
+	return s.Partition, err
+}
+
+func LoadScene(registry *app.Registry) (Scene, error) {
 	var config struct {
 		Scene Scene `config:"scene"`
 	}
-	if err := load(registry, &config); err != nil {
-		return ScenePartition{}, err
-	}
-	return config.Scene.Partition, nil
+	err := load(registry, &config)
+	return config.Scene, err
 }
 
 // LoadTerrain reads the editable-terrain keys together with the partition

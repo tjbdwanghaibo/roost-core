@@ -134,6 +134,9 @@ func (a *demoEnterAttempt) place(ctx stdcontext.Context, entered gamelogin.Enter
 		var err error
 		at, err = syncsender.NewEnterSceneSender(a.controller.NestClient()).MultiSync_EnterScene(ctx, a.subject.ID(), a.controller.WorldSceneID(), spawn.X, spawn.Y)
 		if err != nil {
+			if errors.Is(err, apperrors.ErrSceneFull) {
+				return err
+			}
 			slog.Warn("enter_game: player not placed on the map", "player_id", a.playerID, "err", err)
 			return nil
 		}

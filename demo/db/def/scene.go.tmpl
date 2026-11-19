@@ -22,4 +22,6 @@ type SceneDao struct {
 	TimeAnchorBusiness int64   `dao:"nopersist,sync" store:"time_anchor_business"`
 	TimeAnchorDomain   int64   `dao:"nopersist,sync" store:"time_anchor_domain"`
 	TimeRate           float64 `dao:"nopersist,sync" store:"time_rate"`
+	// Resident ordinary-map players only. Never restored, replicated, or keyed by transport session.
+	Members map[int64]bool `dao:"nopersist,nosync,map=fast" store:"members"`
 }

@@ -139,6 +139,9 @@ func Get(id int64) entity.IThreadSafeEntity {
 	return nil
 }
 
+// KnownUnloaded never treats a missing lookup as proof an entity was unloaded.
+func KnownUnloaded(id int64) bool { get := lookup.Load(); return get != nil && (*get)(id) == nil }
+
 // Locate is Follow's way to read a target: its last committed position, off
 // the target's lock (movement.MapBasic.Published).
 var Locate = movement.LocateIn(Get)

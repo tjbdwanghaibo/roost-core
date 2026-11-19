@@ -15,6 +15,8 @@ import (
 	"{{MODULE}}/game/actor"
 	"{{MODULE}}/game/flags"
 	"{{MODULE}}/game/modules/cellworldhost"
+	scenespace "{{MODULE}}/game/modules/scene"
+	apperrors "{{MODULE}}/internal/errors"
 	gamescene "{{MODULE}}/game/scene"
 	sceneruntime "{{MODULE}}/game/scene/runtime"
 )
@@ -78,6 +80,7 @@ type Scene struct {
 
 	runtime atomic.Pointer[sceneruntime.Runtime]
 	life    sceneLife
+	playerCapacity int
 
 	host     *heartbeat.Host
 	spawnReg *heartbeat.Reg
@@ -133,6 +136,7 @@ func (s *Scene) openMap(config gamescene.Config, domain *timedomain.Domain) erro
 	if err := runtime.Start(); err != nil {
 		return err
 	} // Start unwinds its own partial system list.
+	s.playerCapacity = config.PlayerCapacity
 	s.runtime.Store(runtime) // stopMap now owns the successfully started systems, even if the beat fails.
 	s.host = actor.Heartbeat.NewHost(s)
 	reg, err := s.host.Register("scene.spawn", SpawnPeriod, s.spawnBeat)
@@ -167,6 +171,31 @@ func (s *Scene) stopMap(domain *timedomain.Domain, reason entity.EntityDestroyRe
 		runtime.Stop(reason)
 	}
 }
+
+// AdmitPlayer and DepartPlayer are called under the world guard; neither changes a session or AOI.
+func (s *Scene) AdmitPlayer(id int64) error {
+	dao := s.Dao()
+	var reclaim func()
+	if s.playerCapacity > 0 && dao.MembersLen() >= s.playerCapacity {
+		reclaim = func() {
+			var gone []int64
+			dao.RangeMembers(func(id int64, _ bool) bool {
+				if actor.KnownUnloaded(id) {
+					gone = append(gone, id)
+				}
+				return true
+			})
+			for _, id := range gone {
+				s.DepartPlayer(id)
+			}
+		}
+	}
+	if scenespace.AdmitMember(dao, id, false, s.playerCapacity, reclaim) != scenespace.Admitted {
+		return apperrors.ErrSceneFull
+	}
+	return nil
+}
+func (s *Scene) DepartPlayer(id int64) { scenespace.DepartMember(s.Dao(), id) }
 
 // Terrain and PathFind are the exported systems. They answer nil once the
 // scene is destroyed, which callers must handle — a scene can go away while a
@@ -352,6 +381,8 @@ func (s *Scene) CellRegion() *cellworld.Region { return s.region }
 // a Scene.
 type ISceneEntity interface {
 	entity.IThreadSafeEntity
+	AdmitPlayer(int64) error
+	DepartPlayer(int64)
 	Terrain() gamescene.Terrain
 	PathFind() gamescene.PathFind
 	Refresh() gamescene.Refresh

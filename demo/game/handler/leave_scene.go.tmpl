@@ -2,6 +2,9 @@ package handler
 
 import (
 	"{{MODULE}}/game/view"
+	"{{MODULE}}/game/actor"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"fmt"
 )
 
 // handlerLeaveScene takes a player off the map in its own transaction:
@@ -22,4 +25,27 @@ func handlerLeaveScene(target view.IMapEntity) error {
 		return nil
 	}
 	return component.LeaveScene()
+}
+
+// Release the ordinary player's place and save its last position in the same transaction.
+// Partition eviction keeps its original single-Player LeaveScene handler.
+//roost:nest rollback=undo durability=async
+func handlerLeaveOrdinaryScene(target view.IMapEntity, area sceneentity.ISceneEntity) error {
+	if m := target.Map(); m.InScene() && m.SceneID() != area.ID() {
+		return fmt.Errorf("leave: player is on another map")
+	}
+	if err := handlerLeaveScene(target); err != nil {
+		return err
+	}
+	area.DepartPlayer(target.ID())
+	return nil
+}
+
+// No cold load just to clean a slot. Recheck under the scene guard, so a reloaded/rejoined player wins.
+//roost:nest rollback=undo durability=async
+func handlerForgetUnloadedScenePlayer(area sceneentity.ISceneEntity, subjectID int64) error {
+	if actor.KnownUnloaded(subjectID) {
+		area.DepartPlayer(subjectID)
+	}
+	return nil
 }

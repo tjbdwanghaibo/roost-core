@@ -28,6 +28,9 @@ import (
 //
 //roost:nest rollback=undo durability=async
 func handlerEnterScene(target view.IMapEntity, area sceneentity.ISceneEntity, spawnX int64, spawnY int64) (spatial.Point, error) {
+	if err := area.AdmitPlayer(target.ID()); err != nil {
+		return spatial.Point{}, err
+	}
 	component := target.Map()
 	if component.InScene() && component.SceneID() == area.ID() {
 		return component.Pos(), nil

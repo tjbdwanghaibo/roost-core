@@ -758,6 +758,7 @@ func (evictor playerEvictor) DepartPlayer(ctx context.Context, playerID int64) (
 // It does NOT delete anything persisted: the document is the authority and is
 // exactly what the next load must read. Evicting is forgetting, not deleting.
 type playerEvictor struct {
+	ordinarySceneID int64 // zero on a partitioned server
 	scene   *Scene
 	players *player.Lifecycle
 	manager *coreentity.EntityManager
@@ -824,10 +825,18 @@ func (evictor playerEvictor) leaveMap(ctx context.Context, subjectID int64) erro
 	if evictor.nest == nil || evictor.manager == nil {
 		return nil
 	}
-	if evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer)) == nil {
+	loaded := evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer)) != nil
+	sender := syncsender.NewLeaveSceneSender(evictor.nest)
+	if evictor.ordinarySceneID != 0 {
+		if !loaded {
+			return sender.Sync_ForgetUnloadedScenePlayer(ctx, evictor.ordinarySceneID, subjectID)
+		}
+		return sender.MultiSync_LeaveOrdinaryScene(ctx, subjectID, evictor.ordinarySceneID)
+	}
+	if !loaded {
 		return nil
 	}
-	if err := syncsender.NewLeaveSceneSender(evictor.nest).Sync_LeaveScene(ctx, subjectID); err != nil {
+	if err := sender.Sync_LeaveScene(ctx, subjectID); err != nil {
 		return fmt.Errorf("player evictor: save the position of player %d before it leaves: %w", coreentity.GetUniqueIDFromEntityID(subjectID), err)
 	}
 	return nil

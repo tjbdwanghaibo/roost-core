@@ -120,7 +120,8 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.terrain = terrainMap
-	partitioned, err := settings.LoadPartition(registry)
+	sceneSettings, err := settings.LoadScene(registry)
+	partitioned := sceneSettings.Partition
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
@@ -130,6 +131,9 @@ func (s *Service) Init(registry *app.Registry) error {
 	world, err := sceneWorld(partitioned, terrainMap)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	if !partitioned.Enabled {
+		world.PlayerCapacity = sceneSettings.PlayerCapacity
 	}
 	area, err := sceneentity.EnsureWorldScene(context.Background(), registry, world)
 	if err != nil {
@@ -231,6 +235,9 @@ func (s *Service) Init(registry *app.Registry) error {
 	// 换服（rehome 模块）用的是同一个东西的另一面：不是丢副本，而是把实体的写权交出去——离开场景、DataEngine
 	// 交出实体并保持屏障。DataEngine 不在（不该发生：Nest 的提交器就是它）时不装，换服在“离开”这一步被中止。
 	evictor := playerEvictor{scene: scene, players: players, manager: access.Manager()}
+	if !partitioned.Enabled {
+		evictor.ordinarySceneID = area.ID()
+	}
 	// 只交出 Player：开了地形时玩家的编辑账本与他的建筑归地图（普通场景按服分库），换服时留在本服，不交出、不搬
 	// （terrainmap.DatabaseScope，D11 N3 A）。
 	// 离开本进程之前先存一次位置（LeaveScene，playerEvictor.leaveMap）用的 Nest。
