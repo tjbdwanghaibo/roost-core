@@ -1,6 +1,6 @@
 # PhysX 物理房间 + LevelComponent 联合玩法：方案
 
-**状态**：已记录，后续实施（维护者 2026-11-19“先记录方案后续实施”）；第 9 节决定项尚未确认，实施前再定。只出方案，没有写实现；第 9 节的决定项定下后才动手（2026-11-19，基线 main `ba158535`）。来源：维护者 2026-11-19 对第三类第三批 3A 选 B“做一轮功能”（[证据 3A](evidence/category3-batch3-20261119/README.md#3a-physx-动作执行器与-levelcomponent-的真实联合玩法不是偶发是没有实现的集成)，KNOWN-LIMITS 第一部分“没有物理动作执行器，联合玩法未实现”）。实施完把结论写进现行文档（`docs/framework/PHYSICS-ROOM-SERVICE.md`、`docs/framework/LEVEL-COMPONENT.md`、`client/physics-viewer/README.md`、KNOWN-LIMITS），本文留作来源。
+**状态**：已确认，实施中（维护者 2026-11-19：第 9 节 D1～D11 全部按推荐 A；在分支 `feat/physx-level-actions` 上实施，每批一个提交，不直接提交到 main，分支基线 main `2d15a1e5`）。方案写于 2026-11-19，代码事实的基线是 main `ba158535`。来源：维护者 2026-11-19 对第三类第三批 3A 选 B“做一轮功能”（[证据 3A](evidence/category3-batch3-20261119/README.md#3a-physx-动作执行器与-levelcomponent-的真实联合玩法不是偶发是没有实现的集成)，KNOWN-LIMITS 第一部分“没有物理动作执行器，联合玩法未实现”）。实施完把结论写进现行文档（`docs/framework/PHYSICS-ROOM-SERVICE.md`、`docs/framework/LEVEL-COMPONENT.md`、`client/physics-viewer/README.md`、KNOWN-LIMITS），本文留作来源。
 
 本文的代码事实按 HEAD `ba158535` 的源码核对（codebase-memory MCP 本会话连接失败，没有用图）。
 
