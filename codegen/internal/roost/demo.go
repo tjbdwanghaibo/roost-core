@@ -107,17 +107,25 @@ func demoSourceFiles() ([]string, error) {
 // writeDemoActorBody 让分区世界示例与 actor 模块共用同一份移动机制。
 // demo 的 Map 组件（game/components/mapview）仍负责其分区、地形与连接规则，因此不安装另一套闲置的 Actor 组件和 DAO 状态。
 func writeDemoActorBody(root, gameService string) error {
+	return writeDemoModuleSource(root, gameService, "actor", "game/modules/actor/body.go", "game/actor/body.go")
+}
+
+// Render the canonical module template, without installing its other entities or service wiring.
+func writeDemoModuleSource(root, gameService, module, source, rel string) error {
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		return err
 	}
-	// 模块里的 Body 在 game/modules/actor；demo 的 actor 包是 demo 自己的（没装 actor 模块），仍在 game/actor。
-	const source, rel = "game/modules/actor/body.go", "game/actor/body.go"
-	body, err := renderModuleFile(manifest, gameService, ModuleSpec{Name: "actor"}, "files", source, nil)
+	body, err := renderModuleFile(manifest, gameService, ModuleSpec{Name: module}, "files", source, nil)
 	if err != nil {
 		return err
 	}
 	return writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644)
+}
+
+func writeDemoSceneLife(root, gameService string) error {
+	const rel = "game/entities/scene/life.go"
+	return writeDemoModuleSource(root, gameService, "scene", rel, rel)
 }
 
 // applyDemoTemplate is the game template plus what the demo's own code needs
@@ -586,6 +594,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/scene/runtime/runtime_test.go", why: "the map's promises: edges, occupancy, the nearest free point, no route through a wall, and systems that answer after they stop"},
 		{write: "game/scene/runtime/refresh.go", why: "the population policy: count what exists rather than what was asked for, so a failed spawn is retried instead of leaked"},
 		{write: "game/scene/runtime/refresh_test.go", why: "the population policy: asked once, an unreported spawn asked again, a death waits out the table's delay"},
+		{run: writeDemoSceneLife, why: "the scene module's entity lifecycle, without opening another map or installing its member ledger"},
 		{write: "game/entities/scene/entity.go", why: "the map as an Entity: rebuilt from configuration, exporting its systems by interface, deciding its population on its own 1Hz heartbeat and owning its time domain"},
 		{write: "db/def/scene.go", why: "the time domain's three numbers, nopersist,sync: a dungeon's 2x dies with the process and the client extrapolates from them"},
 		{write: "game/entities/scene/sync_packer.go", why: "the scene's own subject, seen by every member through the scene view"},

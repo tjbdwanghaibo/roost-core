@@ -547,6 +547,16 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	t.Parallel()
 	target := copyOfNewProject(t, "game-demo")
 
+	const life = "game/entities/scene/life.go"
+	shared, err := fs.ReadFile(modules.Files, "scene/files/"+life+".tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated, err := os.ReadFile(filepath.Join(target, life))
+	if err != nil || string(generated) != string(shared) {
+		t.Fatalf("demo scene lifecycle differs from canonical module source: %v", err)
+	}
+
 	// 模块与生成器的功能包在 game/modules/<包>/（维护者 2026-11-15）；game/modules/ 只是目录，本身不放文件。
 	// demo 自己手写的包（scene、actor、dungeon……）暂留在 game/ 下，等 demo 在新框架上重建。
 	entries, err := os.ReadDir(filepath.Join(target, "game", "modules"))

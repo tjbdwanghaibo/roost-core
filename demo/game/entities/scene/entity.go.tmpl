@@ -5,18 +5,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	db "{{MODULE}}/db"
-	"{{MODULE}}/game/actor"
-	"{{MODULE}}/game/flags"
-	"{{MODULE}}/game/modules/cellworldhost"
-	gamescene "{{MODULE}}/game/scene"
-	sceneruntime "{{MODULE}}/game/scene/runtime"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/flags"
+	"{{MODULE}}/game/modules/cellworldhost"
+	gamescene "{{MODULE}}/game/scene"
+	sceneruntime "{{MODULE}}/game/scene/runtime"
 )
 
 const EntityKindScene entity.EntityKind = 3
@@ -76,12 +76,11 @@ type Scene struct {
 	entity.DaoManager
 	dao *db.SceneDao `dao:"scene"`
 
-	runtime   atomic.Pointer[sceneruntime.Runtime]
-	destroyed atomic.Bool
+	runtime atomic.Pointer[sceneruntime.Runtime]
+	life    sceneLife
 
 	host     *heartbeat.Host
 	spawnReg *heartbeat.Reg
-	time     *timedomain.Domain
 
 	// space is what members are entered with (actor.InterestMoves once the
 	// replication bridge is up); spawns is who builds what the population
@@ -117,32 +116,35 @@ func (s *Scene) OnInitFinish(param *entity.EntityCreateParam) error {
 			config = supplied
 		}
 	}
+	if err := s.life.start(sceneTime{s}, MaxTimeRate, func(domain *timedomain.Domain) error {
+		return s.openMap(config, domain)
+	}, s.stopMap); err != nil {
+		return fmt.Errorf("scene %d: %w", s.ID(), err)
+	}
+	return nil
+}
+
+// openMap only acquires the systems owned by this world entity. Space and Manager belong to the bridge.
+func (s *Scene) openMap(config gamescene.Config, domain *timedomain.Domain) error {
 	runtime, err := sceneruntime.New(s, config)
 	if err != nil {
-		return fmt.Errorf("scene %d: %w", s.ID(), err)
+		return err
 	}
 	if err := runtime.Start(); err != nil {
-		return fmt.Errorf("scene %d: %w", s.ID(), err)
-	}
-	domain, err := timedomain.New(sceneTime{scene: s}, timedomain.Config{MinRate: 0, MaxRate: MaxTimeRate})
-	if err != nil {
-		runtime.Stop(entity.DestroyReasonCommon)
-		return fmt.Errorf("scene %d: time domain: %w", s.ID(), err)
-	}
+		return err
+	} // Start unwinds its own partial system list.
+	s.runtime.Store(runtime) // stopMap now owns the successfully started systems, even if the beat fails.
 	s.host = actor.Heartbeat.NewHost(s)
 	reg, err := s.host.Register("scene.spawn", SpawnPeriod, s.spawnBeat)
 	if err != nil {
-		runtime.Stop(entity.DestroyReasonCommon)
-		return fmt.Errorf("scene %d: %w", s.ID(), err)
+		return err
 	}
 	// Not in a transaction (initialization): starts at once. The first beat
 	// is within one period; nothing is decided until a spawner is installed.
 	if err := reg.Start(); err != nil {
-		runtime.Stop(entity.DestroyReasonCommon)
-		return fmt.Errorf("scene %d: %w", s.ID(), err)
+		return err
 	}
-	s.spawnReg, s.time = reg, domain
-	s.runtime.Store(runtime)
+	s.spawnReg = reg
 	// One map per process in this demo: its domain is the members' domain,
 	// and its terrain is what their walks are checked against.
 	actor.SetWorldTime(domain)
@@ -153,14 +155,13 @@ func (s *Scene) OnInitFinish(param *entity.EntityCreateParam) error {
 // OnDestroy stops the population beat and the systems in reverse order. It
 // is idempotent: the framework can destroy an entity from more than one
 // path.
-func (s *Scene) OnDestroy(reason entity.EntityDestroyReason) {
-	if !s.destroyed.CompareAndSwap(false, true) {
-		return
-	}
+func (s *Scene) OnDestroy(reason entity.EntityDestroyReason) { s.life.close(reason) }
+
+func (s *Scene) stopMap(domain *timedomain.Domain, reason entity.EntityDestroyReason) {
 	if s.host != nil {
 		s.host.OnDestroy()
 	}
-	actor.ReleaseWorldTime(s.time)
+	actor.ReleaseWorldTime(domain)
 	if runtime := s.runtime.Swap(nil); runtime != nil {
 		actor.ReleaseWorldGround(runtime.Terrain())
 		runtime.Stop(reason)
@@ -232,7 +233,7 @@ func (s *Scene) SpawnBeats() int64 { return s.spawnBeats.Load() }
 // TimeDomain is the scene's time domain. Members read it from any goroutine
 // (Now / Rate / Read: frozen once per message); only this entity's handlers
 // change it (SetTimeRate).
-func (s *Scene) TimeDomain() *timedomain.Domain { return s.time }
+func (s *Scene) TimeDomain() *timedomain.Domain { return s.life.domain.Load() }
 
 // SetTimeRate changes how fast this map runs, from the business time of the
 // current message on. Only under this scene's lock (its own Nest handler):
@@ -240,10 +241,11 @@ func (s *Scene) TimeDomain() *timedomain.Domain { return s.time }
 // member) and publishes to the members after the commit. A rate outside
 // [0, MaxTimeRate] is refused and nothing changes.
 func (s *Scene) SetTimeRate(rate float64) error {
-	if s.time == nil {
+	domain := s.TimeDomain()
+	if domain == nil {
 		return fmt.Errorf("scene %d: no time domain", s.ID())
 	}
-	return s.time.SetRate(rate)
+	return domain.SetRate(rate)
 }
 
 // spawnBeat is the population heartbeat: decide what is missing, and hand it

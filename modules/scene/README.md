@@ -4,6 +4,8 @@
 
 空间层来自依赖 [scenespace](../scenespace/README.md)；生成的包仍是 `game/modules/scene`。本模块负责实体、成员账本与开关图；只接入已有地图和同步管理器的工程可以单装空间层。
 
+`game/entities/scene/life.go` 是完整模块和 game-demo 共用的实体生命周期模板。实体壳传入自己的时间 DAO 适配与资源启停；只有完整模块在这里持有并关闭自己的 `Space`，demo 不随实体关闭空间或同步管理器。该文件不分配实体号，也不启动服务。
+
 ## 能力
 
 - **客户端协议**

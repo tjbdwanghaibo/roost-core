@@ -569,7 +569,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
-- **game-demo 的进入适配**：`EnterGame` 经模块 `EnterSessionWithPlacement` 统一做进入前检查、选择加载路径、初始化后的进场与通知；`EnterCreate` 经模块 `Create`。demo 保留驻留表与登录预算、World 只投递计数、普通地图 / CellWorld 的落位和协议回包适配。请求在进场前已过期则不通知、答 `login_timeout`，已提交的初始化不撤销；实际落位或 `Join` 失败则沿用只告警、继续通知的边界。普通图的空间成员及视野已由 `scenespace` 接管；场景实体、会话 Ready／重连、分区与换服落点仍用 demo 接线。demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
+- **game-demo 的进入适配**：`EnterGame` 经模块 `EnterSessionWithPlacement` 统一做进入前检查、选择加载路径、初始化后的进场与通知；`EnterCreate` 经模块 `Create`。demo 保留驻留表与登录预算、World 只投递计数、普通地图 / CellWorld 的落位和协议回包适配。请求在进场前已过期则不通知、答 `login_timeout`，已提交的初始化不撤销；实际落位或 `Join` 失败则沿用只告警、继续通知的边界。普通图的空间成员及视野已由 `scenespace` 接管；场景实体的时间域与启停复用 `scene` 内核；世界实例、会话 Ready／重连、分区与换服落点仍用 demo 接线。demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
 
 #### account：一套服务多个游戏（2026-11-18）
 
@@ -965,7 +965,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 要分别核对「新工程能否安装模块」与「game-demo 是否复用模块」。[business-modules 批次表](FEATURE-2026-11-10-business-modules.md)记录原排期；当前 demo 的安装项见[生成步骤](../../codegen/internal/roost/demo.go)。
 
 - **gift：模块已拆，demo 已迁**。玩家间送礼的协议、扣物 / 退款与邮件投递由 [gift 模块](../../modules/gift/README.md) 提供；demo 只在驻留表就绪后启动模块消费者。200 人档的 Saga 排队仍是下面的压测遗留，不因模块拆分关闭。
-- **scene：普通图空间与视野已迁，实体与开关图未迁**。demo 和[完整 scene 模块](../../modules/scene/README.md)共用 [scenespace](../../modules/scenespace/README.md) 的 `Space`。普通图的玩家、怪物与建筑在一个 Interest 内登记和移动；同步管理器仍由 demo 独占，保留首帧 Ready、重连和退役重登记。地形、刷怪、场景实体和 CellWorld 不在这次迁移内。
+- **scene：普通图空间、视野与实体生命周期已复用，成员账本和开关图未迁**。demo 和[完整 scene 模块](../../modules/scene/README.md)共用 [scenespace](../../modules/scenespace/README.md) 的 `Space`。普通图的玩家、怪物与建筑在一个 Interest 内登记和移动；同步管理器仍由 demo 独占，保留首帧 Ready、重连和退役重登记。场景实体复用模块的 `life.go`，保留原实体号、时间字段及编解码；地形、刷怪、CellWorld 的 Region/心跳和世界单例仍由 demo 宿主接线，不安装模块的默认图。
 - **matchroom：模块已有且 demo 已接**。[module-duel](../../demo/README.md) 已走成局移交与回合房；旧 `duel` / `ranked` 仍走 lockstep，R11 改造按 D24 A 暂缓。不要把这条与模块缺失混为一谈。
 - **已落地、不再列为待开发**：`roost project new -recipe` 有 [casual、turn-pvp 两种配方](../../modules/recipes/catalog.yaml)；[task](../../modules/task/README.md) 已有事件上报、周期与前置、配置表、奖励及模块联动。
 

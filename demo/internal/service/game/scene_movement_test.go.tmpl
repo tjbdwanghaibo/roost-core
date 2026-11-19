@@ -131,6 +131,11 @@ func newMoveWorld(t *testing.T) *moveWorld {
 // replicated scene indexes the same world with the same main view.
 func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	t.Helper()
+	return newMoveWorldMode(t, config, false)
+}
+
+func newMoveWorldMode(t *testing.T, config gamescene.Config, partitioned bool) *moveWorld {
+	t.Helper()
 	ctx := context.Background()
 	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}, saved: &savedPositions{at: map[int64]spatial.Point{}}}
 	w.clock.nanos.Store(time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano())
@@ -161,7 +166,7 @@ func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 	t.Cleanup(func() { _ = w.engine.Shutdown(context.Background()) })
 
 	w.recorder = newSceneRecorder()
-	bridge, err := newScene(w.recorder, nil, config)
+	bridge, err := newSceneForMode(sceneLane{transport: w.recorder}, w.recorder, nil, config, config.Normalize().View.MaxVisible, nil, nil, partitioned)
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
@@ -615,6 +620,21 @@ func TestWorldSceneTimeWireAndRollback(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestWorldSceneDestroyDoesNotOwnTheOrdinaryView(t *testing.T) {
+	w := newMoveWorld(t)
+	p := w.join(9732, spatial.Point{X: 300, Y: 300})
+	if err := w.entities.Destroy(w.ctx, w.area, entity.DestroyReasonCommon, false); err != nil {
+		t.Fatal(err)
+	}
+	w.area.OnDestroy(entity.DestroyReasonCommon)
+	if _, alive := w.bridge.ordinary.Interest.ObserverView(p.UniqueID()); !alive {
+		t.Fatal("world entity destroyed the bridge's borrowed space")
+	}
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatalf("world entity closed the bridge manager: %v", err)
 	}
 }
 

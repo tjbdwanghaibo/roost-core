@@ -145,7 +145,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 
 ## 同步视图：谁看见哪些字段
 
-普通地图安装 `scenespace` 而非完整 `scene`：模块 `game/modules/scene.Space` 使用 demo 唯一的同步管理器登记玩家、怪与建筑，接收提交后的移动，维护同一份主视野。同步桥仍负责会话和连接代际；Join 后会话暂缓，客户端 Ready 才放首帧。场景实体、开关图、地形和刷怪仍归 demo；CellWorld 不创建普通地图的 Space。
+普通地图安装 `scenespace` 而非完整 `scene`：模块 `game/modules/scene.Space` 使用 demo 唯一的同步管理器登记玩家、怪与建筑，接收提交后的移动，维护同一份主视野。同步桥仍负责会话和连接代际；Join 后会话暂缓，客户端 Ready 才放首帧。场景实体复用 `scene` 模块同一份 `game/entities/scene/life.go`：验证时间域、启动宿主资源，失败回收，销毁只释放一次。世界实例、原时间字段与快照／增量编码、开关图、地形、刷怪和 Cell 的 Region 仍归 demo；CellWorld 不创建普通地图的 Space。
 
 维护者 2026-11-10：“同步数据是同步视图的问题，业务层处理”。字段的可见性在业务层声明一次：每个同步实体的 packer
 （`game/entities/<kind>/sync_packer.go`）按 DAO 字段名列出视图（`dataengine.NewSyncViewSet`），场景
