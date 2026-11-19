@@ -12,6 +12,7 @@ import (
 	"time"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -95,6 +96,24 @@ func stepLayout() Layout {
 
 // 原生步骤消费者：每条流一个同名 durable（过滤全部分区的主题）；执行与回放都把结果发到命令所属分区的 in.res（MsgID
 // res.<生效的 CommandID>），发布成功才 ack；过期未执行直接 ack、不发；坏信封 Term；步骤体出错与发布失败 nak。
+func TestNativeConsumerSamplesAgeOnBothFirstAndRedelivery(t *testing.T) {
+	js, layout, h := newStepJetStream(), stepLayout(), newNativeHarness()
+	_, err := SubscribeNativeStep(context.Background(), js, layout, StepConsumerConfig{Durable: "age", Topic: "rally.reserve"}, h.body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consume := js.handlers[layout.StreamOf(0)+" "+layout.CommandFilter("rally.reserve")]
+	for i, kind := range []string{"first", "retry"} {
+		labels := metrics.Labels{"stage": "native_step", "delivery": kind}
+		before := metrics.HistogramCount("saga.consumer.delivery_age", labels)
+		// Even a rejected envelope is a delivery: record age before decoding it.
+		err := consume(context.Background(), &fnats.JetStreamMsg{Data: []byte("bad"), StoredAt: time.Now().Add(-time.Second), NumDelivered: uint64(i + 1)})
+		if !fnats.IsPermanent(err) || metrics.HistogramCount("saga.consumer.delivery_age", labels) != before+1 {
+			t.Fatalf("%s delivery: %v", kind, err)
+		}
+	}
+}
+
 func TestNativeStepConsumerPublishesToThePartitionThenAcks(t *testing.T) {
 	js, layout, h := newStepJetStream(), stepLayout(), newNativeHarness()
 	subs, err := SubscribeNativeStep(context.Background(), js, layout, StepConsumerConfig{Durable: "game-rally-reserve", Topic: "rally.reserve"}, h.body)

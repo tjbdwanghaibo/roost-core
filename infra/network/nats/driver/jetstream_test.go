@@ -20,6 +20,26 @@ type fakeConsumeContext struct {
 	drainObserved func()
 }
 
+type timedDelivery struct {
+	settleMsg
+	meta *gojs.MsgMetadata
+}
+
+func (m *timedDelivery) Metadata() (*gojs.MsgMetadata, error) { return m.meta, nil }
+
+func TestJetStreamWrapperPreservesOriginalAppendTimeOnRedelivery(t *testing.T) {
+	at := time.Unix(123, 456)
+	m := jetStreamMsg(&timedDelivery{meta: &gojs.MsgMetadata{Timestamp: at, NumDelivered: 3}})
+	if !m.StoredAt.Equal(at) || m.NumDelivered != 3 {
+		t.Fatalf("metadata lost: %v / %d", m.StoredAt, m.NumDelivered)
+	}
+	for _, msg := range []gojs.Msg{&settleMsg{}, &timedDelivery{}} {
+		if !jetStreamMsg(msg).StoredAt.IsZero() {
+			t.Fatal("invented local append time")
+		}
+	}
+}
+
 func TestJetStreamTerminalClassification(t *testing.T) {
 	cause := errors.New("bad wire")
 	if got := terminalReason(fnats.Permanent(cause), 10, 1); got != "permanent" {
