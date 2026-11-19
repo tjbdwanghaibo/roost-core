@@ -352,3 +352,73 @@ T10 五次运行的实测（50Hz 模拟、20Hz 下发）：从客户端第一次
 - 没有跑 `scripts/physics/verify-viewer.sh`（PhysX 与 Unity 的对照验收）：本批没有改它覆盖的 RC1 路径。
 - 现行文档（`client/physics-viewer/README.md` 等）没有更新（批 5）。
 
+
+## 批 5a：流程的动作账本只留未完成的动作（方案之外，维护者 2026-11-19 选“只给物理房间加可选淘汰”）
+
+### 起因
+
+批 5 的长稳测量（`TestPhysicsRoomSoak`，8 房间 × 20 逻辑客户端，流程开：32 个区域、每客户端约每 5～6 秒重生一次）发现两件事：
+
+- **提交耗时随时间线性上涨。** 流程开时提交 p50 两分钟里从 0.066ms 涨到 0.737ms；流程关时一直是 0.05～0.06ms。
+- **房间在约 330 秒时停止**（`physicsroom: room missing or stale`）。到 315 秒时每房间累计重生约 940 次。停止前提交 p99 到过 137ms，日志里有 368 行 `nest handler held entity locks beyond threshold`（门槛 100ms）与 200～300ms 的 `slow dispatch`，物理均频掉到 35～49Hz。原始数据 [ledger-before-go.tsv](../../../performance/benchmarks/physx-level-actions-20261119/ledger-before-go.tsv)、[ledger-before-tail.txt](../../../performance/benchmarks/physx-level-actions-20261119/ledger-before-tail.txt)。
+
+原因在 `gameplay/level`：动作账本（`State.Effects`）不淘汰，完成了的动作也留着并计入 `Limits.Effects`（缺省 1024，硬上限 4096）。这是 `LevelComponent` 成文的契约（[LEVEL-COMPONENT §预算与验证范围](../../../framework/LEVEL-COMPONENT.md#预算与验证范围)：“动作账本不淘汰以复用 ID，满额拒绝”），不是本轮引入的缺陷。但物理房间里每次重生就是一个动作：账本填满之后下一次 `request` 得到 `ErrBudget`，提交失败，房间按 D4 停止；每次写操作又要复制并校验整份状态（一笔提交里每条回执、每条事实各一次），所以成本跟着账本一起涨。20 人的房间每人每分钟掉一次，一小时就是 1200 次。
+
+方案的风险表只写了“UGC 流程在运行期撞预算导致停房”，没有预见到这是按实例一生累计的上限。向维护者报告后给了三个选项（只给物理房间加可选淘汰 / 改 `LevelComponent` 的缺省 / 不改只记限制），维护者选第一个。
+
+### 改动
+
+| 文件 | 内容 |
+| --- | --- |
+| `gameplay/level/component.go` | `LevelComponent.ForgetSettledActions()`：打开后，每次变更在 `drain`（`action.done` 已分派）之后、校验之前，从草稿里删掉不是 pending 的动作。缺省不打开，行为不变 |
+| `gameplay/level/state.go` | `Effect.Status` 的注释 |
+| `wiring/physicsroom/entity.go` | 房间的流程组件建好后调用 `ForgetSettledActions()` |
+| `gameplay/level/ledger_test.go`（新） | 三条用例，见下 |
+| `wiring/physicsroom/entity_test.go` | `TestRoomFlowLedgerHoldsOnlyUnsettledActions` |
+| `wiring/physicsroom/load_native_test.go` | 压测夹具加“流程开”场景（`flow`：机关场景 + 32 个区域 + 东西两侧最外一列的格子会重生），`ROOST_PHYSICS_SOAK_FLOW=1` 让长稳用它；报告加提交 p50、每秒事实数、每客户端每秒重生次数，长稳 TSV 末尾追加同样三列。发现与验证这个问题用的就是它 |
+| `docs/framework/LEVEL-COMPONENT.md` | 预算一节写明缺省行为与 `ForgetSettledActions()` 的语义和代价 |
+
+语义上的代价：打开之后，对已经结算的动作再给一次回执，不论结论是否相同都是 `ErrStale`（缺省是“同结论幂等成功、不同结论 `ErrConflict`”）。物理房间对每个动作只给一次回执（`service/physicsroom` 的 `flow.known` 在回执提交时才清），提交 handler 本来就把 `ErrStale` 记成作废回执，所以对它没有影响；失去的是“同一个动作先后给出两种结论”的检测。动作 ID 由 `NextEffect` 递增生成，淘汰不动它，ID 不复用。
+
+### 验证
+
+```
+GOWORK=off go vet ./gameplay/level ./wiring/physicsroom                                        # 通过
+GOWORK=off CGO_ENABLED=1 go test -count=1 -tags physx ./gameplay/... ./service/physicsroom/... ./wiring/physicsroom/...   # 全部 ok
+```
+
+| 用例 | 断言 |
+| --- | --- |
+| `TestSettledActionsStayInTheLedgerByDefault` | 缺省：同时最多 2 个动作的流程，两个都完成后账本仍有 2 项，第三个 `request` 是 `ErrBudget`；同结论的重复回执幂等 |
+| `TestForgetSettledActionsKeepsOnlyPendingOnes` | 打开后连续 10 轮“请求 → 回执”：每轮账本回到空、`NextEffect` 递增、ID 互不相同、`action.done` 触发器每轮都执行；已淘汰动作的重复回执（两种结论）都是 `ErrStale` 且状态不变；两个 pending 之后第三个仍是 `ErrBudget`，完成一个腾出一个；阶段结束取消的动作当次离开账本，它晚到的回执是 `ErrStale` |
+| `TestForgettingRollsBackWithTheTransaction` | 同一个 handler 里先完成动作、后面出错：账本回到提交之前（动作还是 pending，`action.done` 的效果也撤回），重试成功 |
+| `TestRoomFlowLedgerHoldsOnlyUnsettledActions` | 房间 Entity + 真实提交 handler：`Limits.Effects = 2` 的流程重生 12 次都能提交，流程状态里没有已完成的动作；重复的回执记成 1 条作废，不算错 |
+
+修后的长稳（同一夹具、同一负载，8 分钟，带进程外的 footprint / vmmap 采样）：
+
+| 量 | 修前 | 修后 |
+| --- | --- | --- |
+| 结果 | 约 330s 房间停止 | 480s 通过，每房间累计重生约 1630 次（超过 1024） |
+| 提交 p50 | 0.115ms → 2.6ms（线性上涨） | 0.056～0.093ms，没有随时间的趋势 |
+| 提交 p99 最大窗口 | 137ms | 5.7ms |
+| `nest handler held entity locks` WARN | 368 行 | 0 行 |
+| goroutine | — | 全程 206 |
+| 估算原生内存 / malloc 已分配 | — | 13.84 → 13.88MB / 9.62 → 9.65MB，斜率 +0.003MB/分钟、+0.007MB/分钟 |
+| Go heap in-use 斜率 | — | −0.08MB/分钟 |
+
+原始数据：[soak8-flow-go.tsv](../../../performance/benchmarks/physx-level-actions-20261119/soak8-flow-go.tsv)、[soak8-flow-proc.tsv](../../../performance/benchmarks/physx-level-actions-20261119/soak8-flow-proc.tsv)、[soak8-flow-summary.txt](../../../performance/benchmarks/physx-level-actions-20261119/soak8-flow-summary.txt)（预热取 120 秒）。
+
+**这两次长稳期间机器同时被别的会话占用**（修后那次 1 分钟负载 13～32，开跑前 swap 已用 12.3GB / 13GB）：修后的物理均频稳定窗口平均 48.9Hz、最低窗口 44.4Hz，Step p99 平均 12ms，这些受干扰的数不能当作容量或频率结论；修前那次物理均频掉到 35Hz 则既有干扰也有账本的成本，两者没有分开。与账本有关的结论（是否停房、提交 p50 的趋势、WARN 行数、内存与 goroutine 斜率）不依赖机器是否空闲。
+
+### 变异（[mutations-batch5a.txt](mutations-batch5a.txt)）
+
+8 条，全部变红：不执行淘汰、连 pending 也淘汰、只淘汰 done 不淘汰 cancelled、缺省也淘汰、淘汰放在 `drain` 之前、淘汰直接改已提交的状态而不是草稿、物理房间不打开淘汰、淘汰时把 `NextEffect` 归零。
+
+“缺省也淘汰”那一条除了本批的缺省用例，还让既有的 `TestTwoConfiguredConsumersUseTheSameComponent` 变红，说明既有用例确实依赖缺省契约。
+
+### 没有验到的
+
+- 只在 macOS ARM64 上跑过。
+- 持久化的流程（`NewLevelDAO`）打开淘汰没有专门的用例：淘汰只是从要写入的状态里少了几项，走的是原有的整状态写入；物理房间用的是瞬态 DAO。
+- 业务动作（`ActionHandler`，独立 goroutine、同 ID 重试）在打开淘汰后的晚到结果没有新增用例；批 3 的 `TestUnknownBusinessResultIsRetriedWithTheSameID` 等仍然通过，房间侧在回执提交前不会对同一个 ID 给第二个结论。
+- 长稳只跑了 8 分钟、每客户端约每 6 秒重生一次这一种负载。

@@ -35,13 +35,10 @@ func TestMultiRoomReplicationLoad(t *testing.T) {
 	if os.Getenv("ROOST_PHYSICS_LOAD") != "1" {
 		t.Skip("set ROOST_PHYSICS_LOAD=1 for bounded multi-room measurement")
 	}
-	for _, mechanisms := range []bool{false, true} {
+	// flow 是机关场景再挂上关卡流程（见 loadFlow），用来与 mechanisms 对照流程本身的成本。
+	for _, name := range []string{"crowd", "mechanisms", "flow"} {
 		for _, count := range []int{1, 4, 8} {
-			name := "crowd"
-			if mechanisms {
-				name = "mechanisms"
-			}
-			t.Run(fmt.Sprintf("%s/%d", name, count), func(t *testing.T) { runRoomLoad(t, name, count, mechanisms) })
+			t.Run(fmt.Sprintf("%s/%d", name, count), func(t *testing.T) { runRoomLoad(t, name, count, name != "crowd") })
 		}
 	}
 }
@@ -57,6 +54,8 @@ type loadWindow struct {
 	samples                map[domain.Ref][]loadSample
 	polls                  []time.Duration
 	payload, frames, empty uint64
+	// 流程场景：随帧提交的事实条数与成功的动作回执数（loadFlow 里唯一的请求动作是重生，所以就是重生次数）。
+	facts, respawns uint64
 	// 客户端一圈的分段（长稳里拆交付频率用）：圈数、整圈、Submit、Poll 与定时器晚醒（醒来时刻减 Reset+50ms）的累计。
 	// 交付频率就是客户端循环频率 = 1 / (50ms + Submit + Poll + 晚醒 + 其余调度)。
 	loops                                uint64
@@ -97,6 +96,12 @@ func startRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool, l
 			l.mu.Lock()
 			if l.recording {
 				l.window.samples[ref] = append(l.window.samples[ref], loadSample{tick.Frame.Tick, tick.Frame.StepTime, time.Since(start), time.Now()})
+				l.window.facts += uint64(len(tick.Facts))
+				for _, receipt := range tick.Receipts {
+					if receipt.Success {
+						l.window.respawns++
+					}
+				}
 			}
 			l.mu.Unlock()
 		}
@@ -141,6 +146,9 @@ func startRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool, l
 				spec.Bodies = append(spec.Bodies, physx.Body{ID: id, Shape: physx.Box, Motion: physx.Dynamic, Position: p, Dimensions: physx.Vec3{.25, 1.5, .25}, Mass: 10})
 				spec.Joints = append(spec.Joints, physx.Joint{ID: uint64(i + 1), Kind: physx.Hinge, A: id, AnchorA: physx.Vec3{0, 1.5, 0}, AnchorB: physx.Vec3{p[0], p[1] + 1.5, p[2]}, MotorSpeed: 1, MotorForce: 100, BreakForce: 10000})
 			}
+		}
+		if scene == "flow" {
+			loadFlow(&spec)
 		}
 		ref, err := rooms.Create(ctx, spec)
 		if err != nil {
@@ -239,6 +247,40 @@ func startRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool, l
 	t.Cleanup(l.stop)
 	return l
 }
+
+// loadFlow 给房间挂上测量用的流程：20 个玩家刚体、铺满围场的 32 个区域（8×4 的格子，每格 6m×12m）、
+// 一个按槽号回到各自起点的出生点。玩家走进 loadKillCells 里的格子就被重生，并让公开变量 falls 加一
+// （于是每次重生都给全房间推一次流程视图）；其余格子只产生进入 / 离开事实。起点都不在会重生的格子里。
+func loadFlow(spec *domain.Spec) {
+	home := gamephysics.Spawn{ID: "home"}
+	for i := 1; i <= gamephysics.CrowdPlayers; i++ {
+		id := uint64(gamephysics.CrowdCapsules + i)
+		spec.Players = append(spec.Players, id)
+		for _, body := range spec.Bodies {
+			if body.ID == id {
+				home.Positions = append(home.Positions, body.Position)
+			}
+		}
+	}
+	spec.Spawns, spec.DefaultSpawn = []gamephysics.Spawn{home}, "home"
+	var triggers []string
+	for row := 0; row < 4; row++ {
+		for column := 0; column < 8; column++ {
+			id := fmt.Sprintf("cell_%d_%d", column, row)
+			spec.Regions = append(spec.Regions, gamephysics.Region{ID: id, Center: physx.Vec3{float32(-21 + 6*column), 3, float32(-18 + 12*row)}, HalfExtents: physx.Vec3{3, 4, 6}})
+			if slices.Contains(loadKillCells, [2]int{column, row}) {
+				triggers = append(triggers, `{"ID":"fall_`+id+`","Event":"region.enter","Conditions":[{"Left":{"EventField":"region"},"Op":"eq","Right":{"Literal":{"Kind":"string","Text":"`+id+`"}}}],"Actions":[`+
+					`{"Kind":"add","Scope":"global","Name":"falls","Value":{"Literal":{"Kind":"int","Int":1}}},{"Kind":"request","Name":"physics_respawn","Args":{"actor":{"EventField":"actor"}}}]}`)
+			}
+		}
+	}
+	spec.Flow = []byte(`{"Version":1,"Name":"load","Revision":1,"TimeDomain":"tick","Initial":["run"],"Variables":[{"Scope":"global","Name":"falls","Default":{"Kind":"int"},"Public":true}],` +
+		`"Stages":[{"ID":"run","Triggers":[` + strings.Join(triggers, ",") + `]}]}`)
+}
+
+// loadKillCells 是会重生的格子（列、行）：东西两侧最外一列。逻辑客户端的输入是缓慢转向的 8 m/s² 加速度，
+// 这样布置实测每个客户端大约每 4～5 秒重生一次（报告里的 RespawnsPerClientPerSecond）。
+var loadKillCells = [][2]int{{0, 0}, {0, 1}, {0, 2}, {0, 3}, {7, 0}, {7, 1}, {7, 2}, {7, 3}}
 
 // record 打开或关闭记录，返回切换时刻。
 func (l *roomLoad) record(on bool) time.Time {
@@ -341,13 +383,15 @@ func runRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool) {
 	}
 	mallocs := after.Mallocs - before.Mallocs
 	report := struct {
-		Scene                                                                                                                                                            string
-		Rooms, Clients, NonstaticPerRoom, GOMAXPROCS                                                                                                                     int
-		Seconds, MeanPhysicsHz, DeliveredHzPerClient, PayloadKBpsPerClient, StepP95ms, StepP99ms, CommitP99ms, TickIntervalP99ms, PollP99ms, AllocatedMB, AllocationMBps float64
-		Frames, EmptyPolls, GCs, PauseNS                                                                                                                                 uint64
+		Scene                                                                                                                                                                         string
+		Rooms, Clients, NonstaticPerRoom, GOMAXPROCS                                                                                                                                  int
+		Seconds, MeanPhysicsHz, DeliveredHzPerClient, PayloadKBpsPerClient, StepP95ms, StepP99ms, CommitP50ms, CommitP99ms, TickIntervalP99ms, PollP99ms, AllocatedMB, AllocationMBps float64
+		Frames, EmptyPolls, GCs, PauseNS                                                                                                                                              uint64
 		// 进程级分配次数；按交付帧摊分只用于同口径前后对照，包含每 Tick 与驱动本身的分配。
 		MallocsPerSecond, AllocKBPerFrame, AllocsPerFrame float64
-	}{scene, roomCount, l.clients, l.nonstatic, runtime.GOMAXPROCS(0), elapsed.Seconds(), float64(s.ticks) / float64(roomCount) / elapsed.Seconds(), float64(w.frames) / float64(l.clients) / elapsed.Seconds(), float64(w.payload) / 1000 / float64(l.clients) / elapsed.Seconds(), loadPercentile(s.steps, .95), loadPercentile(s.steps, .99), loadPercentile(s.commits, .99), loadPercentile(s.intervals, .99), loadPercentile(w.polls, .99), float64(after.TotalAlloc-before.TotalAlloc) / 1e6, float64(after.TotalAlloc-before.TotalAlloc) / 1e6 / elapsed.Seconds(), w.frames, w.empty, uint64(after.NumGC - before.NumGC), after.PauseTotalNs - before.PauseTotalNs, float64(mallocs) / elapsed.Seconds(), float64(after.TotalAlloc-before.TotalAlloc) / 1e3 / float64(max(w.frames, 1)), float64(mallocs) / float64(max(w.frames, 1))}
+		// 流程场景才非零：每秒提交的事实条数，以及平均每个客户端每秒被重生的次数。
+		FactsPerSecond, RespawnsPerClientPerSecond float64
+	}{scene, roomCount, l.clients, l.nonstatic, runtime.GOMAXPROCS(0), elapsed.Seconds(), float64(s.ticks) / float64(roomCount) / elapsed.Seconds(), float64(w.frames) / float64(l.clients) / elapsed.Seconds(), float64(w.payload) / 1000 / float64(l.clients) / elapsed.Seconds(), loadPercentile(s.steps, .95), loadPercentile(s.steps, .99), loadPercentile(s.commits, .5), loadPercentile(s.commits, .99), loadPercentile(s.intervals, .99), loadPercentile(w.polls, .99), float64(after.TotalAlloc-before.TotalAlloc) / 1e6, float64(after.TotalAlloc-before.TotalAlloc) / 1e6 / elapsed.Seconds(), w.frames, w.empty, uint64(after.NumGC - before.NumGC), after.PauseTotalNs - before.PauseTotalNs, float64(mallocs) / elapsed.Seconds(), float64(after.TotalAlloc-before.TotalAlloc) / 1e3 / float64(max(w.frames, 1)), float64(mallocs) / float64(max(w.frames, 1)), float64(w.facts) / elapsed.Seconds(), float64(w.respawns) / float64(l.clients) / elapsed.Seconds()}
 	encoded, _ := json.Marshal(report)
 	t.Log("MULTI_ROOM_RESULT " + string(encoded))
 }
@@ -395,9 +439,14 @@ func TestPhysicsRoomSoak(t *testing.T) {
 	}
 	const roomCount = 8
 	duration := time.Duration(minutes * float64(time.Minute))
-	l := startRoomLoad(t, "mechanisms", roomCount, true, int64(duration/time.Second)+120)
-	header := "unix_s\telapsed_s\trss_kb\theap_inuse_bytes\theap_objects\ttotal_alloc_bytes\tgc_cycles\tgoroutines\tgo_mapped_bytes\tgo_released_bytes\tphysics_hz\tmin_room_hz\tdelivered_hz\tempty_polls\tstep_p99_ms\tcommit_p99_ms\ttick_interval_p99_ms\tpoll_p99_ms\tloop_mean\tsubmit_mean\tpoll_mean\ttimer_late_mean\tloadavg1"
-	t.Logf("SOAK pid=%d rooms=%d clients=%d interval=%s", os.Getpid(), roomCount, l.clients, interval)
+	// ROOST_PHYSICS_SOAK_FLOW=1 时房间挂上 loadFlow 的流程，其余不变。
+	scene := "mechanisms"
+	if os.Getenv("ROOST_PHYSICS_SOAK_FLOW") == "1" {
+		scene = "flow"
+	}
+	l := startRoomLoad(t, scene, roomCount, true, int64(duration/time.Second)+120)
+	header := "unix_s\telapsed_s\trss_kb\theap_inuse_bytes\theap_objects\ttotal_alloc_bytes\tgc_cycles\tgoroutines\tgo_mapped_bytes\tgo_released_bytes\tphysics_hz\tmin_room_hz\tdelivered_hz\tempty_polls\tstep_p99_ms\tcommit_p99_ms\ttick_interval_p99_ms\tpoll_p99_ms\tloop_mean\tsubmit_mean\tpoll_mean\ttimer_late_mean\tloadavg1\tfacts_per_s\trespawns_per_client_s\tcommit_p50_ms"
+	t.Logf("SOAK pid=%d scene=%s rooms=%d clients=%d interval=%s", os.Getpid(), scene, roomCount, l.clients, interval)
 	t.Log("SOAK " + header)
 	if out != nil {
 		fmt.Fprintln(out, header)
@@ -445,6 +494,9 @@ func TestPhysicsRoomSoak(t *testing.T) {
 			soakMeanMS(w.pollSum, w.loops),
 			soakMeanMS(w.lateSum, w.loops),
 			soakLoadAvg(),
+			strconv.FormatFloat(float64(w.facts)/seconds, 'f', 1, 64),
+			strconv.FormatFloat(float64(w.respawns)/float64(l.clients)/seconds, 'f', 3, 64),
+			strconv.FormatFloat(loadPercentile(s.commits, .5), 'f', 3, 64),
 		)
 		line := strings.Join(row, "\t")
 		t.Log("SOAK " + line)

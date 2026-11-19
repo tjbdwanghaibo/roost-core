@@ -124,6 +124,9 @@ func (h *EntityHost) Commit(ctx context.Context, ref domain.Ref, tick domain.Tic
 				h.mu.Unlock()
 				return domain.Settled{}, err
 			}
+			// 重生这类动作在房间的一生里会发生成千上万次：账本只留未完成的，否则它填满 Limits.Effects 之后房间就停了。
+			// 房间对每个动作只给一次回执（service/physicsroom 的 flow.known），晚到的按 ErrStale 记成作废。
+			r.flow.ForgetSettledActions()
 		}
 		h.rooms[ref] = r
 		h.ids[id] = r

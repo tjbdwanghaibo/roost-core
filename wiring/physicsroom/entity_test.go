@@ -295,3 +295,61 @@ func TestRoomEntityRollsBackFrameAndLevelTogether(t *testing.T) {
 		t.Fatalf("the refused commit still advanced the frame: %d %v", got.Tick, err)
 	}
 }
+
+// 房间的流程账本只留未完成的动作：同时最多 2 个动作的流程，重生 12 次（每次都给回执）一直能提交，
+// 流程状态里不积累已完成的动作；回执给过之后再给一次按作废计，不算错。
+func TestRoomFlowLedgerHoldsOnlyUnsettledActions(t *testing.T) {
+	hostKindOnce.Do(func() {
+		if err := entity.RegisterEntityKindCategory(241, 1); err != nil {
+			panic(err)
+		}
+	})
+	h, err := NewEntityHost(241, 1, 4, nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 16}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	defer h.Close(ctx)
+	spec := courseSpec("ledger", "")
+	limited := strings.Replace(string(spec.Flow), `"Stages":`, `"Limits":{"Steps":512,"Timers":8,"Effects":2,"Sources":4},"Stages":`, 1)
+	if limited == string(spec.Flow) {
+		t.Fatal("the course flow has no Stages key to put Limits in front of")
+	}
+	program, err := gamephysics.CompileFlow([]byte(limited), spec.Regions, spec.Spawns, level.Registry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{ID: "ledger", Epoch: 5}
+	instance := domain.LevelInstance(ref)
+	frame := func(tick uint64) gamephysics.Frame {
+		return gamephysics.Frame{Epoch: ref.Epoch, Tick: tick, States: []physx.State{{ID: 1, Rotation: physx.Quat{0, 0, 0, 1}}}}
+	}
+	if _, err = h.Commit(ctx, ref, domain.Tick{Frame: frame(1), Program: program}); err != nil {
+		t.Fatal(err)
+	}
+	tick := uint64(1)
+	var last level.Receipt
+	for fall := 1; fall <= 12; fall++ {
+		tick++
+		enter := level.Event{Instance: instance, Epoch: ref.Epoch, Source: domain.FactSource, Sequence: uint64(fall), Kind: gamephysics.EventRegionEnter,
+			Fields: map[string]level.Value{"actor": level.Int(1), "region": level.String("pit")}}
+		settled, err := h.Commit(ctx, ref, domain.Tick{Frame: frame(tick), Facts: []level.Event{enter}})
+		if err != nil || len(settled.Actions) != 1 || settled.Actions[0].Name != gamephysics.ActionRespawn {
+			t.Fatalf("fall %d: %+v %v", fall, settled, err)
+		}
+		last = level.Receipt{Instance: instance, Epoch: ref.Epoch, ID: settled.Actions[0].ID, Success: true}
+		tick++
+		if settled, err = h.Commit(ctx, ref, domain.Tick{Frame: frame(tick), Receipts: []level.Receipt{last}}); err != nil || len(settled.Actions) != 0 || settled.StaleReceipts != 0 {
+			t.Fatalf("receipt of fall %d: %+v %v", fall, settled, err)
+		}
+		state, err := h.Level(ctx, ref)
+		if err != nil || len(state.Effects) != 0 || state.NextEffect != uint64(fall) || state.Variables["global/falls"] != level.Int(int64(fall)) {
+			t.Fatalf("after fall %d: effects=%+v next=%d variables=%+v %v", fall, state.Effects, state.NextEffect, state.Variables, err)
+		}
+	}
+	tick++
+	settled, err := h.Commit(ctx, ref, domain.Tick{Frame: frame(tick), Receipts: []level.Receipt{last}})
+	if err != nil || settled.StaleReceipts != 1 {
+		t.Fatalf("repeated receipt: %+v %v, want it counted as stale", settled, err)
+	}
+}
