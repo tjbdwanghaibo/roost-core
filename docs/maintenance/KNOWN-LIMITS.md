@@ -569,7 +569,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大的累计值，要 Redis 6.2 及以上；Redis 写失败只记日志，协调器与结算索引不在一个事务里，没有自动对账；分数只升不降，业务以后允许扣分要改用版本化快照或其他明确的顺序方案。
 - **game-demo 的金币来源**（D26，2026-11-14）：副本通关在领奖事务里经 wallet `Add` 发 20（只发一次由领奖账本保证，不用 wallet 业务键）；活动结算按名次另发金币邮件 300/200/100（键 `activity-coins:<活动>:<玩家>`，领取时经 wallet 到账）；GM 邮件照旧。
-- **game-demo 的进入适配**：`EnterGame` 经模块 `EnterSessionWithPlacement` 统一做进入前检查、选择加载路径、初始化后的进场与通知；`EnterCreate` 经模块 `Create`。demo 保留驻留表与登录预算、World 只投递计数、普通地图 / CellWorld 的落位和协议回包适配。请求在进场前已过期则不通知、答 `login_timeout`，已提交的初始化不撤销；实际落位或 `Join` 失败则沿用只告警、继续通知的边界。普通图的空间成员及视野已由 `scenespace` 接管；场景实体的时间域与启停复用 `scene` 内核；世界实例、会话 Ready／重连、分区与换服落点仍用 demo 接线。demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
+- **game-demo 的进入适配**：`EnterGame` 经模块 `EnterSessionWithPlacement` 统一做进入前检查、选择加载路径、初始化后的进场与通知；`EnterCreate` 经模块 `Create`。demo 保留驻留表与登录预算、World 只投递计数、普通地图 / CellWorld 的落位和协议回包适配。请求在进场前已过期则不通知、答 `login_timeout`，已提交的初始化不撤销；普通图满员、目标服首次换服落位或其 `Join` 失败时不通知、不做到账；非换服的其他落位／订阅失败沿用只告警的边界。普通图的空间成员及视野已由 `scenespace` 接管；场景实体的时间域与启停复用 `scene` 内核；世界实例、会话 Ready／重连、分区与换服落点仍用 demo 接线。demo 覆盖了模块的 `protocol/def/enter_game.go`、`game/controllers/enter.go`（两个登录端点交给 demo 的 `EnterGame` / `EnterCreate`，会话激活后的告知 `Announce` 照模块原样）与 `game/modules/login/enter_first.go`（D25：新玩家落库位置写成世界场景出生点，首次初始化事务内只执行一次；demo 不发初始道具或金币）。`Announce` 每次告知经 `FromRegistry` 新建一个 Controller，demo 玩家端点的依赖（`player.go` 的 `playerModuleState`）挂在 Controller 上、按需从 Registry 取，所以多一个 Controller 只是多取一次；往这份状态里加真正的每进程状态（名单、缓存）时要改成进程级对象。
 
 #### account：一套服务多个游戏（2026-11-18）
 
@@ -987,7 +987,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 旧迁出任务不能跨绑定代数清理新一代；交出句柄与副本删除凭据也受保护。这里修的是**旧任务重放的安全性**，不是下面的 checkpoint 负载竞态。game-demo 的居留与场景接线仍是过渡路径；物理房间的检查点重生不是 rehome 的跨服到达回出生点。
 
-- **换服二期未做的两项**（2026-11-19 核对，方案 §7 原写“二期未开始”已过时，其余联动均已实现）：①到达回出生点——demo 没挂 `rehome.OnArrived`，玩家按源服 `LeaveScene` 存下的位置进入目标服地图，这个位置在目标服地图上是否可走未验证；②chat、leaderboard 与 rehome 的联动没做，是否需要未评估（两者都是全服托管服务，按玩家号寻址）。
+- **换服二期边界**：普通图在 Player + Scene 落位事务中按目标服意图选取可走出生点，同时写保存坐标与本次换服的落位标记；`OnEntered` 再到账，同服重连和到账重试不再回出生点。CellWorld 的位置与快照恢复策略不变。chat、leaderboard 与 rehome 的联动没做，是否需要未评估（两者都是全服托管服务，按玩家号寻址）。
 - **换服 checkpoint：旧报错不足以证明生产绕过**。原脚本只凭“已交出”文件存在就报 BYPASS，当时未记录返回瞬间是否已扣住目标 LeaveScene 的 Ack。新演练区分前提未命中和真绕过：同一事务 ID 既在被扣住的 Ack 中、又在等待集合中，释放后才允许正常交出。本机真实双 game 的完整七场景通过；删掉等待的对照在闸门未命中时报告前提不足，确保闸门先生效后可检出 BYPASS。没有修改生产交出逻辑；无法为 11-18 那一次追认根因，也不是高负载绝不绕过的证明。[证据](evidence/local-recovery-four/README.md)。
 
 

@@ -25,6 +25,12 @@ type Map interface {
 	Walking() bool
 }
 
+// OrdinaryPlacement is an internal Nest result (not a client message).
+type OrdinaryPlacement struct {
+	At spatial.Point
+	Arriving bool // Do not consume this transfer's arrival if Join fails.
+}
+
 // MapHolder 是“带有 Map 组件”的小接口：实体接口（entity_<实体>.go，生成）嵌入它。
 type MapHolder interface{ Map() Map }
 

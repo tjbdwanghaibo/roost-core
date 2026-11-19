@@ -63,6 +63,15 @@ func rehomeCommand(ctx context.Context, command string) error {
 		if err != nil || count != 10 {
 			return fmt.Errorf("initial bag=%d: %v", count, err)
 		}
+		// Distinguish the copied source position from the target's spawn (500,500).
+		wire, err := c.call(msgid.MsgMove, mustMarshal(pb.MarshalMoveRequest(&pb.MoveRequest{X: 620, Y: 540})))
+		if err != nil {
+			return err
+		}
+		pos, err := pb.UnmarshalMoveResponse(wire)
+		if err != nil || pos.Code != 0 || pos.X != 620 || pos.Y != 540 {
+			return fmt.Errorf("source move: %+v %v", pos, err)
+		}
 		full, err := entity.BuildEntityID(r.PlayerID, player.EntityKindPlayer)
 		if err != nil {
 			return err
@@ -104,6 +113,17 @@ func rehomeCommand(ctx context.Context, command string) error {
 	defer c.raw.Close()
 	switch command {
 	case "apply":
+		// Give the checkpoint case a fresh, dirty position for its exact leave-save barrier.
+		if os.Getenv("DRILL_DIRTY_BEFORE_APPLY") == "1" {
+			wire, err := c.call(msgid.MsgMove, mustMarshal(pb.MarshalMoveRequest(&pb.MoveRequest{X: 621, Y: 540})))
+			if err != nil {
+				return err
+			}
+			pos, err := pb.UnmarshalMoveResponse(wire)
+			if err != nil || pos.Code != 0 || pos.X != 621 || pos.Y != 540 {
+				return fmt.Errorf("checkpoint move: %+v %v", pos, err)
+			}
+		}
 		raw, err := c.call(msgid.MsgRehomeApply, mustMarshal(pb.MarshalRehomeApplyRequest(&pb.RehomeApplyRequest{To: 1001})))
 		if err != nil {
 			return err

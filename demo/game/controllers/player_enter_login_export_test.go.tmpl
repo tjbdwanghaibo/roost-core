@@ -7,6 +7,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
 )
 
 // 这个文件只在测试里编译。登录的整条链路场景（player_enter_login_scenario_test.go）在外部测试包 controllers_test 里：
@@ -53,8 +54,9 @@ type loginSceneNest struct {
 }
 
 func (n loginSceneNest) RequestMulti(ctx stdcontext.Context, name corenest.HandlerName, ids []int64, params corenest.Params, opts ...corenest.SendOpt) (any, error) {
-	if name.String() == "handlerEnterScene" {
-		return n.place()
+	if name.String() == "handlerPlaceOrdinaryPlayer" {
+		at, err := n.place()
+		return view.OrdinaryPlacement{At: at}, err
 	}
 	return n.Client.RequestMulti(ctx, name, ids, params, opts...)
 }

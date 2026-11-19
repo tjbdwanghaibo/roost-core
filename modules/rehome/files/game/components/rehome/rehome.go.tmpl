@@ -92,6 +92,7 @@ func (component *Component) Prepare(move gamerehome.Move, nowUnixMilli int64) er
 	if err := component.applying(move, nowUnixMilli); err != nil {
 		return gamerehome.Refused(err, "refused by a check")
 	}
+	state.SetPlacedID("")
 	state.SetPendingID(move.ID)
 	state.SetPendingFrom(move.From)
 	state.SetPendingTo(move.To)
@@ -151,10 +152,30 @@ func (component *Component) Cancel(id string) bool {
 
 func (component *Component) clearIntent() {
 	state := component.owner.Dao().GetRehome()
+	state.SetPlacedID("")
 	state.SetPendingID("")
 	state.SetPendingFrom(0)
 	state.SetPendingTo(0)
 	state.SetPendingAt(0)
+}
+
+// PendingArrival returns the transfer still awaiting arrival on this sid and whether its host placement committed.
+func (component *Component) PendingArrival(sid int32) (string, bool) {
+	s := component.owner.Dao().GetRehome()
+	id := s.GetPendingID()
+	if sid <= 0 || s.GetPendingTo() != sid || id == "" || s.GetArrivedID() == id {
+		return "", false
+	}
+	return id, s.GetPlacedID() == id
+}
+
+// MarkPlaced must be issued in the transaction that saves the destination point. It does not consume arrival.
+func (component *Component) MarkPlaced(sid int32, id string) error {
+	if current, _ := component.PendingArrival(sid); id == "" || current != id {
+		return fmt.Errorf("rehome: placement intent is no longer current")
+	}
+	component.owner.Dao().GetRehome().SetPlacedID(id)
+	return nil
 }
 
 // LastAt 是这名玩家上一次换服到达的业务时间（Unix 毫秒），没换过是 0；Count 是换过几次。给同一个实体上别的组件读。

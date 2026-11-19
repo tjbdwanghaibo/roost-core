@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	db "{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
 	"{{MODULE}}/game/flags"
@@ -81,6 +82,7 @@ type Scene struct {
 	runtime atomic.Pointer[sceneruntime.Runtime]
 	life    sceneLife
 	playerCapacity int
+	spawn spatial.Point
 
 	host     *heartbeat.Host
 	spawnReg *heartbeat.Reg
@@ -136,7 +138,7 @@ func (s *Scene) openMap(config gamescene.Config, domain *timedomain.Domain) erro
 	if err := runtime.Start(); err != nil {
 		return err
 	} // Start unwinds its own partial system list.
-	s.playerCapacity = config.PlayerCapacity
+	s.playerCapacity, s.spawn = config.PlayerCapacity, config.Spawn
 	s.runtime.Store(runtime) // stopMap now owns the successfully started systems, even if the beat fails.
 	s.host = actor.Heartbeat.NewHost(s)
 	reg, err := s.host.Register("scene.spawn", SpawnPeriod, s.spawnBeat)
@@ -171,6 +173,8 @@ func (s *Scene) stopMap(domain *timedomain.Domain, reason entity.EntityDestroyRe
 		runtime.Stop(reason)
 	}
 }
+
+func (s *Scene) SpawnPoint() spatial.Point { return s.spawn }
 
 // AdmitPlayer and DepartPlayer are called under the world guard; neither changes a session or AOI.
 func (s *Scene) AdmitPlayer(id int64) error {
@@ -381,6 +385,7 @@ func (s *Scene) CellRegion() *cellworld.Region { return s.region }
 // a Scene.
 type ISceneEntity interface {
 	entity.IThreadSafeEntity
+	SpawnPoint() spatial.Point
 	AdmitPlayer(int64) error
 	DepartPlayer(int64)
 	Terrain() gamescene.Terrain

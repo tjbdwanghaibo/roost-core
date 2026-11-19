@@ -113,11 +113,18 @@ for case_name in ${DEMO_REHOME_STAGES:-accepted quiesced leaving handed-off comm
 		-d "{\"name\":\"gm.player.coins\",\"operator\":\"rehome-drill\",\"payload\":{\"player_id\":$player_id,\"delta\":100,\"note\":\"private crash drill\"}}" >"$out/$case_name/credit.json"
 	jq -e '.ok == true' "$out/$case_name/credit.json" >/dev/null || { cat "$out/$case_name/credit.json"; drill_fail "credit"; }
 	drill spend >"$out/$case_name/spend.txt"
-	snapshot before
+	# Wait for the real position save before arming any crash point (including accepted).
+	for i in $(seq 1 100); do
+		snapshot before
+		jq -e '.source.saved_pos_x == 620 and .source.saved_pos_y == 540' "$out/$case_name/before-documents.json" >/dev/null && break
+		sleep 0.2
+	done
+	jq -e '.source.saved_pos_x == 620 and .source.saved_pos_y == 540' "$out/$case_name/before-documents.json" >/dev/null || drill_fail 'source position never persisted away from spawn'
 	stage="$case_name"; [[ "$stage" != checkpoint ]] || stage=handed-off
 	jq -n --arg stage "$stage" --argjson id "$player_id" '{Stage:$stage,PlayerID:$id}' >"$out/control/arm.json"
-	if [[ "$case_name" == checkpoint ]]; then printf '%s\n' "$entity_id" >"$out/control/hold-checkpoint"; fi
-	drill apply >"$out/$case_name/apply.json" 2>"$out/$case_name/disconnected.txt" &
+	dirty=0; source_x=620
+	if [[ "$case_name" == checkpoint ]]; then dirty=1; source_x=621; printf '%s\n' "$entity_id" >"$out/control/hold-checkpoint"; fi
+	DRILL_DIRTY_BEFORE_APPLY=$dirty drill apply >"$out/$case_name/apply.json" 2>"$out/$case_name/disconnected.txt" &
 	apply_pid=$!
 	wait_file "$out/$case_name/apply.json"
 	if [[ "$case_name" == checkpoint ]]; then
@@ -162,6 +169,7 @@ for case_name in ${DEMO_REHOME_STAGES:-accepted quiesced leaving handed-off comm
 	done
 	jq -e '.serving_server_id == 1001 and .transfer == null' "$out/$case_name/no-login-binding.json" >/dev/null || drill_fail "transfer not recovered without a login"
 	jq -e '.source == null and .target != null' "$out/$case_name/no-login-documents.json" >/dev/null || drill_fail "source documents not dropped without a login"
+	jq -e --argjson x "$source_x" '.target.saved_pos_x == $x and .target.saved_pos_y == 540' "$out/$case_name/no-login-documents.json" >/dev/null || drill_fail 'target before first login did not retain the source point'
 	cp "$out/$case_name/no-login-binding.json" "$out/$case_name/recover-binding.json"
 	drill verify >"$out/$case_name/verify.txt"
 	drill source-refused -gate "127.0.0.1:$(drill_port 7000)" >"$out/$case_name/source-refused.txt"
@@ -175,6 +183,7 @@ for case_name in ${DEMO_REHOME_STAGES:-accepted quiesced leaving handed-off comm
 	done
 	jq -e '.target.wallet["1"] == 93 and .target.bag["1"]["1001"] == 11 and .target.rehome["7"] == 1 and .target.rehome["1"] == ""' "$out/$case_name/after-documents.json" >/dev/null || drill_fail "persisted assets or arrival marker differ"
 	jq -e '.source == null and .target != null' "$out/$case_name/after-documents.json" >/dev/null || drill_fail "source documents not dropped"
+	jq -e '.target.saved_pos_x == 500 and .target.saved_pos_y == 500' "$out/$case_name/after-documents.json" >/dev/null || drill_fail 'target first login did not persist its own spawn'
 	cp .dev/rehome-source.log "$out/$case_name/source-recovered.log"
 	drill_log "PASS $case_name: target binding, bag=11, wallet=93, source refused"
 done

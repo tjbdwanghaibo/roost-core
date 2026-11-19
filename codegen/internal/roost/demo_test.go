@@ -370,7 +370,7 @@ func TestDemoEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
 	cellworldActor := "implements cellworld.Actor: the framework's cell runtime calls it to store / pace the actor"
 	cellworldBase := "implements cellworld.BasePlayer: the framework's base side calls it inside the player's transaction"
 	checkEntityMethodsLeaveStateToComponents(t, demo.Files, map[string]string{
-		"game/entities/scene/entity.go.tmpl Scene.OnInitFinish":      "builds the scene's runtime objects (time domain, world clock and ground for the actors) from the create parameters",
+		"game/entities/scene/entity.go.tmpl Scene.openMap":           "lifecycle startup adapter: installs the configured map runtime, actor ground and time, and the population heartbeat",
 		"game/entities/scene/entity.go.tmpl Scene.SetTimeRate":       "the scene's own time domain (a runtime object of the entity) writes its anchor into SceneDao",
 		"game/entities/monster/cell.go.tmpl Monster.SetCellPeriod":   cellworldActor,
 		"game/entities/player/cell_base.go.tmpl Player.SetCellGroup": cellworldBase,

@@ -67,7 +67,7 @@ func rehomeDrillHoldAck(ctx context.Context, records []coredata.CommitRecord) er
  var matched string
  for _, record := range records {
   // demo 在交出前最后一笔 Player 写入是 LeaveScene（保存位置）。Prepare 之后还有这笔写入，不能提前堵住回放。
-  if !strings.HasSuffix(record.Handler, "LeaveScene") { continue }
+  if !strings.HasSuffix(record.Handler, "LeaveOrdinaryScene") { continue }
   for _, mutation := range record.Mutations { if mutation.Key.ID == target { matched = record.ID.String(); break } }
  }
  if matched == "" { return nil }

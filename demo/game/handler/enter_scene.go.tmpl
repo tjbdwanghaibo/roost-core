@@ -45,3 +45,48 @@ func handlerEnterScene(target view.IMapEntity, area sceneentity.ISceneEntity, sp
 	}
 	return component.EnterScene(area.ID(), area.Space(), at)
 }
+
+// Ordinary login only. Never consult a transfer flag outside the Player transaction or use
+// a default-field spawn for a different destination map. Slot, live position, saved position
+// and transfer-specific placement marker either commit together or all roll back.
+//roost:nest rollback=undo durability=async
+func handlerPlaceOrdinaryPlayer(target view.PlayerEntity, area sceneentity.ISceneEntity, sid int32) (view.OrdinaryPlacement, error) {
+	spawn := area.SpawnPoint()
+	id, placed := target.Rehome().PendingArrival(sid)
+	if id == "" || placed {
+		at, err := handlerEnterScene(target, area, spawn.X, spawn.Y)
+		return view.OrdinaryPlacement{At: at, Arriving: id != ""}, err
+	}
+	if err := area.AdmitPlayer(target.ID()); err != nil {
+		return view.OrdinaryPlacement{}, err
+	}
+	at, err := area.PathFind().Place(spawn)
+	if err != nil {
+		return view.OrdinaryPlacement{}, err
+	}
+	m := target.Map()
+	if m.InScene() {
+		if err := m.LeaveScene(); err != nil {
+			return view.OrdinaryPlacement{}, err
+		}
+	}
+	at, err = m.EnterScene(area.ID(), area.Space(), at)
+	if err != nil {
+		return view.OrdinaryPlacement{}, err
+	}
+	if err := m.Body().Map.Save(); err != nil {
+		return view.OrdinaryPlacement{}, err
+	}
+	if err := target.Rehome().MarkPlaced(sid, id); err != nil {
+		return view.OrdinaryPlacement{}, err
+	}
+	return view.OrdinaryPlacement{At: at, Arriving: true}, nil
+}
+
+// On a placement error the controller cannot infer intent from a zero return value. Check
+// only on that error path: a failed transfer placement must not run the entered/arrival hooks.
+//roost:nest rollback=undo durability=memory
+func handlerPendingOrdinaryArrival(target view.IRehomeEntity, sid int32) (bool, error) {
+	id, _ := target.Rehome().PendingArrival(sid)
+	return id != "", nil
+}
