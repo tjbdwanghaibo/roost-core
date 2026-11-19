@@ -3,12 +3,12 @@ package handler
 import (
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"{{MODULE}}/game/modules/gift"
 	"{{MODULE}}/game/view"
-	"{{MODULE}}/game/gift"
 	apperrors "{{MODULE}}/internal/errors"
 	giftitem "{{MODULE}}/saga/gift_item"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 )
 
 // handlerStartGift starts the gift saga from inside the sender's Nest

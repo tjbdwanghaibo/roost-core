@@ -1,4 +1,4 @@
-package {{GAME_SERVICE_PKG}}
+package giftruntime
 
 import (
 	"context"
@@ -8,9 +8,10 @@ import (
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/gift"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/modules/gift"
 	gamemailbox "{{MODULE}}/game/modules/mailbox"
+	"{{MODULE}}/game/modules/rehome"
 	giftitem "{{MODULE}}/saga/gift_item"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -97,12 +98,45 @@ const (
 	giftRecipientNotFound = "recipient has never entered the game"
 )
 
-// startGiftSaga registers the four steps and starts their consumers. It runs
-// in Init, after the saga Mod has started (the streams exist); the returned
-// Steps is drained in Shutdown. Which streams, prefix and databases the
-// consumers use, their inboxes, the admission signal and metrics are the
-// framework's (roost-core wiring/saga Steps); what is left here is the business.
-func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps, error) {
+// Start 是普通工程的模块入口；当前绑定由 rehome/account 决定，绝不从消息的初始路由推断。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	self, err := rehome.SelfSID(registry)
+	if err != nil {
+		return nil, err
+	}
+	owners := lookupOwner(func(ctx context.Context, playerID int64) (Admission, error) {
+		sid, moving, err := rehome.Binding(ctx, registry, playerID)
+		return Admission{SID: sid, Local: !moving && sid == self, Moving: moving}, err
+	})
+	steps, err := StartSteps(context.Background(), registry, owners)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context) error {
+		if err := steps.Drain(ctx); err != nil {
+			steps.Stop()
+			return err
+		}
+		return nil
+	}, nil
+}
+
+type lookupOwner func(context.Context, int64) (Admission, error)
+
+func (f lookupOwner) AdmitBound(ctx context.Context, id int64) (Admission, error) { return f(ctx, id) }
+
+// Admission 是宿主对当前绑定的回答。Local 且带错误表示本服正在卸载，等待重投。
+type Admission = gift.Admission
+
+// StartSteps 给自带驻留表的宿主使用：它先建立写闸门，再启动这唯一一组消费者。
+func StartSteps(ctx context.Context, registry *app.Registry, owners Ownership) (*kitsaga.Steps, error) {
+	if owners == nil {
+		return nil, fmt.Errorf("gift saga: player ownership required")
+	}
+	self, err := rehome.SelfSID(registry)
+	if err != nil {
+		return nil, err
+	}
 	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
 	if !ok || nestClient == nil {
 		return nil, fmt.Errorf("gift saga: nest client is unavailable")
@@ -117,22 +151,19 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps,
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	mailer, err := Mail(registry)
-	if err != nil {
-		return nil, fmt.Errorf("gift saga: %w", err)
+	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mailer == nil {
+		return nil, fmt.Errorf("gift saga: mail capability unavailable")
 	}
-	// Not optional: a step that runs without the ownership table is a step
-	// that will happily load another process's player, and nothing about the
-	// resulting corruption points back here. Refuse to subscribe instead.
-	owners, ok := app.Lookup[*PlayerOwners](registry, PlayerOwnerCapability)
-	if !ok || owners == nil {
-		return nil, fmt.Errorf("gift saga: player ownership (%s) is not published yet; it must be registered before the step consumers subscribe", PlayerOwnerCapability)
-	}
+	bound := func(ctx context.Context, id int64) (int32, bool, error) { return rehome.Binding(ctx, registry, id) }
 	runtime, err := kitsaga.NewSteps(registry, giftSagaSteps)
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	steps := giftSteps{nest: nestClient, mailer: mailer, recipients: recipientPlayers(mongoClient, databases, owners.sid, owners.bound), owners: owners}
+	if err := registry.Register(gift.OwnershipCapability, owners); err != nil {
+		return nil, err
+	}
+	steps := giftSteps{nest: nestClient, mailer: mailer, recipients: recipientPlayers(mongoClient, databases, self, bound), owners: owners}
 	steps.register(runtime)
 	if err := runtime.Start(ctx); err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
@@ -155,27 +186,13 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps,
 // Deliver is a mail call, which any process may make: it stays on the shared
 // durable, and pinning it to the owner would only make it wait.
 func (steps giftSteps) register(runtime *kitsaga.Steps) {
-	runtime.Native("debit", giftitem.TopicDebit, steps.debit, kitsaga.WithSidRoute(), kitsaga.WithAdmit(steps.admitBound))
-	runtime.Native("debit-undo", giftitem.TopicDebitCompensation, steps.refund, kitsaga.WithSidRoute(), kitsaga.WithAdmit(steps.admitBound))
+	runtime.Native("debit", giftitem.TopicDebit, steps.debit, kitsaga.WithSidRoute(), kitsaga.WithAdmit(func(ctx context.Context, cmd saga.Command) error { return Admit(ctx, steps.owners, cmd) }))
+	runtime.Native("debit-undo", giftitem.TopicDebitCompensation, steps.refund, kitsaga.WithSidRoute(), kitsaga.WithAdmit(func(ctx context.Context, cmd saga.Command) error { return Admit(ctx, steps.owners, cmd) }))
 	runtime.Mongo("deliver", giftitem.TopicDeliver, steps.deliver)
 	runtime.Mongo("deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo)
 }
 
-// playerOwnership is the part of PlayerOwners these steps ask about. Declared
-// here rather than taking *PlayerOwners so a test could stand it in; the
-// route tests (gift_route_test.go) use the real table.
-//
-// 准入按发送方**当前**的绑定回答（PlayerOwners.AdmitBound）：命令里携带的 sid 只是发起时的服，用于最初的路由；
-// 发起之后他可能换了服（rehome 模块）。归本服就接入（建立或刷新驻留记录，算一次使用），发送方离线、没有副本也照常
-// 执行——Nest 在 io 池冷加载他，驻留记录让闲置卸载之后收走这份副本；归别的服、正在换服都不建记录，把步骤退回
-// 协调器。驻留记录因此只会出现在玩家当前绑定的那个 sid 上，不会有两个写者。
-type playerOwnership interface {
-	// AdmitBound: Local → served here (counted as use; a non-nil err means
-	// bound here but the copy is being unloaded); Moving → changing servers,
-	// run nowhere; otherwise bound to SID, nothing was recorded here. A
-	// non-nil err with Local false: the binding could not be asked.
-	AdmitBound(ctx context.Context, playerID int64) (Admission, error)
-}
+type Ownership = gift.Ownership
 
 type giftSteps struct {
 	nest   corenest.Client
@@ -183,9 +200,8 @@ type giftSteps struct {
 	// recipients opens the Player DAO's physical collection where a player's
 	// document is (recipientPlayers), for deliver's recipient check.
 	recipients func(ctx context.Context, playerID int64) (fmongo.ICollection, error)
-	// owners is who may touch which player. nil means a single-process
-	// deployment, where every player is this process's.
-	owners playerOwnership
+	// 启动消费者时必须给当前归属查询；不能假设“收到命令就归本服”。
+	owners Ownership
 }
 
 // admitBound is debit's and refund's admission: may THIS process run this
@@ -232,9 +248,10 @@ type giftSteps struct {
 //
 // Moving a whole sid to another machine keeps the route: the commands wait on
 // that sid's durable for the new process, nothing to bounce.
-func (steps giftSteps) admitBound(ctx context.Context, command saga.Command) error {
-	if steps.owners == nil {
-		return nil
+// Admit 在扣物和退款的路由消费者上执行；离线、本服卸载、迁移中、外服分别判定。
+func Admit(ctx context.Context, owners Ownership, command saga.Command) error {
+	if owners == nil {
+		return fmt.Errorf("gift saga: ownership unavailable")
 	}
 	// Decode only. Admission needs the player id and nothing else: resolving
 	// the entity id here would make "is the Player kind registered yet" part
@@ -250,12 +267,12 @@ func (steps giftSteps) admitBound(ctx context.Context, command saga.Command) err
 		slog.Error("gift saga: rejecting a step whose payload names no sender sid", "player_id", state.From, "command", command.ID, "saga_id", command.SagaID)
 		return saga.RejectStep(fmt.Sprintf("gift step %s for player %d names no sender sid; it cannot be routed", command.ID, state.From))
 	}
-	return admitByBinding(ctx, steps.owners, "gift saga", state.From)
+	return admitByBinding(ctx, owners, "gift saga", state.From)
 }
 
 // admitByBinding turns the ownership table's answer about a player's current
 // binding into the gift step's verdict. Alliance uses the same PlayerOwners through its binding adapter.
-func admitByBinding(ctx context.Context, owners playerOwnership, who string, playerID int64) error {
+func admitByBinding(ctx context.Context, owners Ownership, who string, playerID int64) error {
 	admission, err := owners.AdmitBound(ctx, playerID)
 	switch {
 	case admission.Local && err != nil:
@@ -266,6 +283,9 @@ func admitByBinding(ctx context.Context, owners playerOwnership, who string, pla
 		return fmt.Errorf("%s: player %d: %w", who, playerID, err)
 	case admission.Moving:
 		return saga.BounceStep("", fmt.Sprintf("player %d is moving between sids", playerID))
+	}
+	if admission.SID <= 0 {
+		return fmt.Errorf("%s: no current binding for player %d", who, playerID)
 	}
 	return saga.BounceStep(saga.SidRoute(admission.SID), fmt.Sprintf("player %d is bound to sid %d", playerID, admission.SID))
 }

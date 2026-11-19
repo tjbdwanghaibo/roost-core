@@ -247,7 +247,7 @@ sequenceDiagram
 | 充值与钻石到账 | [purchase 模块](../../modules/purchase/README.md)、[platform](../../service/platform/) | 待发序号与 Player 奖励同事务，终态后清理 | 产品、支付签名、退款与审计 |
 | 邮件与补偿 | [MailboxClaim](../../modules/mailbox/files/game/controllers/mailbox.go.tmpl)、[MailboxClaimReward](../../modules/mailbox/files/game/handler/mailbox_claim_reward.go.tmpl)（mailbox 业务模块） | 服务预留、玩家侧幂等奖励、服务提交多阶段 | 邮件有效期与补发规则 |
 | 活动与排行 | [活动接线](../../demo/internal/service/game/activity.go.tmpl)、[服务篇](guide/09-services.md) | 活动贡献只在首次真实付款时提交；排行写累计快照、只增不减 | 活动窗口、奖励档位；尽力贡献失败不自动补报是已接受取舍 |
-| 跨服协作 | [Saga](guide/06-saga.md)、[gift_item saga](../../demo/saga/gift_item/) | 原生步骤 / effect，失败补偿，结果未知按身份查询 | 原生步骤单进程容量有限（见 Saga 指南 §5），量大按 sid 分片 |
+| 跨服协作 | [Saga](guide/06-saga.md)、[gift_item saga](../../modules/gift/README.md) | 原生步骤 / effect，失败补偿，结果未知按身份查询 | 原生步骤单进程容量有限（见 Saga 指南 §5），量大按 sid 分片 |
 | 技能与 Buff | [技能 / 战斗](guide/08-skill.md) | 完整 Skill Host 按其独立事务 / 持久化契约接入 | 技能、Buff、英雄内容与平衡 |
 | 推送与客户端 | [Sync](guide/04-sync.md)、[玩家接入](PLAYER-ACCESS.md) | 业务视图经 self_sync 推送 | 客户端协议与表现 |
 

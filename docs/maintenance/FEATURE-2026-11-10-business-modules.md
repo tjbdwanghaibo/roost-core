@@ -604,12 +604,12 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 2 | mailbox | 邮件：列表、领附件、发件入口 `SendTo`；附件种类是登记点，金币内置，道具经 mailbox + bag 联动 | 托管 mail 服务；wallet | 已有（32 条；联动 mailbox+bag 9 条、mailbox+enter 5 条）；game-demo 的邮件在用 |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 已有（17 条）（目录是业务文件，没有用配置表） |
 | 3 | room | 带座位的房间实体：进出、连接代际、房主 | 自带 Room Entity、DAO、lifecycle，安装时分配实体号 | 已有基础模块（22 条）；匹配移交、回合与自动断线订阅不包含 |
-| 3 | matchroom | 匹配成局到房间的移交 | 托管 match 服务；room | 未做 |
+| 3 | matchroom | 匹配成局到房间的移交 | room | 已有；demo 的 module-duel 已接，旧锁步池 R11 暂缓 |
 | 3 | turn | 回合推进：命令序号、超时（持久定时器） | room；定时器类型分配 | 已实施（25 条），边界见 turn README |
-| 3 | gift | 玩家间送礼：扣 → 送的 saga，失败补偿；扣款步骤按 sid 确切路由（v1.44.0） | bag；saga Mod 与 `roost add saga` 作为安装前置（安装器现在只检查、不代办）；服务级接线点（步骤消费者要在服务 `Init` 里启动、带属主核对） | 未做（2026-11-11 合入 v1.44.0 后评估：game-demo 的赠礼 saga 删掉交接代码后只剩约 700 行，适合拆；当时卡在安装器没有服务级接线点）。2026-11-19 核对：服务级接线 A1 已落地，不再卡安装器；2026-11-12 留下的半成品暂存（旧布局 `game/gift`，测试未过）已删除，重做从现行 `game/modules/<pkg>` 布局开始 |
+| 3 | gift | 玩家间送礼：按当前绑定扣物、邮件投递、失败退款 | bag、mailbox、rehome；声明式 Saga 与 Player 回执 | 已有，[模块说明](../../modules/gift/README.md)；game-demo 复用同一实现 |
 | 3 | transfer | 单个玩家换服（改绑 sid）：源服停写、等落库、account 改绑、目标服接管；给 saga 的“换服中”钩子提供状态 | account 服务的改绑接口与换服状态（框架内）；服务级接线点 | **已有**：模块 `rehome`（2026-11-11 一期；在途索引、恢复与清扫 2026-11-17 D7 A / D8 A），框架侧是 account 的换服接口与 DataEngine 的交出实体。原写“未做”已过时（2026-11-19 核对），见 [FEATURE-2026-11-11-player-rehome](FEATURE-2026-11-11-player-rehome.md) |
-| 3 | scene | 场景：Scene 实体、进出场景、移动与视野、刷怪、心跳驱动与同步接线（现在只在 game-demo 里，约 2900 行参考实现；core 里只有视野 / AOI、同步视图、移动、时间域、地形这些零件） | 安装器要先支持模块自带实体与服务级接线点 | 未做。**维护者 2026-11-11 同意的顺序**：换服做完 → 补安装器这两个缺口（同时解开 room / matchroom / turn / gift）→ 把 demo 的场景拆成模块 → 再加功能，先后是：多场景管理（按需创建销毁、切换）、区域触发（可接 task 的事件）、附近聊天（chat + scene 联动）、分线、可交互对象 |
-| 4 | 配方 | `roost project new -recipe <name>`：一组模块加参数（休闲、回合对战……） | 模块够用之后 | 未做 |
+| 3 | scene | 场景实体、进出、多地图与分线、区域交互 | actor；服务级接线 | [模块已实现](../../modules/scene/README.md)；game-demo 自有场景接线待迁 |
+| 4 | 配方 | `roost project new -recipe <name>` | 模块组合 | 已有 casual、turn-pvp 两种配方 |
 
 安装器已支持自带实体与 Init / Shutdown 接线点（2026-11-11）；定时器类型分配已完成；还缺、按需要补的能力：配置表与模块配置、更多的登记点（通用机制已有：清单的 `with` 联动文件，见 [modules/README](../../modules/README.md)；已有的登记点是 enter 的进入钩子，chat 与 mailbox 接在上面。还缺：mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
 

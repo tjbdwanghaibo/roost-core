@@ -1,0 +1,47 @@
+package gift
+
+import (
+	"context"
+	"errors"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"testing"
+)
+
+type ownerProbe func(context.Context, int64) (Admission, error)
+
+func (f ownerProbe) AdmitBound(ctx context.Context, id int64) (Admission, error) { return f(ctx, id) }
+
+// 旧会话即使还声称绑定本服，也不能让另一服的 Player 进入本地 StartGift 事务。
+func TestGiftSenderChecksTheCurrentOwner(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	r := app.NewRegistry(cfg)
+	ctx := context.Background()
+	if _, err := SenderSID(ctx, r, 42, 1000); err == nil {
+		t.Fatal("accepted without ownership")
+	}
+	var a Admission
+	var cause error
+	calls := 0
+	if err := r.Register(OwnershipCapability, ownerProbe(func(context.Context, int64) (Admission, error) { calls++; return a, cause })); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SenderSID(ctx, r, 42, 1001); err == nil || calls != 0 {
+		t.Fatal("wrong session sid reached owner lookup")
+	}
+	for _, a = range []Admission{{SID: 1001}, {Moving: true, SID: 1000}, {}} {
+		if _, err := SenderSID(ctx, r, 42, 1000); err == nil {
+			t.Fatalf("accepted stale session: %+v", a)
+		}
+	}
+	a = Admission{Local: true, SID: 1000}
+	cause = errors.New("unloading")
+	if _, err := SenderSID(ctx, r, 42, 1000); !errors.Is(err, cause) {
+		t.Fatalf("unload refusal: %v", err)
+	}
+	cause = nil
+	if sid, err := SenderSID(ctx, r, 42, 1000); err != nil || sid != 1000 {
+		t.Fatalf("local admission: %d, %v", sid, err)
+	}
+}

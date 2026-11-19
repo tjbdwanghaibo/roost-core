@@ -103,6 +103,8 @@ const (
 
 // ModuleOptions 是 plan / add 的选项。
 type ModuleOptions struct {
+	// protocolPins 只给已有客户端的模板迁移；普通安装仍分配空闲号。
+	protocolPins map[string]int64
 	// Service 在工程有多个运行 Nest 的业务服务时指定装进哪一个。
 	Service string
 	// SkipSelfSync 不替工程打开 access.player.self_sync（模块清单 access.self_sync 的那一步）。
@@ -163,6 +165,16 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 	allocator, err := newModuleIDAllocator(root, manifest)
 	if err != nil {
 		return ModulePlan{}, err
+	}
+	if len(options.protocolPins) > 0 {
+		span := manifest.IDs["protocol"].Groups[moduleProtocolGroup]
+		for name, id := range options.protocolPins {
+			if id < span.Min || id > span.Max || allocator.used["protocol"][id] {
+				return ModulePlan{}, fmt.Errorf("cannot reserve protocol %s = %d", name, id)
+			}
+			allocator.reserve("protocol", id)
+		}
+		allocator.protocolPins = options.protocolPins
 	}
 	timerPlans := map[string]*ModuleTimerPlan{}
 	pending := map[string]bool{}
@@ -1007,8 +1019,9 @@ func renderModuleFile(manifest Manifest, service string, spec ModuleSpec, dir, r
 // moduleIDAllocator 在一次计划里给多个模块发号：先扫一遍工程里已用的号，之后发出去的号记在内存里，
 // 所以同一次计划里的两个模块不会拿到同一个号（NextID 每次只看磁盘）。
 type moduleIDAllocator struct {
-	manifest Manifest
-	used     map[string]map[int64]bool
+	protocolPins map[string]int64
+	manifest     Manifest
+	used         map[string]map[int64]bool
 }
 
 func newModuleIDAllocator(root string, manifest Manifest) (*moduleIDAllocator, error) {
@@ -1086,9 +1099,16 @@ func (a *moduleIDAllocator) allocate(spec ModuleSpec) (map[string]map[string]int
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			id, err := a.next(kind)
-			if err != nil {
-				return nil, err
+			id := int64(0)
+			if kind == "protocol" {
+				id = a.protocolPins[name]
+			}
+			if id == 0 {
+				var err error
+				id, err = a.next(kind)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if ids[kind] == nil {
 				ids[kind] = map[string]int64{}

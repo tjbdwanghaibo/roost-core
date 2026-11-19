@@ -21,6 +21,6 @@ type SendGiftResponse struct {
 
 //roost:protocol group=game handler=player
 type SendGiftProtocol interface {
-	//roost:msg id=10013
+	//roost:msg id={{ID:protocol:SendGift}}
 	SendGift(SendGiftRequest) SendGiftResponse
 }

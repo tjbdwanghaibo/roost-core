@@ -191,6 +191,7 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 | 离线收益 | `idle` | wallet | 按间隔惰性结算、时间与金额双上限 |
 | 兑换码 | `cdkey` | mailbox | 一码一次或一人一次 |
 | 充值发货 | `purchase` | wallet | platform 记单、顺序发货、恰好一次 |
+| 玩家送礼 | `gift` | bag、mailbox、rehome | 按玩家当前服扣物与退款，邮件幂等投递 |
 | 邮件 | `mailbox` | wallet | 列表、领取附件、发件入口、全服邮件 |
 | 聊天 | `chat` | — | 世界频道、私聊、历史、系统公告 |
 | 公告、跑马灯 | `notice` | chat | 可信服务端入口与 GM 命令 |
