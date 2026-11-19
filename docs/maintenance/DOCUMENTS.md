@@ -58,3 +58,5 @@
 App 生命周期“停机先关外部输入”的[方案](FEATURE-2026-11-04-app-lifecycle.md)（2026-11-04）：现行契约以 [App 生命周期设计篇](../framework/guide/01-app-lifecycle.md) 为准，方案保留盘点、决定与实施记录。
 
 超过每 subject 订阅者上限后重试机制的[方案](FEATURE-2026-11-19-sync-overcap-retry.md)（2026-11-19，M-9 处置 B）：方案稿，未实施，等维护者确认决定项；现行行为仍以 [ENTITY_SYNC](../framework/ENTITY_SYNC.md) 与 KNOWN-LIMITS 为准。
+
+SLG 主堡跨服的[方案](FEATURE-2026-11-19-activity-player-cross-server.md)（2026-11-19）：Castle 跨服、ActivityPlayer 作为 Player 的伴生 Remote 实体在跨服期间共享、推进留在 A 的 Player、B 侧 Castle 与活动贡献同一笔 multi 事务、game 层协议转发；方案，未实施。
