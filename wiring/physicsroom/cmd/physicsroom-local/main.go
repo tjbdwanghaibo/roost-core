@@ -131,7 +131,7 @@ func newSeats() *seats { return &seats{} }
 
 // load 在 game 服务 Init 时调用一次：读取并校验关卡，固定内容字节与摘要。
 func (s *seats) load() error {
-	level := gamephysics.Level{Version: 1, Name: "crowd", Revision: 1, Bodies: gamephysics.CrowdScene()}
+	level := gamephysics.Level{Version: gamephysics.LevelVersion, Name: "crowd", Revision: 1, Bodies: gamephysics.CrowdScene()}
 	for i := 1; i <= gamephysics.CrowdPlayers; i++ {
 		level.Players = append(level.Players, uint64(gamephysics.CrowdCapsules+i))
 	}

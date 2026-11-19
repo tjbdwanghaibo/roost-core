@@ -60,6 +60,7 @@ type State struct {
 	InputGeneration           uint64 // 成员代际，防止重连后的序列复用确认旧输入。
 	InputSequence             uint64 // 房间附加：此已提交帧实际采样的输入序列；不是 RPC 接收确认。
 	InputActive               bool   // TTL 内仍在施力；过期帧仍携带最后采样序列以终止客户端预测。
+	Teleports                 uint32 // 房间附加：这个刚体累计被传送的次数。不进 native、不上线，只用来按接收方判断位置是否不连续。
 	ID                        uint64
 	Position                  Vec3
 	Rotation                  Quat

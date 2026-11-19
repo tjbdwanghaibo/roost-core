@@ -1,0 +1,156 @@
+基线提交 706f2f26（变异作用在工作区，每条跑完原样恢复；测试为批 2 提交时的版本）
+命令 GOWORK=off go test -count=1 ./gameplay/physics（每条变异后跑整个包）
+共 30 条，变红 30 条
+
+## 行为红（T2）：批 2 之前的代码拒绝合法的 schema 2 关卡
+  在 706f2f26 的临时检出里加一条只用旧 API 的用例：把批 2 的 flowLevel().Content() 字节交给 DecodeLevel，要求接受
+  命令 GOWORK=off go test -count=1 -run TestSchemaTwoLevelIsAccepted ./gameplay/physics
+  结果 退出码 1
+    --- FAIL: TestSchemaTwoLevelIsAccepted (0.00s)
+        schema2_red_test.go:15: schema 2 level refused: json: unknown field "Regions"
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/physics	0.480s
+    FAIL
+
+## 金样（RP3 传送帧）：packed.json 里还没有 RoomFull / RoomTeleport 时
+  命令 GOWORK=off go test -count=1 -run TestRoomTeleportGoldenSharedWithCSharp ./gameplay/physics
+  结果 退出码 1（want 为空），got 即写入金样的字节
+    --- FAIL: TestRoomTeleportGoldenSharedWithCSharp (0.00s)
+        quantized_test.go:304: RoomFull differs from the golden shared with C#:
+             got UlADAAAAAAAAAAAAAAAAAAAAAABSQwIBAQAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAIAAAAAAAAA/////wEAAAABAAAAAAAAACMAHywB/AhkAAAAAwAAAAAAAAAAAAAAAAAAlgAAAAAAAAAAAAAAAAAAAAAAAAEAAAACAAAAAAAAACMAHwAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            want 
+        quantized_test.go:304: RoomTeleport differs from the golden shared with C#:
+             got UlADAQcAAAAAAAAAAwAAAAAAAABSQwIAAQAAAAAAAAACAAAAAAAAAAIAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAEAAAABAAAAAAAAACMAH8gALAEyAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg=
+            want 
+    FAIL
+    FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/physics	0.484s
+    FAIL
+
+## 变异
+
+M1 [T2] level.go: 同时接受 schema 1
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:170: schema 1 accepted
+
+M2 [T2] level.go: Validate 不查区域与出生点
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:225: spawn duplicate ID accepted
+
+M3 [T2] level.go: 不查区域最小尺寸（负值、过薄）
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:225: region negative extent accepted
+
+M4 [T2] level.go: Watch 不要求是动态刚体
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:225: region watches missing body accepted
+
+M4b [T2] level.go: 区域可以谁都不关注
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:235: region that watches nobody accepted
+
+M5 [T2] level.go: 缺省出生点可以不填、没有出生点时也可以填
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:225: default spawn missing accepted
+
+M6 [T2] level.go: 区域 / 出生点上限放宽 1
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:225: too many regions accepted
+
+M7 [T2] level.go: 旋转不要求单位四元数
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:225: region rotation not unit accepted
+
+M8 [T2] flow.go: 流程不要求 tick 时间域
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:225: flow in wall-clock time accepted
+
+M9 [T2] flow.go: 业务动作可以与物理动作重名
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:288: business action shadowing a physics action accepted
+
+M9b [T2] flow.go: 业务事件可以与物理事件重名
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:293: business event shadowing a physics event accepted
+
+M10 [T2] flow.go: 不查流程里写死的出生点名
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:269: unknown checkpoint compiled
+
+M11 [T2] flow.go: 不查流程里写死的区域名
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:269: unknown region (left) compiled
+
+M12 [T2] flow.go: 区域名只查写在右边的
+    结果: 红  失败用例: TestLevelSchemaTwoRejectsBadRegionsSpawnsAndFlow
+    level_test.go:269: unknown region (left) compiled
+
+M13 [T3] regions.go: 去掉线段判定
+    结果: 红  失败用例: TestRegionTrackerEntersLeavesAndCatchesFastCrossings, TestRegionTrackerRotationWatchListsAndOrder
+    regions_test.go:59: step 8 (through the whole gate in one tick): facts [], want [{Region:gate Actor:1 Enter:true} {Region:gate Actor:1 Enter:false}]
+    regions_test.go:123: crossing a rotated region: []
+
+M14 [T3] regions.go: 去掉离开的滞回
+    结果: 红  失败用例: TestRegionTrackerEntersLeavesAndCatchesFastCrossings
+    regions_test.go:59: step 3 (just outside the box but within the exit margin): facts [{Region:gate Actor:1 Enter:false}], want []
+
+M15 [T3] regions.go: 被传送的刚体仍做线段判定
+    结果: 红  失败用例: TestRegionTrackerEntersLeavesAndCatchesFastCrossings
+    regions_test.go:59: step 10 (teleported across: displacement is not a path): facts [{Region:gate Actor:1 Enter:true} {Region:gate Actor:1 Enter:false}], want []
+
+M16 [T3] regions.go: Watch 不排序
+    结果: 红  失败用例: TestRegionTrackerRotationWatchListsAndOrder
+    regions_test.go:142: facts or order: [{Region:b-players Actor:2 Enter:true} {Region:b-players Actor:4 Enter:true} {Region:b-players Actor:5 Enter:true} {Region:a-crates Actor:9 Enter:true} {Region:a-crates Actor:3 Enter:true} {Region:a-crates Actor:7 Enter:true}]
+
+M17 [T3] regions.go: 忽略区域旋转
+    结果: 红  失败用例: TestRegionTrackerRotationWatchListsAndOrder
+    regions_test.go:118: far along the rotated axis: []
+
+M18 [T3] regions.go: 旋转方向反了（没取共轭）
+    结果: 红  失败用例: TestRegionTrackerRotationWatchListsAndOrder
+    regions_test.go:118: far along the rotated axis: []
+
+M19 [T3] regions.go: 直接改传入的占用集合
+    结果: 红  失败用例: TestRegionTrackerEntersLeavesAndCatchesFastCrossings, TestRegionTrackerRotationWatchListsAndOrder
+    regions_test.go:62: step 5 (beyond the exit margin): Step modified the occupancy it was given
+    regions_test.go:164: leave facts or order: [{Region:b-players Actor:2 Enter:false} {Region:b-players Actor:4 Enter:false} {Region:b-players Actor:5 Enter:false} {Region:a-crates Actor:3 Enter:false} {Region:a-crates Actor:7 Enter:false} {Region:a-crates Actor:9 Enter:false}] (0 left, 0 in the old set)
+
+M20 [T3] regions.go: 进入也用外扩后的范围
+    结果: 红  失败用例: TestRegionTrackerEntersLeavesAndCatchesFastCrossings
+    regions_test.go:59: step 6 (inside the margin from outside is not an entry): facts [{Region:gate Actor:1 Enter:true}], want []
+
+M21 [T4] replication.go: 传送不强制刷新：只有本来就要刷新的档位带标记（远档漏掉）
+    结果: 红  失败用例: TestTeleportMarkReachesEveryReceiverOnce
+    replication_test.go:413: middle: unacknowledged plan lacks the mark
+
+M22 [T4] replication.go: 带过标记的对象下一帧不强制刷新（标记留在客户端）
+    结果: 红  失败用例: TestTeleportMarkReachesEveryReceiverOnce
+    replication_test.go:432: middle: mark not cleared on the next frame: tick 2 mark true
+
+M23 [T4] replication.go: 账本不记传送计数
+    结果: 红  失败用例: TestTeleportMarkReachesEveryReceiverOnce
+    replication_test.go:432: near: mark not cleared on the next frame: tick 3 mark true
+
+M24 [T4] replication.go: 刷新但不置位
+    结果: 红  失败用例: TestRoomTeleportGoldenSharedWithCSharp, TestTeleportMarkReachesEveryReceiverOnce
+    quantized_test.go:304: RoomTeleport differs from the golden shared with C#:
+    replication_test.go:413: near: unacknowledged plan lacks the mark
+
+M25 [T4] quantized.go: 解码上限仍是 7
+    结果: 红  失败用例: TestRoomProfileFlagsAndOldProtocolRejection, TestRoomTeleportGoldenSharedWithCSharp, TestTeleportMarkReachesEveryReceiverOnce
+    quantized_test.go:234: state byte 00001000: err=physics: quantized body format, want valid=true
+    quantized_test.go:319: physics: quantized body format
+
+M26 [T4] quantized.go: 帧头仍是 RP2
+    结果: 红  失败用例: TestRoomProfileFlagsAndOldProtocolRejection, TestRoomTeleportGoldenSharedWithCSharp, TestRoomReplicationPipelineStaysByteIdentical
+    quantized_test.go:209: room frames must carry protocol version 3, got 2
+    quantized_test.go:304: RoomFull differs from the golden shared with C#:
+
+M27 [T4] quantized.go: 客户端副本丢掉传送标记
+    结果: 红  失败用例: TestRoomProfileFlagsAndOldProtocolRejection, TestRoomTeleportGoldenSharedWithCSharp, TestTeleportMarkReachesEveryReceiverOnce
+    quantized_test.go:252: teleport mark misread: profile 0 sleeping false
+    quantized_test.go:322: teleport frame: {InputGeneration:0 InputSequence:0 InputActive:false Teleports:0 ID:1 Position:[2 0.5 3] Rotation:[0 0 0 1] Velocity:[0 0 0] AngularVelocity:[0 0 0] Sleeping:false} profiles map[1:0 2:0] ack {Sequence:7 Generation:3 Active:true} tick 2
+
+M28 [T4] replication.go: 新可见的对象也带标记
+    结果: 红  失败用例: TestTeleportMarkReachesEveryReceiverOnce
+    replication_test.go:483: newcomer: mark true, ledger count 2
+
