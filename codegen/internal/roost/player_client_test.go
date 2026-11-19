@@ -435,7 +435,9 @@ func TestClientSDKAgainstGeneratedPlayerTCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// 期限包括 dotnet build、生成工程的 go generate 与 -race 编译，编译耗时随机器负载变化：2026-11-19 v1.58.0 pretag
+	// 在清空构建缓存后与其余 78 个包并行时超过原来的 5 分钟被杀掉（子测试都已通过），单独跑也要约 3.5 分钟。
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	build := exec.CommandContext(ctx, "dotnet", "build", filepath.Join(repo, "client/dotnet/Roost.Client.Tests/Roost.Client.Tests.csproj"), "--nologo")
 	build.Env = append(os.Environ(), "DOTNET_CLI_TELEMETRY_OPTOUT=1")
