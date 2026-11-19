@@ -17,14 +17,14 @@ protocols: [ActivityView]
 verify:
   packages: [./game/components/activity, ./game/handler]
   run: ^TestActivity
-  pass: 21
+  pass: 23
 with:
   enter:
     summary: 首次建档记录相对锚点；每次进入惰性对账，锁外恢复 pending 工作
     verify:
       packages: [./game/handler, ./game/controllers]
       run: ^TestWithActivityEnter
-      pass: 2
+      pass: 3
   profile:
     summary: 升级事实在同一事务触发活动条件，不允许客户端自报等级
     verify:

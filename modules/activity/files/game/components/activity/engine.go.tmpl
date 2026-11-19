@@ -53,6 +53,10 @@ func (h Host) activate(d Definition, event string, factTime, now, generation int
 				return Snapshot{}, err
 			}
 		}
+		// 相对触发按该宿主的事实时间判断资格，不按对账时刻 now：晚来补跑的旧宿主仍要结算。
+		if d.UntilMilli != 0 && anchor+d.WarmupMillis >= d.UntilMilli {
+			return Snapshot{}, ErrDenied
+		}
 	}
 	start, open, close, err := rule.window(anchor, 1)
 	if err != nil {

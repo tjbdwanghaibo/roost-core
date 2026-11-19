@@ -130,9 +130,9 @@ func (c Calendar) dayStartText() string {
 	return fmt.Sprintf("%02d:%02d", int(c.dayStart/time.Hour), int(c.dayStart%time.Hour/time.Minute))
 }
 
-// startOf 是日历日期 (year, month, day) 那个业务日的起点。day 可以越界，time.Date 会规范化。
+// StartOfDate 是日历日期 (year, month, day) 那个业务日的起点。day 可以越界，time.Date 会规范化。
 // 重置时刻落在夏令时跳过的一小时里时，time.Date 取哪一侧不保证，但对日期单调，bounds 的不变量不受影响。
-func (c Calendar) startOf(year int, month time.Month, day int) time.Time {
+func (c Calendar) StartOfDate(year int, month time.Month, day int) time.Time {
 	minutes := int(c.dayStart / time.Minute)
 	return time.Date(year, month, day, minutes/60, minutes%60, 0, 0, c.Location())
 }
@@ -141,15 +141,15 @@ func (c Calendar) startOf(year int, month time.Month, day int) time.Time {
 // 重置时刻之前的时间属前一天；夏令时让起点前后移一两个小时时也收敛到满足 start ≤ t < next 的那一天。
 func (c Calendar) bounds(t time.Time) (Day, time.Time, time.Time) {
 	year, month, day := t.In(c.Location()).Date()
-	start := c.startOf(year, month, day)
+	start := c.StartOfDate(year, month, day)
 	for t.Before(start) {
 		day--
-		start = c.startOf(year, month, day)
+		start = c.StartOfDate(year, month, day)
 	}
-	next := c.startOf(year, month, day+1)
+	next := c.StartOfDate(year, month, day+1)
 	for !t.Before(next) {
 		day++
-		start, next = next, c.startOf(year, month, day+1)
+		start, next = next, c.StartOfDate(year, month, day+1)
 	}
 	return dayOf(time.Date(year, month, day, 12, 0, 0, 0, time.UTC).Date()), start, next
 }

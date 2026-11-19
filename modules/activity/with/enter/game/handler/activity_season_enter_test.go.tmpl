@@ -1,0 +1,79 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"{{MODULE}}/game/components/activity"
+)
+
+func TestWithActivityEnterSeasonCutoff(t *testing.T) {
+	t.Run("missed seasons do not block first enter", func(t *testing.T) {
+		f := newEnterFixture(t)
+		now := f.now.Load()
+		expired := activityRule()
+		expired.Trigger = "created"
+		expired.StartMilli = 0
+		expired.WarmupMillis = 0
+		expired.UntilMilli = now - 1
+		edge := expired
+		edge.ID = 2
+		edge.DelayMillis = 100
+		edge.WarmupMillis = 200
+		edge.UntilMilli = now + 300 // opening exactly at the exclusive end
+		healthy := expired
+		healthy.ID = 3
+		healthy.UntilMilli = 0
+		activityRows(t, expired, edge, healthy)
+		result, err := f.init()
+		if err != nil || !result.First {
+			t.Fatalf("first enter: %+v, %v", result, err)
+		}
+		if ok, at := f.snapshot(t); !ok || at != now {
+			t.Fatalf("initialized=%v firstAt=%d", ok, at)
+		}
+		if err := f.engine.RunLocal(context.Background(), func() {
+			f.player.GetMutex().Lock()
+			defer f.player.GetMutex().Unlock()
+			book := f.player.ActivityBook()
+			r, ok := book.GetRecords(healthy.ID)
+			if book.RecordsLen() != 1 || !ok || activity.Phase(r.GetPhase()) != activity.Open {
+				t.Errorf("normal activity not open or expired instances created; records=%d", book.RecordsLen())
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if again, err := f.init(); err != nil || again.First {
+			t.Fatalf("retry: %+v, %v", again, err)
+		}
+	})
+	t.Run("late reconciliation keeps earned history", func(t *testing.T) {
+		f := newActivityFixture(t)
+		now := f.now.Load()
+		d := activityRule()
+		d.Trigger = "created"
+		d.StartMilli = 0
+		d.WarmupMillis = 0
+		d.UntilMilli = now - 100
+		// No record yet: a durable creation fact was eligible, although the process is only now catching up.
+		f.do(t, 0, func(h activity.Host) error { return h.Reconcile([]activity.Definition{d}, "", now-1000, now) })
+		v := f.view(t, 0)
+		if v.Token.Phase != activity.Ended || v.CompletedThrough != 1 || v.CloseAt != d.UntilMilli {
+			t.Fatalf("late settlement: %+v", v)
+		}
+	})
+	t.Run("invalid fixed window still rolls back enter", func(t *testing.T) {
+		f := newEnterFixture(t)
+		d := activityRule()
+		d.StartMilli = f.now.Load()
+		d.UntilMilli = d.StartMilli + d.WarmupMillis
+		activityRows(t, d)
+		if _, err := f.init(); !errors.Is(err, activity.ErrRule) {
+			t.Fatalf("fixed window with no open phase: %v", err)
+		}
+		if ok, at := f.snapshot(t); ok || at != 0 {
+			t.Fatalf("invalid rule committed first enter: %v, %d", ok, at)
+		}
+	})
+}

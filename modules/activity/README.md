@@ -81,7 +81,7 @@
 
 ## 验证范围
 
-- `roost module verify activity`：21 个场景（`./game/components/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter` 的联动 2 个场景（`./game/handler` 与 `./game/controllers`），与 `profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
+- `roost module verify activity`：23 个场景（`./game/components/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter` 的联动 3 个场景（`./game/handler` 与 `./game/controllers`），与 `profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO 与实体定时器；提交器是替身。覆盖五阶段与期限、异步初始化与结算、零预热、独立解锁与重复激活、初始化失败回滚、定时器回调出错时保留期限并回滚、循环的有界补期与规则冻结、自定义流程与迟到事件、时钟回拨与显式重开、参与资格不是个人实例、`pending` 经 BSON 往返恢复、并发激活只有一个锚点；规则校验、业务日历不按 24 小时、重叠周期拒绝、跳过空期的有界查找、`Resume` 重试、驱动停止时保留在途工作、汇聚键、相对日历等到业务日界。
 - 与 `enter` 的联动：一个场景直接调建档初始化，验证重连不重置创建锚点；另一个经 `gamelogin.RunEntered` 真正执行登记的进入钩子（正式 Nest、生成的 Sender 与 handler），验证钩子按玩家号定位到 `Player`、对账激活、`Resume` 报告完成后用原 `Token` 确认 `pending`，重连再进入不重复 `Resume`、不改时间线。
 - 离线验收记录见 [证据](../../docs/maintenance/evidence/module-activity-20261112/README.md)。真实档另跑 [scripts/test-activity-real.sh](../../scripts/test-activity-real.sh)：精简正式配方经 account、玩家 TCP `EnterGame`、Nest 与 Mongo/文件 WAL，Player 活动先换服再 SIGKILL、同 WAL 重启；到期前已进入游戏，随后只读 Mongo 观察持久定时器推进到 Ended，最后才发 `ActivityView`。World/Alliance 的权威迁移与恢复扫描在同一档分别核对，见 [2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
@@ -122,7 +122,7 @@
 | Catchup | `queue` 保留每期责任；`skip_empty` 仅允许 Logic 为空的纯展示活动 |
 | Disabled | 不再创建新实例；已激活实例继续执行被冻结的规则 |
 
-日历规则冻结业务时区和日界。固定日期的日历活动，StartMilli 必须落在业务日界；创建或解锁触发的日历活动从“事实时间 + DelayMillis”之后的首个业务日界开期，恰好位于日界时使用该时刻。每周活动从首期锚点按 N 周重复；需要固定周一时，配置周一的固定锚点。日历按日期计算，跨夏令时不等于固定 24 小时。每个相邻窗口检查重叠，非法配置保留原状态并报错，不悄悄跳期。
+日历规则冻结业务时区和日界。固定日期的日历活动，StartMilli 必须落在业务日界；创建或解锁触发的日历活动从“事实时间 + DelayMillis”之后的首个业务日界开期，恰好位于日界时使用该时刻。每周活动从首期锚点按 N 周重复；需要固定周一时，配置周一的固定锚点。日历按日期计算，跨夏令时不等于固定 24 小时。按总截止裁剪本期后，只和实际存在的下一期检查重叠；真正重叠仍报错。`created` / `event` 的宿主若按事实时间、延迟、日历对齐及预热算出的首期开启时刻已达到总截止，只跳过该定义，不阻断首登或其他活动。相反，事实时间在有效窗口内的宿主即使迟到对账，也照常补期。
 
 默认首次解锁持久生效，重复事件不重置时间。`Reopen` 只允许已彻底结束的序列，必须传旧代际加 1；重复同代际请求返回现有实例。无限循环的规则不通过热更自动结束。
 

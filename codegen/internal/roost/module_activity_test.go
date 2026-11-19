@@ -16,13 +16,13 @@ func TestModuleActivityGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activity: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 6, "activity_alliance": 7})
+	checkTaskModuleRows(t, report, map[string]int{"activity": 23, "activity_world": 6, "activity_alliance": 7})
 	roost("module", "add", "profile", "leaderboard", "mailbox")
 	report, err = VerifyModules(context.Background(), root, []string{"activity", "activity_world", "activity_alliance"}, nil)
 	if err != nil {
 		t.Fatalf("activity combined: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"activity": 21, "activity_world": 6, "activity_alliance": 7, "activity+enter": 2, "activity+profile": 1, "activity+leaderboard": 1, "activity+mailbox": 1})
+	checkTaskModuleRows(t, report, map[string]int{"activity": 23, "activity_world": 6, "activity_alliance": 7, "activity+enter": 3, "activity+profile": 1, "activity+leaderboard": 1, "activity+mailbox": 1})
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func activityMutationChecks(t *testing.T, root string) {
 	recipeMutationMustFail(t, root, "game/components/activity/types.go", "AdvanceBudget  = 32", "AdvanceBudget  = 1000000", "./game/handler", "TestActivityLoopBoundedCatchupAndFrozenDefinition", "unbounded or missing catchup")
 	recipeMutationMustFail(t, root, "game/components/activity/engine.go", "if record, ok := h.Book.GetRecords(d.ID); ok {", "if record, ok := h.Book.GetRecords(d.ID); ok && false {", "./game/handler", "TestActivityIndependentUnlockAndDuplicate", "anchors")
 	recipeMutationMustFail(t, root, "game/components/activity/component.go", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\tpanic(fmt.Errorf(\"activity timer: %w\", err))", "if err := c.Host().Advance(fire.Now.UnixMilli()); err != nil {\n\t\treturn 0", "./game/handler", "TestActivityTimerErrorKeepsDeadlineAndRollsBackHook", "timer swallowed")
-	recipeMutationMustFail(t, root, "game/components/activity/rules.go", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond).UnixMilli()", "next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond + time.Hour).UnixMilli()", "./game/components/activity", "TestActivityBusinessCalendarDoesNotUse24Hours", "DST day=")
+	recipeMutationMustFail(t, root, "game/components/activity/rules.go", "next = calendar.StartOfDate(y, m, day+int((cycle-1)*days)).UnixMilli()", "next = calendar.StartOfDate(y, m, day+int((cycle-1)*days)).Add(time.Hour).UnixMilli()", "./game/components/activity", "TestActivityBusinessCalendarDoesNotUse24Hours", "DST day=")
 	recipeMutationMustFail(t, root, "game/components/activity/mailbox.go", "token.Generation, token.Cycle, action", "token.Generation, int64(1), action", "./game/components/activity", "TestWithActivityMailboxUsesStableInstanceKey", "")
 	// 停 manager 时不收扫描：在途的推进没被取消、停机不等它。
 	recipeMutationMustFail(t, root, "game/components/activity/driver.go", "\treturn driver.Stop(ctx)\n}", "\treturn nil\n}", "./game/managers", "TestWorldActivityScanRunsUnderTheManagerAndStopsWithIt", "StopWithContext returned while an advance was still running")
@@ -99,7 +99,7 @@ func TestModuleActivityMinimal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("minimal activity: %v %+v", err, report)
 	}
-	checkTaskModuleRows(t, report, map[string]int{"activity": 21})
+	checkTaskModuleRows(t, report, map[string]int{"activity": 23})
 }
 
 func TestModuleActivityServiceRollback(t *testing.T) {
