@@ -27,6 +27,36 @@ func observeDeliveryAge(stage string, msg *fnats.JetStreamMsg, at time.Time) {
 	metrics.ObserveHistogram("saga.consumer.delivery_age", metrics.Labels{"stage": stage, "delivery": delivery}, at.Sub(msg.StoredAt))
 }
 
+// deliveryTiming is local to one invocation; a redelivery gets a new callback
+// timestamp, but retains the broker's original StoredAt. Both local timestamps
+// come from time.Now (monotonic interval). No time or ID is added to the wire.
+type deliveryTiming struct{ callback, started time.Time }
+
+func (t deliveryTiming) split(msg *fnats.JetStreamMsg) (before, local time.Duration, ok bool) {
+	if msg == nil || msg.NumDelivered == 0 || msg.StoredAt.IsZero() || t.callback.IsZero() || t.started.Before(t.callback) || t.callback.Before(msg.StoredAt) {
+		return 0, 0, false
+	}
+	return t.callback.Sub(msg.StoredAt), t.started.Sub(t.callback), true
+}
+
+// Record paired samples only once processing actually starts. A canceled slot
+// waiter isn't a zero-wait start. topic is the subscribed logical step, never
+// the raw subject (which can contain a route or partition), saga ID or player.
+func (t deliveryTiming) observe(stage, topic string, msg *fnats.JetStreamMsg) {
+	observeDeliveryAge(stage, msg, t.started) // original series and validity rules
+	before, local, ok := t.split(msg)
+	if !ok {
+		return
+	}
+	delivery := "first"
+	if msg.NumDelivered > 1 {
+		delivery = "retry"
+	}
+	labels := metrics.Labels{"stage": stage, "delivery": delivery, "topic": topic}
+	metrics.ObserveHistogram("saga.consumer.append_to_callback", labels, before)
+	metrics.ObserveHistogram("saga.consumer.callback_to_worker", labels, local)
+}
+
 // saga.reopened_total 的 reason 标签：重开从哪里来。取值固定三个，保持低基数。
 const (
 	// reopenLateSuccess：已结束的 Failed / Compensated 收到放弃后迟到的正向成功，协调器立即把它带回补偿。

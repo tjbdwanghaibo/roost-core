@@ -80,8 +80,7 @@ func SubscribeNestStarts(ctx context.Context, client fnats.IJetStream, config Ne
 		MaxAckPending: config.MaxAckPending,
 		NakBackoffMin: config.NakBackoffMin,
 		NakBackoffMax: config.NakBackoffMax,
-	}, withConsumerWorkers(config.Workers, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
-		observeDeliveryAge("nest_start", message, time.Now())
+	}, withConsumerWorkers(config.Workers, "nest_start", StartEffectTopic, func(messageCtx context.Context, message *fnats.JetStreamMsg, _ deliveryTiming) error {
 		processCtx, cancel := context.WithTimeout(messageCtx, config.ProcessTimeout)
 		err := handleNestStart(processCtx, message, starter)
 		cancel()
