@@ -1033,6 +1033,24 @@ func TestGeneratedLongProjectMongoHandles(t *testing.T) {
 	}
 }
 
+// RV-20261119-06：普通名不能与系统库避让规则生成同一前缀；同时覆盖开发和生产示例。
+func TestGeneratedReservedProjectMongoPrefixes(t *testing.T) {
+	for _, system := range []string{"admin", "local", "config"} {
+		for _, tc := range []struct{ project, prefix string }{{system, system + "-data"}, {system + "_data", system + "_data"}} {
+			root := filepath.Join(t.TempDir(), tc.project)
+			if _, _, err := NewProject(NewOptions{Name: tc.project, Module: "example.com/" + tc.project, Out: root, Mods: []string{"mongo", "dataengine"}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range []string{"config.game.yaml", "config.game.prod.example.yaml"} {
+				leaves := configLeaves(t, file, readProjectFile(t, root, "configs/service/"+file))
+				if leaves["mongo.database_prefix"] != tc.prefix || leaves["dataengine.databases.main"] != "game" {
+					t.Errorf("%s/%s: got prefix %q, base %q; want %q, game", tc.project, file, leaves["mongo.database_prefix"], leaves["dataengine.databases.main"], tc.prefix)
+				}
+			}
+		}
+	}
+}
+
 // 同一工程各服务之间的配置一致性（维护者 2026-10-19 批准）：跨进程共享的资源名（声明里带 shared 的键，例如
 // nats.prefix）在各服务必须相同；开发配置集里的服务在同一台机器上一起跑，监听地址（声明里带 listen 的键，例如
 // ops.addr）的端口不得冲突。单个进程看不到别的服务，规则只能在这里查：config check --all 与 doctor 的

@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **生成器 / Mongo（RV-20261119-06）**：仅 `admin`、`local`、`config` 三个工程的新配置改用 `-data` 后缀，例如 `local-data_game`；`local_data` 等普通工程的库名不变。已有配置和数据不迁移，重新生成部署配置时要保留旧前缀；已混写的数据不能靠换前缀拆分。
+- **换服演练（RV-20261119-07）**：玩家快照分别按源服、目标服实际启动配置和 Player DAO 选库，不再按工程名猜测；证据目录的 `player-databases.json` 记录两侧物理库。显式指定 `DEMO_REHOME_PROJECT` 时仍停进程，但不按自定义名字删除 Mongo 库、Redis 键或 NATS 流，请使用一次性私有依赖。
+
 - **生成器 / Mongo（RV-20261119-03）**：新生成的超长工程名前缀包含完整名称的摘要，前 40 字节相同的工程不再因截断共用业务库、分服库。已有配置不自动改写；沿用旧库时保留原前缀，不要用新生成配置直接覆盖。若已撞库，升级不会拆分历史数据。
 - **TS Gate（RV-20261119-05）**：`Connection.beginRequest` / `beginProbeClock` 的完成回调抛错时，通过 `error` 事件报告，不再中断后续请求的关闭通知；`notify` 写失败仍向调用方抛出 `GateClosedError`。
 

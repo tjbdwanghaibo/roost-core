@@ -24,6 +24,7 @@ case "${DEMO_REHOME_MUTATION:-}" in ''|skip-checkpoint) ;; *) echo 'unknown DEMO
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/roost-demo-rehome.XXXXXX")"
 project="${DEMO_REHOME_PROJECT:-$(printf 'rhd%06x' $(((RANDOM << 9) ^ RANDOM)))}"
+[[ "$project" =~ ^[a-z][a-z0-9_]*$ ]] || { echo 'invalid DEMO_REHOME_PROJECT' >&2; exit 2; }
 out="$DEMO_REHOME_OUT"
 port_shift="${DEMO_REHOME_PORT_SHIFT:-29000}"
 etcd_port="${DEMO_REHOME_ETCD_PORT:-39579}"
@@ -43,7 +44,8 @@ cleanup() {
 		local pid; pid=$(cat "$work_dir/$project/.dev/rehome-source.pid")
 		if [[ "$(jq -r .pid "$out/control/reached.json")" == "$pid" ]]; then kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
 	fi
-	drill_cleanup
+	# 自定义工程名不证明存储归本轮独占，尤其 local/admin 不能作为清库条件。
+	if [[ -n "${DEMO_REHOME_PROJECT:-}" ]]; then drill_cleanup --keep-stores; else drill_cleanup; fi
 }
 trap cleanup EXIT
 drill_log "project=$project work=$work_dir evidence=$out mutation=${DEMO_REHOME_MUTATION:-none}"
@@ -61,6 +63,9 @@ go build -o bin/rehomedrill ./cmd/rehomedrill
 go build -o bin/sidmove ./cmd/sidmove
 game_target=$(drill_second_game_config 1001)
 game_source=configs/service/config.game.yaml
+source_db=$(bin/rehomedrill player-db -config "$game_source" -sid 1000)
+target_db=$(bin/rehomedrill player-db -config "$game_target" -sid 1001)
+jq -n --arg source "$source_db" --arg target "$target_db" '{source:$source,target:$target}' >"$out/player-databases.json"
 nats_url="${ROOST_DATAENGINE_IT_NATS_URL%%,*}"
 account_prefix=$(awk '/^account:/{a=1;next} a&&/^  key_prefix:/{print $2;exit}' configs/service/config.account.yaml | tr -d '"')
 accountctl() { bin/accountctl -redis "$ROOST_DATAENGINE_IT_REDIS_ADDR" -prefix "$account_prefix" "$@"; }
@@ -87,8 +92,8 @@ source_kill() {
 }
 snapshot() {
 	local label="$1"
-	mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval \
-		"const id=Long('$entity_id'); print(EJSON.stringify({source:db.getSiblingDB('${project}_game_1000').player.findOne({_id:id}),target:db.getSiblingDB('${project}_game_1001').player.findOne({_id:id})}));" >"$out/$case_name/$label-documents.json"
+	SOURCE_DB="$source_db" TARGET_DB="$target_db" PLAYER_ENTITY_ID="$entity_id" mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval \
+		'const id=Long(process.env.PLAYER_ENTITY_ID); print(EJSON.stringify({source:db.getSiblingDB(process.env.SOURCE_DB).player.findOne({_id:id}),target:db.getSiblingDB(process.env.TARGET_DB).player.findOne({_id:id})}));' >"$out/$case_name/$label-documents.json"
 	drill binding >"$out/$case_name/$label-binding.json"
 }
 

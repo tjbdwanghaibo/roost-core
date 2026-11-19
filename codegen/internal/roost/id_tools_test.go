@@ -178,9 +178,9 @@ func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 	for project, want := range map[string]string{
 		"planet":                "planet",
 		"star_wars":             "star_wars",
-		"admin":                 "admin_data", // Mongo 系统库
-		"local":                 "local_data",
-		"config":                "config_data",
+		"admin":                 "admin-data", // Mongo 系统库
+		"local":                 "local-data",
+		"config":                "config-data",
 		strings.Repeat("x", 40): strings.Repeat("x", 40), // 到上限仍直接用原名。
 	} {
 		if got := daoDatabaseName(project); got != want {

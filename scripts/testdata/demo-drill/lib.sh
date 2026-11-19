@@ -195,13 +195,17 @@ drill_cleanup() {
 		sh deploy/dev/run.sh stop >/dev/null 2>&1
 		mkdir -p "$out/logs"
 		cp .dev/*.log "$out/logs/" 2>/dev/null
-		mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval "for (const d of db.adminCommand({listDatabases: 1, nameOnly: true}).databases) { if (/^$project(_|\$)/.test(d.name)) db.getSiblingDB(d.name).dropDatabase() }" >/dev/null 2>&1
-		redis-cli -u "redis://$ROOST_DATAENGINE_IT_REDIS_ADDR" --scan --pattern "*$project*" 2>/dev/null | xargs -n 500 redis-cli -u "redis://$ROOST_DATAENGINE_IT_REDIS_ADDR" del >/dev/null 2>&1
-		local stream upper
-		upper=$(printf '%s' "$project" | tr '[:lower:]' '[:upper:]')
-		for stream in $(nats --server "${ROOST_DATAENGINE_IT_NATS_URL%%,*}" stream ls --names 2>/dev/null | grep -i -e "$project" -e "$upper"); do
-			nats --server "${ROOST_DATAENGINE_IT_NATS_URL%%,*}" stream rm -f "$stream" >/dev/null 2>&1
-		done
+		if [[ "${1:-}" == --keep-stores ]]; then
+			drill_log 'custom project: preserving Mongo databases, Redis keys and NATS streams in the private dependencies'
+		else
+			mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval "for (const d of db.adminCommand({listDatabases: 1, nameOnly: true}).databases) { if (/^$project(_|\$)/.test(d.name)) db.getSiblingDB(d.name).dropDatabase() }" >/dev/null 2>&1
+			redis-cli -u "redis://$ROOST_DATAENGINE_IT_REDIS_ADDR" --scan --pattern "*$project*" 2>/dev/null | xargs -n 500 redis-cli -u "redis://$ROOST_DATAENGINE_IT_REDIS_ADDR" del >/dev/null 2>&1
+			local stream upper
+			upper=$(printf '%s' "$project" | tr '[:lower:]' '[:upper:]')
+			for stream in $(nats --server "${ROOST_DATAENGINE_IT_NATS_URL%%,*}" stream ls --names 2>/dev/null | grep -i -e "$project" -e "$upper"); do
+				nats --server "${ROOST_DATAENGINE_IT_NATS_URL%%,*}" stream rm -f "$stream" >/dev/null 2>&1
+			done
+		fi
 	fi
 	[[ -n "${etcd_pid:-}" ]] && kill "$etcd_pid" 2>/dev/null && wait "$etcd_pid" 2>/dev/null
 	cd /

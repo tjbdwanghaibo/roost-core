@@ -11,13 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"DRILL_MODULE/db"
 	player "DRILL_MODULE/game/entities/player"
 	"DRILL_MODULE/loadtest/playertcp"
 	"DRILL_MODULE/protocol/msgid"
 	"DRILL_MODULE/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 )
+
+var gameConfig = flag.String("config", "", "game service configuration for player-db")
 
 func main() {
 	playertcp.MustRegister()
@@ -39,6 +43,15 @@ func main() {
 }
 
 func rehomeCommand(ctx context.Context, command string) error {
+	if command == "player-db" {
+		// Resolve the generated Player DAO exactly as cmd/sidmove does, without contacting a service.
+		name, err := kitdataengine.DAODatabaseFile(*gameConfig, int32(*sid), db.NewPlayerDao(), nil)
+		if err != nil {
+			return err
+		}
+		fmt.Println(name)
+		return nil
+	}
 	client, stop, err := accounts()
 	if err != nil {
 		return err

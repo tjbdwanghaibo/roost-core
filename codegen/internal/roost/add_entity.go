@@ -608,14 +608,14 @@ func renderDAODefinition(collection, typeName string, serverScoped bool) string 
 
 // daoDatabaseName 是按工程名派生的 Mongo 库名前缀（生成配置的 {project_db}：mongo.database_prefix，维护者 2026-11-19）：
 // 工程名（roost.yaml project.name，已满足 ^[a-z][a-z0-9_]*$）。两条修正：
-//   - 与 Mongo 系统库同名（admin / local / config）时加后缀 "_data"（前缀不能是系统库名）；
+//   - 与 Mongo 系统库同名（admin / local / config）时加后缀 "-data"：连字符不属于工程名，不会与 admin_data 等普通名重合；
 //   - 超过 40 字节时取前 15 字节、连字符与完整工程名的 96 位 SHA-256 摘要（24 个十六进制字符）。
 //     仍为 40 字节，给库名与 sid 留出空间；连字符不属于合法工程名，不会与普通短名重合。
 func daoDatabaseName(project string) string {
 	name := strings.ToLower(strings.TrimSpace(project))
 	switch name {
 	case "admin", "local", "config":
-		name += "_data"
+		name += "-data"
 	}
 	if len(name) > 40 {
 		digest := sha256.Sum256([]byte(name))
