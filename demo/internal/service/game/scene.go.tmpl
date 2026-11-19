@@ -1208,7 +1208,13 @@ func (bridge *Scene) ShowSubject(_ context.Context, state *coreentity.SubjectSyn
 	if _, err := bridge.manager.RegisterAfterRetirement(state, registeredAfterRetirement(subjectID)); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
 	}
-	if err := bridge.interest.Show(subjectID, at); err != nil {
+	var err error
+	if bridge.ordinary != nil {
+		err = bridge.ordinary.EnterRegistered(subjectID, at, policy.ObserverView{})
+	} else {
+		err = bridge.interest.Show(subjectID, at)
+	}
+	if err != nil {
 		return fmt.Errorf("scene: show subject %d: %w", subjectID, err)
 	}
 	return nil
@@ -1234,7 +1240,13 @@ func (bridge *Scene) HideSubject(_ context.Context, subjectID int64) {
 	if bridge == nil || bridge.manager == nil {
 		return
 	}
-	if err := bridge.interest.Hide(subjectID); err != nil {
+	var err error
+	if bridge.ordinary != nil {
+		err = bridge.ordinary.Forget(subjectID)
+	} else {
+		err = bridge.interest.Hide(subjectID)
+	}
+	if err != nil {
 		slog.Debug("scene: interest did not release a subject", "subject_id", subjectID, "err", err)
 	}
 	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {

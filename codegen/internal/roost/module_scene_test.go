@@ -10,12 +10,18 @@ import (
 
 func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 	root, roost, _ := moduleProject(t, "scenemodule")
+	roost("module", "add", "scenespace")
+	for _, path := range []string{"game/entities/scene", "db/def/scene.go", "game/modules/scene/service"} {
+		if _, err := os.Stat(filepath.Join(root, path)); !os.IsNotExist(err) {
+			t.Fatalf("scenespace must not install %s: %v", path, err)
+		}
+	}
 	roost("module", "add", "scene")
-	report, err := VerifyModules(context.Background(), root, []string{"actor", "scene"}, nil)
+	report, err := VerifyModules(context.Background(), root, []string{"actor", "scenespace", "scene"}, nil)
 	if err != nil {
 		t.Fatalf("verify scene: %v %+v", err, report)
 	}
-	want := map[string]int{"actor": 14, "scene": 28}
+	want := map[string]int{"actor": 14, "scenespace": 3, "scene": 28}
 	for _, result := range report.Modules {
 		if !result.OK || result.Skipped != 0 || result.Passed != want[result.Name] {
 			t.Fatalf("%+v", result)

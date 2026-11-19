@@ -205,7 +205,8 @@ roost-core 是**专用服务器**框架：服务器权威、持久化、跨进�
 | 联盟 / 公会 | `alliance` | bag | 独立联盟服务、成员、捐赠领奖、三个 Saga |
 | 活动 | `activity`、`activity_world`、`activity_alliance` | activity（alliance） | 五阶段活动、循环、个人状态与定时器；全服 / 联盟的权威宿主 |
 | 移动 | `actor` | — | 心跳、位置朝向、路径与跟随 |
-| 场景与视野 | `scene` | actor | 多图分线、切换、视野与公开字段同步 |
+| 已有地图的普通空间与视野 | `scenespace` | 无 | 借用宿主同步管理器，不装场景实体或默认图 |
+| 场景与视野 | `scene` | actor、scenespace | 多图分线、切换、视野与公开字段同步 |
 | 怪物 | `monster` | actor、scene | 巡逻、追击、死亡与重生 |
 | 技能目录 | `skillbook` | — | 启动时编译技能定义，客户端读同一份 |
 | 战斗（双人 PvP） | `combat` | actor、attribute、skillbook | 技能运行时、Buff、冷却；**只限两名玩家**（第 3 步） |

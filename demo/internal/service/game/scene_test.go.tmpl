@@ -358,6 +358,61 @@ func (g sceneGetter) GetMany(ctx context.Context, ids []int64, categories []enti
 	return out, nil
 }
 
+// 在模块 Space 读登记状态，在真实同步帧读结果：Join 建立视野不等于准许首帧。
+func TestHostedSceneReadyGatesTheModuleSpaceFirstFrame(t *testing.T) {
+	ctx := context.Background()
+	recorder := newSceneRecorder()
+	bridge, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close(ctx)
+	if bridge.ordinary == nil || bridge.interest != bridge.ordinary.Interest {
+		t.Fatal("ordinary map has no single shared interest")
+	}
+	self, near := newScenePlayer(t, 9701), newScenePlayer(t, 9702)
+	joinReady(t, bridge, ctx, near, spatial.Point{X: 520, Y: 500})
+	if err := bridge.Join(ctx, self, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bridge.ordinary.Interest.ObserverView(self.UniqueID()); !ok {
+		t.Fatal("Join bypassed the module Space")
+	}
+	if err := bridge.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(recorder.take(self.UniqueID())); got != 0 {
+		t.Fatalf("Join sent %d frames before Ready", got)
+	}
+	if err := bridge.Ready(self.UniqueID()); err != nil {
+		t.Fatal(err)
+	}
+	if err := bridge.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fields := decodeSceneFrames(t, self.UniqueID(), recorder.take(self.UniqueID()))
+	if fields[self.ID()] == nil || fields[near.ID()] == nil {
+		t.Fatalf("first frame missing self or nearby player: %v", fields)
+	}
+	bridge.Leave(ctx, self.ID())
+	if _, ok := bridge.ordinary.Interest.ObserverView(self.UniqueID()); ok {
+		t.Fatal("leaver remains in module Space")
+	}
+}
+
+func TestHostedScenePartitionDoesNotCreateOrdinarySpace(t *testing.T) {
+	r := newSceneRecorder()
+	cfg := gamescene.DefaultConfig()
+	bridge, err := newSceneForMode(sceneLane{transport: r}, r, nil, cfg, cfg.Normalize().View.MaxVisible, nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close(context.Background())
+	if bridge.ordinary != nil || bridge.interest == nil {
+		t.Fatal("partition installed an ordinary Space or lost its Base interest")
+	}
+}
+
 func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	recorder := newSceneRecorder()
 	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
