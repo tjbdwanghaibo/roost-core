@@ -827,15 +827,9 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 
 // ---- 等空位 ----
 //
-// 被每 subject 订阅者上限（entitysync.ErrSubscriberLimit）拒绝的 pair 等的是这个 subject 出现空位：某个订阅者
-// 退订、remove 交付之后（Manager.SubscriberRoom 把欠 remove 的项也算作占位）。所以它们不进重试表，按 subject
-// 排队，每次结算对每个有人排队的 subject 查一次空位，没有空位就什么也不做，成本只与等待的 subject 数有关，与被拒
-// pair 数无关；有空位时按入队先后（先来先得）重说至多“空位数”个。空位在第 k 次 Flush 交付 remove 时出现，第 k+1
-// 次 Flush 的政策阶段就订阅上。
-//
-// 已知边角（KNOWN-LIMITS 框架限制）：pair 排队之后，会话经另一个非钉住来源订阅上了同一个 subject，这个 pair 其实
-// 已经可以加入（同会话已有订阅项，不受上限），但要等 subject 再出现空位才会被重说。现有接线里能与 Interest 在同一
-// (会话, 实体) 上重叠的来源只有钉住的 self / SelfView，不排队，所以目前没有触发路径。
+// 因每 subject 订阅者上限被拒的 pair 按 subject 排队，不进普通重试表。两种机会能让它继续：
+// 另一来源已替同一会话占槽时，策略可直接接手，不耗空位；需要新槽的会话则按入队先后分配实际空位。
+// 待交付的 remove 仍占槽。槽与等待者都没有新增时，满员队列只查 subject 的戳和空位，不逐个重试。
 
 // waitForRoomLocked 把被上限拒绝的 pair 排进它的 subject 的等空位队列（已在排队的不变），调用方持有 in.mu。
 func (in *Interest) waitForRoomLocked(key pair, current *hold) {
