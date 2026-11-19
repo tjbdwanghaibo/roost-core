@@ -140,8 +140,23 @@ ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	1.066s
 | `GOWORK=off go test -count=1 .`（根门禁） | 0 |
 | `GOWORK=off go test -count=1 -run 'TestModulePortal\|TestModuleLogin\|WebSocket' ./codegen/internal/roost` | 1：`TestModulePortalInstallsOnTheHostedAccountService` 与 `TestModulePortalInstallsOnALobbyProjectWithoutGame` 在“装完再 `roost project sync` 不改工程”一步失败；在修前基线 main `2d15a1e5` 的干净检出上同样两条、同样位置失败，与本轮改动无关。前一条在这一步之前的生成工程模块场景（portal 21、login 35 等计数）通过 |
 
+## Unity WebGL 最小链路（补跑，2026-11-19）
+
+维护者要求用最小链路在 Unity / IL2CPP / 真实浏览器里打通。`client/dotnet/unity-webgl-smoke` 的 RelaySmoke 新增“取消”阶段（只在 WebGL 下跑，在“只走桥接”之后、端到端之前）：relay 调用前已取消、relay 刚发起就取消（同一帧，桥接还没轮询）、公开的 `TcpSession.ConnectAsync` 调用前已取消；每个场景要求连接任务 5 秒内以取消结束，三个跑完一起判定。之后的端到端照常建房、连接、收发、保持 40s、离开，说明取消过的连接不影响后来的正常连接。
+
+做法：同一份冒烟脚本放进两个工程，只差 Unity 包——修前用 `82d8c768`（本修复之前）的 `client/unity`，修后用 main；都经 `prepare.sh`（`build-unity.py --managed-only`）重新打包，Unity 6000.7.0b7 batchmode `RelaySmokeEditor.BuildWebGL`（IL2CPP）两份都 `Build Finished, Result: Success.`，用 `serve.mjs`（真实 relay + lobby）发构建，在 Claude 内置浏览器面板（Chromium，面板可见）打开 `?hold=40`。
+
+| 场景 | 修前 | 修后 |
+|---|---|---|
+| relay，调用前已取消（审查原场景） | 5 秒后仍挂起 | 0ms 以取消结束 |
+| relay，刚发起就取消（对照组） | 40ms 以取消结束 | 8ms 以取消结束 |
+| `TcpSession.ConnectAsync`，调用前已取消 | 5 秒后仍挂起 | 0ms 以取消结束 |
+| 结论 | `SMOKE FAIL … 2 scenario(s) failed` | `cancel: ok` → 端到端 → `SMOKE PASS` |
+
+与 .NET 用例的修前红一致。日志原文见 [webgl-cancel.txt](webgl-cancel.txt)。JS 一侧的句柄表在 Emscripten 模块作用域里，页面拿不到，所以浏览器里只判定“连接任务一定结束”，Open / Close 配对由 .NET 用例的计数覆盖。
+
 ## 没有验证的部分
 
-- Unity Editor、IL2CPP、真实浏览器里没有重跑：桥接的 C# 一侧用 .NET 链接正式源码 + 假的浏览器一侧验证，jslib 本身没改。`Task.FromCanceled`、`TaskCompletionSource.TrySetCanceled(CancellationToken)` 都在 .NET Standard 2.1 里，Unity 托管包没有重新打包编译。
+- Unity Editor 里没有跑（编辑器上 `RoostPlatform` 用 SDK 自带传输，不经桥接）；Safari、Firefox、手机浏览器没有跑。IL2CPP + 真实浏览器已补跑，见上一节。
 - 生成工程的真实进程（account 带 `portal.websocket_servers` 启动、`--check-config` 退出码）没有重跑；规则只在 `CheckWebSocketAddr` / `BrowserHost` 一处，生成的 portal / login 代码直接调用它。
 - 已经写了不带方括号 IPv6 的工程，升级后启动与 `--check-config` 会报错并提示写成 `[…]`；这类地址浏览器本来就连不上。

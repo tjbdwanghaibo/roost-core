@@ -76,6 +76,7 @@ namespace Roost.RelaySmoke
                 Log($"start: lobby {config.LobbyUrl}, transport {config.Transport}, in browser {RoostPlatform.InBrowser}, pump driven {config.PumpDriven || RoostPlatform.InBrowser}, main thread {mainThread}");
                 await ProbesAsync();
                 if (RoostPlatform.InBrowser) await BridgeAsync();
+                if (RoostPlatform.InBrowser) await CancelAsync();
                 await EndToEndAsync();
                 Passed = true;
                 Log("PASS");
@@ -257,6 +258,55 @@ namespace Roost.RelaySmoke
             if (at < 0) throw new Exception($"no {name} in {json}");
             at += key.Length;
             return json.Substring(at, json.IndexOf('"', at) - at);
+        }
+
+        // ---------- 2b. 取消：连接任务一定结束（RV-20261119-01） ----------
+
+        /// <summary>
+        /// 只在浏览器 WebSocket 下跑。SDK 用 token.Register(transport.Dispose) 做超时 / 取消，令牌在调用前就已取消时 Dispose 先于
+        /// 桥接的 ConnectAsync 执行；修前桥接仍打开浏览器连接并加进轮询表，而轮询对已 Dispose 的连接什么也不做，连接任务永远挂起。
+        /// 三个场景各自判定“5 秒内以取消结束”，全部跑完再一起报：relay 调用前已取消、relay 刚发起就取消、公开的
+        /// TcpSession.ConnectAsync 调用前已取消（地址用 relay 的 ws 地址即可：修后不打开，修前打开后挂起，与对端是谁无关）。
+        /// 之后的端到端照常连接，说明取消过的连接不影响后来的正常连接。
+        /// </summary>
+        private async Task CancelAsync()
+        {
+            var failures = new List<string>();
+            async Task Scenario(string name, Func<CancellationToken, Task> connect, bool cancelBefore)
+            {
+                Step("cancel: " + name);
+                using var cancel = new CancellationTokenSource();
+                if (cancelBefore) cancel.Cancel();
+                Task task;
+                try { task = connect(cancel.Token); }
+                catch (Exception error) { failures.Add($"{name}: threw synchronously {error.GetType().Name}: {error.Message}"); return; }
+                if (!cancelBefore) cancel.Cancel(); // 同一帧里取消：PumpDriven 下这之前桥接还没轮询过，连接还在打开中
+                double from = now();
+                bool ended = await UntilAsync(() => task.IsCompleted, 5);
+                string outcome = ended ? $"{task.Status} after {(now() - from) * 1000:F0}ms" : "still pending after 5s";
+                if (ended && task.IsFaulted) outcome += ": " + task.Exception?.GetBaseException().Message;
+                Log($"cancel {name}: {outcome}");
+                if (!ended || !task.IsCanceled) failures.Add($"{name}: want Canceled within 5s, got {outcome}");
+            }
+
+            async Task<RoomTicket> TicketAsync(SmokePlayer player) =>
+                await player.lobby.CreateRoomAsync(new CreateRoomRequest { Game = "party", Mode = "cancel", Transport = transport });
+
+            var before = await PlayerAsync(config.Account + "-cancel1");
+            var beforeTicket = await TicketAsync(before);
+            await Scenario("relay, token canceled before ConnectAsync", token => before.client.ConnectAsync(beforeTicket, token), cancelBefore: true);
+
+            var during = await PlayerAsync(config.Account + "-cancel2");
+            var duringTicket = await TicketAsync(during);
+            await Scenario("relay, canceled while connecting", token => during.client.ConnectAsync(duringTicket, token), cancelBefore: false);
+
+            var gateTicket = await TicketAsync(await PlayerAsync(config.Account + "-cancel3"));
+            await Scenario("TcpSession, token canceled before ConnectAsync",
+                token => Roost.Client.TcpSession.ConnectAsync(new BrowserWebSocket(), gateTicket.RelayAddr, "ticket", TimeSpan.FromSeconds(10), token),
+                cancelBefore: true);
+
+            if (failures.Count > 0) throw new Exception("cancel: " + failures.Count + " scenario(s) failed: " + string.Join("; ", failures));
+            Log("cancel: ok (relay before / while connecting and TcpSession before: every connect task ended canceled)");
         }
 
         // ---------- 3. 端到端：经 SDK ----------

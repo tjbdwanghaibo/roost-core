@@ -1,0 +1,27 @@
+RV-20261119-01 Unity WebGL 最小链路（2026-11-19）
+Unity 6000.7.0b7 WebGL（IL2CPP，开发版不压缩），RelaySmokeEditor.BuildWebGL；Claude 内置浏览器面板（Chromium，面板可见 visibilityState=visible）；
+对端 client/dotnet/unity-webgl-smoke/serve.mjs（client/relay 测试对端：真实 relay + lobby，房间目录用内存）；页面 ?hold=40。
+两份工程用同一份冒烟脚本（含新的“取消”阶段），只差 Unity 包：
+  修前：82d8c768（74b13250 之前）的 client/unity 经 prepare.sh（build-unity.py --managed-only）打包，BrowserWebSocket.cs 不含 connectCancellation
+  修后：main（74b13250 之后）同样打包，BrowserWebSocket.cs 含修复
+
+== 修前（端口 18791）==
+SMOKE start: lobby http://127.0.0.1:18791/lobby, transport Ws, in browser True, pump driven True, main thread 1
+SMOKE probes: 6 did not complete (the threaded scheduling depends on them; PumpDriven does not)
+SMOKE bridge: ok (UnityWebRequest lobby → jslib WebSocket → welcome + pong, awaits on the Unity context)
+SMOKE cancel relay, token canceled before ConnectAsync: still pending after 5s
+SMOKE cancel relay, canceled while connecting: Canceled after 40ms
+SMOKE cancel TcpSession, token canceled before ConnectAsync: still pending after 5s
+SMOKE FAIL System.Exception: cancel: 2 scenario(s) failed: relay, token canceled before ConnectAsync: want Canceled within 5s, got still pending after 5s; TcpSession, token canceled before ConnectAsync: want Canceled within 5s, got still pending after 5s
+
+== 修后（端口 18792）==
+SMOKE cancel relay, token canceled before ConnectAsync: Canceled after 0ms
+SMOKE cancel relay, canceled while connecting: Canceled after 8ms
+SMOKE cancel TcpSession, token canceled before ConnectAsync: Canceled after 0ms
+SMOKE cancel: ok (relay before / while connecting and TcpSession before: every connect task ended canceled)
+SMOKE member connected: slot 2, host False, host slot 1, epoch 0
+SMOKE frames: ok (member → host 5, host → member 1, room 1)
+SMOKE holding 40s to see heartbeats (from 5.2s) ...
+SMOKE held 40s: still connected, rtt host 8.4ms member 42.7ms
+SMOKE left: ok (member room gone False, last one room gone True)
+SMOKE PASS
