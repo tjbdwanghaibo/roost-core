@@ -200,6 +200,21 @@ func (d *Driver) settleDeparted(ctx context.Context) {
 		if _, tracked := d.residency.Where(move.PlayerID); tracked {
 			continue
 		}
+		// 查明仍归外服才碰本地闸门；慢查询不能挡住已换回来的玩家。
+		binding, err := d.directory.Binding(ctx, move.PlayerID)
+		if err != nil || binding.PlayerID != move.PlayerID || binding.ServingServerID != move.To || binding.BindEpoch != move.Epoch+1 || binding.Transfer != nil {
+			if err != nil && !errors.Is(err, svcaccount.ErrRoleMissing) {
+				d.departed.push(move)
+			} else if err == nil && binding.PlayerID == move.PlayerID && binding.ServingServerID > 0 && binding.ServingServerID != d.self {
+				d.departed.push(departedMove(d.self, move.EntityID, binding))
+			}
+			continue
+		}
+		// A concurrent departure or temporary eviction wins this round. Recheck on retry.
+		if err := d.residency.Reserve(move); err != nil {
+			d.departed.push(move)
+			continue
+		}
 		d.settleGone(ctx, move, nil)
 	}
 }

@@ -460,7 +460,7 @@ func (d *Driver) copyDocuments(ctx context.Context, move Move) (Copied, error) {
 		}
 		copying, cancel := context.WithTimeout(ctx, departBudget)
 		var copied Copied
-		copied, err = d.documents.Copy(copying, move.EntityID, move.To, true)
+		copied, err = d.documents.Copy(copying, move, true)
 		cancel()
 		if err == nil {
 			return copied, nil
@@ -536,7 +536,7 @@ func (d *Driver) settleGone(ctx context.Context, move Move, copied *Copied) {
 				return
 			}
 			copying, cancel := context.WithTimeout(ctx, departBudget)
-			late, err := d.documents.Copy(copying, move.EntityID, move.To, false)
+			late, err := d.documents.Copy(copying, move, false)
 			cancel()
 			if err == nil {
 				copied = &late
@@ -547,6 +547,9 @@ func (d *Driver) settleGone(ctx context.Context, move Move, copied *Copied) {
 					"this server's copy is kept for an operator to reconcile", "player_id", move.PlayerID, "transfer_id", move.ID, "to", move.To, "err", err)
 				return
 			}
+			if where, ok := d.residency.Where(move.PlayerID); !ok || where.Move.ID != move.ID {
+				return
+			} // readmitted while copying
 			slog.Warn("rehome: copying the documents of a player bound elsewhere failed; retrying", "player_id", move.PlayerID, "transfer_id", move.ID,
 				"to", move.To, "attempt", attempt+1, "err", err)
 			d.wait(ctx, attempt)
@@ -571,6 +574,9 @@ func (d *Driver) dropDocuments(ctx context.Context, move Move, copied Copied, si
 		if err == nil {
 			return true
 		}
+		if where, ok := d.residency.Where(move.PlayerID); !ok || where.Move.ID != move.ID {
+			return false
+		} // no longer owns the hand-off
 		slog.Warn("rehome: dropping documents failed; retrying", "what", what, "player_id", move.PlayerID, "transfer_id", move.ID,
 			"sid", sid, "attempt", attempt+1, "err", err)
 		d.wait(ctx, attempt)
@@ -662,6 +668,9 @@ func (d *Driver) settle(ctx context.Context, move Move, outcome Outcome) bool {
 		if err == nil {
 			return true
 		}
+		if where, ok := d.residency.Where(move.PlayerID); ok && where.Move.ID != move.ID {
+			return false
+		} // superseded; never replace a newer hand-off handle
 		slog.Warn("rehome: settling failed; retrying", "player_id", move.PlayerID, "transfer_id", move.ID, "outcome", outcome, "attempt", attempt+1, "err", err)
 		d.wait(ctx, attempt)
 	}

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -42,6 +43,10 @@ func (controller *Controller) mailboxMailer() (svcmail.Mail, error) {
 	return mailer, nil
 }
 
+// Optional composition points: only rehome needs the authority lookup, only enter can rebuild a session profile.
+var mailboxBindingForPull func(context.Context, *app.Registry, int64) (svcmail.BroadcastBinding, int32, error)
+var mailboxRetryProfile func(*app.Registry, *playeraccess.Context, svcmail.Mail) error
+
 // HandleMailboxList 经 mail 服务翻一页玩家自己的邮箱：一次跨进程的类型化调用，不涉及 Entity 锁。
 // 读谁的邮箱取认证会话的玩家，从不取请求字段；mail 服务按这个玩家作用域读取，端点不用再查归属。
 // 页大小与游标的校验也在 mail 服务（负数拒绝、0 用缺省、超过上限截到上限）。
@@ -53,6 +58,11 @@ func (controller *Controller) HandleMailboxList(context *playeraccess.Context, r
 	var page svcmail.Page
 	if err == nil {
 		page, err = mailer.List(context.Context(), context.PlayerID, request.Cursor, int(request.Limit))
+		if errcode.CodeOf(err) == svcmail.CodeBroadcastProfileRequired && mailboxRetryProfile != nil && context.Session != nil {
+			if err = mailboxRetryProfile(controller.Registry(), context, mailer); err == nil {
+				page, err = mailer.List(context.Context(), context.PlayerID, request.Cursor, int(request.Limit))
+			}
+		}
 	}
 	if err != nil {
 		code, reason := errcode.ClientError(err)

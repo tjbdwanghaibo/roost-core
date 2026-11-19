@@ -98,7 +98,9 @@
 - `with/bag`：登记 `item` 这种附件（`mailbox.Item(itemID, amount)`，线上格式 `{"type":"item","id":1001,"amount":3}`），领取时经 `Bag().Add` 进背包，与账本同一笔事务；背包拒绝时邮件保持未领。
 - `with/enter`：玩家进入游戏时把属于他的全服邮件合并进邮箱（mail 服务的 `PullBroadcasts`）。画像规则在工程的 `BroadcastProfileOnEnter`：注册时间缺省取首次进入的时间，会话带着 account 的角色创建时间与承载服 / 原服时改用它们。它是进入钩子，失败只记日志，下一次进入再做。
 - `with/gm`：命令 `gm.mail.send`，单人补偿邮件，要求稳定的 `request_id`。
-- `with/rehome`（`game/controllers/mailbox_rehome.go`，维护者 2026-11-14 D11 N3 A）：换服时全服邮件离开前按旧范围合并一次。rehome 的离开钩子（会话已断、实体还没交出）调 mail 的 `Summary`，mail 服务按他记着的画像——在本服进入时给的那一份，范围是本服——合并，水位推进到此刻；到了新服由 `with/enter` 的进入钩子按会话里新的承载服重新拉。所以在本服期间发给本服的都收到；离开之后才发给旧服的、离开之前就发给新服的都在水位以下，不再合并。合并不成（mail 服务不可用）钩子返回错误，换服中止；邮箱满（全是未读）时 mail 的合并停在放不下的那封之前而 `Summary` 仍成功，钩子看汇总的 `BroadcastsBehind`，没有追平同样中止（错误带 `svcmail.ErrMailboxFull`），玩家留在本服、清掉一些邮件后再申请——否则换走之后旧服那封补不回来、离开前发给新服的反而会合并进来（RV-20261117-01）；可以重复，已合并的不会再合并。没有配置 LazyBroadcast、或从没拉过的玩家只是问一次汇总。
+- `with/rehome`（`game/controllers/mailbox_rehome.go`）：离开钩子向换服目录核实在途绑定，调用 `Mail.CloseBroadcastScope`。对于已经拉过广播的玩家，mail 在同一次邮箱 CAS 中按旧画像合并到当前账本头、停用旧画像并记下绑定代数与尝试序号。邮箱满尚未追平时只保存部分进度，不停用画像，钩子以 `ErrMailboxFull` 中止换服。已关闭的同一次离开可以重试，不会消费界线之后的广播。没配置 lazy 广播时无需切换；从未提供画像的玩家仍能正常读直接邮件。
+- 到达后，`with/enter` 按当前绑定拉取；若未送达，`Summary` 只汇总已有条目，不推进水位。`MailboxList` 收到 `CodeBroadcastProfileRequired` 后，从会话取注册时间并向目录核实当前服，重新拉取再列一次；仍失败只拒绝该次邮箱请求。旧请求不能重新启用旧画像，换服中止后源服的新绑定快照可以恢复收信。自定义拉取入口（包括公会/属性变化时重拉）在使用换服时也要携带可信的 `BroadcastProfile.Binding`；不要从客户端请求采信这些值。
+- **升级**：升级期间暂停换服，先升级全部 mail 实例，再同步模板改动并升级 game（含自定义画像提交方），然后恢复换服。新逻辑不倒退广播水位，不能据此自动补发修复前已经跳过的广播。
 - `with/profile`：升级奖励邮件，见下一节。
 
 别的模块：

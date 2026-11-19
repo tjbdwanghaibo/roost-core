@@ -526,7 +526,7 @@ type EntityCopy = engine.EntityCopy
 type EntityCopyDocument = engine.EntityCopyDocument
 
 // EntityCopyUnknown 是复制出错、结果未知时文档的去向：它可能已经写进目标库（engine.EntityCopyUnknown）。
-// CopyHandedOffEntity 出错（冲突除外）时连同错误返回这些文档，调用方重做复制，或拿它 DropEntityCopy 删掉。
+// 只有 Mongo 提交结果未知时才连同错误返回这些文档，调用方重做复制，或按凭据清理。
 const EntityCopyUnknown = engine.EntityCopyUnknown
 
 // ErrEntityCopyConflict：目标服的库里已有这个实体的另一个版本，不覆盖时拒绝（engine.ErrEntityCopyConflict）。
@@ -538,7 +538,7 @@ var ErrLocalEntityKind = engine.ErrLocalPreloadKind
 
 // CopyHandedOffEntity 把本进程已交出（HandOffEntity 成立、未 Release）的实体的 dbscope=sid 文档复制到 sid=to 的库
 // （engine.Runtime.CopyHandedOffEntity，换服的搬档）。overwrite 只在“account 仍绑在本服、换服在途”时用。
-// 出错（冲突除外）时返回的结果列出可能已经写进目标库的文档（EntityCopyUnknown），不能把出错当成目标库里什么都没有。
+// 仅在提交结果未知时返回的结果列出可能已经写进目标库的文档（EntityCopyUnknown）。
 // 会等待，只能在 io 池或独立 goroutine 调用。
 func (mod *Mod) CopyHandedOffEntity(ctx context.Context, entityID int64, to int32, overwrite bool) (EntityCopy, error) {
 	runtime := mod.Runtime()
@@ -546,6 +546,18 @@ func (mod *Mod) CopyHandedOffEntity(ctx context.Context, entityID int64, to int3
 		return EntityCopy{}, errors.New("dataengine mod: not provided")
 	}
 	return runtime.CopyHandedOffEntity(ctx, entityID, to, overwrite)
+}
+
+// CopyFence identifies the destination binding generation and transfer ID.
+type CopyFence = engine.CopyFence
+
+// CopyForTransfer couples the copy and subsequent cleanup with the account generation.
+func (mod *Mod) CopyForTransfer(ctx context.Context, entityID int64, to int32, overwrite bool, fence CopyFence) (EntityCopy, error) {
+	runtime := mod.Runtime()
+	if runtime == nil {
+		return EntityCopy{}, errors.New("dataengine mod: not provided")
+	}
+	return runtime.CopyForTransfer(ctx, entityID, to, overwrite, fence)
 }
 
 // DropEntityCopy 按复制结果删掉 sid 库里的那些文档（版本仍是复制时的才删；engine.Runtime.DropEntityCopy）。

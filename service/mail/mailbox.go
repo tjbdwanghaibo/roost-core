@@ -52,6 +52,11 @@ type Mailbox struct {
 	// PullBroadcasts. List and Summary merge with it; nil means the player has
 	// never pulled (never logged in under LazyBroadcast) and nothing is merged.
 	BroadcastProfile *BroadcastProfile `json:"broadcast_profile,omitempty"`
+	// Last completed leave boundary, including while awaiting the next profile. Never reset the watermark.
+	BroadcastClosed BroadcastBinding `json:"broadcast_closed,omitzero"`
+	// BroadcastPaused distinguishes an active mailbox awaiting its next profile from a player
+	// who never opted into lazy broadcasts (plain direct mail must keep working for the latter).
+	BroadcastPaused bool `json:"broadcast_paused,omitempty"`
 
 	UpdatedAtUnix int64 `json:"updated_at_unix"`
 }
@@ -94,6 +99,20 @@ type Entry struct {
 	UpdatedAtUnix   int64 `json:"updated_at_unix"`
 }
 
+// reclaimableAt is shared by the read-only fast paths and the CAS mutation.
+func (e Entry) reclaimableAt(nowUnix int64) bool {
+	return e.EnvelopeExpiresAtUnix > 0 && nowUnix >= e.EnvelopeExpiresAtUnix && (e.ClaimToken == "" || e.Status == StatusClaimed)
+}
+
+func (m Mailbox) needsExpiry(nowUnix int64) bool {
+	for _, e := range m.Entries {
+		if e.reclaimableAt(nowUnix) {
+			return true
+		}
+	}
+	return false
+}
+
 // expireEntries reclaims only known-expired entries with no unsettled claim.
 // An entry without an expiry is never written by this package (every envelope
 // must expire); one is kept rather than guessed expired, as is a retained token,
@@ -101,10 +120,7 @@ type Entry struct {
 func (m *Mailbox) expireEntries(nowUnix int64) bool {
 	changed := false
 	for id, entry := range m.Entries {
-		if entry.EnvelopeExpiresAtUnix <= 0 || nowUnix < entry.EnvelopeExpiresAtUnix {
-			continue
-		}
-		if entry.ClaimToken != "" && entry.Status != StatusClaimed {
+		if !entry.reclaimableAt(nowUnix) {
 			continue
 		}
 		if entry.Status == StatusUnread {

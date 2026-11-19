@@ -227,18 +227,20 @@ var ErrCopyConflict = wiringde.ErrEntityCopyConflict
 // 只搬 dbscope=sid 的 DAO；global 的 DAO 各服共用、不动（没有 sid DAO 时两个动作什么都不做）。两侧物理库名按本进程的
 // dataengine.databases 换算，前提是两个服把同一个逻辑库映射到同一个 Mongo 上的同一个前缀。
 type Documents interface {
-	Copy(ctx context.Context, entityID int64, to int32, overwrite bool) (Copied, error)
+	Copy(ctx context.Context, move Move, overwrite bool) (Copied, error)
 	Drop(ctx context.Context, copied Copied, sid int32) error
 }
 
 // documentMover 是 DataEngine Mod 上搬档的入口（wiring/dataengine 的 Mod）。
 type documentMover interface {
-	CopyHandedOffEntity(ctx context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error)
+	CopyForTransfer(ctx context.Context, entityID int64, to int32, overwrite bool, fence wiringde.CopyFence) (wiringde.EntityCopy, error)
 	DropEntityCopy(ctx context.Context, copied wiringde.EntityCopy, sid int32) (int, error)
 }
 
 // RegistryDocuments 返回经 Registry 里 DataEngine Mod 搬档的 Documents（每次用到时才取：DataEngine 在协议绑定之后才发布）。
-func RegistryDocuments(registry *app.Registry) Documents { return registryDocuments{registry: registry} }
+func RegistryDocuments(registry *app.Registry) Documents {
+	return registryDocuments{registry: registry}
+}
 
 type registryDocuments struct{ registry *app.Registry }
 
@@ -250,12 +252,12 @@ func (r registryDocuments) mover() (documentMover, error) {
 	return engine, nil
 }
 
-func (r registryDocuments) Copy(ctx context.Context, entityID int64, to int32, overwrite bool) (Copied, error) {
+func (r registryDocuments) Copy(ctx context.Context, move Move, overwrite bool) (Copied, error) {
 	engine, err := r.mover()
 	if err != nil {
 		return Copied{}, err
 	}
-	return engine.CopyHandedOffEntity(ctx, entityID, to, overwrite)
+	return engine.CopyForTransfer(ctx, move.EntityID, move.To, overwrite, wiringde.CopyFence{Epoch: move.Epoch + 1, ID: move.ID})
 }
 
 func (r registryDocuments) Drop(ctx context.Context, copied Copied, sid int32) error {
@@ -301,6 +303,7 @@ type LocalResidency struct {
 type emigrant struct {
 	move   Move
 	moving bool
+	busy   bool // handing off or releasing outside mu; no competing transition can detach this row
 	since  time.Time
 	// release 非空表示实体已经交出、屏障由它撤销。
 	release func(context.Context) error
@@ -379,21 +382,29 @@ func (r *LocalResidency) Quiesce(ctx context.Context, move Move) error {
 }
 
 func (r *LocalResidency) Depart(ctx context.Context, move Move) error {
-	if !r.holds(move) {
-		return fmt.Errorf("rehome: transfer %s of player %d was not reserved", move.ID, move.PlayerID)
+	r.mu.Lock()
+	entry := r.emigrants[move.PlayerID]
+	if entry == nil || entry.move.ID != move.ID || entry.busy {
+		r.mu.Unlock()
+		return fmt.Errorf("rehome: transfer %s is missing or busy", move.ID)
 	}
+	if entry.release != nil {
+		r.mu.Unlock()
+		return nil
+	}
+	entry.busy = true
+	r.mu.Unlock()
 	// Quiesce 之后握手进来的连接发不出业务请求，但握手本身会登记自身视图的订阅：连接上还有订阅时，
 	// 卸载之后框架会为订阅者把实体重新读回内存。所以交出之前再断开一次。
 	r.closeSessions(move.PlayerID, ErrSessionRehoming)
 	release, err := r.handOff(ctx, move.EntityID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry.busy = false
 	if err != nil {
 		return fmt.Errorf("rehome: hand off player %d: %w", move.PlayerID, err)
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if entry := r.emigrants[move.PlayerID]; entry != nil && entry.move.ID == move.ID {
-		entry.release = release
-	}
+	entry.release = release
 	return nil
 }
 
@@ -407,11 +418,19 @@ func (r *LocalResidency) Settle(ctx context.Context, move Move, outcome Outcome)
 		r.mu.Unlock()
 		return nil
 	}
+	if entry.busy {
+		r.mu.Unlock()
+		return Moving(move.PlayerID, move.To)
+	}
+	entry.busy = true
 	release := entry.release
 	r.mu.Unlock()
 	if release != nil {
 		// 撤屏障之前它先把交出期间被读回内存的实例卸载掉（那个实例可能落后于库）；卸载不掉就失败，屏障保持。
 		if err := release(ctx); err != nil {
+			r.mu.Lock()
+			entry.busy = false
+			r.mu.Unlock()
 			return fmt.Errorf("rehome: release player %d: %w", move.PlayerID, err)
 		}
 	}
@@ -432,7 +451,11 @@ func (r *LocalResidency) Settle(ctx context.Context, move Move, outcome Outcome)
 func (r *LocalResidency) settleCommitted(ctx context.Context, move Move) error {
 	r.mu.Lock()
 	entry := r.emigrants[move.PlayerID]
-	if entry == nil || entry.move.ID != move.ID {
+	if entry != nil && (entry.busy || entry.move.ID != move.ID) {
+		r.mu.Unlock()
+		return Moving(move.PlayerID, move.To)
+	}
+	if entry == nil {
 		entry = &emigrant{move: move}
 		r.emigrants[move.PlayerID] = entry
 	}
@@ -443,19 +466,21 @@ func (r *LocalResidency) settleCommitted(ctx context.Context, move Move) error {
 		// 调用方按 account 的当前绑定告诉我们他现在的服：它可能已经不是这一次换服的目标。
 		entry.move.To = move.To
 	}
-	handed := entry.release != nil
-	r.mu.Unlock()
-	if handed {
+	if entry.release != nil {
+		r.mu.Unlock()
 		return nil
 	}
+	entry.busy = true
+	r.mu.Unlock()
 	r.closeSessions(move.PlayerID, ErrSessionRehoming)
 	release, err := r.handOff(ctx, move.EntityID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry.busy = false
 	if err != nil {
 		return fmt.Errorf("rehome: player %d is bound to server %d but was not handed off: %w", move.PlayerID, move.To, err)
 	}
-	r.mu.Lock()
 	entry.release = release
-	r.mu.Unlock()
 	return nil
 }
 
@@ -466,7 +491,7 @@ func (r *LocalResidency) Where(playerID int64) (Whereabouts, bool) {
 	if entry == nil {
 		return Whereabouts{}, false
 	}
-	return Whereabouts{Move: entry.move, Moving: entry.moving, Since: entry.since}, true
+	return Whereabouts{Move: entry.move, Moving: entry.moving || entry.busy, Since: entry.since}, true
 }
 
 // holds 报告表里是不是正记着这一次换服。

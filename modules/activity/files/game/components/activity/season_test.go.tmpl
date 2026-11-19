@@ -1,0 +1,81 @@
+package activity
+
+import (
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+func TestActivityCalendarUsesWallClockBoundary(t *testing.T) {
+	cal, err := clock.ParseCalendar("America/New_York", "05:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, date := range []time.Time{
+		time.Date(2026, 2, 8, 5, 0, 0, 0, cal.Location()),
+		time.Date(2026, 3, 8, 5, 0, 0, 0, cal.Location()),
+		time.Date(2026, 11, 1, 5, 0, 0, 0, cal.Location()),
+	} {
+		for _, repeat := range []string{"daily", "weekly"} {
+			t.Run(date.Format("2006-01-02")+"/"+repeat, func(t *testing.T) {
+				days := 1
+				if repeat == "weekly" {
+					days = 7
+				}
+				r := frozenRule{Definition: Definition{Repeat: repeat, Period: 1, OpenMillis: 60000}, Zone: cal.Location().String(), DayOffset: cal.DayStartOffset().Milliseconds()}
+				first := date.AddDate(0, 0, -days).UnixMilli()
+				start, _, _, err := r.window(first, 2)
+				if err != nil || start != date.UnixMilli() {
+					t.Fatalf("second window: got %v, %v; want %v", time.UnixMilli(start).In(cal.Location()), err, date)
+				}
+				unlock := date.Add(-time.Minute)
+				anchor, err := r.calendarAnchor(unlock.UnixMilli())
+				if err != nil || anchor != cal.NextDayStart(unlock).UnixMilli() {
+					t.Fatalf("relative anchor: %d, %v", anchor, err)
+				}
+				start, _, _, err = r.window(anchor, 1)
+				if err != nil || start != date.UnixMilli() {
+					t.Fatalf("first window at computed boundary: got %v, %v; want %v", time.UnixMilli(start).In(cal.Location()), err, date)
+				}
+			})
+		}
+	}
+}
+
+func TestActivityLastWindowOnlyChecksActualNeighbors(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hour := time.Hour.Milliseconds()
+	anchor := time.Date(2026, 3, 8, 0, 0, 0, 0, loc).UnixMilli() // next midnight is only 23h away
+	base := frozenRule{Definition: Definition{Repeat: "daily", Period: 1, OpenMillis: 24 * hour}, Zone: loc.String()}
+	for _, tc := range []struct {
+		name                   string
+		limit, until, wantSpan int64
+		overlap                bool
+	}{
+		{"unlimited", 0, 0, 0, true}, {"two cycles", 2, 0, 0, true}, {"one cycle", 1, 0, 24 * hour, false}, {"cutoff inside window", 0, anchor + 20*hour, 20 * hour, false}, {"cutoff at next midnight", 0, anchor + 23*hour, 23 * hour, false}, {"next cycle opens before cutoff", 0, anchor + 23*hour + 1, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := base
+			r.MaxCycles = tc.limit
+			r.UntilMilli = tc.until
+			start, open, close, err := r.window(anchor, 1)
+			if tc.overlap {
+				if !errors.Is(err, ErrRule) {
+					t.Fatalf("overlapping windows: %v", err)
+				}
+				return
+			}
+			if err != nil || start != anchor || open != anchor || close != anchor+tc.wantSpan {
+				t.Fatalf("window=(%d,%d,%d), %v; want start %d span %d", start, open, close, err, anchor, tc.wantSpan)
+			}
+			if _, more, err := r.next(anchor, 1); err != nil || more {
+				t.Fatalf("last window has successor: %v, %v", more, err)
+			}
+		})
+	}
+}

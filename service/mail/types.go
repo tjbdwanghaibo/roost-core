@@ -63,22 +63,23 @@ import (
 const (
 	CodeOK int32 = 0
 
-	CodeMailInvalid      int32 = 590101
-	CodeMailMissing      int32 = 590102
-	CodeBodyInvalid      int32 = 590103
-	CodeAudienceInvalid  int32 = 590104
-	CodeNotRecipient     int32 = 590105
-	CodeExpired          int32 = 590106
-	CodeNoAttachment     int32 = 590107
-	CodeAlreadyClaimed   int32 = 590108
-	CodeClaimHeld        int32 = 590109
-	CodeClaimTokenWrong  int32 = 590110
-	CodeMailboxFull      int32 = 590111
-	CodeRangeInvalid     int32 = 590112
-	CodeRequestInvalid   int32 = 590113
-	CodeConflict         int32 = 590114
-	CodeClaimHistoryFull int32 = 590115
-	CodeBroadcastFull    int32 = 590116
+	CodeMailInvalid              int32 = 590101
+	CodeMailMissing              int32 = 590102
+	CodeBodyInvalid              int32 = 590103
+	CodeAudienceInvalid          int32 = 590104
+	CodeNotRecipient             int32 = 590105
+	CodeExpired                  int32 = 590106
+	CodeNoAttachment             int32 = 590107
+	CodeAlreadyClaimed           int32 = 590108
+	CodeClaimHeld                int32 = 590109
+	CodeClaimTokenWrong          int32 = 590110
+	CodeMailboxFull              int32 = 590111
+	CodeRangeInvalid             int32 = 590112
+	CodeRequestInvalid           int32 = 590113
+	CodeConflict                 int32 = 590114
+	CodeClaimHistoryFull         int32 = 590115
+	CodeBroadcastFull            int32 = 590116
+	CodeBroadcastProfileRequired int32 = 590117
 )
 
 // The sentinels. Each carries its code, so errors.Is keeps working unchanged
@@ -125,10 +126,11 @@ var (
 	// document every merge reads, so its size is bounded and publishing over
 	// the bound is refused rather than growing it; records leave it when they
 	// expire.
-	ErrBroadcastFull  = errcode.Define(CodeBroadcastFull, "mail: broadcast ledger is full", "")
-	ErrRangeInvalid   = errcode.Define(CodeRangeInvalid, "mail: range is invalid", "")
-	ErrRequestInvalid = errcode.Define(CodeRequestInvalid, "mail: request is invalid", "")
-	ErrConflict       = errcode.Define(CodeConflict, "mail: conflict", "")
+	ErrBroadcastProfileRequired = errcode.Define(CodeBroadcastProfileRequired, "mail: refresh the current server's broadcast profile", "")
+	ErrBroadcastFull            = errcode.Define(CodeBroadcastFull, "mail: broadcast ledger is full", "")
+	ErrRangeInvalid             = errcode.Define(CodeRangeInvalid, "mail: range is invalid", "")
+	ErrRequestInvalid           = errcode.Define(CodeRequestInvalid, "mail: request is invalid", "")
+	ErrConflict                 = errcode.Define(CodeConflict, "mail: conflict", "")
 )
 
 // codeBySentinel is the pairing above, as data, so a test can check it rather
@@ -141,22 +143,23 @@ var (
 // error to attach to. A code nothing can produce is worse than no code: it
 // reads as coverage.
 var codeBySentinel = map[int32]error{
-	CodeMailInvalid:      ErrMailInvalid,
-	CodeMailMissing:      ErrMailMissing,
-	CodeBodyInvalid:      ErrBodyInvalid,
-	CodeAudienceInvalid:  ErrAudienceInvalid,
-	CodeNotRecipient:     ErrNotRecipient,
-	CodeExpired:          ErrExpired,
-	CodeNoAttachment:     ErrNoAttachment,
-	CodeAlreadyClaimed:   ErrAlreadyClaimed,
-	CodeClaimHeld:        ErrClaimHeld,
-	CodeClaimTokenWrong:  ErrClaimTokenWrong,
-	CodeMailboxFull:      ErrMailboxFull,
-	CodeRangeInvalid:     ErrRangeInvalid,
-	CodeRequestInvalid:   ErrRequestInvalid,
-	CodeConflict:         ErrConflict,
-	CodeClaimHistoryFull: ErrClaimHistoryFull,
-	CodeBroadcastFull:    ErrBroadcastFull,
+	CodeMailInvalid:              ErrMailInvalid,
+	CodeMailMissing:              ErrMailMissing,
+	CodeBodyInvalid:              ErrBodyInvalid,
+	CodeAudienceInvalid:          ErrAudienceInvalid,
+	CodeNotRecipient:             ErrNotRecipient,
+	CodeExpired:                  ErrExpired,
+	CodeNoAttachment:             ErrNoAttachment,
+	CodeAlreadyClaimed:           ErrAlreadyClaimed,
+	CodeClaimHeld:                ErrClaimHeld,
+	CodeClaimTokenWrong:          ErrClaimTokenWrong,
+	CodeMailboxFull:              ErrMailboxFull,
+	CodeRangeInvalid:             ErrRangeInvalid,
+	CodeRequestInvalid:           ErrRequestInvalid,
+	CodeConflict:                 ErrConflict,
+	CodeClaimHistoryFull:         ErrClaimHistoryFull,
+	CodeBroadcastFull:            ErrBroadcastFull,
+	CodeBroadcastProfileRequired: ErrBroadcastProfileRequired,
 }
 
 // Error maps an error to the code and reason a client sees.

@@ -1,0 +1,65 @@
+package rehome
+
+import (
+	"context"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"sync/atomic"
+	"testing"
+)
+
+func returnedBinding() svcaccount.RoleBinding {
+	return svcaccount.RoleBinding{PlayerID: rehomePlayer, ServerID: rehomeSelf, ServingServerID: rehomeSelf, BindEpoch: 5}
+}
+
+func TestRehomeQueuedDepartureDoesNotTouchReturnedPlayer(t *testing.T) {
+	f := newRehomeFixture(t)
+	ctx := context.Background()
+	f.directory.away = []svcaccount.RoleBinding{departedBinding()}
+	ids, err := f.driver.AdmitPreload(ctx, rehomePlayerKind, []int64{rehomeEntity})
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("setup: %v %v", ids, err)
+	}
+	f.directory.binding = returnedBinding()
+	f.driver.settleDeparted(ctx)
+	f.expectFree(t)
+	f.expectEvents(t, "bindings away from 1000: [94301]", "binding 94301")
+	if len(f.documents.copies)+len(f.documents.drops) != 0 {
+		t.Fatal("returned player's documents were touched")
+	}
+}
+
+// No wall-clock scheduling assumptions: hand-off is stopped before returning its release handle.
+func TestRehomeReadmissionCannotDetachAnUnfinishedHandOff(t *testing.T) {
+	f := newRehomeFixture(t)
+	ctx := context.Background()
+	f.directory.binding = returnedBinding()
+	entered, resume := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	var held atomic.Bool
+	var releases atomic.Int32
+	f.residency.handOff = func(context.Context, int64) (func(context.Context) error, error) {
+		close(entered)
+		<-resume
+		held.Store(true)
+		return func(context.Context) error { releases.Add(1); held.Store(false); return nil }, nil
+	}
+	move := departedMove(rehomeSelf, rehomeEntity, departedBinding())
+	go func() { result <- f.residency.Settle(ctx, move, Committed) }()
+	<-entered
+	admission := f.driver.Admit(ctx, rehomePlayer, nil)
+	earlyRelease := f.residency.Settle(ctx, move, Kept)
+	close(resume)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if admission == nil || earlyRelease == nil || !held.Load() {
+		t.Fatalf("admit=%v earlyRelease=%v held=%v", admission, earlyRelease, held.Load())
+	}
+	if err := f.driver.Admit(ctx, rehomePlayer, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.expectFree(t)
+	if held.Load() || releases.Load() != 1 {
+		t.Fatalf("held=%v releases=%d", held.Load(), releases.Load())
+	}
+}

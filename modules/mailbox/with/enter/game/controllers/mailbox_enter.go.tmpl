@@ -3,9 +3,11 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	gamelogin "{{MODULE}}/game/modules/login"
@@ -20,12 +22,15 @@ import (
 //
 // 这是进入钩子（见 game/enter）：失败只记日志、不让登录失败，下一次进入或下一次 List 会补上。
 func init() {
+	mailboxRetryProfile = func(registry *app.Registry, session *playeraccess.Context, mailer svcmail.Mail) error {
+		return mailboxPullForBinding(session.Context(), registry, mailer, gamelogin.Entered{PlayerID: session.PlayerID, Claims: session.Session.Principal().Claims})
+	}
 	gamelogin.OnEntered("mailbox", func(ctx context.Context, registry *app.Registry, entered gamelogin.Entered) error {
 		mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
 		if !ok || mailer == nil {
 			return fmt.Errorf("mailbox: capability %q not found; list mail under services.<service>.uses in roost.yaml", svcmail.CapabilityName)
 		}
-		return mailboxPullBroadcastsOnEnter(ctx, mailer, entered)
+		return mailboxPullForBinding(ctx, registry, mailer, entered)
 	})
 }
 
@@ -34,11 +39,32 @@ type mailboxBroadcastPuller interface {
 	PullBroadcasts(ctx context.Context, playerID int64, profile svcmail.BroadcastProfile) (svcmail.Summary, error)
 }
 
-func mailboxPullBroadcastsOnEnter(ctx context.Context, mailer mailboxBroadcastPuller, entered gamelogin.Entered) error {
+func mailboxPullForBinding(ctx context.Context, registry *app.Registry, mailer mailboxBroadcastPuller, entered gamelogin.Entered) error {
+	var binding svcmail.BroadcastBinding
+	if mailboxBindingForPull != nil {
+		v, origin, err := mailboxBindingForPull(ctx, registry, entered.PlayerID)
+		if err != nil {
+			return err
+		}
+		binding = v
+		// Keep registration time and application-specific claims; replace only the server pair with the current authority.
+		claims := maps.Clone(entered.Claims)
+		if claims == nil {
+			claims = map[string]string{}
+		}
+		claims[svcaccount.ServerIDClaim] = strconv.FormatInt(int64(v.ServerID), 10)
+		claims[svcaccount.OriginServerIDClaim] = strconv.FormatInt(int64(origin), 10)
+		entered.Claims = claims
+	}
+	return mailboxPullBroadcastsOnEnter(ctx, mailer, binding, entered)
+}
+
+func mailboxPullBroadcastsOnEnter(ctx context.Context, mailer mailboxBroadcastPuller, binding svcmail.BroadcastBinding, entered gamelogin.Entered) error {
 	profile, ok := BroadcastProfileOnEnter(entered)
 	if !ok {
 		return fmt.Errorf("mailbox: player %d has neither a role creation time nor a first-enter time; server-wide mail not pulled", entered.PlayerID)
 	}
+	profile.Binding = binding
 	_, err := mailer.PullBroadcasts(ctx, entered.PlayerID, profile)
 	return err
 }

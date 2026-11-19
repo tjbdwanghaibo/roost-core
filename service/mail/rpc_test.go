@@ -254,7 +254,7 @@ func TestIdentityIsAParameterOnEveryMethodThatNeedsOne(t *testing.T) {
 	perPlayer := map[string]bool{
 		"List": true, "Summary": true, "MarkRead": true, "Delete": true,
 		"ReserveClaim": true, "CommitClaim": true, "CancelClaim": true,
-		"PullBroadcasts": true,
+		"PullBroadcasts": true, "CloseBroadcastScope": true,
 	}
 	seen := 0
 	for index := 0; index < iface.NumMethod(); index++ {
@@ -433,6 +433,9 @@ func (s *spyMail) CancelClaim(context.Context, int64, string, string, int32) (bo
 }
 func (s *spyMail) PullBroadcasts(context.Context, int64, BroadcastProfile) (Summary, error) {
 	return Summary{}, errors.New("spyMail: PullBroadcasts not implemented")
+}
+func (s *spyMail) CloseBroadcastScope(context.Context, int64, BroadcastBinding) (Summary, error) {
+	return Summary{}, errors.New("spyMail: CloseBroadcastScope not implemented")
 }
 func (s *spyMail) RevokeBroadcast(context.Context, string) (bool, error) {
 	return false, errors.New("spyMail: RevokeBroadcast not implemented")
