@@ -1,0 +1,17 @@
+=== RUN   TestReviewGroupMemberPromotion
+2026/11/19 07:03:34 WARN group view: member subscription refused; retrying at the next sync tick subject_id=5000001 member=2 err="entitysync: subscriber limit reached for this subject"
+    review_group_profile_test.go:56: cap=1 member=true groupHolds=true deliveredProfile="room"
+    review_group_profile_test.go:56: cap=2 member=true groupHolds=true deliveredProfile="room"
+--- PASS: TestReviewGroupMemberPromotion (0.00s)
+=== RUN   TestReviewGroupMemberPromotion
+2026/11/19 07:03:34 WARN group view: member subscription refused; retrying at the next sync tick subject_id=5000001 member=2 err="entitysync: subscriber limit reached for this subject"
+    review_group_profile_test.go:56: cap=1 member=true groupHolds=true deliveredProfile="room"
+    review_group_profile_test.go:56: cap=2 member=true groupHolds=true deliveredProfile="room"
+--- PASS: TestReviewGroupMemberPromotion (0.00s)
+=== RUN   TestReviewGroupMemberPromotion
+2026/11/19 07:03:34 WARN group view: member subscription refused; retrying at the next sync tick subject_id=5000001 member=2 err="entitysync: subscriber limit reached for this subject"
+    review_group_profile_test.go:56: cap=1 member=true groupHolds=true deliveredProfile="room"
+    review_group_profile_test.go:56: cap=2 member=true groupHolds=true deliveredProfile="room"
+--- PASS: TestReviewGroupMemberPromotion (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.006s

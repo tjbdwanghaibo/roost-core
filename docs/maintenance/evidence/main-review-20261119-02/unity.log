@@ -1,0 +1,29 @@
+  Determining projects to restore...
+  Restored /workspace/work/r2src/client/dotnet/Roost.Client/Roost.Client.csproj (in 3.81 sec).
+  Roost.Client -> /workspace/work/r2src/client/dotnet/Roost.Client/bin/Release/netstandard2.1/Roost.Client.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:22.08
+  Determining projects to restore...
+  Restored /workspace/work/r2src/client/dotnet/Roost.Client.Relay/Roost.Client.Relay.csproj (in 974 ms).
+  Roost.Client.Relay -> /workspace/work/r2src/client/dotnet/Roost.Client.Relay/bin/Release/netstandard2.1/Roost.Client.Relay.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:14.26
+Unity package: /workspace/work/r2/package/com.roost.client
+cancelBefore=False status=Canceled open=1 close=1 polls=0
+cancelBefore=True status=Canceled open=0 close=0 polls=0
+PASS packed body: Go/C# golden, delta, truncation, missing baseline and immutable history
+PASS playback: sparse samples, stalled stream, Go/C# trajectory phase and calibration
+PASS room frame: RP3 Go/C# golden, teleport flag, RP2 refused, truncation leaves the replica intact
+PASS playback discontinuity: teleport placed at once, buffer dropped, stale sample ignored
+PASS prediction discontinuity: no extrapolation of the old input, older history dropped, later inputs replayed
+PASS level view: Go/C# golden, revision order, 34 malformed inputs, truncation and byte limit
+PASS level markers: Go/C# golden, level without markers, 24 malformed documents and truncation
+PASS prediction: rebase, sampled ACK, single jump, expiry, bounded history and recovery

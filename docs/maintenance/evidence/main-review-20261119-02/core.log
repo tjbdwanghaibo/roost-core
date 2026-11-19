@@ -1,0 +1,11 @@
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/level	0.205s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/physics	0.181s
+ok  	github.com/tjbdwanghaibo/roost-core/service/physicsroom	0.011s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom	0.959s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.932s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	16.308s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/mongo	0.069s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	1.190s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/sidmerge	0.096s
+ok  	github.com/tjbdwanghaibo/roost-core/service/mail	0.697s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/clock	0.595s

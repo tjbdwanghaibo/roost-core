@@ -1,0 +1,8 @@
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	0.011s
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.018s
+PASS pretag-scope selection
+https://play.example.com accepted, Origin https://play.example.com, preflight 204
+https://play.example.com:443 rejected: config: portal.cors_origins entry "https://play.example.com:443" names the default port, which browsers leave out of Origin; write "https://play.example.com"
+https://play.example.com:0443 rejected: config: portal.cors_origins entry "https://play.example.com:0443" names the default port, which browsers leave out of Origin; write "https://play.example.com"
+https://play.example.com:8443 accepted, Origin https://play.example.com:8443, preflight 204
+https://play.example.com:08443 rejected: config: portal.cors_origins entry "https://play.example.com:08443" is not how browsers write this origin in the Origin header; write "https://play.example.com:8443"

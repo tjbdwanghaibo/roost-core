@@ -1,0 +1,61 @@
+package policy
+
+import (
+	"context"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+)
+
+func TestReviewGroupMemberPromotion(t *testing.T) {
+	for _, cap := range []int{1, 2} {
+		lane := &selfLane{}
+		mem := &memory{}
+		manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+			Transport: lane, MaxSubscribersPerSubject: cap,
+			ProfilePriorities: map[entity.SyncProfile]int{roomProfile: -10},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = manager.Close(context.Background()) })
+		group, err := NewGroupView(GroupViewConfig{Manager: manager, Profile: roomProfile, Lookup: mem.lookup})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(group.Close)
+		for _, session := range []entitysync.SessionID{1, 2} {
+			if err := manager.OpenSession(session); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mem.put(subjectState(t, groupRoom))
+		joins(t, group, 1, 2)
+		flush := func() {
+			if err := manager.Flush(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		flush()
+		frames := lane.take(2)
+		group.Leave(groupRoom, 1)
+		flush()
+		// A second source starts sending the public view before the next policy phase.
+		other := manager.NewSubscriptionSource()
+		if err := other.Subscribe(2, groupRoom, entity.SyncProfile{Key: "public"}); err != nil {
+			t.Fatal(err)
+		}
+		flush()
+		for range 4 {
+			flush()
+		}
+		frames = append(frames, lane.take(2)...)
+		_, _, profile := sees(frames, groupRoom)
+		holds := group.source.Holds(2, groupRoom)
+		t.Logf("cap=%d member=%v groupHolds=%v deliveredProfile=%q", cap, group.IsMember(groupRoom, 2), holds, profile)
+		if !holds || profile != roomProfile.Key {
+			t.Errorf("cap=%d: group member did not retain the room view", cap)
+		}
+	}
+}

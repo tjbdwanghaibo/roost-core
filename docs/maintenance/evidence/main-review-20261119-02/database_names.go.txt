@@ -1,0 +1,26 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	wmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
+)
+
+// Inspect handles only. The underlying client is in memory.
+func main() {
+	cfg := viper.New()
+	cfg.SetConfigFile(os.Args[1])
+	if err := cfg.ReadInConfig(); err != nil {
+		panic(err)
+	}
+	prefix, err := wmongo.DatabasePrefix(cfg)
+	if err != nil {
+		panic(err)
+	}
+	client := wmongo.WithDatabasePrefix(mongotest.NewClient(), prefix)
+	logical := cfg.GetString("dataengine.databases.main")
+	fmt.Println(client.Database(logical).Name(), client.DatabaseForSid(logical, 1000).Name())
+}

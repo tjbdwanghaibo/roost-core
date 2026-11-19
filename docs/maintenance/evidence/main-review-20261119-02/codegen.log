@@ -1,0 +1,12 @@
+=== RUN   TestDemoLeavesMailToTheMailboxModule
+--- PASS: TestDemoLeavesMailToTheMailboxModule (0.03s)
+=== RUN   TestDAOSkeletonDatabaseFollowsTheProjectName
+=== PAUSE TestDAOSkeletonDatabaseFollowsTheProjectName
+=== RUN   TestModuleGiftStandalone
+--- PASS: TestModuleGiftStandalone (28.46s)
+=== RUN   TestGeneratedMailboxCutoverAfterLoginPullFailure
+--- PASS: TestGeneratedMailboxCutoverAfterLoginPullFailure (6.41s)
+=== CONT  TestDAOSkeletonDatabaseFollowsTheProjectName
+--- PASS: TestDAOSkeletonDatabaseFollowsTheProjectName (0.06s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	34.969s

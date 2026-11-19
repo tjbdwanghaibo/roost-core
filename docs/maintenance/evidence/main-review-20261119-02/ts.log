@@ -1,0 +1,10 @@
+
+added 12 packages in 2s
+
+> @roost/client@0.2.0 build
+> tsc -p tsconfig.json
+
+{"immediate":false,"time":0,"state":"Disconnected","calls":1,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":false,"time":5000,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":true,"time":0,"state":"Disconnected","calls":0,"aborted":false,"outcome":"GateClosedError"}
+{"immediate":true,"time":5000,"aborted":false,"outcome":"GateClosedError"}

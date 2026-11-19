@@ -1,0 +1,156 @@
+{
+  "modules": [
+    {
+      "name": "account_auth",
+      "want": 7,
+      "passed": 7,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity",
+      "want": 23,
+      "passed": 23,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity+enter",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "activity+mailbox",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "bag",
+      "want": 20,
+      "passed": 20,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "enter",
+      "want": 29,
+      "passed": 29,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "gift",
+      "want": 7,
+      "passed": 7,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login",
+      "want": 35,
+      "passed": 35,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "login+enter",
+      "want": 6,
+      "passed": 6,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox",
+      "want": 35,
+      "passed": 35,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+bag",
+      "want": 9,
+      "passed": 9,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "mailbox+rehome",
+      "want": 3,
+      "passed": 3,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal",
+      "want": 21,
+      "passed": 21,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal+enter",
+      "want": 2,
+      "passed": 2,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "portal+login",
+      "want": 1,
+      "passed": 1,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome",
+      "want": 64,
+      "passed": 64,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "rehome+enter",
+      "want": 5,
+      "passed": 5,
+      "skipped": 0,
+      "ok": true
+    },
+    {
+      "name": "wallet",
+      "want": 17,
+      "passed": 17,
+      "skipped": 0,
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "go build ./...",
+      "ok": true
+    },
+    {
+      "name": "go vet ./...",
+      "ok": true
+    },
+    {
+      "name": "roost id check",
+      "ok": true
+    },
+    {
+      "name": "roost generate --check",
+      "ok": true
+    }
+  ],
+  "ok": true
+}
