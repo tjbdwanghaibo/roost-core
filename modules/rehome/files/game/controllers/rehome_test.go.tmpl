@@ -125,7 +125,7 @@ func (e *rehomeEngine) HandOffEntity(_ context.Context, entityID int64) (*wiring
 	return &wiringde.EntityHandOff{EntityID: entityID}, nil
 }
 
-func (e *rehomeEngine) CopyHandedOffEntity(ctx context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error) {
+func (e *rehomeEngine) CopyForTransfer(ctx context.Context, entityID int64, to int32, overwrite bool, _ wiringde.CopyFence) (wiringde.EntityCopy, error) {
 	e.events.add(fmt.Sprintf("copy %d to %d overwrite=%v", entityID, to, overwrite))
 	if err := e.crash(ctx, "copy"); err != nil {
 		return wiringde.EntityCopy{}, err

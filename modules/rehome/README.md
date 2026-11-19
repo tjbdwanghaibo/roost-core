@@ -81,6 +81,7 @@
 - 原子与幂等：一次复制或删除涉及的全部文档在一个 Mongo 事务里。复制时目标库已有同一版本算“已在”；已有别的版本时，提交之前（他仍绑在本服）覆盖——那只能是以前留下的旧副本；之后补搬（见下一条）不覆盖。删除带 `_version` 条件，之后被写过的不删；删除失败一直重发。
 - 没经本进程搬档就归了别的服（应答丢失后 account 已提交、运维用 `accountctl` 提交、源服重启后由恢复循环或登录续做、起服核对认出的旧档）：先补搬到他现在的服，那里没有才写；那里已有别的版本时不覆盖、也不删本服的，记 Error 留给运维。补搬成功后删本服的。
 - 他换走又换回本服：本服库里已是目标服搬回来的新版本，不动。
+- **恢复清理的代数保护**：起服队列只作线索；出队先向 account 复核，已换回本服不关会话、不搬档。复制和删除在同一 Mongo 部署、首个按服 DAO 映射的无 SID 后缀库中使用 `_dataengine_transfer_fences`，每个迁移过的实体保留一行，不设 TTL；事务以绑定代数和换服 ID 仲裁，新一轮迁入即使业务内容相同也会使旧删除失效。提交结果未知时才返回可能已写的清单；删除还须匹配 `_last_tx` 和墓碑状态。运维不要清除此集合；各服的映射和访问权限须一致。升级时先暂停新换服、排空在途换服，再一起更新框架与各服的 rehome 模块；旧版二进制不登记也不检查新凭据。自定义 `Documents.Copy` 接收完整 `Move`，也应实现相同的代数保护。
 - 中止：已经搬过档的，在撤屏障之前删掉目标服库里这一次写的副本（版本条件同上）。
 
 **日志**：规则 / 冷却 / account 拒绝申请记 Info，记录玩家、目标服和码；原有受理 / 完成日志保留。 玩家成功操作使用框架 `slog.InfoContext`（无 ctx 时 `Info`），非玩家低频运维 / 生命周期使用 `Debug`。记录位于 `game/controllers/rehome.go`；成功日志仅在提交返回后写，幂等确认可能重复，不能当资产流水。
@@ -146,7 +147,7 @@
 
 ## 验证范围
 
-- `roost module verify rehome`：62 条场景（`game/modules/rehome` 45、`game/handler` 8、`game/controllers` 7、`game/managers` 2）；与 `enter` 的联动 5 条，与 `gm` 的联动 4 条。
+- `roost module verify rehome`：64 条场景（`game/modules/rehome` 47、`game/handler` 8、`game/controllers` 7、`game/managers` 2）；与 `enter` 的联动 5 条，与 `gm` 的联动 4 条。
 - **上述模块场景是离线的**：account 是真实的 `service/account` 服务但存储在进程内；Nest 是真实的引擎加替身提交器；玩家传输与 DataEngine 是只记事件的替身，所以“断开会话”“交出实体”与“搬档”都没有经过真实实现（搬档的 DataEngine 一侧另有框架单测与真实 Mongo 副本集上的 `TestRealMongoLocalPreloadAndCopyAcrossServers`）；两个服共用同一个进程内的 account 与同一份玩家档。没有 NATS、Redis、Mongo。
 - 覆盖：整条顺序、各种拒绝不写任何东西、发起被拒清意图、发起结果未知用中止拿结论、离开钩子与交出失败时中止、提交结果未知重发直到有结论、提交被拒转中止、搬档失败先重做（提交应答丢失、结果未知时重做得到确定结果照常换服）、一直失败才中止并删掉目标库里可能已写入的副本（中止时 account 答已在别处提交的，按没搬过补搬，不凭这份清单删本服的档）、中止时删目标副本、删除失败重试、补搬冲突时保留源档、撤屏障忙时重试、迁出表一人一行、`Binding` 先表后 account、离开中的玩家在闸门被拒、排空等待先前的请求、排空不完中止、复核不过中止、应答丢失后按当前绑定落定、对不上的绑定继续问、`Admit` 的三种回答、换回来的玩家重新放行、源服重启后续做（登录触发；恢复循环不等登录：在途的接着做完、过了期限的被拒后按没换成收尾、提交后未删的旧档起服核对时删掉、目标服已有别的版本时保留、正在换回本服的不落定、account 问不到时预加载失败）、到达只做一次、意图对账、GM 入口。
 - **真实进程**：`scripts/test-demo-rehome.sh` 在 macOS ARM64 的私有 Mongo 副本集 / Redis / NATS / etcd 上连续两遍通过（2026-11-14）：生成 game-demo 的 account、两个 game 与正式协作者，受理、断开排空、离开钩子、真实 HandOffEntity、account 提交、删除源档六点之后分别 SIGKILL 源服，原 WAL 重启；前四点经登录续做。核对 account 单一绑定、玩家入口拒绝、背包 / 钱包与扣款去重、Mongo 到达次数 1、源档删除及最终 WAL 排空；提交后删除前的 Q4 窗口明确保留旧源档，不宣称全部写入入口都被隔离。另压住最后 LeaveScene 投影之后的 checkpoint，观察到等待、放行后交出；详见[演练证据](../../docs/maintenance/evidence/rehome-20261114/README.md)。2026-11-17（D7 A / D8 A）起脚本改为六个点重启后都不登录：在途四点与 checkpoint 由恢复循环续做，committed 点由起服核对删掉源档，私有 mirror-local 上连续两遍 7 / 7 通过，见 [R2 证据](../../docs/maintenance/evidence/r2-rehome-d7-d8-20261117/README.md)。

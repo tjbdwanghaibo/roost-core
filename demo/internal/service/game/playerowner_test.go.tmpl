@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
-	player "{{MODULE}}/game/entities/player"
-	gamescene "{{MODULE}}/game/scene"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/msgid"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	player "{{MODULE}}/game/entities/player"
+	gamerehome "{{MODULE}}/game/modules/rehome"
+	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
 )
 
 // 静态绑定下的驻留表：只有通过绑定校验
@@ -22,6 +23,40 @@ import (
 // 相应回归在 app 包。
 
 const ownSID int32 = 1000
+
+type pausedHandOff struct {
+	started, resume chan struct{}
+	released        bool
+}
+
+func (p *pausedHandOff) DepartPlayer(context.Context, int64) (func(context.Context) error, error) {
+	close(p.started)
+	<-p.resume
+	return func(context.Context) error { p.released = true; return nil }, nil
+}
+
+func TestPlayerOwnersKeepsHandleDuringReadmission(t *testing.T) {
+	owners := newPlayerOwners(ownSID, nil, nil)
+	p := &pausedHandOff{started: make(chan struct{}), resume: make(chan struct{})}
+	owners.depart = p
+	move := gamerehome.Move{PlayerID: 42, ID: "out", From: ownSID, To: ownSID + 1}
+	ctx := context.Background()
+	done := make(chan error, 1)
+	go func() { done <- owners.Settle(ctx, move, gamerehome.Committed) }()
+	<-p.started
+	where, ok := owners.Where(move.PlayerID)
+	early := owners.Settle(ctx, move, gamerehome.Kept)
+	close(p.resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !where.Moving || early == nil {
+		t.Fatalf("pending hand-off: %+v %v %v", where, ok, early)
+	}
+	if err := owners.Settle(ctx, move, gamerehome.Kept); err != nil || !p.released {
+		t.Fatalf("readmission: released=%v err=%v", p.released, err)
+	}
+}
 
 type fakeFencer struct {
 	mu     sync.Mutex

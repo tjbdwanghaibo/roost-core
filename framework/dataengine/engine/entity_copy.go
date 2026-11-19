@@ -31,9 +31,9 @@ import (
 //     写过他，目标库里别的版本只能是以前留下的旧副本（换走又换回、中止后没清掉）。account 已经改绑之后补搬时用
 //     overwrite=false：目标服可能已经写过，不能覆盖。
 //     出错时结果未必是“全无”：Mongo 驱动对“提交已发出、应答没回来”返回 ErrCommitResultUnknown，那时目标库里可能已经
-//     有了这次写的文档。所以事务出错（冲突除外）时返回的 EntityCopy 照样列出这次要写的每份文档（Outcome 为
+//     有了这次写的文档。所以提交结果未知时返回的 EntityCopy 照样列出这次要写的每份文档（Outcome 为
 //     EntityCopyUnknown），调用方要么重做复制拿到确定的结果（已写进去的答 already_present），要么拿它 DropEntityCopy
-//     把可能写进去的删掉；不能把出错当成目标库里什么都没有（RV-20261114-01）。冲突、读源库失败是确定没写的，不列文档。
+//     把可能写进去的删掉。只有 ErrCommitResultUnknown 列清单；其余事务错误确定未提交，不授权删除。
 //   - DropEntityCopy(copy, sid)：按复制结果删掉 sid 库里这些文档，条件是 _version 仍是复制时的版本——之后被写过的
 //     文档不删（计入 Kept）。改绑成功之后删源库（本服不再预加载、按 ID 也加载不到他）；中止之后删目标库里这次写的副本。
 //
@@ -62,6 +62,7 @@ type EntityCopy struct {
 	EntityID  int64
 	From, To  int32
 	Documents []EntityCopyDocument
+	fence     copyFenceRow
 }
 
 // EntityCopyDocument 是一份被复制的文档：Database 是物理库名的前缀（不含 _<sid>），Version 是复制的版本。
@@ -70,6 +71,8 @@ type EntityCopyDocument struct {
 	Collection string
 	Version    uint64
 	Outcome    string
+	LastTx     string
+	Deleted    bool
 }
 
 // copyMeta 是比较两份文档是否同一版本用到的元数据。
@@ -81,8 +84,21 @@ type copyMeta struct {
 
 // CopyHandedOffEntity 把本进程已交出的实体 id 的 dbscope=sid 文档复制到 sid=to 的库（见本文件开头）。
 // 会等待，只能在业务池之外调用。实体没有处于交出状态返回 ErrEntityNotHandedOff，什么都不读写。
-// 写目标库的事务出错（冲突除外）时，返回的结果连同错误列出可能已经写进去的文档（Outcome 为 EntityCopyUnknown）。
+// 只有提交结果未知时，返回的结果连同错误列出可能已经写进去的文档（Outcome 为 EntityCopyUnknown）。
 func (runtime *Runtime) CopyHandedOffEntity(ctx context.Context, id int64, to int32, overwrite bool) (result EntityCopy, err error) {
+	return runtime.copyHandedOffEntity(ctx, id, to, overwrite, CopyFence{})
+}
+
+// CopyForTransfer serializes the copy with other generations of this player's move, even
+// when a return trip would otherwise be an already-present (read-only) copy.
+func (runtime *Runtime) CopyForTransfer(ctx context.Context, id int64, to int32, overwrite bool, fence CopyFence) (EntityCopy, error) {
+	if fence.Epoch == 0 || fence.ID == "" {
+		return EntityCopy{}, errors.New("dataengine copy: missing transfer fence")
+	}
+	return runtime.copyHandedOffEntity(ctx, id, to, overwrite, fence)
+}
+
+func (runtime *Runtime) copyHandedOffEntity(ctx context.Context, id int64, to int32, overwrite bool, fence CopyFence) (result EntityCopy, err error) {
 	if err := fctx.BlockingError("dataengine.CopyHandedOffEntity"); err != nil {
 		return EntityCopy{}, err
 	}
@@ -106,38 +122,41 @@ func (runtime *Runtime) CopyHandedOffEntity(ctx context.Context, id int64, to in
 		doc      bson.M
 		meta     copyMeta
 	}
-	var sources []source
-	for _, key := range keys {
-		physical, err := store.physicalDatabase(key)
-		if err != nil {
-			return EntityCopy{}, err
-		}
-		collection, err := store.collection(key)
-		if err != nil {
-			return EntityCopy{}, err
-		}
-		var raw bson.Raw
-		if err := collection.FindOne(ctx, bson.M{"_id": id}, &raw); err != nil {
-			if errors.Is(err, fmongo.ErrNotFound) {
-				continue
-			}
-			return EntityCopy{}, fmt.Errorf("dataengine copy: read %s/%s/%d: %w", physical, key.Resource, id, err)
-		}
-		item := source{physical: physical, key: key}
-		if err := bson.Unmarshal(raw, &item.doc); err != nil {
-			return EntityCopy{}, err
-		}
-		if err := bson.Unmarshal(raw, &item.meta); err != nil {
-			return EntityCopy{}, err
-		}
-		sources = append(sources, item)
-	}
-	if len(sources) == 0 {
+	if len(keys) == 0 {
 		return result, nil
 	}
 	err = store.ReadConsistent(ctx, func(txCtx context.Context) error {
-		// 事务可能被驱动重调：每次从头算结果。
-		result.Documents = result.Documents[:0]
+		result.Documents = nil // a retried transaction has its own snapshot and receipt
+		result.fence = copyFenceRow{fence, result.From, to}
+		if err := store.touchCopyFence(txCtx, keys[0], &result, overwrite, false); err != nil {
+			return err
+		}
+		var sources []source
+		for _, key := range keys {
+			physical, err := store.physicalDatabase(key)
+			if err != nil {
+				return err
+			}
+			collection, err := store.collection(key)
+			if err != nil {
+				return err
+			}
+			var raw bson.Raw
+			if err := collection.FindOne(txCtx, bson.M{"_id": id}, &raw); err != nil {
+				if errors.Is(err, fmongo.ErrNotFound) {
+					continue
+				}
+				return fmt.Errorf("dataengine copy: read %s/%s/%d: %w", physical, key.Resource, id, err)
+			}
+			item := source{physical: physical, key: key}
+			if err := bson.Unmarshal(raw, &item.doc); err != nil {
+				return err
+			}
+			if err := bson.Unmarshal(raw, &item.meta); err != nil {
+				return err
+			}
+			sources = append(sources, item)
+		}
 		for _, item := range sources {
 			target := store.client.DatabaseForSid(item.physical, to).Collection(item.key.Resource)
 			outcome := EntityCopyCopied
@@ -169,23 +188,19 @@ func (runtime *Runtime) CopyHandedOffEntity(ctx context.Context, id int64, to in
 				}
 			}
 			result.Documents = append(result.Documents, EntityCopyDocument{
-				Database: item.physical, Collection: item.key.Resource, Version: item.meta.Version, Outcome: outcome,
+				Database: item.physical, Collection: item.key.Resource, Version: item.meta.Version, LastTx: item.meta.LastTx, Deleted: item.meta.Deleted, Outcome: outcome,
 			})
 		}
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrEntityCopyConflict) {
+		if !errors.Is(err, fmongo.ErrCommitResultUnknown) {
 			return EntityCopy{}, err
 		}
-		// 结果未知：提交可能已经生效。列出这次要写的每份文档，交给调用方重做或按版本删掉。
-		maybe := EntityCopy{EntityID: id, From: result.From, To: to, Documents: make([]EntityCopyDocument, 0, len(sources))}
-		for _, item := range sources {
-			maybe.Documents = append(maybe.Documents, EntityCopyDocument{
-				Database: item.physical, Collection: item.key.Resource, Version: item.meta.Version, Outcome: EntityCopyUnknown,
-			})
+		for i := range result.Documents {
+			result.Documents[i].Outcome = EntityCopyUnknown
 		}
-		return maybe, err
+		return result, err
 	}
 	slog.Info("dataengine: copied a handed-off entity to another server's database", "entity", id, "from", result.From, "to", to,
 		"documents", len(result.Documents), "overwrite", overwrite)
@@ -198,12 +213,12 @@ func (runtime *Runtime) DropEntityCopy(ctx context.Context, copied EntityCopy, s
 	if err := fctx.BlockingError("dataengine.DropEntityCopy"); err != nil {
 		return 0, err
 	}
-	store, _, err := runtime.handedOffDocuments(copied.EntityID)
+	store, keys, err := runtime.handedOffDocuments(copied.EntityID)
 	if err != nil {
 		return 0, err
 	}
-	if sid <= 0 {
-		return 0, fmt.Errorf("dataengine copy: server %d is not valid", sid)
+	if sid <= 0 || (sid != copied.From && sid != copied.To) {
+		return 0, fmt.Errorf("dataengine copy: server %d is not an endpoint of this receipt", sid)
 	}
 	if len(copied.Documents) == 0 {
 		return 0, nil
@@ -213,9 +228,24 @@ func (runtime *Runtime) DropEntityCopy(ctx context.Context, copied EntityCopy, s
 	}
 	err = store.ReadConsistent(ctx, func(txCtx context.Context) error {
 		dropped = 0
+		if len(keys) == 0 {
+			return errors.New("dataengine copy: no local DAO for cleanup receipt")
+		}
+		if err := store.touchCopyFence(txCtx, keys[0], &copied, false, true); err != nil {
+			return err
+		}
 		for _, doc := range copied.Documents {
 			collection := store.client.DatabaseForSid(doc.Database, sid).Collection(doc.Collection)
-			deleted, err := collection.DeleteOne(txCtx, bson.M{"_id": copied.EntityID, "_version": int64(doc.Version)})
+			filter := bson.M{"_id": copied.EntityID, "_version": int64(doc.Version), "_last_tx": doc.LastTx, "_deleted": doc.Deleted}
+			// Legacy documents omit false tombstones and may not have an initial tx ID.
+			if !doc.Deleted {
+				filter["_deleted"] = bson.M{"$ne": true}
+			}
+			if doc.LastTx == "" {
+				delete(filter, "_last_tx")
+				filter["$or"] = bson.A{bson.M{"_last_tx": ""}, bson.M{"_last_tx": bson.M{"$exists": false}}}
+			}
+			deleted, err := collection.DeleteOne(txCtx, filter)
 			if err != nil {
 				return fmt.Errorf("dataengine copy: drop %s_%d/%s/%d: %w", doc.Database, sid, doc.Collection, copied.EntityID, err)
 			}
@@ -224,6 +254,9 @@ func (runtime *Runtime) DropEntityCopy(ctx context.Context, copied EntityCopy, s
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errStaleCopyFence) {
+			return 0, nil
+		} // a newer transfer owns the documents
 		return 0, err
 	}
 	metrics.IncCounter("dataengine.entity_copy_drop.total", nil, int64(dropped))

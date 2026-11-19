@@ -95,6 +95,7 @@ type emigrant struct {
 	move gamerehome.Move
 	// moving 为 true 表示换服还没有结论；false 表示 account 已经把他改绑到 move.To。
 	moving bool
+	busy   bool // hand-off or release in progress; keep the entry until its handle is recorded
 	since  time.Time
 	// release 非空表示实体已经交出，屏障由它撤销。
 	release func(context.Context) error
@@ -174,9 +175,9 @@ func newPlayerOwners(sid int32, fencer sessionFencer, now func() time.Time) *Pla
 	return &PlayerOwners{
 		sid: sid, fencer: fencer, now: now, evictWait: evictBudget,
 		residentKind: playerKindIsResident,
-		residents: map[int64]*resident{},
-		emigrants: map[int64]*emigrant{},
-		evictions: map[int64]*eviction{},
+		residents:    map[int64]*resident{},
+		emigrants:    map[int64]*emigrant{},
+		evictions:    map[int64]*eviction{},
 	}
 }
 
@@ -625,27 +626,38 @@ const quiescePoll = 10 * time.Millisecond
 // DataEngine 拒绝写到他的事务。失败是确定的“没有离开”：驻留记录原样，调用方中止换服。
 func (owners *PlayerOwners) Depart(ctx context.Context, move gamerehome.Move) error {
 	owners.mu.Lock()
+	return owners.departLocked(ctx, move)
+}
+
+// Called with mu held; reserve the row before unlocking for external work.
+func (owners *PlayerOwners) departLocked(ctx context.Context, move gamerehome.Move) error {
 	away, fencer, departer := owners.emigrants[move.PlayerID], owners.fencer, owners.depart
-	owners.mu.Unlock()
-	if away == nil || away.move.ID != move.ID {
-		return fmt.Errorf("player owners: transfer %s of player %d was not reserved", move.ID, move.PlayerID)
+	if away == nil || away.move.ID != move.ID || away.busy {
+		owners.mu.Unlock()
+		return fmt.Errorf("player owners: transfer %s of player %d is missing or busy", move.ID, move.PlayerID)
+	}
+	if away.release != nil {
+		owners.mu.Unlock()
+		return nil
 	}
 	if departer == nil {
+		owners.mu.Unlock()
 		return fmt.Errorf("player owners: no way to hand player %d off is assembled", move.PlayerID)
 	}
+	away.busy = true
+	owners.mu.Unlock()
 	if fencer != nil {
 		fencer.CloseSessions(move.PlayerID, gamerehome.ErrSessionRehoming)
 	}
 	release, err := departer.DepartPlayer(ctx, move.PlayerID)
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	away.busy = false
 	if err != nil {
 		return fmt.Errorf("player owners: hand off player %d: %w", move.PlayerID, err)
 	}
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
 	delete(owners.residents, move.PlayerID)
-	if current := owners.emigrants[move.PlayerID]; current == away {
-		away.release = release
-	}
+	away.release = release
 	return nil
 }
 
@@ -656,29 +668,36 @@ func (owners *PlayerOwners) Settle(ctx context.Context, move gamerehome.Move, ou
 	owners.mu.Lock()
 	away, fencer := owners.emigrants[move.PlayerID], owners.fencer
 	if outcome == gamerehome.Committed {
-		if away == nil || away.move.ID != move.ID {
+		if away != nil && (away.busy || away.move.ID != move.ID) {
+			owners.mu.Unlock()
+			return gamerehome.Moving(move.PlayerID, move.To)
+		}
+		if away == nil {
 			away = &emigrant{move: move, moving: true}
 			owners.emigrants[move.PlayerID] = away
 		}
 		if away.moving {
 			away.moving, away.since = false, owners.now()
 		}
-		handed := away.release != nil
-		owners.mu.Unlock()
-		if handed {
-			return nil
-		}
-		// account 已经改绑而实体还没交出（运维在源服中止到一半时人工提交）：补交。
-		return owners.Depart(ctx, move)
+		// Publish the release or mark this row busy before readmission can see it.
+		return owners.departLocked(ctx, move)
 	}
 	if away == nil || away.move.ID != move.ID {
 		owners.mu.Unlock()
 		return nil
 	}
+	if away.busy {
+		owners.mu.Unlock()
+		return gamerehome.Moving(move.PlayerID, move.To)
+	}
+	away.busy = true
 	release := away.release
 	owners.mu.Unlock()
 	if release != nil {
 		if err := release(ctx); err != nil {
+			owners.mu.Lock()
+			away.busy = false
+			owners.mu.Unlock()
 			return fmt.Errorf("player owners: release player %d: %w", move.PlayerID, err)
 		}
 	}
@@ -701,7 +720,7 @@ func (owners *PlayerOwners) Where(playerID int64) (gamerehome.Whereabouts, bool)
 	if away == nil {
 		return gamerehome.Whereabouts{}, false
 	}
-	return gamerehome.Whereabouts{Move: away.move, Moving: away.moving, Since: away.since}, true
+	return gamerehome.Whereabouts{Move: away.move, Moving: away.moving || away.busy, Since: away.since}, true
 }
 
 var _ gamerehome.Residency = (*PlayerOwners)(nil)

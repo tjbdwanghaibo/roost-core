@@ -82,7 +82,7 @@ type gmMoveEngine struct {
 	drops  chan int32
 }
 
-func (e *gmMoveEngine) CopyHandedOffEntity(_ context.Context, entityID int64, to int32, overwrite bool) (wiringde.EntityCopy, error) {
+func (e *gmMoveEngine) CopyForTransfer(_ context.Context, entityID int64, to int32, overwrite bool, _ wiringde.CopyFence) (wiringde.EntityCopy, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.copies = append(e.copies, fmt.Sprintf("%d to %d overwrite=%v", entityID, to, overwrite))
