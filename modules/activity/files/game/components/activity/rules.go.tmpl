@@ -128,14 +128,13 @@ func (r frozenRule) start(anchor, cycle int64) (int64, error) {
 		if cycle-1 > 366000/days {
 			return 0, ErrRule
 		}
-		location, err := time.LoadLocation(r.Zone)
+		calendar, err := r.calendar()
 		if err != nil {
-			return 0, fmt.Errorf("%w: timezone: %v", ErrRule, err)
+			return 0, err
 		}
-		// 先取锚点的业务日期，再按日期加日数，最后加日界偏移。不能加 N*24h。
-		base := time.UnixMilli(anchor).In(location).Add(-time.Duration(r.DayOffset) * time.Millisecond)
-		midnight := time.Date(base.Year(), base.Month(), base.Day()+int((cycle-1)*days), 0, 0, 0, 0, location)
-		next = midnight.Add(time.Duration(r.DayOffset) * time.Millisecond).UnixMilli()
+		// 每期按冻结的时区与墙钟日界排期，而不是从当天零点累加经过的小时数。
+		y, m, day := calendar.BusinessDay(time.UnixMilli(anchor)).Date()
+		next = calendar.StartOfDate(y, m, day+int((cycle-1)*days)).UnixMilli()
 		if cycle == 1 && next != anchor {
 			return 0, fmt.Errorf("%w: calendar anchor must be the business day boundary", ErrRule)
 		}
@@ -153,20 +152,19 @@ func (r frozenRule) window(anchor, cycle int64) (start, open, close int64, err e
 	}
 	open = start + r.WarmupMillis
 	close = open + r.OpenMillis
-	if r.Repeat != "none" {
-		next, e := r.start(anchor, cycle+1)
-		if e != nil {
-			return 0, 0, 0, e
-		}
-		if next < close {
-			return 0, 0, 0, fmt.Errorf("%w: overlapping cycles", ErrRule)
-		}
-	}
 	if r.UntilMilli != 0 && close > r.UntilMilli {
 		close = r.UntilMilli
 		if close <= open {
 			return 0, 0, 0, ErrRule
 		}
+	}
+	// 只比较实际窗口：截止可以截短本期，期数上限或总截止也可以取消下一期。
+	next, more, err := r.next(anchor, cycle)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if more && next < close {
+		return 0, 0, 0, fmt.Errorf("%w: overlapping cycles", ErrRule)
 	}
 	return
 }
@@ -185,12 +183,20 @@ func (r frozenRule) next(anchor, cycle int64) (int64, bool, error) {
 	return next, true, nil
 }
 
-func (r frozenRule) calendarAnchor(at int64) (int64, error) {
+func (r frozenRule) calendar() (clock.Calendar, error) {
 	location, err := time.LoadLocation(r.Zone)
 	if err != nil {
-		return 0, fmt.Errorf("%w: timezone: %v", ErrRule, err)
+		return clock.Calendar{}, fmt.Errorf("%w: timezone: %v", ErrRule, err)
 	}
 	calendar, err := clock.NewCalendar(location, time.Duration(r.DayOffset)*time.Millisecond)
+	if err != nil {
+		return clock.Calendar{}, fmt.Errorf("%w: calendar: %v", ErrRule, err)
+	}
+	return calendar, nil
+}
+
+func (r frozenRule) calendarAnchor(at int64) (int64, error) {
+	calendar, err := r.calendar()
 	if err != nil {
 		return 0, err
 	}
