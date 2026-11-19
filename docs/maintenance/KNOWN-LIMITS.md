@@ -685,7 +685,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 
 - **按地图归属选库**：game-demo 的地形块（`terrain_chunks`）、建筑（`buildings`）与玩家编辑账本（`terrain_editors`）是 `dbscope=boot`，`terrainmap.Open` 按 `Region.Shared` 选：不分区的普通场景是本服的图，按服分库（`<库>_<sid>`，与 terrain 模块的 `terrain_chunk` / `terrain_building` 相同）；分区场景的图跨服共享，各服共用。分区场景里玩家在格上的账本（`terrain_cell_editors`）始终按服分库。范围在进程第一次读写之前选定、运行中不改；同一份部署从普通场景改成分区（或反过来）等于搬数据，不迁移旧文档。
 - **换服时地形留在原服**：只交出、搬走 Player。建筑仍属于他、站在原地图上，只有回到原服才能拆；demo 的账本（序号窗口与建筑数）是“他在这张图上的”，留在原服，到了新服第一次编辑时建出新的一份，建筑上限按图算，换回来时原来的都在。客户端换服之后按会话开始的规则先查 `last_seq` 再续号；旧服上没确认的编辑拿到新服重发会在新服执行（新服的账本不知道它），客户端不要这样做。terrain 模块的取舍不同：账本 `TerrainLedger` 在 Player 档上、随他搬，序号接着用、站立建筑数仍计入原服那几座（上限按玩家算、不分服）。
-- **全服邮件**：mailbox 与 rehome 的联动在离开钩子里按记着的画像（他在本服进入时给的，范围是本服）合并一次，到了新服由进入钩子按新的承载服拉；离开之后才发给旧服的、离开之前就发给新服的都不再合并。合并不成中止这一次换服。
+- **全服邮件的换服界线**：对已收广播的玩家，离开钩子在同一笔邮箱更新中追平旧服水位、停用旧画像。满箱仍中止，不停用；新服进入时更新失败不阻塞登录，`Summary` 不推进水位，`MailboxList` 可按当前绑定重拉，失败只拒绝该次列表。旧服的迟到请求不能重新启用旧范围。`Summary` 也会清理已到期且没有未决领取的条目。此次改动**不回退历史游标，也不自动补发此前漏掉的邮件**。故障注入覆盖生成的进入 / 换服 / 列表和内存 RPC；不等于这条故障链已在多进程 Redis/NATS 部署重验。[复现](REVIEW-2026-11-19-mail-scope-expiry.md) · [升级顺序](../../modules/mailbox/README.md)。
 - **合服时普通场景的地形**：两个服的普通场景若是同一张图（同样的块坐标与锚点），`sidmerge migrate` 把 A 的 `<库>_<A>` 拷进 B 时块与建筑的 `_id` 相同、内容不同，按 sidmerge 的规则整体停止、逐条报告冲突，由业务先决定 A 的图怎么处理（丢弃、换图号或另开一张图）再重跑；terrain 模块按服分库的块与建筑同样如此。合服演练（`scripts/test-demo-merge.sh`）没有开地形。
 
 #### 地形副本订阅与地图参数（RV-20261110-01～04 修复后）
@@ -938,6 +938,8 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 ##### 2026-11-12：活动模块的驱动与验收边界
 
+错过相对活动的截止时间不再阻塞首次进入；按实际本地日界切换、末期窗口只检查实际存在的相邻期。以上是业务时钟与生成模块的回归，不关闭下面的长稳、外部奖励和容量验收。
+
 P8 的 Player / World / Alliance 真实迁移与崩溃恢复已经通过；活动使用 由 casual 扩展、共 18 模块的独立工程，完整 game-demo 的 PlayerDao 64 顶层字段上限仍保留。扫描长稳 C-S2、外部奖励 / 生产部署与容量未验；这不是 WAL-only 验收。见[运营报告](evidence/operations-real-20261114/README.md)。
 
 ##### 2026-11-12：purchase 模块的恢复与验收边界
@@ -982,6 +984,8 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 - **全服邮件账本规模**：M-13 单 Redis / Cluster 的上界成本待测；原 integration helper 未填 ClusterAddrs 的夹具问题已修复，Cluster 与单机四个子项的 1x 功能探针通过，并保留修前红 / 移除修复对照红 / 恢复绿；这不是生产邮件 / Redis 驱动缺陷，也不是 M-13 正式性能数据，见[探针报告](evidence/mail-cluster-probe-20261114.md)；十万在线版本键压力与频繁公会邮件不由功能回归证明。
 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
+
+旧迁出任务不能跨绑定代数清理新一代；交出句柄与副本删除凭据也受保护。这里修的是**旧任务重放的安全性**，不是下面的 checkpoint 负载竞态。game-demo 的居留与场景接线仍是过渡路径；物理房间的检查点重生不是 rehome 的跨服到达回出生点。
 
 - **换服二期未做的两项**（2026-11-19 核对，方案 §7 原写“二期未开始”已过时，其余联动均已实现）：①到达回出生点——demo 没挂 `rehome.OnArrived`，玩家按源服 `LeaveScene` 存下的位置进入目标服地图，这个位置在目标服地图上是否可走未验证；②chat、leaderboard 与 rehome 的联动没做，是否需要未评估（两者都是全服托管服务，按玩家号寻址）。
 - **换服演练 checkpoint 场景在负载下偶发 `CHECKPOINT_BYPASS`**（2026-11-18，尚未确认）：`scripts/test-demo-rehome.sh` 完整七场景在本机负载约 10 时，第七场景（压住 checkpoint 时交出应当等待）报“hand-off returned before checkpoint release”。account 改造前的基线 `878134b4` 同样复现一次，改造后 main 上完整七场景复跑一次通过、单跑 checkpoint 场景两次通过，与 account 改造无关；是交出确实没等 checkpoint，还是演练的压住时机在前一场景之后没有生效，尚未确认。

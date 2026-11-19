@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **换服、邮件与活动修复**：旧换服任务不跨绑定代数清理，保护实体交出句柄及副本删除凭据；邮箱离开时追平并停用旧范围，新服拉取失败后开列表可以重试，过期未读数无需先开列表即更新。错过相对活动不再阻塞首次进入，日历活动按实际本地日界和相邻期排期。邮件升级须暂停换服、先升级全部 mail，再升级 game；不自动补发旧游标已越过的邮件。见 [mailbox](modules/mailbox/README.md) 和 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)。
+
 - **gift 业务模块**：`roost module add gift` 安装玩家送礼（扣物、邮件投递、退款与状态查询）。game-demo 改用同一套实现，保留原消息号、Saga 类型、回执键、消费者名和重试预算。见 [gift](modules/gift/README.md)。
 
 - **game-demo 复用 enter 的进入编排**：新增可选的 `EnterSessionWithPlacement`，在初始化提交后、进入后通知前运行宿主进场步骤。demo 保留旧协议、登录时限、错服回包以及普通地图与 CellWorld 的落位语义；不改 `Scene`、同步和存档。普通工程原 `EnterSession` / `Enter` API 不变。见 [enter 模块](modules/enter/README.md)。

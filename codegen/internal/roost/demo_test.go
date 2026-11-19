@@ -818,8 +818,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if glue := read("game/controllers/mailbox_enter.go"); !strings.Contains(glue, `gamelogin.OnEntered("mailbox"`) || !strings.Contains(glue, "svcaccount.RoleCreatedAtClaim") || !strings.Contains(glue, "svcaccount.OriginServerIDClaim") {
 		t.Errorf("the mailbox+enter glue was not written into the demo:\n%s", glue)
 	}
-	// 换服离开前按旧范围合并全服邮件是 mailbox 与 rehome 的联动（离开钩子，D11 N3 A）。
-	if glue := read("game/controllers/mailbox_rehome.go"); !strings.Contains(glue, `gamerehome.OnLeaving("mailbox"`) || !strings.Contains(glue, "mailer.Summary(ctx, move.PlayerID)") {
+	// 离开钩子既要按旧范围追平，也要在同一次邮箱更新里停用旧画像；只查 Summary 不够。
+	if glue := read("game/controllers/mailbox_rehome.go"); !strings.Contains(glue, `gamerehome.OnLeaving("mailbox"`) || !strings.Contains(glue, "mailer.CloseBroadcastScope(ctx, move.PlayerID,") || !strings.Contains(glue, "summary.BroadcastsBehind") {
 		t.Errorf("the mailbox+rehome glue was not written into the demo:\n%s", glue)
 	}
 	if login := read("game/controllers/player_enter_game.go"); strings.Contains(login, "PullBroadcasts(") || strings.Contains(login, "func BroadcastProfile(") || !strings.Contains(login, "Claims: context.Session.Principal().Claims") {
