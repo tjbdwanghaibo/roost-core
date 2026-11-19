@@ -22,7 +22,10 @@ func rehomeDrillPoint(stage string, move Move) {
 	if err != nil || json.Unmarshal(raw, &arm) != nil || arm.Stage != stage || arm.PlayerID != move.PlayerID {
 		return
 	}
-	raw, err = json.Marshal(map[string]any{"stage": stage, "pid": os.Getpid(), "player_id": move.PlayerID, "entity_id": move.EntityID, "transfer_id": move.ID, "from": move.From, "to": move.To})
+	// Capture this at the return boundary, not later when the runner polls two files.
+	held, err := os.ReadFile(filepath.Join(dir, "checkpoint-held"))
+	if err != nil && !os.IsNotExist(err) { panic(err) }
+	raw, err = json.Marshal(map[string]any{"stage": stage, "pid": os.Getpid(), "player_id": move.PlayerID, "entity_id": move.EntityID, "transfer_id": move.ID, "from": move.From, "to": move.To, "held_at_return": string(held)})
 	if err != nil {
 		panic(err)
 	}

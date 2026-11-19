@@ -29,7 +29,24 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 	}
 	// 快路不写事务标记，Projector 对它立即 checkpoint；其余记录都在下面的事务里先查标记，重放幂等。
 	if projectsOnFastPath(record) {
-		return store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
+		err := store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
+		if !errors.Is(err, ErrProjectionConflict) {
+			return err
+		}
+		// 首投可能是 batch，恢复时却只剩一条 WAL 记录。同批的后续写会覆盖 _last_tx，
+		// 但首投的事务标记与业务修改原子提交。仅在冲突慢路核对标记，绝不能只因 stored > next 就放行。
+		digest, digestErr := digestRecord(record)
+		if digestErr != nil {
+			return digestErr
+		}
+		applied, markerErr := store.checkTransaction(ctx, record.ID.String(), digest)
+		if markerErr != nil {
+			return markerErr
+		}
+		if applied {
+			return nil
+		}
+		return err
 	}
 	digest, err := digestRecord(record)
 	if err != nil {

@@ -88,7 +88,7 @@ source_kill() {
 snapshot() {
 	local label="$1"
 	mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval \
-		"const id=Long('$entity_id'); print(EJSON.stringify({source:db.getSiblingDB('${project}_1000').player.findOne({_id:id}),target:db.getSiblingDB('${project}_1001').player.findOne({_id:id})}));" >"$out/$case_name/$label-documents.json"
+		"const id=Long('$entity_id'); print(EJSON.stringify({source:db.getSiblingDB('${project}_game_1000').player.findOne({_id:id}),target:db.getSiblingDB('${project}_game_1001').player.findOne({_id:id})}));" >"$out/$case_name/$label-documents.json"
 	drill binding >"$out/$case_name/$label-binding.json"
 }
 
@@ -121,14 +121,24 @@ for case_name in ${DEMO_REHOME_STAGES:-accepted quiesced leaving handed-off comm
 	apply_pid=$!
 	wait_file "$out/$case_name/apply.json"
 	if [[ "$case_name" == checkpoint ]]; then
+		# 两个探针在不同 goroutine。先等确切的目标 LeaveScene Ack 被扣住；waiting 先到不是故障。
 		for i in $(seq 1 300); do
-			[[ ! -f "$out/control/reached.json" ]] || drill_fail "CHECKPOINT_BYPASS: hand-off returned before checkpoint release"
-			[[ ! -f "$out/control/checkpoint-waiting" ]] || break
+			if [[ -s "$out/control/checkpoint-held" ]]; then
+				if [[ -s "$out/control/reached.json" ]]; then
+					jq -e --arg id "$entity_id" --argjson pid "$(cat .dev/rehome-source.pid)" '.stage=="handed-off" and .pid==$pid and (.entity_id|tostring)==$id' "$out/control/reached.json" >/dev/null || drill_fail 'checkpoint marker identity mismatch'
+					jq -e --arg tx "$(cat "$out/control/checkpoint-held")" '.held_at_return==$tx' "$out/control/reached.json" >/dev/null || drill_fail 'CHECKPOINT_PREMISE_MISSING: no held Ack observed at hand-off return'
+					drill_fail "CHECKPOINT_BYPASS: target transaction $(cat "$out/control/checkpoint-held") unacked at hand-off"
+				fi
+				if [[ -s "$out/control/checkpoint-waiting" ]] && grep -Fqw "$(cat "$out/control/checkpoint-held")" "$out/control/checkpoint-waiting"; then break; fi
+			fi
 			sleep 0.1
 		done
-		[[ -f "$out/control/checkpoint-waiting" && -f "$out/control/checkpoint-held" ]] || drill_fail "checkpoint premise missing"
+		[[ -s "$out/control/checkpoint-held" && -s "$out/control/checkpoint-waiting" ]] && grep -Fqw "$(cat "$out/control/checkpoint-held")" "$out/control/checkpoint-waiting" || drill_fail 'CHECKPOINT_PREMISE_MISSING: no matching held transaction and waiter; not proof of bypass'
 		sleep 0.2
-		[[ ! -f "$out/control/reached.json" ]] || drill_fail "CHECKPOINT_BYPASS: wait did not hold"
+		if [[ -s "$out/control/reached.json" ]]; then
+			jq -e --arg tx "$(cat "$out/control/checkpoint-held")" --argjson pid "$(cat .dev/rehome-source.pid)" --arg id "$entity_id" '.held_at_return==$tx and .stage=="handed-off" and .pid==$pid and (.entity_id|tostring)==$id' "$out/control/reached.json" >/dev/null || drill_fail 'CHECKPOINT_PREMISE_MISSING: uncorrelated hand-off marker'
+			drill_fail 'CHECKPOINT_BYPASS: wait did not hold'
+		fi
 		cp "$out/control/checkpoint-"* "$out/$case_name/"
 		rm "$out/control/hold-checkpoint"
 	fi

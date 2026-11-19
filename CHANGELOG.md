@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **DataEngine / Mongo 恢复**：已批量投影的 async WAL 在丢尾后只剩一条时，单条回放不再把同一事务的已提交结果误报为版本冲突。仅用事务 ID 和摘要都吻合的批量标记放行；没有更改默认持久级别。[故障注入与限制](docs/maintenance/evidence/local-recovery-four/README.md)。
+
 - **生成物要求的最低 core 提到 v1.58.0**（2026-11-19）：v1.58.0 的生成物用到新接口——生成配置的 `mongo.database_prefix`、邮箱模板的 `mail.BroadcastBinding` 与 `Mail.CloseBroadcastScope`——v1.57.1 编译不了。`framework-compat` 的 minimum 组合同步钉到 v1.58.0。
 
 ## [v1.58.0] - 2026-11-19

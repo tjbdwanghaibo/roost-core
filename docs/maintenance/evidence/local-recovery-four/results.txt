@@ -1,0 +1,32 @@
+Mongo baseline (before fix), singleton replay:
+    power_tail_integration_test.go:93: surviving prefix=1 replayed=0 error=dataengine projector: segment first_transaction=01000000000000000000000000000000 records=1: transaction 01000000000000000000000000000000: dataengine mongo: fatal projection version conflict: probe_db/heroes/7 (physical database probe_db) expected=1 next=2 stored=3
+
+Mongo after fix (-race -count=3), last pass:
+    power_tail_integration_test.go:110: survived=0 replayed=0 Mongo v=3 marker count=2
+    power_tail_integration_test.go:110: survived=1 replayed=1 Mongo v=3 marker count=2
+    power_tail_integration_test.go:110: survived=2 replayed=2 Mongo v=3 marker count=2
+--- PASS: TestRealMongoShorterWALAfterProjectedBatch (0.83s)
+--- PASS: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint (0.65s)
+
+MOBA controlled tail loss:
+    moba_power_tail_test.go:143: old client 2; retained authority 1; epoch 2 reused frame 2: stale digest differs, rebased digest matches
+--- PASS: TestMOBARealClientAheadAfterTailLoss (0.52s)
+
+Rehome (unmodified production wait, seven stages):
+[drill 17:50:15] PASS accepted: target binding, bag=11, wallet=93, source refused
+[drill 17:50:33] PASS quiesced: target binding, bag=11, wallet=93, source refused
+[drill 17:50:51] PASS leaving: target binding, bag=11, wallet=93, source refused
+[drill 17:51:09] PASS handed-off: target binding, bag=11, wallet=93, source refused
+[drill 17:51:27] PASS committed: target binding, bag=11, wallet=93, source refused
+[drill 17:51:45] PASS dropped: target binding, bag=11, wallet=93, source refused
+[drill 17:52:04] PASS checkpoint: target binding, bag=11, wallet=93, source refused
+held: 761c3f40d8ee4623000000000000002f
+waiter: 761c3f40d8ee4623000000000000002f
+No wait, no hold observed yet / no wait, hold armed:
+[drill 17:53:48] FAIL: CHECKPOINT_PREMISE_MISSING: no held Ack observed at hand-off return
+[drill 17:56:08] FAIL: CHECKPOINT_BYPASS: target transaction 5c5b8ee7259941b00000000000000057 unacked at hand-off
+
+Historical AddExp reconciliation:
+AddExp calls=286, players=200, first ack=86, later ack=86
+server ok=177, error=109, lock hold count=177
+among 114 first-step failures: committed=5, no handler write=109

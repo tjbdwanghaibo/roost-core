@@ -71,7 +71,11 @@ func openActiveRuntime(t *testing.T, scope string, manual bool) *activeRuntime {
 	if err := store.EnsureInfrastructure(ctx); err != nil {
 		t.Fatal(err)
 	}
-	wal, err := nestwal.Open(nestwal.DefaultOptions(filepath.Join(os.Getenv("ROOST_MOBA_WAL"), scope)))
+	walOpts := nestwal.DefaultOptions(filepath.Join(os.Getenv("ROOST_MOBA_WAL"), scope))
+	if scope == "cut-tail" && os.Getenv("ROOST_MOBA_CHILD") == scope {
+		walOpts.GroupCommitInterval = time.Hour
+	} // Explicit Sync pins the surviving prefix.
+	wal, err := nestwal.Open(walOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
