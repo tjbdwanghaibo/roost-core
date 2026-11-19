@@ -39,3 +39,6 @@ FAIL
 FAIL
 FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.546s
 FAIL
+
+# 批 3 GroupView：批 2 提交 ed98a3b6 上、GroupView 改动之前
+    group_view_test.go:251: phases without room were refused 10 more times by the manager, want 0

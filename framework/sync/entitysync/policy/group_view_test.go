@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -219,6 +220,41 @@ func TestGroupViewRefusesBeyondTheMemberLimit(t *testing.T) {
 	f.groups.Close()
 	if err := f.groups.Join(groupRoom+1, 1); !errors.Is(err, ErrGroupClosed) {
 		t.Fatalf("join after Close = %v, want ErrGroupClosed", err)
+	}
+}
+
+// 组实体的订阅者到了 Manager 的每 subject 订阅者上限（不是 MaxMembers）：没有空位时，等待的成员不在每个阶段被重说
+// （Manager 的上限拒绝计数不增长）；有成员离开、remove 交付之后，下一个阶段订阅上。原来每个阶段重说全部等待的成员。
+func TestGroupViewMembersWaitForSubscriberRoom(t *testing.T) {
+	self := newSelfFixtureWith(t, &selfLane{}, entitysync.ManagerConfig{MaxSubscribersPerSubject: 2})
+	groups, err := NewGroupView(GroupViewConfig{Manager: self.manager, Profile: roomProfile, Lookup: self.memory.lookup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(groups.Close)
+	f := &groupFixture{selfFixture: self, groups: groups}
+	for _, player := range []int64{1, 2, 3, 4} {
+		f.loaded(t, player)
+		f.view.Activate(player, "c1")
+	}
+	f.memory.put(subjectState(t, groupRoom))
+	joins(t, f.groups, 1, 2, 3, 4)
+	f.flush(t)
+	if got := f.manager.Subscribers(groupRoom); !slices.Equal(got, []entitysync.SessionID{1, 2}) {
+		t.Fatalf("room subscribers = %v, want [1 2]", got)
+	}
+	refused := f.manager.Stats().SubscriberLimitRefused
+	for range 5 {
+		f.flush(t)
+	}
+	if grew := f.manager.Stats().SubscriberLimitRefused - refused; grew != 0 {
+		t.Fatalf("phases without room were refused %d more times by the manager, want 0", grew)
+	}
+	f.groups.Leave(groupRoom, 1)
+	f.flush(t) // 退订、remove 交付，空位出现
+	f.flush(t) // 下一个阶段订阅上
+	if got := f.manager.Subscribers(groupRoom); !slices.Equal(got, []entitysync.SessionID{2, 3}) {
+		t.Fatalf("room subscribers after member 1 left = %v, want [2 3]", got)
 	}
 }
 

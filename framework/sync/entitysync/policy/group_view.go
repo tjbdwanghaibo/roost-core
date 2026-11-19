@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -84,6 +85,8 @@ type groupFacts struct {
 type groupActual struct {
 	registered bool // 本 GroupView 登记过组实体（Disband 时据此注销）
 	members    map[int64]*groupMember
+	// roomWarnAt 是上一次“成员等空位”汇总告警的时刻（每组每 groupRoomWarnInterval 至多一条）。
+	roomWarnAt time.Time
 }
 
 // groupMember 是一名成员在 Manager 里的订阅状态。
@@ -92,7 +95,13 @@ type groupMember struct {
 	subscribed bool                         // 本来源的订阅在位（被框架丢掉时 released 置回 false）
 	stamp      entitysync.SubscriptionStamp // 最近一次成功订阅的戳，释放通知只删除戳更早的
 	failure    error                        // 上一次拒绝的原因，只在原因变化时记日志
+	// waitsForRoom：上一次被每 subject 订阅者上限拒绝（ErrSubscriberLimit）。组实体没有空位（Manager.SubscriberRoom
+	// 为 0）时不再重说，空位出现后的那个阶段再说；日志按组汇总（align）。
+	waitsForRoom bool
 }
+
+// groupRoomWarnInterval 是“成员等空位”汇总告警的最小间隔（每组）。
+const groupRoomWarnInterval = 10 * time.Second
 
 // NewGroupView 创建组视图并在 Manager 上登记政策阶段。调用方在 Manager 关闭后调用 Close。
 func NewGroupView(config GroupViewConfig) (*GroupView, error) {
@@ -401,6 +410,10 @@ func (v *GroupView) align(step groupStep) {
 		return
 	}
 	complete := true
+	waitingForRoom := 0
+	// room 是组实体此刻的空位：第一次遇到等空位的成员时查一次（Manager.SubscriberRoom），之后按本阶段的订阅与拒绝
+	// 自己扣减，所以每个阶段每组至多查一次；-1 表示还没查。空位按成员 ID 顺序分配。
+	room := -1
 	for _, id := range slices.Sorted(maps.Keys(step.members)) {
 		member := group.members[id]
 		if member == nil {
@@ -410,19 +423,52 @@ func (v *GroupView) align(step groupStep) {
 		if member.subscribed {
 			continue
 		}
+		if member.waitsForRoom {
+			if room < 0 {
+				room = v.manager.SubscriberRoom(step.subject)
+			}
+			if room == 0 {
+				// 上次被订阅者上限拒绝、组实体仍没有空位：不再说给 Manager，等空位出现的那个阶段。
+				complete = false
+				waitingForRoom++
+				continue
+			}
+		}
 		stamp, err := v.source.SubscribeStamped(member.session, step.subject, v.profile)
 		if err != nil {
 			complete = false
 			v.refused(step.subject, id, member, err)
+			if member.waitsForRoom {
+				room = 0
+				waitingForRoom++
+			}
 			continue
 		}
-		member.subscribed, member.stamp, member.failure = true, stamp, nil
+		member.subscribed, member.stamp, member.failure, member.waitsForRoom = true, stamp, nil, false
+		if room > 0 {
+			room--
+		}
+	}
+	if waitingForRoom > 0 {
+		v.warnRoom(step.subject, group, waitingForRoom)
 	}
 	if complete {
 		delete(v.waiting, step.subject)
 	} else {
 		v.waiting[step.subject] = struct{}{}
 	}
+}
+
+// warnRoom 是组的“成员等空位”汇总告警：组实体的订阅者已到 ManagerConfig.MaxSubscribersPerSubject，waiting 名成员
+// 看不到它，直到有订阅者离开。每组每 groupRoomWarnInterval 至多一条。
+func (v *GroupView) warnRoom(subject int64, group *groupActual, waiting int) {
+	now := time.Now()
+	if !group.roomWarnAt.IsZero() && now.Sub(group.roomWarnAt) < groupRoomWarnInterval {
+		return
+	}
+	group.roomWarnAt = now
+	slog.Warn("group view: members wait for subscriber room on the group subject; they subscribe as soon as a subscriber leaves",
+		"subject_id", subject, "waiting", waiting, "max_subscribers_per_subject", v.manager.MaxSubscribersPerSubject())
 }
 
 // dissolve 退订组里每名成员并注销组实体（本 GroupView 登记过时）。
@@ -469,9 +515,15 @@ func (v *GroupView) ensureSubject(step groupStep, group *groupActual) bool {
 	}
 }
 
-// refused 记录一次订阅拒绝；同一原因只记一次，避免 waiting 里的成员每个 tick 刷日志。会话没开（离线、断线宽限内、
+// refused 记录一次订阅拒绝；同一原因只记一次，避免 waiting 里的成员每个 tick 刷日志。被订阅者上限拒绝的只做标记，
+// 由 align 按组汇总告警。会话没开（离线、断线宽限内、
 // 会话还没打开）是正常状态，记 Debug。
 func (v *GroupView) refused(subject, member int64, state *groupMember, err error) {
+	state.waitsForRoom = errors.Is(err, entitysync.ErrSubscriberLimit)
+	if state.waitsForRoom {
+		state.failure = err // 按组汇总告警（warnRoom），不逐个成员记
+		return
+	}
 	if state.failure != nil && (errors.Is(err, state.failure) || err.Error() == state.failure.Error()) {
 		return
 	}
