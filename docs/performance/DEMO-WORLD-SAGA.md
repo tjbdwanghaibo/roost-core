@@ -43,6 +43,23 @@
 
 **证据边界与下次取证**：历史服务日志只有内部 Saga ID，原机器人错误从未输出业务键或记录 ID，原私有数据已清理，故历史 8 笔的终态未知。复跑不人为制造过载。下次运行 `DEMO_ROBOT_TRACE_GIFTS=1 scripts/perf/demo-robot.sh`（其余环境变量同上）；失败行中的 `saga_record` 可关联 game 日志的 `saga_id`。`gift-snapshot.json` 是计时和 after 指标采样后的只读快照（上限 200 条）；`gift-followup.jsonl` 逐 ID 跟到终态或读取窗口结束，末条仍非终态／读失败一律记未知。两次同秒复跑均没有失败记录可追。**不重发赠礼、不改压测判定**。下轮优先按具体投递主题分别量“broker 入流→回调收到→worker 开始”的尾部；不要单调大启动中继（此前[诊断第 7 轮](../maintenance/evidence/robot-step-timing-20261118/README.md)已观察到积压移到后段）。
 
+### 将首次投递拆成两段（`0c8641b3`）
+
+同一提交、相同场景和门槛、不同私有环境串行各跑一档（Go 1.27.3，darwin/arm64）。两档均 100/100，整场景 P95 分别 **29.41s / 24.45s**；第 20 步等待补偿 P95 均 7.70s，最多查询 23 / 21 次。每档计时后协调器均有 100 笔 `completed`、100 笔 `compensated` 的不同赠礼，未发生执行前过期。没有降低错误率门槛或延长查询预算。
+
+| 主题和档位 | 首投样本 | 追加→进入回调：平均 / P95 桶上界 | 回调→开始处理：平均 / P95 桶上界 |
+|---|---:|---:|---:|
+| `gift_item.deliver` 同秒 | 200 | 370.8 ms / 2048 ms | <0.001 ms / 1 ms |
+| `gift_item.deliver` 分批 | 200 | 170.0 ms / 1024 ms | <0.001 ms / 1 ms |
+| `saga.start` 同秒 | 500 | 2614.2 ms / 8192 ms | 45.9 ms / 256 ms |
+| `saga.start` 分批 | 500 | 1900.0 ms / 4096 ms | 39.6 ms / 256 ms |
+
+**怎么读**：分段时间取自同一投递，`topic` 取订阅配置，不从含分区号的消息 subject 造标签。每档 500 个 start、600 个 native step、500 个 Mongo step，各主题两段样本数相等，按阶段合计与旧总等待指标的计数一致，均为首投。P95 报的是累计桶上界（最小桶 1 ms），不是精确分位数。分段和总和以跨进程墙钟、本地单调时钟分别测量，不要求纳秒和完全相等。
+
+**结论及下一步**：这两档的主要等待在进入回调之前。即使启动中继同秒档有 100/500 个首投在回调前超过 4.096s（分批 9/500），两档都通过。`gift_item.deliver` 两档回调前超过 4.096s 的均为 0/200，没有复现旧失败轮 Mongo 步骤的长尾。这既不证明原来 8 笔是 broker 导致的，也不说明放大 worker 数无用：串行消费者在处理上一条时，下一条尚不能进入回调，背压也表现为第一段长。若继续定位，应针对**赠礼 deliver 的 durable、分流到每个 stream**，同窗采样 JetStream `NumPending`（尚未投递）、`NumAckPending`（已投递未确认，不能当作正在执行的条数）及消费者回调忙碌时间，和过期日志的两段时间对照；在此之前不动全局并发或重试。
+
+复算：对 runner 输出的每一档执行 `python3 scripts/testdata/demo-robot/split-waits.py <该档输出目录>`。使用 game 的 before/after 桶、count、sum 差值；只读、不访问服务。全主题配对结果：[同秒](benchmarks/demo-saga-delivery-split/burst.json) · [分批](benchmarks/demo-saga-delivery-split/ramp20.json)。过期日志现在带 `command_id`、`saga_id` 和逻辑主题；可用 `append_to_callback_ns`、`callback_to_worker_ns` 对上具体尝试，不用总体 P95 猜某一笔。
+
 ### World 写语义（本次只盘点，不调级别）
 
 - `RecordEnter`：登录投递、不同步等待，World 在独立 strict 事务中累加。`RecordMatch` 在匹配结果之后独立 strict 记数。都是共享 World 的热点；投递成功不等于已提交，也不能用累计值对每个事件去重。

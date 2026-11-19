@@ -168,11 +168,16 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 
 ### Saga（core/saga）
 
-标签只有 saga 类型、阶段、原因这类枚举；saga id、业务键、步骤号只进日志。
+标签使用订阅时的逻辑步骤主题、阶段、原因等有限集合；不把分区、路由、saga ID、业务键或玩家号加到投递耗时标签。`delivery=first/retry` 按 JetStream **同一条消息**的投递次数区分：重投从最初追加算年龄，协调器新派发的一次尝试则是新消息。
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `saga.start.rejected_total{saga_type,reason}` | Counter | 永久拒绝的启动意图：发起方的 Nest 事务已经提交，saga 不会创建（**非零要人核对**，ERROR 日志点名业务键） |
+| `saga.consumer.delivery_age{stage,delivery}` | Histogram | 原始追加 → 开始处理，保留原口径。`stage` 是 `nest_start` / `native_step` / `mongo_step` |
+| `saga.consumer.append_to_callback{stage,delivery,topic}` | Histogram | 原始追加 → Saga 订阅回调入口；含服务端等待、传输、SDK 缓冲和串行回调背压，不是纯 broker 排队。`topic` 是订阅的逻辑主题（例如 `gift_item.deliver`） |
+| `saga.consumer.callback_to_worker{stage,delivery,topic}` | Histogram | 同次回调入口 → 开始处理；含本地等待在途槽和 goroutine 调度，不含解码、步骤或结算耗时。与上一项在同一开始点成对采样；取消未开工不计，缺投递元数据或 broker 时间晚于回调不造零样本。跨机需校时；P95 不能相加。过期未执行的命令日志在元数据有效时给出同次投递的两段纳秒值 |
+| `saga.start.coordinator_duration` | Histogram | 启动中继调用 `StartSaga` 的时长，含返回错误；与开始处理前的等待分开 |
+| `saga.step.mongo_inbox_duration` | Histogram | 调用 Mongo `inbox.Handle` 到返回（含回执与事务，不是纯数据库 CPU 时间） |
 | `saga.consumer.rejected_total{consumer}` | Counter | saga 消费者（启动中继、原生步骤、Mongo 步骤）拒收、直接 Term 的坏信封（空消息、超长帧、JSON 损坏、未知 WireVersion、内容校验不过；RR-20261006-44） |
 | `saga.reopened_total{saga_type,from_status,reason}` | Counter | saga 重开：`late_success` = 已结束的 Failed / Compensated 收到迟到的正向成功、带回补偿；`resume` / `compensate` = ManualRequired 期间记下的迟到步骤在运维操作时补上。按终态做业务的一方见 [SAGA.md](SAGA.md)「运维观察」 |
 | `saga.completion.stale_incarnation_total{saga_type,phase}` | Counter | 拒收的旧一生结果；Resume 之后的正常现象，只计数、记 WARN |
@@ -366,6 +371,8 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.startup_drain_retry_total` | Counter | `dataengine/engine/runtime.go:IncCounter` |
 | `dataengine.load.skipped.total` | Counter | `dataengine/load.go:IncCounter` |
 | `dataengine.outbox.oldest_age_ms` | Gauge | `dataengine/engine/outbox_worker.go:SetGauge` |
+| `dataengine.outbox.age_at_publish` | Histogram | 暂存时间到开始本次发布；忽略缺失或未来的创建时间 |
+| `dataengine.outbox.publish_duration` | Histogram | 本次发布调用耗时，包括返回错误 |
 | `dataengine.outbox.pending` | Gauge | `dataengine/engine/outbox_worker.go:SetGauge` |
 | `dataengine.projection.pending` | Gauge | `dataengine/engine/projector.go:SetGauge` |
 | `dataengine.projector.parallel_window.lanes.total` | Counter | `dataengine/engine/projector_parallel.go:IncCounter` |
