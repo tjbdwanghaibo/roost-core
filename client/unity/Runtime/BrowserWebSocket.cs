@@ -21,6 +21,8 @@ namespace Roost.Unity
     /// 做法是轮询，不从 JS 回调 C#：JS 一侧把收到的二进制消息排成字节队列，PollAll 每帧把字节交给等着的 ReceiveAsync、并检查
     /// 连接状态；续行在 PollAll 里（主线程）同步执行，不经线程池。两个 SDK 都按包头拼帧，所以这里只管按顺序交字节，不看消息边界。
     /// 发送直接调浏览器的 send（不阻塞），同步完成——两个 SDK 的 PumpDriven 都要求如此。连接超时与取消由 SDK Dispose 这个连接。
+    /// 浏览器句柄 Open 一次、Close 一次（只在 Dispose 里关）：已取消的令牌或已 Dispose 的对象上 ConnectAsync 不打开句柄、直接以
+    /// 取消 / ObjectDisposedException 结束；连接中途令牌取消时下一次 PollAll 以取消结束并关句柄（不依赖调用方 Dispose）。
     /// 只在 WebGL 播放器里能用（DllImport "__Internal" 只有 WebGL 构建链接得到）；编辑器与其他平台用 SDK 自带的 TCP / ClientWebSocket。
     /// 浏览器一侧的函数抽成 <see cref="IBrowserSocket"/>，.NET 测试（Roost.Client.Tests 的 BrowserBridgeTests）用假的喂消息。
     /// </summary>
@@ -74,6 +76,7 @@ namespace Roost.Unity
         private int id;
         private bool disposed;
         private TaskCompletionSource<bool>? connecting;
+        private CancellationToken connectCancellation;
         private TaskCompletionSource<int>? receiving;
         private byte[]? receiveBuffer;
         private int receiveOffset, receiveCount;
@@ -97,7 +100,14 @@ namespace Roost.Unity
         {
             if (!address.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) && !address.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"'{address}' is not a ws:// or wss:// URL (ConnectionOptions.WebSocketUrl, or a relay ticket asked with Transport = Ws).");
+            // 每个打开的浏览器句柄都要有人关：只有 Dispose 关句柄，而 Dispose 可能先于这里执行——SDK 用
+            // token.Register(transport.Dispose) 做超时 / 取消，令牌在调用前就已取消时 Register 当场调 Dispose。
+            // 这时再 Open 就没人关了（Poll 对已 Dispose 的连接什么也不做，连接任务也永远等不到结果），所以先取消、后已关闭都不打开。
+            if (cancellation.IsCancellationRequested) return Task.FromCanceled(cancellation);
+            if (disposed) return Task.FromException(new ObjectDisposedException(nameof(BrowserWebSocket)));
+            if (id != 0) throw new InvalidOperationException("BrowserWebSocket connects once; ask the transport factory for a new one.");
             connecting = new TaskCompletionSource<bool>();
+            connectCancellation = cancellation;
             id = js.Open(address);
             lock (Live) Live.Add(this);
             return connecting.Task;
@@ -144,6 +154,14 @@ namespace Roost.Unity
             if (disposed) return;
             if (connecting != null)
             {
+                // 调用方没有在取消时 Dispose（SDK 会，直接用这个类的不一定）：连接中途取消也在这里结束任务、关掉句柄。
+                if (connectCancellation.IsCancellationRequested)
+                {
+                    var canceled = Take(ref connecting);
+                    Dispose();
+                    canceled?.TrySetCanceled(connectCancellation);
+                    return;
+                }
                 int state = js.State(id);
                 if (state == Open) Take(ref connecting)?.TrySetResult(true);
                 else if (state != Connecting) Take(ref connecting)?.TrySetException(new IOException("websocket: failed to open."));

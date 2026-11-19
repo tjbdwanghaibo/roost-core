@@ -111,7 +111,8 @@ func (presence ServerPresence) validate() (ServerPresence, error) {
 //   - 完整的 URL，scheme 是小写的 ws 或 wss（TLS 由前置负载均衡终结时是 wss）；
 //   - 有主机（不能是 "ws://:7080/ws" 或 "ws:///ws"）；写了端口时在 1～65535，不写取 scheme 的缺省端口；
 //   - 主机是浏览器能用的（httpserver.BrowserHost）：末段是数字的主机必须是点分十进制 IPv4（192.0.2.300、game.1 浏览器
-//     解析不了，127.1、010.0.0.1 浏览器会改写），方括号里必须是不带 %区域号的 IPv6；DNS 名不限；
+//     解析不了，127.1、010.0.0.1 浏览器会改写），IPv6 必须写在方括号里（ws://2001:db8::1:7080/ws 浏览器解析不了，
+//     RV-20261119-02）且不带 %区域号；DNS 名不限；
 //   - 不带用户名密码、不带片段（#…），不含空白；路径与查询串原样保留（路径由部署决定，缺省的玩家接入是 /ws）；
 //   - 至多 MaxPresenceAddrBytes（255）字节。
 func CheckWebSocketAddr(raw string) (string, error) {

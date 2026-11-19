@@ -26,6 +26,8 @@ namespace Roost.Client
     ///   返回 0 表示对端正常关闭；同一时刻只有一个 ReceiveAsync 在等。
     /// - Dispose 立即关闭连接（不发任何帧），可以从任意线程、重复调用；正在等的 ReceiveAsync 要随之结束（返回 0 或抛异常）。
     ///   SDK 的连接超时与断开都靠它，不依赖 CancellationToken 一定生效。
+    ///   Dispose 可能先于 ConnectAsync：SDK 用 token.Register(transport.Dispose) 做超时 / 取消，令牌在调用前已取消时当场 Dispose。
+    ///   之后的 ConnectAsync 不能再打开连接（没人会再关它），要以异常或取消结束（自带的 TCP / ClientWebSocket 在 Dispose 之后连接就抛异常；Unity 包的 BrowserWebSocket 见其说明）。
     /// - 握手、票据与连接代号（鉴权首包的信封）由 SDK 写成第一帧，传输不看帧的内容。
     /// </summary>
     public interface IGateTransport : IDisposable

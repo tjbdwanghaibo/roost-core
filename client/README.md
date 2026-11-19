@@ -272,7 +272,7 @@ WebGL 上没设 `WebSocketUrl` 时 `Configure` 抛 `ArgumentException`（浏览�
 
 **验证**（[证据](../docs/maintenance/evidence/csharp-gate-ws-20261118/README.md)）：
 
-- `Roost.Client.Tests` 本地自测：假的 WebSocket 玩家接入核对每条消息恰好一帧、握手应答拆成两条、应答与推送合成一条、鉴权首包带代号信封、文本消息断开（`TestWebSocketMessageBoundaries`）；Unity 包的 WebGL 桥接（`BrowserWebSocket`，正式源码链接进来）用假的浏览器一侧喂拆开 / 合并 / 接近 1 MiB 的帧（`TestBrowserBridgeFraming`），并当 relay 的传输跑 Welcome 拆开、游戏帧合并与 Ping / Pong（`TestBrowserBridgeRelay`）。
+- `Roost.Client.Tests` 本地自测：假的 WebSocket 玩家接入核对每条消息恰好一帧、握手应答拆成两条、应答与推送合成一条、鉴权首包带代号信封、文本消息断开（`TestWebSocketMessageBoundaries`）；Unity 包的 WebGL 桥接（`BrowserWebSocket`，正式源码链接进来）用假的浏览器一侧喂拆开 / 合并 / 接近 1 MiB 的帧（`TestBrowserBridgeFraming`），并当 relay 的传输跑 Welcome 拆开、游戏帧合并与 Ping / Pong（`TestBrowserBridgeRelay`）；取消（`TestBrowserBridgeCancellation`，RV-20261119-01）：relay、Gate（`GameClient` 与公开的 `TcpSession.ConnectAsync`）在“调用前已取消”与“连接中取消”时连接任务都以取消结束、浏览器句柄 Open 与 Close 次数相等（调用前已取消的不打开），桥接自身在没人 Dispose 时也按令牌结束。
 - 真实 Go 玩家接入（`infra/network/gateway` 的 `TestTheCSharpClientWorksOverWebSocket`、`…ThroughAStandaloneGate`，C# 进程由 Go 驱动）：嵌入 TCP 上缺省调度与 PumpDriven 单线程调度各跑一遍——握手、请求应答、校时、推送、心跳撑过 `idle_timeout`、服务端断开后重连（代号更大）、请求超时、不 Pump 被断开后恢复重连、连接超时；独立 Gate 上 PumpDriven 跑握手、请求、心跳与不 Pump 后的重连。单线程环境照开房间 SDK 的 `SingleThread.cs`：线程池或计时器上的续行、别的线程上调传输都记违规，要求零违规。
 - jslib 的 JS 逻辑：`node client/dotnet/unity-webgl-smoke/check-jslib-frames.mjs`。
 - Unity：`unity-webgl-smoke` 的 GateSmoke 只验“经 WebSocket 连进玩家接入、握手成功、只靠 Pump 的心跳保持连接超过 `idle_timeout`”（维护者 2026-11-18：WebSocket 之上的逻辑由 .NET 用例覆盖）。2026-11-18 用 `--managed-only` 托管包构建的 WebGL 版（Unity 6000.7.0b7）在 Claude 内置浏览器面板里握手 95ms、保持 100s（`idle_timeout` 90s）、6 次心跳往返，`SMOKE PASS`；编辑器里同样通过。Safari、Firefox、移动浏览器没测。

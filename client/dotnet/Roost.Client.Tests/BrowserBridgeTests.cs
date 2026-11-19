@@ -88,6 +88,135 @@ internal static partial class Program
         Console.WriteLine("PASS browser bridge for the relay (BrowserWebSocket + fake jslib, PumpDriven): split welcome, merged game frames, ping / pong");
     }
 
+    // 取消与连接句柄：浏览器连接由 JS Open 打开、Close 关闭，桥接要保证每个打开的句柄最终都关掉、连接任务一定结束。
+    // SDK 在连接超时 / 取消时 Dispose 这个连接（token.Register(transport.Dispose)），令牌在调用前就已取消时 Dispose 会先于
+    // ConnectAsync 执行——这时不能再打开浏览器连接（打开了也没人关、Poll 不再推进，连接任务挂起）。
+    // 场景：relay / Gate（GameClient、公开的 TcpSession.ConnectAsync）各自的“调用前已取消”与“连接中取消”，以及桥接自身
+    // 在没人 Dispose 时也按令牌结束。每个场景都断言连接任务以取消结束、Open 与 Close 次数相等。
+    private static async Task TestBrowserBridgeCancellation()
+    {
+        static void Balanced(CountingBrowserSocket js, int opens, string what) =>
+            Check(js.Opens == opens && js.Closes == js.Opens, $"{what}: every opened browser socket is closed (open={js.Opens} close={js.Closes}, want open={opens})");
+        static void Canceled(Task task, string what) =>
+            Check(task.IsCanceled, $"{what}: the connect task ends canceled (status={task.Status}, error={task.Exception?.GetBaseException().Message})");
+
+        static async Task Ends(StrictLoop loop, Task task, CountingBrowserSocket js)
+        {
+            try { await loop.Until("the connect task to end", () => task.IsCompleted, 1); }
+            catch (Exception) { throw new Exception($"the connect task did not end within 1s of pumping (status={task.Status}, open={js.Opens} close={js.Closes})"); }
+        }
+        // 每个场景单独记结果，一次列出全部失败（修前的红要能看到每个场景各自的状态）。
+        var failures = new List<string>();
+        async Task Scenario(string name, Func<Task> run)
+        {
+            try { await run(); }
+            catch (Exception error) { failures.Add(name + ": " + error.Message); }
+        }
+
+        await StrictLoop.RunAsync("browser-bridge-cancel", TimeSpan.FromSeconds(60), async loop =>
+        {
+            loop.BeforePump.Add(BrowserWebSocket.PollAll);
+            foreach (bool before in new[] { true, false })
+            {
+                string when = before ? "relay, token canceled before ConnectAsync" : "relay, canceled while connecting";
+                await Scenario(when, async () =>
+                {
+                    var js = new CountingBrowserSocket();
+                    var relay = new RelayClient(null, new RelayClientOptions
+                    {
+                        Game = "party", Transport = RelayTransport.Ws, PumpDriven = true, ConnectTimeout = TimeSpan.FromSeconds(10),
+                        TransportFactory = () => new BrowserWebSocket(js),
+                    });
+                    Action pump = () => relay.Pump();
+                    loop.BeforePump.Add(pump);
+                    try
+                    {
+                        using var cancel = new CancellationTokenSource();
+                        if (before) cancel.Cancel();
+                        var task = relay.ConnectAsync(new RoomTicket(new RoomInfo(), "ws://relay.test/ws", "rt1.test", 0), cancel.Token);
+                        if (!before) { await loop.Sleep(0.05); cancel.Cancel(); }
+                        await Ends(loop, task, js);
+                        Canceled(task, when);
+                        Balanced(js, before ? 0 : 1, when);
+                    }
+                    finally { loop.BeforePump.Remove(pump); relay.Dispose(); }
+                });
+            }
+
+            foreach (bool before in new[] { true, false })
+            {
+                string when = before ? "gate, token canceled before ConnectAsync" : "gate, canceled while connecting";
+                await Scenario(when, async () =>
+                {
+                    var js = new CountingBrowserSocket();
+                    var client = loop.Client(new ConnectionOptions
+                    {
+                        WebSocketUrl = "ws://browser.test/ws", PumpDriven = true, ConnectTimeout = TimeSpan.FromSeconds(10),
+                        TransportFactory = () => new BrowserWebSocket(js),
+                    });
+                    try
+                    {
+                        using var cancel = new CancellationTokenSource();
+                        if (before) cancel.Cancel();
+                        var task = client.Connection.ConnectAsync("ticket", cancel.Token);
+                        if (!before) { await loop.Sleep(0.05); cancel.Cancel(); }
+                        await Ends(loop, task, js);
+                        Canceled(task, when);
+                        Balanced(js, before ? 0 : 1, when);
+                    }
+                    finally { loop.Remove(client); }
+                });
+            }
+
+            // 桥接自身：调用方没有注册 Dispose，令牌取消后下一次 PollAll 就以取消结束并关掉句柄；之后的 Dispose 不再重复关。
+            await Scenario("bridge alone, canceled while connecting", async () =>
+            {
+                var js = new CountingBrowserSocket();
+                var socket = new BrowserWebSocket(js);
+                try
+                {
+                    using var cancel = new CancellationTokenSource();
+                    var task = socket.ConnectAsync("ws://browser.test/ws", cancel.Token);
+                    await loop.Sleep(0.05);
+                    cancel.Cancel();
+                    await Ends(loop, task, js);
+                    Canceled(task, "bridge alone");
+                    Balanced(js, 1, "bridge alone");
+                    socket.Dispose();
+                    Balanced(js, 1, "bridge alone, Dispose after the canceled connect");
+                }
+                finally { socket.Dispose(); }
+            });
+        }, expectViolations: false);
+
+        // 公开的 TcpSession.ConnectAsync（线程池调度，不经 Connection 的取票前检查）：调用前已取消也不能打开浏览器连接。
+        await Scenario("TcpSession, token canceled before ConnectAsync", async () =>
+        {
+            var js = new CountingBrowserSocket();
+            using var cancel = new CancellationTokenSource();
+            cancel.Cancel();
+            var task = TcpSession.ConnectAsync(new BrowserWebSocket(js), "ws://browser.test/ws", "ticket", TimeSpan.FromSeconds(10), cancel.Token);
+            for (int i = 0; i < 100 && !task.IsCompleted; i++) { BrowserWebSocket.PollAll(); await Task.Delay(10); }
+            Check(task.IsCompleted, $"the connect task ends (status={task.Status}, open={js.Opens} close={js.Closes})");
+            Canceled(task, "TcpSession");
+            Balanced(js, 0, "TcpSession");
+        });
+        Check(failures.Count == 0, "browser bridge cancellation:\n  " + string.Join("\n  ", failures));
+        Console.WriteLine("PASS browser bridge cancellation (relay / gate / TcpSession / bridge alone): canceled connects end canceled, every Open has a Close");
+    }
+
+    /// <summary>只数 Open / Close 的浏览器一侧：连接一直停在“连接中”，只能靠取消或 Dispose 结束。</summary>
+    private sealed class CountingBrowserSocket : BrowserWebSocket.IBrowserSocket
+    {
+        public int Opens, Closes;
+        public int Open(string url) => ++Opens;
+        public int State(int id) => BrowserWebSocket.Connecting;
+        public void Close(int id) => Closes++;
+        public int Buffered(int id) => 0;
+        public int Send(int id, byte[] data, int length) => 0;
+        public int Receive(int id, byte[] buffer, int length) => 0;
+    }
+
     /// <summary>
     /// 假的浏览器一侧：jslib 的 RoostWs* 同样的语义（Open 后过两轮才连上；收到的消息排成字节队列，按调用方给的长度取，可以跨消息）。
     /// 子类在 OnSend 里拿到一次 Send 的字节，用 Reply 排回要“收到”的消息。

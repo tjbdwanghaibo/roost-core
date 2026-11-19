@@ -24,7 +24,7 @@ await client.Connection.ConnectAsync(ticketProvider);    // 在主线程上
 | 包里的文件 | 作用 |
 |---|---|
 | `Runtime/RoostPlatform.cs` | 按平台选传输：`InBrowser`、`Configure(ConnectionOptions)`、`Configure(RelayClientOptions)`、`CreateLobby`、`Poll`。只在 WebGL 播放器里（`UNITY_WEBGL && !UNITY_EDITOR`）改选项，编辑器切到 WebGL 目标时仍用 SDK 自带传输 |
-| `Runtime/BrowserWebSocket.cs` | 浏览器 WebSocket 的 C# 一侧，同时实现 `IGateTransport` 与 `IRelayTransport`；每帧 `PollAll` 把 JS 排好的字节交给 SDK 的读循环（续行在主线程），发送直接交给浏览器、同步完成，积压超过 16 MiB 当写失败 |
+| `Runtime/BrowserWebSocket.cs` | 浏览器 WebSocket 的 C# 一侧，同时实现 `IGateTransport` 与 `IRelayTransport`；每帧 `PollAll` 把 JS 排好的字节交给 SDK 的读循环（续行在主线程），发送直接交给浏览器、同步完成，积压超过 16 MiB 当写失败。浏览器句柄 Open 一次、Dispose 时 Close 一次：令牌在调用前已取消（SDK 此时已先 Dispose 了这个连接）或对象已 Dispose 时 `ConnectAsync` 不打开句柄、直接以取消 / `ObjectDisposedException` 结束；连接中途令牌取消，下一次 `PollAll` 以取消结束并关句柄（RV-20261119-01） |
 | `Runtime/WebGL/RoostWebSocket.jslib` | JS 一侧：收到的二进制消息排成字节队列，不从 JS 回调 C#；文本消息当协议错误关掉连接 |
 | `Runtime/UnityWebRequestLobbyHttp.cs` | lobby 的 `ILobbyHttp` 经 `UnityWebRequest`（主线程上发，答复在主线程完成）；其他平台也能用 |
 | `Runtime/Roost.Client.Relay.dll` | 开房间 C# SDK，与 `Roost.Client.dll` 一起由 `build-unity.py` 放进包；`Roost.Unity` 引用两者 |

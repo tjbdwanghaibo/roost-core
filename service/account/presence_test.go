@@ -167,6 +167,12 @@ func TestCheckWebSocketAddrRefusesNumericHostsBrowsersCannotUse(t *testing.T) {
 			t.Errorf("%q passed; a browser cannot parse it", addr)
 		}
 	}
+	// IPv6 不写方括号：浏览器把第一个冒号之后当端口，解析失败（Node 的 new URL 报 ERR_INVALID_URL）；拒绝并提示写成 [...]。
+	for _, addr := range []string{"ws://2001:db8::1:7080/ws", "wss://2001:db8::1/ws", "ws://::1:7080/ws"} {
+		if _, err := CheckWebSocketAddr(addr); err == nil || !strings.Contains(err.Error(), "brackets") {
+			t.Errorf("%q: err = %v; want refused, telling to put the IPv6 address in brackets", addr, err)
+		}
+	}
 	for addr, want := range map[string]string{
 		"ws://127.1:7080/ws":       "127.0.0.1",
 		"ws://010.0.0.1/ws":        "8.0.0.1",

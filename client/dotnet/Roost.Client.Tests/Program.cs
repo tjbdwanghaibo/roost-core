@@ -125,7 +125,7 @@ internal static partial class Program
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));
         else
-            { await LocalSession(); await Capacity(); await TestWebSocketMessageBoundaries(); await TestBrowserBridgeFraming(); await TestBrowserBridgeRelay(); await LockstepGapRetry(); await LockstepSnapshotClient(); }
+            { await LocalSession(); await Capacity(); await TestWebSocketMessageBoundaries(); await TestBrowserBridgeFraming(); await TestBrowserBridgeRelay(); await TestBrowserBridgeCancellation(); await LockstepGapRetry(); await LockstepSnapshotClient(); }
         return 0;
     }
     private static void Refuses(Action run, string why, Type? expected = null)

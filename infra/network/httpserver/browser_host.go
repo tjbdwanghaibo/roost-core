@@ -14,6 +14,7 @@ import (
 //
 // 只处理数字主机，DNS 名原样返回（大小写、国际化域名不在这里管）：
 //
+//   - 不在方括号里的主机不能含冒号（不带方括号的 IPv6，如 ws://2001:db8::1:7080/ws，浏览器解析不了）：拒绝并提示写成 [...]。
 //   - 方括号里的是 IPv6：必须是合法的 IPv6（不能是 IPv4、不带 %区域号），返回浏览器的压缩写法（小写、最长一段连续零压成
 //     ::、IPv4 映射地址也写成十六进制，如 [::ffff:c000:21e]）。
 //   - 末段是数字（十进制，或 0x 开头的十六进制；末尾的一个点先去掉）的主机名，浏览器一律按 IPv4 解析：每段可以是十进制、
@@ -29,6 +30,11 @@ func BrowserHost(u *url.URL) (string, error) {
 			return "", fmt.Errorf("host [%s] is not an IPv6 address browsers accept (no IPv4 in brackets, no %%zone)", host)
 		}
 		return "[" + whatwgIPv6(addr) + "]", nil
+	}
+	// 不在方括号里的主机，浏览器读到第一个冒号就当端口开始：ws://2001:db8::1:7080/ws 解析失败。Go 的 url.Parse 只对
+	// http / https 拒绝这种写法（GODEBUG urlstrictcolons），ws / wss 照样把最后一个冒号之前当主机，所以在这里拒绝。
+	if strings.Contains(host, ":") {
+		return "", fmt.Errorf("host %q has a colon outside brackets, which browsers cannot parse; write an IPv6 address in brackets, like [2001:db8::1]:7080", host)
 	}
 	ipv4, numeric, err := whatwgIPv4(host)
 	if err != nil {

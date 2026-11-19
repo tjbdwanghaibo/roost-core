@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- **审查修复 RV-20261119-01～02**（2026-11-19 审查报告的两项新问题，先红后绿，[证据](docs/maintenance/evidence/rv-20261119-01-02/README.md)）：
+  - RV-20261119-01（P2）：Unity 包的 `BrowserWebSocket` 收到调用前已取消的令牌时，SDK 用 `token.Register(transport.Dispose)` 先 Dispose 了它，`ConnectAsync` 随后仍打开浏览器连接、加入轮询；句柄没人关，PumpDriven `RelayClient.ConnectAsync` 永远挂起。现在已取消 / 已 Dispose 时不打开句柄、以取消 / `ObjectDisposedException` 结束；连接中途令牌取消时下一次 `PollAll` 以取消结束并关句柄；同一实例第二次连接抛 `InvalidOperationException`。Gate 经 `GameClient` 本来不受影响（取票前已检查令牌），公开的 `TcpSession.ConnectAsync` 同样挂起，一并修好。`IGateTransport` / `IRelayTransport` 的约定注释写明 Dispose 可能先于 ConnectAsync。新用例 `TestBrowserBridgeCancellation`。
+  - RV-20261119-02（P3）：`svcaccount.CheckWebSocketAddr`（`portal.websocket_servers`、`login.presence.ws_addr`、account 收上报）接受不带方括号的 IPv6 地址 `ws://2001:db8::1:7080/ws`，浏览器解析不了。规则在 `httpserver.BrowserHost`：不在方括号里的主机含冒号就拒绝并提示写成 `[…]`。CORS Origin 在 go1.27 缺省设置下已被 `url.Parse` 拒绝，`GODEBUG=urlstrictcolons=0` 时也会漏过，同样由这条规则挡住。
+  - **升级**：Unity 工程重新执行 `scripts/client/build-unity.py`（或模板的同步脚本）拿到新的 `BrowserWebSocket.cs`。配置里写了不带方括号 IPv6 的 portal / login 工程，启动与 `--check-config` 会报错，照提示加方括号。生成物不用新 API，最低 core 不变。
+
 - **生成物要求的最低 core 提到 v1.57.1**（2026-11-19）：没有新接口，只为让新装模块写入的依赖与 `roost project sync` 对齐到同一发布版（v1.57.1 发版后漏提，`TestModulePortal*` 的“同步不改工程”断言因此失败）。
 
 - **文档：第二类 M 系列正式测量第一批（S1 微基准、S2 心跳投递）**（2026-11-19，KNOWN-LIMITS M-1 / M-2 / M-9 / M-18）：只有测量与记录，代码不变。M-1：回调 10µs 时时间片 50µs 比现缺省 100µs 业务 p99 低约 32%、CPU 与迟到不变，组 2 / 4 无差别，是否改缺省待维护者定；热点冲突转单目标 0.004%～0.007% / 拍，该项关闭。M-2 复测一致。M-9：上限内约 0.27µs / pair 更新、1.2KB / pair 常驻；计划命令的 2000 人档撞缺省每 subject 订阅者上限 1024，被拒 pair 每轮重说使 Flush 约 960ms，记为尚未确认的疑似问题。M-18：组同步成本只随成员总数线性，约 0.6µs / 成员·轮。[证据](docs/performance/benchmarks/m-series-s1-s2-20261119/README.md)

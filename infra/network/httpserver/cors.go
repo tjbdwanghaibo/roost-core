@@ -84,7 +84,7 @@ func (c *CORS) allowOrigin(w http.ResponseWriter, r *http.Request) bool {
 //   - 端口：默认端口（https 的 443、http 的 80）浏览器省掉（RV-20261118-08）；前导零浏览器去掉（:0443 → 省略、
 //     :08443 → :8443，RV-20261118-10）；空端口（"…:"）浏览器省掉；只收 1～65535。
 //   - 数字主机（BrowserHost）：IPv4 只收点分十进制（127.1、010.0.0.1 这类浏览器会改写），IPv6 只收浏览器的压缩写法；
-//     浏览器解析不了的（192.0.2.300）拒绝。
+//     浏览器解析不了的（192.0.2.300、不带方括号的 IPv6）拒绝。
 func CheckCORSOrigins(key string, origins []string) error {
 	for _, origin := range origins {
 		if origin == "*" {

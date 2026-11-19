@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -162,7 +163,9 @@ func TestCheckCORSOriginsAcceptsOnlyWhatTheBrowserSerializes(t *testing.T) {
 			}
 		}
 	}
-	for _, origin := range []string{"https://192.0.2.300", "https://192.0.2.30.1.1", "https://1.2.3.4.example.1", "https://play.example.com:65536", "https://[::1%25en0]:8443", "https://[1.2.3.4]"} {
+	// 不写方括号的 IPv6（https://2001:db8::1:8443）浏览器解析不了，与越界 IPv4 一样拒绝。
+	for _, origin := range []string{"https://192.0.2.300", "https://192.0.2.30.1.1", "https://1.2.3.4.example.1", "https://play.example.com:65536", "https://[::1%25en0]:8443", "https://[1.2.3.4]",
+		"https://2001:db8::1:8443", "https://2001:db8::1", "http://::1:5173"} {
 		if err := CheckCORSOrigins(key, []string{origin}); err == nil || !strings.Contains(err.Error(), key) {
 			t.Errorf("%q: err = %v, want refused naming the key (a browser cannot parse it)", origin, err)
 		}
@@ -178,6 +181,28 @@ func TestCheckCORSOriginsAcceptsOnlyWhatTheBrowserSerializes(t *testing.T) {
 		}
 		if code := preflight(origin, origin); code != http.StatusNoContent {
 			t.Errorf("%q: preflight %d", origin, code)
+		}
+	}
+}
+
+// BrowserHost 本身（不经 url.Parse）：主机里有冒号却不在方括号里，浏览器把第一个冒号之后当端口、解析失败
+// （Node 的 new URL("ws://2001:db8::1:7080/ws") 报 ERR_INVALID_URL），要拒绝并提示写成 [...]。Go 的 url.Parse 只对
+// http / https 拒绝这种主机（GODEBUG urlstrictcolons），ws / wss 照样解析成主机 "2001:db8::1"，所以规则要在这里。
+// 合法的点分十进制 IPv4、方括号 IPv6、DNS 名照常返回。
+func TestBrowserHostRefusesIPv6WithoutBrackets(t *testing.T) {
+	for _, host := range []string{"2001:db8::1:7080", "2001:db8::1", "::1:5173", "fe80::1"} {
+		for _, scheme := range []string{"ws", "https"} {
+			if got, err := BrowserHost(&url.URL{Scheme: scheme, Host: host}); err == nil || !strings.Contains(err.Error(), "brackets") {
+				t.Errorf("%s://%s: got %q, %v; want refused, telling to put the IPv6 address in brackets", scheme, host, got, err)
+			}
+		}
+	}
+	for host, want := range map[string]string{
+		"[2001:db8::1]:7080": "[2001:db8::1]", "[::1]": "[::1]", "192.0.2.30:7080": "192.0.2.30", "game.example:7080": "game.example",
+		"game.example:": "game.example", "localhost": "localhost",
+	} {
+		if got, err := BrowserHost(&url.URL{Scheme: "ws", Host: host}); err != nil || got != want {
+			t.Errorf("ws://%s: got %q, %v; want %q", host, got, err, want)
 		}
 	}
 }
