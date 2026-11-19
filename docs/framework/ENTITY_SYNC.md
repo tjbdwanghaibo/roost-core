@@ -92,7 +92,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 ## 组织方式（`framework/sync/entitysync/policy`）
 
 - `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）上的视野（D19）：空间视野（玩家主视野与业务的空间视野，一个视野是 AOI 的一个观察者）与关系视野（显式实体集合），玩家与视野多对多；按 (玩家, 目标) 聚合成一份订阅——第一个持有的视野订、最后一个释放的视野撤，层级包含取高、不包含取并集；
-  (LOD 层, 距离档) → profile（`BandLayer(level, band)`，视野换层时按新层重给整个可见集，缺省只看档；见 [guide/04-sync“视野参数”](guide/04-sync.md#谁看见谁视野viewd19)）；全部写入口只登记一条有序日志（不做 AOI 计算、不等批次），由 Manager 的政策阶段（ApplySync）或 Interest 的应用线程（ApplyAsync）按调用顺序执行并说给 Manager，被拒的 subscribe 按原因等待，直到被接受或 pair 释放（拒绝不是对 pair 的裁决）：被每 subject 订阅者上限拒绝（`ErrSubscriberLimit`）的 pair 进入该 subject 的等空位队列，每次结算对每个有人排队的 subject 只查一次空位（`Manager.SubscriberRoom`），有空位时按入队先后（先来先得，新来的不插队）重说至多“空位数”个——remove 在第 k 次 Flush 交付、空位出现，第 k+1 次 Flush 就订阅上；其他原因（会话没开、subject 未登记……）进入重试表，每次结算重说，每次政策阶段至多 4096 个。一次结算里每个 pair 至多说一次。政策阶段的拒绝交给 `InterestConfig.OnRefusal`，等空位的 pair 只在进入队列时报告一次；测试与工具可用 `Apply()` 在调用方线程排空并结算，返回 `Refusal`，`Retry` 供调用方分日志级别。等空位与重试停滞的告警每个 Interest 每 10 秒汇总一条。
+  (LOD 层, 距离档) → profile（`BandLayer(level, band)`，视野换层时按新层重给整个可见集，缺省只看档；见 [guide/04-sync“视野参数”](guide/04-sync.md#谁看见谁视野viewd19)）；全部写入口只登记一条有序日志（不做 AOI 计算、不等批次），由 Manager 的政策阶段（ApplySync）或 Interest 的应用线程（ApplyAsync）按调用顺序执行并说给 Manager，被拒的 subscribe 按原因等待，直到被接受或 pair 释放（拒绝不是对 pair 的裁决）：被每 subject 订阅者上限拒绝（`ErrSubscriberLimit`）的 pair 进入该 subject 的等空位队列，每次结算对每个有人排队的 subject 只查一次槽快照（`Manager.SubscriberSlotsSince`）；已有其他来源为同一会话占槽的，直接合并、不消耗空位。其余有空位时按入队先后（先来先得，新来的不插队）重说至多“空位数”个——remove 在第 k 次 Flush 交付、空位出现，第 k+1 次 Flush 就订阅上；其他原因（会话没开、subject 未登记……）进入重试表，每次结算重说，每次政策阶段至多 4096 个。一次结算里每个 pair 至多说一次。政策阶段的拒绝交给 `InterestConfig.OnRefusal`，等空位的 pair 只在进入队列时报告一次；测试与工具可用 `Apply()` 在调用方线程排空并结算，返回 `Refusal`，`Retry` 供调用方分日志级别。等空位与重试停滞的告警每个 Interest 每 10 秒汇总一条。
 - `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Match` 是对局执行对象，而这里只是一个集合。
 - `Interest.Close` 释放本实例持有的订阅，不影响其他政策。
 - `Direct`：`Bind / Unbind` 一对；每个 Direct 实例是独立来源，重复 Bind 不累加。
@@ -176,7 +176,7 @@ game-demo 的场景：玩家 / 怪 / 场景沿用 100、不限快照，`terrain`
 
 ## 容量与观测
 
-`ManagerConfig.MaxSubjects / MaxSessions / MaxSubscribersPerSubject`；`MaxSubscribersPerSubject`（缺省 1024）只拦新会话的订阅（同一会话已被别的来源订阅时不受限），已退订、remove 还没交付的订阅者仍占位，**钉住的订阅（玩家看自己：Interest 的 self、SelfView）不受它限制**，所以一个 subject 至多超出钉住订阅的个数；被拒计入 `ManagerStats.SubscriberLimitRefused` / `entitysync_subscriber_limit_refused_total`，政策据 `Manager.SubscriberRoom` 判断何时有空位（Interest 见上文、GroupView 同样等空位）。`Limits.MaxObjects` 同时是一个会话可持有的 subject 数（配置了 `Namespaces` 时是没列出的那一类的数，列出的命名空间各按自己的 `MaxObjects`）；
+`ManagerConfig.MaxSubjects / MaxSessions / MaxSubscribersPerSubject`；`MaxSubscribersPerSubject`（缺省 1024）只拦新会话的订阅（同一会话已被别的来源订阅时不受限），已退订、remove 还没交付的订阅者仍占位，**钉住的订阅（玩家看自己：Interest 的 self、SelfView）不受它限制**，所以一个 subject 至多超出钉住订阅的个数；被拒计入 `ManagerStats.SubscriberLimitRefused` / `entitysync_subscriber_limit_refused_total`，Interest 和 GroupView 按槽快照判断何时可重试：新会话等空位，已有会话直接合并来源，全部仍以 Manager 的订阅结果为准。`Limits.MaxObjects` 同时是一个会话可持有的 subject 数（配置了 `Namespaces` 时是没列出的那一类的数，列出的命名空间各按自己的 `MaxObjects`）；
 `Subscribe` 不按它拒绝，超出时按上节“超额降级”暂缓放不下的新对象，会话不关；
 `SessionLost` 的原因总是 `*SessionLoss`：`LossReason(cause)` 是低基数分类——`push_refused`（传输拒收这一帧）、
 `too_large`（单实体包超过 `MaxFrameBytes` / `MaxComponentBytes`）、`encode_failed`（其他编码错误），`Err` 是原错误。后两种没有帧交给传输，连接没有拒收任何东西：
