@@ -140,7 +140,7 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 | 期 | 内容 | 状态 |
 | --- | --- | --- |
 | 一 | account 接口与 accountctl；`HandOffEntity`；模块 `rehome` 最小形态、enter 的进入前检查、`with/enter`；demo 的 `admitBound` 与 `PlayerOwners` 接上并改写用例；文档 | **已实现**，只有离线验证 |
-| 二 | demo 全量联动：队伍与匹配（换服前必须不在队里 / 自动取消排队）、副本与战斗中拒绝、场景（离开时离场景、到达回出生点）、联盟 `HomeSID` 惰性修正、全服邮件范围、名下建筑的规则；其余联动（mailbox、chat、leaderboard）；真实依赖演练（两个 game sid + account + saga，每个阶段后 kill -9） | 未开始 |
+| 二 | demo 全量联动：队伍与匹配（换服前必须不在队里 / 自动取消排队）、副本与战斗中拒绝、场景（离开时离场景、到达回出生点）、联盟 `HomeSID` 惰性修正、全服邮件范围、名下建筑的规则；其余联动（mailbox、chat、leaderboard）；真实依赖演练（两个 game sid + account + saga，每个阶段后 kill -9） | **大部分已实现**（2026-11-19 核对，原写“未开始”已过时）：队伍（`team/with/rehome`）、匹配（`matchmaking/with/rehome`；旧 lockstep 匹配票据按设计不拦）、对战座位与分区场景拒绝（demo `rehome_checks.go`；副本 run 按设计不拦，跟着玩家走）、离开前存位置（`LeaveScene`）、联盟 HomeSID（R10）、全服邮件范围（`mailbox/with/rehome`）、建筑与地形归地图留在原服（D11）、真实依赖演练（`scripts/test-demo-rehome.sh` 六个栅栏点 SIGKILL + checkpoint 共七场景）。**未做**：到达回出生点（demo 没挂 `rehome.OnArrived`，玩家按源服存下的位置进目标服地图）；chat、leaderboard 与 rehome 的联动（未评估是否需要）。见 KNOWN-LIMITS“单个玩家换服（模块 rehome 与 game-demo 接线）” |
 | 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 索引、列举、按期限了结与源服重启后的恢复**已实现**（2026-11-17，D7 A / D8 A）；合服前“无在途换服”**已实现**（2026-11-18，放在 account 的 `MergeServer`：`sidmerge` 不连 account，见 [PLAYER-MIGRATION §6.1](../framework/PLAYER-MIGRATION.md#61-步骤) 第 3、7 步）；其余未开始 |
 
 ### 一期后半的实施结果（2026-11-11）

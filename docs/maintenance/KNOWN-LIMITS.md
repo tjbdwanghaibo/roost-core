@@ -949,6 +949,16 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 - **Unity 里没有跑过**：导出的 C# 只在 .NET 上编译和运行，IL2CPP 裁剪安全是按“不用反射、不用 JsonUtility / UnityEngine”推断的，没有实跑，见[客户端：遗留](#客户端遗留)。
 
+#### 业务模块拆分：未做的模块（已决定待实施）
+
+维护者 2026-11-10 / 11-11 定的方向是把 game-demo、玩法夹具里反复手写的业务拆成模块（只要求新生成的工程能直接用）。清单与状态见 [business-modules 批次表](FEATURE-2026-11-10-business-modules.md)，2026-11-19 核对后还没做的：
+
+- **gift**（玩家间送礼 saga）：仍在 game-demo 里（`game/gift` 与 `internal/service/game/gift_saga.go`）。原来卡的服务级接线点已有（A1），可以拆；旧的半成品暂存已删除。
+- **scene**（场景实体、进出场景、移动与视野、刷怪、心跳驱动与同步接线）：仍是 game-demo 里约 2900 行的参考实现。维护者 2026-11-11 同意的顺序是先拆成模块，再加多场景管理、区域触发等功能。
+- **matchroom**（匹配成局到房间的移交）：未做；与 R11（demo 的锁步匹配改成回合房，D24 A 暂缓）相关。
+- **配方**（`roost project new -recipe <name>`）：未做，排在模块够用之后。
+- **task 扩成核心系统**（按事件推进、周期与种类、奖励种类、配置表、各模块上报）：方案里的 5 步都未开始。
+
 <a id="生成工程目录遗留"></a>
 
 ### 框架服务与 game-demo（遗留）
@@ -965,6 +975,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
 
+- **换服二期未做的两项**（2026-11-19 核对，方案 §7 原写“二期未开始”已过时，其余联动均已实现）：①到达回出生点——demo 没挂 `rehome.OnArrived`，玩家按源服 `LeaveScene` 存下的位置进入目标服地图，这个位置在目标服地图上是否可走未验证；②chat、leaderboard 与 rehome 的联动没做，是否需要未评估（两者都是全服托管服务，按玩家号寻址）。
 - **换服演练 checkpoint 场景在负载下偶发 `CHECKPOINT_BYPASS`**（2026-11-18，尚未确认）：`scripts/test-demo-rehome.sh` 完整七场景在本机负载约 10 时，第七场景（压住 checkpoint 时交出应当等待）报“hand-off returned before checkpoint release”。account 改造前的基线 `878134b4` 同样复现一次，改造后 main 上完整七场景复跑一次通过、单跑 checkpoint 场景两次通过，与 account 改造无关；是交出确实没等 checkpoint，还是演练的压住时机在前一场景之后没有生效，尚未确认。
 
 
