@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.57.1**（2026-11-19）：没有新接口，只为让新装模块写入的依赖与 `roost project sync` 对齐到同一发布版（v1.57.1 发版后漏提，`TestModulePortal*` 的“同步不改工程”断言因此失败）。
+
 - **文档：第二类 M 系列正式测量第一批（S1 微基准、S2 心跳投递）**（2026-11-19，KNOWN-LIMITS M-1 / M-2 / M-9 / M-18）：只有测量与记录，代码不变。M-1：回调 10µs 时时间片 50µs 比现缺省 100µs 业务 p99 低约 32%、CPU 与迟到不变，组 2 / 4 无差别，是否改缺省待维护者定；热点冲突转单目标 0.004%～0.007% / 拍，该项关闭。M-2 复测一致。M-9：上限内约 0.27µs / pair 更新、1.2KB / pair 常驻；计划命令的 2000 人档撞缺省每 subject 订阅者上限 1024，被拒 pair 每轮重说使 Flush 约 960ms，记为尚未确认的疑似问题。M-18：组同步成本只随成员总数线性，约 0.6µs / 成员·轮。[证据](docs/performance/benchmarks/m-series-s1-s2-20261119/README.md)
 - **测试：C++ `native_weak` 的 `send_stall` 夹具不再与客户端发送期限赛跑**（2026-11-19，KNOWN-LIMITS E-2）：`client/cpp/tests/weak.py` 的服务端停读后一直持有连接到客户端进程结束，不再固定 0.8s 后关闭。原来客户端从就绪到发出 16 MiB 请求若被调度拖过约 0.5s，就会报 `send failed`（EPIPE）而不是发送超时；注入延迟可确定性复现，修后 0～2000ms 全绿。客户端代码不变，只改测试。[证据](docs/maintenance/evidence/category3-batch3-20261119/README.md)
 
