@@ -9,6 +9,9 @@
 #   sid 1004：只做 Base（不托管格），p5、p6 的连接在这里（演练中两次被 kill -9 再重启：p5 进场回到保存的位置；p6 与
 #             sid 1000 上的 p1 组队，kill 后 3 个快照周期从 p1 的队伍面板移除、重启后恢复）。
 # 依赖全部是调用方给的私有实例（Mongo 副本集、NATS JetStream、Redis），etcd 由本脚本在私有端口自起；不读共享环境。
+# 宽限内断线不等于 Leave；完整双客户端断线接管 / 到期演练另跑：
+#   python3 scripts/test-seamless-reconnect.py --out "$MESHY_WORK/seamless-reconnect-run"
+# 它自起四种私有依赖并逐帧采集旁观端；普通演练收尾 Close 不断言立即移除。
 # 客户端是 scripts/testdata/seamless/drill.go.txt（经真实 account 登录、玩家 TCP、demo 的同步帧解码）。
 # 结束时停掉本脚本起的全部进程、删除本次的库；证据（drill 输出、evidence.json、各进程日志）留在 $ROOST_SEAMLESS_OUT。
 #

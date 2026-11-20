@@ -1,0 +1,550 @@
+// Built only by test-seamless-reconnect.py, alongside the normal game-demo wire client.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"strconv"
+	"sync"
+	"time"
+
+	"MMO_MODULE/game/clientsync"
+	"MMO_MODULE/protocol/msgid"
+	"MMO_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+)
+
+var (
+	reconnectRedis = flag.String("redis", "", "private Redis with this run's grants")
+	reconnectWorld = flag.String("world", "", "unique partition world of this run")
+	reconnectGrace = flag.Duration("grace", 8*time.Second, "configured reconnect grace")
+	wirePath       = flag.String("wire-trace", "", "JSONL of all decoded sync frames (all sockets)")
+)
+
+func init() { reconnectDrill = runReconnect }
+
+type frameBook struct {
+	refs map[frame.ObjectRef]int64
+	full map[int64]map[string]any
+}
+
+// Independently track references: the gameplay client's held[subject] would otherwise hide two
+// wire objects representing the same avatar. On Full, rebuild exactly what that packet contains.
+type frameAudit struct {
+	sync.Mutex
+	out        *json.Encoder
+	books      map[*client]*frameBook
+	watched    int64
+	continuous bool
+}
+
+func (a *frameAudit) frame(c *client, at time.Time, f entitysync.ReceivedFrame) error {
+	a.Lock()
+	defer a.Unlock()
+	b := a.books[c]
+	if b == nil {
+		b = &frameBook{refs: map[frame.ObjectRef]int64{}, full: map[int64]map[string]any{}}
+		a.books[c] = b
+	}
+	if f.Kind == frame.Full {
+		b.refs = map[frame.ObjectRef]int64{}
+	}
+	var ops []map[string]any
+	var illegal string
+	for _, o := range f.Objects {
+		fields := map[string]any{}
+		full := false
+		for _, comp := range o.Components {
+			u := comp.Update
+			if len(u.Payload.BytesCopy()) == 0 {
+				continue
+			}
+			doc, err := clientsync.DecodeFields(u)
+			if err != nil {
+				return err
+			}
+			for k, v := range doc {
+				fields[k] = v
+			}
+			full = full || u.Full
+		}
+		ops = append(ops, map[string]any{"ref": o.Ref, "subject": o.SubjectID, "op": o.Operation, "full_component": full, "fields": fields})
+		switch o.Operation {
+		case frame.ObjectCreate:
+			b.refs[o.Ref] = o.SubjectID
+			if full && !c.readySent.IsZero() && !at.Before(c.readySent) {
+				b.full[o.SubjectID] = fields
+			}
+		case frame.ObjectRemove:
+			delete(b.refs, o.Ref)
+		}
+		if a.continuous && c.name == "B" && o.SubjectID == a.watched && (o.Operation == frame.ObjectCreate || o.Operation == frame.ObjectRemove) {
+			illegal = fmt.Sprintf("B received operation %v for retained actor %d", o.Operation, o.SubjectID)
+		}
+	}
+	n := 0
+	for _, id := range b.refs {
+		if id == a.watched {
+			n++
+		}
+	}
+	if err := a.out.Encode(map[string]any{"at": at.UTC(), "socket": c.name, "ready_sent": c.readySent.UTC(), "stream": f.StreamID, "epoch": f.Epoch, "tick": f.Tick, "base_tick": f.BaseTick, "kind": f.Kind, "ops": ops, "tracked_actor": a.watched, "tracked_refs": n}); err != nil {
+		return err
+	}
+	if a.continuous && c.name == "B" && n != 1 {
+		return fmt.Errorf("B now holds %d references to retained actor %d", n, a.watched)
+	}
+	if illegal != "" {
+		return errors.New(illegal)
+	}
+	return nil
+}
+func (a *frameAudit) snapshots(c *client, ids ...int64) (map[int64]map[string]any, bool) {
+	a.Lock()
+	defer a.Unlock()
+	out := map[int64]map[string]any{}
+	b := a.books[c]
+	if b == nil {
+		return nil, false
+	}
+	for _, id := range ids {
+		f := b.full[id]
+		if len(f) == 0 {
+			return out, false
+		}
+		out[id] = f
+	}
+	return out, true
+}
+func (a *frameAudit) watch(id int64, on bool) {
+	a.Lock()
+	defer a.Unlock()
+	a.watched = id
+	a.continuous = on
+}
+func health(c *client) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failure != nil {
+		return c.failure
+	}
+	if c.closed {
+		return fmt.Errorf("%s TCP unexpectedly closed", c.name)
+	}
+	return nil
+}
+func (c *client) actor() int64 { c.mu.Lock(); defer c.mu.Unlock(); return c.actorID }
+func frameCount(c *client) int { c.mu.Lock(); defer c.mu.Unlock(); return c.frames }
+func presentOn(ctx context.Context, c *client, id int64, test func(object) bool) error {
+	return waitFor(ctx, 5*time.Second, "wire actor on "+c.name, func() (bool, string) {
+		o, ok := c.snapshot()[id]
+		return ok && test(o), fmt.Sprintf("actor=%d at=%v hp=%d err=%v", id, o.pos(), o.hp(), health(c))
+	})
+}
+func fullReady(ctx context.Context, a *frameAudit, c, b *client, actor, other int64) error {
+	var fields map[int64]map[string]any
+	err := waitFor(ctx, 5*time.Second, "post-Ready full creates (self player, avatar, observer)", func() (bool, string) {
+		p, ok := c.ownPlayer()
+		if !ok {
+			return false, "no self Player: " + c.describe()
+		}
+		var base int64
+		for id, o := range c.snapshot() {
+			if o.ns == p.ns && o.ns == "player" && entity.GetEntityKindFromID(id) != kindCellPlayer && entity.GetUniqueIDFromEntityID(id) == c.playerID {
+				base = id
+				break
+			}
+		}
+		var all bool
+		fields, all = a.snapshots(c, base, actor, other)
+		if _, ok := clientsync.PlayerExp(fields[base]); !ok {
+			return false, "self Player create has no profile"
+		}
+		if !all || len(fields) != 3 {
+			return false, fmt.Sprintf("missing full creates, base %d actor %d observer %d; held %s", base, actor, other, c.describe())
+		}
+		for _, id := range []int64{actor, other} {
+			f := fields[id]
+			if _, ok := f["pos_x"]; !ok {
+				return false, fmt.Sprint(f)
+			}
+			if _, ok := f["pos_y"]; !ok {
+				return false, fmt.Sprint(f)
+			}
+			if (object{fields: f}).hp() <= 0 {
+				return false, fmt.Sprint(f)
+			}
+		}
+		return c.actor() == actor && b.actor() == other, fmt.Sprint(fields)
+	})
+	if err == nil {
+		step("ready_full_"+c.name, map[string]any{"at": time.Now().UTC(), "full_creates": fields, "frames": frameCount(c)})
+	}
+	return err
+}
+
+func runReconnect(ctx context.Context) error {
+	wire, err := os.OpenFile(*wirePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer wire.Close()
+	audit := &frameAudit{books: map[*client]*frameBook{}, out: json.NewEncoder(wire)}
+	observeDecoded = audit.frame
+	redis, err := redisdriver.NewClient(fredis.DefaultConfig(*reconnectRedis))
+	if err != nil {
+		return err
+	}
+	defer redis.Close()
+	store, err := versionstore.NewRedisStore(redis, versionstore.RedisConfig[int64, cellworld.OwnerRecord]{Prefix: "roost:cellworld:" + *reconnectWorld + ":owner:", KeyOf: func(i int64) string { return strconv.FormatInt(i, 10) }, Codec: versionstore.JSONCodec[cellworld.OwnerRecord]{}})
+	if err != nil {
+		return err
+	}
+	acct, done, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer done()
+	nonce := strconv.FormatInt(time.Now().UnixNano()%1000000000, 36)
+	dial := func(role, label string) (*client, error) { return loginSocket(ctx, acct, role, 1000, nonce, label) }
+	b, err := dial("observer", "B")
+	if err != nil {
+		return err
+	}
+	defer b.raw.Close()
+	a, err := dial("walker", "A1")
+	if err != nil {
+		return err
+	}
+	defer a.raw.Close()
+	if err := waitFor(ctx, 6*time.Second, "two distinct avatars visible on both TCP sockets", func() (bool, string) {
+		aid, bid := a.actor(), b.actor()
+		_, ab := a.snapshot()[bid]
+		_, ba := b.snapshot()[aid]
+		return aid != 0 && bid != 0 && aid != bid && ab && ba, fmt.Sprintf("A=%s B=%s", a.describe(), b.describe())
+	}); err != nil {
+		return err
+	}
+	actor, bid := a.actor(), b.actor()
+	audit.watch(actor, true)
+	read := func() (cellworld.OwnerRecord, error) {
+		v, ok, e := store.Get(ctx, actor)
+		if e != nil {
+			return cellworld.OwnerRecord{}, e
+		}
+		if !ok || v.Value.Actor != actor {
+			return cellworld.OwnerRecord{}, errors.New("missing actor grant")
+		}
+		return v.Value, nil
+	}
+	first, err := read()
+	if err != nil {
+		return err
+	}
+	if first.Entry == 0 || first.Grant.Process.SID != 1001 || first.Phase != 1 {
+		return fmt.Errorf("initial grant: %+v", first)
+	}
+	start := b.snapshot()[actor].pos()
+	if err := fullReady(ctx, audit, a, b, actor, bid); err != nil {
+		return err
+	}
+	step("initial", map[string]any{"at": time.Now().UTC(), "A_player": a.playerID, "B_player": b.playerID, "A_actor": actor, "B_actor": bid, "pos": start, "grant": first, "grace": reconnectGrace.String()})
+	moveAt := time.Now()
+	if err := a.moveIntent(ctx, 120, 0); err != nil {
+		return err
+	}
+	var grant cellworld.OwnerRecord
+	var sawFrozen bool
+	var lastSource, grantAt, cut time.Time
+	var movingOnB object
+	// Close as soon as we observe an active grant on the destination, not after walkTo (sends stop).
+	for time.Since(moveAt) < 5*time.Second {
+		g, e := read()
+		if e != nil {
+			return e
+		}
+		t := time.Now()
+		if g.Phase == 2 {
+			sawFrozen = true
+		}
+		if g.Grant.Process.SID == 1001 {
+			lastSource = t
+			if o, ok := b.snapshot()[actor]; ok && o.pos().X > start.X && o.updated.After(moveAt) {
+				movingOnB = o
+			}
+		}
+		if g.Phase == 1 && g.Grant.Process.SID == 1002 {
+			grant = g
+			grantAt = t
+			cut = time.Now()
+			if e = a.raw.Close(); e != nil {
+				return e
+			}
+			break
+		}
+		time.Sleep(7 * time.Millisecond)
+	}
+	if cut.IsZero() || grant.Entry != first.Entry || grant.Grant.Epoch <= first.Grant.Epoch {
+		return fmt.Errorf("no same-entry handoff 1001 -> 1002: %+v", grant)
+	}
+	if movingOnB.updated.IsZero() {
+		return errors.New("no B wire displacement before handoff and TCP close")
+	}
+	step("handoff_close", map[string]any{"move_at": moveAt.UTC(), "B_saw_moving_at": movingOnB.updated.UTC(), "B_pre_cut_pos": movingOnB.pos(), "last_source_sample": lastSource.UTC(), "destination_sample": grantAt.UTC(), "tcp_close_start": cut.UTC(), "after_grant_us": cut.Sub(grantAt).Microseconds(), "sampled_frozen_before_cut": sawFrozen, "cut_inside_frozen_window": false, "client_sent_stop": false, "grant": grant})
+	row := func() (map[string]any, error) {
+		rows, e := cellEntities(ctx, 1002)
+		if e != nil {
+			return nil, e
+		}
+		for _, r := range rows {
+			if asInt(r["id"]) == actor && r["role"] == "real" && asInt(r["epoch"]) == int64(grant.Grant.Epoch) {
+				return r, nil
+			}
+		}
+		return nil, fmt.Errorf("no matching real for %d", actor)
+	}
+	var parked point
+	var samples []map[string]any
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			time.Sleep(350 * time.Millisecond)
+		}
+		if err = waitFor(ctx, 2*time.Second, "destination Real stopped away from an edge, B agrees", func() (bool, string) {
+			r, e := row()
+			if e != nil {
+				return false, e.Error()
+			}
+			p := point{asInt(r["x"]), asInt(r["y"])}
+			o, ok := b.snapshot()[actor]
+			vx, hasX := r["vx"]
+			vy, hasY := r["vy"]
+			if !ok || !hasX || !hasY || asInt(vx) != 0 || asInt(vy) != 0 || p.X <= boundary || p.X >= boundary+100 || p.Y != start.Y || o.pos() != p || (i > 0 && p != parked) {
+				return false, fmt.Sprintf("cell=%v B=%v previous=%v", r, o.pos(), parked)
+			}
+			parked = p
+			samples = append(samples, map[string]any{"at": time.Now().UTC(), "B_pos": o.pos(), "cell": r})
+			return true, ""
+		}); err != nil {
+			return err
+		}
+	}
+	retained := func(label string) error {
+		g, e := read()
+		if e != nil {
+			return e
+		}
+		if g != grant {
+			return fmt.Errorf("%s: grant changed %+v -> %+v", label, grant, g)
+		}
+		if err := health(b); err != nil {
+			return err
+		}
+		if cnt := b.createCount(actor); cnt != 1 {
+			return fmt.Errorf("%s: B saw %d creates", label, cnt)
+		}
+		if _, removed := b.removedAt(a.playerID, moveAt); removed {
+			return fmt.Errorf("%s: B saw premature remove", label)
+		}
+		return nil
+	}
+	if err := retained("parked"); err != nil {
+		return err
+	}
+	step("stopped_offline", map[string]any{"samples": samples, "B_frames": frameCount(b), "B_creates": b.createCount(actor), "B_removes": 0})
+	a2, err := dial("walker", "A2")
+	if err != nil {
+		return err
+	}
+	defer a2.raw.Close()
+	if time.Since(cut) >= *reconnectGrace || a2.playerID != a.playerID {
+		return fmt.Errorf("not same-player reconnect within grace: %s", time.Since(cut))
+	}
+	if err = fullReady(ctx, audit, a2, b, actor, bid); err != nil {
+		return err
+	}
+	if err = retained("short reconnect"); err != nil {
+		return err
+	}
+	step("short_reconnect", map[string]any{"elapsed_ms": time.Since(cut).Milliseconds(), "grant": grant, "B_creates": b.createCount(actor), "B_removes": 0})
+	hp0, hitDamage := b.snapshot()[bid].hp(), attackOf(a2)
+	payload := must(pb.MarshalAttackTargetRequest(&pb.AttackTargetRequest{Target: bid, RequestID: 11}))
+	hit, err := a2.numberedAttack(ctx, payload)
+	if err != nil {
+		return err
+	}
+	if err = presentOn(ctx, b, bid, func(o object) bool { return o.hp() == hp0-hitDamage }); err != nil {
+		return err
+	}
+	if err = waitFor(ctx, 3*time.Second, "one applied push", func() (bool, string) {
+		p := a2.resultsFor(hit.Seq, hit.Seq)
+		return len(p) == 1 && p[0].AttackID == hit.AttackID && p[0].Outcome == "applied" && int64(p[0].Damage) == hitDamage && int64(p[0].TargetHP) == hp0-hitDamage, fmt.Sprint(p)
+	}); err != nil {
+		return err
+	}
+	a3, err := dial("walker", "A3")
+	if err != nil {
+		return err
+	}
+	defer a3.raw.Close()
+	if err = fullReady(ctx, audit, a3, b, actor, bid); err != nil {
+		return err
+	}
+	if err = retained("overlap"); err != nil {
+		return err
+	}
+	// All requests below are ordinary documented requests on A's own, previously admitted socket.
+	stale := map[string]int32{}
+	want := int32(100905)
+	type request struct {
+		name   string
+		id     uint32
+		data   []byte
+		decode func([]byte) (int32, error)
+	}
+	for _, r := range []request{
+		{"move", msgid.MsgMoveIntent, must(pb.MarshalMoveIntentRequest(&pb.MoveIntentRequest{VX: -110})), func(b []byte) (int32, error) {
+			r, e := pb.UnmarshalMoveIntentResponse(b)
+			if e != nil {
+				return 0, e
+			}
+			return r.Code, nil
+		}},
+		{"attack", msgid.MsgAttackTarget, must(pb.MarshalAttackTargetRequest(&pb.AttackTargetRequest{Target: bid, RequestID: 12})), func(b []byte) (int32, error) {
+			r, e := pb.UnmarshalAttackTargetResponse(b)
+			if e != nil {
+				return 0, e
+			}
+			return r.Code, nil
+		}},
+		{"ready", msgid.MsgSceneReady, must(pb.MarshalSceneReadyRequest(&pb.SceneReadyRequest{})), func(b []byte) (int32, error) {
+			r, e := pb.UnmarshalSceneReadyResponse(b)
+			if e != nil {
+				return 0, e
+			}
+			return r.Code, nil
+		}},
+		{"view", msgid.MsgSceneView, must(pb.MarshalSceneViewRequest(&pb.SceneViewRequest{ViewRadius: 120})), func(b []byte) (int32, error) {
+			r, e := pb.UnmarshalSceneViewResponse(b)
+			if e != nil {
+				return 0, e
+			}
+			return r.Code, nil
+		}},
+	} {
+		raw, e := a2.call(ctx, r.id, r.data)
+		if e != nil {
+			return fmt.Errorf("old %s: %w", r.name, e)
+		}
+		code, e := r.decode(raw)
+		if e != nil || code != want {
+			return fmt.Errorf("old %s: code %d want %d (%v)", r.name, code, want, e)
+		}
+		stale[r.name] = code
+	}
+	retry, err := a3.numberedAttack(ctx, payload)
+	if err != nil {
+		return err
+	}
+	if retry.AttackID != hit.AttackID || retry.Seq != hit.Seq {
+		return fmt.Errorf("retry got another receipt %v vs %v", retry, hit)
+	}
+	if err = a3.moveIntent(ctx, 0, 60); err != nil {
+		return err
+	}
+	before := b.snapshot()[actor].pos()
+	oldClose := time.Now()
+	if err = a2.raw.Close(); err != nil {
+		return err
+	}
+	if err = presentOn(ctx, b, actor, func(o object) bool { return o.pos().Y >= before.Y+18 && o.pos().X == parked.X }); err != nil {
+		return err
+	}
+	if err = a3.moveIntent(ctx, 0, 0); err != nil {
+		return err
+	}
+	if err = retained("old close"); err != nil {
+		return err
+	}
+	if err = health(a3); err != nil {
+		return err
+	}
+	if n := len(a2.resultsFor(hit.Seq, hit.Seq)) + len(a3.resultsFor(hit.Seq, hit.Seq)); n != 1 || b.snapshot()[bid].hp() != hp0-hitDamage {
+		return fmt.Errorf("repeated verdict or damage: pushes=%d HP=%d", n, b.snapshot()[bid].hp())
+	}
+	step("overlap", map[string]any{"old_close": oldClose.UTC(), "rejected_on_previous_socket": stale, "old_receipt": hit, "new_socket_retry": retry, "target_hp": []int64{hp0, b.snapshot()[bid].hp()}, "damage_from_panel": hitDamage, "applied_push_count": 1, "B_observed_current_move": b.snapshot()[actor].pos(), "grant": grant})
+	// Only the observer's TCP ObjectRemove counts as an exit. Also require a matching closed entry in Redis.
+	off := time.Now()
+	if err = a3.raw.Close(); err != nil {
+		return err
+	}
+	time.Sleep(*reconnectGrace - 350*time.Millisecond)
+	if err = retained("before expiry"); err != nil {
+		return err
+	}
+	audit.watch(actor, false)
+	var gone time.Time
+	var closed cellworld.OwnerRecord
+	if err = waitFor(ctx, 5*time.Second, "expiry: B removed and durable grant closed", func() (bool, string) {
+		t, ok := b.removedAt(a.playerID, off)
+		g, e := read()
+		if e != nil {
+			return false, e.Error()
+		}
+		gone, closed = t, g
+		_, held := b.snapshot()[actor]
+		return ok && !held && g.ClosedEntry == grant.Entry && g.Phase == 3, fmt.Sprintf("remove=%v grant=%+v", t, g)
+	}); err != nil {
+		return err
+	}
+	if gone.Sub(off) < *reconnectGrace {
+		return fmt.Errorf("wire removed at %s before grace %s", gone.Sub(off), *reconnectGrace)
+	}
+	if err = health(b); err != nil {
+		return err
+	}
+	a4, err := dial("walker", "A4")
+	if err != nil {
+		return err
+	}
+	defer a4.raw.Close()
+	if err = fullReady(ctx, audit, a4, b, actor, bid); err != nil {
+		return err
+	}
+	if err = presentOn(ctx, b, actor, func(o object) bool { return o.created.After(gone) }); err != nil {
+		return err
+	}
+	fresh, err := read()
+	if err != nil {
+		return err
+	}
+	if fresh.Entry <= grant.Entry || fresh.ClosedEntry != grant.Entry || fresh.Phase != 1 || fresh.Actor != actor || fresh.Grant.Epoch <= grant.Grant.Epoch || b.createCount(actor) != 2 {
+		return fmt.Errorf("invalid return: %+v, B creates %d", fresh, b.createCount(actor))
+	}
+	if err = health(b); err != nil {
+		return err
+	}
+	if err = health(a4); err != nil {
+		return err
+	}
+	rm := 0
+	for _, r := range b.removalsSince(moveAt) {
+		if r.ID == actor {
+			rm++
+		}
+	}
+	if rm != 1 {
+		return fmt.Errorf("B saw %d removals, want one", rm)
+	}
+	step("expiry_return", map[string]any{"offline_at": off.UTC(), "B_wire_removed_at": gone.UTC(), "elapsed_ms": gone.Sub(off).Milliseconds(), "grace_ms": reconnectGrace.Milliseconds(), "closed": closed, "fresh": fresh, "B_frames": frameCount(b), "B_creates": b.createCount(actor), "B_removes": rm})
+	return nil
+}

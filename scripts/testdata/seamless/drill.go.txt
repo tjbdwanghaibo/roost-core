@@ -72,6 +72,10 @@ var (
 	damage      = flag.Int64("damage", 10, "scene.partition.attack_damage")
 )
 
+// Optional instrumentation installed only by the separately built reconnect probe.
+var reconnectDrill func(context.Context) error
+var observeDecoded func(*client, time.Time, entitysync.ReceivedFrame) error
+
 type point struct{ X, Y int64 }
 
 func dist(a, b point) int64 {
@@ -132,20 +136,21 @@ type client struct {
 	actorID  int64
 	raw      transport.Conn
 
-	mu       sync.Mutex
-	seq      uint32
-	pending  map[uint32]chan *transport.Packet
-	dropSeq  uint32 // test-only: consume this response without giving its payload to gameplay
-	dropped  chan struct{}
-	refs     map[frame.ObjectRef]int64
-	decoder  *entitysync.Decoder // 增量的 subject 身份从基线继承，按顺序解
-	held     map[int64]*object
-	removes  []removal
-	creates  map[int64]int
-	frames   int
-	selfSeen []time.Time
-	failure  error
-	closed   bool
+	mu        sync.Mutex
+	seq       uint32
+	pending   map[uint32]chan *transport.Packet
+	dropSeq   uint32 // test-only: consume this response without giving its payload to gameplay
+	dropped   chan struct{}
+	refs      map[frame.ObjectRef]int64
+	decoder   *entitysync.Decoder // 增量的 subject 身份从基线继承，按顺序解
+	held      map[int64]*object
+	removes   []removal
+	creates   map[int64]int
+	frames    int
+	readySent time.Time // distinguishes initial data received before the Ready request
+	selfSeen  []time.Time
+	failure   error
+	closed    bool
 	// results 是收到的攻击结论推送（AttackResultPush，按到达顺序）。
 	results []*pb.AttackResultPush
 	// terrain 是收到的地形块（terrain 命名空间，只在开地形的演练里出现，terrain.go）。
@@ -205,6 +210,12 @@ func (c *client) consume(payload []byte) {
 		return
 	}
 	c.frames++
+	if observeDecoded != nil {
+		if err := observeDecoded(c, now, decoded); err != nil {
+			c.failure = err
+			return
+		}
+	}
 	for _, obj := range decoded.Objects {
 		subject := c.refs[obj.Ref]
 		fields := map[string]any{}
@@ -388,6 +399,11 @@ func accounts() (*svcaccount.BusClient, func(), error) {
 
 // login 经 account 登录、建角色、选角色，连上 sid 的玩家 TCP，EnterGame，装好解码器后 SceneReady。
 func login(ctx context.Context, accounts *svcaccount.BusClient, name string, sid int32, nonce string) (*client, error) {
+	return loginSocket(ctx, accounts, name, sid, nonce, name)
+}
+
+// label identifies a physical socket in the evidence; it does not change the account or role.
+func loginSocket(ctx context.Context, accounts *svcaccount.BusClient, name string, sid int32, nonce, label string) (*client, error) {
 	openID := "seamless-" + nonce + "-" + name
 	account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
 	if err != nil {
@@ -409,7 +425,7 @@ func login(ctx context.Context, accounts *svcaccount.BusClient, name string, sid
 	if err != nil {
 		return nil, err
 	}
-	c := &client{name: name, sid: sid, playerID: role.PlayerID, raw: raw,
+	c := &client{name: label, sid: sid, playerID: role.PlayerID, raw: raw,
 		pending: map[uint32]chan *transport.Packet{}, refs: map[frame.ObjectRef]int64{}, decoder: entitysync.NewDecoder(frame.DefaultLimits()), held: map[int64]*object{}, creates: map[int64]int{}}
 	if err := raw.WritePackets([]*transport.Packet{playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token))}); err != nil {
 		raw.Close()
@@ -424,6 +440,9 @@ func login(ctx context.Context, accounts *svcaccount.BusClient, name string, sid
 	if err != nil || entered.Code != 0 {
 		return nil, fmt.Errorf("enter game %s: %v %+v", name, err, entered)
 	}
+	c.mu.Lock()
+	c.readySent = time.Now()
+	c.mu.Unlock()
 	ready, err := c.call(ctx, msgid.MsgSceneReady, must(pb.MarshalSceneReadyRequest(&pb.SceneReadyRequest{})))
 	if err != nil {
 		return nil, err
@@ -740,6 +759,9 @@ func main() {
 	drill := run
 	if *terrainMode {
 		drill = runTerrain
+	}
+	if reconnectDrill != nil {
+		drill = reconnectDrill
 	}
 	err := drill(ctx)
 	if *outPath != "" {
@@ -1432,6 +1454,8 @@ func run(ctx context.Context) error {
 	cellBEnd, _ := gm(ctx, 1002, "gm.scene.partition", nil)
 	evidence["stats_end"] = map[string]any{"base_1000": baseEnd, "cell_1001": cellAEnd, "cell_1002": cellBEnd}
 	evidence["stats_start"] = map[string]any{"base_1000": base0, "cell_1001": cellA0, "cell_1002": cellB0}
+	// Closing the final socket starts the configured reconnect grace; it is not a Leave.
+	// The dedicated reconnect drill waits for B's wire removal and the durable closed entry.
 	for _, c := range append(clients, p4) {
 		c.raw.Close()
 	}
