@@ -921,7 +921,7 @@ curl -s -X POST http://127.0.0.1:8081/portal/enter -H 'Content-Type: application
    - 进服票据握手的会话：`EnterGame` 只装载、不创建。没有档、或者有档而没建成，答 `enter_need_create`，什么都不写；客户端发
      `EnterCreate{name}`：名字先过档案模块的规则（enter 与 profile 的联动，不合规在建档之前被拒），然后建档，名字、首次初始化与
      “建成了”的标记一笔事务。再发 `EnterGame`，这一次 `first=true`。已经建成的再发新建答 `enter_created`，名字不变。
-5. **初始化之后**：World 计数只投递；请求已过期则答 `login_timeout`，不通知。否则普通地图先落位再 `Join`，CellWorld 直接 `Join`。落位或 `Join` 失败按原约定只告警。模块随后执行进入后钩子，最后 demo 投递登录公告，两条加载路径相同。
+5. **初始化之后**：World 计数只投递；请求已过期则答 `login_timeout`，不通知。否则普通地图先落位再 `Join`，保留原有拒绝码与普通视野失败的告警行为。分区场景直接按已认证连接进场；Base 未准入、旧连接或视野未接好都不答登录成功，也不发进入后通知。只有放置成功（或普通图允许的告警）才执行进入后钩子并投递登录公告。
 
 写闸门（`PlayerOwners.AdmitMessage`）原来只豁免 `EnterGame`，现在也豁免 `EnterCreate`：新号在建成之前，它是第一条要装载 Player 的消息。
 豁免不建立驻留记录，记录仍然只由端点里的 `Serve` 在核对归属之后建立。

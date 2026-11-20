@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
@@ -91,6 +92,37 @@ type sceneJoiner interface {
 	// view in force (clamped and quantized by the scene's interest policy).
 	SetView(playerID int64, view policy.ObserverView) (policy.ObserverView, error)
 	Leave(ctx context.Context, subjectID int64)
+}
+
+// Ordinary maps keep their original host contract. A partition must never fall back
+// to player-ID-only operations if its connection-aware wiring is incomplete.
+type connectionScene interface {
+	JoinConnection(context.Context, *player.Player, spatial.Point, gateway.Session) error
+	ReadyConnection(int64, gateway.Session) error
+	SetViewConnection(int64, gateway.Session, policy.ObserverView) (policy.ObserverView, error)
+}
+type ordinaryConnections struct{ sceneJoiner }
+
+func (o ordinaryConnections) JoinConnection(ctx context.Context, p *player.Player, at spatial.Point, _ gateway.Session) error {
+	return o.Join(ctx, p, at)
+}
+func (o ordinaryConnections) ReadyConnection(id int64, _ gateway.Session) error { return o.Ready(id) }
+func (o ordinaryConnections) SetViewConnection(id int64, _ gateway.Session, v policy.ObserverView) (policy.ObserverView, error) {
+	return o.SetView(id, v)
+}
+func (controller *Controller) clientScene() (connectionScene, error) {
+	scene, err := controller.Scene()
+	if err != nil {
+		return nil, err
+	}
+	if controller.Partition() == nil {
+		return ordinaryConnections{scene}, nil
+	}
+	c, ok := scene.(connectionScene)
+	if !ok {
+		return nil, errors.New("scene: partition has no connection-aware scene host")
+	}
+	return c, nil
 }
 
 // playerOwners 是端点用到的那部分驻留表：登录把绑定在本服的玩家接入本进程服务，赠礼取本进程 sid。

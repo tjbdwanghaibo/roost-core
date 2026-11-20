@@ -31,6 +31,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -75,6 +76,9 @@ type partitionRuntime struct {
 	scene     *sceneentity.Scene
 	bridge    *Scene
 	access    *coreentity.ManagerAccess
+	// Only populated by the dedicated Gate deployment. A missing method on a request
+	// session must never select the trusted, unbound Gate path on embedded TCP.
+	gateIngress *gateway.GameIngress
 
 	mirrors *policy.Mirrors[cellworld.EntityState]
 	// terrain 是可编辑地形的副本端点（terrain_partition.go：Ghost 带推送、邻格玩家可见）；没有地形时为 nil。
@@ -135,7 +139,14 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		return nil, errors.New("partition: nats client is unavailable")
 	}
 	rt := &partitionRuntime{config: config, grid: grid, sid: identity.Sid, scene: area, bridge: bridge, access: access}
+	var sessionActive func(base int64, connection string) bool
 	if transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && transport != nil {
+		rt.gateIngress, _ = transport.PlayerRuntime.(*gateway.GameIngress)
+		if tcp := transport.TCPRuntime; tcp != nil {
+			sessionActive = func(base int64, connection string) bool {
+				return tcp.ConnectionActive(coreentity.GetUniqueIDFromEntityID(base), connection)
+			}
+		}
 		rt.push = func(ctx context.Context, playerID int64, msgID uint32, message any) error {
 			return transport.PushPlayer(ctx, playerID, msgID, message)
 		}
@@ -158,6 +169,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		ViewRadius: config.ViewRadius, WakeRadius: config.WakeRadius, IdlePeriod: config.IdlePeriod,
 		MaxSpeed: config.MaxSpeed, LeaseTimeout: config.LeaseTimeout, WritebackEvery: config.WritebackEvery,
 		PlayerEntity: partitionIDs.FromActor,
+		SessionActive: sessionActive, ReconnectGrace: config.ReconnectGrace, ReuseSavedPosition: true,
 		Mirrors: rt.mirrors, Interest: bridge.interest,
 		Session:     coreentity.GetUniqueIDFromEntityID,
 		MirrorKind:  partitionMirrorKind,
@@ -258,6 +270,11 @@ func (s *Service) InstallNestHandlers(engine corenest.HandlerRegistrar) error {
 func (rt *partitionRuntime) stop(ctx context.Context) error {
 	if rt == nil {
 		return nil
+	}
+	// Disconnect released receivers, not the grace-period Bases. Fence new
+	// admissions and formally retire them while the Node can still send Leave.
+	if rt.bridge != nil && rt.bridge.partition.Load() == rt {
+		if err := rt.bridge.stopPartitionSessions(ctx, rt); err != nil { return err }
 	}
 	// 跨格编辑先停（在途的执行要 Nest），地形副本再停：它们经 Node 发消息、往场景的 Manager 登记副本。
 	rt.relay.stop()
@@ -480,6 +497,84 @@ var partitionIDs = cellworldhost.PlayerIDs{BaseKind:player.EntityKindPlayer}
 
 func partitionPlayer(playerID int64) (int64, error) { return partitionIDs.Base(playerID) }
 
+// gateConnection validates an actual Game ingress binding. The dedicated Gate keeps
+// its previous admission, ready and departure lifecycle; it does not bind a BaseSession.
+// An embedded runtime (including an unidentified request on one) never takes this path.
+func (rt *partitionRuntime) gateConnection(playerID int64, s gateway.Session) bool {
+	if rt.gateIngress == nil || s == nil {
+		return false
+	}
+	c, ok := s.(interface{ ConnectionID() string })
+	p := s.Principal()
+	if !ok || !p.Authenticated() || p.PlayerID != playerID {
+		return false
+	}
+	b, _, ok := rt.gateIngress.SessionReceiver(p.SessionID)
+	return ok && b.PlayerID == playerID && b.SessionID == p.SessionID && b.ConnectionNonce == c.ConnectionID() && rt.gateIngress.ConnectionActive(playerID, b.ConnectionNonce)
+}
+
+// admitConnection accepts a full Player EntityID (the scene subject). Admission,
+// choice of position and creation/reuse of the entry share the Player's strict transaction.
+func (rt *partitionRuntime) admitConnection(ctx context.Context, subjectID int64, s gateway.Session) (cellworld.BaseState, error) {
+	actor, err := partitionIDs.Actor(subjectID)
+	if err != nil {
+		return cellworld.BaseState{}, err
+	}
+	unique := coreentity.GetUniqueIDFromEntityID(subjectID)
+	spawn := rt.config.PlayerSpawn(unique, rt.grid.Bounds())
+	if rt.gateIngress != nil {
+		if !rt.gateConnection(unique, s) {
+			return cellworld.BaseState{}, cellworld.ErrStaleSession
+		}
+		return rt.node.EnsureEntered(ctx, subjectID, actor, spawn, rt.config.PlayerHP)
+	}
+	id, err := cellworldhost.ConnectionSession(unique, s)
+	if err != nil {
+		return cellworld.BaseState{}, err
+	}
+	return rt.node.AdmitSession(ctx, subjectID, actor, spawn, rt.config.PlayerHP, id)
+}
+
+// Closing the transport only posts the exact identity. The Base beat reconciles a
+// dropped/rolled-back event using the same local table as command admission.
+func (rt *partitionRuntime) closedConnection(ev gateway.TCPSessionClosed) {
+	if rt.gateIngress != nil || ev.ConnectionID == "" || ev.SessionID == "" {
+		return
+	}
+	base, err := partitionPlayer(ev.PlayerID)
+	if err != nil || (rt.access != nil && !rt.access.IsLoaded(base)) {
+		return
+	}
+	if err := rt.node.DisconnectSession(context.Background(), base, ev.SessionID, ev.ConnectionID); err != nil && !errors.Is(err, cellworld.ErrNodeStopping) {
+		slog.Debug("partition: close not queued; Base beat will reconcile", "player_id", ev.PlayerID, "err", err)
+	}
+}
+
+func (rt *partitionRuntime) MoveConnection(ctx context.Context, playerID int64, s gateway.Session, vx, vy int64) error {
+	if rt.gateIngress != nil {
+		if !rt.gateConnection(playerID, s) { return cellworld.ErrStaleSession }
+		return rt.MoveIntent(ctx, playerID, vx, vy)
+	}
+	id, err := cellworldhost.ConnectionSession(playerID, s)
+	if err != nil { return err }
+	base, err := partitionPlayer(playerID)
+	if err != nil { return err }
+	return rt.node.MoveSession(ctx, base, id, vx, vy)
+}
+
+func (rt *partitionRuntime) AttackConnection(ctx context.Context, playerID int64, s gateway.Session, target, requestID int64) (cellworld.HitID, error) {
+	if rt.gateIngress != nil {
+		if !rt.gateConnection(playerID, s) { return cellworld.HitID{}, cellworld.ErrStaleSession }
+		return rt.AttackTarget(ctx, playerID, target, requestID)
+	}
+	id, err := cellworldhost.ConnectionSession(playerID, s)
+	if err != nil { return cellworld.HitID{}, err }
+	base, err := partitionPlayer(playerID)
+	if err != nil { return cellworld.HitID{}, err }
+	if target == 0 { return cellworld.HitID{}, apperrors.ErrPartitionNotEntered }
+	return rt.node.AttackSession(ctx, base, id, target, rt.config.AttackDamage, requestID)
+}
+
 // MoveIntent forwards a velocity to the cell that owns the player now (one transaction on the Player).
 func (rt *partitionRuntime) MoveIntent(ctx context.Context, playerID, vx, vy int64) error {
 	entityID, err := partitionPlayer(playerID)
@@ -501,41 +596,6 @@ func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target, 
 		return cellworld.HitID{}, apperrors.ErrPartitionNotEntered
 	}
 	return rt.node.AttackWithRequest(ctx, entityID, target, rt.config.AttackDamage, requestID)
-}
-
-// enter 让玩家以自己的 CellPlayer 进入分区场景（场景桥的 Join 在会话开好之后调）。已经在里面（重连）时不动：
-// Base 的 Interest 里仍有他，新会话由 Resubscribe 拿到快照。位置取 Player 的快照（在世界里时），否则取 spawn。
-func (rt *partitionRuntime) enter(ctx context.Context, playerEntity int64) error {
-	st, err := rt.node.BaseStateOf(ctx, playerEntity)
-	if err != nil {
-		return err
-	}
-	if st.InWorld {
-		return nil
-	}
-	actor, err := partitionIDs.Actor(playerEntity)
-	if err != nil {
-		return err
-	}
-	return rt.node.Enter(ctx, playerEntity, actor, rt.entryPoint(st, playerEntity), rt.config.PlayerHP)
-}
-
-// entryPoint 是玩家此刻在分区场景里的位置：已在世界里（重连）或有保存的位置时取 Base 记下的位置，否则取他的进入点
-// （出生点，配了 spawn_spread 时是出生点周围按玩家号分散的一点，settings.ScenePartition.PlayerSpawn）。
-func (rt *partitionRuntime) entryPoint(st cellworld.BaseState, playerEntity int64) spatial.Point {
-	if pos := st.Pos(); pos != (spatial.Point{}) && rt.grid.Bounds().Contains(pos) {
-		return pos
-	}
-	return rt.config.PlayerSpawn(coreentity.GetUniqueIDFromEntityID(playerEntity), rt.grid.Bounds())
-}
-
-// terrainViewpoint 是玩家进场时的地形视点（之后跟着 witness 走）；读不到 Base 状态时用出生点。
-func (rt *partitionRuntime) terrainViewpoint(ctx context.Context, playerEntity int64) spatial.Point {
-	st, err := rt.node.BaseStateOf(ctx, playerEntity)
-	if err != nil {
-		return rt.config.PlayerSpawn(coreentity.GetUniqueIDFromEntityID(playerEntity), rt.grid.Bounds())
-	}
-	return rt.entryPoint(st, playerEntity)
 }
 
 // leave 让玩家离开分区场景（尽力而为：消息丢了由 CellPlayer 的租约兜底离场）。

@@ -18,13 +18,13 @@ func (controller *Controller) HandleSceneReady(context *playeraccess.Context, re
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("scene_ready endpoint: context and request are required")
 	}
-	scene, err := controller.Scene()
+	scene, err := controller.clientScene()
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		return &pb.SceneReadyResponse{Code: code, Reason: reason}, nil
 	}
-	if err := scene.Ready(context.PlayerID); err != nil {
-		code, reason := errcode.ClientError(err)
+	if err := scene.ReadyConnection(context.PlayerID, context.Session); err != nil {
+		code, reason := errcode.ClientError(partitionSessionError(err))
 		slog.Warn("scene_ready: session not released", "player_id", context.PlayerID, "err", err)
 		return &pb.SceneReadyResponse{Code: code, Reason: reason}, nil
 	}

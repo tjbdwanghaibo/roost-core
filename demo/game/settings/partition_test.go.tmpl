@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -16,6 +18,17 @@ func validPartition() ScenePartition {
 		SpawnX: 2900, SpawnY: 1500, PlayerHP: 100,
 		Spawns: map[string]PartitionSpawn{"a": {X: 100, Y: 100, Count: 3, Spread: 20, HP: 100}},
 		Team:   PartitionTeam{SnapshotEvery: time.Second, ResyncEvery: 10 * time.Second},
+	}
+}
+
+func TestPartitionReconnectGraceAllowsImmediateLeave(t *testing.T) {
+	for _, tc := range []struct { value string; want time.Duration }{{"", 30*time.Second}, {"0s", 0}, {"750ms", 750*time.Millisecond}} {
+		v := viper.New()
+		if tc.value != "" { v.Set("scene.partition.reconnect_grace", tc.value) }
+		var config struct { Scene struct { Partition ScenePartition `config:"partition"` } `config:"scene"` }
+		if err := app.LoadConfig(v, &config); err != nil || config.Scene.Partition.ReconnectGrace != tc.want {
+			t.Fatalf("grace %q: got %s, want %s, err %v", tc.value, config.Scene.Partition.ReconnectGrace, tc.want, err)
+		}
 	}
 }
 
@@ -40,6 +53,7 @@ func TestPartitionConfigIsCheckedAtLoad(t *testing.T) {
 		{"idle period not a tier", func(p *ScenePartition) { p.IdlePeriod = 300 * time.Millisecond }, "idle_period"},
 		{"spawn outside the world", func(p *ScenePartition) { p.Spawns["a"] = PartitionSpawn{X: 5990, Y: 10, Count: 2, Spread: 20, HP: 1} }, "outside the world"},
 		{"monster faster than max speed", func(p *ScenePartition) { p.Spawns["a"] = PartitionSpawn{X: 10, Y: 10, Count: 1, VX: 400, HP: 1} }, "exceeds max_speed"},
+		{"negative reconnect grace", func(p *ScenePartition) { p.ReconnectGrace = -time.Second }, "reconnect_grace"},
 		{"bad world name", func(p *ScenePartition) { p.World = "a.b" }, "world"},
 		{"team snapshots faster than the Base beat", func(p *ScenePartition) { p.Team.SnapshotEvery = 50 * time.Millisecond }, "team.snapshot_every"},
 		{"team snapshots off the Base beat", func(p *ScenePartition) { p.Team.SnapshotEvery = 250 * time.Millisecond }, "team.snapshot_every"},

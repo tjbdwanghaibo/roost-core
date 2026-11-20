@@ -1,0 +1,498 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"golang.org/x/sync/semaphore"
+
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/cellworldhost"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+type sceneConnectionTable interface{ ConnectionActive(int64, string) bool }
+
+// Distinguish deployments, not which methods a particular request happened to expose.
+func partitionPhysicalTransport(p scenePusher) bool {
+	if tcp, ok := p.(*accessplayertcp.Runtime); ok {
+		_, gate := tcp.PlayerRuntime.(*gateway.GameIngress)
+		return !gate
+	}
+	_, ok := p.(sceneConnectionTable)
+	return ok
+}
+
+func (b *Scene) physicalPartition() bool {
+	rt := b.partition.Load()
+	return rt != nil && rt.gateIngress == nil && partitionPhysicalTransport(b.sessions)
+}
+
+// Keep the manager's player-keyed broadcast and slow-consumer classifications. A failed
+// old broadcast cannot close the player's replacement sockets. If the manager actually
+// loses this epoch, lostPartitionSession closes its specific owner's socket instead.
+type partitionFrameSender struct{ scenePusher }
+
+func (partitionFrameSender) CloseSessions(int64, error) int { return 0 }
+
+// One short-lived slot per player WITH an operation in flight. Joins may return from
+// Nest in either order; high survives even removal of the newer local member until all
+// overlapping operations finish. Outside that window AdmitSession enforces the high
+// watermark on the authoritative Player. A formal leave serializes with admissions of
+// this player only, never holding transitions while waiting on Nest or acquiring this lock.
+type partitionSceneOp struct {
+	formal     *semaphore.Weighted // one permit per Join, all permits for a leave; waits honor ctx
+	leftBefore uint64              // a Join reserved before a completed formal leave may not enter later
+	refs       int
+	high       uint64 // greatest committed admission observed, not last handler to return
+	published  uint64 // order of equal-admission (or legacy) joins
+}
+
+const partitionAllJoins = 1 << 32
+
+func (b *Scene) partitionOp(id int64) (*partitionSceneOp, uint64, func()) {
+	b.transitions.Lock()
+	if b.partitionOps == nil {
+		b.partitionOps = make(map[int64]*partitionSceneOp)
+	}
+	op := b.partitionOps[id]
+	if op == nil {
+		op = &partitionSceneOp{formal: semaphore.NewWeighted(partitionAllJoins)}
+		b.partitionOps[id] = op
+	}
+	op.refs++
+	b.mu.Lock()
+	b.joins++
+	generation := b.joins
+	b.mu.Unlock()
+	b.transitions.Unlock()
+	return op, generation, func() {
+		b.transitions.Lock()
+		if op.refs--; op.refs == 0 {
+			delete(b.partitionOps, id)
+		}
+		b.transitions.Unlock()
+	}
+}
+
+type sceneAdmit func(context.Context, int64, gateway.Session) (cellworld.BaseState, error)
+
+func (b *Scene) JoinConnection(ctx context.Context, subject *player.Player, at spatial.Point, s gateway.Session) error {
+	if b == nil || b.manager == nil || subject == nil {
+		return errors.New("scene: join needs a running scene and a player")
+	}
+	rt := b.partition.Load()
+	if rt == nil {
+		return b.Join(ctx, subject, at)
+	}
+	unique := playerOf(subject.ID())
+	var expected cellworld.BaseSession
+	if rt.gateIngress != nil {
+		if !rt.gateConnection(unique, s) {
+			return cellworld.ErrStaleSession
+		}
+	} else {
+		var err error
+		expected, err = cellworldhost.ConnectionSession(unique, s)
+		if err != nil {
+			return err
+		}
+	}
+	return b.admitPartitionView(ctx, subject, s, expected, rt.admitConnection)
+}
+
+// Only the trusted, non-network Join API on an internal host reaches this adapter.
+func (b *Scene) joinInternalPartition(ctx context.Context, rt *partitionRuntime, subject *player.Player) error {
+	return b.admitPartitionView(ctx, subject, nil, cellworld.BaseSession{}, func(ctx context.Context, id int64, _ gateway.Session) (cellworld.BaseState, error) {
+		actor, err := partitionIDs.Actor(id)
+		if err != nil {
+			return cellworld.BaseState{}, err
+		}
+		return rt.node.EnsureEntered(ctx, id, actor, rt.config.PlayerSpawn(playerOf(id), rt.grid.Bounds()), rt.config.PlayerHP)
+	})
+}
+
+func (b *Scene) admitPartitionView(ctx context.Context, p *player.Player, socket gateway.Session, expected cellworld.BaseSession, admit sceneAdmit) error {
+	id := p.ID()
+	op, generation, done := b.partitionOp(id)
+	defer done()
+	if ctx == nil {
+		return errors.New("scene: missing join context")
+	}
+	if err := op.formal.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer op.formal.Release(1)
+	if generation <= op.leftBefore {
+		return cellworld.ErrStaleSession
+	}
+	b.transitions.Lock()
+	stopping := b.partitionStopping
+	b.transitions.Unlock()
+	if stopping {
+		return apperrors.ErrSceneClosing
+	}
+	st, err := admit(ctx, id, socket) // never hold the scene lock across a Nest request
+	if err != nil {
+		// A cancelled wait does not prove cancellation of the strict transaction.
+		if expected.Admission != 0 && !errors.Is(err, cellworld.ErrStaleSession) {
+			b.transitions.Lock()
+			b.reclaimUninstalledLocked(id, socket, expected, err)
+			b.transitions.Unlock()
+		}
+		return err
+	}
+	b.transitions.Lock()
+	defer b.transitions.Unlock()
+	b.mu.Lock()
+	closed, previous := b.closed, b.members[id]
+	b.mu.Unlock()
+	if closed || b.partitionStopping {
+		return apperrors.ErrSceneClosing
+	}
+	if expected.Admission != 0 && (st.Session.BaseSession != expected || st.Session.OfflineAt != 0) {
+		return cellworld.ErrStaleSession
+	}
+	admission := expected.Admission
+	if admission < max(op.high, previous.connection.Admission) || (admission == op.high && generation < op.published) {
+		return cellworld.ErrStaleSession
+	}
+	op.high, op.published = admission, generation
+	member := sceneMember{generation: generation, own: p, socket: socket, connection: expected}
+	// A close may have arrived after strict commit but before local publication. It
+	// supersedes the previous member even though no new session should be opened.
+	if !b.memberOnline(id, member) || (socket != nil && admission == 0 && !b.partition.Load().gateConnection(playerOf(id), socket)) {
+		b.detachPartitionLocked(id)
+		return cellworld.ErrStaleSession
+	}
+	if err := ctx.Err(); err != nil {
+		if previous.connection != expected {
+			b.detachPartitionLocked(id)
+		}
+		b.reclaimUninstalledLocked(id, socket, expected, err)
+		return err
+	}
+	b.sweepLocked()
+	sid := entitysync.SessionID(playerOf(id))
+	err = b.manager.HoldSession(sid) // even with both sockets live: a new epoch, all snapshots
+	reopened := errors.Is(err, entitysync.ErrSessionUnknown)
+	if reopened {
+		err = b.manager.OpenHeldSession(sid)
+	}
+	if err != nil && !entitysync.SessionOpenRetryable(err) {
+		b.detachPartitionLocked(id)
+		b.reclaimUninstalledLocked(id, socket, expected, err)
+		return fmt.Errorf("scene: open held session for %d: %w", id, err)
+	}
+	member.opening = err != nil
+	b.mu.Lock()
+	b.members[id] = member
+	b.mu.Unlock()
+	b.terrain.watch(playerOf(id), st.Pos())
+	if member.opening {
+		b.openLater(id, generation, 2)
+		return nil
+	}
+	if reopened {
+		b.interest.Resubscribe(playerOf(id))
+		if b.terrain != nil {
+			b.terrain.interest.Resubscribe(playerOf(id))
+		}
+	}
+	if err := b.bindPartitionSelf(p, generation); err != nil {
+		b.failedPartitionWireLocked(id, member, err)
+		return fmt.Errorf("scene: bind partition self: %w", err)
+	}
+	return nil
+}
+
+// A cancelled caller may retry on the same live socket without a second Entry. Until
+// the view is installed, checkPartitionCommand rejects writes. If no retry installs
+// it within this window, close this socket ONLY; the close event / Base beat fences
+// even an admission that committed after the caller stopped waiting.
+const partitionAdmissionRetryWindow = 5 * time.Second
+
+func (b *Scene) reclaimUninstalledLocked(id int64, socket gateway.Session, expected cellworld.BaseSession, cause error) {
+	if expected.Admission == 0 || socket == nil || b.failedAdmissions[expected] {
+		return
+	}
+	if b.failedAdmissions == nil {
+		b.failedAdmissions = make(map[cellworld.BaseSession]bool)
+	}
+	b.failedAdmissions[expected] = true
+	reclaim := func() {
+		// If a retry was already awaiting strict commit when the window elapsed,
+		// let its bounded request finish before deciding whether it installed a view.
+		op, _, done := b.partitionOp(id)
+		defer done()
+		_ = op.formal.Acquire(context.Background(), partitionAllJoins)
+		defer op.formal.Release(partitionAllJoins)
+		b.transitions.Lock()
+		defer b.transitions.Unlock()
+		delete(b.failedAdmissions, expected)
+		b.mu.Lock()
+		retained := b.members[id].connection == expected
+		b.mu.Unlock()
+		if !retained {
+			_ = socket.Close(cause)
+		}
+	}
+	if b.after != nil {
+		b.after(partitionAdmissionRetryWindow, reclaim)
+	} else {
+		time.AfterFunc(partitionAdmissionRetryWindow, reclaim)
+	}
+}
+
+func (b *Scene) failedPartitionWireLocked(id int64, m sceneMember, err error) {
+	slog.Warn("scene: partition view not installed", "player_id", playerOf(id), "err", err)
+	if m.connection.Admission != 0 {
+		b.detachPartitionLocked(id)
+		b.reclaimUninstalledLocked(id, m.socket, m.connection, err)
+	}
+}
+
+// Move/Attack use this local installation fence before their transaction-level Base
+// owner check. In particular a committed but unacknowledged Join is not a writer.
+func (b *Scene) checkPartitionCommand(unique int64, socket gateway.Session) error {
+	if b == nil {
+		return cellworld.ErrStaleSession
+	}
+	rt := b.partition.Load()
+	if rt == nil {
+		return cellworld.ErrStaleSession
+	}
+	b.transitions.Lock()
+	defer b.transitions.Unlock()
+	return b.checkConnectionLocked(rt, unique, socket)
+}
+
+func (b *Scene) memberOnline(id int64, m sceneMember) bool {
+	if m.connection.Admission != 0 {
+		t, ok := b.sessions.(sceneConnectionTable)
+		return ok && t.ConnectionActive(playerOf(id), m.connection.ConnectionID)
+	}
+	return b.sessions.ActiveSessions(playerOf(id)) != 0
+}
+
+// Both Ready and LOD compare and apply under the same lock. No successful check can
+// apply to a replacement member. Gate retains its pre-existing authenticated binding
+// semantics (no locally comparable physical admission across Gate instances).
+func (b *Scene) checkConnectionLocked(rt *partitionRuntime, unique int64, socket gateway.Session) error {
+	id, err := partitionIDs.Base(unique)
+	if err != nil {
+		return cellworld.ErrStaleSession
+	}
+	b.mu.Lock()
+	m, present := b.members[id]
+	closed := b.closed
+	b.mu.Unlock()
+	if !present || closed || b.partitionStopping {
+		return cellworld.ErrStaleSession
+	}
+	if rt.gateIngress != nil {
+		if !rt.gateConnection(unique, socket) {
+			return cellworld.ErrStaleSession
+		}
+		return nil
+	}
+	s, err := cellworldhost.ConnectionSession(unique, socket)
+	if err != nil || m.connection != s || !b.memberOnline(id, m) {
+		return cellworld.ErrStaleSession
+	}
+	return nil
+}
+
+func (b *Scene) ReadyConnection(playerID int64, s gateway.Session) error {
+	if b == nil || b.manager == nil {
+		return errors.New("scene: not started")
+	}
+	rt := b.partition.Load()
+	if rt == nil {
+		return b.Ready(playerID)
+	}
+	b.transitions.Lock()
+	defer b.transitions.Unlock()
+	if err := b.checkConnectionLocked(rt, playerID, s); err != nil {
+		return err
+	}
+	return b.readyLocked(playerID)
+}
+
+func (b *Scene) SetViewConnection(playerID int64, s gateway.Session, view policy.ObserverView) (policy.ObserverView, error) {
+	if b == nil || b.interest == nil {
+		return policy.ObserverView{}, errors.New("scene: not started")
+	}
+	rt := b.partition.Load()
+	if rt == nil {
+		return b.SetView(playerID, view)
+	}
+	b.transitions.Lock()
+	defer b.transitions.Unlock()
+	if err := b.checkConnectionLocked(rt, playerID, s); err != nil {
+		return policy.ObserverView{}, err
+	}
+	return b.interest.SetObserverView(playerID, view)
+}
+
+// Drop only the receiver, not the CellPlayer mirror or witness bookkeeping. Closing
+// the manager lifetime releases all its subscriptions; the Node alone removes the
+// spatial subject from other players' views on a formal exit or grace expiry.
+func (b *Scene) detachPartitionLocked(id int64) {
+	b.mu.Lock()
+	_, present := b.members[id]
+	delete(b.members, id)
+	b.mu.Unlock()
+	if !present {
+		return
+	}
+	b.terrain.unwatch(playerOf(id))
+	b.unbindPartitionSelf(id)
+	b.manager.CloseSession(entitysync.SessionID(playerOf(id)))
+}
+
+func (b *Scene) disconnectPartitionEvent(ev gateway.TCPSessionClosed) {
+	id, err := partitionIDs.Base(ev.PlayerID)
+	if err != nil || ev.SessionID == "" || ev.ConnectionID == "" {
+		return
+	}
+	b.transitions.Lock()
+	defer b.transitions.Unlock()
+	b.mu.Lock()
+	m := b.members[id]
+	b.mu.Unlock()
+	if m.connection.SessionID == ev.SessionID && m.connection.ConnectionID == ev.ConnectionID {
+		b.detachPartitionLocked(id)
+	}
+}
+
+// Notification may run long after this player key was reopened. The manager only
+// loses a session that could send. A held/opening Join cannot be its victim; for a
+// ready Join, ReadySession is an idempotent presence probe (never releases a hold).
+func (b *Scene) lostPartitionSession(unique int64, cause error) {
+	id, err := partitionIDs.Base(unique)
+	if err != nil {
+		return
+	}
+	b.transitions.Lock()
+	defer b.transitions.Unlock()
+	b.mu.Lock()
+	m, present := b.members[id]
+	b.mu.Unlock()
+	if !present || !m.ready || m.opening || m.socket == nil {
+		return
+	}
+	if !errors.Is(b.manager.ReadySession(entitysync.SessionID(unique)), entitysync.ErrSessionUnknown) {
+		return
+	}
+	b.detachPartitionLocked(id)
+	_ = m.socket.Close(cause) // the next socket may already be authenticated, but must not be closed
+}
+
+func (b *Scene) disconnectedLocked(id int64, member sceneMember) {
+	rt := b.partition.Load()
+	switch {
+	case rt == nil:
+		b.leaveLocked(id)
+	case member.connection.Admission != 0:
+		b.detachPartitionLocked(id)
+	default:
+		// Legacy Gate/internal mode has no Base grace machinery: preserve its formal
+		// departure on last disconnect, but perform the Nest request outside transitions.
+		b.runLater(func() { b.leavePartition(context.Background(), id, rt, member.generation) })
+	}
+}
+
+// The transport's close queue is bounded. A motionless disconnected player's self
+// view must not remain registered forever just because nobody else is logging in.
+func (b *Scene) reconcilePartitionViews(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !b.physicalPartition() {
+				continue
+			}
+			b.transitions.Lock()
+			b.mu.Lock()
+			closed := b.closed
+			b.mu.Unlock()
+			if !closed {
+				b.sweepLocked()
+			}
+			b.transitions.Unlock()
+		}
+	}
+}
+
+// Call before Node.Drain on normal shutdown. Detached grace-period Bases are loaded
+// Players, not scene members: include them without retaining a historical ID table.
+func (b *Scene) stopPartitionSessions(ctx context.Context, rt *partitionRuntime) error {
+	b.transitions.Lock()
+	b.partitionStopping = true
+	ids := make(map[int64]bool)
+	for id := range b.partitionOps {
+		ids[id] = true
+	}
+	b.mu.Lock()
+	for id := range b.members {
+		ids[id] = true
+	}
+	b.mu.Unlock()
+	b.transitions.Unlock()
+	rt.access.Range(func(e coreentity.IThreadSafeEntity) bool {
+		if p, ok := e.(*player.Player); ok {
+			ids[p.ID()] = true
+		}
+		return true
+	})
+	for id := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := b.formalPartitionExit(ctx, id, 0, func() error { return rt.node.Leave(ctx, id) }); err != nil && !errors.Is(err, cellworld.ErrNotInWorld) {
+			return fmt.Errorf("scene: formal shutdown leave of %d: %w", id, err)
+		}
+	}
+	return ctx.Err()
+}
+
+func (b *Scene) leavePartition(ctx context.Context, id int64, rt *partitionRuntime, generation uint64) {
+	_ = b.formalPartitionExit(ctx, id, generation, func() error { rt.leave(ctx, id); return nil })
+}
+
+func (b *Scene) formalPartitionExit(ctx context.Context, id int64, generation uint64, leave func() error) error {
+	if ctx == nil { ctx = context.Background() }
+	op, turn, done := b.partitionOp(id)
+	defer done()
+	if err := op.formal.Acquire(ctx, partitionAllJoins); err != nil {
+		return err
+	}
+	defer op.formal.Release(partitionAllJoins)
+	b.transitions.Lock()
+	if generation != 0 {
+		member, current := b.memberLocked(id, generation)
+		if !current || b.memberOnline(id, member) {
+			b.transitions.Unlock()
+			return nil
+		}
+	}
+	op.leftBefore = turn
+	b.detachPartitionLocked(id)
+	b.transitions.Unlock()
+	// Also leave a Base whose receiver was already detached and is still in grace.
+	return leave()
+}

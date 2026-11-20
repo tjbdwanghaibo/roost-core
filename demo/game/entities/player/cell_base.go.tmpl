@@ -18,20 +18,35 @@ import (
 // intent, the attack sequence, the watchdog times and the snapshot the
 // CellPlayer writes back — is cellworld.BaseState, held in PlayerDao's Cell*
 // fields so a handler or beat that rolls back restores it. The mapping
-// (ReadBase / WriteBase), the death receipts and the beat are the cellworld
+// (ReadSessionBase / WriteSessionBase), the death receipts and the beat are the cellworld
 // module's (game/modules/cellworldhost); what stays here is the demo's own:
 // which fields the Player declares, the panel from its attributes and the
 // team copy. The watchdog and the lease renewal are this
 // player's own beat, "cell.base" (Node.BaseBeat).
 
+// The existing demo fields leave three DAO bits. Keep the two opaque identifiers
+// together, with no delimiter or parsing ambiguity; replace (never mutate) on change.
+type partitionBaseDao struct{ *db.PlayerDao }
+
+func (d partitionBaseDao) SocketIDs() (string, string) {
+	sid, _ := d.GetCellSocketIDs(0)
+	nonce, _ := d.GetCellSocketIDs(1)
+	return sid, nonce
+}
+
+func (d partitionBaseDao) SetSocketIDs(sid, nonce string) {
+	if sid == "" && nonce == "" { d.SetCellSocketIDsAll(nil); return }
+	d.SetCellSocketIDsAll([]string{sid, nonce})
+}
+
 // BaseState / SetBaseState / StartBase make the player a cellworld.BasePlayer.
 // Only under the player's own Nest lock.
 func (player *Player) BaseState() cellworld.BaseState {
-	return cellworldhost.ReadBase(player.dao, cellworldhost.SceneID())
+	return cellworldhost.ReadSessionBase(partitionBaseDao{player.dao}, cellworldhost.SceneID())
 }
 
 func (player *Player) SetBaseState(st cellworld.BaseState) {
-	cellworldhost.WriteBase(player.dao, st, cellworldhost.SceneID())
+	cellworldhost.WriteSessionBase(partitionBaseDao{player.dao}, st, cellworldhost.SceneID())
 }
 
 // CellPanel is the battle panel the player's growth gives now — the Final
@@ -63,6 +78,13 @@ func (player *Player) StartBase() error {
 		return errors.New("player: this process runs no partitioned scene")
 	}
 	return player.MapComp().CellBaseBeat().Start()
+}
+
+// Stop only the Base routing beat, not the host or registration: a later entry restarts it.
+func (player *Player) StopBase() {
+	if r := player.MapComp().CellBaseBeat(); r != nil {
+		r.Stop()
+	}
 }
 
 // TeamID is the partitioned scene's team this player is in (0 = none): the

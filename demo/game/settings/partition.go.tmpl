@@ -40,6 +40,7 @@ type ScenePartition struct {
 	// CellPlayer 就离场。
 	WritebackEvery time.Duration `config:"writeback_every" default:"5s" min:"100ms" help:"how often a player's CellPlayer writes its HP and position back to the Player (also on leaving)"`
 	LeaseTimeout   time.Duration `config:"lease_timeout" default:"3s" min:"1s" help:"a CellPlayer whose Base has not renewed its lease for this long leaves the scene"`
+	ReconnectGrace time.Duration `config:"reconnect_grace" default:"30s" min:"0s" help:"how long a disconnected partition player stays in the scene; 0s takes the normal leave path immediately"`
 	// MaxSpeed 是 MoveIntent 速度每个分量的上限；AttackDamage 是 AttackTarget 的固定伤害（D7 = A：技能 / Buff 不跨格）。
 	MaxSpeed     int64 `config:"max_speed" default:"300" min:"1" help:"largest move-intent speed per axis, units per second"`
 	AttackDamage int32 `config:"attack_damage" default:"10" min:"1" help:"the fixed damage of one attack_target"`
@@ -125,6 +126,9 @@ func (p ScenePartition) ValidateConfig(bool) error {
 	}
 	if t := p.Team; t.ResyncEvery <= t.SnapshotEvery {
 		bad("team.resync_every %v must exceed team.snapshot_every %v", t.ResyncEvery, t.SnapshotEvery)
+	}
+	if p.ReconnectGrace < 0 {
+		bad("reconnect_grace must not be negative")
 	}
 	if p.LeaseTimeout <= 500*time.Millisecond {
 		bad("lease_timeout %v must exceed the Base's lease renewal (500ms)", p.LeaseTimeout)

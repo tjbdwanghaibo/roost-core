@@ -19,6 +19,9 @@ var ErrSceneNotPartitioned = errcode.Define(100044, "scene_not_partitioned", "th
 // has not entered the partitioned scene (yet), or whose cell is not known yet.
 var ErrPartitionNotEntered = errcode.Define(100045, "partition_not_entered", "not in the partitioned scene")
 
+// Superseded connections may not move the player, attack, or release the replacement's first frame.
+var ErrPartitionStaleSession = errcode.Define(100905, "partition_stale_session", "this connection is not the current partition session")
+
 // Client-operation numbers are independent of TCP sequence numbers and Cell hit IDs.
 var ErrAttackRequestInvalid = errcode.Define(100902, "attack_request_invalid", "attack request number must not be negative")
 var ErrAttackRequestExpired = errcode.Define(100903, "attack_request_expired", "attack request expired; original outcome is unknown")

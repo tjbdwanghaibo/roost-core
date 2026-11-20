@@ -811,7 +811,31 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
 		{write: "services/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
-	return append(append(steps, demoModuleSteps()...), demoAllianceSteps(gameService)...)
+	steps = append(steps, demoModuleSteps()...)
+	steps = append(steps, demoAllianceSteps(gameService)...)
+	// Even invisible DAO fields participate in positional PB numbering. Append the
+	// transient connection state only after *all* historical module fields exist.
+	return append(steps, demoScaffoldStep{run: appendDemoPartitionSession, why: "append private partition connection state without renumbering any published field"})
+}
+
+func appendDemoPartitionSession(root, _ string) error {
+	source, err := locateDaoStruct(root, "PlayerDao")
+	if err != nil {
+		return err
+	}
+	if source == nil {
+		return fmt.Errorf("partition: PlayerDao not found")
+	}
+	const transient = "nopersist,nosync"
+	updated, err := source.appendFields(root, []daoFieldSpec{
+		{Name: "CellSocketIDs", Type: "[]string", Store: "cell_socket_ids", Dao: transient, Comment: "[account SessionID, physical ConnectionID], or empty. Never stored or synchronized."},
+		{Name: "CellAdmission", Type: "uint64", Store: "cell_admission", Dao: transient},
+		{Name: "CellOfflineAt", Type: "int64", Store: "cell_offline_at", Dao: transient},
+	})
+	if err != nil {
+		return err
+	}
+	return writeAtomic(source.path, updated, 0o644)
 }
 
 // demoModuleSteps 是 demo 经业务模块装进来的功能。排在全部 demo 步骤之后：模块的协议号从
@@ -880,6 +904,8 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 玩家作为分区场景的 Base（cell_base.go、cell_team.go）在 Player 上监听 attribute 与 team 模块的实体事件
 		// event.AttributeChanged、event.TeamChanged：生成器登记监听时要在 game/event 里找到这两个事件，所以排在模块安装之后写。
 		{write: "game/entities/player/cell_base.go", why: "the player as its partitioned scene's Base (cellworld.BasePlayer): routing state declared in PlayerDao and mapped by the cellworld module (cellworldhost.ReadBase / WriteBase), the battle panel from the attributes, starting the cell.base beat, and its copy of its team's roster for the team panel"},
+		{write: "internal/service/game/partition_session_scene.go", why: "bind the partition's replicated scene to the admitted connection without dropping its avatar on disconnect"},
+		{write: "internal/service/game/partition_session_scene_test.go", why: "check late closes, out-of-order admission, replacement snapshots and formal leave for the partition receiver"},
 		{write: "internal/service/game/partition_attack_request_test.go", why: "exercise request-number replay and independent user actions in the generated partition endpoint"},
 		{write: "game/entities/player/cell_attack_request.go", why: "the player's durable, bounded attack admission receipts; retrying a numbered request must not issue another hit"},
 		{write: "game/entities/player/cell_base_test.go", why: "the demo's PlayerDao on the module's Base mapping: the stored snapshot position moves only with a write-back, a reloaded player enters where it was saved, a pending panel rolls back, and the death receipt, wallet and recovery survive a file WAL"},

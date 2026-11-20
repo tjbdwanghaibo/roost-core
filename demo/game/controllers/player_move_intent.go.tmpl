@@ -29,11 +29,11 @@ func (controller *Controller) HandleMoveIntent(context *playeraccess.Context, re
 		code, reason := errcode.ClientError(apperrors.ErrSceneNotPartitioned)
 		return &pb.MoveIntentResponse{Code: code, Reason: reason}, nil
 	}
-	if err := partition.MoveIntent(context.Context(), context.PlayerID, request.VX, request.VY); err != nil {
+	if err := partition.MoveConnection(context.Context(), context.PlayerID, context.Session, request.VX, request.VY); err != nil {
 		if errors.Is(err, cellworld.ErrNotInWorld) {
 			err = apperrors.ErrPartitionNotEntered
 		}
-		code, reason := errcode.ClientError(err)
+		code, reason := errcode.ClientError(partitionSessionError(err))
 		if code == errcode.CodeInternal {
 			slog.Error("move_intent failed", "player_id", context.PlayerID, "err", err)
 		}

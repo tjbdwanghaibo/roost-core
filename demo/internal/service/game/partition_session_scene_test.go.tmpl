@@ -1,0 +1,377 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"{{MODULE}}/game/entities/cell_player"
+	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/cellworldhost"
+	gamescene "{{MODULE}}/game/scene"
+)
+
+type partitionViewSocket struct {
+	gateway.Session
+	unique int64
+	key    cellworld.BaseSession
+	closed atomic.Bool
+}
+
+func (s *partitionViewSocket) Principal() gateway.Principal {
+	return gateway.Principal{PlayerID: s.unique, SessionID: s.key.SessionID}
+}
+func (s *partitionViewSocket) Admission() uint64    { return s.key.Admission }
+func (s *partitionViewSocket) ConnectionID() string { return s.key.ConnectionID }
+func (s *partitionViewSocket) Close(error) error    { s.closed.Store(true); return nil }
+
+type partitionViewPeers struct {
+	*sceneRecorder
+	sockets []*partitionViewSocket
+}
+
+func (peers *partitionViewPeers) ConnectionActive(unique int64, conn string) bool {
+	for _, s := range peers.sockets {
+		if s.unique == unique && s.ConnectionID() == conn {
+			return !s.closed.Load()
+		}
+	}
+	return false
+}
+func (p *partitionViewPeers) socket(unique int64, admission uint64) *partitionViewSocket {
+	s := &partitionViewSocket{unique: unique, key: cellworld.BaseSession{SessionID: fmt.Sprintf("account-%d", unique), ConnectionID: fmt.Sprintf("nonce-%d", admission), Admission: admission}}
+	p.sockets = append(p.sockets, s)
+	return s
+}
+
+func partitionViewBridge(t *testing.T, peers *partitionViewPeers, lane entitysync.Transport) *Scene {
+	t.Helper()
+	cfg := gamescene.DefaultConfig().Normalize()
+	if lane == nil {
+		lane = sceneLane{peers}
+	}
+	b, err := newSceneForMode(lane, peers, nil, cfg, cfg.View.MaxVisible, defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: cfg.Width, Y: cfg.Height}}), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.partition.Store(&partitionRuntime{})
+	t.Cleanup(func() { _ = b.Close(context.Background()) })
+	return b
+}
+
+func committedView(ctx context.Context, subject int64, s gateway.Session) (cellworld.BaseState, error) {
+	id, err := cellworldhost.ConnectionSession(playerOf(subject), s)
+	return cellworld.BaseState{InWorld: true, X: 505, Y: 510, Session: cellworld.SessionState{BaseSession: id}}, err
+}
+
+func TestPartitionViewLateAdmissionCannotResurrectDetachedNewOwner(t *testing.T) {
+	peers := &partitionViewPeers{sceneRecorder: newSceneRecorder()}
+	old, next, unrelated := peers.socket(713, 1), peers.socket(713, 2), peers.socket(777, 3)
+	b := partitionViewBridge(t, peers, nil)
+	p, other := newScenePlayer(t, 713), newScenePlayer(t, 777)
+	type requestKey struct{}
+	ctx := context.WithValue(context.Background(), requestKey{}, "original")
+	committed, release, returned := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		returned <- b.admitPartitionView(ctx, p, old, old.key, func(got context.Context, full int64, s gateway.Session) (cellworld.BaseState, error) {
+			if got != ctx || full != p.ID() || s != old {
+				return cellworld.BaseState{}, errors.New("wrong context, full subject or socket")
+			}
+			st, err := committedView(got, full, s)
+			close(committed)
+			<-release // old commit completed; only its return is delayed
+			return st, err
+		})
+	}()
+	select {
+	case <-committed:
+	case err := <-returned:
+		t.Fatal(err)
+	case <-time.After(time.Second * 3):
+		t.Fatal("old join did not commit")
+	}
+	// Both an unrelated Join and the superseding Join run while the old one waits.
+	for _, pair := range []struct {
+		p *player.Player
+		s *partitionViewSocket
+	}{{other, unrelated}, {p, next}} {
+		if err := b.admitPartitionView(ctx, pair.p, pair.s, pair.s.key, committedView); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !errors.Is(b.ReadyConnection(713, old), cellworld.ErrStaleSession) {
+		t.Fatal("old owner released new session")
+	}
+	if _, err := b.SetViewConnection(713, old, policy.ObserverView{}); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("old LOD: %v", err)
+	}
+	if !errors.Is(b.ReadyConnection(713, unrelated), cellworld.ErrStaleSession) {
+		t.Fatal("wrong principal accepted")
+	}
+	b.disconnectPartitionEvent(gateway.TCPSessionClosed{PlayerID: 713, SessionID: old.key.SessionID, ConnectionID: old.ConnectionID()})
+	if err := b.ReadyConnection(713, next); err != nil {
+		t.Fatal(err)
+	}
+	next.closed.Store(true)
+	if !errors.Is(b.ReadyConnection(713, next), cellworld.ErrStaleSession) {
+		t.Fatal("dead nonce accepted before close event")
+	}
+	b.transitions.Lock()
+	b.sweepLocked()
+	b.transitions.Unlock()
+	if b.Members() != 1 {
+		t.Fatal("sweep counted the still-live obsolete socket instead of the owner")
+	}
+	close(release)
+	if err := <-returned; !errors.Is(err, cellworld.ErrStaleSession) || b.Members() != 1 {
+		t.Fatalf("resurrected old commit: %v, %d", err, b.Members())
+	}
+	if len(b.partitionOps) != 0 {
+		t.Fatal("in-flight admission table retained settled players")
+	}
+	if err := b.Join(ctx, p, spatial.Point{}); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("legacy bypass: %v", err)
+	}
+	if err := b.JoinConnection(ctx, p, spatial.Point{}, nil); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("missing identity: %v", err)
+	}
+}
+
+func TestPartitionViewReconnectFullWithLiveOldSocketAndAfterClose(t *testing.T) {
+	ctx := context.Background()
+	peers := &partitionViewPeers{sceneRecorder: newSceneRecorder()}
+	old, next, last, spectator := peers.socket(721, 11), peers.socket(721, 12), peers.socket(721, 13), peers.socket(722, 14)
+	b := partitionViewBridge(t, peers, nil)
+	p, q := newScenePlayer(t, 721), newScenePlayer(t, 722)
+	rt := b.partition.Load()
+	mirrors, err := policy.NewMirrors(policy.MirrorConfig[cellworld.EntityState]{Manager: b.manager, Interest: b.interest, TTL: time.Minute, Position: func(s cellworld.EntityState) spatial.Point { return s.Pos() }, Snapshot: rt.packMirror})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirrors.Close()
+	// Exactly the witness's mirror apply + interest.Enter; the scene must neither
+	// replace this policy entry nor require another witness for a reconnect snapshot.
+	cell_player.RegisterEntity()
+	var actors []int64
+	for _, pp := range []*player.Player{p, q} {
+		actor, err := partitionIDs.Actor(pp.ID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := cellworld.EntityState{ID: actor, Kind: cellworld.KindPlayer, X: 505, Y: 510, HP: 100}
+		ns, k := partitionMirrorKind(s)
+		if _, err = mirrors.Apply(policy.MirrorItem[cellworld.EntityState]{ID: actor, Namespace: ns, Kind: k, Version: policy.MirrorVersion{Epoch: 1, Seq: 1}, Content: s}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err = b.interest.Enter(playerOf(pp.ID()), actor, s.Pos(), policy.ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+		actors = append(actors, actor)
+	}
+	join := func(pp *player.Player, s *partitionViewSocket) {
+		t.Helper()
+		if err := b.admitPartitionView(ctx, pp, s, s.key, committedView); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flush := func() {
+		t.Helper()
+		if err := b.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready := func(s *partitionViewSocket) {
+		t.Helper()
+		if err := b.ReadyConnection(s.unique, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	full := func(after uint32) uint32 {
+		t.Helper()
+		push := peers.take(721)
+		if len(push) != 1 {
+			t.Fatalf("expected one full, got %d", len(push))
+		}
+		f, err := entitysync.NewDecoder(frame.DefaultLimits()).Decode(push[0].Payload)
+		if err != nil || f.Kind != frame.Full || f.Epoch <= after {
+			t.Fatalf("fresh decoder: %+v %v", f, err)
+		}
+		ids := []int64{}
+		for _, o := range f.Objects {
+			if o.Operation != frame.ObjectCreate {
+				t.Fatal(o.Operation)
+			}
+			ids = append(ids, o.SubjectID)
+		}
+		for _, id := range append(slices.Clone(actors), p.ID()) {
+			if !slices.Contains(ids, id) {
+				t.Fatalf("full missing %d, got %v", id, ids)
+			}
+		}
+		return f.Epoch
+	}
+	join(p, old)
+	join(q, spectator)
+	ready(old)
+	ready(spectator)
+	flush()
+	epoch := full(0)
+	if !heldSubjects(t, peers.take(722))[actors[0]] {
+		t.Fatal("spectator never saw player mirror")
+	}
+	join(p, next)
+	flush()
+	if len(peers.take(721)) != 0 {
+		t.Fatal("held takeover emitted a frame")
+	}
+	// A previous manager loss arriving before OR after the new Ready never closes it.
+	b.lostPartitionSession(721, errors.New("delayed encode failure"))
+	ready(next)
+	b.lostPartitionSession(721, errors.New("old loss"))
+	flush()
+	epoch = full(epoch)
+	if next.closed.Load() || peers.closuresOf(721) != 0 {
+		t.Fatal("old loss closed the replacement")
+	}
+	next.closed.Store(true)
+	b.disconnectPartitionEvent(gateway.TCPSessionClosed{PlayerID: 721, SessionID: next.key.SessionID, ConnectionID: next.ConnectionID()})
+	flush()
+	if b.Members() != 1 || len(b.manager.Subscribers(p.ID())) != 0 {
+		t.Fatal("receiver or self retained on close")
+	}
+	if _, _, ok := mirrors.Get(actors[0]); !ok || removesIn(t, peers.take(722)) != 0 {
+		t.Fatal("spectator saw a disconnect as formal departure")
+	}
+	if _, ok := b.interest.ObserverView(721); !ok {
+		t.Fatal("removed Node's witness bookkeeping")
+	}
+	join(p, last)
+	if at := b.terrain.reported[721]; at != (spatial.Point{X: 505, Y: 510}) {
+		t.Fatalf("terrain origin not committed point: %v", at)
+	}
+	if _, err := b.SetViewConnection(721, last, policy.ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	ready(last)
+	flush()
+	full(epoch)
+}
+
+// Exercise the published Join/Ready APIs and exact-close watcher against a real
+// Player DAO + Nest/Node. Both explicit eviction and shutdown must formally leave
+// even if the local receiver is already gone; no delayed open can undo that.
+func TestPartitionViewFormalExitOfDetachedBase(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shutdown_%v", shutdown), func(t *testing.T) {
+			ctx := context.Background()
+			f := newAttackFixture(t, sceneCommitter{})
+			peers := &partitionViewPeers{sceneRecorder: newSceneRecorder()}
+			s := peers.socket(830, 45)
+			lane := newClosingLane(peers)
+			lane.refuse(830, 1)
+			b := partitionViewBridge(t, peers, lane)
+			f.rt.grid, f.rt.access, f.rt.bridge = partitionTerrainGrid(t), coreentity.NewManagerAccess(f.entities), b
+			b.partition.Store(f.rt)
+			cell_player.RegisterEntity()
+			p := newScenePlayer(t, 830)
+			actor, err := partitionIDs.Actor(p.ID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Dao().SetCellActor(actor)
+			p.Dao().SetCellOwner(partitionSidA)
+			p.Dao().SetCellInWorld(true)
+			f.entities.Add(p)
+			var retry func()
+			b.after = func(_ time.Duration, fn func()) { retry = fn }
+			b.async = func(fn func()) { fn() }
+			b.watchSessions(peers)
+			if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, s); err != nil {
+				t.Fatal(err)
+			}
+			if retry == nil {
+				t.Fatal("no pending transport open")
+			}
+			if err := b.ReadyConnection(830, s); err != nil {
+				t.Fatal(err)
+			}
+			s.closed.Store(true)
+			for _, notify := range peers.closed {
+				notify(gateway.TCPSessionClosed{PlayerID: 830, SessionID: s.key.SessionID, ConnectionID: s.ConnectionID()})
+			}
+			retry()
+			st, err := f.rt.node.BaseStateOf(ctx, p.ID())
+			if err != nil || !st.InWorld || st.Session.BaseSession != s.key || st.Session.OfflineAt == 0 || b.Members() != 0 || lane.opened(830) != 1 {
+				t.Fatalf("disconnect/retry dismantled Base or reopened receiver: %+v, members %d, opens %d, err %v", st, b.Members(), lane.opened(830), err)
+			}
+			if shutdown {
+				if err := b.stopPartitionSessions(ctx, f.rt); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				b.Leave(ctx, p.ID())
+			}
+			st, err = f.rt.node.BaseStateOf(ctx, p.ID())
+			if err != nil || st.InWorld {
+				t.Fatalf("formal exit skipped detached Base: %+v %v", st, err)
+			}
+		})
+	}
+}
+
+func TestPartitionViewUncertainAdmissionRetryAndWireFailureReclaim(t *testing.T) {
+	ctx := context.Background()
+	peers := &partitionViewPeers{sceneRecorder: newSceneRecorder()}
+	a, failed, next := peers.socket(801, 21), peers.socket(801, 22), peers.socket(801, 23)
+	lane := newClosingLane(peers)
+	b := partitionViewBridge(t, peers, lane)
+	p := newScenePlayer(t, 801)
+	var timers []func()
+	b.after = func(_ time.Duration, f func()) { timers = append(timers, f) }
+	// Model an uncertain return from an already admitted transaction: still-live
+	// connection cannot issue a command until a successful Join, and is retryable.
+	if err := b.admitPartitionView(ctx, p, a, a.key, func(context.Context, int64, gateway.Session) (cellworld.BaseState, error) {
+		return cellworld.BaseState{}, context.DeadlineExceeded
+	}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if !errors.Is(b.checkPartitionCommand(801, a), cellworld.ErrStaleSession) || a.closed.Load() || len(timers) != 1 {
+		t.Fatal("uncertain commit became usable or could not retry")
+	}
+	if err := b.admitPartitionView(ctx, p, a, a.key, committedView); err != nil {
+		t.Fatal(err)
+	}
+	timers[0]()
+	timers = nil
+	if a.closed.Load() || b.checkPartitionCommand(801, a) != nil {
+		t.Fatal("cleanup killed successful same-socket retry")
+	}
+	b.manager.CloseSession(801)
+	broken := errors.New("out of slots")
+	lane.breakOpens(801, broken)
+	if err := b.admitPartitionView(ctx, p, failed, failed.key, committedView); !errors.Is(err, broken) {
+		t.Fatal(err)
+	}
+	if len(timers) != 1 || b.Members() != 0 || !errors.Is(b.checkPartitionCommand(801, failed), cellworld.ErrStaleSession) {
+		t.Fatal("failed wire install retained writer")
+	}
+	lane.breakOpens(801, nil)
+	if err := b.admitPartitionView(ctx, p, next, next.key, committedView); err != nil {
+		t.Fatal(err)
+	}
+	timers[0]()
+	if !failed.closed.Load() || next.closed.Load() || a.closed.Load() {
+		t.Fatal("reclaimed wrong socket")
+	}
+}

@@ -219,6 +219,7 @@ scene:
     view_radius: 400       # R：witness 半径；R + H ≤ G，R ≥ Base 的最大离开半径 300
     idle_period: 1s        # 附近没有玩家的怪的心跳档位（D1，缺省 1s；0 不降档）
     writeback_every: 5s    # HP / 位置 / Buff 与冷却回写 Player；发送周期不是硬 RPO
+    reconnect_grace: 30s   # 嵌入式玩家 TCP：当前连接断开即发停步，保留格内化身的宽限；0s 表示立即离场
     attack_damage: 10      # 缺少业务面板时的后备值；Player 使用 attribute 最终攻击力
     spawn_x: 2900          # 没有快照的玩家从这里进入
     spawn_y: 1500
@@ -235,6 +236,8 @@ scene:
 分区场景里玩家用 `MoveIntent(vx, vy)`（速度，`(0,0)` 停下）移动、`AttackTarget(target)` 攻击；`Move` / `MoveTarget` 与
 `gm.scene.root` 返回 `scene_partitioned`；普通场景里 `MoveIntent` / `AttackTarget` 返回 `scene_not_partitioned`。客户端看到的
 其他玩家与自己是 `player` 命名空间（位置与 `cell_hp`），怪是 `monster`。`gm.scene.partition` 看本进程的格、计数与区域表。
+嵌入式 TCP 的 `EnterGame` 成功才获得这名玩家的分区输入权；客户端不用自报连接号。只有当前连接能发移动、攻击、`SceneReady` 和主视野请求，已被接替的连接答 `partition_stale_session`。当前连接断开，Base 提交零速度意图，实际停步以 Cell 为准；`scene.partition.reconnect_grace` 内重连沿用同一化身及 Entry，`SceneReady` 后重新收到当前视野的全量。宽限到期仍离线才正式离场。显式离场不等宽限。独立 Gate 保留原转发会话路径，这个参数不是 Gate 连接迁移策略。普通地图的驻留名额规则不变。
+
 **组队与队伍面板**（维护者 2026-11-04 第 4 项 = A，只在分区场景）：`TeamInvite(invitee)`（没有队伍时建一支、自己当队长）、
 `TeamAccept(team_id)`、`TeamLeave()`（队长离队时队长交给剩下玩家 ID 最小的那名）、`TeamDisband()`（只有队长）、`TeamInfo()`，
 答复都是成员表（`TeamResponse`）。成员表在 Remote 托管的 `Team` 实体上（`service=game`、共享模式：成员在不同的 game 进程上；game 因此装着
@@ -242,6 +245,8 @@ scene:
 每 `snapshot_every` 把他的 CellPlayer 状态发给其他队员的 Base，客户端在同一条同步流里收到队友的 CellPlayer（`player`
 命名空间，位置与 `cell_hp`），不论距离；在视野里的队友就是同一个对象，不重复推。邀请经 team 依赖的 facebook 模块投递：被邀请人连在哪个 game 上都收到 `TeamInvited`，离线的登录后用 `TeamInvites` 查到。
 养成变化后 Player 监听实体事件 `event.AttributeChanged`（`game/entities/player/cell_base.go` 的 `OnAttributeChanged`），在同一笔 Player 事务内更新 Cell 面板，HP 上限增大不自动回血。NPC 致死结算与一次性 1 金币奖励共用 strict 回执，确认后按出生槽重生。Player 入场计数与 Recovery 持久保存；所有 Cell 需要 App singleton 和持久 Redis 权威。
+
+双客户端分区会话演练：在框架根目录执行 `python3 scripts/test-seamless-reconnect.py --out <新目录> --grace-seconds 30`。不写宽限配置，用生成的完整 demo 与私有依赖检验默认值；观察者从真实 TCP 帧记录同一化身的创建和移除，另核对 Cell 速度和授权记录。`--grace-seconds 8` 可缩短演练。断线由真实跨格授权变化触发，并不强制锁定交接中的某条消息。
 
 多进程端到端（两个 Cell、独立 Base、kill -9 后重建、跨 Base 队伍、普通场景）：`scripts/test-seamless-demo.sh`。Robot 使用 `-scenario cellworld`；`ROOST_SEAMLESS_CAPACITY=1 ROOST_SEAMLESS_ROBOT_ONLY=1 ROOST_SEAMLESS_ROBOTS=1000` 启用 9000 NPC / 1000 玩家容量配置，详细口径和依赖见 [验收说明](../docs/performance/CELLWORLD.md)。
 

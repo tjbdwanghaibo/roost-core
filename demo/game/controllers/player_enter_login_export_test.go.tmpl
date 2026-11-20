@@ -5,7 +5,9 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/view"
 )
@@ -63,10 +65,17 @@ func (n loginSceneNest) RequestMulti(ctx stdcontext.Context, name corenest.Handl
 
 type loginSceneJoin struct {
 	sceneJoiner
+	connectionScene
 	join func(spatial.Point) error
 }
 
 func (s loginSceneJoin) Join(_ stdcontext.Context, _ *playerentity.Player, at spatial.Point) error {
+	return s.join(at)
+}
+func (s loginSceneJoin) JoinConnection(_ stdcontext.Context, subject *playerentity.Player, at spatial.Point, session gateway.Session) error {
+	if session == nil || session.Principal().PlayerID != subject.UniqueID() {
+		return cellworld.ErrStaleSession
+	}
 	return s.join(at)
 }
 func (c *Controller) SetLoginSceneForTest(partition bool, place func() (spatial.Point, error), join func(spatial.Point) error) error {

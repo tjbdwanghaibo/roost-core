@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/db"
@@ -41,6 +42,16 @@ type attackTestSession struct {
 }
 
 func (s attackTestSession) Principal() gateway.Principal { return s.principal }
+func (s attackTestSession) ConnectionID() string         { return "conn/" + s.principal.SessionID }
+func (s attackTestSession) Admission() uint64 {
+	if s.principal.SessionID == "reconnected" {
+		return 2
+	}
+	return 1
+}
+func attackSession(id int64, name string) attackTestSession {
+	return attackTestSession{principal: gateway.Principal{PlayerID: id, SessionID: name}}
+}
 
 type attackFixture struct {
 	registry *playeraccess.ProtocolRegistry
@@ -62,7 +73,7 @@ func newAttackFixture(t *testing.T, committer nest.TransactionCommitter) *attack
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = e.Shutdown(context.Background()) })
-	n, err := cellworld.NewNode(cellworld.NodeConfig{World: "attack-test", SID: partitionSidC, Grid: partitionTerrainGrid(t), Nest: e, Handlers: h, Transport: f.sink, PlayerEntity: func(id int64) int64 { return id }, Destroy: func(context.Context, entity.IThreadSafeEntity) error { return errors.New("unexpected destroy") }})
+	n, err := cellworld.NewNode(cellworld.NodeConfig{World: "attack-test", SessionActive: func(base int64, connection string) bool { return base != 0 && connection != "" }, ReconnectGrace: 30 * time.Second, SID: partitionSidC, Grid: partitionTerrainGrid(t), Nest: e, Handlers: h, Transport: f.sink, PlayerEntity: func(id int64) int64 { return id }, Destroy: func(context.Context, entity.IThreadSafeEntity) error { return errors.New("unexpected destroy") }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,13 +127,22 @@ func newAttackFixture(t *testing.T, committer nest.TransactionCommitter) *attack
 }
 
 // Only the volatile route is primed. No persisted ledger or result is seeded.
-func (f *attackFixture) join(t *testing.T, id int64) *player.Player {
+func (f *attackFixture) bind(t *testing.T, p *player.Player, name string) {
+	t.Helper()
+	s := attackSession(p.UniqueID(), name)
+	_, err := f.rt.node.AdmitSession(context.Background(), p.ID(), p.ID(), spatial.Point{X: 1, Y: 1}, 100, cellworld.BaseSession{SessionID: name, ConnectionID: s.ConnectionID(), Admission: s.Admission()})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *attackFixture) join(t *testing.T, id int64, name string) *player.Player {
 	t.Helper()
 	p := newScenePlayer(t, id)
 	p.Dao().SetCellActor(p.ID())
 	p.Dao().SetCellOwner(partitionSidA)
 	p.Dao().SetCellInWorld(true)
 	f.entities.Add(p)
+	f.bind(t, p, name)
 	return p
 }
 func (f *attackFixture) send(t *testing.T, id int64, session string, seq uint32, requestID, target int64) *playeraccess.Response {
@@ -131,7 +151,7 @@ func (f *attackFixture) send(t *testing.T, id int64, session string, seq uint32,
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := attackTestSession{principal: gateway.Principal{PlayerID: id, SessionID: session}}
+	s := attackSession(id, session)
 	r, err := f.registry.Dispatch(context.Background(), s, msgid.MsgAttackTarget, seq, body)
 	if err != nil || r == nil || r.Sequence != seq {
 		t.Fatalf("dispatch(seq=%d): %+v %v", seq, r, err)
@@ -149,12 +169,13 @@ func attackReply(t *testing.T, r *playeraccess.Response, code int32) *pb.AttackT
 
 func TestPartitionAttackRequestWireWindowAndLegacy(t *testing.T) {
 	f := newAttackFixture(t, walkCommitter{})
-	a := f.join(t, 601)
-	f.join(t, 602)
+	a := f.join(t, 601, "same-connection")
+	f.join(t, 602, "same-connection")
 	call := func(id, number, target int64, code int32) *pb.AttackTargetResponse {
 		return attackReply(t, f.send(t, id, "same-connection", 1, number, target), code)
 	}
 	first := call(601, 1, 89, 0)
+	call(601, 2, 0, 100045) // invalid target retains the original business response and cannot consume #2
 	second := call(601, 2, 89, 0)
 	other := call(602, 1, 89, 0)
 	if first.AttackID == second.AttackID || first.AttackID == other.AttackID || second.Seq != first.Seq+1 {
@@ -218,7 +239,7 @@ func TestPartitionAttackRequestLostReplyAndBaseRecovery(t *testing.T) {
 	defer wal.Close(ctx)
 	c := &attackTestWAL{wal: wal}
 	f := newAttackFixture(t, c)
-	p := f.join(t, 701)
+	p := f.join(t, 701, "old")
 	const requestID int64 = 104
 	c.fail.Store(true)
 	failed, err := pb.UnmarshalAttackTargetResponse(f.send(t, 701, "old", 11, requestID, 89).Payload)
@@ -226,6 +247,8 @@ func TestPartitionAttackRequestLostReplyAndBaseRecovery(t *testing.T) {
 		t.Fatalf("failed commit left a success/receipt: %+v err=%v", failed, err)
 	}
 	lost := f.send(t, 701, "old", 12, requestID, 89) // written by the server; the client never receives it
+	f.bind(t, p, "reconnected")
+	attackReply(t, f.send(t, 701, "old", 13, requestID, 89), 100905) // prior live socket cannot even read the receipt
 	retry := attackReply(t, f.send(t, 701, "reconnected", 1, requestID, 89), 0)
 	witness := attackReply(t, lost, 0)
 	if *retry != *witness || retry.Seq != 1 {

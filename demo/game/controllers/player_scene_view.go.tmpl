@@ -27,12 +27,12 @@ func (controller *Controller) HandleSceneView(context *playeraccess.Context, req
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("scene_view endpoint: context and request are required")
 	}
-	scene, err := controller.Scene()
+	scene, err := controller.clientScene()
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		return &pb.SceneViewResponse{Code: code, Reason: reason}, nil
 	}
-	view, err := scene.SetView(context.PlayerID, policy.ObserverView{LOD: int(request.LodLevel), Radius: request.ViewRadius})
+	view, err := scene.SetViewConnection(context.PlayerID, context.Session, policy.ObserverView{LOD: int(request.LodLevel), Radius: request.ViewRadius})
 	response := &pb.SceneViewResponse{LodLevel: int32(view.LOD), ViewRadius: view.Radius}
 	switch {
 	case err == nil:
@@ -44,7 +44,7 @@ func (controller *Controller) HandleSceneView(context *playeraccess.Context, req
 		// Not in the scene (EnterGame has not joined it, or it already left).
 		response.Code, response.Reason = errcode.ClientError(apperrors.ErrScenePosition)
 	default:
-		response.Code, response.Reason = errcode.ClientError(err)
+		response.Code, response.Reason = errcode.ClientError(partitionSessionError(err))
 		slog.Warn("scene_view: view not changed", "player_id", context.PlayerID, "err", err)
 	}
 	return response, nil

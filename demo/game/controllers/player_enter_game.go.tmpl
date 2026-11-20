@@ -33,7 +33,7 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 		return &pb.EnterGameResponse{Code: refusal.code, Reason: refusal.reason, OwnerSID: refusal.ownerSID}, nil
 	}
 	a := demoEnterAttempt{controller: controller, owners: owners, playerID: context.PlayerID, boundSID: boundSID}
-	entered, err := gamelogin.EnterSessionWithPlacement(context.Context(), controller.registry, gamelogin.Entering{PlayerID: a.playerID, Claims: context.Session.Principal().Claims}, gamelogin.Loads{LoadOrCreate: a.loadOrCreate, Existing: a.existing}, a.place)
+	entered, err := gamelogin.EnterSessionWithPlacement(context.Context(), controller.registry, gamelogin.Entering{PlayerID: a.playerID, Session: context.Session, Claims: context.Session.Principal().Claims}, gamelogin.Loads{LoadOrCreate: a.loadOrCreate, Existing: a.existing}, a.place)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
@@ -129,7 +129,8 @@ func (a *demoEnterAttempt) place(ctx stdcontext.Context, entered gamelogin.Enter
 	// 普通地图先落位再订阅；分区场景由 Join 经 Cell 放置，不能先写本地地图。两条路都只尝试一次。
 	var at spatial.Point
 	var arriving bool
-	if a.controller.Partition() == nil {
+	partitioned := a.controller.Partition() != nil
+	if !partitioned {
 		sender := syncsender.NewEnterSceneSender(a.controller.NestClient())
 		placement, err := sender.MultiSync_PlaceOrdinaryPlayer(ctx, a.subject.ID(), a.controller.WorldSceneID(), a.boundSID)
 		if err != nil {
@@ -145,17 +146,17 @@ func (a *demoEnterAttempt) place(ctx stdcontext.Context, entered gamelogin.Enter
 		}
 		at, arriving = placement.At, placement.Arriving
 	}
-	scene, err := a.controller.Scene()
+	scene, err := a.controller.clientScene()
 	if err != nil {
-		if arriving {
+		if arriving || partitioned {
 			return err
 		}
 		slog.Warn("enter_game: no scene to join", "player_id", a.playerID, "err", err)
 		return nil
 	}
-	if err := scene.Join(ctx, a.subject, at); err != nil {
-		if arriving || errors.Is(err, apperrors.ErrSceneClosing) {
-			return err
+	if err := scene.JoinConnection(ctx, a.subject, at, entered.Session); err != nil {
+		if partitioned || arriving || errors.Is(err, apperrors.ErrSceneClosing) {
+			return partitionSessionError(err)
 		}
 		slog.Warn("enter_game: player did not join the replicated scene", "player_id", a.playerID, "err", err)
 	}

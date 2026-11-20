@@ -356,12 +356,12 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 		if item.Status != StatusOK {
 			t.Errorf("%s: %s %s", item.Name, item.Status, item.Detail)
 		}
-		// 工程自己的键共 49 个：模块声明的配置（R5）8 个——leaderboard.* 6 个、profile.exp_per_level、mailbox.ledger_prune_grace；其余 41 个是game/settings 的 activity.key_prefix、activity.groups_file、platform.key_prefix、
+		// 工程自己的键共 50 个：模块声明的配置（R5）8 个——leaderboard.* 6 个、profile.exp_per_level、mailbox.ledger_prune_grace；其余 42 个是game/settings 的 activity.key_prefix、activity.groups_file、platform.key_prefix、
 		// platform.payment_secret，联盟 RPC 客户端的 alliance.service_type、alliance.call_timeout；
-		// 分区场景 scene.partition.* 的 32 个（含出生槽 respawn_delay 与进入点分散 spawn_spread）（game/settings/partition.go；队伍面板的两个键随社交队伍迁入 team 模块而去掉）；
+		// 分区场景 scene.partition.* 的 33 个（含断线宽限 reconnect_grace、出生槽 respawn_delay 与进入点分散 spawn_spread）（game/settings/partition.go；队伍面板的两个键随社交队伍迁入 team 模块而去掉）；
 		// 可编辑地形的 scene.terrain.pack 1 个（game/settings/terrain.go）；普通图驻留名额 scene.player_capacity 和主视野索引 scene.aoi_index 共 2 个（game/settings/settings.go）。guild.found_cost 随公会换用 alliance 模块而去掉。
-		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(49 business key(s))") {
-			t.Errorf("config-schema:game = %q; want the 49 keys the project's own code declares beyond the framework's: the module configs (leaderboard.*, profile.exp_per_level, mailbox.ledger_prune_grace), game/settings (activity.*, platform.*, scene.aoi_index, scene.player_capacity, scene.partition.*, scene.terrain.pack) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
+		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(50 business key(s))") {
+			t.Errorf("config-schema:game = %q; want the 50 keys the project's own code declares beyond the framework's: the module configs (leaderboard.*, profile.exp_per_level, mailbox.ledger_prune_grace), game/settings (activity.*, platform.*, scene.aoi_index, scene.player_capacity, scene.partition.*, scene.terrain.pack) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
 		}
 	}
 

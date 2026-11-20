@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"slices"
 	"strconv"
 	"sync"
@@ -147,7 +148,7 @@ type scenarioTicket struct {
 	done chan struct{}
 }
 
-func (t scenarioTicket) LSN() uint64            { return t.lsn }
+func (t scenarioTicket) LSN() uint64           { return t.lsn }
 func (t scenarioTicket) Done() <-chan struct{} { return t.done }
 func (scenarioTicket) Err() error              { return nil }
 
@@ -851,6 +852,7 @@ func TestDemoScenePlacementPrecedesEnteredOnce(t *testing.T) {
 	}{
 		{"ordinary", false, false, false, []string{"place", "join", "entered"}},
 		{"partition", true, false, false, []string{"join", "entered"}},
+		{"partition placement refused", true, false, true, []string{"join"}},
 		{"place warns", false, true, false, []string{"place", "entered"}},
 		{"join warns", false, false, true, []string{"place", "join", "entered"}},
 	} {
@@ -878,6 +880,9 @@ func TestDemoScenePlacementPrecedesEnteredOnce(t *testing.T) {
 					t.Errorf("join point=%v want %v", at, want)
 				}
 				if tc.joinFails {
+					if tc.partition {
+						return cellworld.ErrStaleSession
+					}
 					return errors.New("replication unavailable")
 				}
 				return nil
@@ -892,7 +897,14 @@ func TestDemoScenePlacementPrecedesEnteredOnce(t *testing.T) {
 				}
 				return nil
 			})
-			if got := s.enterGame(session); got.Code != 0 || !got.First || got.Created || got.PlayerID != session.principal.PlayerID || !slices.Equal(order, tc.want) {
+			got := s.enterGame(session)
+			if tc.partition && tc.joinFails {
+				if got.Code != 100905 || got.First || got.PlayerID != 0 || !slices.Equal(order, tc.want) {
+					t.Fatalf("superseded join reported success or ran hooks: %+v %v", got, order)
+				}
+				return
+			}
+			if got.Code != 0 || !got.First || got.Created || got.PlayerID != session.principal.PlayerID || !slices.Equal(order, tc.want) {
 				t.Fatalf("response=%+v order=%v want %v", got, order, tc.want)
 			}
 		})
