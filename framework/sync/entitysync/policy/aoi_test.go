@@ -858,13 +858,20 @@ func TestAOIEventCollectionSerialAndParallelLifecycle(t *testing.T) {
 
 // 强制全量重算作为分类重算的对照，覆盖同批多原因、退出和 ID 重建。
 func TestAOISelectiveRecomputeMatchesFullRecompute(t *testing.T) {
-	for _, workers := range []int{1, 4} {
-		t.Run(fmt.Sprint(workers), func(t *testing.T) {
-			config := AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 160, LeaveRadius: 200, MaxVisible: 12, Bands: []int64{50, 100}}
+	for _, tc := range []struct {
+		mode    AOIIndexMode
+		workers int
+	}{
+		{IndexBlock, 1}, {IndexBlock, 4}, {IndexCrossList, 1}, {IndexCrossList, 4}, {IndexKDTree, 1}, {IndexKDTree, 4},
+	} {
+		workers := tc.workers
+		t.Run(fmt.Sprintf("%s/%d", tc.mode, workers), func(t *testing.T) {
+			config := AOIConfig{IndexMode: tc.mode, Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 160, LeaveRadius: 200, MaxVisible: 12, Bands: []int64{50, 100}}
 			actual, err := NewAOI(config)
 			if err != nil {
 				t.Fatal(err)
 			}
+			config.IndexMode = IndexBlock // independent reference: force full recompute over Block candidates
 			reference, err := NewAOI(config)
 			if err != nil {
 				t.Fatal(err)

@@ -10,8 +10,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// aoiBlock 只存索引引用。位置真相仍由 subject 唯一持有；物理成员索引复用
-// spatial.BlockIndex 的块锁。登记与查询被批次写/读阶段隔开，不在块锁内计算可见性。
+// aoiBlock 保存显式覆盖；仅 Block 模式还登记逐块反向订阅。这里不存物理成员。
+// 写阶段修改登记，随后的读阶段只读；不在块锁内计算可见性。
 type aoiBlock struct {
 	mu        sync.RWMutex
 	observers map[int64]*interestObserver
@@ -22,13 +22,23 @@ func (m *AOI) block(id int64) *aoiBlock {
 	if b := m.blocks[id]; b != nil {
 		return b
 	}
-	b := &aoiBlock{observers: make(map[int64]*interestObserver), observed: make(map[int64]struct{})}
+	b := &aoiBlock{observed: make(map[int64]struct{})}
+	if m.points == nil {
+		b.observers = make(map[int64]*interestObserver)
+	}
 	m.blocks[id] = b
 	return b
 }
 
+// pruneBlock is called only by the single writer, after removing a subscription or coverage.
+func (m *AOI) pruneBlock(id int64, b *aoiBlock) {
+	if len(b.observers) == 0 && len(b.observed) == 0 {
+		delete(m.blocks, id)
+	}
+}
+
 // BlockAt 返回此 AOI 中位置对应的块编号。编号仅在本 AOI 内有效，越界为-1。
-func (m *AOI) BlockAt(at spatial.Point) int64 { return m.index.BlockIndex(at) }
+func (m *AOI) BlockAt(at spatial.Point) int64 { return m.layout.BlockIndex(at) }
 
 func (m *AOI) checkedBlocks(blocks []int64) ([]int64, error) {
 	next := slices.Clone(blocks)
@@ -38,7 +48,7 @@ func (m *AOI) checkedBlocks(blocks []int64) ([]int64, error) {
 		return nil, fmt.Errorf("%w: observed blocks %d exceed %d", ErrInterestBudget, len(next), m.config.MaxObservedBlocks)
 	}
 	for _, id := range next {
-		if m.index.BlockRect(id).Empty() {
+		if m.layout.BlockRect(id).Empty() {
 			return nil, spatial.ErrInvalidBounds
 		}
 	}
@@ -56,19 +66,21 @@ func (m *AOI) SetObservedBlocks(id int64, blocks []int64) error {
 		return err
 	}
 	previous := m.observed[id]
+	if slices.Equal(previous, next) {
+		return nil
+	}
 	affected := make(map[int64]*interestObserver)
 	// 按有序差集更新，未改变的覆盖无需重写。读阶段要等整个写批次结束。
 	for _, blockID := range previous {
 		if _, keep := slices.BinarySearch(next, blockID); keep {
 			continue
 		}
-		b := m.block(blockID)
+		b := m.blocks[blockID]
 		b.mu.Lock()
 		delete(b.observed, id)
-		for oid, o := range b.observers {
-			affected[oid] = o
-		}
+		m.pruneBlock(blockID, b)
 		b.mu.Unlock()
+		m.coverageChanged(blockID, b, affected)
 	}
 	for _, blockID := range next {
 		if _, keep := slices.BinarySearch(previous, blockID); keep {
@@ -77,10 +89,8 @@ func (m *AOI) SetObservedBlocks(id int64, blocks []int64) error {
 		b := m.block(blockID)
 		b.mu.Lock()
 		b.observed[id] = struct{}{}
-		for oid, o := range b.observers {
-			affected[oid] = o
-		}
 		b.mu.Unlock()
+		m.coverageChanged(blockID, b, affected)
 	}
 	if len(next) == 0 {
 		delete(m.observed, id)
@@ -91,6 +101,25 @@ func (m *AOI) SetObservedBlocks(id int64, blocks []int64) error {
 		m.refreshObserver(o, dirtyCoverage)
 	}
 	return nil
+}
+
+// Called in the write phase. A point-mode batch coalesces changes before doing reverse lookups.
+func (m *AOI) coverageChanged(block int64, b *aoiBlock, affected map[int64]*interestObserver) {
+	if m.points == nil {
+		for oid, o := range b.observers {
+			affected[oid] = o
+		}
+		return
+	}
+	if m.batching {
+		m.points.changes = append(m.points.changes, aoiBlockChange{block: block})
+		return
+	}
+	ids := m.appendPointSubscribers(m.points.scratch[:0], block)
+	for _, id := range ids {
+		affected[id] = m.observers[id]
+	}
+	m.points.recycle(ids)
 }
 
 func (m *AOI) evaluateObserved(o *interestObserver) {
@@ -151,6 +180,9 @@ func sortInterestEvents(events []InterestEvent) {
 func (m *AOI) beginBatch() { m.batching = true }
 
 func (m *AOI) endBatch(workers int) {
+	if m.points != nil {
+		m.resolvePointChanges()
+	}
 	m.batching = false
 	observers := make([]*interestObserver, 0, len(m.dirty))
 	for _, o := range m.dirty {

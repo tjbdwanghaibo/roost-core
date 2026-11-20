@@ -16,78 +16,52 @@ type indexBlock struct {
 	version uint64
 }
 
+// Embed the grid geometry privately: callers can obtain a copy via Layout,
+// but cannot replace the grid of a live index.
+type layout = BlockLayout
+
 // BlockIndex is a concurrent ID-only spatial index. It owns partitioning and
 // version tracking; application object lookup and visibility policy stay in
 // the caller.
 type BlockIndex struct {
-	bounds    Rect
-	blockSize int64
-	cols      int64
-	rows      int64
-	blocks    []*indexBlock
+	layout
+	blocks []*indexBlock
 }
 
 func NewBlockIndex(bounds Rect, blockSize int64) (*BlockIndex, error) {
-	bounds = NormalizeRect(bounds)
-	if bounds.Empty() || blockSize <= 0 {
-		return nil, ErrInvalidBounds
+	layout, err := NewBlockLayout(bounds, blockSize)
+	if err != nil {
+		return nil, err
 	}
-	width, widthOK := SafeSpan(bounds.Min.X, bounds.Max.X)
-	height, heightOK := SafeSpan(bounds.Min.Y, bounds.Max.Y)
-	if !widthOK || !heightOK {
-		return nil, ErrInvalidBounds
-	}
-	cols, rows := DivideCeil(width, blockSize), DivideCeil(height, blockSize)
-	if cols <= 0 || rows <= 0 || cols > MaxBlockCount/rows {
-		return nil, ErrTooManyBlocks
-	}
-	blockCount := cols * rows
-	index := &BlockIndex{bounds: bounds, blockSize: blockSize, cols: cols, rows: rows, blocks: make([]*indexBlock, blockCount)}
+	index := &BlockIndex{layout: layout, blocks: make([]*indexBlock, layout.cols*layout.rows)}
 	for offset := range index.blocks {
 		index.blocks[offset] = &indexBlock{}
 	}
 	return index, nil
 }
 
+// Layout returns a copy of the pure geometry, independent of stored members.
+func (i *BlockIndex) Layout() BlockLayout { return i.layout }
+
 func (i *BlockIndex) Bounds() Rect {
 	if i == nil {
 		return Rect{}
 	}
-	return i.bounds
+	return i.layout.Bounds()
 }
 
 func (i *BlockIndex) BlockIndex(point Point) int64 {
-	if i == nil || i.blockSize <= 0 || !i.bounds.Contains(point) {
+	if i == nil {
 		return -1
 	}
-	x := (point.X - i.bounds.Min.X) / i.blockSize
-	y := (point.Y - i.bounds.Min.Y) / i.blockSize
-	if x < 0 || x >= i.cols || y < 0 || y >= i.rows {
-		return -1
-	}
-	return y*i.cols + x
+	return i.layout.BlockIndex(point)
 }
 
 func (i *BlockIndex) BlockRect(index int64) Rect {
-	if i == nil || index < 0 || index >= int64(len(i.blocks)) {
+	if i == nil {
 		return Rect{}
 	}
-	x, y := index%i.cols, index/i.cols
-	// x*blockSize 小于跨度，Min 加它不会溢出；右 / 下边界再饱和加一个块宽，然后截到 bounds。
-	// 不能直接算 Min + (x+1)*blockSize：最后一块的乘积可以超过剩余跨度，bounds 贴近 int64 上界时
-	// 溢出成负数，截断判断不成立，会返回 Max < Min 的倒置矩形。
-	minX, minY := i.bounds.Min.X+x*i.blockSize, i.bounds.Min.Y+y*i.blockSize
-	rect := Rect{
-		Min: Point{X: minX, Y: minY},
-		Max: Point{X: SaturatingAdd(minX, i.blockSize), Y: SaturatingAdd(minY, i.blockSize)},
-	}
-	if rect.Max.X > i.bounds.Max.X {
-		rect.Max.X = i.bounds.Max.X
-	}
-	if rect.Max.Y > i.bounds.Max.Y {
-		rect.Max.Y = i.bounds.Max.Y
-	}
-	return rect
+	return i.layout.BlockRect(index)
 }
 
 // Add 在指定块登记 ID；同一对象可以覆盖多个块，查询会做并集去重。
@@ -199,13 +173,10 @@ func (i *BlockIndex) AppendRadius(dst []int64, center Point, radius int64) []int
 		return dst
 	}
 	start := len(dst)
-	startX := (rect.Min.X - i.bounds.Min.X) / i.blockSize
-	startY := (rect.Min.Y - i.bounds.Min.Y) / i.blockSize
-	endX := (rect.Max.X - 1 - i.bounds.Min.X) / i.blockSize
-	endY := (rect.Max.Y - 1 - i.bounds.Min.Y) / i.blockSize
+	startX, startY, endX, endY := i.layout.blockRange(rect)
 	for y := startY; y <= endY; y++ {
 		for x := startX; x <= endX; x++ {
-			block := i.blockAt(y*i.cols + x)
+			block := i.blockAt(y*i.layout.cols + x)
 			if block == nil {
 				continue
 			}
@@ -293,22 +264,10 @@ func (i *BlockIndex) RangeBlocks(blocks map[int64]Rect, fn func(int64) bool) boo
 }
 
 func (i *BlockIndex) BlockRects(rect Rect) (map[int64]Rect, bool) {
-	rect, ok := i.ClampRect(rect)
-	if !ok {
+	if i == nil {
 		return nil, false
 	}
-	startX := (rect.Min.X - i.bounds.Min.X) / i.blockSize
-	startY := (rect.Min.Y - i.bounds.Min.Y) / i.blockSize
-	endX := (rect.Max.X - 1 - i.bounds.Min.X) / i.blockSize
-	endY := (rect.Max.Y - 1 - i.bounds.Min.Y) / i.blockSize
-	out := make(map[int64]Rect, (endX-startX+1)*(endY-startY+1))
-	for y := startY; y <= endY; y++ {
-		for x := startX; x <= endX; x++ {
-			index := y*i.cols + x
-			out[index] = i.BlockRect(index)
-		}
-	}
-	return out, len(out) > 0
+	return i.layout.BlockRects(rect)
 }
 
 func (i *BlockIndex) BlockVersions(blocks map[int64]Rect) map[int64]uint64 {
@@ -329,23 +288,7 @@ func (i *BlockIndex) ClampRect(rect Rect) (Rect, bool) {
 	if i == nil {
 		return Rect{}, false
 	}
-	rect = NormalizeRect(rect)
-	if rect.Max.X <= i.bounds.Min.X || rect.Max.Y <= i.bounds.Min.Y || rect.Min.X >= i.bounds.Max.X || rect.Min.Y >= i.bounds.Max.Y {
-		return Rect{}, false
-	}
-	if rect.Min.X < i.bounds.Min.X {
-		rect.Min.X = i.bounds.Min.X
-	}
-	if rect.Min.Y < i.bounds.Min.Y {
-		rect.Min.Y = i.bounds.Min.Y
-	}
-	if rect.Max.X > i.bounds.Max.X {
-		rect.Max.X = i.bounds.Max.X
-	}
-	if rect.Max.Y > i.bounds.Max.Y {
-		rect.Max.Y = i.bounds.Max.Y
-	}
-	return rect, !rect.Empty()
+	return i.layout.ClampRect(rect)
 }
 
 func (i *BlockIndex) Clear() {

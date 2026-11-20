@@ -49,6 +49,8 @@ type InterestEvent struct {
 
 // AOIConfig shapes an AOI.
 type AOIConfig struct {
+	// IndexMode selects the spatial index at construction; zero is IndexBlock.
+	IndexMode AOIIndexMode
 	Bounds    spatial.Rect
 	BlockSize int64
 	// EnterRadius admits a subject into view; LeaveRadius keeps it there.
@@ -117,6 +119,9 @@ type ObserverView struct {
 
 // withViewDefaults 补齐视野范围的零值；validate、NewAOI、NewAOICluster 都在补齐后的配置上工作。
 func (c AOIConfig) withViewDefaults() AOIConfig {
+	if c.IndexMode == "" {
+		c.IndexMode = IndexBlock
+	}
 	if c.MinViewRadius == 0 {
 		c.MinViewRadius = c.EnterRadius
 	}
@@ -130,6 +135,11 @@ func (c AOIConfig) withViewDefaults() AOIConfig {
 }
 
 func (c AOIConfig) validate() error {
+	switch c.IndexMode {
+	case "", IndexBlock, IndexCrossList, IndexKDTree:
+	default:
+		return fmt.Errorf("%w: unknown IndexMode %q", ErrInterestConfig, c.IndexMode)
+	}
 	if c.MaxObservedBlocks < 0 {
 		return ErrInterestConfig
 	}
@@ -274,7 +284,7 @@ type interestObserver struct {
 	farthestSubject, farthestDistance int64
 }
 
-// AOI is the incremental interest (AOI) layer over spatial.BlockIndex:
+// AOI is the incremental interest layer over the configured spatial index:
 // observers subscribe to the blocks their leave radius covers, subject and
 // observer movement re-evaluates only the affected neighborhood, and Flush
 // drains the resulting Enter/Leave/BandChanged events deterministically.
@@ -283,11 +293,13 @@ type interestObserver struct {
 // 自排除比的是 self，不是观察者 ID。每个观察者有自己的视野（ObserverView），进出半径与距离分档都读观察者的值。
 //
 // 并发边界：公开写方法由 Interest 或 AOICluster 协调，不能由外部并发调用。
-// 物理成员索引复用 BlockIndex 的块级读写锁；扩展块保存观察关系与额外覆盖。
+// Block 模式复用 BlockIndex 的块锁与逐块反向订阅；其他模式用两棵独立的点索引分别定位目标与观察者。
 // 批次写入结束后，不同 observer 可以并行计算，各自拥有可见集和事件缓冲。
 type AOI struct {
 	config       AOIConfig
-	index        *spatial.BlockIndex
+	layout       spatial.BlockLayout
+	index        *spatial.BlockIndex // Block mode only; never allocated in point modes.
+	points       *aoiPointIndexes
 	subjects     map[int64]spatial.Point
 	observers    map[int64]*interestObserver
 	blocks       map[int64]*aoiBlock
@@ -308,12 +320,12 @@ func NewAOI(config AOIConfig) (*AOI, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	index, err := spatial.NewBlockIndex(config.Bounds, config.BlockSize)
-	if err != nil {
+	config = config.withViewDefaults()
+	m := &AOI{}
+	if err := m.initIndex(config); err != nil {
 		return nil, err
 	}
-	config = config.withViewDefaults()
-	config.Bounds = index.Bounds()
+	config.Bounds = m.layout.Bounds()
 	config.Bands = slices.Clone(config.Bands)
 	config.LODs = slices.Clone(config.LODs)
 	for level, bands := range config.LODs {
@@ -322,13 +334,13 @@ func NewAOI(config AOIConfig) (*AOI, error) {
 	if config.MaxObservedBlocks == 0 {
 		config.MaxObservedBlocks = 1024
 	}
-	return &AOI{
-		config:    config,
-		index:     index,
-		subjects:  make(map[int64]spatial.Point),
-		observers: make(map[int64]*interestObserver),
-		blocks:    make(map[int64]*aoiBlock), observed: make(map[int64][]int64), dirty: make(map[int64]*interestObserver),
-	}, nil
+	m.config = config
+	m.subjects = make(map[int64]spatial.Point)
+	m.observers = make(map[int64]*interestObserver)
+	m.blocks = make(map[int64]*aoiBlock)
+	m.observed = make(map[int64][]int64)
+	m.dirty = make(map[int64]*interestObserver)
+	return m, nil
 }
 
 // Bounds returns the managed area.
@@ -367,7 +379,11 @@ func (m *AOI) AddSubject(id int64, at spatial.Point) error {
 		return m.MoveSubject(id, at)
 	}
 	m.subjects[id] = at
-	m.index.Add(id, at)
+	if m.points == nil {
+		m.index.Add(id, at)
+	} else {
+		m.points.subjects.put(id, at)
+	}
 	m.subjectChanged(id, at, false, at, at)
 	return nil
 }
@@ -382,7 +398,11 @@ func (m *AOI) MoveSubject(id int64, to spatial.Point) error {
 	if !m.config.Bounds.Contains(to) {
 		return spatial.ErrInvalidBounds
 	}
-	m.index.Move(id, from, to)
+	if m.points == nil {
+		m.index.Move(id, from, to)
+	} else if from != to {
+		m.points.subjects.put(id, to)
+	}
 	m.subjects[id] = to
 	m.subjectChanged(id, to, false, from, to)
 	return nil
@@ -395,7 +415,11 @@ func (m *AOI) RemoveSubject(id int64) error {
 		return ErrInterestUnknown
 	}
 	_ = m.SetObservedBlocks(id, nil)
-	m.index.Remove(id, at)
+	if m.points == nil {
+		m.index.Remove(id, at)
+	} else {
+		m.points.subjects.drop(id)
+	}
 	delete(m.subjects, id)
 	m.subjectChanged(id, at, true, at, at)
 	return nil
@@ -433,6 +457,10 @@ func (m *AOI) placeObserver(id, self int64, at spatial.Point, view ObserverView)
 	} else if observer.self != self {
 		// 自身实体换了：额外覆盖的可见集也按新的 self 重新排除。
 		reason |= dirtyCoverage
+	}
+	if m.points != nil && (!exists || observer.at != at) {
+		// Cluster mirrors use their true world coordinates, not coordinates clipped to this area.
+		m.points.observers.put(id, at)
 	}
 	observer.self, observer.at = self, at
 	m.setView(observer, view)
@@ -492,8 +520,12 @@ func (m *AOI) RemoveObserver(id int64) error {
 	if !exists {
 		return ErrInterestUnknown
 	}
-	for block := range observer.blocks {
-		m.unsubscribeBlock(observer, block)
+	if m.points == nil {
+		for block := range observer.blocks {
+			m.unsubscribeBlock(observer, block)
+		}
+	} else {
+		m.points.observers.drop(id)
 	}
 	subjects := sortedVisible(observer.visible)
 	for _, subject := range subjects {
@@ -542,12 +574,7 @@ func (m *AOI) Flush() []InterestEvent {
 // resubscribe diffs the observer's block subscriptions against the blocks
 // its own leave-radius box currently covers.
 func (m *AOI) resubscribe(observer *interestObserver) (changed bool) {
-	reach := spatial.SaturatingAdd(observer.leave, 1)
-	box := spatial.Rect{
-		Min: spatial.Point{X: spatial.SaturatingSub(observer.at.X, observer.leave), Y: spatial.SaturatingSub(observer.at.Y, observer.leave)},
-		Max: spatial.Point{X: spatial.SaturatingAdd(observer.at.X, reach), Y: spatial.SaturatingAdd(observer.at.Y, reach)},
-	}
-	next, _ := m.index.BlockRects(box)
+	next, _ := m.layout.BlockRects(aoiRadiusBox(observer.at, observer.leave))
 	for block := range observer.blocks {
 		if _, keep := next[block]; !keep {
 			changed = true
@@ -558,6 +585,9 @@ func (m *AOI) resubscribe(observer *interestObserver) (changed bool) {
 		if _, subscribed := observer.blocks[block]; !subscribed {
 			changed = true
 			observer.blocks[block] = struct{}{}
+			if m.points != nil {
+				continue // only the observer's logical subscription, no reverse block buckets
+			}
 			b := m.block(block)
 			b.mu.Lock()
 			b.observers[observer.id] = observer
@@ -569,9 +599,13 @@ func (m *AOI) resubscribe(observer *interestObserver) (changed bool) {
 
 func (m *AOI) unsubscribeBlock(observer *interestObserver, block int64) {
 	delete(observer.blocks, block)
+	if m.points != nil {
+		return
+	}
 	if b := m.blocks[block]; b != nil {
 		b.mu.Lock()
 		delete(b.observers, observer.id)
+		m.pruneBlock(block, b)
 		b.mu.Unlock()
 	}
 }
@@ -579,6 +613,12 @@ func (m *AOI) unsubscribeBlock(observer *interestObserver, block int64) {
 // appendObserverIDsAt 把这些位置所在块登记的观察者 ID 追加到 dst 并返回，可能重复、不排序；
 // 不建中间集合，供 AOICluster 在自己的协调锁内复用暂存切片做容量重选。
 func (m *AOI) appendObserverIDsAt(dst []int64, points ...spatial.Point) []int64 {
+	if m.points != nil {
+		for _, p := range points {
+			dst = m.appendPointSubscribers(dst, m.BlockAt(p))
+		}
+		return dst
+	}
 	for _, p := range points {
 		if b := m.blocks[m.index.BlockIndex(p)]; b != nil {
 			b.mu.RLock()
@@ -616,6 +656,10 @@ func (m *AOI) observersAt(at spatial.Point, other ...spatial.Point) []*interestO
 // 批次写阶段只把目标记到这些观察者上（不建临时集合，重复由读阶段归一），读阶段再决定逐对评估还是完整重评；
 // 否则立即逐对评估（evaluateSubjectFor）。
 func (m *AOI) subjectChanged(subject int64, at spatial.Point, removed bool, from, to spatial.Point) {
+	if m.points != nil {
+		m.pointSubjectChanged(subject, at, removed, from, to)
+		return
+	}
 	if !m.batching {
 		if from == to {
 			m.evaluateSubjectFor(m.observersAt(from), subject, at, removed)
@@ -696,6 +740,17 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 			m.evictFarthest(observer)
 		}
 	}
+	if m.points != nil {
+		m.pointCandidates(observer, work)
+	} else {
+		m.blockCandidates(observer, work)
+	}
+	m.admitNearest(observer, work.candidates)
+	observer.settled = true
+}
+
+// blockCandidates keeps the original Block index's per-block scan and reusable work buffers.
+func (m *AOI) blockCandidates(observer *interestObserver, work *aoiWorkspace) {
 	blocks := work.blocks[:0]
 	for block := range observer.blocks {
 		blocks = append(blocks, block)
@@ -730,8 +785,6 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 	}
 	work.query, work.candidates = query, candidates
 	work.seenPeak = max(work.seenPeak, len(seen))
-	m.admitNearest(observer, candidates)
-	observer.settled = true
 }
 
 // admitNearest 按距离从近到远（同距按 ID）让候选入选，满额时只淘汰严格更远的成员。

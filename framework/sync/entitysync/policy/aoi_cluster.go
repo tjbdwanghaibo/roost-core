@@ -225,8 +225,7 @@ func (c *AOICluster) moveSubjectLocked(id int64, to spatial.Point) error {
 		return nil
 	}
 	// 区域不设容量，同档移动可能没有区域事件，但距离排序已经改变。能看见该目标的观察者
-	// 都登记在旧、新位置块的反向索引里（含边界镜像），区域 AOI 自己判定可见性用的也是这份索引，
-	// 不扫描全部观察者。
+	// 都订阅了旧、新位置块之一。按区域所选索引反查（含边界镜像），不扫描全部观察者。
 	watchers := c.areas[placement.home].manager.appendObserverIDsAt(c.watchers[:0], placement.at)
 	watchers = destination.manager.appendObserverIDsAt(watchers, to)
 	slices.Sort(watchers)
@@ -297,11 +296,7 @@ func (c *AOICluster) placeObserverLocked(id, self int64, at spatial.Point, view 
 		return ErrAreaUnknown
 	}
 	leave := view.Radius + c.config.hysteresis()
-	span := spatial.SaturatingAdd(leave, 1)
-	reach := spatial.Rect{
-		Min: spatial.Point{X: spatial.SaturatingSub(at.X, leave), Y: spatial.SaturatingSub(at.Y, leave)},
-		Max: spatial.Point{X: spatial.SaturatingAdd(at.X, span), Y: spatial.SaturatingAdd(at.Y, span)},
-	}
+	reach := aoiRadiusBox(at, leave)
 	for _, areaID := range c.order {
 		area := c.areas[areaID]
 		inReach := rectsOverlap(area.bounds, reach)

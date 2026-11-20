@@ -309,6 +309,9 @@ type retryItem struct {
 	hold *hold
 }
 
+// IndexMode reports the spatial index fixed at construction, including IndexBlock for a zero configuration mode.
+func (in *Interest) IndexMode() AOIIndexMode { return in.aoi.config.IndexMode }
+
 func NewInterest(config InterestConfig) (*Interest, error) {
 	if config.Manager == nil {
 		return nil, entitysync.ErrManagerClosed
