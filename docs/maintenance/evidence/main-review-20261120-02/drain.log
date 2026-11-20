@@ -1,0 +1,28 @@
+=== RUN   TestReviewDrainEventAttribution
+=== RUN   TestReviewDrainEventAttribution/false
+    review_drain_test.go:55: id=10172420 early=false writes=1 final={620 540}
+=== RUN   TestReviewDrainEventAttribution/true
+    review_drain_test.go:55: id=10172420 early=true writes=0 final={620 540}
+--- PASS: TestReviewDrainEventAttribution (0.00s)
+    --- PASS: TestReviewDrainEventAttribution/false (0.00s)
+    --- PASS: TestReviewDrainEventAttribution/true (0.00s)
+=== RUN   TestReviewDrainEventAttribution
+=== RUN   TestReviewDrainEventAttribution/false
+    review_drain_test.go:55: id=10172420 early=false writes=1 final={620 540}
+=== RUN   TestReviewDrainEventAttribution/true
+    review_drain_test.go:55: id=10172420 early=true writes=0 final={620 540}
+--- PASS: TestReviewDrainEventAttribution (0.00s)
+    --- PASS: TestReviewDrainEventAttribution/false (0.00s)
+    --- PASS: TestReviewDrainEventAttribution/true (0.00s)
+=== RUN   TestReviewDrainEventAttribution
+=== RUN   TestReviewDrainEventAttribution/false
+    review_drain_test.go:55: id=10172420 early=false writes=1 final={620 540}
+=== RUN   TestReviewDrainEventAttribution/true
+    review_drain_test.go:55: id=10172420 early=true writes=0 final={620 540}
+--- PASS: TestReviewDrainEventAttribution (0.00s)
+    --- PASS: TestReviewDrainEventAttribution/false (0.00s)
+    --- PASS: TestReviewDrainEventAttribution/true (0.00s)
+PASS
+ok  	example.com/reviewdemo/internal/service/game	0.019s
+early=false rc=0
+early=true rc=1 inconclusive: final position is correct, but the drain did not prove a coordinate write for this resident

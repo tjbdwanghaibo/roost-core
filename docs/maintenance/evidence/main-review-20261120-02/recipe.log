@@ -1,0 +1,4 @@
+ok  	example.com/explorer/game/modules/cellspace	0.007s
+ok  	example.com/explorer/game/modules/cellworldhost	0.088s
+ok  	example.com/explorer/game/modules/login	0.012s
+?   	example.com/explorer/internal/service/game	[no test files]

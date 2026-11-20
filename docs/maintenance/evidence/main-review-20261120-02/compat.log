@@ -1,0 +1,11 @@
+2ae1c2312fdfb799bf46a7e8b5ba25cfc70cda55 exit 1 # example.com/reviewdemo/game/modules/scene
+game/modules/scene/scene.go:31:18: undefined: policy.AOIIndexMode
+game/modules/scene/scene.go:108:77: unknown field IndexMode in struct literal of type policy.AOIConfig
+game/modules/scene/scene.go:117:97: cfg.AOI.IndexMode undefined (type policy.AOIConfig has no field or method IndexMode)
+
+605bdba165b10d4fe591a2b3e55266e4d867e84f exit 1 # example.com/reviewdemo/game/modules/scene
+game/modules/scene/scene.go:31:18: undefined: policy.AOIIndexMode
+game/modules/scene/scene.go:108:77: unknown field IndexMode in struct literal of type policy.AOIConfig
+game/modules/scene/scene.go:117:97: cfg.AOI.IndexMode undefined (type policy.AOIConfig has no field or method IndexMode)
+
+108ff00b8b19737d880c023ddd9435b4a92ccdb3 exit 0

@@ -1,0 +1,72 @@
+package game
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// Deliver the exact transport close event with another authenticated connection
+// of the same player still active. Only the first connection joined the map.
+func TestReviewPartitionCloseWithSecondLogin(t *testing.T) {
+	for _, mode := range []string{"embedded", "gate-last", "gate"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			const unique = 861
+			f, peers, scene, player := partitionCommandFixture(t, unique)
+			owner := peers.socket(unique, 1)
+			second := peers.socket(unique, 2)
+			second.key.SessionID = "second-account-session"
+			if mode != "embedded" {
+				f.rt.gateIngress = &partitionGateStub{peers: peers, current: owner, order: 1}
+			}
+			scene.watchSessions(peers)
+			if err := scene.JoinConnection(ctx, player, spatial.Point{}, owner); err != nil {
+				t.Fatal(err)
+			}
+			if err := scene.ReadyConnection(unique, owner); err != nil {
+				t.Fatal(err)
+			}
+			if err := owner.Close(nil); err != nil {
+				t.Fatal(err)
+			}
+			ev := gateway.TCPSessionClosed{PlayerID: unique, SessionID: owner.key.SessionID, ConnectionID: owner.ConnectionID()}
+			peers.mu.Lock()
+			callbacks := append([]func(gateway.TCPSessionClosed){}, peers.closed...)
+			peers.mu.Unlock()
+			wantOther := 1
+			if mode == "gate-last" {
+				if err := second.Close(nil); err != nil {
+					t.Fatal(err)
+				}
+				peers.disconnect(unique)
+				wantOther = 0
+			}
+			if len(callbacks) == 0 || peers.ActiveSessions(unique) != wantOther || peers.ConnectionActive(unique, owner.ConnectionID()) || peers.ConnectionActive(unique, second.ConnectionID()) != (wantOther == 1) {
+				t.Fatal("invalid connection table or event setup")
+			}
+			for _, fn := range callbacks {
+				fn(ev)
+			}
+			// Run the production fallback for at least two sweep intervals.
+			run, cancel := context.WithTimeout(ctx, 2200*time.Millisecond)
+			defer cancel()
+			scene.reconcilePartitionViews(run)
+			members := scene.Members()
+			if err := scene.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			frames := len(peers.take(unique))
+			err := scene.manager.ReadySession(entitysync.SessionID(unique))
+			t.Logf("live_other=%d owner_active=false members=%d manager_ready=%v player_keyed_frames=%d", wantOther, members, err, frames)
+			if members != 0 || !errors.Is(err, entitysync.ErrSessionUnknown) {
+				t.Error("disconnected owner's replication session still present")
+			}
+		})
+	}
+}

@@ -1,0 +1,44 @@
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce/nonzero
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce/origin
+--- PASS: TestOrdinaryTransferPlacementUsesTargetOnce (0.00s)
+    --- PASS: TestOrdinaryTransferPlacementUsesTargetOnce/nonzero (0.00s)
+    --- PASS: TestOrdinaryTransferPlacementUsesTargetOnce/origin (0.00s)
+=== RUN   TestOrdinaryFirstPlacementWithoutSaveUsesSpawn
+--- PASS: TestOrdinaryFirstPlacementWithoutSaveUsesSpawn (0.00s)
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_false
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_true
+--- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges (0.00s)
+    --- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_false (0.00s)
+    --- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_true (0.00s)
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce/nonzero
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce/origin
+--- PASS: TestOrdinaryTransferPlacementUsesTargetOnce (0.00s)
+    --- PASS: TestOrdinaryTransferPlacementUsesTargetOnce/nonzero (0.00s)
+    --- PASS: TestOrdinaryTransferPlacementUsesTargetOnce/origin (0.00s)
+=== RUN   TestOrdinaryFirstPlacementWithoutSaveUsesSpawn
+--- PASS: TestOrdinaryFirstPlacementWithoutSaveUsesSpawn (0.00s)
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_false
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_true
+--- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges (0.00s)
+    --- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_false (0.00s)
+    --- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_true (0.00s)
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce/nonzero
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce/origin
+--- PASS: TestOrdinaryTransferPlacementUsesTargetOnce (0.00s)
+    --- PASS: TestOrdinaryTransferPlacementUsesTargetOnce/nonzero (0.00s)
+    --- PASS: TestOrdinaryTransferPlacementUsesTargetOnce/origin (0.00s)
+=== RUN   TestOrdinaryFirstPlacementWithoutSaveUsesSpawn
+--- PASS: TestOrdinaryFirstPlacementWithoutSaveUsesSpawn (0.00s)
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_false
+=== RUN   TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_true
+--- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges (0.00s)
+    --- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_false (0.00s)
+    --- PASS: TestOrdinaryDrainReportsOnlyOwnCoordinateChanges/periodic_save_true (0.00s)
+PASS
+ok  	example.com/reviewdemo/internal/service/game	0.025s

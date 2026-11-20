@@ -1,0 +1,65 @@
+package game
+
+import (
+	"bytes"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+
+	syncsender "example.com/reviewdemo/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+func TestReviewDrainEventAttribution(t *testing.T) {
+	for _, early := range []bool{false, true} {
+		t.Run(fmt.Sprint(early), func(t *testing.T) {
+			w := newMoveWorld(t)
+			spawn, last := spatial.Point{X: 500, Y: 500}, spatial.Point{X: 620, Y: 540}
+			p := w.join(9934, spawn)
+			save := p.MapComp().Body().Map.Save
+			if err := sharedBodyRequest(w, p, save); err != nil {
+				t.Fatal(err)
+			}
+			if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, p.ID(), w.area.ID(), last.X, last.Y); err != nil {
+				t.Fatal(err)
+			}
+			w.bridge.Leave(w.ctx, p.ID())
+			if before := w.saved.of(p.ID()); before != spawn {
+				t.Fatal(before)
+			}
+			if early {
+				if err := sharedBodyRequest(w, p, save); err != nil {
+					t.Fatal(err)
+				}
+			}
+			count := func() int { w.saved.mu.Lock(); defer w.saved.mu.Unlock(); return w.saved.writes[p.ID()] }
+			before := count()
+			var log bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&log, nil)))
+			defer slog.SetDefault(old)
+			d := playerEvictor{scene: w.bridge, manager: w.entities, nest: w.engine, ordinarySceneID: w.area.ID()}
+			ids, err := d.beginOrdinaryDrain(w.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = d.finishOrdinaryDrain(w.ctx, ids); err != nil {
+				t.Fatal(err)
+			}
+			delta := count() - before
+			if w.saved.of(p.ID()) != last || (!early && delta != 1) || (early && delta != 0) {
+				t.Fatal(delta)
+			}
+			t.Logf("id=%d early=%t writes=%d final=%v", p.ID(), early, delta, last)
+			dir := os.Getenv("REVIEW_EVENTS")
+			if err = os.WriteFile(filepath.Join(dir, fmt.Sprintf("%t.jsonl", early)), log.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(dir, "entity-id"), []byte(fmt.Sprint(p.ID())), 0600); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

@@ -1,0 +1,39 @@
+=== RUN   TestReviewPartitionCloseWithSecondLogin
+=== RUN   TestReviewPartitionCloseWithSecondLogin/embedded
+    review_close_test.go:66: live_other=1 owner_active=false members=0 manager_ready=entitysync: session is not open player_keyed_frames=0
+=== RUN   TestReviewPartitionCloseWithSecondLogin/gate-last
+    review_close_test.go:66: live_other=0 owner_active=false members=0 manager_ready=entitysync: session is not open player_keyed_frames=0
+=== RUN   TestReviewPartitionCloseWithSecondLogin/gate
+    review_close_test.go:66: live_other=1 owner_active=false members=1 manager_ready=<nil> player_keyed_frames=1
+    review_close_test.go:68: disconnected owner's replication session still present
+--- FAIL: TestReviewPartitionCloseWithSecondLogin (6.69s)
+    --- PASS: TestReviewPartitionCloseWithSecondLogin/embedded (2.20s)
+    --- PASS: TestReviewPartitionCloseWithSecondLogin/gate-last (2.23s)
+    --- FAIL: TestReviewPartitionCloseWithSecondLogin/gate (2.25s)
+=== RUN   TestReviewPartitionCloseWithSecondLogin
+=== RUN   TestReviewPartitionCloseWithSecondLogin/embedded
+    review_close_test.go:66: live_other=1 owner_active=false members=0 manager_ready=entitysync: session is not open player_keyed_frames=0
+=== RUN   TestReviewPartitionCloseWithSecondLogin/gate-last
+    review_close_test.go:66: live_other=0 owner_active=false members=0 manager_ready=entitysync: session is not open player_keyed_frames=0
+=== RUN   TestReviewPartitionCloseWithSecondLogin/gate
+    review_close_test.go:66: live_other=1 owner_active=false members=1 manager_ready=<nil> player_keyed_frames=1
+    review_close_test.go:68: disconnected owner's replication session still present
+--- FAIL: TestReviewPartitionCloseWithSecondLogin (6.72s)
+    --- PASS: TestReviewPartitionCloseWithSecondLogin/embedded (2.25s)
+    --- PASS: TestReviewPartitionCloseWithSecondLogin/gate-last (2.23s)
+    --- FAIL: TestReviewPartitionCloseWithSecondLogin/gate (2.24s)
+=== RUN   TestReviewPartitionCloseWithSecondLogin
+=== RUN   TestReviewPartitionCloseWithSecondLogin/embedded
+    review_close_test.go:66: live_other=1 owner_active=false members=0 manager_ready=entitysync: session is not open player_keyed_frames=0
+=== RUN   TestReviewPartitionCloseWithSecondLogin/gate-last
+    review_close_test.go:66: live_other=0 owner_active=false members=0 manager_ready=entitysync: session is not open player_keyed_frames=0
+=== RUN   TestReviewPartitionCloseWithSecondLogin/gate
+    review_close_test.go:66: live_other=1 owner_active=false members=1 manager_ready=<nil> player_keyed_frames=1
+    review_close_test.go:68: disconnected owner's replication session still present
+--- FAIL: TestReviewPartitionCloseWithSecondLogin (6.79s)
+    --- PASS: TestReviewPartitionCloseWithSecondLogin/embedded (2.27s)
+    --- PASS: TestReviewPartitionCloseWithSecondLogin/gate-last (2.26s)
+    --- FAIL: TestReviewPartitionCloseWithSecondLogin/gate (2.26s)
+FAIL
+FAIL	example.com/reviewdemo/internal/service/game	20.222s
+FAIL

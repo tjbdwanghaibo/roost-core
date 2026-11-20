@@ -1,0 +1,3 @@
+ok  	example.com/reviewdemo/internal/service/game	83.925s
+ok  	example.com/reviewdemo/game/controllers	9.554s
+ok  	example.com/reviewdemo/game/handler	7.735s

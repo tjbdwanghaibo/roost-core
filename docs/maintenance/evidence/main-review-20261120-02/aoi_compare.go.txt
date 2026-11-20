@@ -1,0 +1,78 @@
+package main
+
+import (
+	"fmt"
+	"math/rand"
+	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func main() {
+	for _, seed := range []int64{10, 69, 248} {
+		r := rand.New(rand.NewSource(seed))
+		modes := []policy.AOIIndexMode{policy.IndexBlock, policy.IndexCrossList, policy.IndexKDTree}
+		var clusters []*policy.AOICluster
+		point := func() spatial.Point { return spatial.Point{X: r.Int63n(96) - 48, Y: r.Int63n(48)} }
+		for _, mode := range modes {
+			c, err := policy.NewAOICluster(policy.AOIConfig{IndexMode: mode, BlockSize: 8, EnterRadius: 10, LeaveRadius: 12, MinViewRadius: 6, MaxLeaveRadius: 22, MaxVisible: 4, Bands: []int64{5, 9}})
+			must(err)
+			must(c.AddArea(1, spatial.Rect{Min: spatial.Point{X: -48}, Max: spatial.Point{Y: 48}}))
+			must(c.AddArea(2, spatial.Rect{Max: spatial.Point{X: 48, Y: 48}}))
+			clusters = append(clusters, c)
+		}
+		for id := int64(1); id <= 32; id++ {
+			p := point()
+			for _, c := range clusters {
+				must(c.AddSubject(id, p))
+			}
+		}
+		for id := int64(1); id <= 12; id++ {
+			p := point()
+			for _, c := range clusters {
+				must(c.AddObserver(id, id, p, policy.ObserverView{}))
+			}
+		}
+		events := 0
+		for step := 0; step < 1200; step++ {
+			at, subject, observer, op, radius := point(), r.Int63n(32)+1, r.Int63n(12)+1, r.Intn(5), r.Int63n(15)+6
+			var reference []policy.InterestEvent
+			for i, c := range clusters {
+				switch op {
+				case 0, 1:
+					must(c.MoveSubject(subject, at))
+				case 2:
+					must(c.MoveObserver(observer, at))
+				case 3:
+					_, err := c.SetObserverView(observer, policy.ObserverView{Radius: radius})
+					must(err)
+				case 4:
+					must(c.RemoveSubject(subject))
+					must(c.AddSubject(subject, at))
+				}
+				got := c.Flush()
+				if i == 0 {
+					reference = got
+					events += len(got)
+					continue
+				}
+				if !slices.Equal(got, reference) {
+					panic(fmt.Sprintf("seed %d step %d mode %s events %v vs %v", seed, step, modes[i], got, reference))
+				}
+				for who := int64(1); who <= 12; who++ {
+					if !slices.Equal(clusters[0].Visible(who), c.Visible(who)) {
+						panic(fmt.Sprintf("visible differed seed=%d step=%d observer=%d mode=%s", seed, step, who, modes[i]))
+					}
+				}
+			}
+		}
+		fmt.Printf("seed=%d steps=1200 observers=12 subjects=32 matching_events=%d\n", seed, events)
+	}
+}
