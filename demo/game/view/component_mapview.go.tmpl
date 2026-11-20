@@ -15,6 +15,7 @@ type Map interface {
 	Facing() movement.Facing
 	SceneID() int64
 	InScene() bool
+	SavedSceneID() int64
 	SavedPos() spatial.Point
 	SavedFacing() movement.Facing
 	EnterScene(sceneID int64, space movement.Space, at spatial.Point) (spatial.Point, error)

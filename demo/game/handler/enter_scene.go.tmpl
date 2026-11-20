@@ -36,7 +36,9 @@ func handlerEnterScene(target view.IMapEntity, area sceneentity.ISceneEntity, sp
 		return component.Pos(), nil
 	}
 	preferred := component.SavedPos()
-	if preferred.X == 0 && preferred.Y == 0 {
+	// A saved scene makes the origin a real position. Keep accepting nonzero points
+	// from first-enter/older saves that do not yet carry a saved scene ID.
+	if preferred == (spatial.Point{}) && component.SavedSceneID() == 0 {
 		preferred = spatial.Point{X: spawnX, Y: spawnY}
 	}
 	at, err := area.PathFind().Place(preferred)

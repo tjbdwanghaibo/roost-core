@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 - **game-demo 写全服 World 的事务改为 `durability=pipelined completion=async`**（维护者 2026-11-18 按推荐定 A）：AddExp、ClaimDungeon、RecordEnter、RecordMatch、SettleActivity 不再每次 fsync 只放一条，同一 World 上的下一条在上一条入队后就开始；回复仍在 WAL 持久之后，持久保证与事务边界不变。只读的 ActivitySettled / WorldStats 不变。demo 测试的替身提交器补了 `Enqueue`。200 人同秒档未重测。
+- **game-demo 普通图（RV-20261120-01）**：已保存场景号的 `(0,0)` 是有效存档，不再被冷重连替换为出生点。无位置存档的首次进入仍用出生点，非零旧存档沿用；不改 DAO 格式、分区场景或换服首次落点规则。
+- **停机演练（RV-20261120-02）**：只在目标玩家的排空离场事务确实改变已保存坐标、调用成功且 Mongo 最终位置正确时认定排空写入。周期保存抢先时报告证据不足，不误报通过；`drain-event.json` 留存对应实体的结构化日志。
+
 ## [v1.59.0] - 2026-11-20
 
 - **game-demo 普通图停机排空**：逐个保存驻留玩家时，某名玩家离场失败不再中止整轮，其余玩家照常保存最后位置，失败汇总返回、地图不确认关闭（回归 `TestOrdinaryDrainSavesEveryResidentBeforeReportingAFailure`）。真实进程演练 `scripts/test-demo-ordinary-drain.sh` 另外核对排空日志里确有这名玩家，周期存档抢先写入时不再误判通过。

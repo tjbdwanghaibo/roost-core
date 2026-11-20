@@ -33,12 +33,30 @@ done
 [[ -f "$out/before.json" ]] || drill_fail 'inconclusive: no resident had an unsaved last point at stop'
 sh deploy/dev/run.sh stop game >"$out/stop.log" 2>&1
 ! grep -Fq 'ordinary map drain incomplete' .dev/game.log || drill_fail 'drain incomplete'
-# A periodic save landing between the sample above and the drain would also produce [620,540];
-# require the drain itself to have saved this resident so the position check proves the drain.
-grep -F 'ordinary map drain saved resident' .dev/game.log | grep -Fq "$id" || drill_fail 'drain did not save the resident'
 grep -Fq 'server stopped' .dev/game.log || drill_fail 'normal stop not confirmed'
 position >"$out/after.json"
 jq -e '. == [620,540]' "$out/after.json" >/dev/null || drill_fail 'disconnected resident lost its last point'
+# The same final point can come from a periodic save. Match the exact entity (int64)
+# and the transaction outcome, not a substring of a log line or a pair of Mongo snapshots.
+python3 - .dev/game.log "$id" "$out/drain-event.json" <<'PY'
+import json, sys
+matches = []
+with open(sys.argv[1]) as log:
+    for line in log:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue  # dev-run also writes plain text
+        if isinstance(event, dict) and event.get('msg') == 'ordinary map drain released resident' and event.get('entity_id') == int(sys.argv[2]):
+            matches.append(event)
+if len(matches) != 1:
+    sys.exit('drain evidence missing or ambiguous for entity ' + sys.argv[2])
+event = matches[0]
+with open(sys.argv[3], 'w') as out:
+    json.dump(event, out)
+if event.get('position_changed') is not True:
+    sys.exit('inconclusive: final position is correct, but the drain did not prove a coordinate write for this resident')
+PY
 sh deploy/dev/run.sh start game >"$out/restart.log" 2>&1
 probe resume >"$out/resume.log"
 drill_log 'PASS: normal stop persisted the last point; fresh ordinary map admitted the same player'

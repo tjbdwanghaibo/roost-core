@@ -90,6 +90,7 @@ type moveWorld struct {
 type savedPositions struct {
 	mu sync.Mutex
 	at map[int64]spatial.Point
+	writes map[int64]int // committed mutations containing at least one saved coordinate
 }
 
 func (s *savedPositions) Commit(_ context.Context, record dataengine.CommitRecord) error {
@@ -103,6 +104,7 @@ func (s *savedPositions) Commit(_ context.Context, record dataengine.CommitRecor
 			x, okX := bson.Raw(raw).Lookup("saved_pos_x").AsInt64OK()
 			y, okY := bson.Raw(raw).Lookup("saved_pos_y").AsInt64OK()
 			if okX || okY {
+				s.writes[mutation.Key.ID]++
 				at := s.at[mutation.Key.ID]
 				if okX {
 					at.X = x
@@ -139,7 +141,7 @@ func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
 func newMoveWorldMode(t *testing.T, config gamescene.Config, partitioned bool) *moveWorld {
 	t.Helper()
 	ctx := context.Background()
-	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}, saved: &savedPositions{at: map[int64]spatial.Point{}}}
+	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}, saved: &savedPositions{at: map[int64]spatial.Point{}, writes: map[int64]int{}}}
 	w.clock.nanos.Store(time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano())
 	clock.SetSource(w.clock.now)
 	t.Cleanup(func() { clock.SetSource(nil) })
@@ -779,6 +781,68 @@ func TestOrdinaryShutdownNeverWritesPastNestFence(t *testing.T) {
 }
 
 func TestOrdinaryTransferPlacementUsesTargetOnce(t *testing.T) {
+	for name, at := range map[string]spatial.Point{"nonzero": {X: 430, Y: 450}, "origin": {}} {
+		t.Run(name, func(t *testing.T) { testTransferPlacement(t, at) })
+	}
+}
+
+func TestOrdinaryFirstPlacementWithoutSaveUsesSpawn(t *testing.T) {
+	w := newMoveWorld(t)
+	p := newScenePlayer(t, 9918)
+	w.entities.Add(p)
+	spawn := locked(w, w.area.ID(), w.area.SpawnPoint)
+	if spawn == (spatial.Point{}) || locked(w, p.ID(), p.MapComp().SavedSceneID) != 0 || locked(w, p.ID(), p.MapComp().SavedPos) != (spatial.Point{}) {
+		t.Fatal("invalid no-save control")
+	}
+	entry, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_PlaceOrdinaryPlayer(w.ctx, p.ID(), w.area.ID(), 1000)
+	if err != nil || entry.At != spawn || entry.Arriving {
+		t.Fatalf("first placement %+v, want %v: %v", entry, spawn, err)
+	}
+}
+
+func TestOrdinaryDrainReportsOnlyOwnCoordinateChanges(t *testing.T) {
+	for _, early := range []bool{false, true} {
+		t.Run(fmt.Sprintf("periodic_save_%t", early), func(t *testing.T) {
+			w := newMoveWorld(t)
+			spawn, last := spatial.Point{X: 500, Y: 500}, spatial.Point{X: 620, Y: 540}
+			p := w.join(9934, spawn)
+			save := p.MapComp().Body().Map.Save
+			if err := sharedBodyRequest(w, p, save); err != nil {
+				t.Fatal(err)
+			}
+			if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, p.ID(), w.area.ID(), last.X, last.Y); err != nil {
+				t.Fatal(err)
+			}
+			w.bridge.Leave(w.ctx, p.ID())
+			if got := w.saved.of(p.ID()); got != spawn {
+				t.Fatalf("before snapshot %v", got)
+			}
+			if early {
+				if err := sharedBodyRequest(w, p, save); err != nil {
+					t.Fatal(err)
+				}
+			}
+			count := func() int { w.saved.mu.Lock(); defer w.saved.mu.Unlock(); return w.saved.writes[p.ID()] }
+			sender := syncsender.NewLeaveSceneSender(w.engine)
+			if _, err := sender.Sync_BeginOrdinaryDrain(w.ctx, w.area.ID()); err != nil {
+				t.Fatal(err)
+			}
+			before := count()
+			changed, err := sender.MultiSync_DrainOrdinaryResident(w.ctx, p.ID(), w.area.ID())
+			writes := count() - before
+			want := 1
+			if early {
+				want = 0
+			}
+			if err != nil || writes != want || changed != (want == 1) || w.saved.of(p.ID()) != last {
+				t.Fatalf("changed=%v, committed coordinate writes=%d, last=%v: %v", changed, writes, w.saved.of(p.ID()), err)
+			}
+		})
+	}
+}
+
+func testTransferPlacement(t *testing.T, moved spatial.Point) {
+	t.Helper()
 	cfg := gamescene.DefaultConfig()
 	cfg.Spawn = spatial.Point{X: 400, Y: 410}
 	cfg.PlayerCapacity = 1
@@ -823,7 +887,6 @@ func TestOrdinaryTransferPlacementUsesTargetOnce(t *testing.T) {
 	}
 	// Join/OnEntered can be interrupted after placement. Move again and unload the map;
 	// retry with the still-pending transfer must use the saved destination point, not spawn again.
-	moved := spatial.Point{X: 430, Y: 450}
 	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, p.ID(), w.area.ID(), moved.X, moved.Y); err != nil {
 		t.Fatal(err)
 	}

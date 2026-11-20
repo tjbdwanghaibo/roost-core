@@ -41,6 +41,17 @@ func handlerLeaveOrdinaryScene(target view.IMapEntity, area sceneentity.ISceneEn
 	return nil
 }
 
+// Report a coordinate change only for this drain's own leave, under the same Player
+// and scene locks. A successful leave after a periodic save is not another position write.
+//roost:nest rollback=undo durability=async
+func handlerDrainOrdinaryResident(target view.IMapEntity, area sceneentity.ISceneEntity) (bool, error) {
+	before := target.Map().SavedPos()
+	if err := handlerLeaveOrdinaryScene(target, area); err != nil {
+		return false, err
+	}
+	return target.Map().SavedPos() != before, nil
+}
+
 //roost:nest rollback=undo durability=memory
 func handlerBeginOrdinaryDrain(area sceneentity.ISceneEntity) []int64 { return area.BeginPlayerDrain() }
 

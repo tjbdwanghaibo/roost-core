@@ -81,6 +81,7 @@ func (c *Component) Pos() spatial.Point      { return c.body.Position() }
 func (c *Component) Facing() movement.Facing { return c.body.Map.Facing() }
 func (c *Component) SceneID() int64          { return c.body.Map.SceneID() }
 func (c *Component) InScene() bool           { return c.body.Map.InScene() }
+func (c *Component) SavedSceneID() int64 { return c.owner.Dao().GetSavedSceneID() }
 func (c *Component) SavedPos() spatial.Point {
 	d := c.owner.Dao()
 	return spatial.Point{X: d.GetSavedPosX(), Y: d.GetSavedPosY()}

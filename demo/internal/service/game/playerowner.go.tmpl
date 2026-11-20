@@ -856,23 +856,32 @@ func (evictor playerEvictor) beginOrdinaryDrain(ctx context.Context) ([]int64, e
 // leave does not stop the loop: every other resident still saves its last point,
 // and the failures are reported together with the map left open.
 func (evictor playerEvictor) finishOrdinaryDrain(ctx context.Context, members []int64) error {
+	sender := syncsender.NewLeaveSceneSender(evictor.nest)
 	var failed error
 	for _, id := range members {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(failed, err)
 		}
-		if err := evictor.leaveMap(ctx, id); err != nil {
+		var changed bool
+		var err error
+		if evictor.manager.GetWithCategory(id, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer)) == nil {
+			// Do not cold load a Player just to release a stale slot.
+			err = sender.Sync_ForgetUnloadedScenePlayer(ctx, evictor.ordinarySceneID, id)
+		} else {
+			changed, err = sender.MultiSync_DrainOrdinaryResident(ctx, id, evictor.ordinarySceneID)
+		}
+		if err != nil {
 			failed = errors.Join(failed, fmt.Errorf("drain ordinary map: leave %d: %w", id, err))
 			continue
 		}
 		evictor.scene.Leave(ctx, id)
-		// One line per resident: the real-process drill checks that its player's last point came from here.
-		slog.Info("ordinary map drain saved resident", "entity_id", id)
+		// Only report after the sync call has succeeded (not from an uncommitted handler).
+		slog.Info("ordinary map drain released resident", "entity_id", id, "position_changed", changed)
 	}
 	if failed != nil {
 		return failed
 	}
-	return syncsender.NewLeaveSceneSender(evictor.nest).Sync_CloseEmptyOrdinaryMap(ctx, evictor.ordinarySceneID)
+	return sender.Sync_CloseEmptyOrdinaryMap(ctx, evictor.ordinarySceneID)
 }
 
 // playerKindIsResident 报告 Player 这个 kind 是否声明了 lifetime=resident（`//roost:entity lifetime=resident`）。
