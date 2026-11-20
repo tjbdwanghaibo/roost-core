@@ -14,6 +14,12 @@
 
 成员准入另有 `AdmitMember` / `DepartMember`：调用者传入 Scene 的事务 DAO，规则不维护第二份集合，不创建会话，也不以断线判定玩家已经离场。完整模块仍用原来的满员／关图拒绝码。`BeginClosing` 在同一场景事务里关准入并返回剩余成员；`CloseIfEmpty` 只允许空图确认关闭。撤离实体、释放 AOI／同步服务等副作用仍归宿主，不在这两个函数里做。
 
+### 按地图选 Interest 索引
+
+给 `scene.Config.AOIIndex` 赋 `policy.IndexBlock`、`policy.IndexCrossList` 或 `policy.IndexKDTree`，再开图。默认（含零值）为 `block`，非法名称会拒绝创建。`NewHostedSpace` 沿用宿主的 `policy.InterestConfig.AOI.IndexMode`；`space.Interest.IndexMode()` 可以核对实际使用的模式。不同地图可同时选不同模式，运行中不自动切换。
+
+高密度、高移动的大图先试 Block；对象较少但会移动的图可以试十字链表；较少移动、经常查询的对象可以试 KD 树。不是固定人数阈值。三者不改变圆形视野、进入/离开滞回、LOD、名额、显式覆盖块或事务提交时机。这里选择的是 **Interest**：独立地图为怪物 `Sense` 建立的索引仍为 Block，保留自己的尺寸/内存约束。不要把 Interest 的节省算成整张地图的节省。
+
 ## 联动
 
 `scene` 使用 `NewSpace`，保留公开视图与感知索引；宿主模式使用宿主原有的公开／私有字段划分。两者共享 `Space` 的同一份实现。

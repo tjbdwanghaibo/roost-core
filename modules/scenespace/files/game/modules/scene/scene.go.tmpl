@@ -26,6 +26,9 @@ type Config struct {
 	Bounds    spatial.Rect
 	Spawn     spatial.Point
 	BlockSize int64
+	// AOIIndex selects this map's Interest broad phase at creation. Zero means block.
+	// Independent of the committed AI Sense index, terrain and Cell ownership.
+	AOIIndex policy.AOIIndexMode
 	Sight     int64
 	Capacity  int
 	Ground    spatial.Terrain
@@ -102,7 +105,7 @@ func NewSpace(manager *entitysync.Manager, config Config, playerKind entity.Enti
 	selfVisible := false // 玩家本人已由 access.self_sync 订阅，AOI 只给公开视图。
 	return newSpace(config, playerKind, 1, Public, true, policy.InterestConfig{
 		Manager: manager, SelfVisible: &selfVisible,
-		AOI: policy.AOIConfig{Bounds: config.Bounds, BlockSize: config.BlockSize,
+		AOI: policy.AOIConfig{Bounds: config.Bounds, BlockSize: config.BlockSize, IndexMode: config.AOIIndex,
 			EnterRadius: config.Sight, LeaveRadius: config.Sight + config.BlockSize, MaxVisible: 128},
 		BandLayer: func(int, int) entity.SyncProfile { return Public },
 	})
@@ -111,7 +114,7 @@ func NewSpace(manager *entitysync.Manager, config Config, playerKind entity.Enti
 // NewHostedSpace 使用宿主已有的 Manager 和原样的 AOI / 可见字段规则，只为这张地图登记一个 Interest。
 // 宿主拥有会话、地形与寻路；这里不创建或关闭 Manager，也不为非 Sense 使用者建立第二份站位索引。
 func NewHostedSpace(cfg policy.InterestConfig, playerKind entity.EntityKind, metadata policy.ViewID, profile entity.SyncProfile) (*Space, error) {
-	return newSpace(Config{Bounds: cfg.AOI.Bounds, BlockSize: cfg.AOI.BlockSize, Sight: cfg.AOI.EnterRadius}, playerKind, metadata, profile, false, cfg)
+	return newSpace(Config{Bounds: cfg.AOI.Bounds, BlockSize: cfg.AOI.BlockSize, AOIIndex: cfg.AOI.IndexMode, Sight: cfg.AOI.EnterRadius}, playerKind, metadata, profile, false, cfg)
 }
 
 func newSpace(config Config, playerKind entity.EntityKind, metadata policy.ViewID, profile entity.SyncProfile, sense bool, cfg policy.InterestConfig) (*Space, error) {

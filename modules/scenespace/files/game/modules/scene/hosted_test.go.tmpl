@@ -29,6 +29,20 @@ func TestSceneSpaceBorrowsTheHostManager(t *testing.T) {
 		t.Fatal("hosted space replaced its manager")
 	}
 	s.Close()
+	// Three maps can coexist on one manager without changing each other's broad phase.
+	var maps []*Space
+	defer func() { for _, space := range maps { space.Close() } }()
+	for _, mode := range []policy.AOIIndexMode{"", policy.IndexCrossList, policy.IndexKDTree} {
+		cfg := DefaultConfig(); cfg.AOIIndex = mode
+		space, err := NewSpace(m, cfg, 1)
+		if err != nil { t.Fatalf("open %q: %v", mode, err) }
+		maps = append(maps, space)
+	}
+	for i, mode := range []policy.AOIIndexMode{policy.IndexBlock, policy.IndexCrossList, policy.IndexKDTree} {
+		if got := maps[i].Interest.IndexMode(); got != mode { t.Fatalf("map %d uses %q, want %q", i, got, mode) }
+	}
+	bad := DefaultConfig(); bad.AOIIndex = "typo"
+	if got, err := NewSpace(m, bad, 1); err == nil || got != nil { t.Fatal("invalid AOI index accepted") }
 	if err := m.OpenHeldSession(19); err != nil {
 		t.Fatalf("closing the space closed the host manager: %v", err)
 	}

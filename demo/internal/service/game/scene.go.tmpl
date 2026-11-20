@@ -321,15 +321,17 @@ func (s *Service) newScene(registry *app.Registry) (*Scene, error) {
 	if !ok || loads == nil {
 		return nil, errors.New("scene: the data engine does not report entity loads, so a player loaded again after an unload would stay unbound from the scene")
 	}
-	partitioned, err := settings.LoadPartition(registry)
+	mapSettings, err := settings.LoadScene(registry)
 	if err != nil {
 		return nil, fmt.Errorf("scene: %w", err)
 	}
+	partitioned := mapSettings.Partition
 	terrainMap := terrainmap.Active()
 	config, err := replicatedWorld(partitioned, terrainMap)
 	if err != nil {
 		return nil, fmt.Errorf("scene: %w", err)
 	}
+	config.AOIIndex = policy.AOIIndexMode(mapSettings.AOIIndex)
 	// The editable terrain (terrain.go, already loaded and published by
 	// startTerrain) replicates through this manager: its own interest policy,
 	// a bigger object limit and the snapshot budget (terrain_sync.go). In a
@@ -546,6 +548,7 @@ func newSceneForMode(lane entitysync.Transport, transport scenePusher, watermark
 		AOI: policy.AOIConfig{
 			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
 			BlockSize:   config.BlockSize,
+			IndexMode:   config.AOIIndex,
 			EnterRadius: config.View.EnterRadius,
 			LeaveRadius: config.View.LeaveRadius,
 			// The nearest View.MaxVisible in range, not everyone in range:

@@ -147,6 +147,8 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 
 ## 同步视图：谁看见哪些字段
 
+`scene.aoi_index` 选择本地图**角色主视野**的空间索引：`block`（默认）、`crosslist`（十字链表）、`kdtree`（KD 树）。开图时固定，不依据在线人数自动迁移；分区模式下此键选的是 Base 的镜像主视野，不会改变 Cell 的归属或授权。地形块的独立 Interest 仍用 Block。完整模块的多地图工程可按每张图设置 `scene.Config.AOIIndex`。
+
 `scene.player_capacity` 是普通图的**在图玩家**容量（默认 0，不限）。Player + Scene 同笔事务登记名额和位置；满员答 `scene_full`，不 Join、不发进入通知，已有角色无需重建。最后一条连接断开只清理会话与视野；重连复用原名额，正式离场／卸载才释放。怪、建筑、CellWorld 都不占这张账本；`MaxPlayersPerView` 是视野预算，不是人数配置。
 
 正常停机时，普通图不再接受新落位和迟到的 Join；在线与断线驻留玩家都经正式离场事务保存最后位置。只有空账本能确认关图，失败或超时不算成功；遇到 fail-stop 不会越过 Nest 围栏写档。同步桥和地形资源仍由服务在原顺序收尾。重启从配置建图，不提供在线关图／重开，不删除地形或建筑存档。真实进程回归见 [`test-demo-ordinary-drain.sh`](../scripts/test-demo-ordinary-drain.sh)：先确认移动后 Mongo 仍是旧点，再停服核对新点并重启登录。

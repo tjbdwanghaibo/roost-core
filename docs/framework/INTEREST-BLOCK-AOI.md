@@ -1,6 +1,32 @@
-# Interest 的 Block AOI 与手写空间组件
+# Interest 的空间索引与手写空间组件
 
 状态：工作分支已实施，尚未发布。复用正式 Nest/Guard 提交门；不增加 Guard 业务回调，不修改生成器。Nest short 池默认等待容量为65536。功能/race验收与性能验收分开：本轮没有重新证明15分钟重档容量。
+
+## 地图选型：Block、十字链表与 KD 树
+
+`policy.AOIConfig.IndexMode` 在构造时选择 `policy.IndexBlock`、`policy.IndexCrossList` 或 `policy.IndexKDTree`；零值沿用 Block，非法值构造失败。`Interest.IndexMode()` 返回实际模式。普通 `scene` 模块按图设置 `scene.Config.AOIIndex`；game-demo 读 `scene.aoi_index: block|crosslist|kdtree`。不会自动或运行时换索引。这里的索引不控制地形、独立 AI Sense 或 CellWorld 的所有权。
+
+- **Block**：固定块直接找目标与订阅者。密集、视野和目标频繁移动的地图优先用默认值。密集块表付出按地图格数分配的内存。
+- **CrossList**：同一节点分别挂在 X/Y 两条有序双向链，用稀疏跳链找区间；短距离移动局部调整，取候选较少的轴筛另一轴。低密度地图值得比较，尤其是不能承受位置变化后整树重建的场景。
+- **KDTree**：X/Y 轴交替的平衡树，按子树包围盒剪枝。适合位置稳定、重复局部查询、且希望降低稀疏图保留内存的场景。有净移动且下一次实际查询该树时要重建；只有逐对更新时不必重建目标树。不能把“多数对象静止”当作“查询必然最快”。
+
+后两种模式各自给目标点和观察者中心建索引，不分配整图的 `BlockIndex`。三者共用逻辑格编号、`MaxBlockCount` 和观察者块预算，仍处理 `SetObservedBlocks`、边界镜像以及圈外但同块移动触发的补位。最终圆距、进出滞回、LOD、名额、排序和事务提交规则相同。小对象数不等于可以无限增大地图或半径。
+
+### 同轨迹实测（不是生产容量承诺）
+
+Apple M5 / darwin-arm64 / Go 1.27.3，`-cpu=4`；每轮 256 拍、五轮中位数，单位 **µs/拍**。进入/离开半径 256/320、距离档边界 128，8 个视野。增量列只移动目标；完整列在相同目标移动后移动 8 个观察者，触发 8 次完整范围查询。建图、轨迹生成、校验不计时。各模式的有序事件和可见集另与全表枚举逐拍核对。
+
+| 世界（每拍移动目标） | 观察者 | Block | CrossList | KDTree |
+|---|---|---:|---:|---:|
+| 16,384 个，8,192²，格 128（2,048） | 固定 / 完整 | 399 / 882 | 1,796 / 4,518 | 330 / 6,196 |
+| 4,096 个，65,536²，格 256（2,048） | 固定 / 完整 | 196 / 196 | 293 / 331 | 127 / 1,274 |
+| 同上（32） | 固定 / 完整 | 6.98 / 16.35 | 9.66 / 21.05 | 2.38 / 1,085 |
+| 256 个，8,192²，格 128（0） | 完整 | 48.74 | 20.30 | 21.54 |
+| 同上（每 8 拍只动同一目标两次） | 完整 | 58.94 | 18.80 | 29.52 |
+
+4,096 个对象的稀疏地图，初次建图、排空事件并 GC 后，AOI 世界约保留 **4.48 / 0.72 / 0.65 MiB**（Block / CrossList / KDTree），不是整个服务或索引单项内存。256 个完全静止对象时约为 **390 / 62 / 56 KiB**。耗时受机器共享负载影响，接近的数值不是稳定名次；按线上实体和观察者的真实移动比例再选。基准用公开 `AOI` API，不包含实体锁、Interest 批处理聚合、编码、传输或客户端帧时。
+
+复现：在仓库根目录运行 `go test ./framework/sync/entitysync/policy -run '^TestAOIModes' -count=1`，再运行 `go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkAOIModesTick$' -benchmem -benchtime=256x -count=5 -cpu=4`。将基准改为 `^BenchmarkAOIModesBuild$`、`-benchtime=8x` 可对照建图分配／保留堆。
 
 ## 1. 正式链路
 
@@ -10,7 +36,7 @@ Nest handler（持 Entity Guard）
   → 校验并准入不可变空间事实 → 写业务 DAO setter
   → Nest 原有 Admit / Confirm / Release
   → 读取已确认事实：ApplySync（缺省）在 Sync Manager 政策阶段里；ApplyAsync 在 Interest 应用线程里
-  → 更新块索引 → 并行计算 Observer（AOI 事件留在缓冲里）
+  → 更新选定的空间索引 → 并行计算 Observer（AOI 事件留在缓冲里）
   → Sync Manager 政策阶段结算：归并全部订阅来源、说给 Manager
   → 释放事实的内容发布屏障 → 同一 Flush 捕获、编码发送
 ```

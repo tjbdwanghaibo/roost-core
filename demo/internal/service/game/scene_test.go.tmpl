@@ -368,13 +368,23 @@ func (g sceneGetter) GetMany(ctx context.Context, ids []int64, categories []enti
 
 // 在模块 Space 读登记状态，在真实同步帧读结果：Join 建立视野不等于准许首帧。
 func TestHostedSceneReadyGatesTheModuleSpaceFirstFrame(t *testing.T) {
+	for _, mode := range []policy.AOIIndexMode{policy.IndexBlock, policy.IndexCrossList, policy.IndexKDTree} {
+		t.Run(string(mode), func(t *testing.T) { checkHostedMainView(t, mode) })
+	}
+}
+
+func checkHostedMainView(t *testing.T, mode policy.AOIIndexMode) {
+	t.Helper()
 	ctx := context.Background()
 	recorder := newSceneRecorder()
-	bridge, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	cfg := gamescene.DefaultConfig()
+	cfg.AOIIndex = mode
+	bridge, err := newScene(recorder, nil, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer bridge.Close(ctx)
+	if bridge.interest.IndexMode() != mode { t.Fatalf("main view uses %s, want %s", bridge.interest.IndexMode(), mode) }
 	if bridge.ordinary == nil || bridge.interest != bridge.ordinary.Interest {
 		t.Fatal("ordinary map has no single shared interest")
 	}

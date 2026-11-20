@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
@@ -31,6 +32,7 @@ type Config struct {
 	Width     int64
 	Height    int64
 	BlockSize int64
+	AOIIndex policy.AOIIndexMode // main view only; frozen when the Interest is created
 	Spawn     spatial.Point
 	View      View
 }
