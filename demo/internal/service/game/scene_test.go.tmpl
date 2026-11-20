@@ -321,6 +321,12 @@ type sceneCommitter struct{}
 
 func (sceneCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
+// World 上的写声明 durability=pipelined completion=async，经 Enqueue 提交：票据立即完成（settleTicket）。
+func (sceneCommitter) Enqueue(context.Context, dataengine.CommitRecord) (nest.CommitTicket, error) {
+	return settleTicket{}, nil
+}
+func (sceneCommitter) DurableLSN() uint64 { return 0 }
+
 func newSceneNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity) nest.Client {
 	t.Helper()
 	handler.RegisterAddExpNestHandlers()

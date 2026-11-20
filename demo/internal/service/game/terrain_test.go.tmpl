@@ -91,6 +91,16 @@ func (c *terrainCommitter) Commit(_ context.Context, record nest.CommitRecord) e
 	return nil
 }
 
+// World 上的写声明 durability=pipelined completion=async，经 Enqueue 提交：同 Commit 的拒绝与记录，票据立即完成。
+func (c *terrainCommitter) Enqueue(ctx context.Context, record nest.CommitRecord) (nest.CommitTicket, error) {
+	if err := c.Commit(ctx, record); err != nil {
+		return nil, err
+	}
+	return settleTicket{}, nil
+}
+
+func (*terrainCommitter) DurableLSN() uint64 { return 0 }
+
 // scopesByCollection 是被接受的改动按集合归拢的库范围（每个集合出现过的范围，去重）。
 func (c *terrainCommitter) scopesByCollection() map[string][]coredata.DatabaseScope {
 	c.mu.Lock()

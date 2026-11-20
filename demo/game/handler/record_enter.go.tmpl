@@ -11,7 +11,10 @@ import "{{MODULE}}/game/view"
 // 等上一条做完，所以 World 每次 fsync 只记一人（macOS 本机约 110 人/秒）。登录因此只投递、不等这笔计数
 // （EnterGame 用 Send_RecordEnter）：登录潮里计数在 World 上排队补记，不占登录的请求预算。
 //
-//roost:nest rollback=undo durability=strict
+// 现在声明 pipelined completion=async（维护者 2026-11-18 按推荐定 A）：下一条在本条入队后就开始、不再每次 fsync
+// 只记一人，回复仍在持久之后；仍保留只投递，登录不等这笔计数。本 handler 没有 AfterCommit 钩子。
+//
+//roost:nest rollback=undo durability=pipelined completion=async
 func handlerRecordEnter(target view.IStatsEntity) error {
 	target.Stats().RecordEnter()
 	return nil

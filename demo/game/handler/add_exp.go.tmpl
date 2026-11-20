@@ -14,7 +14,10 @@ import (
 // number of levels gained, carried back through the generated Sender
 // (MultiSync_AddExp, one id per entity parameter).
 //
-//roost:nest rollback=undo durability=strict
+// World 是全服热点单例：声明 pipelined completion=async（维护者 2026-11-18 按推荐定 A），同一 World 上的下一条
+// 在本条入队后就开始，回复仍在 WAL 持久之后按序返回；本 handler 没有 AfterCommit 钩子，不受完成池执行环境影响。
+//
+//roost:nest rollback=undo durability=pipelined completion=async
 func handlerAddExp(target view.IProfileEntity, stats view.IStatsEntity, amount int64) (int32, error) {
 	// 两个实体的范围先只读校验：超出 int64 经验 / int32 等级 / World 累计时在任何 DAO 写入前拒绝，
 	// 不靠写完再由 rollback=undo 撤回。AddExp / RecordExp 自己也检查，只是兜底。

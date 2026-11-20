@@ -50,6 +50,28 @@ func (c *recordingCommitter) Commit(_ context.Context, record dataengine.CommitR
 	return nil
 }
 
+// World 上的写声明 durability=pipelined completion=async，Nest 经 Enqueue 提交：同样记下记录，票据立即完成
+// （入队即算持久）。
+func (c *recordingCommitter) Enqueue(ctx context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	if err := c.Commit(ctx, record); err != nil {
+		return nil, err
+	}
+	return claimTicket(len(c.records)), nil
+}
+
+func (*recordingCommitter) DurableLSN() uint64 { return 0 }
+
+// claimTicket 是已经持久的 pipelined 票据。
+type claimTicket uint64
+
+func (t claimTicket) LSN() uint64 { return uint64(t) }
+func (claimTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (claimTicket) Err() error { return nil }
+
 // pinBusinessClock 把进程级业务时钟停在 unix 秒，测试结束时恢复。
 //
 // 领奖 handler 的 nowUnix 是生成的分发包装在执行时填的、这条消息冻结的业务时间（fctx.Now），调用方

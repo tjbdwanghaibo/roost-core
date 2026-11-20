@@ -60,9 +60,11 @@
 
 复算：对 runner 输出的每一档执行 `python3 scripts/testdata/demo-robot/split-waits.py <该档输出目录>`。使用 game 的 before/after 桶、count、sum 差值；只读、不访问服务。全主题配对结果：[同秒](benchmarks/demo-saga-delivery-split/burst.json) · [分批](benchmarks/demo-saga-delivery-split/ramp20.json)。过期日志现在带 `command_id`、`saga_id` 和逻辑主题；可用 `append_to_callback_ns`、`callback_to_worker_ns` 对上具体尝试，不用总体 P95 猜某一笔。
 
-### World 写语义（本次只盘点，不调级别）
+### World 写语义
 
-- `RecordEnter`：登录投递、不同步等待，World 在独立 strict 事务中累加。`RecordMatch` 在匹配结果之后独立 strict 记数。都是共享 World 的热点；投递成功不等于已提交，也不能用累计值对每个事件去重。
-- `AddExp`：Player 经验和 World 经验统计、升级效果同一 strict WAL 记录。`ClaimDungeon`：奖励与领取账本、World 变动同笔，重放按领取键处理。不能为吞吐拆事务，`AddExp` 请求超时后不可直接重发。
-- `SettleActivity` 是写结算标记的 strict 事务；`ActivitySettled` 是读标记，虽声明 strict，并不因此每次都产生 WAL 记录。`WorldStats` 也只读。
-- 本轮没有调整持久策略、WAL 或 Nest/Saga 全局默认值。要放宽普通计数，先定义丢失窗口、是否有权威事件可重放和如何防止重算；不能把奖励写一并放宽。
+2026-11-20 起，写 World 的 5 个 handler 声明 `durability=pipelined completion=async`（维护者 2026-11-18 按推荐定 A）：同一 World 上的下一条在上一条入队后就开始，不再每次 fsync 只放一条；回复仍在 WAL 持久之后、按序返回，没有放宽持久保证，也没有拆事务。这几个 handler 都没有 AfterCommit 钩子。
+
+- `RecordEnter`：登录投递、不同步等待，World 在独立事务中累加。`RecordMatch` 在匹配结果之后独立记数。都是共享 World 的热点；投递成功不等于已提交，也不能用累计值对每个事件去重。
+- `AddExp`：Player 经验和 World 经验统计、升级效果同一 WAL 记录。`ClaimDungeon`：奖励与领取账本、World 变动同笔，重放按领取键处理。不能为吞吐拆事务，`AddExp` 请求超时后不可直接重发。
+- `SettleActivity` 写结算标记；`ActivitySettled` 是读标记，仍声明 strict，不产生 WAL 记录。`WorldStats` 也只读。
+- WAL、Nest / Saga 全局默认值没有调整。改声明之后 200 人同秒档尚未重测；诊断对照显示失败会转到 saga 状态轮询，仍取决于 saga 并发。

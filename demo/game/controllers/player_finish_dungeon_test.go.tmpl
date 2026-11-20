@@ -73,6 +73,23 @@ type finishDungeonCommitter struct{}
 
 func (finishDungeonCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
+// 领奖写 World（durability=pipelined completion=async），经 Enqueue 提交：票据立即完成。
+func (finishDungeonCommitter) Enqueue(context.Context, dataengine.CommitRecord) (nest.CommitTicket, error) {
+	return finishDungeonTicket{}, nil
+}
+func (finishDungeonCommitter) DurableLSN() uint64 { return 0 }
+
+// finishDungeonTicket 是已经持久的 pipelined 票据。
+type finishDungeonTicket struct{}
+
+func (finishDungeonTicket) LSN() uint64 { return 0 }
+func (finishDungeonTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (finishDungeonTicket) Err() error { return nil }
+
 // session.Finish 的重放契约：同一局始终返回原来的成功终态与结束时间。
 type finishDungeonSessions struct {
 	svcsession.Session

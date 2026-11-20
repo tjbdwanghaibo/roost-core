@@ -881,8 +881,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if endpoint := read("game/controllers/player_finish_dungeon.go"); !strings.Contains(endpoint, "run.State != svcsession.StateSucceeded") || !strings.Contains(endpoint, "MultiSync_ClaimDungeon(") || strings.Contains(endpoint, "if !request.Success {") {
 		t.Errorf("finish_dungeon still decides the reward from the request instead of the run the service returned")
 	}
-	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "ClaimDungeonRun(runID, resolvedAtUnix, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
-		t.Errorf("the claim handler does not record the run id in the rewarding transaction")
+	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "ClaimDungeonRun(runID, resolvedAtUnix, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=pipelined completion=async") {
+		// World 是热点单例：领奖写 World 声明 pipelined completion=async（维护者 2026-11-18 定 A），回复仍在持久之后。
+		t.Errorf("the claim handler does not record the run id in the rewarding transaction (pipelined completion=async on the World)")
 	}
 	// The ledger is bounded, so forgetting a record and refusing a claim have
 	// to be the same condition — otherwise a pruned run is still payable and

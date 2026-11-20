@@ -108,7 +108,48 @@ type scenarioCommitter struct {
 	reject      bool
 	worldHeld   chan struct{}
 	worldCounts int
+	lsn         uint64
 }
+
+// Enqueue 是 pipelined 的提交入口（World 上的写声明 durability=pipelined completion=async）。Enqueue 在实体锁内
+// 调用、不能等，所以 worldHeld 卡住的是票据而不是 Enqueue：模拟一次迟迟不完成的 fsync，计数在票据完成时记上。
+func (committer *scenarioCommitter) Enqueue(_ context.Context, record coredata.CommitRecord) (nest.CommitTicket, error) {
+	committer.mu.Lock()
+	defer committer.mu.Unlock()
+	committer.lsn++
+	ticket := scenarioTicket{lsn: committer.lsn, done: make(chan struct{})}
+	if record.Handler == worldCountHandler {
+		held := committer.worldHeld
+		go func() {
+			if held != nil {
+				<-held
+			}
+			committer.mu.Lock()
+			committer.worldCounts++
+			committer.mu.Unlock()
+			close(ticket.done)
+		}()
+		return ticket, nil
+	}
+	if committer.reject {
+		return nil, errors.New("scenario: the store refused the commit")
+	}
+	committer.records++
+	close(ticket.done)
+	return ticket, nil
+}
+
+func (*scenarioCommitter) DurableLSN() uint64 { return 0 }
+
+// scenarioTicket 是替身提交器的 pipelined 票据：done 关闭即持久。
+type scenarioTicket struct {
+	lsn  uint64
+	done chan struct{}
+}
+
+func (t scenarioTicket) LSN() uint64            { return t.lsn }
+func (t scenarioTicket) Done() <-chan struct{} { return t.done }
+func (scenarioTicket) Err() error              { return nil }
 
 func (committer *scenarioCommitter) Commit(_ context.Context, record coredata.CommitRecord) error {
 	committer.mu.Lock()

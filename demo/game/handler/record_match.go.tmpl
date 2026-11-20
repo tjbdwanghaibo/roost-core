@@ -6,7 +6,10 @@ import "{{MODULE}}/game/view"
 // match service committed a group. The remote call happened first, outside
 // any Entity lock; only the count crosses into the World.
 //
-//roost:nest rollback=undo durability=strict
+// World 是全服热点单例：声明 pipelined completion=async（维护者 2026-11-18 按推荐定 A），同一 World 上的下一条
+// 在本条入队后就开始，回复仍在 WAL 持久之后按序返回；本 handler 没有 AfterCommit 钩子，不受完成池执行环境影响。
+//
+//roost:nest rollback=undo durability=pipelined completion=async
 func handlerRecordMatch(target view.IStatsEntity) error {
 	target.Stats().RecordMatch()
 	return nil

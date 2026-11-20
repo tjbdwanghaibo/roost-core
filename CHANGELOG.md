@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **game-demo 写全服 World 的事务改为 `durability=pipelined completion=async`**（维护者 2026-11-18 按推荐定 A）：AddExp、ClaimDungeon、RecordEnter、RecordMatch、SettleActivity 不再每次 fsync 只放一条，同一 World 上的下一条在上一条入队后就开始；回复仍在 WAL 持久之后，持久保证与事务边界不变。只读的 ActivitySettled / WorldStats 不变。demo 测试的替身提交器补了 `Enqueue`。200 人同秒档未重测。
 ## [v1.59.0] - 2026-11-20
 
 - **game-demo 普通图停机排空**：逐个保存驻留玩家时，某名玩家离场失败不再中止整轮，其余玩家照常保存最后位置，失败汇总返回、地图不确认关闭（回归 `TestOrdinaryDrainSavesEveryResidentBeforeReportingAFailure`）。真实进程演练 `scripts/test-demo-ordinary-drain.sh` 另外核对排空日志里确有这名玩家，周期存档抢先写入时不再误判通过。
