@@ -236,7 +236,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	cellworldhost.Install(node, area.ID(), actor.Heartbeat)
 	if rt.cell != nil {
 		if err := area.HostCell(node.Config().Period); err != nil {
-			_ = rt.stop(context.Background())
+			_, _ = rt.stop(context.Background())
 			return nil, fmt.Errorf("partition: %w", err)
 		}
 	}
@@ -251,7 +251,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	}
 	if rt.cell != nil {
 		if err := rt.spawnMonsters(ctx); err != nil {
-			_ = rt.stop(context.Background())
+			_, _ = rt.stop(context.Background())
 			return nil, err
 		}
 	}
@@ -267,20 +267,26 @@ func (s *Service) InstallNestHandlers(engine corenest.HandlerRegistrar) error {
 }
 
 // stop takes the Node down: no more messages are taken or sent. The entities go with the process (ephemeral).
-func (rt *partitionRuntime) stop(ctx context.Context) error {
+// leaves reports formal shutdown leaves that failed; the Node was still drained and
+// uninstalled. err means the Node itself did not stop (nothing after it is safe).
+func (rt *partitionRuntime) stop(ctx context.Context) (leaves, err error) {
 	if rt == nil {
-		return nil
+		return nil, nil
 	}
 	// Disconnect released receivers, not the grace-period Bases. Fence new
 	// admissions and formally retire them while the Node can still send Leave.
+	// A failed leave is reported, but the Node is still drained and uninstalled:
+	// returning here used to skip host.Stop and leave the Node running.
 	if rt.bridge != nil && rt.bridge.partition.Load() == rt {
-		if err := rt.bridge.stopPartitionSessions(ctx, rt); err != nil { return err }
+		if leaves = rt.bridge.stopPartitionSessions(ctx, rt); leaves != nil {
+			slog.Warn("partition: formal shutdown leaves incomplete; stopping the node anyway", "err", leaves)
+		}
 	}
 	// 跨格编辑先停（在途的执行要 Nest），地形副本再停：它们经 Node 发消息、往场景的 Manager 登记副本。
 	rt.relay.stop()
 	rt.terrain.stop()
 	if err := rt.host.Stop(ctx); err != nil {
-		return err
+		return leaves, err
 	}
 	if rt.node != nil {
 		cellworldhost.Uninstall(rt.node)
@@ -288,7 +294,7 @@ func (rt *partitionRuntime) stop(ctx context.Context) error {
 	if rt.mirrors != nil {
 		rt.mirrors.Close()
 	}
-	return nil
+	return leaves, nil
 }
 
 // createActor 在 Node 的 handler 里新建 CellPlayer（玩家）或 Monster（NPC）：EntityManager.Create 在 handler 内即

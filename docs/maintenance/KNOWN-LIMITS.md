@@ -1022,12 +1022,11 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### CellWorld 分区会话：遗留（2026-11-20 合入审查，未修）
 
-- **game-demo 分区命令没有用上“视野未装好不能写”的检查**（已确认）：`partition_session_scene.go` 的注释说 Move / Attack 先过 `checkPartitionCommand`，实际只有测试调用它；生产的 `MoveConnection` / `AttackConnection` 直接调 `Node.MoveSession` / `AttackSession`，只核对 Base 上绑定的连接。`AdmitSession` 已提交而视野随后没装好（ctx 超时、自身绑定或打开失败）时，这条连接仍能移动、攻击，直到回收把它关掉；`partition_session_scene_test` 里“uncertain commit became usable”的断言测的是这个生产不走的函数。
-- **分区停机时一名玩家正式离场出错就中断整个停机**（已确认）：`stopPartitionSessions` 对全部已加载的 Player 逐个 `node.Leave`，除 `ErrNotInWorld` 外的错误直接返回，`partitionRuntime.stop` 随即提前 return，跳过跨格编辑与地形副本停止、`host.Stop`（Node 排空）与 Uninstall；`partitionStopping` 已置位，Scene 关闭时也不再补做。Range 之后被卸载的玩家（Leave 答“未加载”一类错误，推断）、或在线人数多、逐个串行耗尽停机期限，都可能触发。普通图的同类写法已于 2026-11-19 改成“继续保存其余玩家、汇总错误”（e6009655）。
-- **独立 Gate 接入的分区命令在事务外核对连接**（已确认）：`MoveConnection` / `AttackConnection` 在 Gate 模式下先在 Player 事务外 `gateConnection` 核对，再走不带会话的 `MoveIntent` / `AttackTarget`；两步之间发生会话接替时，旧连接还能再执行一次移动或攻击。“同一笔事务核验准入”只对嵌入 TCP 的 `MoveSession` / `AttackSession` 成立。
+- **game-demo 分区命令没有用上“视野未装好不能写”的检查**（已确认，维护者 2026-11-20 问为什么要这道检查，接上还是删掉待定）：`partition_session_scene.go` 的注释说 Move / Attack 先过 `checkPartitionCommand`，实际只有测试调用它；生产的 `MoveConnection` / `AttackConnection` 直接调 `Node.MoveSession` / `AttackSession`，只核对 Base 上绑定的连接。`AdmitSession` 已提交而视野随后没装好（ctx 超时、自身绑定或打开失败）时，这条连接仍能移动、攻击，直到回收把它关掉；`partition_session_scene_test` 里“uncertain commit became usable”的断言测的是这个生产不走的函数。
+- **独立 Gate 接入的分区命令在事务外核对连接**（已确认，维护者 2026-11-20 同意修，做法待定）：`MoveConnection` / `AttackConnection` 在 Gate 模式下先在 Player 事务外 `gateConnection` 核对，再走不带会话的 `MoveIntent` / `AttackTarget`；两步之间发生会话接替时，旧连接还能再执行一次移动或攻击。“同一笔事务核验准入”只对嵌入 TCP 的 `MoveSession` / `AttackSession` 成立。
 - **不带会话的进场继承上一次的离线标记**（已确认，当前生成工程走不到）：`leaveBase` 保留整个 `Session`（含 `OfflineAt`），`Enter` / `EnsureEntered` 在 0a4ddd44 后也带上 `prev.Session`；曾经用 `AdmitSession` 绑定、宽限到期离场的玩家之后经不带会话的接口重新进场，下一拍 `BaseBeat` 判定宽限已过，立即再次离场。物理 TCP 只走 Admit、Gate 与内部只走 EnsureEntered，同一进程不混用，所以只在框架使用者混用两套接口时出现。
 - **被接替但仍连着的旧连接是否仍收帧，尚未确认**：推送按玩家广播，审查推断不同 SessionID 的旧连接在接替后仍收到新代的全量与增量帧；若旧连接的推送被拒（非队列溢出，例如驻留预算耗尽），manager 丢掉会话时关的可能是当前成员的新连接。实网用例只断言旧连接的命令答 100905，没有断言它不再收帧。
-- **修不修、怎么修待维护者定**：前三条与第四条是代码问题，按惯例先红后绿修；第五条先补用例确认。
+- **修不修、怎么修待维护者定**：第一、二、三条是代码问题，定了做法后按先红后绿修；第四条先补用例确认。
 
 ### 玩法组件与物理房间（遗留）
 
@@ -1090,6 +1089,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
+- **2026-11-20：game-demo 分区停机遇到离场失败不再半途中断**：`stopPartitionSessions` 对每名玩家都做正式离场、失败汇总返回；`partitionRuntime.stop` 改为返回（离场失败，Node 停止失败）两个结果，离场失败只报告，照样停跨格编辑、地形副本、`host.Stop` 与 Uninstall，服务 Shutdown 继续关场景。修前任何一名玩家离场出错，Node 不排空、服务 Shutdown 直接返回。回归 `TestPartitionShutdownLeavesEveryPlayerPastAFailure`（8 个未加载玩家的离场失败夹一名在场玩家；修前 3 / 3 次红，修后带 race 通过）。
 - **2026-11-20：合入审查（c71d600c..e9a541c0，11 个提交）**：AOI 三种空间索引、CellPlayer 改名与 cellspace 配方、攻击请求号回执、断线宽限与会话接替、移动重构。可见集与事件三模式等价、移动重构行为不变、攻击回执与效果同一笔事务；发现的问题记在二“CellWorld 分区会话：遗留”与“AOI 空间索引：遗留”。另补登记 `TestPartitionLiveClient`、`TestPartitionReconnectLive` 的真实依赖入口（`scripts/test-cellspace.py`），修复根门禁红。
 - **2026-11-20：普通图原点与停机取证（RV-20261120-01～02）**（[原评审](https://github.com/tjbdwanghaibo/roost-core/blob/a8b30c72/docs/maintenance/MAIN-REVIEW-20261120.md)）：换服已落位、尚未到账时从 DAO 冷加载，已保存的合法原点与非零坐标都按存档落位；无存档才回出生点，地形仍由 `Place` 校验。停机演练核对同一实体成功离场后的 `position_changed` 和 Mongo 最终值，提前保存只算证据不足。回归在生成 game-demo 的 `TestOrdinaryTransferPlacementUsesTargetOnce`、`TestOrdinaryFirstPlacementWithoutSaveUsesSpawn`、`TestOrdinaryDrainReportsOnlyOwnCoordinateChanges`；真实进程入口 `scripts/test-demo-ordinary-drain.sh`。不改变 async 持久语义。
 - **2026-11-19：续审 RV-20261119-06～07**（[原报告](https://github.com/tjbdwanghaibo/roost-core/blob/85fba303/docs/maintenance/MAIN-REVIEW-20261119-04.md)）：新建工程对 `admin/local/config` 用 `-data` 转义，不与 `_data` 普通名撞业务库或分服库；不会修正已混写的数据。换服演练由源、目标各自的 game 配置和 Player DAO 定位快照，复跑可用 `DEMO_REHOME_PROJECT=local` 和一次性私有依赖。两侧实际库名留在 `player-databases.json`，显式工程名不再用于清理外部存储。

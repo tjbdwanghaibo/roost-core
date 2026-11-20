@@ -459,9 +459,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	// cells once it is down. The CellPlayers and monsters it holds go with the
 	// process: the Bases re-enter their players elsewhere or here again.
 	if s.partition != nil {
-		if err := s.partition.stop(ctx); err != nil {
-			return err
+		leaves, err := s.partition.stop(ctx)
+		if err != nil {
+			return errors.Join(drainErr, leaves, err)
 		}
+		// Failed formal leaves are reported; the Node is down, so the scene still closes.
+		drainErr = errors.Join(drainErr, leaves)
 		s.partition = nil
 	}
 	// The scene last among the fan-out paths: closing it stops the

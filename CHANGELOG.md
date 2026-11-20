@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **game-demo 分区停机**：正常停机时某名玩家的正式离场失败，不再中断整个分区停机；其余玩家照常离场，Node 照常排空与卸载，服务继续关闭场景，失败汇总返回（`TestPartitionShutdownLeavesEveryPlayerPastAFailure`）。
 - **最小分区配方**：`project new -template game -recipe cellworld` 用标准登录、一个 Base 和两个 Cell 完成玩家入场、跨格和重连，不依赖 demo 的战斗、地形或怪物。普通图默认不启动分区。`cellspace` 不自动升级旧版 `cellworld`。
 - **分区攻击可安全补发**：`AttackTargetRequest` 可带每玩家 `RequestID`，窗口内同号同目标取回原准入回执，不再次出手。旧客户端和普通移动不增加持久等待。过期或结果未知不自动重打；详见[契约](gameplay/cellworld/ATTACK-REQUESTS.md)。
 - **普通图位置同步**：Player 与 Monster 共用 movement 的 DAO 字段适配，保持各自原有发布时机。旁观者收到已提交位置和朝向，失败事务不发布幻影移动。

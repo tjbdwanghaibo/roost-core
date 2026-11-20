@@ -440,6 +440,9 @@ func (b *Scene) reconcilePartitionViews(ctx context.Context) {
 
 // Call before Node.Drain on normal shutdown. Detached grace-period Bases are loaded
 // Players, not scene members: include them without retaining a historical ID table.
+// One failed formal leave does not stop the others: each player still gets its Leave
+// while the Node can send, and the failures come back together. A player left behind
+// is retired by its CellPlayer lease once this Node is down.
 func (b *Scene) stopPartitionSessions(ctx context.Context, rt *partitionRuntime) error {
 	b.transitions.Lock()
 	b.partitionStopping = true
@@ -459,15 +462,16 @@ func (b *Scene) stopPartitionSessions(ctx context.Context, rt *partitionRuntime)
 		}
 		return true
 	})
+	var failed error
 	for id := range ids {
 		if err := ctx.Err(); err != nil {
-			return err
+			return errors.Join(failed, err)
 		}
 		if err := b.formalPartitionExit(ctx, id, 0, func() error { return rt.node.Leave(ctx, id) }); err != nil && !errors.Is(err, cellworld.ErrNotInWorld) {
-			return fmt.Errorf("scene: formal shutdown leave of %d: %w", id, err)
+			failed = errors.Join(failed, fmt.Errorf("scene: formal shutdown leave of %d: %w", id, err))
 		}
 	}
-	return ctx.Err()
+	return errors.Join(failed, ctx.Err())
 }
 
 func (b *Scene) leavePartition(ctx context.Context, id int64, rt *partitionRuntime, generation uint64) {

@@ -268,6 +268,51 @@ func TestPartitionViewReconnectFullWithLiveOldSocketAndAfterClose(t *testing.T) 
 	full(epoch)
 }
 
+// A formal shutdown leave that fails for one player must not strand the others:
+// every other player still leaves while the Node can send, and the failures come
+// back together. Map order is random, so several failing IDs make an early return
+// skip the real player in almost every run.
+func TestPartitionShutdownLeavesEveryPlayerPastAFailure(t *testing.T) {
+	ctx := context.Background()
+	f := newAttackFixture(t, sceneCommitter{})
+	peers := &partitionViewPeers{sceneRecorder: newSceneRecorder()}
+	s := peers.socket(831, 46)
+	lane := newClosingLane(peers)
+	b := partitionViewBridge(t, peers, lane)
+	f.rt.grid, f.rt.access, f.rt.bridge = partitionTerrainGrid(t), coreentity.NewManagerAccess(f.entities), b
+	b.partition.Store(f.rt)
+	cell_player.RegisterEntity()
+	p := newScenePlayer(t, 831)
+	actor, err := partitionIDs.Actor(p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Dao().SetCellActor(actor)
+	p.Dao().SetCellOwner(partitionSidA)
+	p.Dao().SetCellInWorld(true)
+	f.entities.Add(p)
+	b.after = func(time.Duration, func()) {}
+	b.async = func(fn func()) { fn() }
+	b.watchSessions(peers)
+	if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, s); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := f.rt.node.BaseStateOf(ctx, p.ID()); err != nil || !st.InWorld {
+		t.Fatalf("precondition: player not in world: %+v %v", st, err)
+	}
+	// Players this process never loaded: their formal leave fails (not ErrNotInWorld).
+	for i := range 8 {
+		_, _, done := b.partitionOp(newScenePlayer(t, int64(8400+i)).ID())
+		defer done()
+	}
+	if err := b.stopPartitionSessions(ctx, f.rt); err == nil {
+		t.Fatal("failed leaves were not reported")
+	}
+	if st, err := f.rt.node.BaseStateOf(ctx, p.ID()); err != nil || st.InWorld {
+		t.Fatalf("a failed leave stranded a loaded player in the world: %+v %v", st, err)
+	}
+}
+
 // Exercise the published Join/Ready APIs and exact-close watcher against a real
 // Player DAO + Nest/Node. Both explicit eviction and shutdown must formally leave
 // even if the local receiver is already gone; no delayed open can undo that.
