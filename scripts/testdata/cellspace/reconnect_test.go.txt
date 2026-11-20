@@ -1,0 +1,234 @@
+package tcp
+
+import (
+	apperrors "MMO_MODULE/internal/errors"
+	"context"
+	"encoding/json"
+	"os"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/vmihailenco/msgpack/v5"
+)
+
+// No production probes or test-only commands: observe only the current grant in Redis and
+// the owning Cell's actual periodic writeback on the private NATS bus. Never publish on it.
+func TestPartitionReconnectLive(t *testing.T) {
+	grace, err := time.ParseDuration(os.Getenv("CELL_GRACE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*grace+22*time.Second)
+	defer cancel()
+	var original cellworld.OwnerRecord
+	if err := json.Unmarshal([]byte(os.Getenv("CELL_OWNER")), &original); err != nil {
+		t.Fatal(err)
+	}
+	if original.Actor == 0 || original.Grant.Process.SID != 1001 || original.ClosedEntry >= original.Entry {
+		t.Fatalf("unexpected starting owner: %+v", original)
+	}
+	redis, err := redisdriver.NewClient(fredis.DefaultConfig(os.Getenv("CELL_REDIS")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer redis.Close()
+	store, err := versionstore.NewRedisStore(redis, versionstore.RedisConfig[int64, cellworld.OwnerRecord]{Prefix: "roost:cellworld:overworld:owner:", KeyOf: func(i int64) string { return strconv.FormatInt(i, 10) }, Codec: versionstore.JSONCodec[cellworld.OwnerRecord]{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := func() cellworld.OwnerRecord {
+		t.Helper()
+		v, found, err := store.Get(ctx, original.Actor)
+		if err != nil || !found {
+			t.Fatalf("owner missing: found=%v err=%v", found, err)
+		}
+		return v.Value
+	}
+	same := func(label string) {
+		t.Helper()
+		if got := owner(); got != original {
+			t.Fatalf("%s: owner changed: before=%+v after=%+v", label, original, got)
+		}
+	}
+	nc, err := nats.Connect(os.Getenv("CELL_NATS"), nats.NoReconnect())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	sub, err := nc.SubscribeSync(cellworld.SubjectFromCell("overworld", 1000, original.Grant.Process.SID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.FlushTimeout(time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	login := func() *cellProbe {
+		t.Helper()
+		c, status := dialCellProbe(t, ctx) // each socket authenticates the real portal-issued ticket
+		if status.NeedCreate {
+			t.Fatal("same account unexpectedly needs creation")
+		}
+		return c
+	}
+	enter := func(c *cellProbe) {
+		t.Helper()
+		if recipeEnter(t, c).First {
+			t.Fatal("existing role reported first enter")
+		}
+		c.await(t, func() bool { return c.created && c.fields.GetCellHP() > 0 })
+		base, err := strconv.ParseInt(os.Getenv("CELL_BASE"), 10, 64)
+		if err != nil || c.subject != base {
+			t.Fatalf("snapshot subject=%d want same Base %d: %v", c.subject, base, err)
+		}
+	}
+	closeSocket := func(c *cellProbe) time.Time {
+		t.Helper()
+		start := time.Now()
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return start
+	}
+
+	first := login()
+	enter(first)
+	same("initial reconnect")
+	y0 := first.fields.GetPosY()
+	if y0 < 420 || y0 > 580 {
+		t.Fatalf("need space on both sides, got Y=%d", y0)
+	}
+	first.move(t, 0, -1001, apperrors.ErrCellspaceInvalidVelocity)
+	first.move(t, 1001, 0, apperrors.ErrCellspaceInvalidVelocity)
+	first.move(t, 0, 160, nil)
+	first.await(t, func() bool { return first.fields.GetPosY() >= y0+32 })
+	yClose := first.fields.GetPosY()
+	dropped := closeSocket(first) // deliberately NO stop request
+	// Discard pre-close traffic and the first 250ms of in-flight delivery. A post-close
+	// writeback must come from this Real, with zero speed, well away from the map edge.
+	var parked int64
+	for {
+		remaining := dropped.Add(6 * time.Second).Sub(time.Now())
+		if remaining <= 0 {
+			t.Fatal("no post-close writeback within one writeback period plus margin")
+		}
+		msg, err := sub.NextMsg(remaining)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var event struct {
+			Version   uint8 `msgpack:"ver"`
+			From      int32 `msgpack:"f"`
+			SentAt    int64 `msgpack:"t"`
+			Writeback *struct {
+				State cellworld.EntityState `msgpack:"s"`
+			} `msgpack:"wb"`
+		}
+		if err := msgpack.Unmarshal(msg.Data, &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Writeback == nil || event.SentAt < dropped.Add(250*time.Millisecond).UnixNano() {
+			continue
+		}
+		s := event.Writeback.State
+		if s.ID != original.Actor {
+			continue
+		}
+		if event.Version != cellworld.WireVersion || event.From != original.Grant.Process.SID || s.Base != 1000 || s.Ver.Epoch != original.Grant.Epoch || s.VX != 0 || s.VY != 0 || s.Y < yClose || s.Y > yClose+96 || s.Y >= 950 {
+			t.Fatalf("offline at Y=%d, authoritative writeback=%+v from=%d version=%d", yClose, s, event.From, event.Version)
+		}
+		parked = s.Y
+		break
+	}
+	same("offline, after authoritative stop")
+	t.Logf("moving TCP disconnect: Y %d -> %d, authoritative offline Y=%d speed=(0,0), owner SID=%d epoch=%d entry=%d", y0, yClose, parked, original.Grant.Process.SID, original.Grant.Epoch, original.Entry)
+	second := login()
+	enter(second)
+	enter(second)
+	if elapsed := time.Since(dropped); elapsed >= grace {
+		t.Fatalf("re-entry too late to test grace: %s >= %s", elapsed, grace)
+	} else {
+		t.Logf("same-ticket reconnect and duplicate enter after %s", elapsed.Round(time.Millisecond))
+	}
+	same("duplicate enter on reconnected socket")
+	// Confirm the stopped Real position also reached the new connection's fresh self view.
+	second.await(t, func() bool { return second.fields.GetPosY() == parked })
+	second.move(t, 0, -160, nil)
+	second.await(t, func() bool { return second.fields.GetPosY() <= parked-32 })
+	// This time reconnect immediately, without waiting for a 5s writeback.
+	quickDrop := closeSocket(second)
+	third := login()
+	enter(third)
+	enter(third)
+	if elapsed := time.Since(quickDrop); elapsed >= grace/2 {
+		t.Fatalf("fast reconnect took %s, grace=%s", elapsed, grace)
+	} else {
+		t.Logf("immediate reconnect+duplicate enter in %s", elapsed.Round(time.Millisecond))
+	}
+	same("immediate reconnect")
+	latest := login()
+	enter(latest)
+	same("overlapping sockets, latest entered")
+	// The next connection is moving before its predecessor is closed. Do not resend
+	// movement afterward: even a transient stale stop would prevent the later progress.
+	yStart := latest.fields.GetPosY()
+	// Stay away from the map boundary even while observing the full 30s product default.
+	speed := int64(-16)
+	if grace > 20*time.Second {
+		speed = -8
+	}
+	latest.move(t, 0, speed, nil)
+	latest.await(t, func() bool { return latest.fields.GetPosY() <= yStart-3 })
+	third.move(t, 0, 16, apperrors.ErrCellspaceStaleSession)
+	if r := recipeEnterAnswer(t, third); r.Code != apperrors.ErrCellspaceStaleSession.Code() || r.First {
+		t.Fatalf("superseded socket must not take back ownership by entering again: %+v", r)
+	}
+	yBefore := latest.fields.GetPosY()
+	oldClosed := closeSocket(third)
+	latest.await(t, func() bool { return latest.fields.GetPosY() <= yBefore-4 })
+	// Read pushes continuously so buffered pre-deadline traffic cannot count as later movement.
+	late := oldClosed.Add(grace + 250*time.Millisecond)
+	latest.await(t, func() bool { return !time.Now().Before(late) })
+	yLate := latest.fields.GetPosY()
+	latest.await(t, func() bool { return latest.fields.GetPosY() <= yLate-5 })
+	same("moving across all prior grace deadlines")
+	t.Logf("latest socket, no new movement command: Y %d -> %d (old close) -> %d (past grace) -> %d; same entry=%d grant epoch=%d", yStart, yBefore, yLate, latest.fields.GetPosY(), original.Entry, original.Grant.Epoch)
+	offline := closeSocket(latest)
+	// Read throughout the offline interval; a retained Redis key is NOT proof of an
+	// active grant. Retirement must advance ClosedEntry, and must not happen early.
+	for {
+		got := owner()
+		elapsed := time.Since(offline)
+		if got.ClosedEntry == original.Entry && got.Entry == original.Entry && got.Phase != original.Phase && got.Grant == original.Grant {
+			if elapsed < grace {
+				t.Fatalf("left early: %s, configured grace=%s", elapsed, grace)
+			}
+			t.Logf("continuous offline: closed_entry=%d after %s (grace=%s)", got.ClosedEntry, elapsed.Round(time.Millisecond), grace)
+			break
+		}
+		if got != original || elapsed > grace+3*time.Second {
+			t.Fatalf("wrong or missing closure after %s: %+v", elapsed, got)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	returned := login()
+	enter(returned)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		got := owner()
+		if got.Entry == original.Entry+1 && got.ClosedEntry == original.Entry && got.Actor == original.Actor && got.Grant.Epoch > original.Grant.Epoch && got.Phase == original.Phase {
+			t.Logf("returned actor=%d new entry=%d epoch=%d", got.Actor, got.Entry, got.Grant.Epoch)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("did not obtain a new active grant: %+v", got)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
