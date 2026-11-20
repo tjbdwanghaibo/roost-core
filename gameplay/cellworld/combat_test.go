@@ -305,10 +305,10 @@ func TestPanelCapsCurrentHPWithoutHealing(t *testing.T) {
 		st := w.baseState(1)
 		return st.HP == 31 && st.PanelAcked == 3
 	})
-	eventually(t, settleWithin, "the client's own scene actor with the new panel", func() (bool, string) {
+	eventually(t, settleWithin, "the client's own cell player with the new panel", func() (bool, string) {
 		self, ok := w.base.client.held(1)[actorID(1)]
 		return ok && self.Panel.MaxHP == 200 && self.Panel.Ver == 3 && self.HP == 31,
-			fmt.Sprintf("client's own scene actor %+v (held %v), want panel ver 3 max hp 200 hp 31", self, ok)
+			fmt.Sprintf("client's own cell player %+v (held %v), want panel ver 3 max hp 200 hp 31", self, ok)
 	})
 }
 

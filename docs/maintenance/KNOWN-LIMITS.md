@@ -724,7 +724,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **属性变化钩子收 `attribute.Owner`**：`OnAttributeChanged` 不限定实体类型，要 Player 的登记方自己判断宿主类型。
 - **cellworld 真实时钟用例的墙钟期限**：用例仍按墙钟、负载更高时可能误报的只剩协议自己的墙钟期限（HandoffAbort 3s、租约 1s、GhostTTL），各处注释写明。证据见 [cellworld 真实时钟用例整治](evidence/cellworld-clock-cleanup-20261110/README.md)。
 
-- **业务适配的分工**（D21 后半，维护者 2026-11-18 按推荐定，维护者可改）：SceneActor 实体、分区状态映射、格心跳登记、Node 安装点、Player 的恢复快照 / 死亡回执在 cellworld 模块（v1.54.0 起，[证据](evidence/cellworld-module-d21-20261117/README.md)）。留在 demo：Player 的 Base 标量字段与面板 / 队伍副本（Q1 A：字段由工程按模块 README 的字段表声明；改成模块状态要同时改客户端 / drill / loadtest 的同步解码）、队伍视图 `with/team`（Q2 随 Q1）、mirror 编码与攻击结论推送、奖励规则、分区地形转发（Q4 暂不合一）。MMORPG 夹具的队伍、场景、怪物、战斗、副本不随 CellWorld 走，留作各模块的扩展项。`scene.partition` 改名见[业务模块（roost module）](#业务模块roost-module)。
+- **业务适配的分工**（D21 后半，维护者 2026-11-18 按推荐定，维护者可改）：CellPlayer 实体、分区状态映射、格心跳登记、Node 安装点、Player 的恢复快照 / 死亡回执在 cellworld 模块（v1.54.0 起，[证据](evidence/cellworld-module-d21-20261117/README.md)）。留在 demo：Player 的 Base 标量字段与面板 / 队伍副本（Q1 A：字段由工程按模块 README 的字段表声明；改成模块状态要同时改客户端 / drill / loadtest 的同步解码）、队伍视图 `with/team`（Q2 随 Q1）、mirror 编码与攻击结论推送、奖励规则、分区地形转发（Q4 暂不合一）。MMORPG 夹具的队伍、场景、怪物、战斗、副本不随 CellWorld 走，留作各模块的扩展项。`scene.partition` 改名见[业务模块（roost module）](#业务模块roost-module)。
 - **无缝世界原型的产品简化**：方案 §8.4、§9.6、§10.4、§11.10、§12.2、§13.6 列的简化（面板变化不回血、邀请不推送、队伍面板只在分区场景里等）按原样保留。Team 归 game 服务（`service=game`、共享模式，game 因此保留 `remote_entity`），按方案 §14.3 B 实施（`649f2c78`）。维护者 2026-11-14 确认（D14 A，#154）：Team 保持在 game 服务，不改成独占实体服务。
 
 #### cellworld 的位置零头与入场序号

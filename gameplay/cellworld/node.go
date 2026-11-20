@@ -54,7 +54,7 @@ type NodeConfig struct {
 	Cell  *CellID
 	Scene int64
 	// CreateActor 在当前 Nest handler 内新建一个角色 / NPC 实体（EntityManager.Create：handler 内走 CreateInScope，
-	// 由事务捕获，回滚即撤销发布）。kind 区分玩家的 SceneActor 与 NPC 的 Monster。
+	// 由事务捕获，回滚即撤销发布）。kind 区分玩家的 CellPlayer 与 NPC 的 Monster。
 	CreateActor func(id int64, kind EntityKind) (Actor, error)
 	// Period 是角色与区域心跳的周期，必须是 heartbeat.Periods 的档位；零值 50ms。
 	Period time.Duration
@@ -76,9 +76,9 @@ type NodeConfig struct {
 	AttackRetry, AttackDeadline, DedupWindow time.Duration
 	// MaxAppliedHits：单个目标去重窗口内最多记录的伤害数，满了拒绝（ReasonBusy）；零值 128。
 	MaxAppliedHits int
-	// LeaseTimeout：玩家 SceneActor 多久没收到 Base 的输入 / 续租就离场；零值 3s，必须长于 LeasePeriod。
+	// LeaseTimeout：玩家 CellPlayer 多久没收到 Base 的输入 / 续租就离场；零值 3s，必须长于 LeasePeriod。
 	LeaseTimeout time.Duration
-	// WritebackEvery：玩家 SceneActor 定时回写 Player 的间隔（战斗中每 N 秒）；零值 5s。
+	// WritebackEvery：玩家 CellPlayer 定时回写 Player 的间隔（战斗中每 N 秒）；零值 5s。
 	WritebackEvery time.Duration
 	// IdlePeriod：附近没有玩家的 NPC 的心跳档位（D1，见 tier.go）；必须是长于 Period 的 heartbeat 档位。零值不降档
 	// （NPC 恒为 Period）。
@@ -95,7 +95,7 @@ type NodeConfig struct {
 
 	// ---- Base 侧（PlayerEntity 为 nil 时本进程不托管玩家）----
 
-	// PlayerEntity 把角色（SceneActor）ID 换成本进程 Player 实体 ID。
+	// PlayerEntity 把角色（CellPlayer）ID 换成本进程 Player 实体 ID。
 	PlayerEntity func(actorID int64) int64
 	// WatchPeriod：Base 心跳（看门狗 + 续租）周期，必须是 heartbeat 档位；零值 100ms。
 	WatchPeriod time.Duration
@@ -117,7 +117,7 @@ type NodeConfig struct {
 
 	// ---- 队伍面板（Base 侧；GroupView 为 nil 时不启用，group.go）----
 
-	// GroupView 给出玩家（Player 实体 ID）的组关系视野 ID：成员是其他队员的 SceneActor，玩家挂接它，不论距离都看见队员；
+	// GroupView 给出玩家（Player 实体 ID）的组关系视野 ID：成员是其他队员的 CellPlayer，玩家挂接它，不论距离都看见队员；
 	// 在空间视野里的队员与它是同一个 subject，Interest 合并成一份订阅，不重复推。每个玩家一个，不能与本进程别的视野相同。
 	// 启用时 Mirrors 必填。GroupLayer 是这个视野给的同步层级（零值是缺省视图）。
 	GroupView  func(playerEntity int64) policy.ViewID
@@ -920,8 +920,7 @@ func NewHandlers() *Handlers { return &Handlers{} }
 // Register 把全部 handler 装到 Nest 引擎实例上（引擎 Start 之前）。Cell 侧与 Base 侧的 handler 都注册：注册时还不知道
 // 本进程托管哪一格，没用到的那一侧永远不会被投递。全部 rollback=undo：区域表与角色 DAO 的修改随事务回滚。
 func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
-	// 缺省 async；死亡回执（hDeath）与 Base 入场（hBaseEnter）在下面单独改成 strict：
-	// 回执要落盘后才关闭投递（DeathFact 的约定），入场编号要落入 WAL 后才发消息（BaseState.Entry 的约定）。
+	// 死亡回执、入场编号、带客户端请求号的攻击回执须先落入 WAL。普通移动和无号攻击仍走 async。
 	meta := nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync}
 	for _, entry := range []struct {
 		name nest.HandlerName
@@ -931,6 +930,7 @@ func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
 		{hInput, (*Node).handleInput}, {hAttack, (*Node).handleAttack}, {hImplied, (*Node).handleImplied},
 		{hOwnerResult, (*Node).handleOwnerResult}, {hSpawn, (*Node).handleSpawn}, {hInspect, (*Node).handleInspect}, {hTier, (*Node).handleTier},
 		{hBase, (*Node).handleBase}, {hBaseCmd, (*Node).handleBaseCmd}, {hBaseEnter, (*Node).handleBaseCmd},
+		{hBaseAttackRequest, (*Node).handleAttackRequest},
 	} {
 		run := entry.run
 		handler := func(es []fentity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (any, error) {
@@ -944,7 +944,7 @@ func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
 			return run(n, es, params, opts...)
 		}
 		entryMeta := meta
-		if entry.name == hBaseEnter || entry.name == hDeath {
+		if entry.name == hBaseEnter || entry.name == hDeath || entry.name == hBaseAttackRequest {
 			entryMeta.Durability = nest.DurabilityStrict
 		}
 		if err := engine.RegisterHandlerWithMeta(entry.name, handler, entryMeta); err != nil {
@@ -1220,7 +1220,7 @@ func (n *Node) handoffConcluded(cs ActorState, accepted bool, now time.Time, fx 
 // ---- 进入 / 离开 / 生成 ----
 
 // onEnter：Base 让玩家进入。本格已是 Real 时幂等返回 owner；本格知道 Real 在别处（Frozen 或存活 Ghost）时拒绝并提示
-// owner，避免造出第二个 Real。接受时按 Base 带来的 Player 快照（位置、HP）新建 SceneActor。
+// owner，避免造出第二个 Real。接受时按 Base 带来的 Player 快照（位置、HP）新建 CellPlayer。
 func (n *Node) onEnter(r *Region, a Actor, from int32, req *enterReq, now time.Time, fx *txEffects) error {
 	if err := req.Recovery.Validate(); err != nil {
 		return err

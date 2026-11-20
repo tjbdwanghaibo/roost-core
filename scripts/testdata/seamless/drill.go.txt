@@ -44,8 +44,8 @@ import (
 )
 
 const (
-	// SceneActor 是 cellworld 模块自带的实体，号由 game-demo 生成时的安装器分配（Player 1、World 2、Scene 3、Monster 4 之后，2026-11-17 起是 5）。
-	kindSceneActor = entity.EntityKind(5)
+	// CellPlayer 是 cellworld 模块自带的实体，号由 game-demo 生成时的安装器分配（Player 1、World 2、Scene 3、Monster 4 之后，2026-11-17 起是 5）。
+	kindCellPlayer = entity.EntityKind(5)
 	kindMonster    = entity.EntityKind(4)
 	// boundary 是两个格的分界线 x（cell_size 3000，2 × 1）。
 	boundary = 3000
@@ -135,6 +135,8 @@ type client struct {
 	mu       sync.Mutex
 	seq      uint32
 	pending  map[uint32]chan *transport.Packet
+	dropSeq  uint32 // test-only: consume this response without giving its payload to gameplay
+	dropped  chan struct{}
 	refs     map[frame.ObjectRef]int64
 	decoder  *entitysync.Decoder // 增量的 subject 身份从基线继承，按顺序解
 	held     map[int64]*object
@@ -177,6 +179,12 @@ func (c *client) start() {
 				continue
 			}
 			c.mu.Lock()
+			if c.dropped != nil && c.dropSeq == packet.Seq {
+				close(c.dropped)
+				c.dropped = nil
+				c.mu.Unlock()
+				continue
+			}
 			ch := c.pending[packet.Seq]
 			delete(c.pending, packet.Seq)
 			c.mu.Unlock()
@@ -223,8 +231,8 @@ func (c *client) consume(payload []byte) {
 				fields[k] = v
 			}
 		}
-		// 自己的 SceneActor：ID 是 BuildEntityID(玩家 ID, SceneActor)。本进程没有登记实体种类，按 kind 与 unique 认。
-		if c.actorID == 0 && entity.GetEntityKindFromID(subject) == kindSceneActor && entity.GetUniqueIDFromEntityID(subject) == c.playerID {
+		// 自己的 CellPlayer：ID 是 BuildEntityID(玩家 ID, CellPlayer)。本进程没有登记实体种类，按 kind 与 unique 认。
+		if c.actorID == 0 && entity.GetEntityKindFromID(subject) == kindCellPlayer && entity.GetUniqueIDFromEntityID(subject) == c.playerID {
 			c.actorID = subject
 		}
 		switch obj.Operation {
@@ -441,6 +449,66 @@ func (c *client) moveIntent(ctx context.Context, vx, vy int64) error {
 	return nil
 }
 
+// Lose only the original admission reply at the client's transport boundary. Wait for an
+// independent applied push BEFORE resubmission, so a failed first call cannot masquerade as dedup.
+func (c *client) attackWithLostReply(ctx context.Context, target, requestID int64) (*pb.AttackTargetResponse, error) {
+	payload := must(pb.MarshalAttackTargetRequest(&pb.AttackTargetRequest{Target: target, RequestID: requestID}))
+	c.mu.Lock()
+	c.seq++
+	seq := c.seq
+	seen := len(c.results)
+	done := make(chan struct{})
+	c.dropSeq, c.dropped = seq, done
+	c.mu.Unlock()
+	if err := c.raw.WritePackets([]*transport.Packet{{MsgID: msgid.MsgAttackTarget, Seq: seq, Payload: payload}}); err != nil {
+		return nil, err
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("first admission reply never reached the drop point")
+	}
+	var applied *pb.AttackResultPush
+	if err := waitFor(ctx, 5*time.Second, "first keyed hit applied before retry", func() (bool, string) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, r := range c.results[seen:] {
+			if r.Target == target && r.Outcome == "applied" && r.AttackID != "" {
+				applied = r
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("new verdicts: %d", len(c.results)-seen)
+	}); err != nil {
+		return nil, err
+	}
+	r, err := c.numberedAttack(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	if r.AttackID != applied.AttackID || r.Seq != applied.Seq {
+		return nil, fmt.Errorf("retry got another hit: verdict %v receipt %v", applied, r)
+	}
+	return r, nil
+}
+
+func (c *client) numberedAttack(ctx context.Context, payload []byte) (*pb.AttackTargetResponse, error) {
+	b, err := c.call(ctx, msgid.MsgAttackTarget, payload)
+	if err != nil {
+		return nil, err
+	}
+	r, err := pb.UnmarshalAttackTargetResponse(b)
+	if err != nil {
+		return nil, err
+	}
+	if r.Code != 0 || r.AttackID == "" {
+		return nil, fmt.Errorf("numbered attack receipt: %+v", r)
+	}
+	return r, nil
+}
+
 func (c *client) attack(ctx context.Context, target int64) (uint64, error) {
 	resp, err := c.call(ctx, msgid.MsgAttackTarget, must(pb.MarshalAttackTargetRequest(&pb.AttackTargetRequest{Target: target})))
 	if err != nil {
@@ -566,6 +634,32 @@ func cellEntities(ctx context.Context, sid int32) ([]map[string]any, error) {
 		}
 	}
 	return out, nil
+}
+
+// Steady-state observation. The per-transition realChecker in the loopback tests checks
+// transient dual authority; two sequential GM samples cannot prove its absence.
+func verifyPlayerOwner(ctx context.Context, c *client, owner, other int32, match func(map[string]any) bool) error {
+	return waitFor(ctx, 10*time.Second, c.name+" owner and route agree", func() (bool, string) {
+		base, err := gm(ctx, c.sid, "gm.scene.partition", map[string]any{"player_id": c.playerID})
+		if err != nil {
+			return false, err.Error()
+		}
+		rows, err := cellEntities(ctx, owner)
+		if err != nil {
+			return false, err.Error()
+		}
+		others, err := cellEntities(ctx, other)
+		if err != nil {
+			return false, err.Error()
+		}
+		old := roleIn(others, c.actorID)
+		for _, row := range rows {
+			if asInt(row["id"]) == c.actorID && row["role"] == "real" && old != "real" && old != "frozen" && asInt(base["owner_sid"]) == int64(owner) && asInt(base["epoch"]) == asInt(row["epoch"]) && asInt(base["actor"]) == c.actorID && (match == nil || match(row)) {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("base=%v expected actor=%d real on %d; other role=%s", base, c.actorID, owner, old)
+	})
 }
 
 func roleIn(entities []map[string]any, id int64) string {
@@ -709,7 +803,7 @@ func run(ctx context.Context) error {
 		"monsters_near_p1": monstersNear(p1, self1.pos(), keepRadius), "move_refused": "scene_partitioned"})
 
 	// E4：分区场景里自己的 Player 字段（exp 等）经自身视图走同一条连接：AddExp 之后客户端看到自己的 exp 变了；
-	// SceneActor 的 mirror 不带这些字段。
+	// CellPlayer 的 mirror 不带这些字段。
 	soft("own_state", func() error {
 		var before int64
 		if err := waitFor(ctx, 5*time.Second, "p1 holds its own Player", func() (bool, string) {
@@ -735,13 +829,16 @@ func run(ctx context.Context) error {
 		}
 		if s, ok := p1.self(); ok {
 			if _, carries := clientsync.PlayerExp(s.fields); carries {
-				return fmt.Errorf("the scene actor's mirror carries exp: %v", s.fields)
+				return fmt.Errorf("the cell player's mirror carries exp: %v", s.fields)
 			}
 		}
 		step("own_state", map[string]any{"exp_before": before, "exp_after": before + 7})
 		return nil
 	}())
 
+	if err := verifyPlayerOwner(ctx, p2, 1001, 1002, nil); err != nil {
+		return err
+	}
 	// p2 走到格 (1,0) 里靠边的位置站着（他是 p1 的“附近的其它玩家”，也是之后崩溃重建的对象）；p3 留在格 (0,0)。
 	if err := p2.walkTo(ctx, 3060, 1530, 200); err != nil {
 		return err
@@ -857,7 +954,7 @@ func run(ctx context.Context) error {
 			return fmt.Errorf("attack %d: no monster across the border in p1's view", i)
 		}
 		startHP := p1.snapshot()[target].hp()
-		// 第 3 项 = A：伤害是 p1 的 Real 上面板的攻击（客户端从自己 SceneActor 的 mirror 看到 cell_attack）。
+		// 第 3 项 = A：伤害是 p1 的 Real 上面板的攻击（客户端从自己 CellPlayer 的 mirror 看到 cell_attack）。
 		atk := attackOf(p1)
 		statsBefore, _ := gm(ctx, 1000, "gm.scene.partition", nil)
 		forwardedBefore := cellsStat(ctx, "DamageForwarded")
@@ -866,8 +963,30 @@ func run(ctx context.Context) error {
 			return fmt.Errorf("attack %d: target starts too weak for nonlethal checks", i)
 		}
 		var firstSeq, lastSeq uint64
+		var replayed, distinct *pb.AttackTargetResponse
+		if i == 0 && n < 2 {
+			return errors.New("need two nonlethal attacks for the retry check")
+		}
 		for k := range n {
-			seq, err := p1.attack(ctx, target)
+			var seq uint64
+			var err error
+			switch {
+			case i == 0 && k == 0:
+				replayed, err = p1.attackWithLostReply(ctx, target, 1)
+				if err == nil {
+					seq = replayed.Seq
+				}
+			case i == 0 && k == 1:
+				distinct, err = p1.numberedAttack(ctx, must(pb.MarshalAttackTargetRequest(&pb.AttackTargetRequest{Target: target, RequestID: 2})))
+				if err == nil {
+					seq = distinct.Seq
+					if distinct.AttackID == replayed.AttackID || distinct.Seq == replayed.Seq {
+						return errors.New("two intentional attacks got one receipt")
+					}
+				}
+			default:
+				seq, err = p1.attack(ctx, target) // legacy client, no request number
+			}
 			if err != nil {
 				return err
 			}
@@ -918,6 +1037,7 @@ func run(ctx context.Context) error {
 			"damage_forwarded_by_cells": cellsStat(ctx, "DamageForwarded") - forwardedBefore,
 			"damage_retries_total":      cellsStat(ctx, "DamageRetries")})
 		if i == 0 {
+			step("attack_lost_reply", map[string]any{"replayed_attack_id": replayed.AttackID, "distinct_attack_id": distinct.AttackID, "admission_replies_dropped": 1, "intended": n, "applied": applied, "before_hp": startHP, "after_hp": wantHP})
 			own, _ := p1.ownPlayer()
 			beforeCoins, ok := clientsync.PlayerCoins(own.fields)
 			if !ok {
@@ -952,7 +1072,7 @@ func run(ctx context.Context) error {
 	}
 
 	// 第 3 项 = A：战斗面板的权威在 Cell 的 Real。p1 升一级（AddExp 一级的经验）：Base 在同一笔事务里推出新面板、提交后发给
-	// 当前 owner；客户端从自己 SceneActor 的 mirror 看到 cell_max_hp / cell_attack 变大、当前 HP 不回血；自己 Player 的
+	// 当前 owner；客户端从自己 CellPlayer 的 mirror 看到 cell_max_hp / cell_attack 变大、当前 HP 不回血；自己 Player 的
 	// self 视图里没有另一份 HP / 面板；之后打怪一次，伤害是新的攻击值。
 	soft("panel_level_up", func() error {
 		self, ok := p1.self()
@@ -982,7 +1102,7 @@ func run(ctx context.Context) error {
 			return fmt.Errorf("add_exp: %v %+v", err, r)
 		}
 		var maxAfter, atkAfter int64
-		if err := waitFor(ctx, 5*time.Second, "p1's scene actor shows the new panel", func() (bool, string) {
+		if err := waitFor(ctx, 5*time.Second, "p1's cell player shows the new panel", func() (bool, string) {
 			s, _ := p1.self()
 			maxAfter, atkAfter = asInt(s.fields["cell_max_hp"]), attackOf(p1)
 			return maxAfter == wantAfter.HP && atkAfter == wantAfter.Attack, fmt.Sprintf("cell_max_hp %d cell_attack %d, want %d / %d", maxAfter, atkAfter, wantAfter.HP, wantAfter.Attack)
@@ -1078,12 +1198,19 @@ func run(ctx context.Context) error {
 	}
 
 	// 7. kill -9 一个 Cell 进程（格 (1,0)，sid 1002）后玩家重进、HP 按快照恢复：p1 先打 p2 两下（HP 100 → 80），等回写
-	//    进 Player（Base 进程 sid 1000）；kill -9 sid 1002 再重启，p2 的 Base 静默看门狗重进，新的 SceneActor 按快照建出。
+	//    进 Player（Base 进程 sid 1000）；kill -9 sid 1002 再重启，p2 的 Base 静默看门狗重进，新的 CellPlayer 按快照建出。
 	// p1 回到格 (0,0)（越过 3000 - H），这样被杀的只有 p2 所在的格。
 	if err := p1.walkTo(ctx, 2930, 1520, 100); err != nil {
 		return err
 	}
 	time.Sleep(300 * time.Millisecond)
+	if err := verifyPlayerOwner(ctx, p2, 1002, 1001, nil); err != nil {
+		return err
+	}
+	preHit, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
+	if err != nil {
+		return err
+	}
 	p2Self, _ := p2.self()
 	for range 2 {
 		if _, err := p1.attack(ctx, p2.actorID); err != nil {
@@ -1096,11 +1223,16 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return false, err.Error()
 		}
-		return asInt(state["hp"]) == wantHP && asInt(state["snapshot_seq"]) > 0, fmt.Sprintf("%v", state)
+		newer := asInt(state["snapshot_epoch"]) == asInt(preHit["epoch"]) && (asInt(state["snapshot_epoch"]) > asInt(preHit["snapshot_epoch"]) || asInt(state["snapshot_seq"]) > asInt(preHit["snapshot_seq"]))
+		return asInt(state["hp"]) == wantHP && newer, fmt.Sprintf("%v", state)
 	}); err != nil {
 		return err
 	}
-	before7, _ := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
+	before7, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
+	if err != nil {
+		return err
+	}
+	savedPos := point{asInt(before7["x"]), asInt(before7["y"])}
 	if *killCmd == "" || *restartCmd == "" {
 		return errors.New("-kill and -restart are required")
 	}
@@ -1145,7 +1277,7 @@ func run(ctx context.Context) error {
 			return false, err.Error()
 		}
 		s, ok := p2.self()
-		return asInt(state["epoch"]) > asInt(before7["epoch"]) && ok && s.hp() == wantHP && s.updated.After(killedAt),
+		return asInt(state["epoch"]) > asInt(before7["epoch"]) && ok && s.hp() == wantHP && s.pos() == savedPos && s.updated.After(killedAt),
 			fmt.Sprintf("base %v client hp %d", state, s.hp())
 	}); err != nil {
 		return err
@@ -1156,6 +1288,34 @@ func run(ctx context.Context) error {
 	step("cell_crash", map[string]any{"p2_hp_before": wantHP, "p2_hp_after": selfNow.hp(), "epoch_before": before7["epoch"], "epoch_after": after7["epoch"],
 		"owner_after": after7["owner_sid"], "restart_seconds": restartedAt.Sub(killedAt).Seconds(),
 		"cell_b_monsters_respawned": cellB2["spawned"], "base_reenters": nodeStat(after7base(ctx), "Reenters")})
+
+	// Reconnect the very same player after recovering its Cell, not another role on another Base.
+	p2.raw.Close()
+	again2, err := login(ctx, accountsClient, "p2", 1000, nonce)
+	if err != nil {
+		return err
+	}
+	defer again2.raw.Close()
+	if again2.playerID != p2.playerID {
+		return errors.New("reconnect selected another role")
+	}
+	if err := waitFor(ctx, 10*time.Second, "new decoder has the recovered self", func() (bool, string) {
+		s, ok := again2.self()
+		return ok && again2.actorID == p2.actorID && s.hp() == wantHP && s.pos() == savedPos, again2.describe()
+	}); err != nil {
+		return err
+	}
+	if err := verifyPlayerOwner(ctx, again2, 1002, 1001, nil); err != nil {
+		return err
+	}
+	if err := again2.walkTo(ctx, savedPos.X+80, savedPos.Y, 100); err != nil {
+		return err
+	}
+	if err := verifyPlayerOwner(ctx, again2, 1002, 1001, func(row map[string]any) bool { return asInt(row["x"]) >= savedPos.X+80 && asInt(row["hp"]) == wantHP }); err != nil {
+		return err
+	}
+	reconnectedSelf, _ := again2.self()
+	step("same_player_reconnect", map[string]any{"player": again2.playerID, "actor": again2.actorID, "owner": 1002, "before": savedPos, "after": reconnectedSelf.pos(), "hp": reconnectedSelf.hp()})
 
 	// 9（第 1 项）. Base 进程重启后回到保存的位置：p5 的 Base 是只做 Base 的 sid 1004。p5 走到 (1200, 1500)（远离 spawn
 	//    (2900, 1500)），等一次回写进 Player（快照位置随被接受的回写写进持久的 SavedPos*）；kill -9 sid 1004 再重启，p5
@@ -1221,7 +1381,7 @@ func run(ctx context.Context) error {
 	}
 
 	// 7b. 跨 Base 的队伍面板（第 4 项 = A）：p1（Base sid 1000）邀请 p6（Base sid 1004），两人彼此不在视野里（相距超过
-	//     witness 半径）；入队后在各自的客户端里看见对方的 SceneActor（位置、HP），不论距离。p6 的 Base 被 kill -9 后
+	//     witness 半径）；入队后在各自的客户端里看见对方的 CellPlayer（位置、HP），不论距离。p6 的 Base 被 kill -9 后
 	//     3 个快照周期（1s × 3）没更新，p1 的面板移除 p6；重启、重新登录后队伍还在（成员表在 Team 实体上），面板恢复；
 	//     p6 离队后两边的面板都移除对方；最后 p1 解散。
 	if *killBase != "" && *restartBase != "" {
@@ -1300,20 +1460,20 @@ func (c *client) team(ctx context.Context, id uint32, payload []byte) (*pb.TeamV
 	return r.Info, nil
 }
 
-// actorOf 是客户端手里玩家 playerID 的 SceneActor（本进程没有登记实体种类：按 kind 与 unique 认）。
+// actorOf 是客户端手里玩家 playerID 的 CellPlayer（本进程没有登记实体种类：按 kind 与 unique 认）。
 func (c *client) actorOf(playerID int64) (object, bool) {
 	for id, o := range c.snapshot() {
-		if entity.GetEntityKindFromID(id) == kindSceneActor && entity.GetUniqueIDFromEntityID(id) == playerID {
+		if entity.GetEntityKindFromID(id) == kindCellPlayer && entity.GetUniqueIDFromEntityID(id) == playerID {
 			return o, true
 		}
 	}
 	return object{}, false
 }
 
-// removedAt 是客户端最近一次删除玩家 playerID 的 SceneActor 的时间（since 之后）。
+// removedAt 是客户端最近一次删除玩家 playerID 的 CellPlayer 的时间（since 之后）。
 func (c *client) removedAt(playerID int64, since time.Time) (time.Time, bool) {
 	for _, r := range c.removalsSince(since) {
-		if entity.GetEntityKindFromID(r.ID) == kindSceneActor && entity.GetUniqueIDFromEntityID(r.ID) == playerID {
+		if entity.GetEntityKindFromID(r.ID) == kindCellPlayer && entity.GetUniqueIDFromEntityID(r.ID) == playerID {
 			return r.At, true
 		}
 	}
@@ -1548,7 +1708,7 @@ func (c *client) createCount(id int64) int {
 	return c.creates[id]
 }
 
-// attackOf 是客户端从自己 SceneActor 的 mirror 看到的面板攻击（第 3 项 = A：伤害按它结算）。mirror 里没有这个字段时
+// attackOf 是客户端从自己 CellPlayer 的 mirror 看到的面板攻击（第 3 项 = A：伤害按它结算）。mirror 里没有这个字段时
 // （没有面板）伤害是配置的 attack_damage；面板本身由 panel_level_up 一步严格核对（那里先要求 cell_max_hp 存在）。
 func attackOf(c *client) int64 {
 	s, _ := c.self()
@@ -1561,7 +1721,7 @@ func attackOf(c *client) int64 {
 // ownPlayer 是客户端手里自己的 Player（kind 是 Player、unique 是玩家 ID；分区场景里经 self 视图来，E4）。
 func (c *client) ownPlayer() (object, bool) {
 	for id, o := range c.snapshot() {
-		if entity.GetEntityKindFromID(id) != kindSceneActor && entity.GetUniqueIDFromEntityID(id) == c.playerID && o.ns == "player" {
+		if entity.GetEntityKindFromID(id) != kindCellPlayer && entity.GetUniqueIDFromEntityID(id) == c.playerID && o.ns == "player" {
 			if _, hasExp := clientsync.PlayerExp(o.fields); hasExp {
 				return o, true
 			}

@@ -26,6 +26,7 @@
 - `game/controllers/enter.go` 的 `HandleEnterGame`、`HandleEnterCreate`：两个协议的端点。
 - `game/modules/login/enter.go` 的 `Enter(ctx, registry, entering, load)`：一次进入的骨架，顺序是进入前检查 → `load` → 进入钩子。工程改写进入端点时把自己的加载与初始化包成 `load` 交给它。
 - `game/modules/login/enter_create.go` 的 `EnterSession(ctx, registry, entering, Loads{LoadOrCreate, Existing})`：普通端点的入口，按 `CreateFirst` 选一种 `load`，检查放行后执行，成功后通知。
+- 可选服务接线 `InstallSessionPlacement(registry, place)`：在服务启动时为**此服务实例**的标准 `EnterSession` 登记一个放置动作，重复登记报错。没有登记与之前一样。这样配方不必为进图复制登录控制器；自行传回调的 `EnterSessionWithPlacement` 不叠加这个动作。
 - `EnterSessionWithPlacement(ctx, registry, entering, loads, place)`：同一流程，在初始化已提交、`RunEntered` 尚未调用时执行本次请求的 `place(ctx, entered)`。它拿到原请求上下文和同一份 claims。返回错误则本次不通知、不答成功，**不会撤销已经提交的首次初始化**；重试必须安全。只想记日志的进场错误应在 `place` 内处理并返回 nil。没有这一步继续用 `EnterSession`。
 - `game/modules/login/enter_create.go` 的 `Create(ctx, registry, creating, CreateSteps{Ensure, Commit})`：一次新建的骨架，六步见下面“一致性”。
 - `game/modules/login/enter_create.go` 的 `Assess(ctx, registry, entering, built)`：算出该告诉客户端什么（`Status{Code, Reason, NeedCreate}`），不推送、不断开。

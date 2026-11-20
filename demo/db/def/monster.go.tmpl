@@ -51,7 +51,7 @@ type MonsterDao struct {
 	// scene (scene.partition, gameplay/cellworld; maintainer decision D5 = A):
 	// velocity, version, role, handoff and the damage dedup list. Position and
 	// HP are PosX / PosY / HP above. They carry the same names and keys as the
-	// cellworld module's SceneActorDao, so game/modules/cellworldhost maps both
+	// cellworld module's CellPlayerDao, so game/modules/cellworldhost maps both
 	// with one function (MonsterDao is a cellworldhost.CellDao), and a monster
 	// of an ordinary scene never writes them. The nested types (CellHit,
 	// CellHandoff, ...) are the module's, in db/def/cellworld.go. `nopersist,nosync`: a
@@ -71,16 +71,16 @@ type MonsterDao struct {
 	CellApplied     []CellHit    `dao:"nopersist,nosync" store:"cell_applied"`
 	CellHandoff     *CellHandoff `dao:"nopersist,nosync" store:"cell_handoff"`
 	// The battle panel (cellworld.Panel, item 3 = A), same names as
-	// SceneActorDao's; a monster has none today (zero = no panel).
+	// CellPlayerDao's; a monster has none today (zero = no panel).
 	CellMaxHP    int64  `dao:"nopersist,nosync" store:"cell_max_hp"`
 	CellAttack   int64  `dao:"nopersist,nosync" store:"cell_attack"`
 	CellPower    int64  `dao:"nopersist,nosync" store:"cell_power"`
 	CellPanelVer uint64 `dao:"nopersist,nosync" store:"cell_panel_ver"`
 	// The entry sequence (cellworld.ActorState.Entry), same name as
-	// SceneActorDao's; a monster never enters, so it stays 0.
+	// CellPlayerDao's; a monster never enters, so it stays 0.
 	CellEntry uint64 `dao:"nopersist,nosync" store:"cell_entry"`
 	// The sub-unit position remainder (cellworld.ActorState.FracX / FracY,
-	// thousandths of a unit), same names as SceneActorDao's.
+	// thousandths of a unit), same names as CellPlayerDao's.
 	CellFracX int32 `dao:"nopersist,nosync" store:"cell_frac_x"`
 	CellFracY int32 `dao:"nopersist,nosync" store:"cell_frac_y"`
 }

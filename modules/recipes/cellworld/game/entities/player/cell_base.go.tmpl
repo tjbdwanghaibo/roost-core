@@ -1,0 +1,30 @@
+package player
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"{{MODULE}}/game/modules/cellworldhost"
+)
+
+var _ cellworld.BasePlayer = (*Player)(nil)
+var _ cellworld.AttackRequestPlayer = (*Player)(nil)
+
+func (p *Player) CellAttackSlot(slot int64) (int64, cellworld.AttackReceipt) {
+	return cellworldhost.ReadAttackSlot(p.dao.GetCellworldBase(), slot)
+}
+func (p *Player) SetCellAttackSlot(slot, high int64, r cellworld.AttackReceipt) {
+	cellworldhost.WriteAttackSlot(p.dao.GetCellworldBase(), slot, high, r)
+}
+func (p *Player) BaseState() cellworld.BaseState {
+	return cellworldhost.ReadBase(p.dao, cellworldhost.SceneID())
+}
+func (p *Player) SetBaseState(s cellworld.BaseState) {
+	cellworldhost.WriteBase(p.dao, s, cellworldhost.SceneID())
+}
+func (p *Player) CellPanel() cellworld.Panel { return cellworld.Panel{} }
+func (p *Player) StartBase() error           { return p.CellspaceComp().Start(p) }
+func (p *Player) CellDeathReceipt(target int64) uint64 {
+	return cellworldhost.DeathReceipt(p.dao.GetCellworldBase(), target)
+}
+func (p *Player) RecordCellDeathReceipt(target int64, life uint64, limit int) error {
+	return cellworldhost.RecordDeathReceipt(p.dao.GetCellworldBase(), target, life, limit)
+}

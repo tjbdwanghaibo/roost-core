@@ -102,7 +102,7 @@ func TestOldEnterCannotRenewOrRebindAReal(t *testing.T) {
 	}
 }
 
-// v2 新增的生命周期：Cell 崩溃后玩家重进按 Player 快照重建；Base 消失后 SceneActor 按租约离场；回写按版本幂等；
+// v2 新增的生命周期：Cell 崩溃后玩家重进按 Player 快照重建；Base 消失后 CellPlayer 按租约离场；回写按版本幂等；
 // 交接事务回滚不移交。
 
 // failingStart 让 StartCell 失败：安装的最后一步，此前实体已新建、状态与区域表都已写入当前事务。
@@ -111,7 +111,7 @@ type failingStart struct{ Actor }
 func (failingStart) StartCell() error { return errors.New("injected install failure") }
 
 // Cell 崩溃：玩家在 B 挨打（HP 100 → 90）并回写给 Base；B 的进程停止（内存全丢）后重启一个空的 B'。Base 的静默看门狗按
-// 最后位置重进，B' 按 Player 的快照建 SceneActor：epoch 比崩溃前大、HP 是快照的 90。
+// 最后位置重进，B' 按 Player 的快照建 CellPlayer：epoch 比崩溃前大、HP 是快照的 90。
 func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 	spec, _ := loopbackSpec(t, 2, 1)
 	spec.cellMod = func(cfg *NodeConfig) { cfg.WritebackEvery = 200 * time.Millisecond }
@@ -137,7 +137,7 @@ func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 	if v.Cell != w.grid.SID(b) || v.Self.X != 12000 || v.Self.HP != 90 {
 		t.Fatalf("after restart: view from %d at (%d,%d) hp %d, want B at (12000,5000) hp 90", v.Cell, v.Self.X, v.Self.Y, v.Self.HP)
 	}
-	// 面板随 Base 的 Enter 回到重建的 SceneActor（第 3 项：面板的来源是 Base 的养成输入，崩溃的 Cell 不带走它）。
+	// 面板随 Base 的 Enter 回到重建的 CellPlayer（第 3 项：面板的来源是 Base 的养成输入，崩溃的 Cell 不带走它）。
 	if v.Self.Panel != panel {
 		t.Fatalf("after restart: panel %+v, want %+v", v.Self.Panel, panel)
 	}
@@ -147,15 +147,15 @@ func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 	w.assertSingleReal(actorID(1), b)
 	// 客户端：崩溃期间自己的 mirror 过期删除（witness 停了），重进后它以新版本回来，客户端又持有自己（HP 是快照的 90）。
 	// 2026-11-03 接 demo 端到端时发现：mirror 重新出现只 Show 进空间索引，玩家对自己的订阅（Enter 时建立）不会恢复。
-	eventually(t, settleWithin, "the client to hold its own scene actor again", func() (bool, string) {
+	eventually(t, settleWithin, "the client to hold its own cell player again", func() (bool, string) {
 		self, ok := w.base.client.held(1)[actorID(1)]
 		return ok && self.HP == 90 && self.Ver.Epoch > before, fmt.Sprintf("held %v (present %v), removes %v, creates %d, mirror stats %+v",
 			self, ok, w.base.client.removed(1), w.base.client.createCount(1, actorID(1)), w.base.mirrors.Stats())
 	})
 }
 
-// Base 进程消失：SceneActor 收不到输入 / 续租，LeaseTimeout 后自行离场，邻格的 Ghost 随删除消息消失。
-func TestBaseGoneSceneActorExpires(t *testing.T) {
+// Base 进程消失：CellPlayer 收不到输入 / 续租，LeaseTimeout 后自行离场，邻格的 Ghost 随删除消息消失。
+func TestBaseGoneCellPlayerExpires(t *testing.T) {
 	spec, _ := loopbackSpec(t, 2, 1)
 	spec.cellMod = func(cfg *NodeConfig) { cfg.LeaseTimeout = time.Second }
 	w := startWorld(t, spec)
@@ -164,7 +164,7 @@ func TestBaseGoneSceneActorExpires(t *testing.T) {
 	waitFor(t, settleWithin, "ghost in B", func() bool { _, ok := w.roleOf(b, actorID(1)); return ok })
 	time.Sleep(1500 * time.Millisecond) // 负向窗口（长于 LeaseTimeout 1s）：Base 在续租，角色不该离场
 	if s, ok := w.roleOf(a, actorID(1)); !ok || s.Role != "real" {
-		t.Fatalf("SceneActor %+v (known %v) did not stay while the base renews its lease", s, ok)
+		t.Fatalf("CellPlayer %+v (known %v) did not stay while the base renews its lease", s, ok)
 	}
 	w.base.stop()
 	waitFor(t, settleWithin, "lease expiry", func() bool { _, ok := w.roleOf(a, actorID(1)); return !ok })

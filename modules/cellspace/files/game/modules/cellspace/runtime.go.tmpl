@@ -1,0 +1,143 @@
+// Package cellspace is the optional two-cell starter. It installs no combat, spawn or reward hooks.
+package cellspace
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	region "{{MODULE}}/game/entities/cell_region"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/modules/cellworldhost"
+)
+
+var ids = cellworldhost.PlayerIDs{BaseKind: player.EntityKindPlayer}
+
+// Runtime owns the region and the pre-existing manager owns the Node. Both use the heartbeat Mod's one driver.
+type Runtime struct {
+	host   *cellworldhost.Runtime
+	access *entity.ManagerAccess
+	area   entity.IThreadSafeEntity
+}
+
+func Start(ctx context.Context, registry *app.Registry, handlers *cellworld.Handlers) (*Runtime, error) {
+	var cfg Config
+	if err := app.LoadConfig(registry.Config(), &cfg); err != nil {
+		return nil, err
+	}
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	var ident app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &ident); err != nil {
+		return nil, err
+	}
+	g, err := cfg.grid()
+	if err != nil {
+		return nil, err
+	}
+	access, ok := app.Lookup[*entity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil {
+		return nil, errors.New("cellspace: missing entity runtime")
+	}
+	d, ok := app.Lookup[*heartbeat.Driver](registry, mods.ModHeartbeat)
+	if !ok || d == nil {
+		return nil, errors.New("cellspace: missing heartbeat")
+	}
+	scene, err := entity.BuildEntityID(1, region.EntityKindCellRegion)
+	if err != nil {
+		return nil, err
+	}
+	nc := cellworld.NodeConfig{World: cfg.World, SID: ident.Sid, Grid: g, Scene: scene, Handlers: handlers, ViewRadius: 150, PlayerEntity: ids.FromActor, CreateActor: func(id int64, k cellworld.EntityKind) (cellworld.Actor, error) {
+		return cellworldhost.CreatePlayer(access, id, k)
+	}}
+	if c, owns := g.CellOf(ident.Sid); owns {
+		nc.Cell = &c
+	}
+	h, err := cellworldhost.New(registry, nc)
+	if err != nil {
+		return nil, err
+	}
+	rt := &Runtime{host: h, access: access}
+	cellworldhost.Install(h.Node, scene, d)
+	if nc.Cell != nil {
+		rt.area, err = access.Create(&entity.EntityCreateParam{Id: scene, IsCreate: true, Kind: region.EntityKindCellRegion, Category: entity.EntityCategoryWorld, Param: cellworldhost.CellMode{}})
+		if err != nil {
+			cellworldhost.Uninstall(h.Node)
+			return nil, err
+		}
+	}
+	if err = h.Start(ctx); err != nil {
+		return nil, errors.Join(err, rt.Stop(ctx))
+	}
+	return rt, nil
+}
+func (rt *Runtime) Stop(ctx context.Context) error {
+	if rt == nil {
+		return nil
+	}
+	if err := rt.host.Stop(ctx); err != nil {
+		return err
+	}
+	if rt.area != nil {
+		if err := rt.access.Destroy(ctx, rt.area, entity.DestroyReasonCommon, false); err != nil {
+			return err
+		}
+		rt.area = nil
+	}
+	cellworldhost.Uninstall(rt.host.Node)
+	return nil
+}
+
+// Enter uses the authenticated unique ID; callers must have completed Player load. Loading the DAO alone never enters.
+func Enter(ctx context.Context, unique int64) (cellworld.BaseState, error) {
+	n := cellworldhost.Node()
+	if n == nil {
+		return cellworld.BaseState{}, cellworldhost.ErrNoNode
+	}
+	base, err := ids.Base(unique)
+	if err != nil {
+		return cellworld.BaseState{}, err
+	}
+	a, err := ids.Actor(base)
+	if err != nil {
+		return cellworld.BaseState{}, err
+	}
+	s, err := n.BaseStateOf(ctx, base)
+	if err != nil {
+		return s, err
+	}
+	if s.InWorld {
+		if s.Actor != a {
+			return s, fmt.Errorf("cellspace: inconsistent actor %d", s.Actor)
+		}
+		return s, nil
+	}
+	pos := spatial.Point{X: 500, Y: 500}
+	if s.SnapVer != (cellworld.Version{}) && n.Config().Grid.Bounds().Contains(s.Pos()) {
+		pos = s.Pos()
+	}
+	if err = n.Enter(ctx, base, a, pos, 100); err != nil {
+		return s, err
+	}
+	return n.BaseStateOf(ctx, base)
+}
+func Move(ctx context.Context, unique, vx, vy int64) error {
+	n := cellworldhost.Node()
+	if n == nil {
+		return cellworldhost.ErrNoNode
+	}
+	if vx < -1000 || vx > 1000 || vy < -1000 || vy > 1000 {
+		return errors.New("cellspace: velocity outside allowed range")
+	}
+	base, err := ids.Base(unique)
+	if err != nil {
+		return err
+	}
+	return n.Move(ctx, base, vx, vy)
+}

@@ -46,8 +46,9 @@
 | [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 14 |
 | [scenespace](scenespace/README.md) | 普通地图的空间与视野，借用宿主的同步管理器，不自建会话或默认图 | 无 | 无 | 3 |
 | [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor、scenespace | SceneDao；Player 场景交互回执 | 29 |
-| [monster](monster/README.md) | 正式实体生命周期、AI/actionflow 巡逻追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 27 |
-| [cellworld](cellworld/README.md) | 固定 Cell 分区、共享授权、持久出生目录与停机排空；自带玩家在格上的 SceneActor 实体、分区状态映射与 Node 安装点；Player / 场景 / 怪物的接线见 game-demo | nest、redis、nats | `PlayerDao.CellworldBase`（恢复快照、死亡回执）；Player 的路由 / 快照 / 面板字段由业务按模块 README 声明 | 17 |
+| [monster](monster/README.md) | 正式实体生命周期、实体事务内直接决策的巡逻与追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 27 |
+| [cellspace](cellspace/README.md) | 可选的两格玩家装配、区域和速度意图。新工程 `-template game -recipe cellworld` 组合登录、存档和进场，不必复制 demo | cellworld、heartbeat | `CellPlayer` 由 cellworld 提供；区域不持久、不开分区不建化身 | 1 |
+| [cellworld](cellworld/README.md) | 固定 Cell 分区、共享授权、持久出生目录与停机排空；自带玩家在格上的 CellPlayer 实体、分区状态映射与 Node 安装点；玩家最小接入见 cellspace 配方；含怪物与完整邻近视野的接线见 game-demo | nest、redis、nats | `PlayerDao.CellworldBase`（恢复快照、死亡回执）；Player 的路由 / 快照 / 面板字段由业务按模块 README 声明 | 17 |
 | [attribute](attribute/README.md) | 生成的属性 profile 与 Container：基础/装备/最终三层、升级成长 | profile | AttributeBase / AttributeGear / AttributeFinal | 20 |
 | [equipment](equipment/README.md) | 配置表槽位、穿卸、背包原子扣回；不包含物品实例和随机词条 | bag | Equipment | 18 |
 | [combat](combat/README.md) | 双人同意战斗、正式技能 Runtime / CombatDAO、Buff 与冷却恢复 | actor、attribute、skillbook | CombatDAO；Player 的公开投影与私有 checkpoint | 38 |

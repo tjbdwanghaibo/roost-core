@@ -14,7 +14,6 @@ import (
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	scene_actor "{{MODULE}}/game/entities/scene_actor"
 	handlersender "{{MODULE}}/game/handler/sender"
 	"{{MODULE}}/game/modules/cellworldhost"
 	gamescene "{{MODULE}}/game/scene"
@@ -39,10 +38,10 @@ import (
 // 分区场景（scene.partition）：本进程的 Base / Cell 装配，复用 cellworldhost 的生命周期。
 //
 // 每个 game 进程读同一份 scene.partition。sid 是 owners 之一的进程是那个格的 **Cell**：本进程的 Scene 实体持有
-// 格的区域表（cellworld.Region），刷本格的怪，站在本格的玩家由这里的 SceneActor 代表；每个进程都是自己玩家的
+// 格的区域表（cellworld.Region），刷本格的怪，站在本格的玩家由这里的 CellPlayer 代表；每个进程都是自己玩家的
 // **Base**：Player 不迁移，玩家的路由状态在 Player 上，Cell 发来的视野（witness）喂给场景桥的 Sync mirror，
 // 客户端照旧从本进程这一条连接收帧。两边都在同一个 cellworld.Node 上，Node 把 NATS 上的消息投成 Nest 请求，
-// 状态全在实体上（Scene / SceneActor / Monster / Player），这里不持有任何格内状态、也没有带锁的进程级表
+// 状态全在实体上（Scene / CellPlayer / Monster / Player），这里不持有任何格内状态、也没有带锁的进程级表
 // （区域事实仍由 Scene 的 Nest 事务持有）。当前契约与验收见 core 的 gameplay/cellworld/README.md。
 //
 // 进程级的保证（同一 sid 只有一个进程、失锁即停）是 App 单实例锁给的（singleton.enabled），这里不另做。
@@ -158,17 +157,14 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		Scene: area.ID(), CreateActor: rt.createActor,
 		ViewRadius: config.ViewRadius, WakeRadius: config.WakeRadius, IdlePeriod: config.IdlePeriod,
 		MaxSpeed: config.MaxSpeed, LeaseTimeout: config.LeaseTimeout, WritebackEvery: config.WritebackEvery,
-		PlayerEntity: func(actorID int64) int64 {
-			id, _ := coreentity.BuildEntityID(coreentity.GetUniqueIDFromEntityID(actorID), player.EntityKindPlayer)
-			return id
-		},
+		PlayerEntity: partitionIDs.FromActor,
 		Mirrors: rt.mirrors, Interest: bridge.interest,
 		Session:     coreentity.GetUniqueIDFromEntityID,
 		MirrorKind:  partitionMirrorKind,
 		Hooks:       cellworld.Hooks{AttackResult: rt.attackResult, PanelResult: rt.panelResult},
 		SettleDeath: settlePartitionDeath,
-		// 队伍面板（第 4 项 = A）：每名队员的 Base 每 snapshot_every 把他的 SceneActor 状态发给其他队员的 Base，收到的进
-		// 同一个 mirror、3 个周期没更新过期；每名玩家一个组关系视野（成员是其他队员的 SceneActor）。成员表的权威是 Team
+		// 队伍面板（第 4 项 = A）：每名队员的 Base 每 snapshot_every 把他的 CellPlayer 状态发给其他队员的 Base，收到的进
+		// 同一个 mirror、3 个周期没更新过期；每名玩家一个组关系视野（成员是其他队员的 CellPlayer）。成员表的权威是 Team
 		// 实体：缓存版本为 0 时与每 resync_every 投一笔 [Team, Player] 重读（只做准入，不等）。
 		GroupView: func(playerEntity int64) policy.ViewID {
 			return partitionTeamViews | policy.ViewID(coreentity.GetUniqueIDFromEntityID(playerEntity))
@@ -224,7 +220,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	rt.host, rt.spawnBook = host, host.Births
 	node := host.Node
 	rt.node = node
-	// SceneActor（模块自带）从这里装的驱动取心跳宿主：与 Scene / Player / Monster 是同一个驱动（actor.Heartbeat）。
+	// CellPlayer（模块自带）从这里装的驱动取心跳宿主：与 Scene / Player / Monster 是同一个驱动（actor.Heartbeat）。
 	cellworldhost.Install(node, area.ID(), actor.Heartbeat)
 	if rt.cell != nil {
 		if err := area.HostCell(node.Config().Period); err != nil {
@@ -278,14 +274,15 @@ func (rt *partitionRuntime) stop(ctx context.Context) error {
 	return nil
 }
 
-// createActor 在 Node 的 handler 里新建 SceneActor（玩家）或 Monster（NPC）：EntityManager.Create 在 handler 内即
-// CreateInScope，由事务捕获，回滚就撤销发布。实体按 cellworldhost.CellMode 登记格内心跳（SceneActor 是 cellworld
+// createActor 在 Node 的 handler 里新建 CellPlayer（玩家）或 Monster（NPC）：EntityManager.Create 在 handler 内即
+// CreateInScope，由事务捕获，回滚就撤销发布。实体按 cellworldhost.CellMode 登记格内心跳（CellPlayer 是 cellworld
 // 模块自带的实体，Monster 是 demo 自己的）。
 func (rt *partitionRuntime) createActor(id int64, kind cellworld.EntityKind) (cellworld.Actor, error) {
-	want := monster.EntityKindMonster
 	if kind == cellworld.KindPlayer {
-		want = scene_actor.EntityKindSceneActor
+		return cellworldhost.CreatePlayer(rt.access, id, kind)
 	}
+	if kind != cellworld.KindNPC { return nil, fmt.Errorf("partition: unknown actor kind %d",kind) }
+	want := monster.EntityKindMonster
 	if got := coreentity.GetEntityKindFromID(id); got != want {
 		return nil, fmt.Errorf("partition: entity %d is kind %d, want %d", id, got, want)
 	}
@@ -354,7 +351,7 @@ func (rt *partitionRuntime) spawnMonsters(ctx context.Context) error {
 	return nil
 }
 
-// partitionMirrorKind 给出 mirror 在帧上的命名空间与 kind：玩家的 SceneActor 是 player（D2 = A：客户端不变），
+// partitionMirrorKind 给出 mirror 在帧上的命名空间与 kind：玩家的 CellPlayer 是 player（D2 = A：客户端不变），
 // NPC 是 monster。
 func partitionMirrorKind(s cellworld.EntityState) (string, uint32) {
 	if s.Kind == cellworld.KindPlayer {
@@ -433,7 +430,7 @@ func (rt *partitionRuntime) attackResult(r cellworld.AttackResult) {
 	}
 }
 
-// panelResult 是 Base 收到的面板结论（提交之后、不阻塞）：计数并记日志。面板本身随 SceneActor 的 mirror 到客户端。
+// panelResult 是 Base 收到的面板结论（提交之后、不阻塞）：计数并记日志。面板本身随 CellPlayer 的 mirror 到客户端。
 func (rt *partitionRuntime) panelResult(r cellworld.PanelResult) {
 	switch {
 	case r.Outcome == cellworld.OutcomeUnknown:
@@ -479,9 +476,9 @@ func (rt *partitionRuntime) TerrainForwarder() terrainmap.Forwarder {
 	return rt.relay
 }
 
-func partitionPlayer(playerID int64) (int64, error) {
-	return coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
-}
+var partitionIDs = cellworldhost.PlayerIDs{BaseKind:player.EntityKindPlayer}
+
+func partitionPlayer(playerID int64) (int64, error) { return partitionIDs.Base(playerID) }
 
 // MoveIntent forwards a velocity to the cell that owns the player now (one transaction on the Player).
 func (rt *partitionRuntime) MoveIntent(ctx context.Context, playerID, vx, vy int64) error {
@@ -492,9 +489,10 @@ func (rt *partitionRuntime) MoveIntent(ctx context.Context, playerID, vx, vy int
 	return rt.node.Move(ctx, entityID, vx, vy)
 }
 
-// AttackTarget sends one attack and returns its sequence. The damage is the attacker's panel attack on its Real
+// AttackTarget returns the Base admission receipt; retries with a request ID never send a second attack.
+// The damage is the attacker's panel attack on its Real
 // (item 3 = A); scene.partition.attack_damage is the default for an attacker without a panel.
-func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target int64) (cellworld.HitID, error) {
+func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target, requestID int64) (cellworld.HitID, error) {
 	entityID, err := partitionPlayer(playerID)
 	if err != nil {
 		return cellworld.HitID{}, err
@@ -502,14 +500,10 @@ func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target i
 	if target == 0 {
 		return cellworld.HitID{}, apperrors.ErrPartitionNotEntered
 	}
-	hit, err := rt.node.Attack(ctx, entityID, target, rt.config.AttackDamage)
-	if err != nil {
-		return cellworld.HitID{}, err
-	}
-	return hit, nil
+	return rt.node.AttackWithRequest(ctx, entityID, target, rt.config.AttackDamage, requestID)
 }
 
-// enter 让玩家以自己的 SceneActor 进入分区场景（场景桥的 Join 在会话开好之后调）。已经在里面（重连）时不动：
+// enter 让玩家以自己的 CellPlayer 进入分区场景（场景桥的 Join 在会话开好之后调）。已经在里面（重连）时不动：
 // Base 的 Interest 里仍有他，新会话由 Resubscribe 拿到快照。位置取 Player 的快照（在世界里时），否则取 spawn。
 func (rt *partitionRuntime) enter(ctx context.Context, playerEntity int64) error {
 	st, err := rt.node.BaseStateOf(ctx, playerEntity)
@@ -519,7 +513,7 @@ func (rt *partitionRuntime) enter(ctx context.Context, playerEntity int64) error
 	if st.InWorld {
 		return nil
 	}
-	actor, err := coreentity.BuildEntityID(coreentity.GetUniqueIDFromEntityID(playerEntity), scene_actor.EntityKindSceneActor)
+	actor, err := partitionIDs.Actor(playerEntity)
 	if err != nil {
 		return err
 	}
@@ -544,7 +538,7 @@ func (rt *partitionRuntime) terrainViewpoint(ctx context.Context, playerEntity i
 	return rt.entryPoint(st, playerEntity)
 }
 
-// leave 让玩家离开分区场景（尽力而为：消息丢了由 SceneActor 的租约兜底离场）。
+// leave 让玩家离开分区场景（尽力而为：消息丢了由 CellPlayer 的租约兜底离场）。
 func (rt *partitionRuntime) leave(ctx context.Context, playerEntity int64) {
 	if err := rt.node.Leave(ctx, playerEntity); err != nil && !errors.Is(err, cellworld.ErrNotInWorld) {
 		slog.Debug("partition: player did not leave the partitioned scene", "player_entity", playerEntity, "err", err)

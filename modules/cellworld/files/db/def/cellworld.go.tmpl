@@ -1,16 +1,28 @@
 package dbdef
 
 // CellworldBaseState 是模块追加在 PlayerDao 末尾的状态（PlayerDao.CellworldBase，存储键 cellworld_base，持久、不同步）：
-// Player 作为 Base 要跨重启保住的两样。Recovery 是 Buff / 冷却的恢复快照（SceneActor 回写时一起写，Base 重启后 Enter 按它
-// 重建）；DeathReceipts 是死亡回执（被击杀实体 → 那一条命的 Life），与 SettleDeath 的奖励在同一笔事务（缺省 async）提交，重复投递
-// 的死亡只结算一次。其余 Base 字段（路由、快照位置、面板）由工程在 PlayerDao 里声明，见 cellworldhost.BaseDao。
+// Player 作为 Base 要跨重启保住的状态。Recovery 是 Buff / 冷却的恢复快照（CellPlayer 回写时一起写，Base 重启后 Enter 按它
+// 重建）；DeathReceipts 是死亡回执（被击杀实体 → 那一条命的 Life），与 SettleDeath 的奖励在同一笔 strict 事务中提交，WAL 持久后才确认，重复投递
+// 的死亡只结算一次。AttackHigh / AttackSlots 是带号攻击的准入高水位与有界回执。其余 Base 字段（路由、快照位置、面板）由工程在 PlayerDao 里声明，见 cellworldhost.BaseDao。
 type CellworldBaseState struct {
-	Recovery      *CellRecovery    `store:"1"`
-	DeathReceipts map[int64]uint64 `store:"2"`
+	Recovery      *CellRecovery                `store:"1"`
+	DeathReceipts map[int64]uint64             `store:"2"`
+	AttackHigh    int64                        `store:"3"`
+	AttackSlots   map[int64]*CellAttackReceipt `store:"4"`
+}
+
+// CellAttackReceipt is an admission receipt in the player's private CellworldBase, not a verdict.
+// Slot = request number modulo the window width. Keep the full number to distinguish wraps.
+type CellAttackReceipt struct {
+	RequestID int64  `store:"1"`
+	Target    int64  `store:"2"`
+	Attacker  int64  `store:"3"`
+	Seq       uint64 `store:"4"`
+	HitID     string `store:"5"`
 }
 
 // cellworld 模块的嵌套类型：cellworld.ActorState / BaseState 里不是标量的那几样，在 DAO 里各占一个字段。
-// 承载 Actor 状态的 DAO（模块自带的 SceneActorDao，工程自己让它在分区场景里走格的实体，例如 game-demo 的 MonsterDao）
+// 承载 Actor 状态的 DAO（模块自带的 CellPlayerDao，工程自己让它在分区场景里走格的实体，例如 game-demo 的 MonsterDao）
 // 与 Player 的 Base 状态都用这几个类型；game/modules/cellworldhost 的 ReadActor / WriteActor / ReadBase / WriteBase
 // 是它们与 cellworld 值之间唯一的一份映射。存储键发布后不要改。
 

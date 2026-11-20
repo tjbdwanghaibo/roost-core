@@ -23,7 +23,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// 测试用实体：Scene（持有 Region，scene.cell 心跳）、SceneActor（玩家在格里的部分）、NPC、Player（Base 侧）。
+// 测试用实体：Scene（持有 Region，scene.cell 心跳）、CellPlayer（玩家在格里的部分）、NPC、Player（Base 侧）。
 // 它们是 game 生成实体的手写替身：状态放在手写 DAO 里，写时向当前 Nest 事务登记逆操作（与生成 setter 同形）。
 // kind 号只在本测试二进制内唯一（本包测试没有别的 kind）。
 const (
@@ -132,7 +132,7 @@ func (a *testActor) StartCell() error                      { return a.reg.Start(
 func (a *testActor) SetCellPeriod(d time.Duration) error   { return a.reg.SetPeriod(d) }
 func (a *testActor) OnDestroy(fentity.EntityDestroyReason) { a.host.OnDestroy() }
 
-// buildTestActor 是 SceneActor / NPC 的构造函数（EntityManager.Create 调用；handler 内即 CreateInScope）。Param 是它所在的“进程”。
+// buildTestActor 是 CellPlayer / NPC 的构造函数（EntityManager.Create 调用；handler 内即 CreateInScope）。Param 是它所在的“进程”。
 func buildTestActor(p *fentity.EntityCreateParam) (fentity.IThreadSafeEntity, error) {
 	proc, ok := p.Param.(*testProc)
 	if !ok {

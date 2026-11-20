@@ -14,11 +14,11 @@ import (
 //	成员表   权威在 game（demo 是 Remote 托管的 Team 实体）；每个 Base 在 Player 上缓存一份（GroupPlayer，带版本 Ver）。
 //	         game 改了成员表就在那笔事务里 SetGroup 自己、NotifyGroup 别人；缓存版本为 0（Base 重启、Player 重新加载）
 //	         或每 GroupResyncEvery 经 GroupResync 从权威重读，兜住丢失的通知。
-//	快照     每名队员的 Base 心跳每 GroupEvery 把它自己的 SceneActor 状态（本进程 mirror 里最新的一份 witness 里的自己，
+//	快照     每名队员的 Base 心跳每 GroupEvery 把它自己的 CellPlayer 状态（本进程 mirror 里最新的一份 witness 里的自己，
 //	         带 Real 的版本）发给其他队员所在的 Base（不发给自己的 sid：同 Base 的队员本来就在本进程的 mirror 里）。
 //	收件     收到的快照按版本喂本进程的 Sync mirror（policy.Mirrors，保留 GroupHold = 3 个周期，过期即删）。它与 witness
-//	         喂的是同一个 mirror、同一个 subject（队友的 SceneActor ID）：队友在视野里时两路按版本取新的，客户端只持有一份。
-//	面板     每名玩家一个组关系视野（Interest 的 relation view，NodeConfig.GroupView）：成员是其他队员的 SceneActor，玩家
+//	         喂的是同一个 mirror、同一个 subject（队友的 CellPlayer ID）：队友在视野里时两路按版本取新的，客户端只持有一份。
+//	面板     每名玩家一个组关系视野（Interest 的 relation view，NodeConfig.GroupView）：成员是其他队员的 CellPlayer，玩家
 //	         挂接它，不论距离都订阅队友；在空间视野里的队友与它合并成一份订阅。视野按缓存的成员表在 Base 心跳里重设
 //	         （成员表变了的下一拍；幂等，事务回滚了下一拍再设）。
 //
@@ -34,7 +34,7 @@ type Group struct {
 	Members []GroupMember `msgpack:"m,omitempty"`
 }
 
-// GroupMember 是一名成员：Player 实体 ID、它在分区 Scene 里的 SceneActor ID、它的 Base 的 sid（静态归属）。
+// GroupMember 是一名成员：Player 实体 ID、它在分区 Scene 里的 CellPlayer ID、它的 Base 的 sid（静态归属）。
 type GroupMember struct {
 	Player int64 `msgpack:"p"`
 	Actor  int64 `msgpack:"a"`
@@ -147,7 +147,7 @@ func (n *Node) groupBeat(p GroupPlayer, st *BaseState, now time.Time, fx *txEffe
 	}
 }
 
-// groupOthers 是 g 里除 playerEntity 之外的队员的 SceneActor（升序）。
+// groupOthers 是 g 里除 playerEntity 之外的队员的 CellPlayer（升序）。
 func groupOthers(g Group, playerEntity int64) []int64 {
 	others := make([]int64, 0, len(g.Members))
 	for _, m := range g.Members {
@@ -169,7 +169,7 @@ func (n *Node) groupViewDrifted(playerEntity int64, g Group) bool {
 	return !ok || !slices.Equal(members, groupOthers(g, playerEntity))
 }
 
-// setGroupView 按成员表 g 设玩家的组关系视野：不在组里时删掉，否则成员是其他队员的 SceneActor、玩家挂接它。在 handler
+// setGroupView 按成员表 g 设玩家的组关系视野：不在组里时删掉，否则成员是其他队员的 CellPlayer、玩家挂接它。在 handler
 // 里直接调用 Interest（只取它的短锁、幂等）：事务回滚时 BaseState 里记的视野版本也回滚，下一拍再设一次。
 func (n *Node) setGroupView(playerEntity, actor int64, g Group) {
 	if _, in := g.member(playerEntity); g.ID == 0 || !in {

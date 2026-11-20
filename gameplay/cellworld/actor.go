@@ -8,7 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// Role 是一个角色 / NPC 在它所在格里的身份，存在 SceneActor / Monster 的 DAO 里。
+// Role 是一个角色 / NPC 在它所在格里的身份，存在 CellPlayer / Monster 的 DAO 里。
 type Role uint8
 
 const (
@@ -52,7 +52,7 @@ type HandoffState struct {
 }
 
 // ActorState 是一个角色 / NPC 在格内的全部状态：空间与战斗字段（EntityState）加交接、输入、去重、租约与回写的进度。
-// 它整份存在 SceneActor / Monster 的 DAO 里（nopersist），事务内改、回滚即还原，交接时整份带走（Offer）。
+// 它整份存在 CellPlayer / Monster 的 DAO 里（nopersist），事务内改、回滚即还原，交接时整份带走（Offer）。
 // 值语义：Handoff 与 Applied 一旦写进 DAO 就不再原地修改，改动一律换新的指针 / 切片（DAO 的回滚前像可能引用旧的）。
 type ActorState struct {
 	SpawnGeneration uint64 `msgpack:"sg,omitempty"`
@@ -70,7 +70,7 @@ type ActorState struct {
 	Applied    []AppliedHit  `msgpack:"a,omitempty"`
 	Handoff    *HandoffState `msgpack:"h,omitempty"`
 	RetryAfter int64         `msgpack:"ra,omitempty"`
-	// LeaseUntil：玩家的 SceneActor 在这之前没收到 Base 的输入 / 续租就自行离场（Base 进程消失后的清理）。NPC 为 0。
+	// LeaseUntil：玩家的 CellPlayer 在这之前没收到 Base 的输入 / 续租就自行离场（Base 进程消失后的清理）。NPC 为 0。
 	LeaseUntil int64 `msgpack:"lu,omitempty"`
 	// WritebackAt：下一次定时回写 Player 的时间；玩家才有。
 	WritebackAt int64 `msgpack:"wb,omitempty"`
@@ -84,7 +84,7 @@ type ActorState struct {
 	FracY int32 `msgpack:"fy,omitempty"`
 }
 
-// Actor 是 game 的 SceneActor / Monster 实体为格内模拟提供的能力。三个方法都只在实体自己的 Nest 锁内调用：
+// Actor 是 game 的 CellPlayer / Monster 实体为格内模拟提供的能力。三个方法都只在实体自己的 Nest 锁内调用：
 //
 //   - CellState / SetCellState：读写 ActorState。SetCellState 必须经 DAO setter 写（登记逆操作与同步脏标），
 //     这样心跳或 handler 的事务回滚时状态一起还原（A1：事务内会改的状态放在 DAO）。

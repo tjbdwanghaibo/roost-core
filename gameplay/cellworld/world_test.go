@@ -611,7 +611,7 @@ func (w *world) checkClient(unique int64, npcs map[int64]spatial.Point) {
 			}
 		}
 		if _, ok := held[actorID(unique)]; !ok {
-			missing = append(missing, "its own SceneActor")
+			missing = append(missing, "its own CellPlayer")
 		}
 		return len(missing) == 0, fmt.Sprintf("player at %v does not hold %s", last.Self.Pos(), strings.Join(missing, ", "))
 	})
@@ -818,7 +818,7 @@ func TestWorldStraightCrossing(t *testing.T) {
 }
 
 // 接 demo 时发现（2026-11-03）：正式进程的 getter 是装了 DataEngine 加载器的 ManagerAccess，原先对不在内存的不持久实体
-// （SceneActor / Monster）返回“聚合不存在”的错误而不是 nil，Node 把还不存在的角色放进加锁集合（交接装入、进入、生成、
+// （CellPlayer / Monster）返回“聚合不存在”的错误而不是 nil，Node 把还不存在的角色放进加锁集合（交接装入、进入、生成、
 // 伤害打到不在本格的目标）时整个请求失败。框架统一后（E1 = B）ManagerAccess 对不持久种类内存未命中答 nil、不问加载器，
 // Node 不再自己过滤加锁集合：同一组场景在加载器替身下照常通过，加载器一次都没被问到。
 func TestWorldOnALoaderBackedGetter(t *testing.T) {

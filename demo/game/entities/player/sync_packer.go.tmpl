@@ -52,7 +52,7 @@ var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFiel
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "team"}, Fields: playerPublicFields, Priority: -1},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Profile", "PosX", "PosY", "SceneID"}, Priority: 10},
 	// self is what a member of a partitioned scene gets of its own Player (maintainer decision E4 = A): its own
-	// state. Not the position and not the HP — the scene actor's mirror carries those, and the partitioned scene's
+	// state. Not the position and not the HP — the cell player's mirror carries those, and the partitioned scene's
 	// position and HP live on the cell; not the attribute maps either (which combat field lives where in a
 	// partitioned scene waits on the maintainer, FEATURE §11).
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Profile", "ProfilePrivate", "Bag", "Wallet", "Equipment", "Alliance"}, Priority: 0},

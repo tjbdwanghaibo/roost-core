@@ -1,0 +1,15 @@
+package cellspace
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+
+// All processes use the same grid. A SID outside its owner list is Base-only.
+type Config struct {
+	Enabled bool   `config:"cellspace.enabled" default:"false"`
+	World   string `config:"cellspace.world" default:"overworld"`
+	Left    int32  `config:"cellspace.left_sid" default:"1001" min:"1"`
+	Right   int32  `config:"cellspace.right_sid" default:"1002" min:"1"`
+}
+
+func (c Config) grid() (*cellworld.Grid, error) {
+	return cellworld.NewGrid(cellworld.GridConfig{CellSize: 1000, Cols: 2, Rows: 1, GhostBand: 300, Hysteresis: 30, Owners: map[cellworld.CellID]int32{{Col: 0}: c.Left, {Col: 1}: c.Right}})
+}

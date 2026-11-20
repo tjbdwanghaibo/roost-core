@@ -2,7 +2,6 @@ package cellworld
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,7 +14,7 @@ import (
 )
 
 // Base 侧：Player 留在自己的 sid（BaseApp），只跟随玩家当前所在的格——转发输入与攻击、接收 witness 喂给客户端、
-// 收下 SceneActor 的回写。路由字段在 Player 的 nopersist DAO 中；入场计数、面板、HP 与快照位置 / 版本必须持久化。
+// 收下 CellPlayer 的回写。路由字段在 Player 的 nopersist DAO 中；入场计数、面板、HP 与快照位置 / 版本必须持久化。
 // 看门狗与续租是 Player 的心跳（BaseBeat），不另建带锁的玩家表。
 
 // ErrNotInWorld 表示玩家没有进入分区 Scene（未 Enter 或已 Leave）。
@@ -24,13 +23,13 @@ var ErrNotInWorld = errors.New("cellworld: player is not in the partitioned scen
 // BaseState 是 Player 上的分区 Scene 路由状态。时间都是系统时间 UnixNano。
 type BaseState struct {
 	Recovery RecoveryState `msgpack:"rc"`
-	// Actor 是玩家的 SceneActor ID（跨格不变）；InWorld 表示已 Enter、未 Leave。
+	// Actor 是玩家的 CellPlayer ID（跨格不变）；InWorld 表示已 Enter、未 Leave。
 	Actor   int64 `msgpack:"a"`
 	InWorld bool  `msgpack:"w"`
 	// Cell / Epoch：当前所知的 owner 格 sid 与 epoch（只前进）。
 	Cell  int32  `msgpack:"c"`
 	Epoch uint64 `msgpack:"e"`
-	// X / Y / HP / SnapVer：Player 的最近快照（回写与 witness 里的自己），重建 SceneActor 用。SnapVer 是被接受的
+	// X / Y / HP / SnapVer：Player 的最近快照（回写与 witness 里的自己），重建 CellPlayer 用。SnapVer 是被接受的
 	// 最新回写版本：只接受更新的（幂等）。game 把这几项映射到持久字段。
 	// X、Y、VX、VY 各用自己的标签（RV-20261106-04：曾经 `X, Y` 共用 x、`VX, VY` 共用 v，MsgPack 编码丢了 X 与 VX）。
 	X       int64   `msgpack:"x"`
@@ -52,10 +51,10 @@ type BaseState struct {
 	EnterHint   int32  `msgpack:"eh"`
 	LostEpoch   uint64 `msgpack:"lo"`
 	LostAt      int64  `msgpack:"la"`
-	// Shown：玩家已经以自己的 SceneActor mirror 进入 Base 的 Interest（第一份 witness 之后）。自己的 mirror 过期删除
+	// Shown：玩家已经以自己的 CellPlayer mirror 进入 Base 的 Interest（第一份 witness 之后）。自己的 mirror 过期删除
 	// （Hide + 注销）后再出现时，Interest 自己恢复“玩家看自己”（self 跟着目标的 Hide / Show 走，E2），这里不用再管。
 	Shown bool `msgpack:"sh"`
-	// Panel 是 Base 从养成输入推出的最新面板（Ver 单调，只在数值变化时 +1）：Enter 带它建 SceneActor，变化时发给 owner。
+	// Panel 是 Base 从养成输入推出的最新面板（Ver 单调，只在数值变化时 +1）：Enter 带它建 CellPlayer，变化时发给 owner。
 	// game 把它映射到持久字段：序号跨 Base 重启单调，Real 才不会把重启后的新面板当成旧的。
 	Panel Panel `msgpack:"pn"`
 	// PanelAcked 是 Real 已应用的最高面板序号（面板结论、owner 通知、witness 里的自己、回写都会带来）；小于 Panel.Ver
@@ -92,7 +91,7 @@ type BasePlayer interface {
 
 // View 是 Base 接受的一份 witness（观察点用）。
 type View struct {
-	Player    int64 // 角色（SceneActor）ID
+	Player    int64 // 角色（CellPlayer）ID
 	Cell      int32 // 发出它的格 sid
 	Epoch     uint64
 	Tick      uint64
@@ -149,7 +148,7 @@ type baseCmd struct {
 	amount int32
 }
 
-// Enter 让 Player（playerEntity）以 SceneActor actor 在 pos 进入分区 Scene。Player 已有快照（之前回写过）时 hp 被快照覆盖。
+// Enter 让 Player（playerEntity）以 CellPlayer actor 在 pos 进入分区 Scene。Player 已有快照（之前回写过）时 hp 被快照覆盖。
 func (n *Node) Enter(ctx context.Context, playerEntity, actor int64, pos spatial.Point, hp int32) error {
 	_, err := n.cfg.Nest.Request(ctx, hBaseEnter, playerEntity, nest.Params{baseCmd{kind: cmdEnter, actor: actor, pos: pos, hp: hp}})
 	return err
@@ -170,7 +169,7 @@ func (n *Node) Attack(ctx context.Context, playerEntity, target int64, amount in
 	return out.(HitID), nil
 }
 
-// Leave 让玩家离开分区 Scene（尽力而为：消息丢了由 SceneActor 的租约兜底离场）。
+// Leave 让玩家离开分区 Scene（尽力而为：消息丢了由 CellPlayer 的租约兜底离场）。
 func (n *Node) Leave(ctx context.Context, playerEntity int64) error {
 	_, err := n.cfg.Nest.Request(ctx, hBaseCmd, playerEntity, nest.Params{baseCmd{kind: cmdLeave}})
 	return err
@@ -275,7 +274,7 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 			st.HP = prev.HP
 		}
 		st.Epoch = max(prev.Epoch, prev.SnapVer.Epoch)
-		// 面板取玩家现在的养成输入（数值变了才编新序号）；Enter 带它建 SceneActor，Real 上的序号经 owner 通知确认。
+		// 面板取玩家现在的养成输入（数值变了才编新序号）；Enter 带它建 CellPlayer，Real 上的序号经 owner 通知确认。
 		n.takePanel(&st, p.CellPanel(), now)
 		st.PanelSince = now.UnixNano()
 		n.enterMsg(&st, n.cfg.Grid.SID(cell), max(st.Epoch, st.LostEpoch)+1, now, fx)
@@ -292,13 +291,10 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 			fx.send(st.Cell, n.inputMsg(&st, now))
 		}
 	case cmdAttack:
-		if !st.InWorld || st.Cell == 0 {
-			return nil, ErrNotInWorld
+		hit, err := prepareAttack(&st, cmd.target, cmd.amount, fx)
+		if err != nil {
+			return nil, err
 		}
-		st.AttackSeq++
-		// Seq 用于展示，不承担跨重启唯一性；随机 ID 也覆盖回滚后重试和 Player 卸载重载。
-		hit := HitID{Attacker: st.Actor, Seq: st.AttackSeq, ID: rand.Text()}
-		fx.send(st.Cell, &wireMsg{Kind: kindAttack, Attack: &attackReq{Hit: hit, Entry: st.Entry, Target: cmd.target, Amount: cmd.amount}})
 		ret = hit
 	case cmdPanel:
 		n.panelChanged(&st, p.CellPanel(), now, fx)
@@ -477,7 +473,7 @@ func (n *Node) onWitness(st *BaseState, from int32, sentAt int64, w *witnessMsg,
 	}
 }
 
-// feedMirrors 把 witness 里的对象交给 Sync（Base 进程的 Manager），第一次时让玩家以自己的 SceneActor mirror 进入
+// feedMirrors 把 witness 里的对象交给 Sync（Base 进程的 Manager），第一次时让玩家以自己的 CellPlayer mirror 进入
 // Interest。mirror 不是事务状态（按版本幂等，没有回滚），只在提交后调用。登记失败由下一份视野重试。
 func (n *Node) feedMirrors(st *BaseState, w *witnessMsg, now time.Time) {
 	if n.cfg.Mirrors == nil {
@@ -546,8 +542,8 @@ func (n *Node) unshow(st *BaseState, now time.Time) {
 
 // BaseBeat 是 Player 的 Base 心跳（看门狗 + 续租）：初次 Enter 丢失则重发；交接放弃（Lost）后宽限期内没有更新的
 // owner 就按最后位置重进；witness 静默超过 SilenceTimeout（owner 格崩溃或不可达）也重进——新格按 Player 快照重建
-// SceneActor。重进的 epoch 提示比已知的大，目标格已有 Real 时幂等返回，有存活 Ghost 时拒绝并提示 owner。
-// 有 owner 时每 LeasePeriod 重发一次最新意图，兼作 SceneActor 的租约续期。
+// CellPlayer。重进的 epoch 提示比已知的大，目标格已有 Real 时幂等返回，有存活 Ghost 时拒绝并提示 owner。
+// 有 owner 时每 LeasePeriod 重发一次最新意图，兼作 CellPlayer 的租约续期。
 func (n *Node) BaseBeat(p BasePlayer, now time.Time) error {
 	if err := n.guardTransaction(); err != nil {
 		return err

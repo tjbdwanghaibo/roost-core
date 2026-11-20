@@ -1,5 +1,7 @@
 # `-template game-demo` 的源码
 
+**普通巡逻的复用边界**：demo 和 `monster` 模块都从模块的 `game/modules/monster/patrol/route.go` 模板生成选点与起步规则；两边都在启动成功后推进游标，拒绝时重试原点。demo 仍用 500ms 策略拍、地形过滤和动作组冻结；独立 monster 模块仍按生命代次检查、在实体事务里追击或巡逻，DAO 游标随事务回滚。复用规则不会给 demo 安装第二套怪物管理器；这不是把两种玩法换成同一个运行时。
+
 通用运维命令由 [gm 业务模块](../modules/gm/README.md)及各功能联动提供；`internal/service/game/gm.go` 保留 demo 专属命令，以及加经验同时计入 World 的双实体执行回调。
 
 `roost project new <name> -module <mod> -template game-demo` 在 `game` 模板之上再生成**一条可运行的完整游戏链路**：
@@ -165,7 +167,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 | 字段 | default（本人） | near（主视野里的别人） | team（队友，不论距离） | self（分区场景的本人） | 说明 |
 | --- | :-: | :-: | :-: | :-: | --- |
 | `profile`（名字、等级）、`equipment`、`alliance` | ✓ | ✓ | ✓ | ✓ | 头顶名字、等级、外观、公会名牌。`profile` 是 profile 模块的 `PlayerDao.Profile` |
-| `pos_x`、`pos_y`、`facing` | ✓ | ✓ | ✓ | | 分区场景的位置随 SceneActor 的 mirror 走 |
+| `pos_x`、`pos_y`、`facing` | ✓ | ✓ | ✓ | | 分区场景的位置随 CellPlayer 的 mirror 走 |
 | `scene_id` | ✓ | ✓ | ✓ | | 只在全量里（2～5 字节）；多场景共用一个 Manager 的玩法（MMORPG 夹具）靠它 |
 | `cell_hp`、`cell_max_hp` | ✓ | ✓ | ✓ | | 血条 |
 | `profile_private`（经验）、`bag`、`wallet` | ✓ | | | ✓ | 私有。`profile_private` 是 profile 模块的 `PlayerDao.ProfilePrivate`；`bag` 是 bag 模块的嵌套状态（道具号 → 数量），整个结构体是一个同步字段；`wallet` 是 wallet 模块的金币余额（随 mailbox 模块装进来）。两本账本 `MailboxLedger`、`WalletLedger` 只落库，任何视图里都没有 |
@@ -196,7 +198,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 
 缺省不分区：没有 `scene.partition` 的配置，game 跑普通场景，上面的一切照旧。`scene.partition.enabled: true` 把本进程的场景变成
 分区场景（`gameplay/cellworld`，Cell + Ghost）的一员：sid 在 `owners` 里的进程托管那个格（**Cell**），每个进程都是自己玩家的
-**Base**（Player 不迁移，玩家站在哪个格，那个格的进程上就有他的 SceneActor）。通用装配、SceneActor 实体、分区状态的映射与 Player 上的恢复快照 / 死亡回执来自 [cellworld 模块](../modules/cellworld/README.md)（demo 先单独装它，见模块 README“复用方式”）；demo 自己写的是 Player 的 Base 字段与面板、走格的怪物、mirror 编码、攻击结论推送、奖励规则与分区地形。权威、迁移与恢复见
+**Base**（Player 不迁移，玩家站在哪个格，那个格的进程上就有他的 CellPlayer）。通用装配、CellPlayer 实体、分区状态的映射与 Player 上的恢复快照 / 死亡回执来自 [cellworld 模块](../modules/cellworld/README.md)（demo 先单独装它，见模块 README“复用方式”）；demo 自己写的是 Player 的 Base 字段与面板、走格的怪物、mirror 编码、攻击结论推送、奖励规则与分区地形。权威、迁移与恢复见
 [CellWorld 契约](../gameplay/cellworld/README.md)，已测范围见 [容量与验收](../docs/performance/CELLWORLD.md)。
 
 每个 game 进程读同一份（加到 `configs/service/config.game*.yaml`；声明与校验在 `game/settings/partition.go`）：
@@ -235,7 +237,7 @@ scene:
 `TeamAccept(team_id)`、`TeamLeave()`（队长离队时队长交给剩下玩家 ID 最小的那名）、`TeamDisband()`（只有队长）、`TeamInfo()`，
 答复都是成员表（`TeamResponse`）。成员表在 Remote 托管的 `Team` 实体上（`service=game`、共享模式：成员在不同的 game 进程上；game 因此装着
 `remote_entity`，联盟实体对它是别的服务的、写不了），每个端点是一笔 [Team, Player] 事务；普通场景答 `scene_not_partitioned`，普通场景的组队仍是匹配（不动）。队友的位置与 HP 从**队伍面板**来：每名队员的 Base
-每 `snapshot_every` 把他的 SceneActor 状态发给其他队员的 Base，客户端在同一条同步流里收到队友的 SceneActor（`player`
+每 `snapshot_every` 把他的 CellPlayer 状态发给其他队员的 Base，客户端在同一条同步流里收到队友的 CellPlayer（`player`
 命名空间，位置与 `cell_hp`），不论距离；在视野里的队友就是同一个对象，不重复推。邀请经 team 依赖的 facebook 模块投递：被邀请人连在哪个 game 上都收到 `TeamInvited`，离线的登录后用 `TeamInvites` 查到。
 养成变化后 Player 监听实体事件 `event.AttributeChanged`（`game/entities/player/cell_base.go` 的 `OnAttributeChanged`），在同一笔 Player 事务内更新 Cell 面板，HP 上限增大不自动回血。NPC 致死结算与一次性 1 金币奖励共用 strict 回执，确认后按出生槽重生。Player 入场计数与 Recovery 持久保存；所有 Cell 需要 App singleton 和持久 Redis 权威。
 

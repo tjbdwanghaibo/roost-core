@@ -1,0 +1,9 @@
+# {{PROJECT}}：最小两格分区玩家
+
+这是 `game` 配方，不是精简版 game-demo。`enter`/`login`/`portal` 负责玩家身份、建档和进入，`cellworld` 提供玩家化身 `CellPlayer`、授权与恢复，`cellspace` 提供一个可用的两格区域和 `CellMove` 速度意图。没有安装怪物、战斗、掉落或地形。自己的状态走正式玩家自身同步；这个样例不提供附近所有角色的 AOI 镜像。
+
+默认 `cellspace.enabled=false`，普通登录不会创建格内玩家。要运行分区：准备同一环境和世界名的 Base 和两个 Cell；默认左格 sid 1001、右格 sid 1002，各宽 1000，示例出生点 `(500,500)`。为三个进程分别配置独立端口、sid 和相同的 `cellspace.enabled: true`、`cellspace.world`、`cellspace.left_sid`、`cellspace.right_sid`；Cell 必须启用正式 singleton，Redis 的授权数据必须持久且不可淘汰。同一配置不能直接并排启动三个进程。还需运行工程生成的 account/portal、Nest、NATS、Mongo、Redis 和 etcd 等依赖。
+
+登录进入后发 `CellMove(VX,VY)`；`(0,0)` 停止。成功只确认 Base 接纳意图，以收到的权威位置判断是否走到目标。玩家的长期身份在 Base，实时位置在当前格；`CellPlayer` 跨格不换 ID，重新连接不取得新写权。不要在业务里手拼 Player 或 CellPlayer 的完整 ID。只有一份 Base 心跳和格内化身调度，不要另外安装移动驱动来推进同一个角色。
+
+在框架源码库运行 `python3 scripts/test-cellspace.py --out <一个尚不存在的目录>` 可生成全新的项目并启动隔离的真实依赖、两个 Cell、Base 和 TCP 客户端；不会借用在线游戏服务或修改已部署工程。仅需底层能力、自己接战斗与视野时使用 `roost module add cellworld`，不必采用这套配方。

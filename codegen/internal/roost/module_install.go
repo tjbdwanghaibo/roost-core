@@ -210,6 +210,14 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 			plan.Modules = append(plan.Modules, item)
 			continue
 		}
+		// An already-installed cellworld is application-owned and is not overwritten.
+		// The new cellspace imports the generated CellPlayer factory. Reject that
+		// combination at plan time; allocating another kind would change subject IDs.
+		if spec.Name == "cellspace" {
+			if prior, ok := manifest.Modules["cellworld"]; ok && (prior.IDs["entity"]["CellPlayer"] == 0 || !contains(prior.Files, "game/modules/cellworldhost/runtime_players.go")) {
+				return ModulePlan{}, fmt.Errorf("cellspace requires the CellPlayer factory from cellworld; migrate the installed cellworld in place, preserving its entity kind, before adding cellspace (the installer does not overwrite it)")
+			}
+		}
 		for _, other := range spec.Conflicts {
 			if _, installed := manifest.Modules[other]; installed {
 				return ModulePlan{}, fmt.Errorf("module %s cannot be installed: it conflicts with installed module %s", spec.Name, other)

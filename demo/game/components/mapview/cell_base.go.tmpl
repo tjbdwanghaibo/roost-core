@@ -7,7 +7,7 @@ import (
 )
 
 // 分区场景（scene.partition，gameplay/cellworld）里玩家不在进程间移动：本进程是它的 Base，它在地图上的那一份是所在格的
-// SceneActor（cellworld 模块自带的实体）。Base 一侧的路由心跳（"cell.base"，Node.BaseBeat）挂在这个组件的心跳宿主上，
+// CellPlayer（cellworld 模块自带的实体）。Base 一侧的路由心跳（"cell.base"，Node.BaseBeat）挂在这个组件的心跳宿主上，
 // 登记本身是模块的（cellworldhost.RegisterBaseBeat）；cellworld.BasePlayer 的实体方法在 game/entities/player/cell_base.go。
 
 // registerCellBase registers the routing beat when this process runs a

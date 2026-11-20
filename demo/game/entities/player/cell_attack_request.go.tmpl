@@ -1,0 +1,17 @@
+package player
+
+import (
+	"{{MODULE}}/game/modules/cellworldhost"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// 带号攻击的准入回执不属于路由态；只在玩家的攻击事务里访问，由玩家 DAO 的 WAL 和 undo 一起保护。
+var _ cellworld.AttackRequestPlayer = (*Player)(nil)
+
+func (p *Player) CellAttackSlot(slot int64) (int64, cellworld.AttackReceipt) {
+	return cellworldhost.ReadAttackSlot(p.dao.GetCellworldBase(), slot)
+}
+
+func (p *Player) SetCellAttackSlot(slot, high int64, receipt cellworld.AttackReceipt) {
+	cellworldhost.WriteAttackSlot(p.dao.GetCellworldBase(), slot, high, receipt)
+}

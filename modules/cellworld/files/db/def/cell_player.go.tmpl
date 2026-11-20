@@ -1,20 +1,20 @@
 package dbdef
 
-// SceneActorDao 是玩家在分区场景里那一部分（SceneActor，gameplay/cellworld）的格内状态。
+// CellPlayerDao 是玩家在分区场景里那一部分（CellPlayer，gameplay/cellworld）的格内状态。
 //
-// 分区场景里玩家不迁移：Player 留在自己 sid 的 Base 进程，玩家所在格的 Cell 进程上有一个不持久的 SceneActor 实体
-// 代表他，跨格交接时整份状态随交接走（ID = BuildEntityID(玩家 ID, SceneActor)，交接前后不变）。这里就是那“整份状态”：
+// 分区场景里玩家不迁移：Player 留在自己 sid 的 Base 进程，玩家所在格的 Cell 进程上有一个不持久的 CellPlayer 实体
+// 代表他，跨格交接时整份状态随交接走（ID = BuildEntityID(玩家 ID, CellPlayer)，交接前后不变）。这里就是那“整份状态”：
 // cellworld.ActorState 的每个字段对应一个生成字段，game/modules/cellworldhost 的 ReadActor / WriteActor 做映射（只写
 // 变化了的字段）。字段在生成 DAO 里，是为了让生成 setter 登记逆操作：心跳或 handler 的事务回滚时状态一起还原。
 //
-// 全部 `nopersist,nosync`：Cell 进程崩溃后由 Base 按 Player 的快照重建 SceneActor，这里没有值得存的东西；客户端看到的
+// 全部 `nopersist,nosync`：Cell 进程崩溃后由 Base 按 Player 的快照重建 CellPlayer，这里没有值得存的东西；客户端看到的
 // 是 Base 进程上的 Sync mirror，不是这个实体本身。`nocoll`：没有集合，只生成读写器、回滚快照。
 //
 // 字段名就是 cellworldhost.CellDao 的方法集：工程让自己的实体（怪物）也走格时，在那个 DAO 里声明同名同类型的字段，
 // 共用同一份映射。嵌套类型（CellHit / CellHandoff / …）在 db/def/cellworld.go。
 //
 //roost:dao nocoll
-type SceneActorDao struct {
+type CellPlayerDao struct {
 	CellSpawnGeneration uint64        `dao:"nopersist,nosync" store:"cell_spawn_generation"`
 	CellLife            uint64        `dao:"nopersist,nosync" store:"cell_life"`
 	CellDeath           *CellDeath    `dao:"nopersist,nosync" store:"cell_death"`

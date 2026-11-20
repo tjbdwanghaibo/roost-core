@@ -63,7 +63,7 @@ type childSpec struct {
 	Seed          uint64 `json:"seed"`
 	// Events 为 true 时逐条输出 Real / 伤害事件（功能用例）；测量时关闭，只输出汇总。
 	Events bool `json:"events"`
-	// Writeback / Lease 覆盖 SceneActor 的回写间隔与租约（毫秒；0 取缺省）。
+	// Writeback / Lease 覆盖 CellPlayer 的回写间隔与租约（毫秒；0 取缺省）。
 	WritebackMS int `json:"wb"`
 	LeaseMS     int `json:"lease"`
 	// IdleMS > 0 时 NPC 无人在附近降到这个档位（D1，NodeConfig.IdlePeriod）。
@@ -959,7 +959,7 @@ func TestCellsInSeparateProcesses(t *testing.T) {
 }
 
 // Cell 进程 kill -9：玩家在 B 挨打并回写（HP 90），B 进程被 SIGKILL（不释放单实例锁、内存全丢）；新起的 B' 进程等旧锁过期
-// （TTL 3s）后拿到锁，Base 的看门狗重进，B' 按 Player 快照建 SceneActor：新进程、epoch 更大、HP 90。
+// （TTL 3s）后拿到锁，Base 的看门狗重进，B' 按 Player 快照建 CellPlayer：新进程、epoch 更大、HP 90。
 func TestCellProcessKill9PlayerRestoredFromSnapshot(t *testing.T) {
 	mp := startMPWorld(t, 2, 1, func(s *childSpec) { s.WritebackMS = 200 })
 	mp.startCells(nil)
@@ -1016,8 +1016,8 @@ func TestSecondCellProcessForSameSIDIsRefused(t *testing.T) {
 	mp.stopAll()
 }
 
-// Base 进程消失：Base 是子进程，玩家在 A；Base 被 SIGKILL 后 SceneActor 收不到续租，LeaseTimeout（1s）内离场。
-func TestBaseProcessGoneSceneActorCleanedUp(t *testing.T) {
+// Base 进程消失：Base 是子进程，玩家在 A；Base 被 SIGKILL 后 CellPlayer 收不到续租，LeaseTimeout（1s）内离场。
+func TestBaseProcessGoneCellPlayerCleanedUp(t *testing.T) {
 	mp := startMPWorld(t, 2, 1, func(s *childSpec) { s.LeaseMS = 1000 })
 	mp.startCells(nil)
 	spec := mp.spec
@@ -1027,16 +1027,16 @@ func TestBaseProcessGoneSceneActorCleanedUp(t *testing.T) {
 	waitFor(t, settleWithin, "witness at the base child", func() bool {
 		return slices.ContainsFunc(base.eventsSnapshot(), func(e childEvent) bool { return e.Ev == "witness" })
 	})
-	time.Sleep(1500 * time.Millisecond) // 负向窗口（长于 1s 租约）：Base 在续租，SceneActor 必须还在；负载下只会更弱，不会误报
+	time.Sleep(1500 * time.Millisecond) // 负向窗口（长于 1s 租约）：Base 在续租，CellPlayer 必须还在；负载下只会更弱，不会误报
 	released := func() bool {
 		return slices.ContainsFunc(a.eventsSnapshot(), func(e childEvent) bool { return e.Ev == "real" && e.ID == actorID(5) && !e.Acq })
 	}
 	if released() {
-		t.Fatal("SceneActor left although its base renews the lease")
+		t.Fatal("CellPlayer left although its base renews the lease")
 	}
 	killedAt := time.Now()
 	base.kill()
-	waitFor(t, settleWithin, "SceneActor released after the base died", released)
+	waitFor(t, settleWithin, "CellPlayer released after the base died", released)
 	var at int64
 	for _, e := range a.eventsSnapshot() {
 		if e.Ev == "real" && e.ID == actorID(5) && !e.Acq {
@@ -1049,9 +1049,9 @@ func TestBaseProcessGoneSceneActorCleanedUp(t *testing.T) {
 	gone := time.Unix(0, at).Sub(killedAt)
 	beats := mp.regionBeats(mp.grid.SID(CellID{0, 0}), killedAt, time.Unix(0, at))
 	if limit := int(time.Second/worldPeriod) + 4; beats > limit {
-		t.Errorf("SceneActor left %d beats (%v) after the base died, want within the 1s lease (%d beats) plus a few", beats, gone, limit)
+		t.Errorf("CellPlayer left %d beats (%v) after the base died, want within the 1s lease (%d beats) plus a few", beats, gone, limit)
 	} else {
-		t.Logf("SceneActor left %d beats (%v) after the base process was killed", beats, gone)
+		t.Logf("CellPlayer left %d beats (%v) after the base process was killed", beats, gone)
 	}
 	var leases uint64
 	for _, e := range mp.stopAll() {

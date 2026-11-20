@@ -1,0 +1,47 @@
+package cell_region
+
+import (
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"time"
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/modules/cellworldhost"
+)
+
+const EntityKindCellRegion entity.EntityKind = {{ID:entity:CellRegion}}
+
+type ICellRegionEntity interface{ entity.IThreadSafeEntity }
+
+// CellRegion has no collection. Nest locks this region before a CellPlayer.
+//
+//roost:entity id={{ID:entity:CellRegion}} entityKind=EntityKindCellRegion category=entity.EntityCategoryWorld noPersist=true lifetime=ephemeral service={{GAME_SERVICE}}
+type CellRegion struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao    *db.CellRegionDao `dao:"cell_region"`
+	region *cellworld.Region
+	host   *heartbeat.Host
+}
+
+func (r *CellRegion) CellRegion() *cellworld.Region { return r.region }
+func (r *CellRegion) OnInitFinish(p *entity.EntityCreateParam) error {
+	n, d := cellworldhost.Node(), cellworldhost.Heartbeat()
+	if n == nil || d == nil || p == nil || !cellworldhost.IsCellMode(p.Param) {
+		return errors.New("cellregion: not a partition")
+	}
+	r.region = cellworld.NewRegion()
+	r.host = d.NewHost(r)
+	beat, err := r.host.Register("cell.region", n.Config().Period, func(heartbeat.Beat) error { return n.RegionBeat(r, time.Now()) })
+	if err != nil {
+		return err
+	}
+	return beat.Start()
+}
+func (r *CellRegion) OnDestroy(entity.EntityDestroyReason) {
+	if r.host != nil {
+		r.host.OnDestroy()
+	}
+}

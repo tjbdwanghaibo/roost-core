@@ -1,0 +1,148 @@
+package tcp
+
+import (
+	"MMO_MODULE/db"
+	cell "MMO_MODULE/game/entities/cell_player"
+	player "MMO_MODULE/game/entities/player"
+	"MMO_MODULE/game/modules/cellworldhost"
+	"MMO_MODULE/protocol/msgid"
+	"MMO_MODULE/protocol/pb"
+	"context"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"os"
+	"strconv"
+	"testing"
+	"time"
+)
+
+// Decode from a fresh baseline on every new TCP connection, including pushes interleaved with RPC responses.
+type cellProbe struct {
+	transport.Conn
+	decoder *entitysync.Decoder
+	fields  *db.PlayerDao
+	subject int64
+	created bool
+}
+
+func (c *cellProbe) ReadPacket() (*transport.Packet, error) {
+	p, e := c.Conn.ReadPacket()
+	if e != nil || p.MsgID != msgid.MsgSelfSync {
+		return p, e
+	}
+	f, e := c.decoder.Decode(p.Payload)
+	if e != nil {
+		return nil, e
+	}
+	for _, o := range f.Objects {
+		for _, part := range o.Components {
+			u := part.Update
+			if u.Namespace != "player" || len(u.Payload.BytesCopy()) == 0 {
+				continue
+			}
+			if c.subject != 0 && c.subject != u.SubjectID {
+				return nil, fmt.Errorf("self view changed identity")
+			}
+			c.subject = u.SubjectID
+			c.created = c.created || o.Operation == frame.ObjectCreate
+			if e = c.fields.ApplySync(u.Payload.BytesCopy()); e != nil {
+				return nil, e
+			}
+		}
+	}
+	return p, nil
+}
+func TestPartitionLiveClient(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
+	defer cancel()
+	raw, err := transport.DialPlayerTCP(ctx, transport.Config{Endpoint: os.Getenv("CELL_ADDR"), DialTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stop()
+	c := &cellProbe{Conn: raw, decoder: entitysync.NewDecoder(frame.DefaultLimits()), fields: db.NewPlayerDao()}
+	auth := transport.AuthPacket(os.Getenv("CELL_TICKET"))
+	auth.Seq = 1
+	if err = c.WritePackets([]*transport.Packet{auth}); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := c.ReadPacket()
+	if err != nil || ack.MsgID != 0 || len(ack.Payload) != 0 {
+		t.Fatalf("auth: %+v %v", ack, err)
+	}
+	p, err := c.ReadPacket()
+	for err == nil && p.MsgID == msgid.MsgSelfSync {
+		p, err = c.ReadPacket()
+	}
+	if err != nil || p.MsgID != msgid.MsgEnterStatus {
+		t.Fatalf("status: %+v %v", p, err)
+	}
+	s, err := pb.UnmarshalEnterStatusPush(p.Payload)
+	if err != nil || s.Code != 0 {
+		t.Fatalf("status %+v %v", s, err)
+	}
+	mode := os.Getenv("CELL_ACTION")
+	if s.NeedCreate != (mode == "ordinary") {
+		t.Fatalf("need create=%v mode=%s", s.NeedCreate, mode)
+	}
+	if s.NeedCreate {
+		if r := recipeCreate(t, c, "walker"); r.Code != 0 {
+			t.Fatal(r)
+		}
+	}
+	recipeEnter(t, c)
+	if mode == "ordinary" {
+		return
+	}
+	// The first usable state comes from the new connection, not a previous decoder or Redis.
+	for !c.created || c.fields.GetCellHP() == 0 || ((mode == "recover" || mode == "left") && c.fields.GetPosX() < 1000) {
+		if _, err := c.ReadPacket(); err != nil {
+			t.Fatalf("self snapshot x=%d hp=%d: %v", c.fields.GetPosX(), c.fields.GetCellHP(), err)
+		}
+	}
+	player.RegisterEntity()
+	cell.RegisterEntity()
+	ids := cellworldhost.PlayerIDs{BaseKind: player.EntityKindPlayer}
+	unique := entity.GetUniqueIDFromEntityID(c.subject)
+	a, err := ids.Actor(c.subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("identity %d %d %d\n", unique, c.subject, a)
+	x := c.fields.GetPosX()
+	if mode == "recover" || mode == "left" {
+		if x < 1000 {
+			t.Fatalf("new connection did not restore right cell x=%d", x)
+		}
+	}
+	if mode == "recover" {
+		return
+	}
+	v := int64(800)
+	if mode == "left" {
+		v = -800
+	}
+	move := func(v int64) {
+		raw, err := pb.MarshalCellMoveRequest(&pb.CellMoveRequest{VX: v})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := pb.UnmarshalCellMoveResponse(recipeRequest(t, c, msgid.MsgCellMove, raw))
+		if err != nil || r.Code != 0 {
+			t.Fatalf("move %d: %+v %v", v, r, err)
+		}
+	}
+	move(v)
+	for (v > 0 && c.fields.GetPosX() < 1200) || (v < 0 && c.fields.GetPosX() > 800) {
+		if _, err = c.ReadPacket(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move(0)
+	t.Log("new client saw X", strconv.FormatInt(x, 10), "then", c.fields.GetPosX())
+}

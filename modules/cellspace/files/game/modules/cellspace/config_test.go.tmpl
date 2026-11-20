@@ -1,0 +1,9 @@
+package cellspace
+
+import "testing"
+
+func TestCellspaceRequiresDistinctCells(t *testing.T) {
+	if _, err := (Config{Left: 1, Right: 1}).grid(); err == nil {
+		t.Fatal("same owner accepted for two cells")
+	}
+}

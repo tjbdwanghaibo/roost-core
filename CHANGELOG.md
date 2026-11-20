@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+- **最小分区配方**：`project new -template game -recipe cellworld` 用标准登录、一个 Base 和两个 Cell 完成玩家入场、跨格和重连，不依赖 demo 的战斗、地形或怪物。普通图默认不启动分区。`cellspace` 不自动升级旧版 `cellworld`。
+- **分区攻击可安全补发**：`AttackTargetRequest` 可带每玩家 `RequestID`，窗口内同号同目标取回原准入回执，不再次出手。旧客户端和普通移动不增加持久等待。过期或结果未知不自动重打；详见[契约](gameplay/cellworld/ATTACK-REQUESTS.md)。
+- **普通图位置同步**：Player 与 Monster 共用 movement 的 DAO 字段适配，保持各自原有发布时机。旁观者收到已提交位置和朝向，失败事务不发布幻影移动。
+- **分区玩家命名**：新生成工程把 `SceneActor` / `SceneActorDao` 更名为 `CellPlayer` / `CellPlayerDao`，game-demo 的数字实体种类保持 5；保持旧模块已安装即不覆盖的约定。`Player` 的持久身份、格内写权和 `cellworld.Actor` 接口不变。更名不是自动升级业务工程，见 [cellworld 的旧名迁移说明](modules/cellworld/README.md#从旧名-sceneactor-升级)。
+
+- **普通怪和移动组件**：默认怪在原 Nest 事务里直接选巡逻或追击，不再每拍新建 AI Controller。玩家移动 handler 直接调用组件的 `Walk/Follow/Stop/Position`；旧 `Body` 与 `MoveRefusal` 保留。未改协议、持久字段和默认持久级别。手写的 `view.Actor` 实现需要补齐新增方法。
+- **CellWorld 验收**：同一个玩家从 Base 进图、跨格、当前 Cell 被终止重建，再从新 TCP 连接登录。演练核对恢复位置、HP 和当前 Cell 的唯一稳态写者，并要求重连后的移动确实在该 Cell 执行。
+
 - **game-demo 写全服 World 的事务改为 `durability=pipelined completion=async`**（维护者 2026-11-18 按推荐定 A）：AddExp、ClaimDungeon、RecordEnter、RecordMatch、SettleActivity 不再每次 fsync 只放一条，同一 World 上的下一条在上一条入队后就开始；回复仍在 WAL 持久之后，持久保证与事务边界不变。只读的 ActivitySettled / WorldStats 不变。demo 测试的替身提交器补了 `Enqueue`。200 人同秒档未重测。
 - **game-demo 普通图（RV-20261120-01）**：已保存场景号的 `(0,0)` 是有效存档，不再被冷重连替换为出生点。无位置存档的首次进入仍用出生点，非零旧存档沿用；不改 DAO 格式、分区场景或换服首次落点规则。
 - **停机演练（RV-20261120-02）**：只在目标玩家的排空离场事务确实改变已保存坐标、调用成功且 Mongo 最终位置正确时认定排空写入。周期保存抢先时报告证据不足，不误报通过；`drain-event.json` 留存对应实体的结构化日志。

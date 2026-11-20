@@ -1,0 +1,49 @@
+package {{SERVICE_PACKAGE}}
+
+import (
+	"context"
+	"errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/modules/cellspace"
+	gamelogin "{{MODULE}}/game/modules/login"
+)
+
+type Service struct {
+	world     *world.World
+	handlers  *cellworld.Handlers
+	partition *cellspace.Runtime
+}
+
+func New() *Service                             { return &Service{handlers: cellworld.NewHandlers()} }
+func (*Service) Name() app.ServiceName          { return "{{GAME_SERVICE}}" }
+func (*Service) ConfigSchema() app.ConfigSchema { return app.SchemaOf(cellspace.Config{}) }
+func (s *Service) InstallNestHandlers(engine nest.HandlerRegistrar) error {
+	return s.handlers.Register(engine)
+}
+func (s *Service) Init(r *app.Registry) error {
+	ctx := context.Background()
+	w, err := world.EnsureWorld(ctx, r)
+	if err != nil {
+		return err
+	}
+	s.world = w
+	s.partition, err = cellspace.Start(ctx, r, s.handlers)
+	if err != nil || s.partition == nil {
+		return err
+	}
+	// Keep the module's EnterGame endpoint and authenticated load/create pipeline intact.
+	if err := gamelogin.InstallSessionPlacement(r, func(ctx context.Context, e gamelogin.Entered) error {
+		_, err := cellspace.Enter(ctx, e.PlayerID)
+		return err
+	}); err != nil {
+		return errors.Join(err, s.partition.Stop(ctx))
+	}
+	return nil
+}
+func (s *Service) World() *world.World                { return s.world }
+func (*Service) Serve(ctx context.Context) error      { <-ctx.Done(); return nil }
+func (s *Service) Shutdown(ctx context.Context) error { return s.partition.Stop(ctx) }

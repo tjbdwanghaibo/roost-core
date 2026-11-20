@@ -1,6 +1,6 @@
 # CellWorld：固定分区大世界
 
-CellWorld 是 Scene 的一种运行模式：固定网格的每个 Cell 由一个进程执行，Player 留在静态归属的 Base 进程，SceneActor 随位置跨 Cell 迁移；NPC 使用同一套迁移协议。业务修改始终经 Nest 与 DAO，客户端同步仍由 Base 的 EntitySync / Interest 承载。
+CellWorld 是 Scene 的一种运行模式：固定网格的每个 Cell 由一个进程执行，Player 留在静态归属的 Base 进程，CellPlayer 随位置跨 Cell 迁移；NPC 使用同一套迁移协议。业务修改始终经 Nest 与 DAO，客户端同步仍由 Base 的 EntitySync / Interest 承载。
 
 算法与协议在本包，正式装配在 [modules/cellworld](../../modules/cellworld/README.md)，完整 Entity / DAO / 业务接线由 [game-demo](../../demo/README.md) 生成。不要复制另一套授权、迁移、持久恢复或客户端协议。
 
@@ -15,7 +15,7 @@ CellWorld 是 Scene 的一种运行模式：固定网格的每个 Cell 由一个
 | 对象 | 权威与保存方式 |
 | --- | --- |
 | Player | 静态 Base 的持久 Entity；保存养成、入场计数、回写快照、死亡奖励回执 |
-| SceneActor / Monster | 当前 Cell 的临时 Entity；状态写 DAO，参与回滚；位置、速度、HP、面板、Recovery 随 Offer 交接 |
+| CellPlayer / Monster | 当前 Cell 的临时 Entity；状态写 DAO，参与回滚；位置、速度、HP、面板、Recovery 随 Offer 交接 |
 | Scene.Region | 当前 Cell 的区域索引；只在 Scene 的 Nest 锁内读写 |
 | OwnerRecord | 共享 Redis CAS 权威；唯一写者 Grant、单调 Epoch、入场高水位、死亡与出生状态，不设 TTL |
 | Ghost / Sync mirror | 可重建只读副本；从不执行战斗、授予写权限或覆盖权威数据 |
@@ -114,7 +114,7 @@ Ghost / Witness 传全量或字段 mask 增量，零值变化也可表达；接�
 | 路径 | 来源 | 职责 |
 | --- | --- | --- |
 | `game/modules/cellworldhost` | 模块 | 通用 Runtime、App / Redis / NATS 装配、稳定出生 ID；Node 安装点、DAO 与 Actor / Base 状态的映射、格心跳登记、死亡回执 |
-| `game/entities/scene_actor`、`db/def/scene_actor.go`、`db/def/cellworld.go` | 模块 | 玩家在格上的 SceneActor 实体与 DAO、分区状态的嵌套类型、Player 上的 `CellworldBase`（恢复快照与死亡回执） |
+| `game/entities/cell_player`、`db/def/cell_player.go`、`db/def/cellworld.go` | 模块 | 玩家在格上的 CellPlayer 实体与 DAO、分区状态的嵌套类型、Player 上的 `CellworldBase`（恢复快照与死亡回执） |
 | `game/entities/player/cell_base.go` | demo | Player 的 Base 字段声明之上的 BasePlayer 实现、面板（取属性）与队伍副本 |
 | `game/managers/cellworld_host.go` | 模块 | 托管 Node 协程的 manager（D22）：发布 Host，服务心跳装好后 `Runtime.Start` 交给它，停机兜底排空 |
 | `internal/service/game/partition.go` | demo | 心跳、镜像、Scene 与服务生命周期 |

@@ -105,6 +105,10 @@ GOWORK=off go run ./fireball
 
 ## 6. 什么时候再读其他模块
 
+**先用普通地图做一只巡逻怪。** `roost module add monster` 会带上移动与场景。实体 `Monster` 是谁，`MonsterActor` 组件决定下一步做什么，Nest 保证这次决定成功或回滚；改巡逻或感知规则不必新建 AI Controller。给玩家写普通移动 handler 时，持锁调 `target.Actor().Walk(path, speed)` 即可，拒绝原样返回，不再自己翻译错误。详见 [monster](../modules/monster/README.md) 与 [actor](../modules/actor/README.md)。`actor.Body` 是共享实现，不是新的实体身份。
+
+**只有真的分区，才需要知道谁有写权。** 想单独尝试，运行 `roost project new explorer -module example.com/explorer -template game -recipe cellworld`；它给纯 game 接好 `CellPlayer` 的身份、心跳和恢复，不需要搬 demo。详见[最小两格配方](../modules/cellspace/README.md)。 玩家跨 Cell，不是把持久 Player 移到另一个进程：Base 转发意图，当前格的分区化身才写实时位置，邻格的 Ghost 只读。见 [进图到故障重连的责任表](../modules/cellworld/README.md)。不要把一条跨进程意图当作已经执行成功的本地移动。
+
 | 你的问题 | 接着读 |
 | --- | --- |
 | 玩家消息如何排队、怎样改 DAO | [Nest](framework/guide/02-nest-entity.md) |

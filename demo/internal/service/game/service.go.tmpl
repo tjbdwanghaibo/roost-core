@@ -456,7 +456,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	// The partitioned scene's node before the scene: it feeds the scene's
 	// manager (the mirrors), and nothing is taken from or sent to the other
-	// cells once it is down. The SceneActors and monsters it holds go with the
+	// cells once it is down. The CellPlayers and monsters it holds go with the
 	// process: the Bases re-enter their players elsewhere or here again.
 	if s.partition != nil {
 		if err := s.partition.stop(ctx); err != nil {

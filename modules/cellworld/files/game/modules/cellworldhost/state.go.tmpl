@@ -13,7 +13,7 @@ import (
 )
 
 // 实体一侧的接线：本进程的 cellworld.Node 装在哪里、格心跳怎么登记、Actor 的 DAO 与 cellworld.ActorState、Player 的
-// DAO 与 cellworld.BaseState 怎么互相映射。实体包（模块自带的 scene_actor、工程自己的 Player / 走格的怪物 / 场景）
+// DAO 与 cellworld.BaseState 怎么互相映射。实体包（模块自带的 cell_player、工程自己的 Player / 走格的怪物 / 场景）
 // 引用这里，这里不引用任何实体包。共享授权、迁移与恢复契约见 core 的 gameplay/cellworld/README.md。
 // 没有装 Node 的进程（普通场景）这里的函数都不会被调用，或者调用了什么都不做。
 
@@ -29,8 +29,8 @@ type installation struct {
 	driver *heartbeat.Driver
 }
 
-// Install 装上本进程的 Node、分区场景的 Scene ID 与格内心跳用的驱动（SceneActor 从它取心跳宿主；工程自己的实体
-// 用自己的宿主）。一个进程一个；要在 Runtime.Start 之前装，Node 一开始投递就会建 SceneActor。
+// Install 装上本进程的 Node、分区场景的 Scene ID 与格内心跳用的驱动（CellPlayer 从它取心跳宿主；工程自己的实体
+// 用自己的宿主）。一个进程一个；要在 Runtime.Start 之前装，Node 一开始投递就会建 CellPlayer。
 func Install(n *cellworld.Node, sceneID int64, driver *heartbeat.Driver) {
 	scene.Store(sceneID)
 	installed.Store(&installation{node: n, driver: driver})
@@ -62,7 +62,7 @@ func Heartbeat() *heartbeat.Driver {
 // SceneID 是分区场景的 Scene ID（Install 时给出）。
 func SceneID() int64 { return scene.Load() }
 
-// CellMode 是分区场景的 Node 在 handler 里新建 SceneActor / 走格的怪物时的 EntityCreateParam.Param：实体据此登记
+// CellMode 是分区场景的 Node 在 handler 里新建 CellPlayer / 走格的怪物时的 EntityCreateParam.Param：实体据此登记
 // 格内心跳（cell.actor），走格的怪物也据此不启动自己的 AI / 移动（格的心跳代替它们）。
 type CellMode struct{}
 
@@ -107,7 +107,7 @@ func RegisterBaseBeat(host *heartbeat.Host, owner cellworld.BasePlayer) (*heartb
 	})
 }
 
-// CellDao 是承载 cellworld.ActorState 的那组生成读写器：模块自带的 SceneActorDao，以及工程让它走格的实体的 DAO
+// CellDao 是承载 cellworld.ActorState 的那组生成读写器：模块自带的 CellPlayerDao，以及工程让它走格的实体的 DAO
 // （声明同名同类型的字段即可，例如 game-demo 的 MonsterDao），共用一份映射。
 type CellDao interface {
 	GetCellSpawnGeneration() uint64
@@ -301,11 +301,11 @@ func sameHandoff(h *db.CellHandoff, p *cellworld.HandoffState) bool {
 //   - PosX / PosY 是实时位置（不持久，随 witness 更新）；SavedSceneID / SavedPosX / SavedPosY 是持久的快照位置，只在
 //     Base 接受一次回写（快照版本前进）时写；
 //   - CellHP / CellSnapEpoch / CellSnapSeq、面板 CellMaxHP / CellAttack / CellPower / CellPanelVer / CellPanelAcked、
-//     入场计数 CellEntry 持久：Base 重启后 Enter 以它们为准重建 SceneActor，面板序号跨重启单调；
+//     入场计数 CellEntry 持久：Base 重启后 Enter 以它们为准重建 CellPlayer，面板序号跨重启单调；
 //   - 恢复快照与死亡回执是模块自己追加的状态 PlayerDao.CellworldBase（GetCellworldBase，安装时写进 PlayerDao）；
 //   - 其余（路由、看门狗计时、面板重发计时、队伍面板计时）不持久。
 //
-// 工程用 Base 的 mirror 借 Player 的同步编码给客户端看 SceneActor 时，CellHP 与面板字段同时标 sync（game-demo 如此）。
+// 工程用 Base 的 mirror 借 Player 的同步编码给客户端看 CellPlayer 时，CellHP 与面板字段同时标 sync（game-demo 如此）。
 type BaseDao interface {
 	GetPosX() int64
 	SetPosX(int64)
@@ -383,7 +383,7 @@ type BaseDao interface {
 }
 
 // ReadBase 从 Player 的 DAO 读出分区路由状态。快照位置取 PosX / PosY（实时，随 witness 更新）；HP 与快照版本取持久的
-// CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。面板与 Real 已确认的序号
+// CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 CellPlayer。面板与 Real 已确认的序号
 // （CellPanelAcked）也持久：序号跨 Base 重启单调。Base 重启后重新装载的 Player 不在世界里、实时位置是零（PosX / PosY
 // 不持久）：这时快照位置取持久的 SavedPosX / SavedPosY——条件是它记在这个分区场景之下（SavedSceneID == sceneID，
 // sceneID 是本进程的分区场景 Scene ID），否则留零，Enter 取出生点。
@@ -460,8 +460,30 @@ func WriteBase(d BaseDao, st cellworld.BaseState, sceneID int64) {
 	}
 }
 
+// ReadAttackSlot and WriteAttackSlot adapt a generated player's private, persisted CellworldBase.
+// Moves/witnesses need no ledger lookup. A numbered attack reads one slot; the DAO may
+// serialize the bounded parent field when recording the resulting mutation.
+func ReadAttackSlot(s *db.CellworldBaseState, slot int64) (int64, cellworld.AttackReceipt) {
+	r, ok := s.GetAttackSlots(slot)
+	if !ok || r == nil {
+		return s.GetAttackHigh(), cellworld.AttackReceipt{}
+	}
+	return s.GetAttackHigh(), cellworld.AttackReceipt{RequestID: r.GetRequestID(), Target: r.GetTarget(), Hit: cellworld.HitID{Attacker: r.GetAttacker(), Seq: r.GetSeq(), ID: r.GetHitID()}}
+}
+
+func WriteAttackSlot(s *db.CellworldBaseState, slot, high int64, receipt cellworld.AttackReceipt) {
+	r := &db.CellAttackReceipt{}
+	r.SetRequestID(receipt.RequestID)
+	r.SetTarget(receipt.Target)
+	r.SetAttacker(receipt.Hit.Attacker)
+	r.SetSeq(receipt.Hit.Seq)
+	r.SetHitID(receipt.Hit.ID)
+	s.SetAttackSlotsKey(slot, r)
+	s.SetAttackHigh(high)
+}
+
 // DeathReceipt 是 Player 对 target 记下的最后一条命（cellworld.BasePlayer.CellDeathReceipt）；s 是 PlayerDao.CellworldBase。
-// 回执与 SettleDeath 的奖励在同一笔 Player 事务里提交（缺省 async）：重复投递的死亡事实只结算一次。
+// 回执与 SettleDeath 的奖励在同一笔 strict Player 事务里提交，WAL 持久后才确认：重复投递的死亡事实只结算一次。
 func DeathReceipt(s *db.CellworldBaseState, target int64) uint64 {
 	v, _ := s.GetDeathReceipts(target)
 	return v

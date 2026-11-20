@@ -98,7 +98,8 @@ func scaffoldRecipe(ctx context.Context, root string, manifest Manifest, service
 	for _, item := range plan.Modules {
 		written = append(written, item.Files...)
 	}
-	replacer := strings.NewReplacer("{{MODULE}}", manifest.Project.Module, "{{PROJECT}}", manifest.Project.Name, "{{GAME_SERVICE}}", service, "{{RECIPE}}", recipe.Name)
+	host := manifest.withServicePackages(root)
+	replacer := strings.NewReplacer("{{MODULE}}", manifest.Project.Module, "{{PROJECT}}", manifest.Project.Name, "{{GAME_SERVICE}}", service, "{{SERVICE_PACKAGE}}", host.servicePackage(service), "{{RECIPE}}", recipe.Name)
 	for _, dir := range []string{"common", recipe.Name} {
 		base := "recipes/" + dir
 		err := fs.WalkDir(modules.Recipes, base, func(file string, entry fs.DirEntry, walkErr error) error {
@@ -112,6 +113,9 @@ func scaffoldRecipe(ctx context.Context, root string, manifest Manifest, service
 				return fmt.Errorf("recipe source %s must end in .tmpl", file)
 			}
 			rel := strings.TrimSuffix(strings.TrimPrefix(file, base+"/"), ".tmpl")
+			if tail, isHostFile := strings.CutPrefix(rel, "internal/service/game/"); isHostFile {
+				rel = path.Join(host.serviceDir(service), tail)
+			}
 			raw, err := modules.Recipes.ReadFile(file)
 			if err != nil {
 				return err

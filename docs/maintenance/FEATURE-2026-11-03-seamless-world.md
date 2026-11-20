@@ -1,5 +1,7 @@
 # 功能设计：多进程无缝大世界（2026-11-03）
 
+> 下文保留设计和当时演练使用的历史名 `SceneActor`。当前新工程的类型名为 `CellPlayer`，仍指同一写权实体；实际安装与升级以 [cellworld 模块](../../modules/cellworld/README.md) 为准。
+
 **状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）；同日维护者定下 D1～D4，v2.1 的 NPC 降档与 demo 接入的方向问题见 §9；同日维护者定下 D5～D8，v2.2 的 game-demo 接入与多进程端到端见 §10。2026-11-04 的框架契约 E1～E4 与追加项见 §11，第 3 项（战斗面板放 Cell）见 §12，第 4 项（跨 Base 的队伍面板，Remote 托管的 Team）见 §13。2026-11-04 维护者决定原型也合进 main（合入的冲突、编号重排、Team 归属与待决定见 §14）：代码在 main 上，但仍是原型（`gameplay/cellworld`、game-demo 的 `scene.partition` 缺省关闭），不是承诺的正式能力；上线前缺口见 §6.3～§13.6。正式能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
 
 登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。

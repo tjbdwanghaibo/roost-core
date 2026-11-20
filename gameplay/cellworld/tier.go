@@ -31,7 +31,7 @@ import (
 //     回到慢档。
 //   - 邻格的 Ghost：慢档 NPC 一个慢拍才更新一次，Ghost 的过期时间放宽为 GhostTTL + IdlePeriod（按接收方自己的配置；
 //     所有进程读同一份分区配置）。
-//   - 玩家的 SceneActor 恒为快档。伤害、交接协议、去重与档位无关：慢档只改变心跳的频率。
+//   - 玩家的 CellPlayer 恒为快档。伤害、交接协议、去重与档位无关：慢档只改变心跳的频率。
 
 var hTier = nest.NewHandlerName("cellworld_tier")
 

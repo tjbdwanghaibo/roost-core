@@ -1,0 +1,43 @@
+package dbdef
+
+//roost:dao coll=player db=main dbscope=sid
+type PlayerDao struct {
+	Enter            EnterState         `store:"enter" dao:"nosync"`
+	CellworldBase    CellworldBaseState `store:"cellworld_base" dao:"nosync"`
+	PosX             int64              `dao:"nopersist,sync" store:"pos_x"`
+	PosY             int64              `dao:"nopersist,sync" store:"pos_y"`
+	SavedSceneID     int64              `dao:"nosync" store:"saved_scene_id"`
+	SavedPosX        int64              `dao:"nosync" store:"saved_pos_x"`
+	SavedPosY        int64              `dao:"nosync" store:"saved_pos_y"`
+	CellActor        int64              `dao:"nopersist,nosync" store:"cell_actor"`
+	CellInWorld      bool               `dao:"nopersist,nosync" store:"cell_in_world"`
+	CellOwner        int32              `dao:"nopersist,nosync" store:"cell_owner"`
+	CellEpoch        uint64             `dao:"nopersist,nosync" store:"cell_epoch"`
+	CellIntentSeq    uint64             `dao:"nopersist,nosync" store:"cell_intent_seq"`
+	CellVX           int64              `dao:"nopersist,nosync" store:"cell_vx"`
+	CellVY           int64              `dao:"nopersist,nosync" store:"cell_vy"`
+	CellAttackSeq    uint64             `dao:"nopersist,nosync" store:"cell_attack_seq"`
+	CellViewAt       int64              `dao:"nopersist,nosync" store:"cell_view_at"`
+	CellEnterAt      int64              `dao:"nopersist,nosync" store:"cell_enter_at"`
+	CellLeaseAt      int64              `dao:"nopersist,nosync" store:"cell_lease_at"`
+	CellHint         int32              `dao:"nopersist,nosync" store:"cell_hint"`
+	CellLostEpoch    uint64             `dao:"nopersist,nosync" store:"cell_lost_epoch"`
+	CellLostAt       int64              `dao:"nopersist,nosync" store:"cell_lost_at"`
+	CellShown        bool               `dao:"nopersist,nosync" store:"cell_shown"`
+	CellEntry        uint64             `dao:"nosync" store:"cell_entry"`
+	CellHP           int64              `dao:"persist,sync" store:"cell_hp"`
+	CellSnapEpoch    uint64             `dao:"nosync" store:"cell_snap_epoch"`
+	CellSnapSeq      uint64             `dao:"nosync" store:"cell_snap_seq"`
+	CellMaxHP        int64              `dao:"persist,sync" store:"cell_max_hp"`
+	CellAttack       int64              `dao:"persist,sync" store:"cell_attack"`
+	CellPower        int64              `dao:"persist,sync" store:"cell_power"`
+	CellPanelVer     uint64             `dao:"nosync" store:"cell_panel_ver"`
+	CellPanelAcked   uint64             `dao:"nosync" store:"cell_panel_acked"`
+	CellPanelSentAt  int64              `dao:"nopersist,nosync" store:"cell_panel_sent_at"`
+	CellPanelSince   int64              `dao:"nopersist,nosync" store:"cell_panel_since"`
+	CellPanelUnknown bool               `dao:"nopersist,nosync" store:"cell_panel_unknown"`
+	CellGroupSentAt  int64              `dao:"nopersist,nosync" store:"cell_group_sent_at"`
+	CellGroupSyncAt  int64              `dao:"nopersist,nosync" store:"cell_group_sync_at"`
+	CellGroupViewID  int64              `dao:"nopersist,nosync" store:"cell_group_view_id"`
+	CellGroupViewVer uint64             `dao:"nopersist,nosync" store:"cell_group_view_ver"`
+}

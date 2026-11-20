@@ -181,7 +181,7 @@ func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 //
 // 唯一的例外是 cellworld（D21 后半，2026-11-17）：它带来 demo 的 MonsterDao / PlayerDao 用到的分区状态嵌套类型，GiftItem
 // saga 那一步重刷全部生成物时这些类型必须已经在盘上，所以它单独一步、排在那之前；那时工程还没有引用任何别的模块，它也
-// 没有协议号与错误码，只分一个实体号（SceneActor）。
+// 没有协议号与错误码，只分一个实体号（CellPlayer）。
 func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	steps := demoScaffoldSteps("game")
 	installed := -1

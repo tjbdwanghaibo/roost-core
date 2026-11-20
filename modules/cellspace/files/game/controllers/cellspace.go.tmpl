@@ -1,0 +1,15 @@
+package controllers
+
+import (
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/game/modules/cellspace"
+	"{{MODULE}}/protocol/pb"
+)
+
+func (c *Controller) HandleCellMove(ctx *playeraccess.Context, req *pb.CellMoveRequest) (*pb.CellMoveResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, errors.New("cellspace: missing request")
+	}
+	return &pb.CellMoveResponse{}, cellspace.Move(ctx.Context(), ctx.PlayerID, req.VX, req.VY)
+}

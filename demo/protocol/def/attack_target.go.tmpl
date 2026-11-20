@@ -4,17 +4,23 @@ package protocoldef
 
 // AttackTargetRequest attacks one thing the player sees in a partitioned
 // scene (scene.partition): Target is its subject id as the replicated state
-// names it — a monster, or another player's scene actor. The damage is fixed
+// names it — a monster, or another player's cell player. The damage is fixed
 // (scene.partition.attack_damage; maintainer decision D7 = A: skills and
 // buffs do not cross cells). The attacker's cell checks that the target is in
 // its view and in range, and the target's own cell — the other cell's
-// process when the target is across the border — applies it, exactly once
-// however often the request is retried on the way.
+// process when the target is across the border — settles the Hit.
 type AttackTargetRequest struct {
 	Target int64 `pb:"1"`
+	// RequestID: optional, player-scoped operation number, NOT the connection's message sequence.
+	// Allocate increasing positive numbers for distinct attacks; persist the number and request
+	// before sending. Retry a lost reply with the same number and target, including after reconnect.
+	// Only the latest 64 numbers (relative to the greatest admitted number) are replayable.
+	// An expired number cannot attack again. Zero/omitted = legacy: each call is a new attack.
+	RequestID int64 `pb:"2"`
 }
 
-// AttackTargetResponse says the attack was sent (Code 0). AttackID identifies
+// AttackTargetResponse confirms admission, NOT delivery or damage (Code 0). A client replay
+// returns the original receipt and does not trigger a second send or verdict push. AttackID identifies
 // the attempt across reconnects and Base restarts; Seq is for display only.
 // The verdict comes later and on its own — applied, refused (not
 // visible, out of range, dead), or unknown when the target's cell did not

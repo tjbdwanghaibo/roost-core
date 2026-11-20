@@ -2,7 +2,7 @@ package player
 
 import (
 	gameteam "{{MODULE}}/game/components/team"
-	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	cell_player "{{MODULE}}/game/entities/cell_player"
 	"{{MODULE}}/game/event"
 	"{{MODULE}}/game/modules/cellworldhost"
 	"{{MODULE}}/game/view"
@@ -38,7 +38,7 @@ func (player *Player) OnTeamChanged(ev event.TeamChanged) error {
 	return nil
 }
 
-// teamGroup 把 Team 的成员表换成 Base 缓存的那份（cellworld.Group）：每名成员的 Player、在分区场景里的 SceneActor
+// teamGroup 把 Team 的成员表换成 Base 缓存的那份（cellworld.Group）：每名成员的 Player、在分区场景里的 CellPlayer
 // （ID 跨格不变）与 Base 的 sid。
 func teamGroup(info view.TeamSnapshot) cellworld.Group {
 	g := cellworld.Group{ID: info.TeamID, Ver: uint64(info.Revision)}
@@ -47,7 +47,7 @@ func teamGroup(info view.TeamSnapshot) cellworld.Group {
 		if err != nil {
 			continue
 		}
-		actorID, err := entity.BuildEntityID(unique, scene_actor.EntityKindSceneActor)
+		actorID, err := entity.BuildEntityID(unique, cell_player.EntityKindCellPlayer)
 		if err != nil {
 			continue
 		}

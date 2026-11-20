@@ -97,11 +97,11 @@ type PlayerDao struct {
 	// CellEntry 是持久入场计数；strict 入场提交后才发消息，重启与机器时钟回拨不复用编号。
 	CellEntry uint64 `dao:"nosync" store:"cell_entry"`
 	// CellHP / CellSnapEpoch / CellSnapSeq are the player's snapshot from the
-	// partitioned scene: the HP its SceneActor last wrote back and that
+	// partitioned scene: the HP its CellPlayer last wrote back and that
 	// write-back's version. Persisted — they are what a crashed Cell rebuilds
-	// the SceneActor from, and a restarted Base must still refuse an older
+	// the CellPlayer from, and a restarted Base must still refuse an older
 	// write-back. CellHP is also synced: the Base's mirror of the player's
-	// SceneActor is packed with this DAO's encoding (the client's `player`
+	// CellPlayer is packed with this DAO's encoding (the client's `player`
 	// namespace, D2 = A), and HP is one of the fields it carries. The live
 	// position is PosX / PosY; the snapshot position is SavedPosX / SavedPosY
 	// with SavedSceneID = the partitioned scene, written with each accepted
@@ -118,10 +118,10 @@ type PlayerDao struct {
 	// change, so the sequence stays monotonic across a Base restart.
 	// CellPanelAcked is the highest sequence the Real has confirmed — it comes
 	// back with the write-back snapshot. Persisted. The three numbers are
-	// also synced for the same reason as CellHP: the SceneActor's mirror is
+	// also synced for the same reason as CellHP: the CellPlayer's mirror is
 	// packed with this DAO's encoding and carries the Real's panel; the
 	// player's own `self` view leaves them out (the panel and the HP of a
-	// partitioned scene are the scene actor's). CellPanelSentAt /
+	// partitioned scene are the cell player's). CellPanelSentAt /
 	// CellPanelSince / CellPanelUnknown are the resend and "unknown" timers.
 	CellMaxHP        int64  `dao:"persist,sync" store:"cell_max_hp"`
 	CellAttack       int64  `dao:"persist,sync" store:"cell_attack"`
@@ -131,7 +131,7 @@ type PlayerDao struct {
 	CellPanelSentAt  int64  `dao:"nopersist,nosync" store:"cell_panel_sent_at"`
 	CellPanelSince   int64  `dao:"nopersist,nosync" store:"cell_panel_since"`
 	CellPanelUnknown bool   `dao:"nopersist,nosync" store:"cell_panel_unknown"`
-	// TeamVer / TeamMembers 是 Base 缓存的成员表（cellworld.Group）：版本与每名成员的 Player、SceneActor、Base sid。不持久：
+	// TeamVer / TeamMembers 是 Base 缓存的成员表（cellworld.Group）：版本与每名成员的 Player、CellPlayer、Base sid。不持久：
 	// 重启后版本为 0，Node 从 Team 实体重读（GroupResync）。CellGroupSentAt / CellGroupSyncAt / CellGroupViewID /
 	// CellGroupViewVer 是队伍面板的计时与组关系视野的版本（cellworld.BaseState）。
 	TeamVer          uint64     `dao:"nopersist,nosync" store:"team_ver"`

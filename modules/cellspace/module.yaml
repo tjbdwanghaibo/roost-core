@@ -1,0 +1,15 @@
+name: cellspace
+summary: 可选分区区域实体、玩家意图端点和唯一 Base 心跳宿主；完整启动接线见 cellworld 配方
+requires: [cellworld]
+needs:
+  mods: [nest, heartbeat]
+  features: [entity, dao, protocol]
+entities: [CellRegion]
+entity: Player
+component: Cellspace
+component_package: game/components/cellspace
+protocols: [CellMove]
+verify:
+  packages: [./game/modules/cellspace]
+  run: ^TestCellspace
+  pass: 1

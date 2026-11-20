@@ -108,7 +108,7 @@ func teamMember(unique int64, sid int32) GroupMember {
 	return GroupMember{Player: playerEntityID(unique), Actor: actorID(unique), SID: sid}
 }
 
-// enterOn 让 sid 上的玩家进入并等到它的客户端持有自己的 SceneActor。
+// enterOn 让 sid 上的玩家进入并等到它的客户端持有自己的 CellPlayer。
 func (tw *teamWorld) enterOn(sid int32, unique int64, at spatial.Point) {
 	tw.t.Helper()
 	base := tw.bases[sid]
@@ -118,7 +118,7 @@ func (tw *teamWorld) enterOn(sid int32, unique int64, at spatial.Point) {
 	if err := base.node.Enter(ctx, pl.ID(), actorID(unique), at, 100); err != nil {
 		tw.t.Fatal(err)
 	}
-	waitFor(tw.t, settleWithin, "own scene actor on the client", func() bool {
+	waitFor(tw.t, settleWithin, "own cell player on the client", func() bool {
 		_, ok := base.client.held(unique)[actorID(unique)]
 		return ok
 	})
@@ -160,7 +160,7 @@ func (tw *teamWorld) groupOf(sid int32, unique int64) Group {
 	return out.(Group)
 }
 
-// holds 是 sid 上 viewer 的客户端此刻持有的 target 的 SceneActor。
+// holds 是 sid 上 viewer 的客户端此刻持有的 target 的 CellPlayer。
 func (tw *teamWorld) holds(sid int32, viewer, target int64) (EntityState, bool) {
 	s, ok := tw.bases[sid].client.held(viewer)[actorID(target)]
 	return s, ok

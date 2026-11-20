@@ -1,4 +1,4 @@
-package scene_actor
+package cell_player
 
 import (
 	"errors"
@@ -12,14 +12,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-const EntityKindSceneActor entity.EntityKind = {{ID:entity:SceneActor}}
+const EntityKindCellPlayer entity.EntityKind = {{ID:entity:CellPlayer}}
 
-// ISceneActorEntity is the lock-safe business view used by Nest handlers.
-type ISceneActorEntity interface{ entity.IThreadSafeEntity }
+// ICellPlayerEntity is the lock-safe business view used by Nest handlers.
+type ICellPlayerEntity interface{ entity.IThreadSafeEntity }
 
-// SceneActor 是玩家在分区场景里的那一部分（gameplay/cellworld 的 SceneActor）：玩家站在哪个格，那个格的 Cell
-// 进程上就有一个它，位置、速度、HP、伤害去重表与交接进度都在它的 DAO 上（SceneActorDao），跨格交接时整份带走，
-// ID 不变（BuildEntityID(玩家 ID, SceneActor)）。Player 本身留在自己 sid 的 Base 进程，不迁移。
+// CellPlayer 是玩家在分区场景里的那一部分（gameplay/cellworld 的 CellPlayer）：玩家站在哪个格，那个格的 Cell
+// 进程上就有一个它，位置、速度、HP、伤害去重表与交接进度都在它的 DAO 上（CellPlayerDao），跨格交接时整份带走，
+// ID 不变（BuildEntityID(玩家 ID, CellPlayer)）。Player 本身留在自己 sid 的 Base 进程，不迁移。
 //
 // 只由分区场景的 Node 在 Nest handler 里建（EntityManager.Create，handler 内即 CreateInScope：事务回滚即撤销），
 // Param 是 cellworldhost.CellMode；由 Node 在提交后销毁；不经 lifecycle，普通场景里从不存在。`noPersist=true
@@ -28,12 +28,12 @@ type ISceneActorEntity interface{ entity.IThreadSafeEntity }
 //
 // Category：Other（与工程里走格的怪物同档），在 Scene（World）之后加锁——Node 的 handler 一律先锁 Scene、再锁角色。
 //
-//roost:entity id={{ID:entity:SceneActor}} entityKind=EntityKindSceneActor category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral service={{GAME_SERVICE}}
-type SceneActor struct {
+//roost:entity id={{ID:entity:CellPlayer}} entityKind=EntityKindCellPlayer category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral service={{GAME_SERVICE}}
+type CellPlayer struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	dao *db.SceneActorDao `dao:"scene_actor"`
+	dao *db.CellPlayerDao `dao:"cell_player"`
 
 	// host / cell 是格内心跳 cell.actor（Node.ActorBeat）：OnInitFinish 登记、StartCell 启动、SetCellPeriod 换档。
 	host *heartbeat.Host
@@ -41,50 +41,50 @@ type SceneActor struct {
 }
 
 // OnInitFinish 登记格内心跳（不启动：Node 在装好状态的那笔事务里 StartCell，提交后生效）。只接受分区场景的 Node
-// 建出的实例：别的路径建出的 SceneActor 没有格可待。
-func (a *SceneActor) OnInitFinish(param *entity.EntityCreateParam) error {
+// 建出的实例：别的路径建出的 CellPlayer 没有格可待。
+func (a *CellPlayer) OnInitFinish(param *entity.EntityCreateParam) error {
 	if param == nil || !cellworldhost.IsCellMode(param.Param) {
-		return fmt.Errorf("scene actor %d: only the partitioned scene creates scene actors", a.ID())
+		return fmt.Errorf("cell player %d: only the partitioned scene creates cell players", a.ID())
 	}
 	driver := cellworldhost.Heartbeat()
 	if driver == nil {
-		return fmt.Errorf("scene actor %d: this process runs no partitioned scene", a.ID())
+		return fmt.Errorf("cell player %d: this process runs no partitioned scene", a.ID())
 	}
 	a.host = driver.NewHost(a)
 	reg, err := cellworldhost.RegisterActorBeat(a.host, a)
 	if err != nil {
-		return fmt.Errorf("scene actor %d: %w", a.ID(), err)
+		return fmt.Errorf("cell player %d: %w", a.ID(), err)
 	}
 	a.cell = reg
 	return nil
 }
 
 // OnDestroy 让格内心跳离开驱动。
-func (a *SceneActor) OnDestroy(entity.EntityDestroyReason) {
+func (a *CellPlayer) OnDestroy(entity.EntityDestroyReason) {
 	if a.host != nil {
 		a.host.OnDestroy()
 	}
 }
 
 // CellState / SetCellState / StartCell / SetCellPeriod 实现 cellworld.Actor，只在本实体的 Nest 锁内调用。
-func (a *SceneActor) CellState() cellworld.ActorState {
+func (a *CellPlayer) CellState() cellworld.ActorState {
 	return cellworldhost.ReadActor(a.dao, a.ID(), cellworld.KindPlayer)
 }
 
-func (a *SceneActor) SetCellState(st cellworld.ActorState) { cellworldhost.WriteActor(a.dao, st) }
+func (a *CellPlayer) SetCellState(st cellworld.ActorState) { cellworldhost.WriteActor(a.dao, st) }
 
-func (a *SceneActor) StartCell() error {
+func (a *CellPlayer) StartCell() error {
 	if a.cell == nil {
-		return errors.New("scene actor: no cell beat")
+		return errors.New("cell player: no cell beat")
 	}
 	return a.cell.Start()
 }
 
-func (a *SceneActor) SetCellPeriod(period time.Duration) error {
+func (a *CellPlayer) SetCellPeriod(period time.Duration) error {
 	if a.cell == nil {
-		return errors.New("scene actor: no cell beat")
+		return errors.New("cell player: no cell beat")
 	}
 	return a.cell.SetPeriod(period)
 }
 
-var _ cellworld.Actor = (*SceneActor)(nil)
+var _ cellworld.Actor = (*CellPlayer)(nil)

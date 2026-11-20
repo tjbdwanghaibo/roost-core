@@ -276,9 +276,9 @@ func checkComponentViews(t *testing.T, fsys fs.FS, views []string, sourcesOf fun
 func TestModuleEntityPackagesHoldOnlyComponentWiring(t *testing.T) {
 	timerComponent := regexp.MustCompile(`^\{\{TIMER_COMPONENT\}\}Component$`)
 	checkEntityPackagesHoldOnlyWiring(t, modules.Files, func(_, component string) bool { return timerComponent.MatchString(component) })
-	// cellworld 模块自带的 SceneActor 没有业务规则：方法只把 cellworld.Actor 接到 DAO 映射与格心跳上，换档改心跳登记。
+	// cellworld 模块自带的 CellPlayer 没有业务规则：方法只把 cellworld.Actor 接到 DAO 映射与格心跳上，换档改心跳登记。
 	checkEntityMethodsLeaveStateToComponents(t, modules.Files, map[string]string{
-		"cellworld/files/game/entities/scene_actor/entity.go.tmpl SceneActor.SetCellPeriod": "implements cellworld.Actor: the framework's cell runtime calls it to pace the actor's cell beat",
+		"cellworld/files/game/entities/cell_player/entity.go.tmpl CellPlayer.SetCellPeriod": "implements cellworld.Actor: the framework's cell runtime calls it to pace the actor's cell beat",
 	})
 }
 

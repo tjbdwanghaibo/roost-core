@@ -14,7 +14,7 @@ import (
 )
 
 // ScenePartition 声明分区场景（gameplay/cellworld 的 Cell + Ghost）：把 game 的场景切成静态网格，每个格由一个
-// game 进程（Cell）托管，玩家留在自己 sid 的进程（Base），站在哪个格就由那个格的 Cell 进程上的 SceneActor 代表。
+// game 进程（Cell）托管，玩家留在自己 sid 的进程（Base），站在哪个格就由那个格的 Cell 进程上的 CellPlayer 代表。
 // 每个 game 进程读同一份；enabled 为 false（缺省）时本进程跑普通场景，其余键不读、不校验，demo 现有行为不变。
 //
 // 声明一次、加载时校验一次（维护者的配置规则）：cellworld 的几何约束（R + H ≤ G、W + H ≤ G、R ≥ Base 的最大
@@ -36,10 +36,10 @@ type ScenePartition struct {
 	WakeRadius int64 `config:"wake_radius" default:"0" min:"0" help:"a monster with no player within this radius drops to idle_period (W, 0 = view_radius); view_radius <= W and W + H <= G"`
 	// IdlePeriod 是附近没有玩家的 NPC 的心跳档位（D1；维护者 2026-11-03：demo 缺省 1s）。0 = 不降档。
 	IdlePeriod time.Duration `config:"idle_period" default:"1s" min:"0" help:"beat period of a monster no player is near (a heartbeat tier, a multiple of 50ms); 0 keeps every monster at 50ms"`
-	// WritebackEvery：SceneActor 把 HP 与位置写回 Player 的间隔（另在离场、交接放弃时写）。LeaseTimeout：Base 多久没续租
-	// SceneActor 就离场。
-	WritebackEvery time.Duration `config:"writeback_every" default:"5s" min:"100ms" help:"how often a player's SceneActor writes its HP and position back to the Player (also on leaving)"`
-	LeaseTimeout   time.Duration `config:"lease_timeout" default:"3s" min:"1s" help:"a SceneActor whose Base has not renewed its lease for this long leaves the scene"`
+	// WritebackEvery：CellPlayer 把 HP 与位置写回 Player 的间隔（另在离场、交接放弃时写）。LeaseTimeout：Base 多久没续租
+	// CellPlayer 就离场。
+	WritebackEvery time.Duration `config:"writeback_every" default:"5s" min:"100ms" help:"how often a player's CellPlayer writes its HP and position back to the Player (also on leaving)"`
+	LeaseTimeout   time.Duration `config:"lease_timeout" default:"3s" min:"1s" help:"a CellPlayer whose Base has not renewed its lease for this long leaves the scene"`
 	// MaxSpeed 是 MoveIntent 速度每个分量的上限；AttackDamage 是 AttackTarget 的固定伤害（D7 = A：技能 / Buff 不跨格）。
 	MaxSpeed     int64 `config:"max_speed" default:"300" min:"1" help:"largest move-intent speed per axis, units per second"`
 	AttackDamage int32 `config:"attack_damage" default:"10" min:"1" help:"the fixed damage of one attack_target"`

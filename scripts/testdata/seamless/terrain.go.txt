@@ -607,8 +607,8 @@ func runTerrain(ctx context.Context) error {
 		"owner_version": ownerBoundary.Version, "b_ghost_after_answer_ms": ms(ghostTook), "clients_after_request_ms": clientTook,
 		"b_view_far_chunk_loaded": true, "b_cross_cell_refused_rtt_ms": crossRefusedRTT, "b_forward_to_a_rtt_ms": forwardRTT})
 
-	// (b1) 真实 SceneActor：B 紧挨分界线（x 13000～13600、y 3000 那一行）抬起 5 米的坎，推到 A 的 Ghost 带；pW（Base 是只做
-	//      Base 的 1004，SceneActor 在格 A）朝东走：越过分界线、停在坎前最后一个整数点 12949（坎的第一个节点从 12950 起），
+	// (b1) 真实 CellPlayer：B 紧挨分界线（x 13000～13600、y 3000 那一行）抬起 5 米的坎，推到 A 的 Ghost 带；pW（Base 是只做
+	//      Base 的 1004，CellPlayer 在格 A）朝东走：越过分界线、停在坎前最后一个整数点 12949（坎的第一个节点从 12950 起），
 	//      没到交接线 13000，一直是 A 的 Real；坎挖平后接着走，交给 B。
 	playerStep := raise(13300, tPlayerY, 300, tStepRaw)
 	stepKey := terrain.ChunkKey{X: 2}
@@ -628,12 +628,12 @@ func runTerrain(ctx context.Context) error {
 	if h, ok, err := heightAt(ctx, 1001, 13000, tPlayerY); err != nil || !ok || h != tStepRaw*10 {
 		return fmt.Errorf("(b) A's view at the step's first node: %d %v %v, want %d", h, ok, err, tStepRaw*10)
 	}
-	// pW 自己的 SceneActor 的完整 ID 取客户端从同步里认出的那个（本程序没有登记实体种类，不自己拼 ID）。
+	// pW 自己的 CellPlayer 的完整 ID 取客户端从同步里认出的那个（本程序没有登记实体种类，不自己拼 ID）。
 	pW.mu.Lock()
 	actorW := pW.actorID
 	pW.mu.Unlock()
 	if _, isReal, err := realIn(ctx, 1001, actorW); err != nil || !isReal {
-		return fmt.Errorf("(b) pW's scene actor is not a real on A: %v", err)
+		return fmt.Errorf("(b) pW's cell player is not a real on A: %v", err)
 	}
 	blocksBefore := cellStat(ctx, 1001, "SurfaceBlocks")
 	walkStart := time.Now()

@@ -1,0 +1,8 @@
+package view
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+
+type Cellspace interface {
+	Start(cellworld.BasePlayer) error
+}
+type CellspaceHolder interface{ Cellspace() Cellspace }

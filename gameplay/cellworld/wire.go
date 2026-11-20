@@ -95,7 +95,7 @@ type HitID struct {
 	ID       string `msgpack:"i"`
 }
 
-// AppliedHit 是目标 Real 上已结算伤害的去重记录，随交接带走（存在 SceneActor / Monster 的 DAO 里）。
+// AppliedHit 是目标 Real 上已结算伤害的去重记录，随交接带走（存在 CellPlayer / Monster 的 DAO 里）。
 type AppliedHit struct {
 	Hit HitID `msgpack:"h"`
 	At  int64 `msgpack:"t"` // 结算时的系统时间（UnixNano），用于去重窗口过期
@@ -232,7 +232,7 @@ type damageReply struct {
 }
 
 // enterReq：Base 让玩家进入（首次、Cell 崩溃后重进、交接放弃后补回）。State 是 Player 的最近快照（位置、HP），
-// 新格按它建 SceneActor。
+// 新格按它建 CellPlayer。
 type enterReq struct {
 	Recovery  RecoveryState `msgpack:"rc"`
 	State     EntityState   `msgpack:"s"`
@@ -249,8 +249,8 @@ type leaveReq struct {
 	Entry uint64 `msgpack:"en"`
 }
 
-// inputReq 是移动意图，同时是 Base 对 SceneActor 的租约续期：Base 每 LeasePeriod 重发一次最新意图（序号不变），
-// SceneActor 收到任何一条都续租，只有序号前进的才改速度。
+// inputReq 是移动意图，同时是 Base 对 CellPlayer 的租约续期：Base 每 LeasePeriod 重发一次最新意图（序号不变），
+// CellPlayer 收到任何一条都续租，只有序号前进的才改速度。
 type inputReq struct {
 	ID    int64  `msgpack:"i"`
 	Entry uint64 `msgpack:"en"`
@@ -290,7 +290,7 @@ type witnessMsg struct {
 	Truncated      bool          `msgpack:"tr,omitempty"`
 }
 
-// writebackMsg 是 SceneActor 回写 Player 的快照（HP、位置与面板）。Ver 是 SceneActor 当时的版本，
+// writebackMsg 是 CellPlayer 回写 Player 的快照（HP、位置与面板）。Ver 是 CellPlayer 当时的版本，
 // 跨交接、跨重建单调；Base 只接受比 Player 上已存版本新的快照（幂等）。
 type writebackMsg struct {
 	Recovery RecoveryState `msgpack:"rc"`
@@ -325,7 +325,7 @@ type panelResult struct {
 	Hint      int32         `msgpack:"hint,omitempty"`
 }
 
-// groupSnap 是 Base 发给别的队员的 Base 的一份快照（队伍面板，group.go）：本进程这名队员的 SceneActor 状态，取自本进程
+// groupSnap 是 Base 发给别的队员的 Base 的一份快照（队伍面板，group.go）：本进程这名队员的 CellPlayer 状态，取自本进程
 // 自己的 mirror（最新一份 witness 里的自己，带 Real 上的版本），收件方按版本喂 mirror。Group / Ver 是发送方缓存的成员表。
 type groupSnap struct {
 	Group int64       `msgpack:"g"`

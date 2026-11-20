@@ -1,0 +1,282 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/controllers"
+	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/settings"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	playerbind "{{MODULE}}/protocol/player_bind"
+)
+
+// Real protobuf -> playeraccess/Controller -> partitionRuntime -> Nest -> Player DAO.
+// The transport consumes every Base publication without delivering it: no Cell verdict is possible.
+type attackBlackhole struct {
+	walkTransport
+	sends atomic.Int32
+}
+
+func (b *attackBlackhole) Publish(string, []byte) error { b.sends.Add(1); return nil }
+
+type attackTestSession struct {
+	gateway.Session
+	principal gateway.Principal
+}
+
+func (s attackTestSession) Principal() gateway.Principal { return s.principal }
+
+type attackFixture struct {
+	registry *playeraccess.ProtocolRegistry
+	rt       *partitionRuntime
+	sink     *attackBlackhole
+	entities *entity.EntityManager
+	stop     func()
+}
+
+func newAttackFixture(t *testing.T, committer nest.TransactionCommitter) *attackFixture {
+	t.Helper()
+	f := &attackFixture{registry: playeraccess.NewProtocolRegistry(), sink: &attackBlackhole{}, entities: entity.NewEntityManager()}
+	e := nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(f.entities)), nest.NestOptionWithTransactionCommitter(committer))
+	h := cellworld.NewHandlers()
+	if err := h.Register(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = e.Shutdown(context.Background()) })
+	n, err := cellworld.NewNode(cellworld.NodeConfig{World: "attack-test", SID: partitionSidC, Grid: partitionTerrainGrid(t), Nest: e, Handlers: h, Transport: f.sink, PlayerEntity: func(id int64) int64 { return id }, Destroy: func(context.Context, entity.IThreadSafeEntity) error { return errors.New("unexpected destroy") }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- n.Run(ctx) }()
+	select {
+	case <-n.Ready():
+	case err := <-done:
+		t.Fatalf("Base startup: %v", err)
+	}
+	f.stop = func() {
+		if f.stop == nil {
+			return
+		}
+		limit, end := context.WithTimeout(context.Background(), 5*time.Second)
+		defer end()
+		if err := n.Drain(limit); err != nil {
+			t.Errorf("drain: %v", err)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("stop: %v", err)
+		}
+		f.stop = nil
+	}
+	t.Cleanup(func() {
+		if f.stop != nil {
+			f.stop()
+		}
+	})
+	registry := app.NewRegistry(viper.New())
+	f.rt = &partitionRuntime{node: n, config: settings.ScenePartition{AttackDamage: 7}}
+	if err := registry.Register("nest", e); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(PartitionCapability, f.rt); err != nil {
+		t.Fatal(err)
+	}
+	c, err := controllers.FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := playerbind.RegisterAttackTarget(f.registry, c.HandleAttackTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// Only the volatile route is primed. No persisted ledger or result is seeded.
+func (f *attackFixture) join(t *testing.T, id int64) *player.Player {
+	t.Helper()
+	p := newScenePlayer(t, id)
+	p.Dao().SetCellActor(p.ID())
+	p.Dao().SetCellOwner(partitionSidA)
+	p.Dao().SetCellInWorld(true)
+	f.entities.Add(p)
+	return p
+}
+func (f *attackFixture) send(t *testing.T, id int64, session string, seq uint32, requestID, target int64) *playeraccess.Response {
+	t.Helper()
+	body, err := pb.MarshalAttackTargetRequest(&pb.AttackTargetRequest{Target: target, RequestID: requestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := attackTestSession{principal: gateway.Principal{PlayerID: id, SessionID: session}}
+	r, err := f.registry.Dispatch(context.Background(), s, msgid.MsgAttackTarget, seq, body)
+	if err != nil || r == nil || r.Sequence != seq {
+		t.Fatalf("dispatch(seq=%d): %+v %v", seq, r, err)
+	}
+	return r
+}
+func attackReply(t *testing.T, r *playeraccess.Response, code int32) *pb.AttackTargetResponse {
+	t.Helper()
+	m, err := pb.UnmarshalAttackTargetResponse(r.Payload)
+	if err != nil || m.Code != code || (code == 0) != (m.AttackID != "") || code != 0 && (m.Reason == "" || m.Seq != 0) {
+		t.Fatalf("reply=%+v err=%v, want code %d", m, err, code)
+	}
+	return m
+}
+
+func TestPartitionAttackRequestWireWindowAndLegacy(t *testing.T) {
+	f := newAttackFixture(t, walkCommitter{})
+	a := f.join(t, 601)
+	f.join(t, 602)
+	call := func(id, number, target int64, code int32) *pb.AttackTargetResponse {
+		return attackReply(t, f.send(t, id, "same-connection", 1, number, target), code)
+	}
+	first := call(601, 1, 89, 0)
+	second := call(601, 2, 89, 0)
+	other := call(602, 1, 89, 0)
+	if first.AttackID == second.AttackID || first.AttackID == other.AttackID || second.Seq != first.Seq+1 {
+		t.Fatalf("independent operations: %+v %+v %+v", first, second, other)
+	}
+	call(601, 1, 90, 100904)
+	f.rt.config.AttackDamage++
+	if got := call(601, 1, 89, 0); *got != *first {
+		t.Fatalf("server config change invalidated original receipt: %+v", got)
+	}
+	f.rt.config.AttackDamage--
+	call(601, -1, 89, 100902)
+	legacy1, legacy2 := call(601, 0, 89, 0), call(601, 0, 89, 0)
+	if legacy1.AttackID == legacy2.AttackID {
+		t.Fatal("legacy requests were coalesced")
+	}
+	call(601, 64, 89, 0)
+	if got := call(601, 1, 89, 0); *got != *first {
+		t.Fatalf("last replayable receipt: %+v vs %+v", got, first)
+	}
+	call(601, 65, 89, 0)
+	call(601, 1, 89, 100903)
+	call(601, 1, 90, 100903)
+	if got := call(601, 2, 89, 0); *got != *second {
+		t.Fatalf("window lower bound: %+v", got)
+	}
+	for id := int64(3); id < 64; id++ {
+		call(601, id, 89, 0)
+	} // in-window gaps may arrive out of order
+	if a.Dao().GetCellworldBase().AttackSlotsLen() != int(cellworld.AttackRequestWindow) {
+		t.Fatal("ledger not bounded by its documented window")
+	}
+	f.stop()
+	if got := f.sink.sends.Load(); got != 68 {
+		t.Fatalf("Base sent %d attacks, want 68", got)
+	}
+}
+
+// A failing commit must neither publish nor consume the number. The succeeding retry goes to
+// a real file WAL; a new player + engine + connection can look up its Hit with no live route.
+type attackTestWAL struct {
+	wal  *nestwal.WAL
+	fail atomic.Bool
+}
+
+func (c *attackTestWAL) Commit(ctx context.Context, record nest.CommitRecord) error {
+	if c.fail.Swap(false) {
+		return errors.New("injected WAL refusal before append")
+	}
+	_, err := c.wal.Append(ctx, record)
+	return err
+}
+func TestPartitionAttackRequestLostReplyAndBaseRecovery(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	options := nestwal.DefaultOptions(dir)
+	wal, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wal.Close(ctx)
+	c := &attackTestWAL{wal: wal}
+	f := newAttackFixture(t, c)
+	p := f.join(t, 701)
+	const requestID int64 = 104
+	c.fail.Store(true)
+	failed, err := pb.UnmarshalAttackTargetResponse(f.send(t, 701, "old", 11, requestID, 89).Payload)
+	if err != nil || failed.Code == 0 || failed.AttackID != "" || p.Dao().GetCellAttackSeq() != 0 || p.Dao().GetCellworldBase().GetAttackHigh() != 0 || p.Dao().GetCellworldBase().AttackSlotsLen() != 0 {
+		t.Fatalf("failed commit left a success/receipt: %+v err=%v", failed, err)
+	}
+	lost := f.send(t, 701, "old", 12, requestID, 89) // written by the server; the client never receives it
+	retry := attackReply(t, f.send(t, 701, "reconnected", 1, requestID, 89), 0)
+	witness := attackReply(t, lost, 0)
+	if *retry != *witness || retry.Seq != 1 {
+		t.Fatalf("reconnect did not return the original: %+v %+v", retry, witness)
+	}
+	f.stop()
+	if f.sink.sends.Load() != 1 || wal.Stats().Syncs == 0 {
+		t.Fatalf("sends=%d WAL=%+v", f.sink.sends.Load(), wal.Stats())
+	}
+	if err := wal.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close(ctx)
+	dao := db.NewPlayerDao()
+	dao.SetId(p.ID())
+	records := 0
+	err = reopened.Replay(ctx, func(_ nest.CommitFence, r nest.CommitRecord) error {
+		records++
+		if r.Durability != dataengine.DurabilityStrict || len(r.Mutations) != 1 || r.Mutations[0].Kind != dataengine.MutationPut || r.Mutations[0].Key.ID != p.ID() {
+			return fmt.Errorf("not a single strict Player image: %+v", r)
+		}
+		m := r.Mutations[0]
+		return dao.RestorePersisted(m.Data, m.Schema, m.NextVersion)
+	})
+	if err != nil || records != 1 {
+		t.Fatalf("WAL recovery: %d records: %v", records, err)
+	}
+	loaded, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: false, Id: p.ID(), Kind: player.EntityKindPlayer, Dao: map[string]entity.DaoInterface{db.PlayerDaoCollection: dao}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2 := newAttackFixture(t, walkCommitter{})
+	f2.entities.Add(loaded)
+	if loaded.(*player.Player).BaseState().InWorld {
+		t.Fatal("volatile route survived restart")
+	}
+	if _, ok := dataengine.SyncFieldByName(db.PlayerDaoSyncFields(), "CellworldBase"); ok {
+		t.Fatal("private admission ledger is in the client sync schema")
+	}
+	if got := attackReply(t, f2.send(t, 701, "new-base", 1, requestID, 89), 0); *got != *witness {
+		t.Fatalf("restored receipt %+v != %+v", got, witness)
+	}
+	attackReply(t, f2.send(t, 701, "new-base", 2, requestID, 90), 100904)
+	attackReply(t, f2.send(t, 701, "new-base", 3, 1, 89), 100903)           // restored high-water mark, independent of a slot match
+	attackReply(t, f2.send(t, 701, "new-base", 4, requestID+1, 89), 100045) // not in world: not admitted
+	f2.stop()
+	if f2.sink.sends.Load() != 0 || f2.rt.attacksApplied.Load() != 0 {
+		t.Fatal("a receipt replay dispatched or claimed a hit")
+	}
+}

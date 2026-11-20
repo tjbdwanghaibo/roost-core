@@ -578,9 +578,9 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "entity", Name: "Monster"}, why: "the scene spawns things that are seen but do not see; the pipeline must not have a special case for them"},
 		{add: &AddOptions{Kind: "dao", Name: "Monster", Entity: "Monster"}, why: "a DAO with no collection (//roost:dao nocoll) whose every field is nopersist,sync: nothing to store, everything to replicate"},
 		// cellworld 模块单独先装（D21 后半，2026-11-17）：它带来分区状态的嵌套类型（db/def/cellworld.go：CellHit、CellRecovery……）
-		// 与玩家在格上的 SceneActor 实体；demo 的 MonsterDao（下一步）与 PlayerDao 都用这些类型，所以排在写 MonsterDao 之前。它没有协议号与错误码，提前装
-		// 不影响模块步骤的分号；SceneActor 的实体号是这时的最小空号（Player 1、World 2、Scene 3、Monster 4 之后的 5）。
-		{modules: []string{"cellworld"}, why: "the cellworld module first: the partitioned scene's nested state types (db/def/cellworld.go) that MonsterDao and PlayerDao use, the SceneActor entity a player has on a cell, and the module's state mapping and node install point (game/modules/cellworldhost)"},
+		// 与玩家在格上的 CellPlayer 实体；demo 的 MonsterDao（下一步）与 PlayerDao 都用这些类型，所以排在写 MonsterDao 之前。它没有协议号与错误码，提前装
+		// 不影响模块步骤的分号；CellPlayer 的实体号是这时的最小空号（Player 1、World 2、Scene 3、Monster 4 之后的 5）。
+		{modules: []string{"cellworld"}, why: "the cellworld module first: the partitioned scene's nested state types (db/def/cellworld.go) that MonsterDao and PlayerDao use, the CellPlayer entity a player has on a cell, and the module's state mapping and node install point (game/modules/cellworldhost)"},
 		{write: "db/def/monster.go", why: "template, position and hp — //roost:dao nocoll, all nopersist,sync: a position still lives in a DAO, and no Mongo collection is invented for it"},
 		{write: "game/entities/monster/entity.go", why: "ephemeral, replicated, rebuilt by the spawner on every start; its MonsterBody and MonsterActor components mounted the component-package way"},
 		{write: "game/components/monsterbody/monsterbody.go", why: "where a monster is and how much of it is left, the same position rule as the Player: read and written here, nowhere else; its component type (2100) and factory registration, mounted on Monster as comp:\"monsterbody.CompTypeMonsterBody\""},
@@ -880,8 +880,10 @@ func demoModuleSteps() []demoScaffoldStep {
 		// 玩家作为分区场景的 Base（cell_base.go、cell_team.go）在 Player 上监听 attribute 与 team 模块的实体事件
 		// event.AttributeChanged、event.TeamChanged：生成器登记监听时要在 game/event 里找到这两个事件，所以排在模块安装之后写。
 		{write: "game/entities/player/cell_base.go", why: "the player as its partitioned scene's Base (cellworld.BasePlayer): routing state declared in PlayerDao and mapped by the cellworld module (cellworldhost.ReadBase / WriteBase), the battle panel from the attributes, starting the cell.base beat, and its copy of its team's roster for the team panel"},
+		{write: "internal/service/game/partition_attack_request_test.go", why: "exercise request-number replay and independent user actions in the generated partition endpoint"},
+		{write: "game/entities/player/cell_attack_request.go", why: "the player's durable, bounded attack admission receipts; retrying a numbered request must not issue another hit"},
 		{write: "game/entities/player/cell_base_test.go", why: "the demo's PlayerDao on the module's Base mapping: the stored snapshot position moves only with a write-back, a reloaded player enters where it was saved, a pending panel rolls back, and the death receipt, wallet and recovery survive a file WAL"},
-		{write: "game/entities/player/cell_team.go", why: "the team module's event.TeamChanged heard on the Player: the roster as the Base's copy (cellworld.Group: each member's Player, SceneActor and Base sid), written to this process's Node and, unless it is a periodic refresh, announced to the members before and after"},
+		{write: "game/entities/player/cell_team.go", why: "the team module's event.TeamChanged heard on the Player: the roster as the Base's copy (cellworld.Group: each member's Player, CellPlayer and Base sid), written to this process's Node and, unless it is a periodic refresh, announced to the members before and after"},
 		// 排行榜是 leaderboard 模块：读榜的两条协议（LeaderboardTop 带自己的名次、LeaderboardMe）与提交入口
 		// SubmitSeason 都是模块的；demo 只覆盖模块留给工程的业务文件——哪张榜、哪个赛季、分数范围、一屏多长——
 		// 与钉住这些数的测试。副本结算（finish_dungeon）在事务之外调模块的提交，它 import game/modules/leaderboard。

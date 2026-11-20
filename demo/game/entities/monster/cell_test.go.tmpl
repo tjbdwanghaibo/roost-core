@@ -12,7 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 )
 
-// 分区场景里的怪物走格（D5 = A）：MonsterDao 声明了与模块的 SceneActorDao 同名的 Cell* 字段，同一份映射
+// 分区场景里的怪物走格（D5 = A）：MonsterDao 声明了与模块的 CellPlayerDao 同名的 Cell* 字段，同一份映射
 // （cellworldhost.ReadActor / WriteActor，模块场景覆盖映射本身）。这里核对 demo 的 MonsterDao 接上之后整份状态读得回来、
 // 回滚整份还原。
 var _ cellworldhost.CellDao = (*db.MonsterDao)(nil)

@@ -9,7 +9,7 @@ import (
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
-	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	cell_player "{{MODULE}}/game/entities/cell_player"
 	"{{MODULE}}/game/modules/cellworldhost"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -18,8 +18,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-// 模块自带的 SceneActorDao 承载 cellworld.ActorState：工程让自己的实体走格时照它声明同名字段。
-var _ cellworldhost.CellDao = (*db.SceneActorDao)(nil)
+// 模块自带的 CellPlayerDao 承载 cellworld.ActorState：工程让自己的实体走格时照它声明同名字段。
+var _ cellworldhost.CellDao = (*db.CellPlayerDao)(nil)
 
 type nullCommitter struct{}
 
@@ -48,9 +48,9 @@ func sampleActor(id int64, kind cellworld.EntityKind, seq uint64) cellworld.Acto
 }
 
 // 映射就是整份状态：写进去的每个字段都读得回来；读出的是副本，改它不碰 DAO；回到 Real 时交接与去重表清掉。
-func TestCellworldActorStateRoundTripsThroughTheSceneActorDAO(t *testing.T) {
+func TestCellworldActorStateRoundTripsThroughTheCellPlayerDAO(t *testing.T) {
 	for _, kind := range []cellworld.EntityKind{cellworld.KindPlayer, cellworld.KindNPC} {
-		dao := db.NewSceneActorDao()
+		dao := db.NewCellPlayerDao()
 		want := sampleActor(42, kind, 10)
 		cellworldhost.WriteActor(dao, want)
 		if got := cellworldhost.ReadActor(dao, 42, kind); !reflect.DeepEqual(got, want) {
@@ -76,7 +76,7 @@ func TestCellworldActorStateRoundTripsThroughTheSceneActorDAO(t *testing.T) {
 
 // 心跳或 handler 的事务失败时，格内状态经生成 setter 的逆操作整份还原：状态放在生成 DAO 里就是为了这个。
 func TestCellworldActorStateRollsBackWithTheTransaction(t *testing.T) {
-	dao := db.NewSceneActorDao()
+	dao := db.NewCellPlayerDao()
 	before := sampleActor(42, cellworld.KindPlayer, 10)
 	cellworldhost.WriteActor(dao, before)
 	failure := errors.New("install failed after the write")
@@ -222,24 +222,24 @@ func TestCellworldPlayerStateRollsBackAndSurvivesTheStoredForm(t *testing.T) {
 	}
 }
 
-// SceneActor 只由装了 Node 的进程以 CellMode 建出：没有 Node、不是 CellMode 都拒绝；建出之后格内心跳已登记、可以启动与
+// CellPlayer 只由装了 Node 的进程以 CellMode 建出：没有 Node、不是 CellMode 都拒绝；建出之后格内心跳已登记、可以启动与
 // 换档，状态经模块的映射读写。Node 卸下之后 Base 心跳不再登记。
-func TestCellworldSceneActorNeedsTheInstalledNode(t *testing.T) {
-	scene_actor.RegisterEntity()
-	id, err := entity.BuildEntityID(31, scene_actor.EntityKindSceneActor)
+func TestCellworldCellPlayerNeedsTheInstalledNode(t *testing.T) {
+	cell_player.RegisterEntity()
+	id, err := entity.BuildEntityID(31, cell_player.EntityKindCellPlayer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	create := func(param any) error {
-		p := &entity.EntityCreateParam{IsCreate: true, Id: id, Kind: scene_actor.EntityKindSceneActor, Category: entity.EntityCategoryOther, Param: param}
-		a, err := scene_actor.NewSceneActor(p)
+		p := &entity.EntityCreateParam{IsCreate: true, Id: id, Kind: cell_player.EntityKindCellPlayer, Category: entity.EntityCategoryOther, Param: param}
+		a, err := cell_player.NewCellPlayer(p)
 		if err != nil {
 			return err
 		}
 		return a.OnInitFinish(p)
 	}
 	if err := create(cellworldhost.CellMode{}); err == nil {
-		t.Fatal("a scene actor was created on a process with no Node")
+		t.Fatal("a cell player was created on a process with no Node")
 	}
 	if reg, err := cellworldhost.RegisterBaseBeat(nil, nil); reg != nil || err != nil {
 		t.Fatalf("base beat without a Node = %v, %v; want nothing", reg, err)
@@ -252,15 +252,15 @@ func TestCellworldSceneActorNeedsTheInstalledNode(t *testing.T) {
 		t.Fatal("Install did not publish the node, scene and driver")
 	}
 	if err := create(struct{}{}); err == nil {
-		t.Fatal("a scene actor was created without CellMode")
+		t.Fatal("a cell player was created without CellMode")
 	}
-	p := &entity.EntityCreateParam{IsCreate: true, Id: id, Kind: scene_actor.EntityKindSceneActor, Category: entity.EntityCategoryOther, Param: cellworldhost.CellMode{}}
-	a, err := scene_actor.NewSceneActor(p)
+	p := &entity.EntityCreateParam{IsCreate: true, Id: id, Kind: cell_player.EntityKindCellPlayer, Category: entity.EntityCategoryOther, Param: cellworldhost.CellMode{}}
+	a, err := cell_player.NewCellPlayer(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := a.OnInitFinish(p); err != nil {
-		t.Fatalf("scene actor with the installed node: %v", err)
+		t.Fatalf("cell player with the installed node: %v", err)
 	}
 	if err := a.StartCell(); err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestCellworldSceneActorNeedsTheInstalledNode(t *testing.T) {
 	want := sampleActor(id, cellworld.KindPlayer, 3)
 	a.SetCellState(want)
 	if got := a.CellState(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("scene actor state\n got %+v\nwant %+v", got, want)
+		t.Fatalf("cell player state\n got %+v\nwant %+v", got, want)
 	}
 	a.OnDestroy(entity.DestroyReasonCommon)
 	cellworldhost.Uninstall(testNode(t)) // 只卸自己装的那一个
@@ -283,7 +283,7 @@ func TestCellworldSceneActorNeedsTheInstalledNode(t *testing.T) {
 		t.Fatal("Uninstall left the node installed")
 	}
 	if err := create(cellworldhost.CellMode{}); err == nil {
-		t.Fatal("a scene actor was created after the node was uninstalled")
+		t.Fatal("a cell player was created after the node was uninstalled")
 	}
 }
 

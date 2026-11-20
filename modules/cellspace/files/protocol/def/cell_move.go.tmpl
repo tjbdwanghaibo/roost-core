@@ -1,0 +1,18 @@
+//go:build protocoldef
+
+package protocoldef
+
+type CellMoveRequest struct {
+	VX int64 `pb:"1"`
+	VY int64 `pb:"2"`
+}
+type CellMoveResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+}
+
+//roost:protocol group=game handler=cellspace
+type CellMoveProtocol interface {
+	//roost:msg id={{ID:protocol:CellMove}}
+	CellMove(CellMoveRequest) CellMoveResponse
+}

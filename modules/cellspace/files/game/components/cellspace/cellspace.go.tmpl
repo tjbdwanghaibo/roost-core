@@ -1,0 +1,49 @@
+package cellspace
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"{{MODULE}}/game/modules/cellworldhost"
+)
+
+//roost:component type={{ID:component:Cellspace}}
+const CompTypeCellspace entity.ComponentType = {{ID:component:Cellspace}}
+
+func init() { entity.RegisterComponentFactory(CompTypeCellspace, NewComponent) }
+
+type Component struct {
+	entity.ComponentBase
+	host *heartbeat.Host
+	beat *heartbeat.Reg
+}
+
+func NewComponent(any, *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	return &Component{}, nil
+}
+func (*Component) Name() string { return "cellspace" }
+
+// Start runs under the Player lock, only on explicit enter. Loading an old document does nothing.
+func (c *Component) Start(p cellworld.BasePlayer) error {
+	if c.beat == nil {
+		d := cellworldhost.Heartbeat()
+		if d == nil {
+			return cellworldhost.ErrNoNode
+		}
+		h := d.NewHost(p)
+		b, err := cellworldhost.RegisterBaseBeat(h, p)
+		if err != nil {
+			return err
+		}
+		if b == nil {
+			return cellworldhost.ErrNoNode
+		}
+		c.host, c.beat = h, b
+	}
+	return c.beat.Start()
+}
+func (c *Component) OnDestroy(entity.EntityDestroyReason) {
+	if c.host != nil {
+		c.host.OnDestroy()
+	}
+}

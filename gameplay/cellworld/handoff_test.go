@@ -178,7 +178,7 @@ func TestHandoffAckLossResolvedByGhostUpdate(t *testing.T) {
 }
 
 // 超时只删不恢复：目标格收不到 Offer（第一次放弃之前全部丢掉）时旧格在 HandoffAbort 后删除记录、告诉 Base；之后 Base
-// 按最后位置重进（新格按快照建出 SceneActor，epoch 更大）；全程至多一个 Real。
+// 按最后位置重进（新格按快照建出 CellPlayer，epoch 更大）；全程至多一个 Real。
 //
 // 丢 Offer 的窗口按状态而不是墙钟划定（原来是“前 1.2s”）：负载下冻结 + HandoffAbort 走完可能超过 1.2s，重传的 Offer
 // 就会送达、交接成功，用例等不到放弃。现在丢到旧格真的放弃为止，之后的消息（重进）照常。

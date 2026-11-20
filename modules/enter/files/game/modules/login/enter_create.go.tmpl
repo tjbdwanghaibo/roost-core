@@ -70,7 +70,25 @@ type Loads struct {
 // “先新建”的会话（CreateFirst）用 Existing，别的会话用 LoadOrCreate——没有登记规则的工程永远是后者，
 // 与直接调 Enter(…, LoadOrCreate) 相同。
 func EnterSession(ctx context.Context, registry *app.Registry, entering Entering, loads Loads) (Entered, error) {
-	return EnterSessionWithPlacement(ctx, registry, entering, loads, nil)
+	var place sessionPlacement
+	if registry != nil {
+		if v, found := registry.Get(sessionPlacementKey); found {
+			var ok bool
+			if place, ok = v.(sessionPlacement); !ok || place == nil { return Entered{}, fmt.Errorf("enter: invalid session placement") }
+		}
+	}
+	return EnterSessionWithPlacement(ctx, registry, entering, loads, place)
+}
+
+const sessionPlacementKey app.ModName = "game.login.session_placement"
+type sessionPlacement func(context.Context, Entered) error
+
+// InstallSessionPlacement gives the standard enter endpoint one placement action for this
+// service registry only. Install at startup; a second host cannot replace it. A normal
+// project needs no registration. Explicit EnterSessionWithPlacement remains request-scoped.
+func InstallSessionPlacement(r *app.Registry, place func(context.Context, Entered) error) error {
+	if r == nil || place == nil { return fmt.Errorf("enter: session placement requires a registry and a callback") }
+	return r.Register(sessionPlacementKey, sessionPlacement(place))
 }
 
 // EnterSessionWithPlacement 与 EnterSession 走同一条路，只在初始化提交后、RunEntered 之前多一个宿主步骤。

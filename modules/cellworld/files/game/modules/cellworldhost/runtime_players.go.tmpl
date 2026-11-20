@@ -1,0 +1,56 @@
+package cellworldhost
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// PlayerIDs translates a project's Player kind and the installer-allocated CellPlayer kind.
+// No lookup or call to an ID allocator: reloading a Base always addresses the same actor.
+// Pass the generated player.EntityKindPlayer; its category need not match the demo's.
+type PlayerIDs struct{ BaseKind entity.EntityKind }
+
+const cellPlayerKind entity.EntityKind = {{ID:entity:CellPlayer}}
+
+func (p PlayerIDs) Base(unique int64) (int64, error) { return entity.BuildEntityID(unique, p.BaseKind) }
+
+func canonical(id int64, kind entity.EntityKind) bool {
+	expected, err := entity.BuildEntityID(entity.GetUniqueIDFromEntityID(id), kind)
+	return err == nil && expected == id
+}
+
+// Actor takes a full Player EntityID, not a client/player unique number.
+func (p PlayerIDs) Actor(base int64) (int64, error) {
+	if !canonical(base, p.BaseKind) {
+		return 0, fmt.Errorf("cellworld: invalid Base ID %d", base)
+	}
+	return entity.BuildEntityID(entity.GetUniqueIDFromEntityID(base), cellPlayerKind)
+}
+
+// FromActor is the NodeConfig.PlayerEntity callback. Never treat an NPC or malformed ID as a Player.
+func (p PlayerIDs) FromActor(actor int64) int64 {
+	if !canonical(actor, cellPlayerKind) {
+		return 0
+	}
+	id, _ := p.Base(entity.GetUniqueIDFromEntityID(actor))
+	return id
+}
+
+// CreatePlayer is called under the Node's Nest transaction. Create joins the transaction;
+// no out-of-band allocation, lifecycle load, or second heartbeat is involved.
+func CreatePlayer(access *entity.ManagerAccess, id int64, kind cellworld.EntityKind) (cellworld.Actor, error) {
+	if access == nil || kind != cellworld.KindPlayer || !canonical(id, cellPlayerKind) {
+		return nil, fmt.Errorf("cellworld: invalid player factory request kind=%v id=%d", kind, id)
+	}
+	e, err := access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: cellPlayerKind, Category: entity.EntityCategoryOther, Param: CellMode{}})
+	if err != nil {
+		return nil, err
+	}
+	a, ok := e.(cellworld.Actor)
+	if !ok {
+		return nil, fmt.Errorf("cellworld: %T does not implement Actor", e)
+	}
+	return a, nil
+}
