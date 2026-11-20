@@ -781,14 +781,18 @@ func TestTerrainPartitionGhostBandSeesNeighbourBuildings(t *testing.T) {
 	terrainmap.Install(a.process.m)
 	// 占地提交之后拥有者立即推送（SetLotsCommitted → Replicator.Changed），不等订阅每秒续期时的补齐：小屋不整平地面，
 	// 块本身没变，这次推送只能来自占地的提交通知。只看“到了没有”抓不到它（续期 1s 内照样补齐），所以数拥有者的推送。
+	// Only B subscribes to A in this two-cell fixture. Subscribers is published after the
+	// owner installs the key set. A placement during the initial handshake can correctly
+	// reach B in its initial snapshot; that is not evidence about commit-triggered pushes.
+	waitFor(t, "B's ghost subscription installed at A before placement", func() bool { return a.pt.rep.Stats().Subscribers == 1 })
 	pushedBefore := a.pt.rep.Stats().PushedOut
 	if _, err := a.process.m.Place(context.Background(), relayPlayer, 1, hut(250, 20)); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the neighbour's ghost band takes the building's lot", func() bool { return b.process.m.Occupied(relayLeft, index) })
-	if pushed := a.pt.rep.Stats().PushedOut - pushedBefore; pushed == 0 {
-		t.Fatalf("the lot reached the neighbour without a push after the commit (only the renewal filled it in): %+v", a.pt.rep.Stats())
-	}
+	// Sender stats are updated after handing the packet to B; B may apply it first.
+	// A refresh or initial snapshot never increments PushedOut and cannot satisfy this.
+	waitFor(t, "the owner's commit-triggered push (a subscription refresh is not a push)", func() bool { return a.pt.rep.Stats().PushedOut > pushedBefore })
 	if walkable(b) || walkable(a) {
 		t.Fatal("a walker steps into the building")
 	}
