@@ -8,6 +8,7 @@ import (
 	"time"
 
 	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -18,16 +19,31 @@ type attackTestLedger struct {
 
 type numberedTestPlayer struct {
 	*testPlayer
-	ledger undoCell[attackTestLedger]
+	ledger     undoCell[attackTestLedger]
+	reads      atomic.Int32
+	rejectNext atomic.Bool
+}
+
+func newNumberedTestPlayer(unique int64) *numberedTestPlayer {
+	return &numberedTestPlayer{testPlayer: &testPlayer{
+		EntityBase: fentity.NewEntityBase(playerEntityID(unique), fentity.EntityCategoryPlayer, true, kindTPlayer),
+		dao:        &undoCell[BaseState]{}, group: &undoCell[Group]{},
+	}}
 }
 
 func (p *numberedTestPlayer) CellAttackSlot(slot int64) (int64, AttackReceipt) {
+	p.reads.Add(1)
 	return p.ledger.v.high, p.ledger.v.slots[slot]
 }
 func (p *numberedTestPlayer) SetCellAttackSlot(slot, high int64, receipt AttackReceipt) {
 	s := p.ledger.v
 	s.high, s.slots[slot] = high, receipt
 	p.ledger.set(s)
+	if p.rejectNext.Swap(false) {
+		if err := nest.CurrentRollbackTx().RegisterCommitParticipant(rejectSessionCommit{}); err != nil {
+			panic(err)
+		}
+	}
 }
 
 // No watchdog needed: both cells and the Base stay up throughout this test.
@@ -52,7 +68,7 @@ func TestNumberedAttackReplayAfterUnknownAndTargetDedupExpiry(t *testing.T) {
 	if _, err := w.base.node.AttackWithRequest(context.Background(), old.ID(), npcID(11), 7, 1); !errors.Is(err, ErrAttackLedgerMissing) {
 		t.Fatalf("missing durable ledger: %v", err)
 	}
-	p := &numberedTestPlayer{testPlayer: &testPlayer{EntityBase: fentity.NewEntityBase(playerEntityID(1), fentity.EntityCategoryPlayer, true, kindTPlayer), dao: &undoCell[BaseState]{}, group: &undoCell[Group]{}}}
+	p := newNumberedTestPlayer(1)
 	w.base.manager.Add(p)
 	if err := w.base.sync.OpenSession(1); err != nil {
 		t.Fatal(err)

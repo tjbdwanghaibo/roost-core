@@ -97,7 +97,11 @@ type NodeConfig struct {
 
 	// PlayerEntity 把角色（CellPlayer）ID 换成本进程 Player 实体 ID。
 	PlayerEntity func(actorID int64) int64
-	// SessionActive 是可选的本地传输表查询，不得等待网络、Nest 或取得实体锁。
+	// ReuseSavedPosition lets a host whose Player also owns a saved map position
+	// use that nonzero position before the first Cell writeback. Bounds are still
+	// checked in the Player transaction. A versioned snapshot can include (0,0).
+	ReuseSavedPosition bool
+	// SessionActive 查询已认证的本地传输表：连接仍活跃且属于此玩家才返回 true。不得等待网络、Nest 或取得实体锁。
 	// ReconnectGrace 从确认当前物理连接离线开始，零表示立即离场。仅 AdmitSession 使用。
 	SessionActive  func(playerEntity int64, connectionID string) bool
 	ReconnectGrace time.Duration
@@ -936,7 +940,7 @@ func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
 		{hInput, (*Node).handleInput}, {hAttack, (*Node).handleAttack}, {hImplied, (*Node).handleImplied},
 		{hOwnerResult, (*Node).handleOwnerResult}, {hSpawn, (*Node).handleSpawn}, {hInspect, (*Node).handleInspect}, {hTier, (*Node).handleTier},
 		{hBase, (*Node).handleBase}, {hBaseCmd, (*Node).handleBaseCmd}, {hBaseEnter, (*Node).handleBaseCmd},
-		{hBaseAttackRequest, (*Node).handleAttackRequest},
+		{hBaseAttackRequest, (*Node).handleBaseCmd},
 	} {
 		run := entry.run
 		handler := func(es []fentity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (any, error) {

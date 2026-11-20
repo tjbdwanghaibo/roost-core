@@ -5,7 +5,26 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
+
+// ConnectionSession extracts a server-issued transport identity. An account SessionID can
+// survive reconnects, so it is never sufficient by itself (even with a matching PlayerID).
+func ConnectionSession(unique int64, s gateway.Session) (cellworld.BaseSession, error) {
+	c, ok := s.(interface {
+		ConnectionID() string
+		Admission() uint64
+	})
+	if !ok {
+		return cellworld.BaseSession{}, cellworld.ErrStaleSession
+	}
+	p := s.Principal()
+	id := cellworld.BaseSession{SessionID: p.SessionID, ConnectionID: c.ConnectionID(), Admission: c.Admission()}
+	if !p.Authenticated() || p.PlayerID != unique || id.ConnectionID == "" || id.Admission == 0 {
+		return cellworld.BaseSession{}, cellworld.ErrStaleSession
+	}
+	return id, nil
+}
 
 // PlayerIDs translates a project's Player kind and the installer-allocated CellPlayer kind.
 // No lookup or call to an ID allocator: reloading a Base always addresses the same actor.

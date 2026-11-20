@@ -142,18 +142,20 @@ const (
 	cmdAdmit
 	cmdSessionMove
 	cmdDisconnect
+	cmdSessionAttack
 )
 
 type baseCmd struct {
-	kind     baseCmdKind
-	actor    int64
-	pos      spatial.Point
-	hp       int32
-	vx, vy   int64
-	target   int64
-	amount   int32
-	session  BaseSession
-	closedAt time.Time
+	kind      baseCmdKind
+	actor     int64
+	pos       spatial.Point
+	hp        int32
+	vx, vy    int64
+	target    int64
+	amount    int32
+	requestID int64
+	session   BaseSession
+	closedAt  time.Time
 }
 
 // Enter 让 Player（playerEntity）以 CellPlayer actor 在 pos 进入分区 Scene。Player 已有快照（之前回写过）时 hp 被快照覆盖。
@@ -170,11 +172,7 @@ func (n *Node) Move(ctx context.Context, playerEntity int64, vx, vy int64) error
 
 // Attack 让玩家攻击 target，结论经 Hooks.AttackResult 回来。owner 未知时返回 ErrNotInWorld。
 func (n *Node) Attack(ctx context.Context, playerEntity, target int64, amount int32) (HitID, error) {
-	out, err := n.cfg.Nest.Request(ctx, hBaseCmd, playerEntity, nest.Params{baseCmd{kind: cmdAttack, target: target, amount: amount}})
-	if err != nil {
-		return HitID{}, err
-	}
-	return out.(HitID), nil
+	return n.AttackWithRequest(ctx, playerEntity, target, amount, 0)
 }
 
 // Leave 让玩家离开分区 Scene（尽力而为：消息丢了由 CellPlayer 的租约兜底离场）。
@@ -279,8 +277,8 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 				}
 				return st, nil
 			}
-			if st.SnapVer != (Version{}) && n.cfg.Grid.Bounds().Contains(st.Pos()) {
-				cmd.pos = st.Pos()
+			if at := st.Pos(); (st.SnapVer != (Version{}) || (n.cfg.ReuseSavedPosition && at != (spatial.Point{}))) && n.cfg.Grid.Bounds().Contains(at) {
+				cmd.pos = at
 			}
 		}
 		if st.InWorld {
@@ -295,12 +293,10 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		if prev.Entry == ^uint64(0) {
 			return nil, errors.New("cellworld: entry sequence exhausted")
 		}
-		st = BaseState{Actor: cmd.actor, InWorld: true, X: cmd.pos.X, Y: cmd.pos.Y, HP: cmd.hp,
+		// 无会话进场也不能清除已有的连接接替记录；从未绑定的旧调用方仍是零值。
+		st = BaseState{Session: prev.Session, Actor: cmd.actor, InWorld: true, X: cmd.pos.X, Y: cmd.pos.Y, HP: cmd.hp,
 			SnapVer: prev.SnapVer, IntentSeq: prev.IntentSeq, AttackSeq: prev.AttackSeq, LostEpoch: prev.LostEpoch, Panel: prev.Panel, PanelAcked: prev.PanelAcked,
 			Entry: prev.Entry + 1, Recovery: prev.Recovery.At(now)}
-		if cmd.kind == cmdAdmit {
-			st.Session = prev.Session
-		}
 		if prev.SnapVer != (Version{}) {
 			st.HP = prev.HP
 		}
@@ -319,7 +315,7 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		if !st.InWorld {
 			return nil, ErrNotInWorld
 		}
-		if cmd.kind == cmdSessionMove && (st.Session.BaseSession != cmd.session || st.Session.OfflineAt != 0 || !n.sessionLive(p, cmd.session)) {
+		if cmd.kind == cmdSessionMove && !n.currentSession(p, st.Session, cmd.session) {
 			return nil, ErrStaleSession
 		}
 		n.setVelocity(&st, cmd.vx, cmd.vy, now, fx)
@@ -331,12 +327,8 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		if n.graceElapsed(&st, now) {
 			n.leaveBase(p, &st, now, fx)
 		}
-	case cmdAttack:
-		hit, err := prepareAttack(&st, cmd.target, cmd.amount, fx)
-		if err != nil {
-			return nil, err
-		}
-		ret = hit
+	case cmdAttack, cmdSessionAttack:
+		return n.admitAttack(p, &st, cmd, fx)
 	case cmdPanel:
 		n.panelChanged(&st, p.CellPanel(), now, fx)
 	case cmdLeave:

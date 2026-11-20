@@ -2,6 +2,7 @@ package player
 
 import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"{{MODULE}}/db"
 	"{{MODULE}}/game/modules/cellworldhost"
 )
 
@@ -14,17 +15,19 @@ func (p *Player) CellAttackSlot(slot int64) (int64, cellworld.AttackReceipt) {
 func (p *Player) SetCellAttackSlot(slot, high int64, r cellworld.AttackReceipt) {
 	cellworldhost.WriteAttackSlot(p.dao.GetCellworldBase(), slot, high, r)
 }
+type partitionBaseDao struct{ *db.PlayerDao }
+
+func (d partitionBaseDao) SocketIDs() (string, string) { return d.GetCellSessionID(), d.GetCellConnectionID() }
+func (d partitionBaseDao) SetSocketIDs(sid, nonce string) {
+	d.SetCellSessionID(sid)
+	d.SetCellConnectionID(nonce)
+}
+
 func (p *Player) BaseState() cellworld.BaseState {
-	s := cellworldhost.ReadBase(p.dao, cellworldhost.SceneID())
-	s.Session = cellworld.SessionState{BaseSession: cellworld.BaseSession{SessionID: p.dao.GetCellSessionID(), ConnectionID: p.dao.GetCellConnectionID(), Admission: p.dao.GetCellAdmission()}, OfflineAt: p.dao.GetCellOfflineAt()}
-	return s
+	return cellworldhost.ReadSessionBase(partitionBaseDao{p.dao}, cellworldhost.SceneID())
 }
 func (p *Player) SetBaseState(s cellworld.BaseState) {
-	cellworldhost.WriteBase(p.dao, s, cellworldhost.SceneID())
-	p.dao.SetCellSessionID(s.Session.SessionID)
-	p.dao.SetCellConnectionID(s.Session.ConnectionID)
-	p.dao.SetCellAdmission(s.Session.Admission)
-	p.dao.SetCellOfflineAt(s.Session.OfflineAt)
+	cellworldhost.WriteSessionBase(partitionBaseDao{p.dao}, s, cellworldhost.SceneID())
 }
 func (p *Player) CellPanel() cellworld.Panel { return cellworld.Panel{} }
 func (p *Player) StopBase()                  { p.CellspaceComp().Stop() }

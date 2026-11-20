@@ -179,6 +179,20 @@ func TestCellworldPlayerStateRollsBackAndSurvivesTheStoredForm(t *testing.T) {
 	}
 	dao := db.NewPlayerDao()
 	dao.SetId(id)
+	// The minimal module-only host lacks session fields; the recipe and game-demo
+	// exercise the same tests on their real generated PlayerDao.
+	basePlayer := func(d *db.PlayerDao) cellworld.BasePlayer {
+		if _, ok := any((*player.Player)(nil)).(cellworld.BasePlayer); !ok {
+			return nil
+		}
+		e, err := entity.BuildEntity(&entity.EntityCreateParam{Id: id, Kind: player.EntityKindPlayer, Dao: map[string]entity.DaoInterface{db.PlayerDaoCollection: d}})
+		if err != nil { t.Fatal(err) }
+		return e.(cellworld.BasePlayer)
+	}
+	p := basePlayer(dao)
+	conn := func(revision uint64) cellworld.SessionState {
+		return cellworld.SessionState{BaseSession: cellworld.BaseSession{SessionID: []string{"", "account1", "account2"}[revision], ConnectionID: []string{"", "nonce1", "nonce2"}[revision], Admission: revision}, OfflineAt: int64(revision)}
+	}
 	recovery := func(revision uint64) *db.CellRecovery {
 		r := &db.CellRecovery{}
 		r.SetRevision(revision)
@@ -194,6 +208,11 @@ func TestCellworldPlayerStateRollsBackAndSurvivesTheStoredForm(t *testing.T) {
 		_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "cellworld_player_state", func() (any, error) {
 			if err := cellworldhost.RecordDeathReceipt(dao.GetCellworldBase(), target, life, 8); err != nil {
 				return nil, err
+			}
+			if p != nil {
+				st := p.BaseState()
+				st.Session = conn(revision)
+				p.SetBaseState(st)
 			}
 			dao.GetCellworldBase().SetRecovery(recovery(revision))
 			return nil, fail
@@ -215,6 +234,19 @@ func TestCellworldPlayerStateRollsBackAndSurvivesTheStoredForm(t *testing.T) {
 	restored.SetId(id)
 	if err := restored.RestorePersisted(dao.MarshalPersist(dataengine.AllFields), db.PlayerDaoSchemaVersion, 1); err != nil {
 		t.Fatal(err)
+	}
+	if p != nil {
+		if got := p.BaseState().Session; got != conn(1) {
+			t.Fatalf("session was not restored by rollback: %+v", got)
+		}
+		if got := basePlayer(restored).BaseState().Session; got != (cellworld.SessionState{}) {
+			t.Fatalf("session survived restore: %+v", got)
+		}
+		for _, field := range []string{"CellSocketIDs", "CellSessionID", "CellConnectionID", "CellAdmission", "CellOfflineAt"} {
+			if _, ok := dataengine.SyncFieldByName(db.PlayerDaoSyncFields(), field); ok {
+				t.Fatalf("private connection field %s is exposed to clients", field)
+			}
+		}
 	}
 	again := restored.GetCellworldBase()
 	if cellworldhost.DeathReceipt(again, 781) != 9 || again.GetRecovery().GetRevision() != 1 || again.GetRecovery().EffectsLen() != 1 {

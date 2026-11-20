@@ -382,6 +382,38 @@ type BaseDao interface {
 	SetCellGroupViewVer(uint64)
 }
 
+// SessionBaseDao is the Base DAO for a host with volatile transport bindings. The
+// identity pair is adapted by the host: two legacy fields in the recipe, a fixed pair
+// in one []string in the demo (64-field budget). Both use undo-tracked setters.
+type SessionBaseDao interface {
+	BaseDao
+	SocketIDs() (string, string)
+	SetSocketIDs(string, string)
+	GetCellAdmission() uint64
+	SetCellAdmission(uint64)
+	GetCellOfflineAt() int64
+	SetCellOfflineAt(int64)
+}
+
+func ReadSessionBase(d SessionBaseDao, sceneID int64) cellworld.BaseState {
+	s := ReadBase(d, sceneID)
+	sid, nonce := d.SocketIDs()
+	s.Session = cellworld.SessionState{
+		BaseSession: cellworld.BaseSession{SessionID: sid, ConnectionID: nonce, Admission: d.GetCellAdmission()},
+		OfflineAt: d.GetCellOfflineAt(),
+	}
+	return s
+}
+
+func WriteSessionBase(d SessionBaseDao, s cellworld.BaseState, sceneID int64) {
+	WriteBase(d, s, sceneID)
+	if sid, nonce := d.SocketIDs(); sid != s.Session.SessionID || nonce != s.Session.ConnectionID {
+		d.SetSocketIDs(s.Session.SessionID, s.Session.ConnectionID)
+	}
+	d.SetCellAdmission(s.Session.Admission)
+	d.SetCellOfflineAt(s.Session.OfflineAt)
+}
+
 // ReadBase 从 Player 的 DAO 读出分区路由状态。快照位置取 PosX / PosY（实时，随 witness 更新）；HP 与快照版本取持久的
 // CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 CellPlayer。面板与 Real 已确认的序号
 // （CellPanelAcked）也持久：序号跨 Base 重启单调。Base 重启后重新装载的 Player 不在世界里、实时位置是零（PosX / PosY

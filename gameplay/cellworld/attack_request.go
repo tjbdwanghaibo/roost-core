@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 
-	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
@@ -37,70 +36,77 @@ type AttackRequestPlayer interface {
 	SetCellAttackSlot(slot, high int64, receipt AttackReceipt)
 }
 
-type attackCommand struct {
-	requestID int64
-	target    int64
-	amount    int32
-}
-
 // AttackWithRequest returns the original admission receipt on replay; it never sends a second
 // attack on replay, even when no verdict arrived. Zero preserves the old Attack semantics.
 func (n *Node) AttackWithRequest(ctx context.Context, playerEntity, target int64, amount int32, requestID int64) (HitID, error) {
-	if requestID == 0 {
-		return n.Attack(ctx, playerEntity, target, amount)
-	}
 	if requestID < 0 {
 		return HitID{}, ErrAttackRequestInvalid
 	}
-	out, err := n.cfg.Nest.Request(ctx, hBaseAttackRequest, playerEntity, nest.Params{attackCommand{requestID, target, amount}})
+	return n.requestAttack(ctx, playerEntity, baseCmd{kind: cmdAttack, target: target, amount: amount, requestID: requestID})
+}
+
+// AttackSession 只接受当前在线连接的攻击。在同一笔 Player 事务中先核验会话，再按
+// AttackWithRequest 的规则处理：无号为一次新攻击，带号可重放原回执，不等待 Cell 结算。
+// 冷恢复后尚无绑定且未进场时，本玩家的活连接只能查旧回执。session 须来自已认证的本机连接。
+func (n *Node) AttackSession(ctx context.Context, base int64, session BaseSession, target int64, damage int32, requestID int64) (HitID, error) {
+	return n.requestAttack(ctx, base, baseCmd{kind: cmdSessionAttack, session: session, target: target, amount: damage, requestID: requestID})
+}
+
+func (n *Node) requestAttack(ctx context.Context, base int64, cmd baseCmd) (HitID, error) {
+	handler := hBaseCmd // 无号保持 async，带号回执必须 strict。
+	if cmd.requestID != 0 {
+		handler = hBaseAttackRequest
+	}
+	out, err := n.cfg.Nest.Request(ctx, handler, base, nest.Params{cmd})
 	if err != nil {
 		return HitID{}, err
 	}
 	return out.(HitID), nil
 }
 
-func (n *Node) handleAttackRequest(es []fentity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-	p, err := playerOf(es)
-	if err != nil {
-		return nil, err
-	}
-	ledger, ok := p.(AttackRequestPlayer)
-	if !ok {
-		return nil, ErrAttackLedgerMissing
-	}
-	cmd := params[0].(attackCommand)
-	slot := cmd.requestID % AttackRequestWindow
-	high, old := ledger.CellAttackSlot(slot)
-	if cmd.requestID <= high-AttackRequestWindow {
-		return nil, ErrAttackRequestExpired
-	}
-	// Read before consulting volatile routing state: reconnect/recovery can leave it empty.
-	if old.RequestID == cmd.requestID {
-		if old.Target != cmd.target {
-			return nil, ErrAttackRequestConflict
+// admitAttack 在一笔 Player 事务内处理会话检查、请求号和出手。
+func (n *Node) admitAttack(p BasePlayer, st *BaseState, cmd baseCmd, fx *txEffects) (HitID, error) {
+	if cmd.kind == cmdSessionAttack && !n.currentSession(p, st.Session, cmd.session) {
+		// 冷 Base 可以没有路由和绑定，却已从 WAL 恢复回执。只开放带号读取；未命中
+		// 会在下面的 InWorld 检查返回，不写账本。正常离场保留 Admission，不走此例外。
+		if st.InWorld || st.Session != (SessionState{}) || !n.sessionLive(p, cmd.session) {
+			return HitID{}, ErrStaleSession
 		}
-		return old.Hit, nil
 	}
-	st := p.BaseState()
-	fx := &txEffects{}
-	hit, err := prepareAttack(&st, cmd.target, cmd.amount, fx)
-	if err != nil {
-		return nil, err
+	var ledger AttackRequestPlayer
+	var slot, high int64
+	if cmd.requestID < 0 {
+		return HitID{}, ErrAttackRequestInvalid
 	}
-	ledger.SetCellAttackSlot(slot, max(high, cmd.requestID), AttackReceipt{RequestID: cmd.requestID, Target: cmd.target, Hit: hit})
-	p.SetBaseState(st)
-	n.registerCommit(fx)
-	return hit, nil
-}
-
-// Only a newly admitted operation may reach this function. Seq is for display; ID identifies
-// the internal Hit, not the client operation. No publication before the player commits.
-func prepareAttack(st *BaseState, target int64, amount int32, fx *txEffects) (HitID, error) {
+	if cmd.requestID > 0 {
+		var ok bool
+		ledger, ok = p.(AttackRequestPlayer)
+		if !ok {
+			return HitID{}, ErrAttackLedgerMissing
+		}
+		slot = cmd.requestID % AttackRequestWindow
+		var old AttackReceipt
+		high, old = ledger.CellAttackSlot(slot)
+		if cmd.requestID <= high-AttackRequestWindow {
+			return HitID{}, ErrAttackRequestExpired
+		}
+		if old.RequestID == cmd.requestID {
+			if old.Target != cmd.target {
+				return HitID{}, ErrAttackRequestConflict
+			}
+			return old.Hit, nil
+		}
+	}
 	if !st.InWorld || st.Cell == 0 {
 		return HitID{}, ErrNotInWorld
 	}
 	st.AttackSeq++
 	hit := HitID{Attacker: st.Actor, Seq: st.AttackSeq, ID: rand.Text()}
-	fx.send(st.Cell, &wireMsg{Kind: kindAttack, Attack: &attackReq{Hit: hit, Entry: st.Entry, Target: target, Amount: amount}})
+	if ledger != nil {
+		ledger.SetCellAttackSlot(slot, max(high, cmd.requestID), AttackReceipt{RequestID: cmd.requestID, Target: cmd.target, Hit: hit})
+	}
+	p.SetBaseState(*st)
+	fx.send(st.Cell, &wireMsg{Kind: kindAttack, Attack: &attackReq{Hit: hit, Entry: st.Entry, Target: cmd.target, Amount: cmd.amount}})
+	n.registerCommit(fx)
 	return hit, nil
 }

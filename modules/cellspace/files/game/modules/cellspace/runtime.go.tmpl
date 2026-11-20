@@ -134,19 +134,11 @@ func (rt *Runtime) Stop(ctx context.Context) error {
 
 // 已认证 TCP 连接的接受序号来自服务端（旧客户端不必发送 Generation）。
 func identity(unique int64, s gateway.Session) (cellworld.BaseSession, error) {
-	c, ok := s.(interface {
-		ConnectionID() string
-		Admission() uint64
-	})
-	if !ok {
-		return cellworld.BaseSession{}, apperrors.ErrCellspaceStaleSession
+	id, err := cellworldhost.ConnectionSession(unique, s)
+	if errors.Is(err, cellworld.ErrStaleSession) {
+		return id, apperrors.ErrCellspaceStaleSession
 	}
-	p := s.Principal()
-	id := cellworld.BaseSession{SessionID: p.SessionID, ConnectionID: c.ConnectionID(), Admission: c.Admission()}
-	if p.PlayerID != unique || !p.Authenticated() || id.ConnectionID == "" || id.Admission == 0 {
-		return cellworld.BaseSession{}, apperrors.ErrCellspaceStaleSession
-	}
-	return id, nil
+	return id, err
 }
 
 // 传输回调仅尝试投递；检查是否仍是当前连接和清零速度必须在同一 Player 事务。

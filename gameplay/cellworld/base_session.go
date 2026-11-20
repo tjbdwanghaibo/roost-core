@@ -58,6 +58,11 @@ func (n *Node) DisconnectSession(ctx context.Context, base int64, sessionID, con
 	return n.cfg.Nest.Dispatch(ctx, hBaseCmd, base, nest.Params{baseCmd{kind: cmdDisconnect, session: BaseSession{SessionID: sessionID, ConnectionID: connectionID}, closedAt: time.Now()}})
 }
 
+// currentSession 在玩家事务内同时确认绑定、离线标记与本地连接存活。
+func (n *Node) currentSession(p BasePlayer, current SessionState, s BaseSession) bool {
+	return current.BaseSession == s && current.OfflineAt == 0 && n.sessionLive(p, s)
+}
+
 func (n *Node) sessionLive(p BasePlayer, s BaseSession) bool {
 	return s.Admission != 0 && s.SessionID != "" && s.ConnectionID != "" && n.cfg.SessionActive != nil && n.cfg.SessionActive(p.ID(), s.ConnectionID)
 }

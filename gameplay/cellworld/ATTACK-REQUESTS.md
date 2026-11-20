@@ -17,4 +17,6 @@
 
 **准入不是结算。** `AttackTargetResponse.Code == 0` 仅确认 Base 接受过此操作，`Seq/AttackID` 用于关联异步的 `AttackResultPush`。提交后的发包可能丢失；甚至可能在 WAL 落盘后、发布前退出。重放能找回回执，但不会再发攻击以“补救”这种不确定性。只有 Cell 的结论可以说明 `applied` / `rejected`；`unknown` 或未收到推送时保持未知。这里不提供可靠最终送达、结论重播或无限期查询。
 
-**接入。** 普通 `Node.Attack` 与 `BasePlayer` 无需变更。带号请求走 `Node.AttackWithRequest`；玩家需实现可选 `AttackRequestPlayer`，把高水位和槽写入该玩家的持久私有 DAO。生成工程使用 `PlayerDao.CellworldBase`（`nosync`）；回滚还原槽、高水位和显示序号，没有提交后发件。手工接入若缺少持久账本则失败，绝不回退到内存去重或无号攻击。新客户端启用带号重试前必须完成服务器升级；旧服可能忽略未知 protobuf 字段。
+**会话接入。** 来自已认证物理连接的攻击用 `Node.AttackSession`，传入本机连接身份，而不是客户端自报的身份。与 `MoveSession` 一样，Base 在玩家事务内先确认身份仍是当前绑定、未离线、且 `SessionActive` 确认此连接属于该玩家并仍活跃，再查请求号或出手。被接替的活连接即使知道原号也不能查询、占号或发无号攻击。仅冷恢复后既未入场又没有任何会话绑定记录时，属于该玩家的活连接可以**只读**查询正号回执：同目标取回原 HitID，冲突、过期照常报错，新号及无号报 `ErrNotInWorld`，负号报 `ErrAttackRequestInvalid`，不占号、不出手。正常离场保留的 Admission 高水位不能走此例外。
+
+**兼容接入。** 无会话调用方的 `Node.Attack` 与 `BasePlayer` 无需变更。带号请求走 `Node.AttackWithRequest`；玩家需实现可选 `AttackRequestPlayer`，把高水位和槽写入该玩家的持久私有 DAO。生成工程使用 `PlayerDao.CellworldBase`（`nosync`）；回滚还原槽、高水位和显示序号，没有提交后发件。手工接入若缺少持久账本则失败，绝不回退到内存去重或无号攻击。新客户端启用带号重试前必须完成服务器升级；旧服可能忽略未知 protobuf 字段。

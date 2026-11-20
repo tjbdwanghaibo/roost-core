@@ -36,6 +36,33 @@ func TestEntryAdvancesPersistedCounterWithoutWallClock(t *testing.T) {
 	}
 }
 
+func TestEnsureEntryUsesOnlyAValidSavedPosition(t *testing.T) {
+	spawn := spatial.Point{X: 100, Y: 100}
+	saved := spatial.Point{X: 208, Y: 420}
+	for _, tc := range []struct {
+		name          string
+		use, snapshot bool
+		at, want      spatial.Point
+	}{
+		{"default_starter", false, false, saved, spawn}, {"demo_old_position", true, false, saved, saved},
+		{"absent", true, false, spatial.Point{}, spawn}, {"out_of_bounds", true, false, spatial.Point{X: -1}, spawn},
+		{"versioned_origin", false, true, spatial.Point{}, spatial.Point{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := BaseState{X: tc.at.X, Y: tc.at.Y}
+			if tc.snapshot {
+				st.SnapVer = Version{Epoch: 1, Seq: 1}
+			}
+			p := &entryPlayer{testPlayer: &testPlayer{dao: &undoCell[BaseState]{v: st}}}
+			n := &Node{cfg: NodeConfig{Grid: worldGrid(t, 1, 1), ReuseSavedPosition: tc.use}, out: make(chan job, 4)}
+			_, err := n.handleBaseCmd([]fentity.IThreadSafeEntity{p}, []any{baseCmd{kind: cmdEnsureEnter, actor: actorID(1), pos: spawn, hp: 100}})
+			if err != nil || p.BaseState().Pos() != tc.want {
+				t.Fatalf("entry at %v, want %v: %v", p.BaseState().Pos(), tc.want, err)
+			}
+		})
+	}
+}
+
 func TestAttackIdentitySurvivesResetSequence(t *testing.T) {
 	state := BaseState{Actor: actorID(1), InWorld: true, Cell: 101, Entry: 1}
 	attack := func() HitID {
