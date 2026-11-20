@@ -1,0 +1,5 @@
+https://play.example.com:00443 rejected: config: portal.cors_origins entry "https://play.example.com:00443" names the default port, which browsers leave out of Origin; write "https://play.example.com"
+https://play.example.com accepted, Origin https://play.example.com, preflight 204
+PASS pretag-scope selection
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	0.005s
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	0.008s

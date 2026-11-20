@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	1.519s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	5.187s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats	0.006s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	1.039s

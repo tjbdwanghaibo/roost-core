@@ -1,0 +1,158 @@
+--- a/internal/service/game/scene_movement_test.go
++++ b/internal/service/game/scene_movement_test.go
+@@ -3,0 +4 @@
++	"bytes"
+@@ -6,0 +8 @@
++	"log/slog"
+@@ -7,0 +10 @@
++	"strings"
+@@ -91,2 +94,3 @@
+-	mu sync.Mutex
+-	at map[int64]spatial.Point
++	mu     sync.Mutex
++	at     map[int64]spatial.Point
++	writes map[int64]int
+@@ -105,0 +110,4 @@
++				if s.writes == nil {
++					s.writes = make(map[int64]int)
++				}
++				s.writes[mutation.Key.ID]++
+@@ -1299,0 +1308,138 @@
++
++func TestReviewSavedOrigin(t *testing.T) {
++	cfg := gamescene.DefaultConfig()
++	cfg.Spawn = spatial.Point{X: 400, Y: 410}
++	cfg.PlayerCapacity = 1
++	w := newMoveWorldOn(t, cfg)
++	p := newScenePlayer(t, 9922)
++	w.entities.Add(p)
++	const sid int32 = 1001
++	source := spatial.Point{X: 620, Y: 540}
++	_, err := w.engine.Request(w.ctx, sharedBodyWrite, p.ID(), nest.NewParams(func() error {
++		p.Dao().SetSavedPosX(source.X)
++		p.Dao().SetSavedPosY(source.Y)
++		s := p.Dao().GetRehome()
++		s.SetPendingID("transfer-A")
++		s.SetPendingFrom(1000)
++		s.SetPendingTo(sid)
++		return nil
++	}))
++	if err != nil {
++		t.Fatal(err)
++	}
++	place := func() (spatial.Point, bool, error) {
++		entry, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_PlaceOrdinaryPlayer(w.ctx, p.ID(), w.area.ID(), sid)
++		return entry.At, entry.Arriving, err
++	}
++	block := w.join(9923, cfg.Spawn)
++	if _, _, err := place(); !errors.Is(err, apperrors.ErrSceneFull) {
++		t.Fatalf("full destination: %v", err)
++	}
++	if at := locked(w, p.ID(), p.MapComp().SavedPos); at != source {
++		t.Fatalf("refusal changed source save: %v", at)
++	}
++	if marked := locked(w, p.ID(), func() bool { _, v := p.RehomeComp().PendingArrival(sid); return v }); marked {
++		t.Fatal("refusal consumed placement")
++	}
++	leave := syncsender.NewLeaveSceneSender(w.engine)
++	if err := leave.MultiSync_LeaveOrdinaryScene(w.ctx, block.ID(), w.area.ID()); err != nil {
++		t.Fatal(err)
++	}
++	at, arriving, err := place()
++	if err != nil || !arriving || at != cfg.Spawn || locked(w, p.ID(), p.MapComp().SavedPos) != at {
++		t.Fatalf("arrival at %v, arriving=%t: %v", at, arriving, err)
++	}
++	// Join/OnEntered can be interrupted after placement. Move again and unload the map;
++	// retry with the still-pending transfer must use the saved destination point, not spawn again.
++	moved := spatial.Point{}
++	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, p.ID(), w.area.ID(), moved.X, moved.Y); err != nil {
++		t.Fatal(err)
++	}
++	if err := leave.MultiSync_LeaveOrdinaryScene(w.ctx, p.ID(), w.area.ID()); err != nil {
++		t.Fatal(err)
++	}
++	// Rebuild a fresh Player through the production DAO hydration path; no live component
++	// or in-memory arrival flag is available after a destination process restart.
++	pid := p.ID()
++	raw := locked(w, pid, p.Dao().Marshal)
++	if err := w.entities.Destroy(w.ctx, p, entity.DestroyReasonCommon, false); err != nil {
++		t.Fatal(err)
++	}
++	restored := db.NewPlayerDao()
++	if err := restored.RestorePersisted(raw, restored.SchemaVersion(), 1); err != nil {
++		t.Fatal(err)
++	}
++	loaded, err := entity.BuildEntity(&entity.EntityCreateParam{Kind: player.EntityKindPlayer, Id: pid, Dao: map[string]entity.DaoInterface{restored.CollName(): restored}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	p = loaded.(*player.Player)
++	w.entities.Add(p)
++	t.Logf("restored saved_scene=%d saved=(%d,%d)", restored.GetSavedSceneID(), restored.GetSavedPosX(), restored.GetSavedPosY())
++	at, arriving, err = place()
++	if err != nil || !arriving || at != moved {
++		t.Fatalf("cold pending retry reset to %v: %v", at, err)
++	}
++	_, err = w.engine.Request(w.ctx, sharedBodyWrite, p.ID(), nest.NewParams(func() error {
++		result, e := p.RehomeComp().Arrive(sid, 1234)
++		if e == nil && !result.Arrived {
++			return errors.New("arrival not applied")
++		}
++		return e
++	}))
++	if err != nil {
++		t.Fatal(err)
++	}
++	at, arriving, err = place()
++	if err != nil || arriving || at != moved || locked(w, p.ID(), p.RehomeComp().Count) != 1 {
++		t.Fatalf("same-sid reconnect: %v %t %v", at, arriving, err)
++	}
++}
++
++// Use the same Save transaction as the periodic heartbeat between the drill's
++// before sample and shutdown. Count committed position fields by player ID.
++func TestReviewDrainSaveAttribution(t *testing.T) {
++	for _, early := range []bool{false, true} {
++		t.Run(fmt.Sprintf("save_before_drain_%v", early), func(t *testing.T) {
++			w := newMoveWorld(t)
++			spawn, last := spatial.Point{X: 500, Y: 500}, spatial.Point{X: 620, Y: 540}
++			p := w.join(9934, spawn)
++			save := p.MapComp().Body().Map.Save
++			if err := sharedBodyRequest(w, p, save); err != nil {
++				t.Fatal(err)
++			}
++			if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, p.ID(), w.area.ID(), last.X, last.Y); err != nil {
++				t.Fatal(err)
++			}
++			w.bridge.Leave(w.ctx, p.ID())
++			if before := w.saved.of(p.ID()); before != spawn {
++				t.Fatalf("before=%v", before)
++			}
++			if early {
++				if err := sharedBodyRequest(w, p, save); err != nil {
++					t.Fatal(err)
++				}
++			}
++			count := func() int { w.saved.mu.Lock(); defer w.saved.mu.Unlock(); return w.saved.writes[p.ID()] }
++			start := count()
++			var logs bytes.Buffer
++			old := slog.Default()
++			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
++			defer slog.SetDefault(old)
++			d := playerEvictor{scene: w.bridge, manager: w.entities, nest: w.engine, ordinarySceneID: w.area.ID()}
++			ids, err := d.beginOrdinaryDrain(w.ctx)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if err := d.finishOrdinaryDrain(w.ctx, ids); err != nil {
++				t.Fatal(err)
++			}
++			marker := strings.Contains(logs.String(), "ordinary map drain saved resident") && strings.Contains(logs.String(), fmt.Sprint(p.ID()))
++			delta := count() - start
++			t.Logf("before=%v after=%v saved_marker=%v drain_position_writes=%d", spawn, w.saved.of(p.ID()), marker, delta)
++			if !marker || w.saved.of(p.ID()) != last || (delta == 0) != early {
++				t.Fatal("unexpected evidence")
++			}
++		})
++	}
++}

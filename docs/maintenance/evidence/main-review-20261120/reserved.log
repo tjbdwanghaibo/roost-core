@@ -1,0 +1,8 @@
+admin: admin-data_game admin-data_game_1000
+admin_data: admin_data_game admin_data_game_1000
+local: local-data_game local-data_game_1000
+local_data: local_data_game local_data_game_1000
+config: config-data_game config-data_game_1000
+config_data: config_data_game config_data_game_1000
+atlas_a: atlas_a_game atlas_a_game_1000
+atlas_b: atlas_b_game atlas_b_game_1000

@@ -1,0 +1,10 @@
+{"immediate":false,"time":0,"state":"Disconnected","calls":1,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":false,"time":5000,"aborted":true,"outcome":"GateClosedError"}
+{"immediate":true,"time":0,"state":"Disconnected","calls":0,"aborted":false,"outcome":"GateClosedError"}
+{"immediate":true,"time":5000,"aborted":false,"outcome":"GateClosedError"}
+{"trigger":"write","mode":"raw-ok","first":1,"second":"GateClosedError","state":"Disconnected","transportClosed":true,"escaped":"gate: write failed","appErrors":[],"time":1000}
+{"trigger":"write","mode":"raw-throws","first":1,"second":"GateClosedError","state":"Disconnected","transportClosed":true,"escaped":"gate: write failed","appErrors":["view disposed"],"time":1000}
+{"trigger":"write","mode":"game-client-throws","first":1,"second":"GateClosedError","state":"Disconnected","transportClosed":true,"escaped":"gate: write failed","appErrors":["view disposed"],"time":1000}
+{"trigger":"peer-close","mode":"raw-ok","first":1,"second":"GateClosedError","state":"Disconnected","transportClosed":true,"appErrors":[],"time":1000}
+{"trigger":"peer-close","mode":"raw-throws","first":1,"second":"GateClosedError","state":"Disconnected","transportClosed":true,"appErrors":["view disposed"],"time":1000}
+{"trigger":"peer-close","mode":"game-client-throws","first":1,"second":"GateClosedError","state":"Disconnected","transportClosed":true,"appErrors":["view disposed"],"time":1000}

@@ -1,0 +1,4 @@
+ok  	example.com/reviewdemo/internal/service/game	82.083s
+ok  	example.com/reviewdemo/game/handler	2.303s
+ok  	example.com/reviewdemo/game/controllers	9.453s
+ok  	example.com/reviewdemo/game/modules/scene	0.006s

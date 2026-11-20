@@ -1,0 +1,45 @@
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce
+--- PASS: TestOrdinaryTransferPlacementUsesTargetOnce (0.01s)
+=== RUN   TestReviewSavedOrigin
+    scene_movement_test.go:1378: restored saved_scene=1038 saved=(0,0)
+    scene_movement_test.go:1381: cold pending retry reset to {400 410}: <nil>
+--- FAIL: TestReviewSavedOrigin (0.00s)
+=== RUN   TestReviewDrainSaveAttribution
+=== RUN   TestReviewDrainSaveAttribution/save_before_drain_false
+    scene_movement_test.go:1439: before={500 500} after={620 540} saved_marker=true drain_position_writes=1
+=== RUN   TestReviewDrainSaveAttribution/save_before_drain_true
+    scene_movement_test.go:1439: before={500 500} after={620 540} saved_marker=true drain_position_writes=0
+--- PASS: TestReviewDrainSaveAttribution (0.00s)
+    --- PASS: TestReviewDrainSaveAttribution/save_before_drain_false (0.00s)
+    --- PASS: TestReviewDrainSaveAttribution/save_before_drain_true (0.00s)
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce
+--- PASS: TestOrdinaryTransferPlacementUsesTargetOnce (0.00s)
+=== RUN   TestReviewSavedOrigin
+    scene_movement_test.go:1378: restored saved_scene=1038 saved=(0,0)
+    scene_movement_test.go:1381: cold pending retry reset to {400 410}: <nil>
+--- FAIL: TestReviewSavedOrigin (0.00s)
+=== RUN   TestReviewDrainSaveAttribution
+=== RUN   TestReviewDrainSaveAttribution/save_before_drain_false
+    scene_movement_test.go:1439: before={500 500} after={620 540} saved_marker=true drain_position_writes=1
+=== RUN   TestReviewDrainSaveAttribution/save_before_drain_true
+    scene_movement_test.go:1439: before={500 500} after={620 540} saved_marker=true drain_position_writes=0
+--- PASS: TestReviewDrainSaveAttribution (0.00s)
+    --- PASS: TestReviewDrainSaveAttribution/save_before_drain_false (0.00s)
+    --- PASS: TestReviewDrainSaveAttribution/save_before_drain_true (0.00s)
+=== RUN   TestOrdinaryTransferPlacementUsesTargetOnce
+--- PASS: TestOrdinaryTransferPlacementUsesTargetOnce (0.00s)
+=== RUN   TestReviewSavedOrigin
+    scene_movement_test.go:1378: restored saved_scene=1038 saved=(0,0)
+    scene_movement_test.go:1381: cold pending retry reset to {400 410}: <nil>
+--- FAIL: TestReviewSavedOrigin (0.00s)
+=== RUN   TestReviewDrainSaveAttribution
+=== RUN   TestReviewDrainSaveAttribution/save_before_drain_false
+    scene_movement_test.go:1439: before={500 500} after={620 540} saved_marker=true drain_position_writes=1
+=== RUN   TestReviewDrainSaveAttribution/save_before_drain_true
+    scene_movement_test.go:1439: before={500 500} after={620 540} saved_marker=true drain_position_writes=0
+--- PASS: TestReviewDrainSaveAttribution (0.00s)
+    --- PASS: TestReviewDrainSaveAttribution/save_before_drain_false (0.00s)
+    --- PASS: TestReviewDrainSaveAttribution/save_before_drain_true (0.00s)
+FAIL
+FAIL	example.com/reviewdemo/internal/service/game	0.038s
+FAIL

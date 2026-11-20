@@ -1,0 +1,4 @@
+rhd123456 custom_target=False handles=['rhd123456_game_1000', 'rhd123456_game_1001'] queried={'source': 'rhd123456_game_1000', 'target': 'rhd123456_game_1001'}
+local custom_target=False handles=['local-data_game_1000', 'local-data_game_1001'] queried={'source': 'local-data_game_1000', 'target': 'local-data_game_1001'}
+local custom_target=True handles=['local-data_game_1000', 'target_zone_game_1001'] queried={'source': 'local-data_game_1000', 'target': 'target_zone_game_1001'}
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeast custom_target=False handles=['aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game_1000', 'aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game_1001'] queried={'source': 'aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game_1000', 'target': 'aaaaaaaaaaaaaaa-44618380842e559f8c7383cf_game_1001'}
