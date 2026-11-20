@@ -11,6 +11,7 @@ import (
 	"time"
 	"{{MODULE}}/game/modules/actor"
 	rules "{{MODULE}}/game/modules/monster"
+	"{{MODULE}}/game/modules/monster/patrol"
 	"{{MODULE}}/game/view"
 )
 
@@ -64,7 +65,9 @@ func (c *Component) OnInitFinish(param *entity.EntityCreateParam, _ bool) error 
 	}
 	c.params = params
 	var err error
-	c.body, err = actor.New(c.owner, actor.Config{Fields: monsterFields{c.owner}, Hooks: actor.Hooks{AfterTick: c.tick}})
+	// The commit observer publishes this nested DAO state; no setter-side publish.
+	fields := movement.BindXY(func() movement.XYStore { return c.owner.Dao().GetActor() }, nil)
+	c.body, err = actor.New(c.owner, actor.Config{Fields: fields, Hooks: actor.Hooks{AfterTick: c.tick}})
 	if err != nil {
 		return err
 	}
@@ -159,12 +162,12 @@ func (c *Component) respawnTick(beat heartbeat.Beat) error {
 	}
 	return nil
 }
-func (c *Component) tick(body *actor.Body, beat heartbeat.Beat) error {
+func (c *Component) tick(body *actor.Body, _ heartbeat.Beat) error {
 	if c.owner.Dao().GetVitals().GetHP() <= 0 || !body.CanMove() {
 		return nil
 	}
-	life := c.owner.Dao().GetVitals().GetLifeSeq()
-	return rules.Decide(c.owner, beat.Now, func() error { return c.Decide(life) })
+	// Already inside the owner's Nest transaction. An ordinary patrol needs no transient AI runner.
+	return c.Decide(c.owner.Dao().GetVitals().GetLifeSeq())
 }
 
 // Decide 是持锁的单拍动作入口；LifeSeq检查也适用于未来排队的AI命令。
@@ -198,19 +201,20 @@ func (c *Component) Decide(expectedLife uint64) error {
 	if c.body.Move.Moving() {
 		return nil
 	}
-	half := c.params.Spec.PatrolHalf
 	home := spatial.Point{X: b.GetHomeX(), Y: b.GetHomeY()}
-	corners := []spatial.Point{{X: spatial.SaturatingAdd(home.X, half), Y: spatial.SaturatingAdd(home.Y, half)}, {X: spatial.SaturatingSub(home.X, half), Y: spatial.SaturatingAdd(home.Y, half)}, {X: spatial.SaturatingSub(home.X, half), Y: spatial.SaturatingSub(home.Y, half)}, {X: spatial.SaturatingAdd(home.X, half), Y: spatial.SaturatingSub(home.Y, half)}}
-	index := b.GetCorner() % 4
+	corners := patrol.AroundCenter(home, c.params.Spec.PatrolHalf)
+	index := int(b.GetCorner()) % len(corners)
 	if index < 0 {
 		return fmt.Errorf("monster: invalid patrol cursor")
 	}
-	at := corners[index]
-	// 一次只规划一个角点；移动失败原样交给Nest撤销，不能在这里吞掉已经修改Body的错误。
-	if err := c.body.Walk([]spatial.Point{at}, c.params.Spec.Speed); err != nil {
+	// Only the DAO owns the cursor. A refused start returns the Body's error to Nest.
+	next, err := patrol.StartNext(corners[:], index, func(at spatial.Point) error {
+		return c.body.Walk([]spatial.Point{at}, c.params.Spec.Speed)
+	})
+	if err != nil {
 		return err
 	}
-	b.SetCorner((index + 1) % 4)
+	b.SetCorner(int32(next % len(corners)))
 	return nil
 }
 
@@ -222,23 +226,5 @@ func (c *Component) Snapshot() Snapshot {
 	p := c.body.Position()
 	return Snapshot{ID: c.owner.ID(), LifeSeq: v.GetLifeSeq(), HP: v.GetHP(), Template: v.GetTemplate(), SceneID: c.body.Map.SceneID(), X: p.X, Y: p.Y}
 }
-
-type monsterFields struct{ owner Owner }
-
-func (f monsterFields) SceneID() int64     { return f.owner.Dao().GetActor().GetSceneID() }
-func (f monsterFields) SetSceneID(v int64) { f.owner.Dao().GetActor().SetSceneID(v) }
-func (f monsterFields) Pos() spatial.Point {
-	a := f.owner.Dao().GetActor()
-	return spatial.Point{X: a.GetX(), Y: a.GetY()}
-}
-func (f monsterFields) SetPos(v spatial.Point) {
-	a := f.owner.Dao().GetActor()
-	a.SetX(v.X)
-	a.SetY(v.Y)
-}
-func (f monsterFields) Facing() movement.Facing {
-	return movement.Facing(f.owner.Dao().GetActor().GetFacing())
-}
-func (f monsterFields) SetFacing(v movement.Facing) { f.owner.Dao().GetActor().SetFacing(int32(v)) }
 
 func (c *Component) SpawnPoint() spatial.Point { return c.params.Spec.At }

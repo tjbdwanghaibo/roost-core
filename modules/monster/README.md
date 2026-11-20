@@ -58,7 +58,7 @@
   - 改缺省怪或不要它：改 `game/modules/monster/rules.go` 的 `DefaultSpec`，或改 `runtime.go` 的 `Start` 里那一次 `Spawn`。
   - 多种怪、多个刷怪点：在自己的启动代码或玩法逻辑里多次调 `Spawn`，每次给不同的 `Spec`。
   - 改选目标的规则：改 `rules.go` 的 `Nearest`。改巡逻路线：改 `game/components/monsteractor/monsteractor.go` 的 `Decide`。
-  - 不要把跨拍的状态存进 `game/modules/monster/brain.go` 里每拍新建的 AI / actionflow 对象：它们不支持 Nest 回滚，跨拍事实只放 DAO 与 actor 的 `Body`。
+  - 普通怪只改 `Decide`；一次决定在怪自己的 Nest 事务内完成，跨拍事实只放 DAO 与支持回滚的移动组件。需要动作打断或行为树时再选择 AI 编排。
 - **别的代码要用它**：
   - 打怪：`manager.Damage(ctx, monsterEntityID, lifeSeq, amount)`，`lifeSeq` 取自先前读到的快照（`MonsterInspect` 的应答或同步下来的 `Vitals.LifeSeq`）。
   - 在自己的事务里读怪：handler 的目标参数写 `view.IMonsterActorEntity`，调 `target.MonsterActor().Snapshot()`。
@@ -74,7 +74,7 @@
 ## 验证范围
 
 - `roost module verify monster`：27 条场景，全部在 `game/modules/monster/service`（清单的包列表只有这一个包）。
-- 离线，但用的是真实的 Nest、实体 Manager 与 lifecycle、heartbeat、AI / actionflow、movement、Sync / AOI；持久提交与网络传输是替身。
+- 离线，但用的是真实的 Nest、实体 Manager 与 lifecycle、heartbeat、movement、Sync / AOI；持久提交与网络传输是替身。
 - 覆盖：正式出生与 AOI 可见、`MonsterInspect`、`MonsterInspect` 的每种拒绝各答自己的业务码（不是怪的号、不存在的怪物号、查看者离开场景、怪已死亡；查看者没进入游戏仍是框架码；拒绝之后同一个入口照常可用）、巡逻、定身、低速追击、感知边界、决策失败回滚、死亡隐藏与重生截止、旧命的伤害被拒、销毁、非法规则与 sid、序号停在 CellWorld 出生号位之前、停机准入、真实心跳驱动的巡逻与重生、出生失败清理、死亡失败回滚、退出回复丢失后续做，以及出生 / 异步重生 / 伤害 / 退出遇到同 ID 重建的 8 种交错。
 - 没有验证：真实数据库、TCP 联网、跨进程故障、长期稳定性、大规模性能。
 
@@ -82,7 +82,9 @@
 
 移动、位置、朝向、跟随与定身门控共用 actor 的 `Body`。场景通过实例回调提供已提交的玩家位置；怪只在自己的锁里读这份值快照，不读别人的 DAO、不拿别人的锁。当前目标没变且跟随仍在进行时不重新发起，低速移动的小数进度不会每拍归零。目标离开或看不见时回到四角巡逻。
 
-每拍实际创建一个 `ai.Controller` 与一个 `actionflow.Behavior`（`game/modules/monster/brain.go` 的 `Decide`），AI 经一个瞬时动作提交一次巡逻或追击意图。真正持续的移动只留在支持回滚的 `Body` 里，目标、游标与生命留在 DAO。一次决策的后续步骤失败时，DAO 与 `Body` 同时撤销，不会留下后台动作。
+普通怪的心跳直接调用组件 `Decide(lifeSeq)`，不为这一拍新建控制器、动作表或瞬时动作。实际走路仍用同一个 `Body`，目标、游标与生命留在 DAO，后续失败时一起回滚。旧导出函数 `monster.Decide(owner, now, fn)` 保留兼容，但不是普通怪接入要求。生成工程执行 `go test -run '^$' -bench BenchmarkOrdinaryPatrolDecision -benchmem ./game/modules/monster/service` 可对照同一只怪的同一巡逻决定（含 Nest 派发和回滚，不是整服吞吐）。
+
+`game/modules/monster/patrol/route.go` 由本模块与 game-demo 的实际巡逻入口共用。模块以出生点为中心按四角环绕，游标在 DAO 内按 4 回绕；demo 从出生点的一条边起步、先过滤不可走点。这两个规则不能靠互换起点来“统一”。
 
 actor 的心跳按场景时间域移动；死亡重生用单独的 1 秒心跳（`monster.respawn`），按业务时间。
 

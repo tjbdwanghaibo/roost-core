@@ -105,7 +105,7 @@ func (component *Component) OnInitFinish(param *entity.EntityCreateParam, isCrea
 	}
 	component.host = actor.Heartbeat.NewHost(owner)
 	var err error
-	if component.mb, err = movement.NewMapBasic(owner, component.host, movement.MapConfig{Fields: monsterFields{owner: owner}}); err != nil {
+	if component.mb, err = movement.NewMapBasic(owner, component.host, movement.MapConfig{Fields: movement.BindPosXY(owner.Dao, owner.PublishSyncDirty)}); err != nil {
 		return fmt.Errorf("actor component: %w", err)
 	}
 	if component.move, err = movement.NewMove(component.mb, movement.MoveConfig{Terrain: actor.Ground{}, Surface: actor.Surface, Locate: actor.Locate}); err != nil {
@@ -249,33 +249,4 @@ func (component *Component) Pos() spatial.Point { return component.mb.Pos() }
 func (component *Component) Behavior() *actionflow.Behavior { return component.behavior }
 func (component *Component) Brain() *ai.Controller          { return component.brain }
 func (component *Component) States() *state.Set             { return component.states }
-
-// monsterFields is movement.Fields over MonsterDao.
-type monsterFields struct{ owner Owner }
-
-func (f monsterFields) SceneID() int64 { return f.owner.Dao().GetSceneID() }
-
-func (f monsterFields) SetSceneID(v int64) {
-	f.owner.Dao().SetSceneID(v)
-	f.owner.PublishSyncDirty()
-}
-
-func (f monsterFields) Pos() spatial.Point {
-	dao := f.owner.Dao()
-	return spatial.Point{X: dao.GetPosX(), Y: dao.GetPosY()}
-}
-
-func (f monsterFields) SetPos(v spatial.Point) {
-	dao := f.owner.Dao()
-	dao.SetPosX(v.X)
-	dao.SetPosY(v.Y)
-	f.owner.PublishSyncDirty()
-}
-
-func (f monsterFields) Facing() movement.Facing { return movement.Facing(f.owner.Dao().GetFacing()) }
-
-func (f monsterFields) SetFacing(v movement.Facing) {
-	f.owner.Dao().SetFacing(int32(v))
-	f.owner.PublishSyncDirty()
-}
 

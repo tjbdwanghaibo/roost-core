@@ -44,7 +44,7 @@ type monsterCommit struct{}
 func (monsterCommit) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
 type monsterFixture struct {
-	t        *testing.T
+	t        testing.TB
 	access   *entity.ManagerAccess
 	engine   *nest.NestMgr
 	sync     *entitysync.Manager
@@ -56,7 +56,7 @@ type monsterFixture struct {
 
 var monsterTestHandler = nest.NewHandlerName("module_monster.test")
 
-func newMonsterFixture(t *testing.T) *monsterFixture {
+func newMonsterFixture(t testing.TB) *monsterFixture {
 	t.Helper()
 	monster.RegisterEntity()
 	sceneentity.RegisterEntity()
@@ -256,12 +256,54 @@ func TestMonsterInspectRefusalsCarryBusinessCodes(t *testing.T) {
 }
 func TestMonsterPatrolMovesThroughActor(t *testing.T) {
 	f := newMonsterFixture(t)
-	m := f.spawn(rules.DefaultSpec())
-	f.tick(m)
-	f.tick(m)
-	if s := f.snapshot(m); s.X <= 80 || s.Y <= 80 {
-		t.Fatal(s)
+	spec := rules.DefaultSpec()
+	spec.PatrolHalf, spec.Speed = 3, 40 // one ordinary 200ms beat can finish one side
+	m := f.spawn(spec)
+	want := [4]spatial.Point{{X: 83, Y: 83}, {X: 77, Y: 83}, {X: 77, Y: 77}, {X: 83, Y: 77}}
+	f.tick(m) // start the first leg; each following beat arrives and starts the next
+	for i := 0; i <= len(want); i++ {
+		f.tick(m)
+		s := f.snapshot(m)
+		if p := want[i%len(want)]; s.X != p.X || s.Y != p.Y { t.Fatalf("patrol destination %d = (%d,%d), want %v", i, s.X, s.Y, p) }
+		var cursor int32
+		f.must(m, func(m *monster.Monster) error { cursor = m.Dao().GetBrain().GetCorner(); return nil })
+		if cursor != int32((i+2)%len(want)) { t.Fatalf("stored corner after leg %d = %d", i, cursor) }
 	}
+	f.must(m, func(m *monster.Monster) error {
+		c, b := m.MonsterActorComp(), m.Dao().GetBrain()
+		body := c.Body()
+		body.Stop()
+		// Exercise the centered route at both signed limits without asking the scene
+		// to place a monster outside the map: one short step reveals the direction.
+		b.SetHomeX(1<<63 - 1)
+		b.SetHomeY(-1 << 63)
+		b.SetCorner(3) // (+half, -half): saturation means east and south, not west and north
+		if err := c.Decide(1); err != nil { return err }
+		from := body.Position()
+		step := body.Move.Advance(body.Move.Token(), 200*time.Millisecond)
+		if step.Err != nil || step.At.X <= from.X || step.At.Y >= from.Y { return errors.New("centered patrol bounds wrapped instead of saturating") }
+		body.Stop()
+		// The original cursor check is on the remainder: -4 starts at 0, -1 is rejected.
+		b.SetCorner(-4)
+		if err := c.Decide(1); err != nil { return err }
+		if b.GetCorner() != 1 { return errors.New("negative whole lap changed corner numbering") }
+		c.Body().Stop()
+		b.SetCorner(-1)
+		if err := c.Decide(1); err == nil || err.Error() != "monster: invalid patrol cursor" || b.GetCorner() != -1 || c.Body().Move.Moving() { return errors.New("invalid patrol cursor accepted or changed") }
+		b.SetCorner(2)
+		c.Body().MoveHeartbeat().Close() // MoveTo succeeds, then Walk's heartbeat start fails
+		return nil
+	})
+	err := f.run(m, func(entity.IThreadSafeEntity) error {
+		err := m.MonsterActorComp().Decide(1)
+		if m.Dao().GetBrain().GetCorner() != 2 { return errors.New("refused walk advanced the DAO cursor before rollback") }
+		return err
+	})
+	if !errors.Is(err, heartbeat.ErrRegClosed) { t.Fatalf("patrol swallowed or changed Walk error: %v", err) }
+	f.must(m, func(m *monster.Monster) error {
+		if m.MonsterActorComp().Body().Move.Moving() || m.Dao().GetBrain().GetCorner() != 2 { return errors.New("failed patrol survived Nest rollback") }
+		return nil
+	})
 }
 func TestMonsterRootedStopsAndResumesPatrol(t *testing.T) {
 	f := newMonsterFixture(t)
@@ -341,6 +383,67 @@ func TestMonsterFailedDecisionRollsBackCursorAndMovement(t *testing.T) {
 	if f.snapshot(m).X <= 80 {
 		t.Fatal("retry could not act")
 	}
+	// Same failure after acquiring a target must not publish the target or leave a follow running.
+	p := f.player()
+	spec := rules.DefaultSpec()
+	spec.At = spatial.Point{X: 60, Y: 50}
+	chaser := f.spawn(spec)
+	err = f.run(chaser, func(_ entity.IThreadSafeEntity) error {
+		if err := chaser.MonsterActorComp().Decide(1); err != nil {
+			return err
+		}
+		if chaser.Dao().GetBrain().GetTarget() != p.ID() {
+			return errors.New("chase control missed its target")
+		}
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	f.must(chaser, func(m *monster.Monster) error {
+		if m.Dao().GetBrain().GetTarget() != 0 || m.MonsterActorComp().Body().Move.Moving() {
+			return errors.New("chase survived rollback")
+		}
+		return nil
+	})
+}
+
+// Same guarded patrol decision on each iteration. Abort after Walk to restore the DAO cursor
+// and Body route; includes Nest dispatch and rollback, not movement ticks, storage or networking.
+func BenchmarkOrdinaryPatrolDecision(b *testing.B) {
+	for _, legacy := range []bool{false, true} {
+		name := "direct"
+		if legacy {
+			name = "legacy-runner"
+		}
+		b.Run(name, func(b *testing.B) {
+			f := newMonsterFixture(b)
+			m := f.spawn(rules.DefaultSpec())
+			rollback := errors.New("repeat identical decision")
+			decide := func() error { return m.MonsterActorComp().Decide(1) }
+			at := time.UnixMilli(f.now.Load())
+			run := func(_ entity.IThreadSafeEntity) error {
+				var err error
+				if legacy {
+					err = rules.Decide(m, at, decide)
+				} else {
+					err = decide()
+				}
+				if err != nil {
+					return err
+				}
+				return rollback
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := f.run(m, run); !errors.Is(err, rollback) {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		})
+	}
 }
 func TestMonsterDeathHidesButRetainsSpawnSlotUntilRespawn(t *testing.T) {
 	f := newMonsterFixture(t)
@@ -416,6 +519,7 @@ func TestMonsterInvalidRulesAndShardAreRefusedBeforeCreating(t *testing.T) {
 		t.Fatal("invalid sid accepted")
 	}
 }
+
 // 运行期号的第 33 位留给 cellworldhost.SpawnID（Static | home<<34 | 1<<33 | seq）：同一 sid 的序号走到这一位
 // 就与 CellWorld 出生号撞号，所以序号在 1<<33-1 处拒绝，不创建实体。
 func TestMonsterIDSequenceStaysBelowTheCellWorldBirthBit(t *testing.T) {

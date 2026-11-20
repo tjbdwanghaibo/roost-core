@@ -123,6 +123,11 @@ func writeDemoModuleSource(root, gameService, module, source, rel string) error 
 	return writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), body, 0o644)
 }
 
+func writeDemoPatrolRoute(root, gameService string) error {
+	const rel = "game/modules/monster/patrol/route.go"
+	return writeDemoModuleSource(root, gameService, "monster", rel, rel)
+}
+
 func writeDemoSceneLife(root, gameService string) error {
 	const rel = "game/entities/scene/life.go"
 	return writeDemoModuleSource(root, gameService, "scene", rel, rel)
@@ -562,6 +567,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/view/component_mapview.go", why: "the Map interface other game packages use and its Holder (view.PlayerEntity embeds it)"},
 		{run: writeDemoActorBody, why: "the same Body implementation as the actor module; the partitioned-world demo only keeps its own adapters"},
 		{write: "game/actor/actor.go", why: "the demo's heartbeat driver, action vocabulary and partitioned-world rules around the shared Body"},
+		{run: writeDemoPatrolRoute, why: "share the monster module's waypoint rules without installing a second monster runtime"},
 		{write: "game/actor/patrol.go", why: "the monster's AI: walk the corners on its own heartbeat, and never ask whether it is rooted — the state gate does"},
 		{write: "game/actor/patrol_test.go", why: "the patrol decides only when the move group is idle and not frozen, and a refused start retries the same corner"},
 		{write: "game/entities/player/attribute_component_test.go", why: "the composition rule as a test: Final = Base + Gear with the derived attribute computed once over the composed inputs"},

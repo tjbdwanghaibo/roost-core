@@ -410,14 +410,14 @@ func TestActorMoveRefusalCodesPathLimitAndLeavesOtherErrorsInternal(t *testing.T
 	unrelated := errors.New("unrelated failure")
 	f.must(func(p *player.Player) error {
 		component := p.ActorComp()
-		err := component.MoveRefusal(component.Body().Walk(make([]spatial.Point, 257), 50))
+		err := component.Walk(make([]spatial.Point, 257), 50)
 		if !errors.Is(err, apperrors.ErrActorPathTooLong) || !errors.Is(err, actor.ErrPathTooLong) {
 			t.Fatalf("oversized path: %v", err)
 		}
 		if code, _ := errcode.ClientError(err); code != apperrors.ErrActorPathTooLong.Code() {
 			t.Fatalf("oversized path code %d", code)
 		}
-		if err := component.MoveRefusal(component.Body().Follow(p.ID(), 50, 2)); err == nil || errcode.CodeOf(err) != errcode.CodeInternal {
+		if err := component.Follow(p.ID(), 50, 2); err == nil || errcode.CodeOf(err) != errcode.CodeInternal {
 			t.Fatalf("self follow must stay an internal error: %v", err)
 		}
 		if err := component.MoveRefusal(unrelated); err != unrelated {

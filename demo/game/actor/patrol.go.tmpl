@@ -7,6 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"{{MODULE}}/game/modules/monster/patrol"
 )
 
 // PatrolInterval is how often a patrolling monster decides (its AI
@@ -36,15 +37,10 @@ type Patrol struct {
 }
 
 // NewPatrol is the strategy for a monster spawned at home: the corners of a
-// square of the given half-side, clipped to the walkable ones. A home with no
+// square anchored at home, clipped to the walkable ones. A home with no
 // walkable corner patrols nowhere (the strategy idles).
 func NewPatrol(home spatial.Point, half int64, walkable func(spatial.Point) bool, speed float64) *Patrol {
-	corners := []spatial.Point{
-		{X: home.X + half, Y: home.Y},
-		{X: home.X + half, Y: home.Y + half},
-		{X: home.X, Y: home.Y + half},
-		home,
-	}
+	corners := patrol.FromCorner(home, half)
 	points := make([]spatial.Point, 0, len(corners))
 	for _, corner := range corners {
 		if walkable == nil || walkable(corner) {
@@ -69,12 +65,11 @@ func (p *Patrol) Tick(ctx *ai.Context, _ time.Time) {
 	if ctx.ActionList.CurAction(GroupMove) != nil || ctx.ActionList.Frozen(GroupMove) {
 		return
 	}
-	goal := p.Waypoints[p.next%len(p.Waypoints)]
-	// A refused start (the group froze in between) leaves the index where
-	// it is: the same waypoint is tried on the next decision.
-	if _, err := ctx.ActionList.CreateAction(ActMoveTo, movement.MoveToParam{Path: []spatial.Point{goal}, Speed: p.Speed}); err == nil {
-		p.next++
-	}
+	// A refused start leaves the same waypoint for the next decision.
+	p.next, _ = patrol.StartNext(p.Waypoints, p.next, func(goal spatial.Point) error {
+		_, err := ctx.ActionList.CreateAction(ActMoveTo, movement.MoveToParam{Path: []spatial.Point{goal}, Speed: p.Speed})
+		return err
+	})
 }
 
 // Next is the index of the waypoint the next walk goes to (tests).

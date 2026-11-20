@@ -10,6 +10,12 @@ import (
 // game/modules/actor 只有角色身体与钩子的类型（不引用实体与组件包），view 可以引用。
 // Actor 是 Actor 组件对 game/ 下其它包公开的方法（实现在 game/components/actor，语义见那里）；只在宿主被 Nest 锁住期间调用。
 type Actor interface {
+	// Ordinary gameplay commands, under the existing entity guard. Walk/Follow already return business refusals.
+	Walk(path []spatial.Point, speed float64) error
+	Follow(target int64, speed float64, keep int64) error
+	Stop()
+	Position() spatial.Point
+	// Lower-level access for scene wiring, diagnostics and existing callers.
 	Body() *actor.Body
 	MoveRefusal(err error) error
 	// SavedPosition 是离开空间或周期存档时记下的场景号、位置与朝向（场景切换时决定落脚点）。

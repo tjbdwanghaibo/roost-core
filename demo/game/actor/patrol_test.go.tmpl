@@ -1,7 +1,10 @@
 package actor
 
 import (
+	"math"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
@@ -40,6 +43,49 @@ func newWalker(t *testing.T, at spatial.Point) *walker {
 		t.Fatal(err)
 	}
 	return w
+}
+
+// Start the real action and finish its real Move; checking the route slice alone
+// would not detect a consumer selecting the wrong waypoint or skipping a retry.
+func TestPatrolWalksTheFilteredRouteAndRetriesARefusedStart(t *testing.T) {
+	home := spatial.Point{X: 10, Y: 20}
+	all := []spatial.Point{{X: 13, Y: 20}, {X: 13, Y: 23}, {X: 10, Y: 23}, home}
+	for _, tc := range []struct {
+		name string
+		walkable func(spatial.Point) bool
+		want []spatial.Point
+	}{
+		{"all", nil, all},
+		{"some", func(p spatial.Point) bool { return p == all[0] || p == all[2] }, []spatial.Point{all[0], all[2]}},
+		{"none", func(spatial.Point) bool { return false }, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWalker(t, home)
+			ctx := &ai.Context{Owner: w, ActionList: w.behavior}
+			p := NewPatrol(home, 3, tc.walkable, 0) // rejected by Move.MoveTo, not by the freeze gate
+			if !slices.Equal(p.Waypoints, tc.want) { t.Fatalf("patrol waypoints = %v, want %v", p.Waypoints, tc.want) }
+			p.Tick(nil, ctx.Now)
+			p.Tick(&ai.Context{}, ctx.Now)
+			p.Tick(ctx, ctx.Now)
+			if p.Next() != 0 || w.move.Moving() { t.Fatalf("refused patrol advanced: next=%d moving=%v", p.Next(), w.move.Moving()) }
+			p.Speed = 10
+			if len(tc.want) == 0 {
+				p.Tick(ctx, ctx.Now)
+				if p.Next() != 0 || w.move.Moving() { t.Fatal("empty patrol started") }
+				return
+			}
+			for i := 0; i <= len(tc.want); i++ { // one step past the wrap: Next still counts successful starts
+				p.Tick(ctx, ctx.Now)
+				if p.Next() != i+1 || !w.move.Moving() { t.Fatalf("patrol start %d: next=%d moving=%v", i, p.Next(), w.move.Moving()) }
+				result := w.move.Advance(w.move.Token(), time.Second)
+				if want := tc.want[i%len(tc.want)]; result.Reason != movement.Arrived || w.mb.Pos() != want { t.Fatalf("patrol destination %d = %v (%v), want %v", i, w.mb.Pos(), result.Reason, want) }
+				w.behavior.EndCurAction(GroupMove, true, actionflow.NewActionReason("arrived"))
+			}
+		})
+	}
+	// This public constructor historically uses ordinary signed addition and keeps duplicates.
+	if got := NewPatrol(spatial.Point{X: math.MaxInt64}, 1, nil, 1).Waypoints[0].X; got != math.MinInt64 { t.Fatalf("anchored patrol addition = %d", got) }
+	if got := NewPatrol(home, 0, nil, 1).Waypoints; !slices.Equal(got, []spatial.Point{home, home, home, home}) { t.Fatalf("coincident corners = %v", got) }
 }
 
 // The patrol decides only when the move group is idle: a walk in progress, or

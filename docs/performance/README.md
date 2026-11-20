@@ -8,6 +8,7 @@ Generated TCP 持久写入的可重复夹具见 [运行说明](../../scripts/tes
 
 | 要了解什么 | 基线与适用范围 |
 | --- | --- |
+| 普通怪默认决策与旧 AI 包装 | [巡逻决策 A/B](MONSTER-PATROL.md)：同一实体、同一决策、同一 Nest 派发与回滚，不含网络、数据库或整服容量 |
 | game-demo 共享 World 与 Saga 等待 | [本机百人同秒 / 分批](DEMO-WORLD-SAGA.md)：区分状态等待失败、首投年龄、outbox 与处理耗时，不作容量承诺 |
 | DAO 递归持久化 | [更新准备、真实 Mongo 与 Nest 压测](DATAENGINE-PERSIST-PATHS.md)：区分编码、积压追平与多实体请求指标 |
 | DAO map/list 同步 | [集合同步微基准](DAO-COLLECTION-SYNC.md)：稀疏/密集变化的 PB 字节、CPU 与分配开销，不是网络容量 |

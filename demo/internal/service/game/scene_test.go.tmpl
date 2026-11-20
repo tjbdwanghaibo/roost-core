@@ -26,6 +26,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
@@ -327,14 +328,15 @@ func (sceneCommitter) Enqueue(context.Context, dataengine.CommitRecord) (nest.Co
 }
 func (sceneCommitter) DurableLSN() uint64 { return 0 }
 
-func newSceneNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity) nest.Client {
+func newSceneNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity, extra ...nest.NestOption) nest.Client {
 	t.Helper()
 	handler.RegisterAddExpNestHandlers()
-	engine := nest.NewEngine(
+	opts := []nest.NestOption{
 		nest.NestOptionWithGetter(sceneGetter(entities)),
 		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
-	)
+	}
+	engine := nest.NewEngine(append(opts, extra...)...)
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)
 	}
@@ -416,6 +418,145 @@ func TestHostedScenePartitionDoesNotCreateOrdinarySpace(t *testing.T) {
 	defer bridge.Close(context.Background())
 	if bridge.ordinary != nil || bridge.interest == nil {
 		t.Fatal("partition installed an ordinary Space or lost its Base interest")
+	}
+}
+
+// Read the near observer's actual decoded envelopes, not the mover's published
+// snapshot. Both coordinates change on every write; do not merge a missing
+// coordinate with the baseline or let a later good packet hide a bad one.
+func TestOrdinaryMovementFieldsReachWatcherOnlyOnCommit(t *testing.T) {
+	ctx := context.Background()
+	watcher, p := newScenePlayer(t, 9821), newScenePlayer(t, 9822)
+	monster.RegisterEntity()
+	mid, err := entity.BuildEntityID(9822, monster.EntityKindMonster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: monster.EntityKindMonster, Id: mid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := built.(*monster.Monster)
+	observer := &sceneSyncObserver{}
+	engine := newSceneNest(t, sceneGetter{p.ID(): p, m.ID(): m, watcher.ID(): watcher}, nest.NestOptionWithEntitySync(observer))
+	recorder := newSceneRecorder()
+	cfg := gamescene.DefaultConfig()
+	scene, err := newSceneWithObserver(sceneLane{transport: recorder}, recorder, nil, cfg, cfg.Normalize().View.MaxVisible, nil, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scene.Close(ctx) })
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	type mapActor interface {
+		entity.IThreadSafeEntity
+		movement.MapOwner
+	}
+	type movementFrame struct {
+		full   bool
+		pos    spatial.Point
+		facing movement.Facing
+	}
+	for _, tc := range []struct {
+		kind  string
+		mover mapActor
+	}{{"player", p}, {"monster", m}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			kind, mover := tc.kind, tc.mover
+			request := func(fn func() error) error {
+				_, err := engine.Request(ctx, sharedBodyWrite, mover.ID(), nest.NewParams(fn))
+				return err
+			}
+			start := spatial.Point{X: 510, Y: 501}
+			if err := request(func() error { return mover.MapBasic().Enter(1, scene.MoveSpace(), start) }); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := request(func() error { return mover.MapBasic().Leave() }); err != nil {
+					t.Error(err)
+				}
+			})
+			if kind == "player" {
+				joinReady(t, scene, ctx, p, start)
+			} else if err := scene.ShowSubject(ctx, m.Sync(), m.ID(), start); err != nil {
+				t.Fatal(err)
+			}
+
+			// An empty request drains the entity's preceding transaction. The
+			// scene has no background tick: only our Flush can send packets.
+			checkWire := func(phase string, want ...movementFrame) {
+				t.Helper()
+				if _, err := engine.Request(ctx, settleHandler, mover.ID(), nest.NewParams()); err != nil {
+					t.Fatal(err)
+				}
+				if err := scene.Flush(ctx); err != nil {
+					t.Fatal(err)
+				}
+				var got []movementFrame
+				for _, push := range recorder.take(watcher.UniqueID()) {
+					for _, object := range decodedPush(t, push).Objects {
+						for _, component := range object.Components {
+							u := component.Update
+							if u.SubjectID != mover.ID() || u.Payload.Len() == 0 {
+								continue
+							}
+							fields, err := clientsync.DecodeFields(u)
+							if err != nil {
+								t.Fatal(err)
+							}
+							x, hasX := fields["pos_x"]
+							y, hasY := fields["pos_y"]
+							f, hasFacing := fields["facing"]
+							if !hasX && !hasY && !hasFacing {
+								continue
+							}
+							if u.Namespace != kind || u.Profile.Key != "near" || !hasX || !hasY || !hasFacing {
+								t.Fatalf("%s: unexpected movement frame: namespace=%s view=%s fields=%v", phase, u.Namespace, u.Profile.Key, fields)
+							}
+							got = append(got, movementFrame{u.Full, spatial.Point{X: asInt64(x), Y: asInt64(y)}, movement.Facing(asInt64(f))})
+						}
+					}
+				}
+				if !slices.Equal(got, want) {
+					t.Fatalf("%s: watcher received %+v, want %+v", phase, got, want)
+				}
+			}
+			checkWire("baseline", movementFrame{true, start, 0})
+			write := func(at spatial.Point, facing movement.Facing, outcome error) {
+				t.Helper()
+				err := request(func() error {
+					m := mover.MapBasic()
+					if err := m.SetPos(at); err != nil {
+						return err
+					}
+					m.SetFacing(facing)
+					if m.Pos() != at || m.Facing() != facing {
+						return errors.New("movement not written before transaction outcome")
+					}
+					return outcome
+				})
+				if !errors.Is(err, outcome) {
+					t.Fatalf("movement transaction: got %v, want %v", err, outcome)
+				}
+			}
+			committed := spatial.Point{X: 521, Y: 509}
+			write(committed, 2400, nil)
+			checkWire("commit", movementFrame{false, committed, 2400})
+			write(spatial.Point{X: 531, Y: 516}, 7800, errors.New("reject after movement setters"))
+			checkWire("rollback")
+			if err := request(func() error {
+				m := mover.MapBasic()
+				if m.Pos() != committed || m.Facing() != 2400 {
+					return errors.New("rollback failed to restore the DAO-backed movement fields")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// A second committed delta proves silence did not mean a lost subscription.
+			next := spatial.Point{X: 526, Y: 512}
+			write(next, 4200, nil)
+			checkWire("next commit", movementFrame{false, next, 4200})
+		})
 	}
 }
 

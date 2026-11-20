@@ -12,10 +12,10 @@ import (
 //
 //roost:nest rollback=undo durability=async
 func handlerActorMove(target view.IActorEntity, request *pb.ActorMoveRequest) (*pb.ActorMoveResponse, error) {
-	body := target.Actor().Body()
-	if err := body.Walk([]spatial.Point{{X: request.X, Y: request.Y}}, 60); err != nil {
-		return nil, target.Actor().MoveRefusal(err)
+	m := target.Actor()
+	if err := m.Walk([]spatial.Point{{X: request.X, Y: request.Y}}, 60); err != nil {
+		return nil, err
 	}
-	pos := body.Position()
+	pos := m.Position()
 	return &pb.ActorMoveResponse{X: pos.X, Y: pos.Y}, nil
 }

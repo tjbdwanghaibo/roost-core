@@ -9,7 +9,8 @@
   - `ActorStop`（`actor_stop.go`）：停止移动，应答带当前坐标。端点 `HandleActorStop`。
   - 没有“进入空间”的协议：把玩家放进某个空间是上层（`scene` 模块或工程自己的房间代码）的事。
 - **服务端入口**
-  - 取身体：`target.Actor().Body()`（组件在 `game/components/actor/actor.go`，类型号 `actor.CompTypeActor` 与工厂登记也在这里），handler 参数写 `view.IActorEntity`。另有 `Actor().SavedPosition()` 读上次存档的空间号、坐标与朝向，`player.MapBasic()`、`player.MoveComponent()` 取底层移动组件（Player 一侧的手写方法在 `game/entities/player/actor.go`）。
+  - **普通玩法入口**：`m := target.Actor()`；在当前实体锁内直接用 `m.Walk(path, speed)`、`m.Follow(id, speed, keep)`、`m.Stop()`、`m.Position()`。错误原样返回给 Nest 即可。这里的 Actor 是组件，不是另一套实体；分区 Cell 上的 CellPlayer 则是不同写权边界，不能用这组本地调用冒充跨进程成功。
+  - 高级接线取身体：`target.Actor().Body()`（组件在 `game/components/actor/actor.go`，类型号 `actor.CompTypeActor` 与工厂登记也在这里），handler 参数写 `view.IActorEntity`。另有 `Actor().SavedPosition()` 读上次存档的空间号、坐标与朝向，`player.MapBasic()`、`player.MoveComponent()` 取底层移动组件（Player 一侧的手写方法在 `game/entities/player/actor.go`）。
   - `Actor().MoveRefusal(err)`：把 `Body.Walk` / `Follow` 的正常拒绝换成带业务码的错误（见“错误码”），在同一把实体锁内、紧接着失败的那次调用使用；别的错误原样返回。`handlerActorMove` 用的就是它，工程自己写的移动协议同样调它。
   - `Body` 的方法（`game/modules/actor/body.go`，都必须在所属实体的锁内调用）：
     - `Enter(env Environment, at spatial.Point, facing movement.Facing) error`：放进一个空间。重复进入同一个空间保留现有站位；从别的空间切过来时先 `Leave`，同一笔事务。
@@ -59,7 +60,7 @@
   - 让别的玩家看到某个 `PlayerDao` 字段：`init` 里调 `OnActorSyncFields`（装了 `scene` 时用它提供的 `OnSceneFields`）。
   - `game/modules/actor/body.go` 是 `Player` 与怪物共用的实现，尽量不改；要加行为优先用钩子。
 - **别的模块 / 业务代码要用它**
-  - 服务端驱动移动：`body.Walk(path, speed)` / `body.Follow(target, speed, keep)` / `body.Stop()`，持锁调用，错误返回给 Nest。结果要答给客户端时先过一遍 `target.Actor().MoveRefusal(err)`，否则这些拒绝到客户端是内部错误。
+  - 服务端驱动移动：优先调组件 `Walk` / `Follow` / `Stop`；组件已将正常拒绝转为业务码，保留底层 `errors.Is`，不需再次调用 `MoveRefusal`。旧 `Body()` 与 `MoveRefusal` 保留供高级接线。自行实现 `view.Actor` 的替身，升级生成源码时也要补齐这四个组件方法。
   - 施加定身、沉默：改 `body.States`（状态号 `actor.Rooted`、`actor.Silenced`）；`combat` 用 buff 绑定派生这两个状态。
   - 读位置：持锁时 `body.Position()`；空间号 `body.Map.SceneID()`。
   - 没有持锁时：`syncsender.NewActorMoveSender(client).Sync_ActorMove(ctx, 完整实体号, &pb.ActorMoveRequest{…})`。

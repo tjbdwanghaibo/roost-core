@@ -61,7 +61,7 @@ func (c *Component) Body() *actor.Body { return c.body }
 
 func (c *Component) OnInitFinish(*entity.EntityCreateParam, bool) error {
 	// demo 寻路最多访问4096节点，不能因共用默认256点预算而缩短既有有效路线。
-	body, err := actor.New(c.owner, actor.Config{Fields: playerFields{c.owner}, Save: c.save, MaxPathPoints: 4096, Surface: actor.Surface})
+	body, err := actor.New(c.owner, actor.Config{Fields: movement.BindPosXY(c.owner.Dao, c.owner.PublishSyncDirty), Save: c.save, MaxPathPoints: 4096, Surface: actor.Surface})
 	if err != nil {
 		return err
 	}
@@ -155,26 +155,5 @@ func (c *Component) save(sceneID int64, at spatial.Point, facing movement.Facing
 	d.SetSavedPosY(at.Y)
 	d.SetSavedFacing(int32(facing))
 	return nil
-}
-
-// playerFields 保留 demo 的 DAO/公开视图字段词汇；Body 只通过 movement.Fields 写它们。
-type playerFields struct{ owner Owner }
-
-func (f playerFields) SceneID() int64     { return f.owner.Dao().GetSceneID() }
-func (f playerFields) SetSceneID(v int64) { f.owner.Dao().SetSceneID(v); f.owner.PublishSyncDirty() }
-func (f playerFields) Pos() spatial.Point {
-	d := f.owner.Dao()
-	return spatial.Point{X: d.GetPosX(), Y: d.GetPosY()}
-}
-func (f playerFields) SetPos(v spatial.Point) {
-	d := f.owner.Dao()
-	d.SetPosX(v.X)
-	d.SetPosY(v.Y)
-	f.owner.PublishSyncDirty()
-}
-func (f playerFields) Facing() movement.Facing { return movement.Facing(f.owner.Dao().GetFacing()) }
-func (f playerFields) SetFacing(v movement.Facing) {
-	f.owner.Dao().SetFacing(int32(v))
-	f.owner.PublishSyncDirty()
 }
 

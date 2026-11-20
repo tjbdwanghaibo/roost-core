@@ -43,8 +43,18 @@ func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInter
 func (component *Component) Name() string      { return "actor" }
 func (component *Component) Owner() Owner    { return component.owner }
 func (component *Component) Body() *actor.Body { return component.body }
+func (component *Component) Walk(path []spatial.Point, speed float64) error {
+	return component.MoveRefusal(component.body.Walk(path, speed))
+}
+func (component *Component) Follow(target int64, speed float64, keep int64) error {
+	return component.MoveRefusal(component.body.Follow(target, speed, keep))
+}
+func (component *Component) Stop() { component.body.Stop() }
+func (component *Component) Position() spatial.Point { return component.body.Position() }
 func (component *Component) OnInitFinish(*entity.EntityCreateParam, bool) error {
-	body, err := actor.New(component.owner, actor.Config{Fields: actorFields{component.owner}, Save: component.save, Hooks: component.hooks()})
+	// The commit observer publishes this nested DAO state; no setter-side publish.
+	fields := movement.BindXY(func() movement.XYStore { return component.owner.Dao().GetActor() }, nil)
+	body, err := actor.New(component.owner, actor.Config{Fields: fields, Save: component.save, Hooks: component.hooks()})
 	component.body = body
 	return err
 }
@@ -83,17 +93,3 @@ func (component *Component) save(id int64, p spatial.Point, facing movement.Faci
 	saved.SetFacing(int32(facing))
 	return nil
 }
-
-type actorFields struct{ owner view.PlayerEntity }
-
-func (f actorFields) SceneID() int64     { return f.owner.Dao().GetActor().GetSceneID() }
-func (f actorFields) SetSceneID(v int64) { f.owner.Dao().GetActor().SetSceneID(v) }
-func (f actorFields) Pos() spatial.Point {
-	s := f.owner.Dao().GetActor()
-	return spatial.Point{X: s.GetX(), Y: s.GetY()}
-}
-func (f actorFields) SetPos(v spatial.Point) { s := f.owner.Dao().GetActor(); s.SetX(v.X); s.SetY(v.Y) }
-func (f actorFields) Facing() movement.Facing {
-	return movement.Facing(f.owner.Dao().GetActor().GetFacing())
-}
-func (f actorFields) SetFacing(v movement.Facing) { f.owner.Dao().GetActor().SetFacing(int32(v)) }

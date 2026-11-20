@@ -1,0 +1,37 @@
+// Package patrol contains waypoint rules, not an AI controller or an entity runtime.
+package patrol
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+
+// perimeter visits the four corners in order, starting at (x1,y0).
+// Keep the caller's coordinate arithmetic and any coincident corners intact.
+func perimeter(x0, x1, y0, y1 int64) [4]spatial.Point {
+	return [4]spatial.Point{{X: x1, Y: y0}, {X: x1, Y: y1}, {X: x0, Y: y1}, {X: x0, Y: y0}}
+}
+
+// FromCorner walks a side length from home along +X first, returning home last.
+func FromCorner(home spatial.Point, side int64) [4]spatial.Point {
+	return perimeter(home.X, home.X+side, home.Y, home.Y+side)
+}
+
+// AroundCenter visits (+,+), (-,+), (-,-), (+,-) relative to home.
+// Index zero has this meaning in the monster brain's DAO.
+func AroundCenter(home spatial.Point, half int64) [4]spatial.Point {
+	p := perimeter(spatial.SaturatingSub(home.X, half), spatial.SaturatingAdd(home.X, half),
+		spatial.SaturatingSub(home.Y, half), spatial.SaturatingAdd(home.Y, half))
+	return [4]spatial.Point{p[1], p[2], p[3], p[0]}
+}
+
+// StartNext attempts one waypoint. An empty route idles; a refused start keeps
+// the same cursor and error. Only the caller commits the successful successor:
+// a demo strategy counts starts, while a monster DAO stores a wrapping index.
+// Callers supply a cursor whose remainder in this route is nonnegative.
+func StartNext(points []spatial.Point, cursor int, start func(spatial.Point) error) (int, error) {
+	if len(points) == 0 {
+		return cursor, nil
+	}
+	if err := start(points[cursor%len(points)]); err != nil {
+		return cursor, err
+	}
+	return cursor + 1, nil
+}
