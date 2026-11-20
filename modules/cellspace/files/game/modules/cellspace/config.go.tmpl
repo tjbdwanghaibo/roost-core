@@ -1,13 +1,18 @@
 package cellspace
 
-import "github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
 
 // All processes use the same grid. A SID outside its owner list is Base-only.
 type Config struct {
-	Enabled bool   `config:"cellspace.enabled" default:"false"`
-	World   string `config:"cellspace.world" default:"overworld"`
-	Left    int32  `config:"cellspace.left_sid" default:"1001" min:"1"`
-	Right   int32  `config:"cellspace.right_sid" default:"1002" min:"1"`
+	ReconnectGrace time.Duration `config:"cellspace.reconnect_grace" default:"30s" min:"0s" help:"当前连接断开后保留化身的时间；0s 表示立即离场"`
+	Enabled        bool          `config:"cellspace.enabled" default:"false"`
+	World          string        `config:"cellspace.world" default:"overworld"`
+	Left           int32         `config:"cellspace.left_sid" default:"1001" min:"1"`
+	Right          int32         `config:"cellspace.right_sid" default:"1002" min:"1"`
 }
 
 func (c Config) grid() (*cellworld.Grid, error) {

@@ -9,7 +9,8 @@ entity: Player
 component: Cellspace
 component_package: game/components/cellspace
 protocols: [CellMove]
+errcodes: [cellspace_disabled, cellspace_not_entered, cellspace_invalid_velocity, cellspace_stale_session]
 verify:
   packages: [./game/modules/cellspace]
   run: ^TestCellspace
-  pass: 1
+  pass: 5

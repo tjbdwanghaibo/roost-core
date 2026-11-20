@@ -4,25 +4,45 @@ package cellspace
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
 	region "{{MODULE}}/game/entities/cell_region"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/modules/cellworldhost"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 var ids = cellworldhost.PlayerIDs{BaseKind: player.EntityKindPlayer}
 
 // Runtime owns the region and the pre-existing manager owns the Node. Both use the heartbeat Mod's one driver.
 type Runtime struct {
-	host   *cellworldhost.Runtime
-	access *entity.ManagerAccess
-	area   entity.IThreadSafeEntity
+	stopMu      sync.Mutex
+	closed      atomic.Bool
+	unsubscribe func()
+	host        *cellworldhost.Runtime
+	access      *entity.ManagerAccess
+	area        entity.IThreadSafeEntity
+}
+
+// 与 Node 一样，一个进程只装一份；Stop 撤下旧运行实例，旧回调只引用原 Node。
+var active atomic.Pointer[Runtime]
+
+type connections interface {
+	ConnectionActive(playerID int64, connectionID string) bool
+	OnSessionClosed(func(gateway.TCPSessionClosed)) func()
 }
 
 func Start(ctx context.Context, registry *app.Registry, handlers *cellworld.Handlers) (*Runtime, error) {
@@ -53,7 +73,13 @@ func Start(ctx context.Context, registry *app.Registry, handlers *cellworld.Hand
 	if err != nil {
 		return nil, err
 	}
-	nc := cellworld.NodeConfig{World: cfg.World, SID: ident.Sid, Grid: g, Scene: scene, Handlers: handlers, ViewRadius: 150, PlayerEntity: ids.FromActor, CreateActor: func(id int64, k cellworld.EntityKind) (cellworld.Actor, error) {
+	conns, ok := app.Lookup[connections](registry, app.ModName("access.player.tcp"))
+	if !ok || conns == nil {
+		return nil, errors.New("cellspace: missing player TCP session lifecycle")
+	}
+	nc := cellworld.NodeConfig{ReconnectGrace: cfg.ReconnectGrace, SessionActive: func(base int64, conn string) bool {
+		return conns.ConnectionActive(entity.GetUniqueIDFromEntityID(base), conn)
+	}, World: cfg.World, SID: ident.Sid, Grid: g, Scene: scene, Handlers: handlers, ViewRadius: 150, PlayerEntity: ids.FromActor, CreateActor: func(id int64, k cellworld.EntityKind) (cellworld.Actor, error) {
 		return cellworldhost.CreatePlayer(access, id, k)
 	}}
 	if c, owns := g.CellOf(ident.Sid); owns {
@@ -73,13 +99,25 @@ func Start(ctx context.Context, registry *app.Registry, handlers *cellworld.Hand
 		}
 	}
 	if err = h.Start(ctx); err != nil {
-		return nil, errors.Join(err, rt.Stop(ctx))
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return nil, errors.Join(err, rt.Stop(cleanup))
 	}
+	rt.unsubscribe = conns.OnSessionClosed(rt.disconnected)
+	active.Store(rt)
 	return rt, nil
 }
 func (rt *Runtime) Stop(ctx context.Context) error {
 	if rt == nil {
 		return nil
+	}
+	rt.stopMu.Lock()
+	defer rt.stopMu.Unlock()
+	rt.closed.Store(true)
+	active.CompareAndSwap(rt, nil)
+	if rt.unsubscribe != nil {
+		rt.unsubscribe()
+		rt.unsubscribe = nil
 	}
 	if err := rt.host.Stop(ctx); err != nil {
 		return err
@@ -94,11 +132,44 @@ func (rt *Runtime) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Enter uses the authenticated unique ID; callers must have completed Player load. Loading the DAO alone never enters.
-func Enter(ctx context.Context, unique int64) (cellworld.BaseState, error) {
-	n := cellworldhost.Node()
-	if n == nil {
-		return cellworld.BaseState{}, cellworldhost.ErrNoNode
+// 已认证 TCP 连接的接受序号来自服务端（旧客户端不必发送 Generation）。
+func identity(unique int64, s gateway.Session) (cellworld.BaseSession, error) {
+	c, ok := s.(interface {
+		ConnectionID() string
+		Admission() uint64
+	})
+	if !ok {
+		return cellworld.BaseSession{}, apperrors.ErrCellspaceStaleSession
+	}
+	p := s.Principal()
+	id := cellworld.BaseSession{SessionID: p.SessionID, ConnectionID: c.ConnectionID(), Admission: c.Admission()}
+	if p.PlayerID != unique || !p.Authenticated() || id.ConnectionID == "" || id.Admission == 0 {
+		return cellworld.BaseSession{}, apperrors.ErrCellspaceStaleSession
+	}
+	return id, nil
+}
+
+// 传输回调仅尝试投递；检查是否仍是当前连接和清零速度必须在同一 Player 事务。
+func (rt *Runtime) disconnected(ev gateway.TCPSessionClosed) {
+	if rt.closed.Load() || ev.ConnectionID == "" || ev.SessionID == "" {
+		return
+	}
+	base, err := ids.Base(ev.PlayerID)
+	if err != nil || !rt.access.IsLoaded(base) {
+		return
+	}
+	if err = rt.host.Node.DisconnectSession(context.Background(), base, ev.SessionID, ev.ConnectionID); err != nil && !rt.closed.Load() {
+		slog.Warn("cellspace: close not queued; Base heartbeat will reconcile", "player", ev.PlayerID, "err", err)
+	}
+}
+
+func (rt *Runtime) Enter(ctx context.Context, unique int64, s gateway.Session) (cellworld.BaseState, error) {
+	if rt == nil || rt.closed.Load() {
+		return cellworld.BaseState{}, cellworld.ErrNodeStopping
+	}
+	id, err := identity(unique, s)
+	if err != nil {
+		return cellworld.BaseState{}, err
 	}
 	base, err := ids.Base(unique)
 	if err != nil {
@@ -108,36 +179,44 @@ func Enter(ctx context.Context, unique int64) (cellworld.BaseState, error) {
 	if err != nil {
 		return cellworld.BaseState{}, err
 	}
-	s, err := n.BaseStateOf(ctx, base)
-	if err != nil {
-		return s, err
+	st, err := rt.host.Node.AdmitSession(ctx, base, a, spatial.Point{X: 500, Y: 500}, 100, id)
+	if errors.Is(err, cellworld.ErrStaleSession) {
+		err = apperrors.ErrCellspaceStaleSession
 	}
-	if s.InWorld {
-		if s.Actor != a {
-			return s, fmt.Errorf("cellspace: inconsistent actor %d", s.Actor)
-		}
-		return s, nil
-	}
-	pos := spatial.Point{X: 500, Y: 500}
-	if s.SnapVer != (cellworld.Version{}) && n.Config().Grid.Bounds().Contains(s.Pos()) {
-		pos = s.Pos()
-	}
-	if err = n.Enter(ctx, base, a, pos, 100); err != nil {
-		return s, err
-	}
-	return n.BaseStateOf(ctx, base)
+	return st, err
 }
-func Move(ctx context.Context, unique, vx, vy int64) error {
-	n := cellworldhost.Node()
-	if n == nil {
-		return cellworldhost.ErrNoNode
+func Move(ctx context.Context, unique int64, s gateway.Session, vx, vy int64) error {
+	rt := active.Load()
+	if rt == nil {
+		return apperrors.ErrCellspaceDisabled
+	}
+	if rt.closed.Load() {
+		return cellworld.ErrNodeStopping
 	}
 	if vx < -1000 || vx > 1000 || vy < -1000 || vy > 1000 {
-		return errors.New("cellspace: velocity outside allowed range")
+		return apperrors.ErrCellspaceInvalidVelocity
 	}
 	base, err := ids.Base(unique)
 	if err != nil {
 		return err
 	}
-	return n.Move(ctx, base, vx, vy)
+	if !rt.access.IsLoaded(base) {
+		return apperrors.ErrCellspaceNotEntered
+	}
+	id, err := identity(unique, s)
+	if err != nil {
+		return err
+	}
+	return moveError(rt.host.Node.MoveSession(ctx, base, id, vx, vy))
+}
+
+func moveError(err error) error {
+	switch {
+	case errors.Is(err, cellworld.ErrStaleSession):
+		return apperrors.ErrCellspaceStaleSession
+	case errors.Is(err, cellworld.ErrNotInWorld), errors.Is(err, nest.ErrEntityNotFound), errors.Is(err, errcode.ErrEntityNotFound):
+		return apperrors.ErrCellspaceNotEntered
+	default:
+		return err
+	}
 }

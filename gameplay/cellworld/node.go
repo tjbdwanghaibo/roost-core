@@ -97,6 +97,10 @@ type NodeConfig struct {
 
 	// PlayerEntity 把角色（CellPlayer）ID 换成本进程 Player 实体 ID。
 	PlayerEntity func(actorID int64) int64
+	// SessionActive 是可选的本地传输表查询，不得等待网络、Nest 或取得实体锁。
+	// ReconnectGrace 从确认当前物理连接离线开始，零表示立即离场。仅 AdmitSession 使用。
+	SessionActive  func(playerEntity int64, connectionID string) bool
+	ReconnectGrace time.Duration
 	// WatchPeriod：Base 心跳（看门狗 + 续租）周期，必须是 heartbeat 档位；零值 100ms。
 	WatchPeriod time.Duration
 	// SilenceTimeout：多久没收到 witness 就按最后位置发入场查询（新建仍须确认共享授权）；零值 1s。LostGrace：收到交接放弃后等多久再重进；零值 500ms。
@@ -272,6 +276,8 @@ func (cfg NodeConfig) validate() error {
 		return fmt.Errorf("%w: "+format, append([]any{ErrNodeConfig}, args...)...)
 	}
 	switch {
+	case cfg.ReconnectGrace < 0:
+		return bad("negative session reconnect grace")
 	case !validWorld(cfg.World):
 		return bad("world %q", cfg.World)
 	case cfg.SID == 0 || cfg.Grid == nil || cfg.Transport == nil || cfg.Nest == nil || cfg.Destroy == nil:

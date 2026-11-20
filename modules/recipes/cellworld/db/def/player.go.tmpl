@@ -40,4 +40,9 @@ type PlayerDao struct {
 	CellGroupSyncAt  int64              `dao:"nopersist,nosync" store:"cell_group_sync_at"`
 	CellGroupViewID  int64              `dao:"nopersist,nosync" store:"cell_group_view_id"`
 	CellGroupViewVer uint64             `dao:"nopersist,nosync" store:"cell_group_view_ver"`
+	// Append only: even unsent fields participate in the positional DAO field numbering.
+	CellSessionID    string `dao:"nopersist,nosync" store:"cell_session_id"`
+	CellConnectionID string `dao:"nopersist,nosync" store:"cell_connection_id"`
+	CellAdmission    uint64 `dao:"nopersist,nosync" store:"cell_admission"`
+	CellOfflineAt    int64  `dao:"nopersist,nosync" store:"cell_offline_at"`
 }

@@ -46,7 +46,7 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
 	}
-	entering := gamelogin.Entering{PlayerID: context.PlayerID}
+	entering := gamelogin.Entering{PlayerID: context.PlayerID, Session: context.Session}
 	if context.Session != nil {
 		// 认证器写进会话的 claims 原样带给检查与钩子：这里不解释它们，哪个键是什么意思由写它的认证器与读它的一方约定。
 		entering.Claims = context.Session.Principal().Claims

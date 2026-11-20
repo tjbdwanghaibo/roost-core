@@ -1,0 +1,11 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 已发布数字由工程的 roost.yaml ids.errcode 固定；不是用日志字符串分类。
+var (
+	ErrCellspaceDisabled = errcode.Define({{ID:errcode:cellspace_disabled}}, "cellspace_disabled", "partitioned space is not enabled")
+	ErrCellspaceNotEntered = errcode.Define({{ID:errcode:cellspace_not_entered}}, "cellspace_not_entered", "enter the partitioned space before moving")
+	ErrCellspaceInvalidVelocity = errcode.Define({{ID:errcode:cellspace_invalid_velocity}}, "cellspace_invalid_velocity", "velocity outside allowed range")
+	ErrCellspaceStaleSession = errcode.Define({{ID:errcode:cellspace_stale_session}}, "cellspace_stale_session", "this connection is not the current space session")
+)

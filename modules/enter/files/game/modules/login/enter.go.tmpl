@@ -26,6 +26,7 @@ import (
 	"{{MODULE}}/game/view"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
 
 // InitResult 是首次初始化（Nest handler EnterInit）的结果，定义在 game/view（view.EnterInitResult）。
@@ -34,6 +35,7 @@ type InitResult = view.EnterInitResult
 // Entered 是一次成功的进入：Player 已经加载或创建，首次初始化已经提交。
 type Entered struct {
 	PlayerID int64
+	Session  gateway.Session // 与 Entering 同源；不以 PlayerID 或客户端字段替代连接身份。
 	InitResult
 	// Claims 是这次进入所用的已认证会话带的 claims：认证器在握手时写进 gateway.Principal.Claims 的键值。
 	// 它们是接入层给出的、与具体业务无关的事实——用 account 服务的工程里是角色的承载服
@@ -49,6 +51,8 @@ type Entered struct {
 // Entering 是一次还没有被放行的进入：会话已经认证，Player 还没有加载或创建。
 type Entering struct {
 	PlayerID int64
+	// Session 是端点已认证的服务端连接；无传输的调用可留 nil。
+	Session gateway.Session
 	// Claims 与 Entered.Claims 同源：这次进入所用的已认证会话带的 claims，可为 nil，只读。
 	// 检查同样要把“没有这个键”当成正常情况，自己决定那时是放行、拒绝还是去问权威。
 	Claims map[string]string
@@ -135,7 +139,7 @@ func enterWithPlacement(ctx context.Context, registry *app.Registry, entering En
 	if err != nil {
 		return Entered{}, err
 	}
-	entered := Entered{PlayerID: entering.PlayerID, InitResult: result, Claims: entering.Claims}
+	entered := Entered{PlayerID: entering.PlayerID, Session: entering.Session, InitResult: result, Claims: entering.Claims}
 	if place != nil {
 		if err := place(ctx, entered); err != nil {
 			return Entered{}, err

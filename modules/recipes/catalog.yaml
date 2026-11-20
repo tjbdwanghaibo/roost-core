@@ -3,7 +3,8 @@ casual:
   modules: [enter, wallet, checkin, task, stamina, shop, bag, mailbox, login, portal, servertime]
 cellworld:
   summary: 固定两格大世界的最小玩家配方：Base、Cell、入场、跨格、重连；不带战斗、怪物、场景玩法
-  modules: [enter, cellspace, login, portal]
+  # Login and portal retain the six published error numbers. Allocate new CellMove errors after them.
+  modules: [enter, login, portal, cellspace]
 turn-pvp:
   summary: 回合房间：登录入口、进入、档案、成员席位、回合推进与排行榜查询
   modules: [enter, profile, room, turn, leaderboard, matchmaking, login, portal, servertime]

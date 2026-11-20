@@ -23,6 +23,8 @@ var ErrNotInWorld = errors.New("cellworld: player is not in the partitioned scen
 // BaseState 是 Player 上的分区 Scene 路由状态。时间都是系统时间 UnixNano。
 type BaseState struct {
 	Recovery RecoveryState `msgpack:"rc"`
+	// Session 只由启用连接生命周期的宿主映射到 nopersist/nosync DAO；不是客户端参数。
+	Session SessionState `msgpack:"session"`
 	// Actor 是玩家的 CellPlayer ID（跨格不变）；InWorld 表示已 Enter、未 Leave。
 	Actor   int64 `msgpack:"a"`
 	InWorld bool  `msgpack:"w"`
@@ -136,16 +138,22 @@ const (
 	cmdLeave
 	cmdState
 	cmdPanel
+	cmdEnsureEnter
+	cmdAdmit
+	cmdSessionMove
+	cmdDisconnect
 )
 
 type baseCmd struct {
-	kind   baseCmdKind
-	actor  int64
-	pos    spatial.Point
-	hp     int32
-	vx, vy int64
-	target int64
-	amount int32
+	kind     baseCmdKind
+	actor    int64
+	pos      spatial.Point
+	hp       int32
+	vx, vy   int64
+	target   int64
+	amount   int32
+	session  BaseSession
+	closedAt time.Time
 }
 
 // Enter 让 Player（playerEntity）以 CellPlayer actor 在 pos 进入分区 Scene。Player 已有快照（之前回写过）时 hp 被快照覆盖。
@@ -254,7 +262,27 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 	switch cmd.kind {
 	case cmdState:
 		return st, nil
-	case cmdEnter:
+	case cmdEnter, cmdEnsureEnter, cmdAdmit:
+		if cmd.kind == cmdAdmit {
+			if err := n.admitSession(p, &st, cmd, fx, now); err != nil {
+				return nil, err
+			}
+		}
+		if cmd.kind != cmdEnter {
+			if st.InWorld {
+				if st.Actor != cmd.actor {
+					return nil, fmt.Errorf("cellworld: already entered with different actor %d", st.Actor)
+				}
+				if cmd.kind == cmdAdmit {
+					p.SetBaseState(st)
+					n.registerCommit(fx)
+				}
+				return st, nil
+			}
+			if st.SnapVer != (Version{}) && n.cfg.Grid.Bounds().Contains(st.Pos()) {
+				cmd.pos = st.Pos()
+			}
+		}
 		if st.InWorld {
 			return nil, fmt.Errorf("cellworld: player %d already entered", p.ID())
 		}
@@ -270,6 +298,9 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		st = BaseState{Actor: cmd.actor, InWorld: true, X: cmd.pos.X, Y: cmd.pos.Y, HP: cmd.hp,
 			SnapVer: prev.SnapVer, IntentSeq: prev.IntentSeq, AttackSeq: prev.AttackSeq, LostEpoch: prev.LostEpoch, Panel: prev.Panel, PanelAcked: prev.PanelAcked,
 			Entry: prev.Entry + 1, Recovery: prev.Recovery.At(now)}
+		if cmd.kind == cmdAdmit {
+			st.Session = prev.Session
+		}
 		if prev.SnapVer != (Version{}) {
 			st.HP = prev.HP
 		}
@@ -281,14 +312,24 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		if err := p.StartBase(); err != nil {
 			return nil, err
 		}
-	case cmdMove:
+		if cmd.kind != cmdEnter {
+			ret = st
+		}
+	case cmdMove, cmdSessionMove:
 		if !st.InWorld {
 			return nil, ErrNotInWorld
 		}
-		st.IntentSeq++
-		st.VX, st.VY = cmd.vx, cmd.vy
-		if st.Cell != 0 {
-			fx.send(st.Cell, n.inputMsg(&st, now))
+		if cmd.kind == cmdSessionMove && (st.Session.BaseSession != cmd.session || st.Session.OfflineAt != 0 || !n.sessionLive(p, cmd.session)) {
+			return nil, ErrStaleSession
+		}
+		n.setVelocity(&st, cmd.vx, cmd.vy, now, fx)
+	case cmdDisconnect:
+		if !st.InWorld || st.Session.OfflineAt != 0 || st.Session.SessionID != cmd.session.SessionID || st.Session.ConnectionID != cmd.session.ConnectionID || st.Session.Admission == 0 {
+			return nil, nil
+		}
+		n.disconnect(&st, cmd.closedAt, now, fx)
+		if n.graceElapsed(&st, now) {
+			n.leaveBase(p, &st, now, fx)
 		}
 	case cmdAttack:
 		hit, err := prepareAttack(&st, cmd.target, cmd.amount, fx)
@@ -302,14 +343,7 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		if !st.InWorld {
 			return nil, ErrNotInWorld
 		}
-		if st.Cell != 0 {
-			fx.send(st.Cell, &wireMsg{Kind: kindLeave, Leave: &leaveReq{ID: st.Actor, Entry: st.Entry}})
-		}
-		leaving := st
-		fx.hooks = append(fx.hooks, func() { n.unshow(&leaving, now) })
-		st.Shown = false
-		st.GroupViewID, st.GroupViewVer = 0, 0
-		st.InWorld, st.Cell = false, 0
+		n.leaveBase(p, &st, now, fx)
 	}
 	p.SetBaseState(st)
 	n.registerCommit(fx)
@@ -554,6 +588,18 @@ func (n *Node) BaseBeat(p BasePlayer, now time.Time) error {
 	}
 	nowNano := now.UnixNano()
 	fx := &txEffects{}
+	if st.Session.Admission != 0 {
+		// 关闭通知的队列有界，可丢；复用现有心跳补查。补查、停步、到期均在 Player 事务内。
+		if st.Session.OfflineAt == 0 && !n.sessionLive(p, st.Session.BaseSession) {
+			n.disconnect(&st, now, now, fx)
+		}
+		if n.graceElapsed(&st, now) {
+			n.leaveBase(p, &st, now, fx)
+			p.SetBaseState(st)
+			n.registerCommit(fx)
+			return nil
+		}
+	}
 	target := st.EnterHint
 	if target == 0 {
 		if cell, ok := n.cfg.Grid.CellAt(st.Pos()); ok {

@@ -6,4 +6,6 @@
 
 登录进入后发 `CellMove(VX,VY)`；`(0,0)` 停止。成功只确认 Base 接纳意图，以收到的权威位置判断是否走到目标。玩家的长期身份在 Base，实时位置在当前格；`CellPlayer` 跨格不换 ID，重新连接不取得新写权。不要在业务里手拼 Player 或 CellPlayer 的完整 ID。只有一份 Base 心跳和格内化身调度，不要另外安装移动驱动来推进同一个角色。
 
+断线时 Base 发送零速度；从 Cell 的位置回写观察停步，而不是假定断开的瞬间已停。`cellspace.reconnect_grace` 默认 `30s`，可设 `0s` 立即离场。在宽限内对同一角色重复进入／重连沿用同一 Entry；之后的旧连接关闭和旧输入不会接管它。持续离线到期后正式离场，再进入会取得新 Entry。此处的连接接管适用于配方的嵌入式 TCP，不是独立 Gate 的会话迁移。`CellMoveResponse` 用业务码区分未启用、未进场、速度越界和旧连接，具体值见本工程 `internal/errors/cellspace.go`。
+
 在框架源码库运行 `python3 scripts/test-cellspace.py --out <一个尚不存在的目录>` 可生成全新的项目并启动隔离的真实依赖、两个 Cell、Base 和 TCP 客户端；不会借用在线游戏服务或修改已部署工程。仅需底层能力、自己接战斗与视野时使用 `roost module add cellworld`，不必采用这套配方。

@@ -21,12 +21,45 @@ func TestCellworldRecipeUsesTheSelectedHostAndStockEnter(t *testing.T) {
 			t.Fatalf("%s service=%s", n, m.Modules[n].Service)
 		}
 	}
+	// Fresh clients generated after a recipe change must still interpret the old login responses correctly.
+	for module, codes := range map[string]map[string]int64{
+		"enter": {"enter_created": 100000, "enter_name_long": 100001, "enter_need_create": 100002},
+		"login": {"login_elsewhere": 100003}, "portal": {"portal_request_invalid": 100004, "portal_transport_unavailable": 100005},
+		"cellspace": {"cellspace_disabled": 100006, "cellspace_invalid_velocity": 100007, "cellspace_not_entered": 100008, "cellspace_stale_session": 100009},
+	} {
+		for name, want := range codes {
+			if got := m.Modules[module].IDs["errcode"][name]; got != want {
+				t.Fatalf("%s.%s = %d, want %d", module, name, got, want)
+			}
+		}
+	}
+	if m.Modules["cellspace"].IDs["protocol"]["CellMove"] != 10003 || m.Modules["cellworld"].IDs["entity"]["CellPlayer"] != 3 {
+		t.Fatal("recipe changed CellMove or CellPlayer ID")
+	}
 	if _, err := os.Stat(filepath.Join(root, "internal/service/game/service.go")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected default host: %v", err)
 	}
 	host, err := os.ReadFile(filepath.Join(root, "internal/service/arena/service.go"))
 	if err != nil || !bytes.Contains(host, []byte("cellspace.Start")) {
 		t.Fatalf("missing host on arena: %v", err)
+	}
+	// A positional DAO tag is part of the client wire format even for a recipe-only change.
+	schema, err := os.ReadFile(filepath.Join(root, "db/dao_sync.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, tail, found := strings.Cut(string(schema), "message SyncPlayerDao {\n")
+	msg, _, end := strings.Cut(tail, "\n}")
+	wantMsg := `  int64 entity_id = 1;
+  uint32 sync_format = 2047;
+  SyncPlayerDaoPosXField pos_x = 4;
+  SyncPlayerDaoPosYField pos_y = 5;
+  SyncPlayerDaoCellHPField cell_hp = 25;
+  SyncPlayerDaoCellMaxHPField cell_max_hp = 28;
+  SyncPlayerDaoCellAttackField cell_attack = 29;
+  SyncPlayerDaoCellPowerField cell_power = 30;`
+	if !found || !end || msg != wantMsg {
+		t.Fatalf("unexpected SyncPlayerDao wire definition:\n%s", msg)
 	}
 	const rel = "game/controllers/enter.go"
 	want, err := renderModuleFile(m, "arena", ModuleSpec{Name: "enter"}, "files", rel, m.Modules["enter"].IDs)

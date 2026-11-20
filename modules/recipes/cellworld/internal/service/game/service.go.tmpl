@@ -37,7 +37,7 @@ func (s *Service) Init(r *app.Registry) error {
 	}
 	// Keep the module's EnterGame endpoint and authenticated load/create pipeline intact.
 	if err := gamelogin.InstallSessionPlacement(r, func(ctx context.Context, e gamelogin.Entered) error {
-		_, err := cellspace.Enter(ctx, e.PlayerID)
+		_, err := s.partition.Enter(ctx, e.PlayerID, e.Session)
 		return err
 	}); err != nil {
 		return errors.Join(err, s.partition.Stop(ctx))

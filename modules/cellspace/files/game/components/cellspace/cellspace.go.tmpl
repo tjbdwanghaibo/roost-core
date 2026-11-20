@@ -42,6 +42,12 @@ func (c *Component) Start(p cellworld.BasePlayer) error {
 	}
 	return c.beat.Start()
 }
+// Stop 和 Start 一样随 Player 事务提交；离场后不再排空拍，重新进场复用登记。
+func (c *Component) Stop() {
+	if c.beat != nil {
+		c.beat.Stop()
+	}
+}
 func (c *Component) OnDestroy(entity.EntityDestroyReason) {
 	if c.host != nil {
 		c.host.OnDestroy()

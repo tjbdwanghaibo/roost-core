@@ -1,0 +1,104 @@
+package cellspace
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"{{MODULE}}/game/modules/cellworldhost"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func TestCellspaceReconnectConfigAndDisabledRuntime(t *testing.T) {
+	var cfg Config
+	if err := app.LoadConfig(nil, &cfg); err != nil || cfg.Enabled || cfg.ReconnectGrace != 30*time.Second {
+		t.Fatalf("default %+v %v", cfg, err)
+	}
+	v := viper.New()
+	v.Set("cellspace.reconnect_grace", "0s")
+	if err := app.LoadConfig(v, &cfg); err != nil || cfg.ReconnectGrace != 0 {
+		t.Fatalf("zero grace %+v %v", cfg, err)
+	}
+	v.Set("cellspace.reconnect_grace", "750ms")
+	if err := app.LoadConfig(v, &cfg); err != nil || cfg.ReconnectGrace != 750*time.Millisecond {
+		t.Fatalf("override %+v %v", cfg, err)
+	}
+	rt, err := Start(context.Background(), app.NewRegistry(v), nil)
+	if err != nil || rt != nil {
+		t.Fatalf("disabled startup: %p %v", rt, err)
+	}
+	if err := Move(context.Background(), 10, nil, 0, 0); !errors.Is(err, apperrors.ErrCellspaceDisabled) {
+		t.Fatalf("disabled move: %v", err)
+	}
+	v.Set("cellspace.reconnect_grace", "-1ns")
+	if err := app.LoadConfig(v, &cfg); err == nil {
+		t.Fatal("negative grace accepted")
+	}
+}
+
+// 收回订阅、撤下当前入口；已经摘下但尚未交付的旧关闭回调不能碰下一代运行实例。
+func TestCellspaceStopRetiresOnlyItsSubscription(t *testing.T) {
+	unsubscribed := 0
+	rt := &Runtime{host: &cellworldhost.Runtime{}, unsubscribe: func() { unsubscribed++ }}
+	active.Store(rt)
+	t.Cleanup(func() { active.Store(nil) })
+	if err := rt.Stop(context.Background()); err != nil || active.Load() != nil || unsubscribed != 1 {
+		t.Fatalf("stop: active=%p unsubscribe=%d err=%v", active.Load(), unsubscribed, err)
+	}
+	replacement := &Runtime{}
+	active.Store(replacement)
+	rt.disconnected(gateway.TCPSessionClosed{PlayerID: 1, SessionID: "old", ConnectionID: "closed"})
+	if err := rt.Stop(context.Background()); err != nil || active.Load() != replacement || unsubscribed != 1 {
+		t.Fatalf("late stop affected new runtime: active=%p unsubscribe=%d err=%v", active.Load(), unsubscribed, err)
+	}
+}
+
+type testConnection struct {
+	gateway.Session
+	principal gateway.Principal
+	nonce     string
+	order     uint64
+}
+
+func (s testConnection) Principal() gateway.Principal { return s.principal }
+func (s testConnection) ConnectionID() string         { return s.nonce }
+func (s testConnection) Admission() uint64            { return s.order }
+func TestCellspaceAuthenticatedSessionIdentity(t *testing.T) {
+	s := testConnection{principal: gateway.Principal{PlayerID: 10, SessionID: "account"}, nonce: "physical", order: 3}
+	id, err := identity(10, s)
+	if err != nil || id != (cellworld.BaseSession{SessionID: "account", ConnectionID: "physical", Admission: 3}) {
+		t.Fatalf("identity %+v %v", id, err)
+	}
+	if _, err := identity(11, s); !errors.Is(err, apperrors.ErrCellspaceStaleSession) {
+		t.Fatalf("wrong player: %v", err)
+	}
+	s.order = 0
+	if _, err := identity(10, s); !errors.Is(err, apperrors.ErrCellspaceStaleSession) {
+		t.Fatalf("missing server admission: %v", err)
+	}
+	if _, err := identity(10, nil); !errors.Is(err, apperrors.ErrCellspaceStaleSession) {
+		t.Fatalf("no transport: %v", err)
+	}
+}
+func TestCellspaceMoveCodesPreserveInternalFailure(t *testing.T) {
+	seen := map[int32]bool{}
+	for _, def := range []*errcode.IntError{apperrors.ErrCellspaceDisabled, apperrors.ErrCellspaceNotEntered, apperrors.ErrCellspaceInvalidVelocity, apperrors.ErrCellspaceStaleSession} {
+		c, r := errcode.ClientError(def)
+		if c <= errcode.FrameworkCodeLast || seen[c] || r == "" {
+			t.Fatalf("business code %d %q", c, r)
+		}
+		seen[c] = true
+	}
+	for _, tc := range []struct{ in, want error }{{nil, nil}, {cellworld.ErrNotInWorld, apperrors.ErrCellspaceNotEntered}, {nest.ErrEntityNotFound, apperrors.ErrCellspaceNotEntered}, {cellworld.ErrStaleSession, apperrors.ErrCellspaceStaleSession}, {nest.ErrNestTimeout, nest.ErrNestTimeout}, {context.DeadlineExceeded, context.DeadlineExceeded}} {
+		if got := moveError(tc.in); !errors.Is(got, tc.want) {
+			t.Fatalf("moveError(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}

@@ -4,5 +4,6 @@ import "github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 
 type Cellspace interface {
 	Start(cellworld.BasePlayer) error
+	Stop()
 }
 type CellspaceHolder interface{ Cellspace() Cellspace }
