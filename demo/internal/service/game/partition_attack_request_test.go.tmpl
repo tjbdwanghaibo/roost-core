@@ -59,6 +59,7 @@ type attackFixture struct {
 	sink     *attackBlackhole
 	entities *entity.EntityManager
 	stop     func()
+	peers    *partitionViewPeers // the scene's connection table once a view is installed
 }
 
 func newAttackFixture(t *testing.T, committer nest.TransactionCommitter) *attackFixture {
@@ -130,10 +131,29 @@ func newAttackFixture(t *testing.T, committer nest.TransactionCommitter) *attack
 func (f *attackFixture) bind(t *testing.T, p *player.Player, name string) {
 	t.Helper()
 	s := attackSession(p.UniqueID(), name)
-	_, err := f.rt.node.AdmitSession(context.Background(), p.ID(), p.ID(), spatial.Point{X: 1, Y: 1}, 100, cellworld.BaseSession{SessionID: name, ConnectionID: s.ConnectionID(), Admission: s.Admission()})
+	key := cellworld.BaseSession{SessionID: name, ConnectionID: s.ConnectionID(), Admission: s.Admission()}
+	_, err := f.rt.node.AdmitSession(context.Background(), p.ID(), p.ID(), spatial.Point{X: 1, Y: 1}, 100, key)
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.installView(t, p, key)
+}
+
+// installView records the admitted connection as the scene member whose view is
+// installed: Move/Attack pass the scene's installation fence only for that member.
+func (f *attackFixture) installView(t *testing.T, p *player.Player, key cellworld.BaseSession) {
+	t.Helper()
+	if f.rt.bridge == nil {
+		f.peers = &partitionViewPeers{sceneRecorder: newSceneRecorder()}
+		f.rt.bridge = partitionViewBridge(t, f.peers, nil)
+	}
+	f.peers.sockets = append(f.peers.sockets, &partitionViewSocket{unique: p.UniqueID(), key: key})
+	b := f.rt.bridge
+	b.transitions.Lock()
+	b.mu.Lock()
+	b.members[p.ID()] = sceneMember{ready: true, own: p, connection: key}
+	b.mu.Unlock()
+	b.transitions.Unlock()
 }
 func (f *attackFixture) join(t *testing.T, id int64, name string) *player.Player {
 	t.Helper()

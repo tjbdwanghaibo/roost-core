@@ -76,9 +76,9 @@ type partitionRuntime struct {
 	scene     *sceneentity.Scene
 	bridge    *Scene
 	access    *coreentity.ManagerAccess
-	// Only populated by the dedicated Gate deployment. A missing method on a request
-	// session must never select the trusted, unbound Gate path on embedded TCP.
-	gateIngress *gateway.GameIngress
+	// Only populated by the dedicated Gate deployment (the Game ingress). It is
+	// chosen by deployment, never by which methods a request session happens to expose.
+	gateIngress partitionGate
 
 	mirrors *policy.Mirrors[cellworld.EntityState]
 	// terrain 是可编辑地形的副本端点（terrain_partition.go：Ghost 带推送、邻格玩家可见）；没有地形时为 nil。
@@ -141,10 +141,17 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	rt := &partitionRuntime{config: config, grid: grid, sid: identity.Sid, scene: area, bridge: bridge, access: access}
 	var sessionActive func(base int64, connection string) bool
 	if transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && transport != nil {
-		rt.gateIngress, _ = transport.PlayerRuntime.(*gateway.GameIngress)
-		if tcp := transport.TCPRuntime; tcp != nil {
+		// Embedded TCP and the dedicated Gate bind the same BaseSession; only the
+		// source of the connection table and the admission order differs.
+		var table interface{ ConnectionActive(int64, string) bool }
+		if ingress, gate := transport.PlayerRuntime.(*gateway.GameIngress); gate && ingress != nil {
+			rt.gateIngress, table = ingress, ingress
+		} else if tcp := transport.TCPRuntime; tcp != nil {
+			table = tcp
+		}
+		if table != nil {
 			sessionActive = func(base int64, connection string) bool {
-				return tcp.ConnectionActive(coreentity.GetUniqueIDFromEntityID(base), connection)
+				return table.ConnectionActive(coreentity.GetUniqueIDFromEntityID(base), connection)
 			}
 		}
 		rt.push = func(ctx context.Context, playerID int64, msgID uint32, message any) error {
@@ -503,20 +510,40 @@ var partitionIDs = cellworldhost.PlayerIDs{BaseKind:player.EntityKindPlayer}
 
 func partitionPlayer(playerID int64) (int64, error) { return partitionIDs.Base(playerID) }
 
-// gateConnection validates an actual Game ingress binding. The dedicated Gate keeps
-// its previous admission, ready and departure lifecycle; it does not bind a BaseSession.
-// An embedded runtime (including an unidentified request on one) never takes this path.
-func (rt *partitionRuntime) gateConnection(playerID int64, s gateway.Session) bool {
+// partitionGate is the part of the Game ingress the partition uses on a dedicated Gate.
+type partitionGate interface {
+	SessionAdmission(sessionID string) (gateway.Binding, uint64, bool)
+	ConnectionActive(playerID int64, connectionID string) bool
+}
+
+// gateSession maps a forwarded request to the Base identity of its current Game
+// binding. The Admission is the binding's confirmation order on this Game process:
+// a later replacement of the same account session is always larger, so the Base
+// transaction orders Gate connections exactly like embedded TCP admissions.
+func (rt *partitionRuntime) gateSession(playerID int64, s gateway.Session) (cellworld.BaseSession, error) {
 	if rt.gateIngress == nil || s == nil {
-		return false
+		return cellworld.BaseSession{}, cellworld.ErrStaleSession
 	}
 	c, ok := s.(interface{ ConnectionID() string })
 	p := s.Principal()
 	if !ok || !p.Authenticated() || p.PlayerID != playerID {
-		return false
+		return cellworld.BaseSession{}, cellworld.ErrStaleSession
 	}
-	b, _, ok := rt.gateIngress.SessionReceiver(p.SessionID)
-	return ok && b.PlayerID == playerID && b.SessionID == p.SessionID && b.ConnectionNonce == c.ConnectionID() && rt.gateIngress.ConnectionActive(playerID, b.ConnectionNonce)
+	b, admission, ok := rt.gateIngress.SessionAdmission(p.SessionID)
+	if !ok || admission == 0 || b.PlayerID != playerID || b.SessionID != p.SessionID || b.ConnectionNonce == "" || b.ConnectionNonce != c.ConnectionID() {
+		return cellworld.BaseSession{}, cellworld.ErrStaleSession
+	}
+	return cellworld.BaseSession{SessionID: b.SessionID, ConnectionID: b.ConnectionNonce, Admission: admission}, nil
+}
+
+// connectionSession is the one mapping from a request to its BaseSession for both
+// deployments. An embedded runtime (including an unidentified request on one)
+// never takes the Gate path.
+func (rt *partitionRuntime) connectionSession(playerID int64, s gateway.Session) (cellworld.BaseSession, error) {
+	if rt.gateIngress != nil {
+		return rt.gateSession(playerID, s)
+	}
+	return cellworldhost.ConnectionSession(playerID, s)
 }
 
 // admitConnection accepts a full Player EntityID (the scene subject). Admission,
@@ -528,13 +555,7 @@ func (rt *partitionRuntime) admitConnection(ctx context.Context, subjectID int64
 	}
 	unique := coreentity.GetUniqueIDFromEntityID(subjectID)
 	spawn := rt.config.PlayerSpawn(unique, rt.grid.Bounds())
-	if rt.gateIngress != nil {
-		if !rt.gateConnection(unique, s) {
-			return cellworld.BaseState{}, cellworld.ErrStaleSession
-		}
-		return rt.node.EnsureEntered(ctx, subjectID, actor, spawn, rt.config.PlayerHP)
-	}
-	id, err := cellworldhost.ConnectionSession(unique, s)
+	id, err := rt.connectionSession(unique, s)
 	if err != nil {
 		return cellworld.BaseState{}, err
 	}
@@ -556,12 +577,12 @@ func (rt *partitionRuntime) closedConnection(ev gateway.TCPSessionClosed) {
 	}
 }
 
+// MoveConnection and AttackConnection first pass the scene's installation fence (a
+// committed admission whose view was never installed is not a writer), then the
+// Base transaction checks the same BaseSession is still the current owner.
 func (rt *partitionRuntime) MoveConnection(ctx context.Context, playerID int64, s gateway.Session, vx, vy int64) error {
-	if rt.gateIngress != nil {
-		if !rt.gateConnection(playerID, s) { return cellworld.ErrStaleSession }
-		return rt.MoveIntent(ctx, playerID, vx, vy)
-	}
-	id, err := cellworldhost.ConnectionSession(playerID, s)
+	if err := rt.bridge.checkPartitionCommand(playerID, s); err != nil { return err }
+	id, err := rt.connectionSession(playerID, s)
 	if err != nil { return err }
 	base, err := partitionPlayer(playerID)
 	if err != nil { return err }
@@ -569,15 +590,17 @@ func (rt *partitionRuntime) MoveConnection(ctx context.Context, playerID int64, 
 }
 
 func (rt *partitionRuntime) AttackConnection(ctx context.Context, playerID int64, s gateway.Session, target, requestID int64) (cellworld.HitID, error) {
-	if rt.gateIngress != nil {
-		if !rt.gateConnection(playerID, s) { return cellworld.HitID{}, cellworld.ErrStaleSession }
-		return rt.AttackTarget(ctx, playerID, target, requestID)
-	}
-	id, err := cellworldhost.ConnectionSession(playerID, s)
+	id, err := rt.connectionSession(playerID, s)
 	if err != nil { return cellworld.HitID{}, err }
 	base, err := partitionPlayer(playerID)
 	if err != nil { return cellworld.HitID{}, err }
 	if target == 0 { return cellworld.HitID{}, apperrors.ErrPartitionNotEntered }
+	if err := rt.bridge.checkPartitionCommand(playerID, s); err != nil {
+		// Not a writer (yet): a numbered retry may still read its original receipt,
+		// e.g. after a cold Base recovery, but never attacks or consumes a number.
+		if requestID <= 0 { return cellworld.HitID{}, err }
+		return rt.node.AttackReceiptSession(ctx, base, id, target, requestID)
+	}
 	return rt.node.AttackSession(ctx, base, id, target, rt.config.AttackDamage, requestID)
 }
 

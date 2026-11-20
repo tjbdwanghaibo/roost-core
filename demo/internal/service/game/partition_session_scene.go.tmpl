@@ -16,7 +16,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/modules/cellworldhost"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -95,18 +94,9 @@ func (b *Scene) JoinConnection(ctx context.Context, subject *player.Player, at s
 	if rt == nil {
 		return b.Join(ctx, subject, at)
 	}
-	unique := playerOf(subject.ID())
-	var expected cellworld.BaseSession
-	if rt.gateIngress != nil {
-		if !rt.gateConnection(unique, s) {
-			return cellworld.ErrStaleSession
-		}
-	} else {
-		var err error
-		expected, err = cellworldhost.ConnectionSession(unique, s)
-		if err != nil {
-			return err
-		}
+	expected, err := rt.connectionSession(playerOf(subject.ID()), s)
+	if err != nil {
+		return err
 	}
 	return b.admitPartitionView(ctx, subject, s, expected, rt.admitConnection)
 }
@@ -171,7 +161,7 @@ func (b *Scene) admitPartitionView(ctx context.Context, p *player.Player, socket
 	member := sceneMember{generation: generation, own: p, socket: socket, connection: expected}
 	// A close may have arrived after strict commit but before local publication. It
 	// supersedes the previous member even though no new session should be opened.
-	if !b.memberOnline(id, member) || (socket != nil && admission == 0 && !b.partition.Load().gateConnection(playerOf(id), socket)) {
+	if !b.memberOnline(id, member) {
 		b.detachPartitionLocked(id)
 		return cellworld.ErrStaleSession
 	}
@@ -285,9 +275,9 @@ func (b *Scene) memberOnline(id int64, m sceneMember) bool {
 	return b.sessions.ActiveSessions(playerOf(id)) != 0
 }
 
-// Both Ready and LOD compare and apply under the same lock. No successful check can
-// apply to a replacement member. Gate retains its pre-existing authenticated binding
-// semantics (no locally comparable physical admission across Gate instances).
+// Ready, LOD, Move and Attack compare under the same lock. No successful check can
+// apply to a replacement member. Embedded TCP and the dedicated Gate compare the same
+// BaseSession (the Gate's Admission is the Game binding's confirmation order).
 func (b *Scene) checkConnectionLocked(rt *partitionRuntime, unique int64, socket gateway.Session) error {
 	id, err := partitionIDs.Base(unique)
 	if err != nil {
@@ -300,13 +290,7 @@ func (b *Scene) checkConnectionLocked(rt *partitionRuntime, unique int64, socket
 	if !present || closed || b.partitionStopping {
 		return cellworld.ErrStaleSession
 	}
-	if rt.gateIngress != nil {
-		if !rt.gateConnection(unique, socket) {
-			return cellworld.ErrStaleSession
-		}
-		return nil
-	}
-	s, err := cellworldhost.ConnectionSession(unique, socket)
+	s, err := rt.connectionSession(unique, socket)
 	if err != nil || m.connection != s || !b.memberOnline(id, m) {
 		return cellworld.ErrStaleSession
 	}

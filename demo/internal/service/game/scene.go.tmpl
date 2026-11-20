@@ -244,7 +244,7 @@ type sceneMember struct {
 	// own is the member's Player in a partitioned scene (nil in an ordinary
 	// one): a session opened after a retry binds its own state then.
 	own *player.Player
-	connection cellworld.BaseSession // zero for legacy (ordinary map, dedicated Gate, internal) lifecycles
+	connection cellworld.BaseSession // zero for legacy (ordinary map, internal) lifecycles
 	socket gateway.Session           // close only this physical connection if its manager session is lost
 }
 

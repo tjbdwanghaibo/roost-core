@@ -46,6 +46,10 @@ type bindingRecord struct {
 	generation    uint64    // Bind 带来的客户端连接代号（ControlRequest.Generation，0 为没带），只与另一个 Gate 实例的记录比较
 	arrived       time.Time // Bind 到达 Game 的时刻（receiveControl 收下请求时），跨 Gate 判新旧时与已有绑定的确认时刻比较
 	confirmedAt   time.Time // finish 确认这条绑定的时刻
+	// confirmSeq 是本 Game 进程按确认先后分配的序号（从 1 起严格递增，不复用）。SessionID 的当前绑定总是被最后确认的
+	// 那条，所以它的 confirmSeq 一定大于此前任何一条；receiverID 按 Bind 到达先后分配，跨 Gate“后完成者胜出”时
+	// 较早到达的 Bind 可以后确认，receiverID 不能当新旧顺序用。
+	confirmSeq uint64
 }
 
 // bindingSupersededReason 是迟到的旧 Bind 被拒的原因：同一 SessionID 已绑定的是更新的连接（同一 Gate 实例按接受
@@ -64,6 +68,7 @@ type bindingTable struct {
 	byReceiver   map[uint64]*bindingRecord
 	active       int
 	nextReceiver uint64
+	nextConfirm  uint64
 	closing      bool
 }
 
@@ -154,6 +159,12 @@ func (table *bindingTable) finish(record *bindingRecord, accepted bool) (previou
 		record.result.Reason = bindingSupersededReason
 		return nil, record.result
 	}
+	if table.nextConfirm == ^uint64(0) {
+		table.closeLocked(record)
+		return nil, record.result
+	}
+	table.nextConfirm++
+	record.confirmSeq = table.nextConfirm
 	record.state = bindingConfirmed
 	record.confirmedAt = time.Now()
 	record.leaseUntil = record.confirmedAt.Add(table.config.Lease)

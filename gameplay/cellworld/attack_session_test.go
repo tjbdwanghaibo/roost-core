@@ -62,6 +62,23 @@ func TestAttackSessionTakeoverRollbackAndNextEntry(t *testing.T) {
 	admit(old, 1)
 	w.waitView(u, settleWithin, "owner", func(v View) bool { return v.Cell == w.grid.SID(cell) })
 	first := attack(old, 1, nil)
+	// 只读回放：命中取回原回执；未命中的新号按会话失效拒绝，不出手、不推进序号和账本。
+	before, err := n.BaseStateOf(ctx, p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	high := p.ledger.v.high
+	if got, err := n.AttackReceiptSession(ctx, p.ID(), old, target, 1); err != nil || got != first {
+		t.Fatalf("receipt replay = %+v, %v; want %+v", got, err, first)
+	}
+	for _, req := range []int64{2, 0} {
+		if got, err := n.AttackReceiptSession(ctx, p.ID(), old, target, req); !errors.Is(err, ErrStaleSession) || got != (HitID{}) {
+			t.Fatalf("replay-only request %d = %+v, %v; want ErrStaleSession", req, got, err)
+		}
+	}
+	if st, err := n.BaseStateOf(ctx, p.ID()); err != nil || st.AttackSeq != before.AttackSeq || p.ledger.v.high != high {
+		t.Fatalf("replay-only attacked: seq %d->%d high %d->%d err=%v", before.AttackSeq, st.AttackSeq, high, p.ledger.v.high, err)
+	}
 	admit(next, 1) // 两条 TCP 连接仍然活跃，仅玩家绑定发生接替。
 	const collide = 1 + AttackRequestWindow
 	reads := p.reads.Load()
@@ -153,6 +170,12 @@ func TestAttackSessionColdBaseReceiptOnly(t *testing.T) {
 	checkSessionAttack(t, n, p.ID(), live, target+1, req, ErrAttackRequestConflict)
 	checkSessionAttack(t, n, p.ID(), live, target, 1, ErrAttackRequestExpired)
 	checkSessionAttack(t, n, p.ID(), live, target, req+1, ErrNotInWorld)
+	if got, err := n.AttackReceiptSession(context.Background(), p.ID(), live, target, req); err != nil || got != hit {
+		t.Fatalf("cold replay-only receipt = %+v, %v; want %+v", got, err, hit)
+	}
+	if _, err := n.AttackReceiptSession(context.Background(), p.ID(), live, target, req+1); !errors.Is(err, ErrNotInWorld) {
+		t.Fatalf("cold replay-only miss = %v, want ErrNotInWorld", err)
+	}
 	if st, err := n.BaseStateOf(context.Background(), p.ID()); err != nil || st.InWorld || st.AttackSeq != 0 || st.Session != (SessionState{}) || p.ledger.v != before {
 		t.Fatalf("cold receipt query changed the player: %+v, %v, high=%d", st, err, p.ledger.v.high)
 	}

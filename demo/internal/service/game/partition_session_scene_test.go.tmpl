@@ -420,3 +420,129 @@ func TestPartitionViewUncertainAdmissionRetryAndWireFailureReclaim(t *testing.T)
 		t.Fatal("reclaimed wrong socket")
 	}
 }
+
+// partitionGateStub is the Game ingress seen by the partition on a dedicated Gate:
+// current is the binding the ingress reports for the account session right now.
+type partitionGateStub struct {
+	peers   *partitionViewPeers
+	current *partitionViewSocket
+	order   uint64 // confirmation order of current
+}
+
+func (g *partitionGateStub) SessionAdmission(sessionID string) (gateway.Binding, uint64, bool) {
+	if g.current == nil || g.current.key.SessionID != sessionID {
+		return gateway.Binding{}, 0, false
+	}
+	return gateway.Binding{PlayerID: g.current.unique, SessionID: sessionID, ConnectionNonce: g.current.ConnectionID()}, g.order, true
+}
+func (g *partitionGateStub) ConnectionActive(unique int64, conn string) bool {
+	return g.peers.ConnectionActive(unique, conn)
+}
+
+func partitionCommandFixture(t *testing.T, unique int64) (*attackFixture, *partitionViewPeers, *Scene, *player.Player) {
+	t.Helper()
+	f := newAttackFixture(t, sceneCommitter{})
+	peers := &partitionViewPeers{sceneRecorder: newSceneRecorder()}
+	b := partitionViewBridge(t, peers, newClosingLane(peers))
+	f.rt.grid, f.rt.access, f.rt.bridge = partitionTerrainGrid(t), coreentity.NewManagerAccess(f.entities), b
+	b.partition.Store(f.rt)
+	cell_player.RegisterEntity()
+	p := newScenePlayer(t, unique)
+	actor, err := partitionIDs.Actor(p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Dao().SetCellActor(actor)
+	p.Dao().SetCellOwner(partitionSidA)
+	p.Dao().SetCellInWorld(true)
+	f.entities.Add(p)
+	b.after = func(time.Duration, func()) {}
+	b.async = func(fn func()) { fn() }
+	return f, peers, b, p
+}
+
+func partitionVelocity(t *testing.T, f *attackFixture, p *player.Player) int64 {
+	t.Helper()
+	st, err := f.rt.node.BaseStateOf(context.Background(), p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.VX
+}
+
+// A strict admission that committed but whose view was never installed (the client
+// saw the Join fail) is not a writer: Move and Attack hit the installation fence
+// before the Base transaction. Retrying Join on the same socket installs it.
+func TestPartitionCommandNeedsAnInstalledView(t *testing.T) {
+	ctx := context.Background()
+	f, peers, b, p := partitionCommandFixture(t, 851)
+	s := peers.socket(851, 7)
+	if _, err := f.rt.admitConnection(ctx, p.ID(), s); err != nil {
+		t.Fatalf("strict admission: %v", err)
+	}
+	if err := f.rt.MoveConnection(ctx, 851, s, 3, 0); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("move before the view is installed = %v, want ErrStaleSession", err)
+	}
+	if vx := partitionVelocity(t, f, p); vx != 0 {
+		t.Fatalf("an uninstalled admission moved the player: vx=%d", vx)
+	}
+	if _, err := f.rt.AttackConnection(ctx, 851, s, 9999, 1); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("attack before the view is installed = %v, want ErrStaleSession", err)
+	}
+	if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, s); err != nil {
+		t.Fatalf("retry Join on the same socket: %v", err)
+	}
+	if err := f.rt.MoveConnection(ctx, 851, s, 3, 0); err != nil {
+		t.Fatalf("move after the view is installed: %v", err)
+	}
+	if vx := partitionVelocity(t, f, p); vx != 3 {
+		t.Fatalf("vx=%d after an installed move, want 3", vx)
+	}
+}
+
+// On a dedicated Gate the Base binds the Game binding's confirmation order like an
+// embedded TCP admission. A request of the replaced connection that still saw its
+// own binding at the edge (the replacement raced past the check) cannot write.
+func TestPartitionGateCommandsAreOrderedByTheBaseSession(t *testing.T) {
+	ctx := context.Background()
+	f, peers, b, p := partitionCommandFixture(t, 861)
+	old, next := peers.socket(861, 0), peers.socket(861, 0)
+	old.key.ConnectionID, next.key.ConnectionID = "gate-nonce-old", "gate-nonce-new"
+	gate := &partitionGateStub{peers: peers, current: old, order: 1}
+	f.rt.gateIngress = gate
+	if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, old); err != nil {
+		t.Fatalf("Gate Join: %v", err)
+	}
+	if st, err := f.rt.node.BaseStateOf(ctx, p.ID()); err != nil || st.Session.Admission != 1 || st.Session.ConnectionID != "gate-nonce-old" {
+		t.Fatalf("Gate Join did not bind the Base session: %+v %v", st.Session, err)
+	}
+	if err := f.rt.MoveConnection(ctx, 861, old, 3, 0); err != nil {
+		t.Fatalf("Gate move: %v", err)
+	}
+	gate.current, gate.order = next, 2
+	if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, next); err != nil {
+		t.Fatalf("replacement Gate Join: %v", err)
+	}
+	if vx := partitionVelocity(t, f, p); vx != 0 {
+		t.Fatalf("replacement kept the old velocity: vx=%d", vx)
+	}
+	// The old connection's request passed the edge while its binding was current.
+	gate.current, gate.order = old, 1
+	if err := f.rt.MoveConnection(ctx, 861, old, 5, 0); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("replaced Gate connection move = %v, want ErrStaleSession", err)
+	}
+	if _, err := f.rt.AttackConnection(ctx, 861, old, 9999, 2); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("replaced Gate connection attack = %v, want ErrStaleSession", err)
+	}
+	if vx := partitionVelocity(t, f, p); vx != 0 {
+		t.Fatalf("a replaced Gate connection moved the player: vx=%d", vx)
+	}
+	// Even past the scene fence (stale member view), the Base transaction rejects it.
+	if err := f.rt.node.MoveSession(ctx, p.ID(), cellworld.BaseSession{SessionID: old.key.SessionID, ConnectionID: "gate-nonce-old", Admission: 1}, 5, 0); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("Base accepted the replaced Gate session: %v", err)
+	}
+	// A late Join of the replaced binding cannot take the Base back.
+	if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, old); !errors.Is(err, cellworld.ErrStaleSession) {
+		t.Fatalf("late Join of the replaced Gate connection = %v, want ErrStaleSession", err)
+	}
+}

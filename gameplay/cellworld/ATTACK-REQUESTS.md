@@ -19,4 +19,6 @@
 
 **会话接入。** 来自已认证物理连接的攻击用 `Node.AttackSession`，传入本机连接身份，而不是客户端自报的身份。与 `MoveSession` 一样，Base 在玩家事务内先确认身份仍是当前绑定、未离线、且 `SessionActive` 确认此连接属于该玩家并仍活跃，再查请求号或出手。被接替的活连接即使知道原号也不能查询、占号或发无号攻击。仅冷恢复后既未入场又没有任何会话绑定记录时，属于该玩家的活连接可以**只读**查询正号回执：同目标取回原 HitID，冲突、过期照常报错，新号及无号报 `ErrNotInWorld`，负号报 `ErrAttackRequestInvalid`，不占号、不出手。正常离场保留的 Admission 高水位不能走此例外。
 
+**只读回放。** `Node.AttackReceiptSession` 做与 `AttackSession` 相同的会话与请求号检查，但只查旧回执：命中返回原 HitID（冲突、过期照常报错），未命中时在场答 `ErrStaleSession`、未进场答 `ErrNotInWorld`，不出手、不占号。宿主在连接还不是写入方时用它，例如 game-demo 的入场已提交而视野没装好、或冷恢复后尚未入场：重试仍能取回原回执，但不会因此打出新的一击。
+
 **兼容接入。** 无会话调用方的 `Node.Attack` 与 `BasePlayer` 无需变更。带号请求走 `Node.AttackWithRequest`；玩家需实现可选 `AttackRequestPlayer`，把高水位和槽写入该玩家的持久私有 DAO。生成工程使用 `PlayerDao.CellworldBase`（`nosync`）；回滚还原槽、高水位和显示序号，没有提交后发件。手工接入若缺少持久账本则失败，绝不回退到内存去重或无号攻击。新客户端启用带号重试前必须完成服务器升级；旧服可能忽略未知 protobuf 字段。

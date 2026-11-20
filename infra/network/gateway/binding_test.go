@@ -1014,6 +1014,10 @@ func TestBindingTableOrdersASessionAcrossGatesByConnectionGeneration(t *testing.
 		late, first := bind(table, gateA, 1, generations[0]), bind(table, gateB, 1, generations[1])
 		table.finish(first, true)
 		replaces(table, late, first)
+		// 先到达、后确认的 late 成为当前绑定：到达序号 receiverID 更小，确认序号必须更大，接替顺序才单调。
+		if late.receiverID >= first.receiverID || late.confirmSeq <= first.confirmSeq || first.confirmSeq == 0 {
+			t.Fatalf("receiver %d/%d confirm %d/%d; want the current binding to carry the larger confirmation order", late.receiverID, first.receiverID, late.confirmSeq, first.confirmSeq)
+		}
 	}
 
 	// 同一 Gate 实例只比接受序号：序号更大、代号更小的新连接替换旧的；序号更小、代号更大的迟到 Bind 被拒。

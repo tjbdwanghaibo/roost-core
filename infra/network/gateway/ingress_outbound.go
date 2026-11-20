@@ -163,3 +163,13 @@ func (game *GameIngress) SessionReceiver(sessionID string) (Binding, uint64, boo
 	}
 	return resource.record.identity, resource.record.receiverID, true
 }
+
+// SessionAdmission 返回当前绑定和它在本 Game 进程的确认序号（见 bindingRecord.confirmSeq）：同一 SessionID 后确认的
+// 绑定序号严格更大，可当作连接接替顺序与已提交的高水位比较。序号只在本进程内有意义，不能持久化或跨进程比较。
+func (game *GameIngress) SessionAdmission(sessionID string) (Binding, uint64, bool) {
+	resource, err := game.resourceForSession(sessionID)
+	if err != nil {
+		return Binding{}, 0, false
+	}
+	return resource.record.identity, resource.record.confirmSeq, true
+}

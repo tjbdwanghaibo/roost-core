@@ -156,6 +156,8 @@ type baseCmd struct {
 	requestID int64
 	session   BaseSession
 	closedAt  time.Time
+	// replayOnly 只查带号攻击的旧回执：命中返回原回执，未命中按会话失效拒绝，不出手、不写账本。
+	replayOnly bool
 }
 
 // Enter 让 Player（playerEntity）以 CellPlayer actor 在 pos 进入分区 Scene。Player 已有快照（之前回写过）时 hp 被快照覆盖。

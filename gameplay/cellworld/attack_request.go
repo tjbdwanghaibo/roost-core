@@ -52,6 +52,15 @@ func (n *Node) AttackSession(ctx context.Context, base int64, session BaseSessio
 	return n.requestAttack(ctx, base, baseCmd{kind: cmdSessionAttack, session: session, target: target, amount: damage, requestID: requestID})
 }
 
+// AttackReceiptSession 只读回放：同 AttackSession 的会话与请求号检查，命中返回原回执；未命中时在场返回
+// ErrStaleSession、未进场返回 ErrNotInWorld，都不出手、不消耗请求号。宿主在连接还不是写入方时（如入场已提交但视野未装好）用它让重试仍能取回旧回执。
+func (n *Node) AttackReceiptSession(ctx context.Context, base int64, session BaseSession, target, requestID int64) (HitID, error) {
+	if requestID <= 0 {
+		return HitID{}, ErrStaleSession
+	}
+	return n.requestAttack(ctx, base, baseCmd{kind: cmdSessionAttack, session: session, target: target, requestID: requestID, replayOnly: true})
+}
+
 func (n *Node) requestAttack(ctx context.Context, base int64, cmd baseCmd) (HitID, error) {
 	handler := hBaseCmd // 无号保持 async，带号回执必须 strict。
 	if cmd.requestID != 0 {
@@ -96,6 +105,9 @@ func (n *Node) admitAttack(p BasePlayer, st *BaseState, cmd baseCmd, fx *txEffec
 			}
 			return old.Hit, nil
 		}
+	}
+	if cmd.replayOnly && st.InWorld {
+		return HitID{}, ErrStaleSession
 	}
 	if !st.InWorld || st.Cell == 0 {
 		return HitID{}, ErrNotInWorld
