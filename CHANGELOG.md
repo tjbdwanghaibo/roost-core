@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.59.0**（2026-11-22）：v1.59.0 发版时最低 core 留在 v1.58.0，生成工程的 `go.mod` 从 v1.58.0 起步，`project sync` 按 `latest` 解析到 v1.59.0 后改写 `go.mod`，“安装模块后 sync 不改工程”的三条用例因此在 v1.60.0 pretag 上失败。`framework-compat` 的 minimum 组合同步钉到 v1.59.0。本版的新接口（`GameIngress.SessionAdmission`、`Node.AttackReceiptSession`）在打 tag 后另行把最低 core 提到 v1.60.0。
+
 - **AOI 跨区可见性**（RV-20261121-01）：已进入视野的目标跨区时仍按观察者的离开半径判断，不因换区先消失又出现；从未进入过视野的目标仍须满足进入半径。
 - **game-demo 分区视野**（RV-20261120-03）：独立 Gate 按已进图连接释放复制视野，不因同玩家另有已认证连接而留下旧视野，也不因旧连接的迟到关闭事件移除接替者。视野回收不等于让 Cell 化身正式离场。
 
