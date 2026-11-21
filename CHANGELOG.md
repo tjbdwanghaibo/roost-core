@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.60.0**（2026-11-22）：v1.60.0 的 game-demo 分区接线用到新接口 `gateway.GameIngress.SessionAdmission` 与 `cellworld.Node.AttackReceiptSession`，v1.59.0 编译不了。`framework-compat` 的 minimum 组合同步钉到 v1.60.0。
+
 ## [v1.60.0] - 2026-11-22
 
 - **生成物要求的最低 core 提到 v1.59.0**（2026-11-22）：v1.59.0 发版时最低 core 留在 v1.58.0，生成工程的 `go.mod` 从 v1.58.0 起步，`project sync` 按 `latest` 解析到 v1.59.0 后改写 `go.mod`，“安装模块后 sync 不改工程”的三条用例因此在 v1.60.0 pretag 上失败。`framework-compat` 的 minimum 组合同步钉到 v1.59.0。本版的新接口（`GameIngress.SessionAdmission`、`Node.AttackReceiptSession`）在打 tag 后另行把最低 core 提到 v1.60.0。
