@@ -378,14 +378,19 @@ func (m *AOI) AddSubject(id int64, at spatial.Point) error {
 	if _, exists := m.subjects[id]; exists {
 		return m.MoveSubject(id, at)
 	}
+	m.indexNewSubject(id, at)
+	m.subjectChanged(id, at, false, at, at)
+	return nil
+}
+
+// indexNewSubject 仅登记到索引，调用者保证 id 非零、在本区尚不存在且位置在界内，并负责评估邻域。
+func (m *AOI) indexNewSubject(id int64, at spatial.Point) {
 	m.subjects[id] = at
 	if m.points == nil {
 		m.index.Add(id, at)
 	} else {
 		m.points.subjects.put(id, at)
 	}
-	m.subjectChanged(id, at, false, at, at)
-	return nil
 }
 
 // MoveSubject re-indexes a subject and re-evaluates the union of its old and
@@ -883,6 +888,11 @@ func (m *AOI) evaluateMoved(observer *interestObserver, work *aoiWorkspace, move
 }
 
 func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial.Point, removed bool) {
+	m.evaluatePairWithin(observer, subject, at, removed, observer.enter)
+}
+
+// admitRadius 是本区尚无此对时的准入半径。跨区接手源区的可见成员时用 leave，仍产生本区的 Enter。
+func (m *AOI) evaluatePairWithin(observer *interestObserver, subject int64, at spatial.Point, removed bool, admitRadius int64) {
 	// 单独的逐对评估不补位；完整重评与 evaluateMoved 在评估结束后重新置位。
 	// 这对目标可能是移动过的成员或新成员，最远成员缓存一并失效。
 	observer.settled, observer.farthestKnown = false, false
@@ -907,7 +917,7 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 		}
 		return
 	}
-	if !spatial.WithinDistance(observer.at, at, observer.enter) {
+	if !spatial.WithinDistance(observer.at, at, admitRadius) {
 		return
 	}
 	if limit, bounded := m.visibleLimit(observer); bounded && len(observer.visible) >= limit {

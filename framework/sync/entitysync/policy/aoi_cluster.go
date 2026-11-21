@@ -59,7 +59,7 @@ type AOICluster struct {
 	// observerPairs indexes visible by observer for capacity settlement.
 	observerPairs map[int64]map[int64]*clusterVisibility
 	pending       []InterestEvent
-	// watchers 是目标移动时容量重选的暂存（看得见旧、新位置的观察者），只在 mu 内使用。
+	// watchers 暂存目标位置的邻域观察者，供跨区迁移与容量重选复用，只在 mu 内使用。
 	watchers []int64
 }
 
@@ -205,17 +205,29 @@ func (c *AOICluster) moveSubjectLocked(id int64, to spatial.Point) error {
 	if !ok {
 		return ErrAreaUnknown
 	}
-	if destination.id == placement.home {
-		if err := destination.manager.MoveSubject(id, to); err != nil {
+	source, target := c.areas[placement.home].manager, destination.manager
+	if source != target || c.config.MaxVisible > 0 {
+		c.watchers = target.appendObserverIDsAt(c.watchers[:0], to)
+	}
+	if source == target {
+		if err := target.MoveSubject(id, to); err != nil {
 			return err
 		}
 	} else {
-		// Make before break: the destination sees the subject before the
-		// source forgets it, and the net-change flush folds the overlap away.
-		if err := destination.manager.AddSubject(id, to); err != nil {
-			return err
+		// 先接手再移除。只有源区此刻可见的观察者才沿用离开半径，包括区域可见但被集群容量抑制的对。
+		// 不看上次公开 Flush 或 pending：其间的连续移动可能已真正离开，又在另一侧重新进入。
+		target.indexNewSubject(id, to)
+		for _, watcher := range c.watchers {
+			observer := target.observers[watcher]
+			radius := observer.enter
+			if old := source.observers[watcher]; old != nil {
+				if _, visible := old.visible[id]; visible {
+					radius = observer.leave
+				}
+			}
+			target.evaluatePairWithin(observer, id, to, false, radius)
 		}
-		if err := c.areas[placement.home].manager.RemoveSubject(id); err != nil {
+		if err := source.RemoveSubject(id); err != nil {
 			return err
 		}
 	}
@@ -226,8 +238,7 @@ func (c *AOICluster) moveSubjectLocked(id int64, to spatial.Point) error {
 	}
 	// 区域不设容量，同档移动可能没有区域事件，但距离排序已经改变。能看见该目标的观察者
 	// 都订阅了旧、新位置块之一。按区域所选索引反查（含边界镜像），不扫描全部观察者。
-	watchers := c.areas[placement.home].manager.appendObserverIDsAt(c.watchers[:0], placement.at)
-	watchers = destination.manager.appendObserverIDsAt(watchers, to)
+	watchers := source.appendObserverIDsAt(c.watchers, placement.at)
 	slices.Sort(watchers)
 	watchers = slices.Compact(watchers)
 	c.watchers = watchers
