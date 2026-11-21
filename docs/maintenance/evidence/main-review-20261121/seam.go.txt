@@ -1,0 +1,88 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+var settings = map[string]func(*policy.AOIConfig){"block": func(*policy.AOIConfig) {}}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func run(mode string, split bool) bool {
+	cfg := policy.AOIConfig{EnterRadius: 8, LeaveRadius: 12, BlockSize: 8}
+	settings[mode](&cfg)
+	c, err := policy.NewAOICluster(cfg)
+	must(err)
+	rect := func(lo, hi int64) spatial.Rect {
+		return spatial.Rect{Min: spatial.Point{X: lo, Y: -16}, Max: spatial.Point{X: hi, Y: 16}}
+	}
+	if split {
+		must(c.AddArea(1, rect(-32, 0)))
+		must(c.AddArea(2, rect(0, 32)))
+	} else {
+		must(c.AddArea(1, rect(-32, 32)))
+	}
+	must(c.AddObserver(1, 0, spatial.Point{X: -7}, policy.ObserverView{}))
+	// The fresh subject starts inside the hysteresis band and must stay invisible
+	// until its first entry. The same band must retain an already-visible subject.
+	must(c.AddSubject(2, spatial.Point{X: 2}))
+	event := func(kind policy.InterestEventKind, band int) []policy.InterestEvent {
+		return []policy.InterestEvent{{Observer: 1, Subject: 2, Kind: kind, Band: band}}
+	}
+	steps := []struct {
+		x       int64
+		visible bool
+		changes []policy.InterestEvent
+	}{
+		{2, false, nil},
+		{-1, true, event(policy.InterestEnter, 0)},
+		{1, true, nil}, // Cross while still inside the enter radius.
+		{-1, true, nil},
+		{2, true, nil}, // Cross into the hysteresis band while already visible.
+		{1, true, nil},
+		{5, true, nil},
+		{6, false, event(policy.InterestLeave, -1)},
+	}
+	ok := true
+	for i, s := range steps {
+		if i > 0 {
+			must(c.MoveSubject(2, spatial.Point{X: s.x}))
+		}
+		events := c.Flush()
+		visible := c.Visible(1)
+		var wantVisible []int64
+		if s.visible {
+			wantVisible = []int64{2}
+		}
+		passed := slices.Equal(events, s.changes) && slices.Equal(visible, wantVisible)
+		fmt.Printf("mode=%s split=%v x=%d dist=%d visible=%v events=%v pass=%v\n", mode, split, s.x, s.x+7, visible, events, passed)
+		ok = ok && passed
+	}
+	return ok
+}
+
+func main() {
+	passed := true
+	for _, mode := range []string{"block", "crosslist", "kdtree"} {
+		if settings[mode] == nil {
+			continue
+		}
+		for _, split := range []bool{false, true} {
+			if !run(mode, split) {
+				passed = false
+			}
+		}
+	}
+	if !passed {
+		os.Exit(1)
+	}
+}

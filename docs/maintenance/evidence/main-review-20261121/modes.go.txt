@@ -1,0 +1,8 @@
+package main
+
+import "github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+
+func init() {
+	settings["crosslist"] = func(cfg *policy.AOIConfig) { cfg.IndexMode = policy.IndexCrossList }
+	settings["kdtree"] = func(cfg *policy.AOIConfig) { cfg.IndexMode = policy.IndexKDTree }
+}

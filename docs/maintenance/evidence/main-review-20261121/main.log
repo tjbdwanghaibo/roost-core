@@ -1,0 +1,48 @@
+mode=block split=false x=2 dist=9 visible=[] events=[] pass=true
+mode=block split=false x=-1 dist=6 visible=[2] events=[{1 2 0 0}] pass=true
+mode=block split=false x=1 dist=8 visible=[2] events=[] pass=true
+mode=block split=false x=-1 dist=6 visible=[2] events=[] pass=true
+mode=block split=false x=2 dist=9 visible=[2] events=[] pass=true
+mode=block split=false x=1 dist=8 visible=[2] events=[] pass=true
+mode=block split=false x=5 dist=12 visible=[2] events=[] pass=true
+mode=block split=false x=6 dist=13 visible=[] events=[{1 2 1 -1}] pass=true
+mode=block split=true x=2 dist=9 visible=[] events=[] pass=true
+mode=block split=true x=-1 dist=6 visible=[2] events=[{1 2 0 0}] pass=true
+mode=block split=true x=1 dist=8 visible=[2] events=[] pass=true
+mode=block split=true x=-1 dist=6 visible=[2] events=[] pass=true
+mode=block split=true x=2 dist=9 visible=[] events=[{1 2 1 -1}] pass=false
+mode=block split=true x=1 dist=8 visible=[2] events=[{1 2 0 0}] pass=false
+mode=block split=true x=5 dist=12 visible=[2] events=[] pass=true
+mode=block split=true x=6 dist=13 visible=[] events=[{1 2 1 -1}] pass=true
+mode=crosslist split=false x=2 dist=9 visible=[] events=[] pass=true
+mode=crosslist split=false x=-1 dist=6 visible=[2] events=[{1 2 0 0}] pass=true
+mode=crosslist split=false x=1 dist=8 visible=[2] events=[] pass=true
+mode=crosslist split=false x=-1 dist=6 visible=[2] events=[] pass=true
+mode=crosslist split=false x=2 dist=9 visible=[2] events=[] pass=true
+mode=crosslist split=false x=1 dist=8 visible=[2] events=[] pass=true
+mode=crosslist split=false x=5 dist=12 visible=[2] events=[] pass=true
+mode=crosslist split=false x=6 dist=13 visible=[] events=[{1 2 1 -1}] pass=true
+mode=crosslist split=true x=2 dist=9 visible=[] events=[] pass=true
+mode=crosslist split=true x=-1 dist=6 visible=[2] events=[{1 2 0 0}] pass=true
+mode=crosslist split=true x=1 dist=8 visible=[2] events=[] pass=true
+mode=crosslist split=true x=-1 dist=6 visible=[2] events=[] pass=true
+mode=crosslist split=true x=2 dist=9 visible=[] events=[{1 2 1 -1}] pass=false
+mode=crosslist split=true x=1 dist=8 visible=[2] events=[{1 2 0 0}] pass=false
+mode=crosslist split=true x=5 dist=12 visible=[2] events=[] pass=true
+mode=crosslist split=true x=6 dist=13 visible=[] events=[{1 2 1 -1}] pass=true
+mode=kdtree split=false x=2 dist=9 visible=[] events=[] pass=true
+mode=kdtree split=false x=-1 dist=6 visible=[2] events=[{1 2 0 0}] pass=true
+mode=kdtree split=false x=1 dist=8 visible=[2] events=[] pass=true
+mode=kdtree split=false x=-1 dist=6 visible=[2] events=[] pass=true
+mode=kdtree split=false x=2 dist=9 visible=[2] events=[] pass=true
+mode=kdtree split=false x=1 dist=8 visible=[2] events=[] pass=true
+mode=kdtree split=false x=5 dist=12 visible=[2] events=[] pass=true
+mode=kdtree split=false x=6 dist=13 visible=[] events=[{1 2 1 -1}] pass=true
+mode=kdtree split=true x=2 dist=9 visible=[] events=[] pass=true
+mode=kdtree split=true x=-1 dist=6 visible=[2] events=[{1 2 0 0}] pass=true
+mode=kdtree split=true x=1 dist=8 visible=[2] events=[] pass=true
+mode=kdtree split=true x=-1 dist=6 visible=[2] events=[] pass=true
+mode=kdtree split=true x=2 dist=9 visible=[] events=[{1 2 1 -1}] pass=false
+mode=kdtree split=true x=1 dist=8 visible=[2] events=[{1 2 0 0}] pass=false
+mode=kdtree split=true x=5 dist=12 visible=[2] events=[] pass=true
+mode=kdtree split=true x=6 dist=13 visible=[] events=[{1 2 1 -1}] pass=true
