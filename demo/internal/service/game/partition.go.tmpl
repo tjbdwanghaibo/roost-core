@@ -529,11 +529,21 @@ func (rt *partitionRuntime) gateSession(playerID int64, s gateway.Session) (cell
 	if !ok || !p.Authenticated() || p.PlayerID != playerID {
 		return cellworld.BaseSession{}, cellworld.ErrStaleSession
 	}
-	b, admission, ok := rt.gateIngress.SessionAdmission(p.SessionID)
-	if !ok || admission == 0 || b.PlayerID != playerID || b.SessionID != p.SessionID || b.ConnectionNonce == "" || b.ConnectionNonce != c.ConnectionID() {
+	_, owner, ok := rt.currentGateSession(playerID, p.SessionID)
+	if !ok || owner.ConnectionID != c.ConnectionID() {
 		return cellworld.BaseSession{}, cellworld.ErrStaleSession
 	}
-	return cellworld.BaseSession{SessionID: b.SessionID, ConnectionID: b.ConnectionNonce, Admission: admission}, nil
+	return owner, nil
+}
+
+// Both Join and the view reconciler read the same current binding. The close event
+// carries the full Binding; the Base uses the confirmation order from this lookup.
+func (rt *partitionRuntime) currentGateSession(playerID int64, sessionID string) (gateway.Binding, cellworld.BaseSession, bool) {
+	b, admission, ok := rt.gateIngress.SessionAdmission(sessionID)
+	if !ok || admission == 0 || b.PlayerID != playerID || b.SessionID != sessionID || b.ConnectionNonce == "" {
+		return gateway.Binding{}, cellworld.BaseSession{}, false
+	}
+	return b, cellworld.BaseSession{SessionID: b.SessionID, ConnectionID: b.ConnectionNonce, Admission: admission}, true
 }
 
 // connectionSession is the one mapping from a request to its BaseSession for both

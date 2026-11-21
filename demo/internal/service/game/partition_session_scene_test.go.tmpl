@@ -421,22 +421,31 @@ func TestPartitionViewUncertainAdmissionRetryAndWireFailureReclaim(t *testing.T)
 	}
 }
 
-// partitionGateStub is the Game ingress seen by the partition on a dedicated Gate:
-// current is the binding the ingress reports for the account session right now.
-type partitionGateStub struct {
-	peers   *partitionViewPeers
-	current *partitionViewSocket
-	order   uint64 // confirmation order of current
+// GameIngress has one current binding per SessionID, not per player.
+type partitionGateStub map[string]partitionGateRecord
+
+type partitionGateRecord struct {
+	binding gateway.Binding
+	order   uint64
 }
 
-func (g *partitionGateStub) SessionAdmission(sessionID string) (gateway.Binding, uint64, bool) {
-	if g.current == nil || g.current.key.SessionID != sessionID {
-		return gateway.Binding{}, 0, false
-	}
-	return gateway.Binding{PlayerID: g.current.unique, SessionID: sessionID, ConnectionNonce: g.current.ConnectionID()}, g.order, true
+func (g partitionGateStub) bind(s *partitionViewSocket, order uint64) gateway.Binding {
+	binding := gateway.Binding{PlayerID: s.unique, SessionID: s.key.SessionID, ConnectionNonce: s.ConnectionID(), BindID: fmt.Sprintf("%032x", order)}
+	g[binding.SessionID] = partitionGateRecord{binding, order}
+	return binding
 }
-func (g *partitionGateStub) ConnectionActive(unique int64, conn string) bool {
-	return g.peers.ConnectionActive(unique, conn)
+
+func (g partitionGateStub) SessionAdmission(sessionID string) (gateway.Binding, uint64, bool) {
+	record, ok := g[sessionID]
+	return record.binding, record.order, ok
+}
+func (g partitionGateStub) ConnectionActive(unique int64, conn string) bool {
+	for _, record := range g {
+		if record.binding.PlayerID == unique && record.binding.ConnectionNonce == conn {
+			return true
+		}
+	}
+	return false
 }
 
 func partitionCommandFixture(t *testing.T, unique int64) (*attackFixture, *partitionViewPeers, *Scene, *player.Player) {
@@ -459,6 +468,83 @@ func partitionCommandFixture(t *testing.T, unique int64) (*attackFixture, *parti
 	b.after = func(time.Duration, func()) {}
 	b.async = func(fn func()) { fn() }
 	return f, peers, b, p
+}
+
+// A confirmed replacement login and a replacement Join are distinct lifecycle
+// steps. Only the latter installs a new receiver; neither formally removes the Base.
+func TestPartitionGateViewLifecycle(t *testing.T) {
+	for _, step := range []string{"close", "reconcile", "close_after_rejoin"} {
+		t.Run(step, func(t *testing.T) {
+			ctx := context.Background()
+			const id = 862
+			f, peers, scene, p := partitionCommandFixture(t, id)
+			owner, next := peers.socket(id, 1), peers.socket(id, 2)
+			gate := partitionGateStub{}
+			binding := gate.bind(owner, 1)
+			f.rt.gateIngress = gate
+			scene.watchSessions(peers)
+			join := func(socket *partitionViewSocket) {
+				t.Helper()
+				if err := scene.JoinConnection(ctx, p, spatial.Point{}, socket); err != nil {
+					t.Fatal(err)
+				}
+				if err := scene.ReadyConnection(id, socket); err != nil {
+					t.Fatal(err)
+				}
+			}
+			join(owner)
+			before, err := f.rt.node.BaseStateOf(ctx, p.ID())
+			if err != nil || !before.InWorld {
+				t.Fatalf("joined Base: %+v, %v", before, err)
+			}
+			if step != "close_after_rejoin" {
+				next.key.SessionID = "second-login" // independent login of the same player
+			}
+			nextBinding := gate.bind(next, 2)
+			if step == "close_after_rejoin" {
+				join(next) // same SID replaced, and the new connection has entered
+			} else {
+				if len(gate) != 2 || !gate.ConnectionActive(id, owner.ConnectionID()) || !gate.ConnectionActive(id, next.ConnectionID()) {
+					t.Fatal("expected two independently live Gate bindings before owner close")
+				}
+				delete(gate, binding.SessionID) // retire only the owner before publishing its close
+			}
+			owner.closed.Store(true)
+			closed := gateway.TCPSessionClosed{PlayerID: id, SessionID: binding.SessionID, ConnectionID: binding.ConnectionNonce, Binding: binding, ReceiverID: 1}
+			if step == "reconcile" {
+				// Exactly one periodic pass, without delivering the close or another Join.
+				scene.reconcilePartitionViewsOnce()
+			} else {
+				for _, notify := range peers.closed {
+					notify(closed)
+				}
+			}
+			after, err := f.rt.node.BaseStateOf(ctx, p.ID())
+			if err != nil || !after.InWorld || after.Actor != before.Actor || after.Entry != before.Entry {
+				t.Fatalf("view cleanup changed the Base entry: %+v -> %+v, %v", before, after, err)
+			}
+			_, terrain := scene.terrain.interest.ObserverView(id)
+			subs := scene.manager.Subscribers(p.ID())
+			if binding, order, ok := gate.SessionAdmission(next.key.SessionID); !ok || binding != nextBinding || order != 2 || next.closed.Load() || peers.closuresOf(id) != 0 {
+				t.Fatal("view cleanup disturbed the second login")
+			}
+			// The first Flush is after cleanup. A retired receiver cannot emit its
+			// pending first snapshot even though player-keyed delivery is available.
+			if err := scene.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			frames := peers.take(id)
+			if step == "close_after_rejoin" {
+				if err := scene.ReadyConnection(id, next); err != nil || scene.Members() != 1 || !terrain || len(subs) != 1 || !heldSubjects(t, frames)[p.ID()] {
+					t.Fatalf("replacement view: ready=%v members=%d terrain=%v self=%v frames=%d", err, scene.Members(), terrain, subs, len(frames))
+				}
+				return
+			}
+			if scene.Members() != 0 || terrain || len(subs) != 0 || len(frames) != 0 || !errors.Is(scene.manager.ReadySession(id), entitysync.ErrSessionUnknown) {
+				t.Fatalf("departed view: members=%d terrain=%v self=%v frames=%d", scene.Members(), terrain, subs, len(frames))
+			}
+		})
+	}
 }
 
 func partitionVelocity(t *testing.T, f *attackFixture, p *player.Player) int64 {
@@ -508,7 +594,8 @@ func TestPartitionGateCommandsAreOrderedByTheBaseSession(t *testing.T) {
 	f, peers, b, p := partitionCommandFixture(t, 861)
 	old, next := peers.socket(861, 0), peers.socket(861, 0)
 	old.key.ConnectionID, next.key.ConnectionID = "gate-nonce-old", "gate-nonce-new"
-	gate := &partitionGateStub{peers: peers, current: old, order: 1}
+	gate := partitionGateStub{}
+	gate.bind(old, 1)
 	f.rt.gateIngress = gate
 	if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, old); err != nil {
 		t.Fatalf("Gate Join: %v", err)
@@ -519,7 +606,7 @@ func TestPartitionGateCommandsAreOrderedByTheBaseSession(t *testing.T) {
 	if err := f.rt.MoveConnection(ctx, 861, old, 3, 0); err != nil {
 		t.Fatalf("Gate move: %v", err)
 	}
-	gate.current, gate.order = next, 2
+	gate.bind(next, 2)
 	if err := b.JoinConnection(ctx, p, spatial.Point{X: 9999, Y: 9999}, next); err != nil {
 		t.Fatalf("replacement Gate Join: %v", err)
 	}
@@ -527,7 +614,7 @@ func TestPartitionGateCommandsAreOrderedByTheBaseSession(t *testing.T) {
 		t.Fatalf("replacement kept the old velocity: vx=%d", vx)
 	}
 	// The old connection's request passed the edge while its binding was current.
-	gate.current, gate.order = old, 1
+	gate.bind(old, 1)
 	if err := f.rt.MoveConnection(ctx, 861, old, 5, 0); !errors.Is(err, cellworld.ErrStaleSession) {
 		t.Fatalf("replaced Gate connection move = %v, want ErrStaleSession", err)
 	}

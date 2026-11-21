@@ -245,6 +245,7 @@ type sceneMember struct {
 	// one): a session opened after a retry binds its own state then.
 	own *player.Player
 	connection cellworld.BaseSession // zero for legacy (ordinary map, internal) lifecycles
+	gateBinding gateway.Binding      // exact close identity installed with connection; zero on embedded TCP
 	socket gateway.Session           // close only this physical connection if its manager session is lost
 }
 
@@ -406,8 +407,8 @@ func (bridge *Scene) watchSessions(source sessionSource) {
 		return
 	}
 	bridge.unsubscribe = source.OnSessionClosed(func(event gateway.TCPSessionClosed) {
-		if rt := bridge.partition.Load(); rt != nil && rt.gateIngress == nil {
-			rt.closedConnection(event) // only posts the exact identity; the Base checks it inside its transaction
+		if rt := bridge.partition.Load(); rt != nil {
+			rt.closedConnection(event) // embedded only; on Gate the Base beat still owns disconnect/grace
 			if bridge.physicalPartition() {
 				bridge.runLater(func() { bridge.disconnectPartitionEvent(event) })
 				return
@@ -1307,8 +1308,8 @@ func (bridge *Scene) leaveTeamLocked(playerID int64) {
 }
 
 // sweepLocked removes members whose connection is gone. The session-close
-// source is the primary path; this catches what it missed, at the one moment
-// a player is arriving. Called with transitions held.
+// source is the primary path; joins and the partition reconciliation tick
+// catch what it missed. Called with transitions held.
 func (bridge *Scene) sweepLocked() {
 	bridge.mu.Lock()
 	candidates := make([]int64, 0, len(bridge.members))

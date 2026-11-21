@@ -16,7 +16,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"{{MODULE}}/game/entities/player"
-	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
 )
 
@@ -24,17 +23,13 @@ type sceneConnectionTable interface{ ConnectionActive(int64, string) bool }
 
 // Distinguish deployments, not which methods a particular request happened to expose.
 func partitionPhysicalTransport(p scenePusher) bool {
-	if tcp, ok := p.(*accessplayertcp.Runtime); ok {
-		_, gate := tcp.PlayerRuntime.(*gateway.GameIngress)
-		return !gate
-	}
 	_, ok := p.(sceneConnectionTable)
 	return ok
 }
 
 func (b *Scene) physicalPartition() bool {
 	rt := b.partition.Load()
-	return rt != nil && rt.gateIngress == nil && partitionPhysicalTransport(b.sessions)
+	return rt != nil && (rt.gateIngress != nil || partitionPhysicalTransport(b.sessions))
 }
 
 // Keep the manager's player-keyed broadcast and slow-consumer classifications. A failed
@@ -161,10 +156,12 @@ func (b *Scene) admitPartitionView(ctx context.Context, p *player.Player, socket
 	member := sceneMember{generation: generation, own: p, socket: socket, connection: expected}
 	// A close may have arrived after strict commit but before local publication. It
 	// supersedes the previous member even though no new session should be opened.
-	if !b.memberOnline(id, member) {
+	binding, online := b.liveViewOwner(id, expected)
+	if !online {
 		b.detachPartitionLocked(id)
 		return cellworld.ErrStaleSession
 	}
+	member.gateBinding = binding
 	if err := ctx.Err(); err != nil {
 		if previous.connection != expected {
 			b.detachPartitionLocked(id)
@@ -268,11 +265,23 @@ func (b *Scene) checkPartitionCommand(unique int64, socket gateway.Session) erro
 }
 
 func (b *Scene) memberOnline(id int64, m sceneMember) bool {
-	if m.connection.Admission != 0 {
+	_, online := b.liveViewOwner(id, m.connection)
+	return online
+}
+
+// A Gate login is not a Join. Only the binding with the installed admission
+// owns this view; another live connection for the player does not retain it.
+func (b *Scene) liveViewOwner(id int64, owner cellworld.BaseSession) (gateway.Binding, bool) {
+	unique := playerOf(id)
+	if owner.Admission != 0 {
+		if rt := b.partition.Load(); rt != nil && rt.gateIngress != nil {
+			binding, current, ok := rt.currentGateSession(unique, owner.SessionID)
+			return binding, ok && current == owner
+		}
 		t, ok := b.sessions.(sceneConnectionTable)
-		return ok && t.ConnectionActive(playerOf(id), m.connection.ConnectionID)
+		return gateway.Binding{}, ok && t.ConnectionActive(unique, owner.ConnectionID)
 	}
-	return b.sessions.ActiveSessions(playerOf(id)) != 0
+	return gateway.Binding{}, b.sessions.ActiveSessions(unique) != 0
 }
 
 // Ready, LOD, Move and Attack compare under the same lock. No successful check can
@@ -355,7 +364,7 @@ func (b *Scene) disconnectPartitionEvent(ev gateway.TCPSessionClosed) {
 	b.mu.Lock()
 	m := b.members[id]
 	b.mu.Unlock()
-	if m.connection.SessionID == ev.SessionID && m.connection.ConnectionID == ev.ConnectionID {
+	if m.connection.SessionID == ev.SessionID && m.connection.ConnectionID == ev.ConnectionID && m.gateBinding == ev.Binding {
 		b.detachPartitionLocked(id)
 	}
 }
@@ -391,7 +400,7 @@ func (b *Scene) disconnectedLocked(id int64, member sceneMember) {
 	case member.connection.Admission != 0:
 		b.detachPartitionLocked(id)
 	default:
-		// Legacy Gate/internal mode has no Base grace machinery: preserve its formal
+		// Connection-less internal mode has no Base grace machinery: preserve its formal
 		// departure on last disconnect, but perform the Nest request outside transitions.
 		b.runLater(func() { b.leavePartition(context.Background(), id, rt, member.generation) })
 	}
@@ -407,18 +416,22 @@ func (b *Scene) reconcilePartitionViews(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !b.physicalPartition() {
-				continue
-			}
-			b.transitions.Lock()
-			b.mu.Lock()
-			closed := b.closed
-			b.mu.Unlock()
-			if !closed {
-				b.sweepLocked()
-			}
-			b.transitions.Unlock()
+			b.reconcilePartitionViewsOnce()
 		}
+	}
+}
+
+func (b *Scene) reconcilePartitionViewsOnce() {
+	if !b.physicalPartition() {
+		return
+	}
+	b.transitions.Lock()
+	defer b.transitions.Unlock()
+	b.mu.Lock()
+	closed := b.closed
+	b.mu.Unlock()
+	if !closed {
+		b.sweepLocked()
 	}
 }
 
