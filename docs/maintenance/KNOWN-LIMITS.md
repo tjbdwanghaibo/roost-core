@@ -1084,6 +1084,8 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 
 ## 三、已修复的历史
 
+- **RV-20261121-01 / RV-20261120-03**（[续审报告](https://github.com/tjbdwanghaibo/roost-core/blob/89f62f55/docs/maintenance/MAIN-REVIEW-20261121.md)）：目标跨 AOI 区域后保留已进入观察者的距离滞回；独立 Gate 的分区视野归属实际进图的连接，不由同玩家的其他登录维持。Gate 的生成工程生命周期回归与真实多进程接入验收分开计算。
+
 - **2026-11-14：v147 本机遗留收口**：P1 六个真实换服 SIGKILL 点（Q4 保留）；P2 联盟正式探针；P4 C++ 跨 Gate / protobuf；P5 MOBA 宿主交接与 GeneratedTCP；P6 登录；P7 社交及排队入队互斥修复；P8 运营；P9 Room / Turn 与合作 / 经营恢复；P10 地形 WAL 恢复均按各自边界通过。统一入口、证据与未关项见[本轮状态](evidence/known-limits-remaining-20261114/remaining.md#当前收口状态2026-11-14)。B3 仅实验，E2 仅实际窗口未复现；M / C / D 未由功能通过关闭。
 只留一行结论；现象、根因、红绿与复现原文在[已修复历史的证据](evidence/known-limits-history-20261113/README.md)（2026-11-13 从本文件原样移出），发布状态以 CHANGELOG 为准。修复后仍有效的边界在前两部分对应的条目里。
 
