@@ -11,7 +11,7 @@
 
 ## 当前收口状态（2026-11-14）
 
-本机功能实现 / 演练与正式性能、外部环境、维护者决定分开判定。A 的 31 段已迁入 [KNOWN-LIMITS 一](../../KNOWN-LIMITS.md#一框架本身的限制)，F 的 17 项按下表收敛；B 的结果如下。M 的正式测量逐项状态见 §3 开头（2026-11-19：M-1、M-2、M-9、M-15、M-18、M-19 已测，M-5 = E-1 已归因，其余未运行），B-2 大形状成本与 B-3 checkpoint 实验不由功能冒烟关闭。E-1 / E-3 / E-2 已在第三类（2026-11-18～19）归因，见下方“第三类结果”；E-2 当年那次 200 轮（max load 10.39）未复现不是修复。C 的 36 项继续待外部环境；D 与 N1～N4 原样保留未答。
+本机功能实现 / 演练与正式性能、外部环境、维护者决定分开判定。A 的 31 段已迁入 [KNOWN-LIMITS 一](../../KNOWN-LIMITS.md#一框架本身的限制)，F 的 17 项按下表收敛；B 的结果如下。M 的正式测量逐项状态见 §3 开头（2026-11-19：M-1、M-2、M-9、M-15、M-18、M-19 已测，M-5 = E-1 已归因；2026-11-22 按压缩口径测完其余，M-16 未完成），B-2 大形状成本与 B-3 checkpoint 实验不由功能冒烟关闭。E-1 / E-3 / E-2 已在第三类（2026-11-18～19）归因，见下方“第三类结果”；E-2 当年那次 200 轮（max load 10.39）未复现不是修复。C 的 36 项继续待外部环境；D 与 N1～N4 原样保留未答。
 
 | B / 对应 No. | 本机结果与证据 | 仍保留的边界 |
 | --- | --- | --- |
@@ -316,7 +316,7 @@ M-13 的 [Cluster 探针修复](../mail-cluster-probe-20261114.md)已合：仅 i
 
 ## 3. M：空闲机器上的运行序列
 
-**状态（2026-11-19 更新）**：第二类按维护者 11-18 的顺序推进（S1..S14，之后第四类 Colima Linux）。
+**状态（2026-11-22 更新）**：第二类按维护者 11-18 的顺序推进（S1..S14，之后第四类 Colima Linux）。11-22 按维护者的压缩口径（每轮约 10 分钟、每档 1 个样本、缩短时长、串行）跑完其余 12 项，M-16 未完成；口径与原计划不同，实际参数见[本轮报告](../../../performance/benchmarks/m-series-rest-20261122/README.md)。
 
 | M | 段 | 状态 | 结论 / 证据 |
 | --- | --- | --- | --- |
@@ -328,7 +328,18 @@ M-13 的 [Cluster 探针修复](../mail-cluster-probe-20261114.md)已合：仅 i
 | M-15（No.75） | S11 | 已测（2026-11-15） | 见 KNOWN-LIMITS“游戏尺度与千人”与 [login-burst](../../../performance/benchmarks/login-burst-20261115/README.md) |
 | M-19（No.14） | S14 | 已测（2026-11-14） | 开 / 关无退步，缺省打开；[实验记录](../checkpoint-experiment-20261114/README.md) |
 | E-3（No.92） | S12 | 已归因 | [第三类第一批](../category3-anomalies-20261118/README.md) |
-| M-3、M-4、M-6～M-8、M-10～M-14、M-16、M-17 | S3～S10、S13 | 未运行 | 2026-11-22 维护者要求跑完；当时本周额度已用 98%，按“额度低先记录”先停，未开跑。按每轮约 10 分钟压缩后合计约 2～2.5 小时，须串行、机器空闲时跑 |
+| M-3（No.9） | S4 | 已测（2026-11-22，压缩口径：各 1 次 3min） | batch / dispatch 都零跳拍、零拒绝，业务 p99 12.1 / 11.8ms；dispatch 短池作业数 6.7 倍、分配多 18%。尾部差异单样本不下结论，无 CPU 数据；Linux 仍 C-L1。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-3no9nest-game-心跳投递-batch--dispatch) |
+| M-4（No.21） | S3 | 已测（2026-11-22，压缩口径：各 1 次） | periodic / on_change 五个场景差异都在噪声内（p99 最大差 0.6ms），帧数相同、零超期；未见退步。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-4no21sync-类型调度-periodic--on_change) |
+| M-6（No.23、98） | S5 | 已测（2026-11-22，压缩口径：1 次 4min） | 独立 Gate + self_sync 1000 人：240 万条全完成、值核对一致；业务 p99 20.1ms、Gate 往返 p99 17ms，偶发 0.3～0.4s 尾部未拆。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-6no2398独立-gate--self_sync-重档) |
+| M-7（No.24） | S5 | 已测（2026-11-22，80s；计划 120s 撞 TCP 空闲 90s 作废） | 健康 1000 + 停读 50、4 KiB 帧：20 / 100 轮每秒驻留峰值 35 / 101 MiB（预算 256 MiB），预算拒绝 0，停读 50 条全被 5s 写期限关。120s 档要客户端发心跳（夹具未改）。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-7no24出站驻留预算健康-1000--停读-50) |
+| M-8（No.25） | S3 | 已测（2026-11-22，压缩口径：各 1 次） | 16 视野 ApplySync：`log_backlog_per_tick` 200 tick 中 46 个非零、p99 110 / max 120 条，政策阶段 p95 31.7ms 超半周期，帧少 1.3%；ApplyAsync 帧满额、settle_delay p99 80ms。与 10-22 同量级，缺省上限 8 有依据。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-8no25interest-applysync-16-视野诊断构建) |
+| M-10（No.30、99） | S6 | 已测（2026-11-22，1 次） | 3000 帧：256 kB/s 5.27s 追平回实时、无期限关闭；64 kB/s 被 Gate 以单帧发送预算断开，`player_tcp_write_deadline_total{deadline="send_budget"}`=1、`write_timeout` 0。与既有“独立 Gate 无写出回执”限制一致。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-10no3099独立-gate-追帧慢链路) |
+| M-11（No.15.2） | S8 | 已测（2026-11-22，压缩口径：w=16 / w=1 各 1 轮） | Join 吞吐差 1～4%（755 / 726 次/s 等），retryable / unknown 都是 0；两种设置都随段递减约 36%，原因尚未确认。C-Q2 仍未验。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-11no152effect-消费者对联盟-join-rpc-的影响) |
+| M-12（No.57、113） | S9、S10 | 已测（2026-11-22，压缩口径：同秒 100 / 200 各 1 次，每档新环境，不做爬坡） | 100 人 96 / 100、200 人 182 / 200（11-18 为 86）；World 热点 `nest: sync timeout` 0，失败全在 saga 状态轮询（赠礼 14、联盟 4），saga 仍未知 / 等待日志 8 / 22 次。爬坡档与“积压继承”推断未测。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-12no57113game-demo-100--200-人同秒) |
+| M-13（No.60） | S6 | 已测（2026-11-22，count 3；publish 改 1000x） | 账本满 1000 条：私有单机 / Cluster 发布 1.08 / 1.24ms、撤回 1.19 / 1.32ms、重载 0.44 / 0.46ms、版本命中 17～27µs。计划的 publish 2000x 撞基准自身上限（第 1000 次起账本满，夹具缺陷）。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-13no60全服邮件账本在上界附近的成本) |
+| M-14（No.72） | S3 | 已测（2026-11-22，压缩口径：各 1 次 60s） | demo 尺度达标；game 尺度每格 Ghost 约 3500，region beat p50 96～116ms（20Hz 周期 50ms），ghost 延迟 p99 约 150ms、handoff p50 约 0.2s、重传 200 余次，无丢弃 / 冲突。根因未拆，尚未确认。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-14no72cellworld-demo--game-尺度) |
+| M-16（No.97） | S7 | **未完成**（2026-11-22） | 1000 人集中布局经 Gate 两档开场约 8s 失败（夹具连接 5s 期限，疑似夹具，尚未确认）；改 400 人：c0 通过，c4 收尾 `want 376 got 100`——期望集合超过会话上限 100，核对口径与配置不匹配，块覆盖不受会话上限约束是否算设计缺口待维护者定。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-16no97block-aoi-集中布局-observed-0--4未完成) |
+| M-17（No.103、112） | S13 | 已测（2026-11-22，压缩口径：四档各 120s） | strict 890 次/s（p50 62ms，每次 fsync 约 6 条）；+self_sync 不变；pipelined 开环 1500/s 只接 973/s、丢 35%；pipelined 同一实体 104 次/s、每次 fsync 1 条（与 M-15 记录的按实体排队同一机制）。[证据](../../../performance/benchmarks/m-series-rest-20261122/README.md#m-17no103112生成工程持久写入四档) |
 
 下列是计划入口，实际报告须记录生效参数与错误，不以开关冒烟为完成。2026-11-14 更正：M-10 单位为十进制 kB/s，使用 256/64（原 262144/65536 大 1024 倍）；M-16 显式 8/8/queue65536/CPU0（省略时旧默认 4/32，不作同参数对照）；M-17 开环固定 1500/s、四档各 5min，不是容量保证。统一使用`GOWORK=off GOFLAGS=-p=2 GOMAXPROCS=0`，每段≤30min，等待无编译/race/索引负载。
 

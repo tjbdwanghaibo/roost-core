@@ -888,7 +888,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 压测工具的心跳驱动：遗留
 
-- **投递方式与平台复测**：M-3 的 nest-game batch / dispatch 四档待测；Linux 与历史 ticker 约 0.2s 停顿的复现 / 归因见 C-L1。不同驱动的移动者分布不同，不把全部延迟差归给投递方式。
+- **投递方式与平台复测**：M-3 已测（2026-11-22，压缩口径：batch / dispatch 各 1 次 3min，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-3no9nest-game-心跳投递-batch--dispatch)）：两种都零跳拍、零拒绝，业务 p99 12.09 / 11.83ms，dispatch 短池作业数是 batch 的 6.7 倍、分配多 18%；单样本，不据此改缺省；Linux 与历史 ticker 约 0.2s 停顿的复现 / 归因见 C-L1。不同驱动的移动者分布不同，不把全部延迟差归给投递方式。
 
 #### 单实例锁：遗留
 
@@ -899,7 +899,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 #### Remote：遗留
 
 - **路由守卫与大形状成本**：路由守卫 ≥1h 浸泡仍为 C-S1；B-2 已提供真实成员 ≤500 与合成 1k / 5k / 10k 形状探针、精确嵌套 setKey 与开关功能验证。正式成本档待测；Go heap 不等于 RSS，空 L1 不等于冷 Mongo。见[探针报告](../performance/benchmarks/alliance-probes-20261114/README.md)。
-- **Join 1000/s 与 effect 竞争**：目标硬件容量 C-Q2 未验；M-11 待比较 effect workers 16 / 1、c256、写额度 512 与有限重试。既有额度 512 三轮 retryable / unknown 为 0，旧“来源尚未确认”已过时；不据此关闭 effect 对 RPC 的容量影响。正式 RPC 开关只改变 Info / Join，Found 初始化仍固定 1 / 16；脚本 PASS 不代替逐档 failed / slow 核对。
+- **Join 1000/s 与 effect 竞争**：目标硬件容量 C-Q2 未验；M-11 已测（2026-11-22，私有 mirror，w=16 / w=1 各 1 轮，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-11no152effect-消费者对联盟-join-rpc-的影响)）：两者 Join 吞吐差 1～4%，retryable / unknown 均 0；两种设置下吞吐都随段下降约 36%，**原因尚未确认**。既有额度 512 三轮 retryable / unknown 为 0，旧“来源尚未确认”已过时；不据此关闭 effect 对 RPC 的容量影响。正式 RPC 开关只改变 Info / Join，Found 初始化仍固定 1 / 16；脚本 PASS 不代替逐档 failed / slow 核对。
 
 #### DataEngine：尚未确认
 
@@ -917,13 +917,13 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 #### 同步：尚未确认的偶发与疑点
 
-- **类型调度性能**：生产 on_change 接线的功能冒烟已通过；M-4 periodic / on_change 正式对照待测。
+- **类型调度性能**：生产 on_change 接线的功能冒烟已通过；M-4 已测（2026-11-22，各 1 次，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-4no21sync-类型调度-periodic--on_change)）：五个场景差异都在噪声内（p99 最大差 0.6ms），帧数相同、零超期，未见退步。
 
 #### 自身视图、嵌入 TCP 与 AOI：未测部分
 
-- **self_sync**：M-6 独立 Gate 重档待测。整轮重试放大已由 D1 合入的按 subject 作废 + 从被拒会话轮转修掉（`2e1486b4`）；同参数演练 16 KiB 171 / 200、64 KiB 200 / 200 轮提交。
-- **出站预算**：M-7 健康 1000 + 停读 50 连接待测；256 MiB 的历史正常负载拒绝为 0，不证明停读容量。
-- **Interest / 关系视图**：M-8 16 视野诊断构建与逐 tick backlog 待测，CPU=0 参数已修并仅做小冒烟，不能当正式数据。M-9 已测（2026-11-19，`BenchmarkRelationViewAllianceFlush`，单进程、传输层只数字节）：订阅者上限内每轮成本按“变化成员数 × 观察者数”线性，约 0.27µs / 18～19B 每次 pair 更新；1000 人互见（100 万 pair）每轮 1% 变化 2.63ms、堆增量 1.23GB，2000 人（上限提到 2016）10.8ms、4.85GB，约 1.2KB / pair。端到端（Gate、网络、客户端）的百万 pair 容量仍未验（[证据](../performance/benchmarks/m-series-s1-s2-20261119/README.md)）。超过每 subject 订阅者上限时被拒 pair 每轮全量重说的问题已于 2026-11-19 修掉（等空位，[方案与实施结果](FEATURE-2026-11-19-sync-overcap-retry.md)）；基准已随人数提高上限，超上限路径另由 `BenchmarkRelationViewAllianceOverCap` 测量（[证据](../performance/benchmarks/sync-overcap-retry-20261119/README.md)）。
+- **self_sync**：M-6 已测（2026-11-22，独立 Gate + self_sync 1000 人 1 次 4min，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-6no2398独立-gate--self_sync-重档)）：240 万条全部完成、值核对一致，业务 p99 20.1ms、Gate 往返 p99 17ms；偶发 0.3～0.4s 尾部未拆原因。整轮重试放大已由 D1 合入的按 subject 作废 + 从被拒会话轮转修掉（`2e1486b4`）；同参数演练 16 KiB 171 / 200、64 KiB 200 / 200 轮提交。
+- **出站预算**：M-7 已测（2026-11-22，健康 1000 + 停读 50，80s，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-7no24出站驻留预算健康-1000--停读-50)）：每秒 20 / 100 轮时驻留峰值 35 / 101 MiB（预算 256 MiB），预算拒绝 0，50 条停读连接都被 5s 写期限关闭。计划的 120s 档跑不了：演练夹具的健康客户端只读不发，90s 被 TCP IdleTimeout 关掉（夹具问题，未改）。
+- **Interest / 关系视图**：M-8 已测（2026-11-22，16 视野诊断构建 sync / async 各 1 次，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-8no25interest-applysync-16-视野诊断构建)）：ApplySync 下 200 个 tick 有 46 个日志积压非零（p99 110、max 120 条），政策阶段 p95 31.7ms 超过 25ms 半周期、帧数少 1.3%；ApplyAsync 帧数满额、settle_delay p99 80ms。与 10-22 同量级，缺省上限 8 有依据。M-9 已测（2026-11-19，`BenchmarkRelationViewAllianceFlush`，单进程、传输层只数字节）：订阅者上限内每轮成本按“变化成员数 × 观察者数”线性，约 0.27µs / 18～19B 每次 pair 更新；1000 人互见（100 万 pair）每轮 1% 变化 2.63ms、堆增量 1.23GB，2000 人（上限提到 2016）10.8ms、4.85GB，约 1.2KB / pair。端到端（Gate、网络、客户端）的百万 pair 容量仍未验（[证据](../performance/benchmarks/m-series-s1-s2-20261119/README.md)）。超过每 subject 订阅者上限时被拒 pair 每轮全量重说的问题已于 2026-11-19 修掉（等空位，[方案与实施结果](FEATURE-2026-11-19-sync-overcap-retry.md)）；基准已随人数提高上限，超上限路径另由 `BenchmarkRelationViewAllianceOverCap` 测量（[证据](../performance/benchmarks/sync-overcap-retry-20261119/README.md)）。
 
 #### AOI 空间索引：遗留
 
@@ -934,7 +934,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 - **Lockstep 深缓冲链路子例（2026-11-07 本机实验与夹具修正，Linux 未复跑）**：Linux 上 `TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link` 偶发 `closed=true`（约 67 秒，五轮一败）。本机实验（[记录](evidence/lockstep-deep-link-20261107/README.md)）：链路均匀变慢到 128 KiB/s 仍通过，只有中转那一跳完全停住 10 秒以上才失败（测试里 `write_timeout` / `CatchupSendTimeout` 都是 10 秒，按设计放弃）。Linux 回环上，夹具中转那一跳 16 KiB 的接收窗口小于回环 MSS，持续定时器退避会造成这种长停顿，真实网络不会；同文件直连路径早已因同一原因用 256 KiB。已把这一跳改成与直连一致（`deepLinkReadBuffer = slowReadBuffer`），只准入负对照照旧溢出；用例失败时打出 Gate 关连接计数增量与链路各跳进度。**判定为夹具问题，不是框架缺陷；修正后尚未在 Linux 复跑，复跑通过前不关闭。**
 - **TCP 快照的平台窗口**：非 Linux 发送缓冲假设仍为 4 MiB；调大时用例按规模不足失败。历史 Linux 全仓拖到 90s 后失活，夹具已加心跳 / 收紧期限；C-L4 需深缓冲 20 轮与同机慢套件复跑，不能由 macOS 通过关闭。
-- **独立 Gate 慢链路**：deadline 分类指标与夹具已提供，M-10 3000 帧 `LS_DRILL_RATES=256,64` 待测（单位 kB/s，十进制乘 1000；旧 262144 / 65536 是单位错误）。纯追帧通过也不关闭大快照只准入、无写出回执的既定限制。
+- **独立 Gate 慢链路**：deadline 分类指标与夹具已提供，M-10 已测（2026-11-22，3000 帧，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-10no3099独立-gate-追帧慢链路)）：256 kB/s 下 5.27s 追平回到实时；64 kB/s 下 Gate 按单帧发送预算断开（`player_tcp_write_deadline_total{deadline="send_budget"}`=1，`write_timeout` 0），与下句的既定限制一致。纯追帧通过也不关闭大快照只准入、无写出回执的既定限制。
 - **快照外部接入**：MOBA 分进程恢复 / 交接已验，但真实移动网络、跨机 / 目标负载与快照大小分布仍为 C-X3；C# SHA256 / restore 的 Unity / IL2CPP 实跑仍为 C-U1。
 
 ### 生成器、配置与模块（遗留）
@@ -987,11 +987,12 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 - **机器人负载当前边界：百人档有通过样本，尚不作容量保证**。加入分段观测后，同秒与每秒 20 人分五批各跑一次，均 100/100；每档 200 笔赠礼在计时后只读核对，100 笔送达、100 笔按预期补偿。更早的同秒失败档是 92/100：8 笔在等第二笔赠礼补偿时用尽查询次数，当时未记录可关联的 ID，最终状态未知，不能据此重发。赠礼投递的主要等待出现在订阅回调之前；这一段包含 broker、传输、SDK 缓冲和上一条串行处理的背压，不能据此归因于 broker。200 人同秒容量问题仍未关闭，本轮未重测 200 人，未调整 World 持久写或全局并发。见[两段测量、原始口径与后续取证](../performance/DEMO-WORLD-SAGA.md)。
   - **历史对照（按当时门槛）**（2026-10-22 晚，[压测清单 §3 结果](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）：`make dev-smoke`（2 / 2）与 20 人 loadtest 通过；100 / 200 人（单 IP 上限调到 512）connect 全部成功、`object limit exceeded` 0，但成功 24 / 100、30 / 200：gift saga 步骤排队超时、公会目录实体慢派发，200 人时 `enter_game` 写全服 World 实体与上单场景实体在请求期限内没轮到（110 个复制会话没打开）。按现有证据是 demo 场景的共享热点与同秒突发，不判为框架缺陷，**尚未确认**（没有按秒爬坡的对照）。 **2026-11-14 重测**（忙机，负载 5～8，同一部署连跑）：100 人同秒 96 / 100、200 人同秒 72 / 200（`add_exp` 在 World 热点上 `nest: sync timeout`）；爬坡反而更差（200 人 20/s 43、10/s 54，100 人 10/s 73，gift / 联盟 saga 停在“仍未知 / 等待”），推断是前一轮 saga 积压被下一轮继承，**尚未确认**。要在空闲机器上每轮用新环境（mirror-local clean/up 并重新部署）重跑。证据在本轮 scratchpad 的 122/。 **2026-11-18 复跑**（v1.54.0 发版前压缩测量，负载 3～6，每档全新环境）：100 人同秒 **100 / 100**，零超时、日志零 saga 卡住，但整场景 p95 24.8s 超过 16s 门槛（请求层最慢的 AddExp p95 2.3s，推断场景耗时主要在等 saga 和轮询，尚未确认）；200 人同秒 80 / 200，AddExp 的 `nest: sync timeout` 108 次，与 11-14 的形态相同。爬坡四档与空闲机复跑仍没做。`demo-robot.sh` 默认的私有依赖偏移 37000 会把 Mongo 端口放进 macOS 的临时端口段（49152 以上），撞上别的进程的出站连接时起不来；在本机要用不大于 21746 的偏移（这轮用 20000）（[证据](evidence/perf-compressed-20261118/README.md)）。 **2026-11-18 逐步计时**（[证据](evidence/robot-step-timing-20261118/README.md)，忙机负载 5～19，两轮正式加五轮诊断）：100 人同秒整场景时间的 72%～73% 在 5 个 saga 状态轮询上（约 17s）。其余是 `add_exp` 的 World 排队约 1.4s，和场景固定等待约 4.5s（对战 1.34s、寻路、推送等待、轮询量化）。 saga 步骤体本身很快（联盟最慢的 found 228ms），时间花在启动链路排队：Nest 提交到协调器建出记录，负载下平均 3.7～4.1s，排空后 0.12s。诊断轮把 `saga.start_effect_workers` 从 4 调到 16 后，启动降到约 0.5s，但排队转移到串行的 Mongo 步骤消费者（`MongoWorkers` 缺省 1，wiring 未开放），出现投递步骤超时重派、6 / 100 失败。只调 Mongo 步骤并发没有效果。 判断是框架 saga 启动 / 步骤并发的排队，不是场景写法；改轮询写法最多省约 2s，达不到 16s 门槛。各段占比（outbox、JetStream、StartSaga、Mongo 步骤构成）**尚未确认**，待 saga 分段指标后复测再定缺省并发与门槛。 **2026-11-18 saga 单独成组**（[证据](evidence/robot-saga-group-20261118/README.md)）：维护者定 saga 只看成败、不卡延迟，demo 的 p95 16s 门槛改判除去 saga 组之后的场景时间。忙机一轮（负载 7.2）100 人同秒 100 / 100，除去 saga 组 p95 8.32s、通过；saga 组 p95 22.6s、整场景 28.9s 只报告。100 人同秒档按新门槛通过（单轮，余量是否稳定尚未确认）；200 人档与爬坡档没按新门槛复跑。saga 启动 / 步骤并发的排队本身没有改变，仍按逐步计时证据第 6 节待定。
   - **2026-11-18 200 人同秒归因**（[证据](evidence/category3-batch2-20261118/README.md) 第 1 节）：AddExp 等的是 World，不是 Player（派发诊断：286 个 AddExp 中 243 个最后由共享 World 的前驱放行、0 个由 Player 放行）。原因是 World 链上 strict 提交每次 fsync 一条（本机约 10ms 一次），同秒 200 个 AddExp 前面还排着 136 个只投递不等待、但仍是 strict 的 `RecordEnter`，约 3.4s 的 World 时间超过 `nest.request_timeout` 3s，末尾 114 个超时。这是“热点单例实体的写吞吐”的同一机制，加上 demo 的写法（AddExp 每次写全服 `ExpGranted`、World 上的写都是 strict），不是框架缺陷。诊断对照把 AddExp / RecordEnter 改成 `durability=pipelined completion=async` 后 add_exp 200 / 200 零超时，但失败整体移到 saga 状态轮询（32 / 200），所以 200 人同秒档还取决于 saga 并发的决定。demo 改法按推荐定 A（World 上的写都声明 `pipelined completion=async`，维护者“有推荐默认按推荐”），**2026-11-20 已实施**：写 World 的 5 个 handler 改了声明，只读的 `ActivitySettled` / `WorldStats` 不变；回复仍在 WAL 持久之后，持久保证不变。生成 demo 全部用例与 race 通过；200 人同秒档改后**尚未重测**，按诊断对照失败会转到 saga 状态轮询，仍取决于 saga 并发的决定。本轮 114 笔首步客户端失败（105 次 timeout、9 次取消/期限）中 **5 笔在服务端成功提交，109 笔未执行写入**。依据是该轮 strict handler 的成功、持锁与机器人两次调用的计数，不是逐玩家查 Mongo；不能由 3s 超时推断未到账，也不能把该比例套给另一轮 108 次 timeout。[复算与局限](evidence/local-recovery-four/README.md)。
+  - **2026-11-22 M-12 复测**（同秒 100 / 200 人各 1 次、每档新环境、不做爬坡，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-12no57113game-demo-100--200-人同秒)）：100 人 96 / 100，200 人 182 / 200（11-18 为 86）。World 热点 `nest: sync timeout` 为 0，失败全在 saga 状态轮询（200 人档赠礼 14、联盟 4），saga 仍未知 / 等待日志 8 / 22 次；100 人档比 11-18 的 100 / 100 少 4 个，**原因尚未确认**。
 
 #### 框架服务与 game-demo：未测部分
 
 - **匹配队列 / 活动榜**：异步复制丢最近写、跨机分区与 Cluster 容量 C-X5，结算榜 24h C-S3 未验。Sweep 的 limit 1000 → 200 已在 2026-10-22 修正重跑；不能继续列为当前夹具缺口。
-- **全服邮件账本规模**：M-13 单 Redis / Cluster 的上界成本待测；原 integration helper 未填 ClusterAddrs 的夹具问题已修复，Cluster 与单机四个子项的 1x 功能探针通过，并保留修前红 / 移除修复对照红 / 恢复绿；这不是生产邮件 / Redis 驱动缺陷，也不是 M-13 正式性能数据，见[探针报告](evidence/mail-cluster-probe-20261114.md)；十万在线版本键压力与频繁公会邮件不由功能回归证明。
+- **全服邮件账本规模**：M-13 已测（2026-11-22，账本满 1000 条、count 3，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-13no60全服邮件账本在上界附近的成本)）：单机 / Cluster 发布 1.08 / 1.24ms、撤回 1.19 / 1.32ms、重载 0.44 / 0.46ms；计划的 publish 2000x 撞到基准自身上限（第 1000 次起账本必满，夹具缺陷），改跑 1000x；原 integration helper 未填 ClusterAddrs 的夹具问题已修复，Cluster 与单机四个子项的 1x 功能探针通过，并保留修前红 / 移除修复对照红 / 恢复绿；这不是生产邮件 / Redis 驱动缺陷，也不是 M-13 正式性能数据，见[探针报告](evidence/mail-cluster-probe-20261114.md)；十万在线版本键压力与频繁公会邮件不由功能回归证明。
 
 #### 单个玩家换服（模块 rehome 与 game-demo 接线）
 
@@ -1016,7 +1017,7 @@ P7 的基础 55 场景及联动、双 sid 迁服 handed-off / committed SIGKILL 
 
 #### 地形 / 无缝世界：遗留
 
-- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
+- **游戏尺度与千人**：M-14 view_radius=68m / ghost_band=70m、D13 C 已实施（Base 按来源 Cell 分订阅）。**M-14 已测（2026-11-22，`TestCellWorldMeasure` demo / game 各 60s，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-14no72cellworld-demo--game-尺度)）**：demo 尺度各项远低于 50ms 周期；game 尺度（每格约 2500 Real + 3500 Ghost、5% 移动）每格 region beat p50 96～116ms，是 20Hz 周期的两倍多，ghost 延迟 p99 约 150ms、handoff p50 约 0.2s、重传 200 余次，无丢弃无冲突——本机 4 Cell 跟不上 20Hz，**哪一段随 Ghost 数变慢尚未确认**（未开 profile，开跑时负载 10）。M-15（2026-11-15）先后查出并修掉登录潮里的两处排队（demo 的 EnterGame 同步等唯一 World 的 strict 登录计数、chat 世界频道写在同进程内抢 compare-and-set），进入路径失败 422 → 0、请求超时 438 → 0；登录公告按维护者决定合并为每秒至多一条；s11 改为进入点分散 1400（**测试条件已改，不能与此前的 M-15 直接比较**）。分散后的剩余失败（240 / 21 / 417）根因是机器人比例控制在回传位置延迟 0.6 秒以上时来回摆（测试缺陷），已改为分段到达（走一段、停稳、再走），三轮 0 / 0 / 0（判定框、阈值、爬坡、预热不变，负载 3.8～19.7）；同一出生点两轮 0 / 0，但此前 5 轮里 3 轮在预热期出现 Base 兴趣饱和（日志积压 37～50 万、会话丢失 222～755），触发条件尚未确认；整机过载时（负载 18 → 28）同步帧停更约 2.7 秒的一轮不作容量结论。见[登录潮记录](../performance/benchmarks/login-burst-20261115/README.md)与 [hot-entity-commit](../performance/benchmarks/hot-entity-commit-20261115/README.md)。Base 在千人同点下的兴趣 / 同步容量优化已决定另起一批（维护者 2026-11-15）；B / E 暂不做；本机容量不代替 C-L5 / C-X6 的独占 Linux / 分机、目标 1w × 1w 地图、同时在线 3000 / 单服 10w 人（存量 / 活跃口径仍需明确）及端到端 50ms 证据。
 - **编辑 / 建筑恢复的外部边界**：B-11 已验四块笔刷、两块建筑，strict 确认且 Mongo 空时 SIGKILL，从原 WAL 冷载逐版本 / hash / 占地 / 账本核对，drop-WAL 变异红；不含 TCP 同步送达、跨机或容量。T09 规模、T10 可选物理与 Unity 状态仍按[地形总表](TERRAIN-STATUS.md)。
 - **CellWorld Runtime**：模块场景 10 条已验，含 Start / Stop、三种失败复位（就绪前退出、ctx 先到、就绪后 AddIngress 失败，2026-11-17 补，[证据](evidence/d-small-items-20261117/README.md)）与 manager 托管（2026-11-19 在 v1.57.1 上复验：`module verify cellworld` 17 / 17、race 全过、AddIngress 那条的 4 条变异全被杀，[证据](evidence/category3-batch3-20261119/README.md#2-b-12cellworld-addingress-失败分支的用例)）；业务适配的模块 / demo 分工见 [CellWorld 固定分区](#cellworld-固定分区v1470)“业务适配的分工”。Linux 原始收尾样本未在本机复现，C-L6 需目标 Linux race 20 轮。
 
@@ -1066,7 +1067,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 
 #### 能力与验证边界
 
-历史性能数据仍在各原报告与一、范围说明；当前待测入口统一见 remaining §3，外部入口见 C 清单。M-16 Block AOI 集中布局 observed 0 / 4 显式 short8 / io8 / queue65536 / CPU0，与旧省略参数的 4 / 32 不作同参数对照；M-17 GeneratedTCP 四档各 5min、开环固定 1500/s 是本轮负载设定，不是容量保证。原 2026-10-21 HEAD / v1.27 单变量重跑任务已过时，不继续挂作本轮待办；Mongo 夜间慢的原因与 Sync 长尾仍未归因。
+历史性能数据仍在各原报告与一、范围说明；当前待测入口统一见 remaining §3，外部入口见 C 清单。M-16 Block AOI 集中布局 observed 0 / 4 显式 short8 / io8 / queue65536 / CPU0，与旧省略参数的 4 / 32 不作同参数对照；**2026-11-22 未完成**（[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-16no97block-aoi-集中布局-observed-0--4未完成)）：1000 人两档开场约 8s 失败，疑为负载夹具只在握手 / 发请求时刷新 5s 读期限（尚未确认）；400 人 c0 通过，c4 收尾核对的期望集合（`Interest.Seen` 376 个）超过会话对象上限 100，核对口径与配置不匹配，“值不收敛”无法判定，做法待维护者定。M-17 已测（2026-11-22，四档各 120s，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-17no103112生成工程持久写入四档)）：strict 约 890 次/s、p50 62ms、每次 fsync 约 6 条，加 self_sync 不变；pipelined 开环 1500/s 只接下 973/s；pipelined 同一实体 104 次/s、每次 fsync 1 条（按实体排队，同 M-15 的机制）；开环固定速率是负载设定，不是容量保证。原 2026-10-21 HEAD / v1.27 单变量重跑任务已过时，不继续挂作本轮待办；Mongo 夜间慢的原因与 Sync 长尾仍未归因。
 
 #### 游戏接入验收：遗留
 
