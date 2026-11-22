@@ -1,9 +1,9 @@
 # 方案：超额暂缓订阅很多时的 flush 成本（Sync，2026-11-22）
 
-**状态：待维护者定（只出方案，未改代码）。** 来源：M-16 1000 人 c4 在负载结束后 60s 内没有收敛（[追查记录](../performance/benchmarks/m-series-rest-20261122/README.md#追查-1000-人-c42026-11-22)），维护者 2026-11-22 要求“先出优化方案”。Sync 是 core 三大块之一，确认前不改代码。
+**状态：暂缓（维护者 2026-11-22“先不做”）。** 方案保留，以后随时可按 §8 复测、再决定做不做。来源：M-16 1000 人 c4 在负载结束后 60s 内没有收敛（[追查记录](../performance/benchmarks/m-series-rest-20261122/README.md#追查-1000-人-c42026-11-22)），维护者要求“先出优化方案”。Sync 是 core 三大块之一，确认前不改代码。
 
 - 基线：main `1b12ce0c`，行号都对应这个提交。codebase-memory-mcp 本次连不上（connection closed），调用链靠直接读源码整理。
-- 证据：CPU profile `artifacts/perf/nest/m16prof-c4-17370/sample-1.cpu.pprof`，采样 125s，共 225.55s 样本（约 1.8 核）。采样期在负载结束后的收敛段。
+- 证据：CPU profile 已入库 [`m16prof-c4/baseline-1b12ce0c.cpu.pprof`](../performance/benchmarks/m-series-rest-20261122/m16prof-c4/baseline-1b12ce0c.cpu.pprof)（原件在本机 `artifacts/perf/nest/m16prof-c4-17370/`，artifacts 不入库），参数见同目录 `env.txt`，采样 125s，共 225.55s 样本（约 1.8 核）。采样期在负载结束后的收敛段。
 
 ## 0. 结论速览
 
@@ -141,3 +141,23 @@ D、F 等第 4 批的数据出来再决定。
 | D4 | C 用 subject 上第二张表，还是把暂缓订阅从 `subscribers` 挪到单独的表 | **第二张表**（`subscribers` 保持全集）。挪表要改 44 处读写，风险更大 |
 | D5 | D（重复通知退避）做不做 | **先不做**，等批 4 数据 |
 | D6 | F（配置告警）做不做 | **做指标、不做 WARN**；WARN 已有“政策上限要在会话上限之内” |
+
+## 8. 以后怎么复测
+
+不做优化也能随时重测，看问题还在不在、有没有被别的改动顺带改善。需要本机私有 NATS（`~/.roost-it`），一轮约 10 分钟，按 perf 规则串行跑：
+
+```sh
+source ~/.roost-it/roost-dataengine-it/env.sh
+ROOST_PERF_LABEL=m16prof-c4 ROOST_PERF_COUNT=1 \
+ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 ROOST_NEST_GAME_DIRTY=1 ROOST_NEST_GAME_HZ=1 \
+ROOST_NEST_GAME_LAYOUT=concentrated ROOST_NEST_GAME_OBSERVED_BLOCKS=4 \
+ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_ENTITIES=10000 ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 \
+ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_SHORT_QUEUE=65536 \
+ROOST_NEST_GAME_DURATION=30s ROOST_NEST_GAME_SETTLE=60s ROOST_NEST_GAME_PROFILE=1 \
+bash scripts/perf/nest-game.sh
+```
+
+- **看什么**：日志里每 10s 一行 `Sync settling`（未收敛客户端、缺对象数、累计帧、超额暂缓数），对照 §1.1。60s 内收敛就是 PASS；没收敛时，看客户端读静默中止前的最后一行。
+- **对比 CPU**：`go tool pprof -top -cum <新 cpu.pprof>`，对照 §1.2 各段。也可以直接和基线比：`go tool pprof -diff_base docs/performance/benchmarks/m-series-rest-20261122/m16prof-c4/baseline-1b12ce0c.cpu.pprof <新 cpu.pprof>`。
+- **注意**：§1.2 里夹具核对占了 42.8s，还会和 flush 抢锁。没做批 1 之前，复测得到的是“框架 + 夹具”的合成结果，不能直接当作框架的收敛速度。
+- **回归档**（确认改动没伤到常见路径）：同参数改 `ROOST_NEST_GAME_OBSERVED_BLOCKS=0` 跑 1000 人 c0，或者 `ROOST_NEST_GAME_PLAYERS=400` 跑 c4。两档在 1b12ce0c 上终值核对都通过（只差延迟门槛）。
