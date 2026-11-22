@@ -1067,7 +1067,7 @@ Mongo journal / NATS 文件写入、全局停顿与 200ms 心跳抖动的归因�
 
 #### 能力与验证边界
 
-历史性能数据仍在各原报告与一、范围说明；当前待测入口统一见 remaining §3，外部入口见 C 清单。M-16 Block AOI 集中布局 observed 0 / 4 显式 short8 / io8 / queue65536 / CPU0，与旧省略参数的 4 / 32 不作同参数对照；**2026-11-22 未完成**（[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-16no97block-aoi-集中布局-observed-0--4未完成)）：1000 人两档开场约 8s 失败，疑为负载夹具只在握手 / 发请求时刷新 5s 读期限（尚未确认）；400 人 c0 通过，c4 收尾核对的期望集合（`Interest.Seen` 376 个）超过会话对象上限 100，核对口径与配置不匹配，“值不收敛”无法判定，做法待维护者定。M-17 已测（2026-11-22，四档各 120s，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-17no103112生成工程持久写入四档)）：strict 约 890 次/s、p50 62ms、每次 fsync 约 6 条，加 self_sync 不变；pipelined 开环 1500/s 只接下 973/s；pipelined 同一实体 104 次/s、每次 fsync 1 条（按实体排队，同 M-15 的机制）；开环固定速率是负载设定，不是容量保证。原 2026-10-21 HEAD / v1.27 单变量重跑任务已过时，不继续挂作本轮待办；Mongo 夜间慢的原因与 Sync 长尾仍未归因。
+历史性能数据仍在各原报告与一、范围说明；当前待测入口统一见 remaining §3，外部入口见 C 清单。M-16 Block AOI 集中布局 observed 0 / 4 显式 short8 / io8 / queue65536 / CPU0，与旧省略参数的 4 / 32 不作同参数对照；**2026-11-22 未完成**（[证据](../performance/benchmarks/m-series-rest-20261122/README.md#2026-11-22-夹具修复后重跑维护者定-a)）：维护者定 A 后修了两处夹具问题（读写期限分开、终值核对按会话对象上限），1000 人 c0 功能通过（只差延迟门槛）、400 人 c4 终值核对通过；**1000 人 c4（集中布局 + 4 个覆盖块）负载结束后终值不收敛**：收尾 Flush 阻塞在 `GameIngress.PushBound`，有连接整分钟收不到包，**疑似独立 Gate 出站在高扇出下卡住，尚未确认**（下一步抓阻塞栈）。M-17 已测（2026-11-22，四档各 120s，[证据](../performance/benchmarks/m-series-rest-20261122/README.md#m-17no103112生成工程持久写入四档)）：strict 约 890 次/s、p50 62ms、每次 fsync 约 6 条，加 self_sync 不变；pipelined 开环 1500/s 只接下 973/s；pipelined 同一实体 104 次/s、每次 fsync 1 条（按实体排队，同 M-15 的机制）；开环固定速率是负载设定，不是容量保证。原 2026-10-21 HEAD / v1.27 单变量重跑任务已过时，不继续挂作本轮待办；Mongo 夜间慢的原因与 Sync 长尾仍未归因。
 
 #### 游戏接入验收：遗留
 

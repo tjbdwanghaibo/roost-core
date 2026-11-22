@@ -40,6 +40,8 @@ type gameConfig struct {
 	// 大于 0 时改值走 Interest.QueueSpatial（与 SpatialComponent.MoveWithObservedBlocks 同一入口），覆盖自己右侧
 	// 连续 N 个块；块来源不占 MaxVisible，用来压 Block AOI 的额外扇出（INTEREST-BLOCK-AOI §5、§8）。
 	ObservedBlocks int
+	// Settle 是负载结束后等客户端终值收敛的上限（ROOST_NEST_GAME_SETTLE，缺省 10s）。
+	Settle time.Duration
 }
 
 func envInt(t *testing.T, key string, fallback int) int {
@@ -323,6 +325,12 @@ func TestNestGameLoad(t *testing.T) {
 	c.Duration, err = time.ParseDuration(duration)
 	if err != nil {
 		t.Fatal(err)
+	}
+	c.Settle = 10 * time.Second
+	if settle := os.Getenv("ROOST_NEST_GAME_SETTLE"); settle != "" {
+		if c.Settle, err = time.ParseDuration(settle); err != nil || c.Settle <= 0 {
+			t.Fatalf("ROOST_NEST_GAME_SETTLE must be a positive duration, got %q", settle)
+		}
 	}
 	c.Frontend = "direct"
 	switch gate, embedded := os.Getenv("ROOST_NEST_GAME_GATE") == "1", os.Getenv("ROOST_NEST_GAME_EMBEDDED") == "1"; {

@@ -42,6 +42,10 @@ type loadClients struct {
 	stopping  atomic.Bool
 }
 
+// loadReadIdle 是读协程两次收包之间允许的最长静默：建连、负载结束到收尾核对期间可能没有推送。
+// 请求的回包另有 5 秒等待（见 connect 的写协程），服务端卡住仍会在那里先报错。
+const loadReadIdle = 60 * time.Second
+
 // connect 拨号并完成鉴权（票据是玩家序号 1..Players），随后为每条连接启动读、写协程。
 // 所有连接都在负载开始之前建好，握手不在被测区间内。
 func (clients *loadClients) connect(t *testing.T, addr string, players, maxPayload int, onSync func(index int, payload []byte) error) {
@@ -60,12 +64,16 @@ func (clients *loadClients) connect(t *testing.T, addr string, players, maxPaylo
 		if _, err = wire.Read(conn, 8192); err != nil {
 			t.Fatal(err)
 		}
+		// 握手的 5 秒期限到此为止。之后读、写各管各的期限：写只在发请求时设；读协程每次读之前自己续期。
+		// 以前读沿用写侧刷新的整体期限，1000 条连接逐个建好要超过 5 秒，第一条在负载开始前就读超时。
+		_ = conn.SetDeadline(time.Time{})
 
 		replies := make(chan *wire.Packet, 1)
 		readDone := make(chan struct{})
 		clients.readWait.Go(func() {
 			defer close(readDone)
 			for {
+				_ = conn.SetReadDeadline(time.Now().Add(loadReadIdle))
 				packet, err := wire.Read(conn, maxPayload)
 				if err != nil {
 					if !clients.stopping.Load() {
@@ -106,7 +114,7 @@ func (clients *loadClients) connect(t *testing.T, addr string, players, maxPaylo
 				if in.sample {
 					payload[25] = 1
 				}
-				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				err := wire.Write(conn, []*wire.Packet{{MsgID: 1, Seq: sequence, Payload: payload[:]}}, maxPayload)
 				if err == nil {
 					var reply *wire.Packet

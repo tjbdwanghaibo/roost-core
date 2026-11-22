@@ -276,6 +276,24 @@ WARN entitysync: a session is over its object limit; the extra objects are not s
 
 结论：**M-16 未完成**。observed 4 的“值不收敛”（`fa936c0d` 修的那种缺 1 个对象）这次没法判定——期望集合本身超出会话上限，核对口径与配置不匹配。需要维护者定：(a) 夹具把期望集合截到会话上限（或调大会话上限 / 减少覆盖块）后重跑；还是 (b) 认为块覆盖不受会话上限约束本身是 Block AOI 的设计缺口。本轮不判，**尚未确认**。1000 人档要先解决夹具 5 秒读期限。原始：`m16/`（含两次诊断与 400 人两档；`m16-diag-mistaken-default-env.out` 是一次环境变量没传进去、按缺省参数跑的误操作，作废）。
 
+### 2026-11-22 夹具修复后重跑（维护者定 A）
+
+夹具改了三处（`codegen/internal/entity/testdata/nestgame`，只影响压测，不改框架）：
+
+1. **读写期限分开**（`tcp_clients_test.go`）：握手后清掉整体期限；读协程每次读之前自己续 60s（`loadReadIdle`），写只在发请求时设 5s。以前读沿用写侧刷新的期限，1000 条连接逐个建好超过 5s，第一条在负载开始前就读超时——上面“开场约 8 秒失败”的原因，修后确认。
+2. **终值核对按会话上限**（`sync_load_test.go` 的 `clientMismatch`）：应见集合不超过会话对象上限（`frame.DefaultLimits().MaxObjects`=100）时仍要求两边集合与值完全一致；超过时要求客户端恰好持有 100 个、每个都在应见集合里、值与 DAO 一致。暂缓哪几个由框架决定，不核对。
+3. **收敛上限可配**：`ROOST_NEST_GAME_SETTLE`（缺省 10s，原硬编码值），报告新增 `SyncReport.SettleMS`。
+
+重跑结果（负载 1～3.8，每档 1 次）：
+
+| 档 | 时长 | 结果 | 关键数字 |
+| --- | --- | --- | --- |
+| 1000 人 c0 | 30s | 功能通过；只因延迟门槛判失败 | 业务 300,000 / 300,000、拒绝 0；Gate 往返 p99 9.48ms；VisibleMax 50；提交→客户端 p99 51.83ms（门槛 50ms） |
+| 400 人 c4 | 60s | 终值核对通过；只因延迟门槛判失败 | 业务 240,000 / 240,000、拒绝 0；每个客户端恰好 100 个对象，收敛 0.32s；提交→客户端 p99 93.07ms |
+| 1000 人 c4 | 30s，收敛上限 10s / 60s / 120s | **失败：负载结束后终值不收敛** | 收尾 `Flush` 在 `GameIngress.PushBound` 里阻塞到期限（`sync admission session 860: context deadline exceeded`）；120s 那次客户端 200 在负载结束后整整 60s 没收到一个包（读期限 60s 到期），持有 79 个、应为 100 个（应见 940 个），缺的对象都 `subscribed=true` |
+
+结论：夹具的两个问题已修，1000 人 c0 与 400 人 c4 都能跑完并核对通过。**1000 人 c4（集中布局 + 4 个覆盖块）在负载停止后，有连接的出站整分钟不动**：服务端推送阻塞在 Game Ingress 的出站，客户端一直在读却收不到包。这不再是夹具能解释的，**疑似框架问题（独立 Gate 出站在高扇出下卡住），尚未确认**；没有抓 goroutine 栈，下一步是带 `-test.timeout` 的 panic 栈或 block profile 定位 `PushBound` 等的是什么。正式的 c0 / c4 对照（计划 1000 人）因此仍未完成。原始：`artifacts/perf/nest/m16fix-*`（smoke-c0、smoke-c4、smoke-c4s60、p400-c4），以及 scratchpad 里的 120s 那次日志（已摘录上面的原文）。
+
 ## M-17（No.103、112）生成工程持久写入四档
 
 命令（每档 1 次，计划 5min 改 120s；50 连接；Mongo 用共享隔离环境，每档唯一库 `roost_generated_tcp_*`，脚本结束已删）：

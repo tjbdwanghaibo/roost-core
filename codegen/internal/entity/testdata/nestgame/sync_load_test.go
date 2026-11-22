@@ -41,10 +41,12 @@ type syncLoadClient struct {
 	refs     map[frame.ObjectRef]int64
 }
 type syncLoadReport struct {
-	Mode                                                string
-	Frames, Updates                                     uint64
-	VisibleMin, VisibleMax                              int
-	ValuesVerified, LatencyPassed                       bool
+	Mode                          string
+	Frames, Updates               uint64
+	VisibleMin, VisibleMax        int
+	ValuesVerified, LatencyPassed bool
+	// SettleMS 是负载结束后客户端终值收敛用的时间（上限 gameConfig.Settle）。
+	SettleMS                                            float64
 	PlannedToClient, ChangedToClient, CommittedToClient latencyResult
 	// SelfOnline / SelfStranded 是自身视图在负载结束时的在线连接数与滞留玩家数（selfsync.Online / Stranded；
 	// 场景 Sync 下为 0）。独立 Gate 下没有嵌入 TCP 的出站计数，滞留玩家数从这里看。
@@ -373,30 +375,59 @@ func (load *syncGameLoad) wanted(index int) []int64 {
 }
 func (load *syncGameLoad) valuesMatch() bool {
 	for index := range load.clients {
-		wanted := load.wanted(index)
-		client := &load.clients[index]
-		client.mu.Lock()
-		matches := len(client.objects) == len(wanted)
-		for _, id := range wanted {
-			value, exists := client.objects[id]
-			u := load.units[entity.GetUniqueIDFromEntityID(id)-1]
-			if !exists || value.value.X != u.state.GetX() || value.value.HP != u.state.GetHP() {
-				matches = false
-				break
-			}
-		}
-		client.mu.Unlock()
-		if !matches {
+		if load.clientMismatch(index) != "" {
 			return false
 		}
 	}
 	return true
 }
 
+// sessionObjectLimit 是 Manager 给每个会话的对象上限（ManagerConfig.Limits 用缺省值，frame.DefaultLimits）。
+// 覆盖扇出下应见集合可以超过它：超出的对象按框架既定行为暂缓、会话不关（over_limit.go）。
+var sessionObjectLimit = frame.DefaultLimits().MaxObjects
+
+// clientMismatch 核对玩家 index 的客户端：应见集合不超过会话上限时两边集合与值都必须一致；超过时客户端
+// 必须恰好持有上限个对象、每个都在应见集合里、值与 DAO 一致——暂缓哪几个由框架决定，不在核对范围内。
+// 一致时返回空串，否则返回首错描述。
+func (load *syncGameLoad) clientMismatch(index int) string {
+	wanted := load.wanted(index)
+	want := min(len(wanted), sessionObjectLimit)
+	client := &load.clients[index]
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if got := len(client.objects); got != want {
+		// 首错定位：列出多出与缺少的对象，以及缺少的对象此刻在 Manager 里是否订阅给了这个会话。
+		var missing, extra []string
+		observer, _ := load.observerOf(load.units[index].ID())
+		for _, id := range wanted {
+			if _, ok := client.objects[id]; !ok {
+				missing = append(missing, fmt.Sprintf("%d(subscribed=%v)", id, slices.Contains(load.manager.Subscribers(id), entitysync.SessionID(observer))))
+			}
+		}
+		for id := range client.objects {
+			if !slices.Contains(wanted, id) {
+				extra = append(extra, strconv.FormatInt(id, 10))
+			}
+		}
+		return fmt.Sprintf("client=%d want count=%d (seen %d, session limit %d) got=%d missing=%v extra=%v wanted=%v", index, want, len(wanted), sessionObjectLimit, got, missing, extra, wanted)
+	}
+	for id, v := range client.objects {
+		if !slices.Contains(wanted, id) {
+			return fmt.Sprintf("client=%d holds %d that is not in its seen set (seen %d)", index, id, len(wanted))
+		}
+		u := load.units[entity.GetUniqueIDFromEntityID(id)-1]
+		if v.value.X != u.state.GetX() || v.value.HP != u.state.GetHP() {
+			return fmt.Sprintf("client=%d subject=%d want X/HP=%d/%d got=%d/%d", index, id, u.state.GetX(), u.state.GetHP(), v.value.X, v.value.HP)
+		}
+	}
+	return ""
+}
+
 // 仅在业务未启动或已 Shutdown 时读 DAO；不会在客户端网络 goroutine 读 Entity。
-func (load *syncGameLoad) awaitValues(t *testing.T, network loadFrontend) {
+func (load *syncGameLoad) awaitValues(t *testing.T, network loadFrontend) time.Duration {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	began := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), load.config.Settle)
 	defer cancel()
 	for !load.valuesMatch() {
 		if failure := network.currentFailure(); failure != nil {
@@ -416,15 +447,16 @@ func (load *syncGameLoad) awaitValues(t *testing.T, network loadFrontend) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+	return time.Since(began)
 }
 func (load *syncGameLoad) finish(t *testing.T, network loadFrontend) *syncLoadReport {
-	load.awaitValues(t, network)
+	settled := load.awaitValues(t, network)
 	load.measuring.Store(false)
 	mode := load.manager.Mode().String()
 	if load.self {
 		mode = "self:" + mode
 	}
-	report := &syncLoadReport{Mode: mode, Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: math.MaxInt}
+	report := &syncLoadReport{Mode: mode, Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, SettleMS: float64(settled) / float64(time.Millisecond), PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: math.MaxInt}
 	if load.self {
 		report.SelfOnline, report.SelfStranded = load.selfSync.Online(), load.selfSync.Stranded()
 	}
@@ -441,37 +473,9 @@ func (load *syncGameLoad) finish(t *testing.T, network loadFrontend) *syncLoadRe
 
 func (load *syncGameLoad) mismatch() string {
 	for index := range load.clients {
-		wanted := load.wanted(index)
-		client := &load.clients[index]
-		client.mu.Lock()
-		if len(wanted) != len(client.objects) {
-			got := len(client.objects)
-			// 首错定位：列出多出与缺少的对象，以及缺少的对象此刻在 Manager 里是否订阅给了这个会话。
-			var missing, extra []string
-			observer, _ := load.observerOf(load.units[index].ID())
-			for _, id := range wanted {
-				if _, ok := client.objects[id]; !ok {
-					missing = append(missing, fmt.Sprintf("%d(subscribed=%v)", id, slices.Contains(load.manager.Subscribers(id), entitysync.SessionID(observer))))
-				}
-			}
-			for id := range client.objects {
-				if !slices.Contains(wanted, id) {
-					extra = append(extra, strconv.FormatInt(id, 10))
-				}
-			}
-			client.mu.Unlock()
-			return fmt.Sprintf("client=%d want count=%d got=%d missing=%v extra=%v wanted=%v", index, len(wanted), got, missing, extra, wanted)
+		if message := load.clientMismatch(index); message != "" {
+			return message
 		}
-		for _, id := range wanted {
-			v, exists := client.objects[id]
-			u := load.units[entity.GetUniqueIDFromEntityID(id)-1]
-			if !exists || v.value.X != u.state.GetX() || v.value.HP != u.state.GetHP() {
-				message := fmt.Sprintf("client=%d subject=%d exists=%v want X/HP=%d/%d got=%d/%d", index, id, exists, u.state.GetX(), u.state.GetHP(), v.value.X, v.value.HP)
-				client.mu.Unlock()
-				return message
-			}
-		}
-		client.mu.Unlock()
 	}
 	return "no mismatch"
 }
