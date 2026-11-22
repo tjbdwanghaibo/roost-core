@@ -429,8 +429,14 @@ func (load *syncGameLoad) awaitValues(t *testing.T, network loadFrontend) time.D
 	began := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), load.config.Settle)
 	defer cancel()
+	nextReport := began.Add(10 * time.Second)
 	for !load.valuesMatch() {
+		if now := time.Now(); now.After(nextReport) {
+			nextReport = now.Add(10 * time.Second)
+			t.Logf("Sync settling %s: %s", now.Sub(began).Round(time.Second), load.settleDiagnostic())
+		}
 		if failure := network.currentFailure(); failure != nil {
+			t.Logf("Sync settle state: %s", load.settleDiagnostic())
 			t.Logf("Sync mismatch: %s", load.mismatch())
 			client := &load.clients[0]
 			client.mu.Lock()
@@ -469,6 +475,24 @@ func (load *syncGameLoad) finish(t *testing.T, network loadFrontend) *syncLoadRe
 	}
 	report.LatencyPassed = report.CommittedToClient.Samples > 0 && report.CommittedToClient.P99MS <= 50 && report.CommittedToClient.NegativeDurations == 0 && report.ChangedToClient.NegativeDurations == 0 && report.PlannedToClient.NegativeDurations == 0
 	return report
+}
+
+// settleDiagnostic 是收敛期间的进度：Manager 的健康计数（pending、over_limit_waiting 等）、累计帧数、
+// 未收敛的客户端数与它们离应持有数还差多少个对象。
+func (load *syncGameLoad) settleDiagnostic() string {
+	short, behind := 0, 0
+	for index := range load.clients {
+		if load.clientMismatch(index) == "" {
+			continue
+		}
+		behind++
+		want := min(len(load.wanted(index)), sessionObjectLimit)
+		client := &load.clients[index]
+		client.mu.Lock()
+		short += max(0, want-len(client.objects))
+		client.mu.Unlock()
+	}
+	return fmt.Sprintf("clients behind=%d short objects=%d frames=%d manager{%s}", behind, short, load.frames.Load(), load.manager.CheckHealth(context.Background()).Message)
 }
 
 func (load *syncGameLoad) mismatch() string {
