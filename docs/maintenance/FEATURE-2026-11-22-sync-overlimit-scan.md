@@ -1,9 +1,9 @@
 # 方案：超额暂缓订阅很多时的 flush 成本（Sync，2026-11-22）
 
-**状态：暂缓（维护者 2026-11-22“先不做”）。** 方案保留，以后随时可按 §8 复测、再决定做不做。来源：M-16 1000 人 c4 在负载结束后 60s 内没有收敛（[追查记录](../performance/benchmarks/m-series-rest-20261122/README.md#追查-1000-人-c42026-11-22)），维护者要求“先出优化方案”。Sync 是 core 三大块之一，确认前不改代码。
+**状态：已实施 A（夹具）、E（同一 subject 的延期登记去重），并修复实测发现的冷创建队首阻塞。** 整路预选全部因会话容量暂缓时，仅轮换下一次先挑的会话，不计发送额度、不改变准入排序，不越过有效的未尝试请求或字节阻挡。B/C/D 未实施。1000 人 c4 两次原参数复测：31.08s / 28.41s 全员通过权威终验；同步延迟仍未达 50ms 门槛。[分项结果](../performance/benchmarks/m-series-rest-20261122/README.md#修复分支复测)。随后在不改变 `SetObserverLimit` 语义的前提下减少 AOI 点候选排序，密集重评加快，c4 收尾改善；50ms 门槛仍未过，详见[发压期采样及交错对照](../performance/benchmarks/m-series-rest-20261122/review/README.md)。下列分析和分批路线是修前提案。来源：M-16 1000 人 c4 在负载结束后 60s 内没有收敛（[追查记录](../performance/benchmarks/m-series-rest-20261122/README.md#追查-1000-人-c42026-11-22)），维护者要求“先出优化方案”。Sync 是 core 三大块之一，确认前不改代码。
 
 - 基线：main `1b12ce0c`，行号都对应这个提交。codebase-memory-mcp 本次连不上（connection closed），调用链靠直接读源码整理。
-- 证据：CPU profile 已入库 [`m16prof-c4/baseline-1b12ce0c.cpu.pprof`](../performance/benchmarks/m-series-rest-20261122/m16prof-c4/baseline-1b12ce0c.cpu.pprof)（原件在本机 `artifacts/perf/nest/m16prof-c4-17370/`，artifacts 不入库），参数见同目录 `env.txt`，采样 125s，共 225.55s 样本（约 1.8 核）。采样期在负载结束后的收敛段。
+- 证据：CPU profile 已入库 [`m16prof-c4/baseline-1b12ce0c.cpu.pprof`](../performance/benchmarks/m-series-rest-20261122/m16prof-c4/baseline-1b12ce0c.cpu.pprof)（原件在本机 `artifacts/perf/nest/m16prof-c4-17370/`，artifacts 不入库），参数见同目录 `env.txt`，采样 125s，共 225.55s 样本（约 1.8 核）。这是整个测试二进制的采样，含收敛段，不是只采收敛期；§1.1 的进度表与此 profile 也不是同一次运行。
 
 ## 0. 结论速览
 
@@ -78,18 +78,20 @@ c4 里大多数被暂缓的 pair 只来自块覆盖：
 
 ### 2.4 夹具
 
-`clientMismatch` 在每次轮询里重新算 `wanted`（`Interest.Seen`，持有 `in.mu`），数量不对时还对每个缺少的 ID 调一次 `Manager.Subscribers`（持有 `subj.mu`，复制并排序约 960 个会话 ID），只是为了拼首错描述。c4 里每个未收敛客户端缺约 840 个对象，每轮就是几十万次排序，还和 flush 抢同样的锁。
+`clientMismatch` 在每次轮询里重新算 `wanted`（`Interest.Seen`，持有 `in.mu`），数量不对时还对每个缺少的 ID 调一次 `Manager.Subscribers`（持有 `subj.mu`，复制并排序约 960 个会话 ID），只是为了拼首错描述。例如 seen=940、上限=100、持有=99 时，正确性缺口是 1，不是 841；旧详查却枚举了全部 841 个差集成员。周期诊断的累计 CPU 为 40.92s、普通轮询为 2.38s，不能把累计 CPU 直接当墙钟收益。
 
 ## 3. 选项
 
 | 选项 | 做法 | 收益 | 代价 / 风险 |
 | --- | --- | --- | --- |
-| **A 夹具去开销**（测试代码） | 首错描述只在最终失败和 10s 诊断时拼；`Subscribers` 换成一次性取会话订阅集合（或者只取前 N 个缺口）；`wanted` 每轮每个客户端只算一次 | 去掉 42.8s 的 CPU 和锁竞争；重测能看清框架本身的收敛速度 | 只动测试，无框架风险 |
+| **A 夹具去开销**（测试代码） | 周期只输出轻量进度；全员按集合、数量和 DAO 值判定，最终失败详情限定客户端和 ID 样本，避免持客户端锁调 `Subscribers` | 减少夹具核对和锁竞争；节省的墙钟时间由复测决定 | 只动测试，无框架风险 |
 | **B Interest 只做有效收紧** | ① `tightenLocked` 开始前先数观察者可见成员里“离开就能给 need 里的玩家腾位”的个数（`!heldBesidesLocked`）。为 0 就不收紧，计 `untightened`（或新标签 `ineffective`）。② 不再一步一步重评：按距离从远到近排可见成员，一次算出要腾够位置时的上限，只调**一次** `SetObserverLimit`。③ 记住“这个视野对这名玩家收紧无效”，直到视野成员或来源变化才重新判断，避免每次通知都重新数 | 去掉 `deliverDeferrals` 的大头（15.2s），c4 下预期接近 0；也消除“收紧到 0 → 上调 → 再收紧”的空转 | 改 Interest 的收紧算法。要保持“最终可见集是最近 N 个”和滞回语义；一次算到位依赖 AOI 的距离序与 `admitNearest` 一致，需要等价测试 |
-| **C 暂缓订阅移出 flush 扫描** | subject 上另存一张 `ready` 表（不暂缓的订阅）。`subscribers` 保持全集，供去重、每 subject 上限、退订、`Subscribers` 等 44 处用。flush 热循环（`prepareSubscribersLocked`、`deferUnselectedSnapshotsLocked`、`profilesLocked`、`revisions`、分发）只扫 `ready`。只有标暂缓（`markOverLimit` 一侧）、放回（`releaseOverLimit`）、增删订阅这几处维护 `ready`。暂缓订阅的过期 lifetime 由会话关闭和 `renotifyOverLimit`（它已经在比 `sub.lifetime == item.life`）清理 | flush 扫描量从“全部订阅者”降到“非暂缓订阅者”，c4 下约降一半以上；和暂缓数解耦 | 两张表必须一致，否则会漏发或多发。需要不变式测试：任何时刻 `ready` = `subscribers` 里 `!waitsForRoom()` 的集合。改动集中在 entitysync 包内，不改对外 API |
+| **C 暂缓订阅移出 flush 扫描** | subject 上另存一张 `ready` 表（不暂缓的订阅）。`subscribers` 保持全集，供去重、每 subject 上限、退订、`Subscribers` 等 44 处用。flush 热循环（`prepareSubscribersLocked`、`deferUnselectedSnapshotsLocked`、`profilesLocked`、`revisions`、分发）只扫 `ready`。所有暂缓、放回、订阅状态变化、删除、替换都须维护 `ready`（见下文前置条件） | 普通扫描可只看非暂缓项；到期重通知和开槽仍有成本，降幅待测 | 两张表必须一致，否则会漏发或多发。需要不变式测试：任何时刻 `ready` = `subscribers` 里 `!waitsForRoom()` 的集合。改动集中在 entitysync 包内，不改对外 API |
 | D 重复通知退避 | 会话的暂缓集合没变（没有放回、没有新增）时，`renotifyOverLimit` 的间隔按会话从 1s 加倍到 32s；有空位或集合变化就回到 1s | 再省下 B 之后剩下的通知成本（43 万条/s 的收集和回调） | Interest 的“上调试探”靠重复通知发现边界，退避会让上调后的超额多停留一会儿（都只是 Manager 内部暂缓，不产生线上流量）。B 做完后收益可能已经很小，所以列为备选 |
 | E `deferSnapshot` 提到循环外 | 循环里只记“有未入选的全量”，循环后对 subject 调一次 | 2.5s，锁次数从每订阅一次降到每 subject 一次 | 很小，随 C 一起做 |
 | F 配置告警 | 运行时统计“只来自无距离来源、收紧无效”的暂缓 pair 数，做成指标；每周期限频一条 WARN，说明政策（块覆盖、关系视野）本身超过了会话上限 | 让运维看见“这个配置不会收敛到上限内”，而不是只看到暂缓数在涨 | 只是可观测，不降成本。现有 Warn 已经要求“政策上限要在会话上限之内”，F 补的是运行时证据 |
+
+**实施前置条件（本轮评审）：** B② 若做等价提速，要沿用实际淘汰序（距离降序、同距 ID 升序）及旧 limit/冷却；B①③ 的“零收益跳过”会改变 `Visible` 和多来源的有效 profile，不能按不改语义实施。局部来源少一份也不等于同一 namespace 有空槽。C 的 `ready` 必须在 subject 锁内与全集的当前指针一致，包括欠 Remove 的 `kindLeaving`、Hold/Ready、追加 pinned 来源和同 SID 重开；`renotifyOverLimit` 对过期项只跳过，不删除，删除仍由按 lifetime 清理的关闭路径负责。未暂缓的常态须单独量内存/GC。D 的退避不能延迟新来源第一次得到通知。E 只合并 subject 等待登记，实际延期订阅数仍逐项累计。
 
 没有选的方向：
 
@@ -126,7 +128,7 @@ D、F 等第 4 批的数据出来再决定。
 | I2 | 已持有的对象 Manager 不替政策挤掉（钉住例外） | B、C | 不动 |
 | I3 | 有距离概念的政策，最终可见集是按距离选出的最近 N 个 | B | 等价测试 |
 | I4 | 暂缓订阅在有空位时恢复，不会永远留在暂缓 | C、D | `releaseOverLimit` 同时维护 `ready`；D 的退避在空位出现时立即复位 |
-| I5 | 过期 lifetime 的订阅最终被清理 | C | 会话关闭照旧清理；`renotifyOverLimit` 清理暂缓订阅；flush 只清 `ready` 里的 |
+| I5 | 过期 lifetime 的订阅最终被清理 | C | 会话关闭按旧 lifetime 的全集清理；`renotifyOverLimit` 只复核并通知；保留 flush 对可扫描项的防御清理 |
 | I6 | 无暂缓时帧逐字节不变 | 全部 | c0 回归 |
 
 最大风险在 C：两张表不一致会导致漏发（订阅在 `subscribers` 里但不在 `ready` 里）或给暂缓订阅发内容。所以 C 必须带一致性断言，并且在 entitysync 全量和 game-demo 生成测试都通过后再推。
@@ -144,7 +146,7 @@ D、F 等第 4 批的数据出来再决定。
 
 ## 8. 以后怎么复测
 
-不做优化也能随时重测，看问题还在不在、有没有被别的改动顺带改善。需要本机私有 NATS（`~/.roost-it`），一轮约 10 分钟，按 perf 规则串行跑：
+以下是冷启动对照配方（不预热）；不能用它代替这张高压地图的正式稳态复测。正式 c4 须先预热 30s、再计时 30s，关掉 profile，使用独立标签。两种口径分别保留原 50ms 门槛；实载业务错误与提交到客户端的 p99、收尾时的正确性与实测耗时、客户端读静默失败分别记账。需要本机私有 NATS（`~/.roost-it`），一轮约 10 分钟，按 perf 规则串行跑：
 
 ```sh
 source ~/.roost-it/roost-dataengine-it/env.sh
@@ -153,11 +155,12 @@ ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 ROOST_NEST_GAME_DIRTY=1 ROOST_NEST
 ROOST_NEST_GAME_LAYOUT=concentrated ROOST_NEST_GAME_OBSERVED_BLOCKS=4 \
 ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_ENTITIES=10000 ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 \
 ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_SHORT_QUEUE=65536 \
-ROOST_NEST_GAME_DURATION=30s ROOST_NEST_GAME_SETTLE=60s ROOST_NEST_GAME_PROFILE=1 \
+ROOST_NEST_GAME_DURATION=30s ROOST_NEST_GAME_SETTLE=60s ROOST_NEST_GAME_WARMUP=0s ROOST_NEST_GAME_PROFILE=1 \
 bash scripts/perf/nest-game.sh
 ```
 
-- **看什么**：日志里每 10s 一行 `Sync settling`（未收敛客户端、缺对象数、累计帧、超额暂缓数），对照 §1.1。60s 内收敛就是 PASS；没收敛时，看客户端读静默中止前的最后一行。
+- **正式预热档**：上例换独立标签、`ROOST_NEST_GAME_WARMUP=30s ROOST_NEST_GAME_PROFILE=0`，保持 `ROOST_PERF_CPU=0` 与原负载、时限、计数及终验；共发压 60s。`CommittedDeliveries.ThroughWindowEnd` 与 `AfterWindowEnd` 分别是正式计划变化在计划截止前（含）与之后解码的增量。一次先前对照的最大值 10.08s / 0.77s 不是普遍的因果结论：[预热初测](../performance/benchmarks/m-series-rest-20261122/review/README.md)。CPU profile 包含预热、收尾等，不等于稳态 30s 的采样，不作异口径直接归因。
+- **看什么**：日志里每 10s 一行 `Sync settling`（未收敛客户端、缺对象数、累计帧、超额暂缓数），对照 §1.1。全员数量、集合及值正确且实测 ≤60s、无网络失败，才算收尾通过；业务吞吐和 p99 是独立门槛。
 - **对比 CPU**：`go tool pprof -top -cum <新 cpu.pprof>`，对照 §1.2 各段。也可以直接和基线比：`go tool pprof -diff_base docs/performance/benchmarks/m-series-rest-20261122/m16prof-c4/baseline-1b12ce0c.cpu.pprof <新 cpu.pprof>`。
-- **注意**：§1.2 里夹具核对占了 42.8s，还会和 flush 抢锁。没做批 1 之前，复测得到的是“框架 + 夹具”的合成结果，不能直接当作框架的收敛速度。
+- **注意**：§1.2 里夹具核对占了 42.8s，还会和 flush 抢锁。旧结果是“框架 + 夹具”的合成结果；新一轮也要分清 fixture、后台 Flush 和实载/收尾两个阶段。
 - **回归档**（确认改动没伤到常见路径）：同参数改 `ROOST_NEST_GAME_OBSERVED_BLOCKS=0` 跑 1000 人 c0，或者 `ROOST_NEST_GAME_PLAYERS=400` 跑 c4。两档在 1b12ce0c 上终值核对都通过（只差延迟门槛）。

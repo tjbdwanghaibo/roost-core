@@ -1,0 +1,1388 @@
+{
+  "m7": [
+    {
+      "budget_bytes": 268435456,
+      "budget_exhausted_total": 0,
+      "elapsed_seconds": 119.95317025,
+      "frame_bytes": 4096,
+      "healthy": 1000,
+      "healthy_frames_received": 2399912,
+      "healthy_frames_received_at_push_cutoff": 2399912,
+      "overflow_closes": 0,
+      "peak_resident_bytes": 35552352,
+      "pushes_accepted": 2416540,
+      "pushes_refused_by_budget": 0,
+      "pushes_to_closed_or_missing": 103460,
+      "rate_per_second": 20,
+      "seconds": 120,
+      "stalled": 50,
+      "write_timeout": "5s",
+      "write_timeout_closes": 50
+    },
+    {
+      "budget_bytes": 268435456,
+      "budget_exhausted_total": 0,
+      "elapsed_seconds": 119.995220083,
+      "frame_bytes": 4096,
+      "healthy": 1000,
+      "healthy_frames_received": 11999909,
+      "healthy_frames_received_at_push_cutoff": 11999909,
+      "overflow_closes": 0,
+      "peak_resident_bytes": 104514704,
+      "pushes_accepted": 12033192,
+      "pushes_refused_by_budget": 0,
+      "pushes_to_closed_or_missing": 566808,
+      "rate_per_second": 100,
+      "seconds": 120,
+      "stalled": 50,
+      "write_timeout": "5s",
+      "write_timeout_closes": 50
+    }
+  ],
+  "m12": {
+    "state": "failed",
+    "stats": {
+      "scheduled": 200,
+      "dropped_capacity": 0,
+      "dropped_schedule": 0,
+      "launch_failed": 0,
+      "peak_online": 200,
+      "started": 200,
+      "online": 0,
+      "success": 148,
+      "failure": 52,
+      "canceled": 0,
+      "failure_rate": 0.26
+    },
+    "thresholds": [
+      {
+        "metric": "error_rate",
+        "max": 0,
+        "actual": 0.26,
+        "violated": true,
+        "samples": 200
+      },
+      {
+        "metric": "drop_rate",
+        "max": 0,
+        "actual": 0,
+        "violated": false,
+        "samples": 200
+      },
+      {
+        "metric": "p95_excluding:saga",
+        "max": 16,
+        "actual": 8.39270810937478,
+        "violated": false,
+        "samples": 148
+      }
+    ],
+    "groups": {
+      "saga": {
+        "scenarios": 148,
+        "steps": 878,
+        "steps_failed": 52,
+        "group_ms": {
+          "mean_ms": 34436.03634180406,
+          "p50_ms": 36320.56401748552,
+          "p90_ms": 38835.865207,
+          "p95_ms": 38835.865207,
+          "p99_ms": 38835.865207,
+          "max_ms": 38835.865207
+        },
+        "excluding_ms": {
+          "mean_ms": 6677.737213114865,
+          "p50_ms": 7063.974504986768,
+          "p90_ms": 8392.70810937478,
+          "p95_ms": 8392.70810937478,
+          "p99_ms": 8807.276459,
+          "max_ms": 8807.276459
+        }
+      }
+    },
+    "quantiles_ms": {
+      "p50": 38549.131362,
+      "p90": 43286.44734,
+      "p95": 43928.795268999995,
+      "p99": 44410.556216000004
+    },
+    "logged_occurrences": {
+      "gift_saga_still": 18,
+      "alliance_saga_still": 34,
+      "saga_unknown_or_waiting": 56,
+      "nest_sync_timeout": 0,
+      "world_stats_sync_timeout": 0,
+      "world_record_enter_sync_timeout": 0,
+      "player_world_add_exp_sync_timeout": 0
+    },
+    "readback_counts": {
+      "terminal_expected": 52
+    },
+    "failed_records": [
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "80e3e6592a33e8f4ad35c1d8a644e1f2",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "9f63a51546564429a2b6eafe9f50ec92",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "1f7cf6b55570e100cf752664d77c303f",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "d375f613656093983173eed6ef8ccac3",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "fad743d93131c0f748d1b593f80bbe44",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "e96fd7f0d6523b0942330b679539e11e",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "4c916362064d1945c0823925358cc69a",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "5e13cbb0d38ee784a2d5b1f101ea2649",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "1f5aee52be2427e77dfa05201ce4bab8",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "70c56bdb8c966db3f64f9728fc0bcc1c",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "6560c47fa591b1b07b94e89884e1b984",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "ff7ec97d0c2ba79e2e09f36df1070976",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "5b586f072debc6e18433b436ce08f430",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "98a75bb593dec2a9e8830e1ef399d77d",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "df75f092a63880eb23200f372848cb5b",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "23b53d00e08f7dc8be1345f476ca745d",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "bd3ab7db2ce362528c998ff733534204",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "gift_status",
+        "last_status": "waiting",
+        "saga_record": "f2808581ab57259b2ee75fda98e215b9",
+        "observed_status": "compensated",
+        "saga_type": "gift_item",
+        "outcome": "terminal_expected",
+        "expected_status": "compensated"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "0c85e4a425b51e0e19d1366173f91592",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "b004ca1ddbe13678d60a024faa886633",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "0bb79d3c9d3d6c3347fb9af0f149e5ce",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "59acabbe4986a1096401db9961e8d043",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "9f6999db99ace0eeab7ab57fb5b2e970",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "765d570306ae7b5146ab3d0bb2768d8e",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "1bf593368806a43f150e3d7935233fed",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "29fe247963c3797889e4daad1cfaef15",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "9d3a5670c5833741bf1757c6920ba655",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "71e4b6a34e9539f7e9e3e48410bb5e30",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "38a3ef76df24bc9a8f4012d25a4a0cb3",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "6611a488096535dcf9da7482cbd4a276",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "5add7836c8906233fba5efa0f3a4b206",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "a594dfcc9044ac7057e438a8c33d2e0b",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "79d4e4fed01a4c3f25e86ab939fc1a27",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "0585643e8d5bdee4c1caa83838783d87",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "33f35e9c0e22c3d06b9a1a59c09fca66",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "c87f5bdcf696477e8620e08d885e6aff",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "ca0dda517b8f1f600f9cf54c72f26486",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "1f251f8356e09db46f82063d2e640c08",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "9abfb93d1627c007422c310b3c1e2fea",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "c5e179921565db6386bc8f28e92efc2d",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "989bb374a443960b2443b243a0149fcc",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "7f178dc4539dac02e480f6fe7bedbd00",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "42027f781830959ccaf15a3754ef8e68",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "29daaa6cb511b5dffb5b1b3685cafba0",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "99341ec7e0eca346c06c98a9f862d721",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "34ad5f0857d68c7c104c137e3543dcd1",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "8c4049bcfedac4f6ab2532b57f1caa6a",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "ac5034a5771036b2427f0bed628cca37",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "531a83faa6106e397b3127306e3998c6",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "c2ace2fa9d1951863fcfadf9f8ad8f29",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "d8a83f9b00be86648569c0ceb75b063b",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      },
+      {
+        "action": "alliance_op_status",
+        "last_status": "waiting",
+        "saga_record": "a6a4c1b9dbb25e96ed4fdac69b0f75ad",
+        "observed_status": "completed",
+        "saga_type": "alliance_found",
+        "outcome": "terminal_expected",
+        "expected_status": "completed"
+      }
+    ],
+    "delivery_waits": [
+      {
+        "stage": "mongo_step",
+        "delivery": "first",
+        "topic": "alliance_donate.donate",
+        "append_to_callback": {
+          "n": 148,
+          "sum_ns": 38414315000,
+          "mean_ms": 259.5562,
+          "p95_le_ms": 1024,
+          "gt_4096ms": 0
+        },
+        "callback_to_worker": {
+          "n": 148,
+          "sum_ns": 54170,
+          "mean_ms": 0.0004,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "mongo_step",
+        "delivery": "first",
+        "topic": "alliance_found.found",
+        "append_to_callback": {
+          "n": 185,
+          "sum_ns": 205984590000,
+          "mean_ms": 1113.4302,
+          "p95_le_ms": 8192,
+          "gt_4096ms": 12
+        },
+        "callback_to_worker": {
+          "n": 185,
+          "sum_ns": 49372,
+          "mean_ms": 0.0003,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "mongo_step",
+        "delivery": "first",
+        "topic": "alliance_reward.claim",
+        "append_to_callback": {
+          "n": 148,
+          "sum_ns": 68620374000,
+          "mean_ms": 463.6512,
+          "p95_le_ms": 2048,
+          "gt_4096ms": 0
+        },
+        "callback_to_worker": {
+          "n": 148,
+          "sum_ns": 35117,
+          "mean_ms": 0.0002,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "mongo_step",
+        "delivery": "first",
+        "topic": "gift_item.deliver",
+        "append_to_callback": {
+          "n": 430,
+          "sum_ns": 392037753000,
+          "mean_ms": 911.7157,
+          "p95_le_ms": 8192,
+          "gt_4096ms": 40
+        },
+        "callback_to_worker": {
+          "n": 430,
+          "sum_ns": 85200,
+          "mean_ms": 0.0002,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "mongo_step",
+        "delivery": "retry",
+        "topic": "alliance_found.found",
+        "append_to_callback": {
+          "n": 1,
+          "sum_ns": 6720236000,
+          "mean_ms": 6720.236,
+          "p95_le_ms": 8192,
+          "gt_4096ms": 1
+        },
+        "callback_to_worker": {
+          "n": 1,
+          "sum_ns": 125,
+          "mean_ms": 0.0001,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "native_step",
+        "delivery": "first",
+        "topic": "alliance_donate.debit",
+        "append_to_callback": {
+          "n": 148,
+          "sum_ns": 6071477000,
+          "mean_ms": 41.0235,
+          "p95_le_ms": 256,
+          "gt_4096ms": 0
+        },
+        "callback_to_worker": {
+          "n": 148,
+          "sum_ns": 1386455,
+          "mean_ms": 0.0094,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "native_step",
+        "delivery": "first",
+        "topic": "alliance_found.debit",
+        "append_to_callback": {
+          "n": 182,
+          "sum_ns": 9083841000,
+          "mean_ms": 49.9112,
+          "p95_le_ms": 256,
+          "gt_4096ms": 0
+        },
+        "callback_to_worker": {
+          "n": 182,
+          "sum_ns": 1854750,
+          "mean_ms": 0.0102,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "native_step",
+        "delivery": "first",
+        "topic": "alliance_reward.grant",
+        "append_to_callback": {
+          "n": 148,
+          "sum_ns": 4636372000,
+          "mean_ms": 31.3268,
+          "p95_le_ms": 256,
+          "gt_4096ms": 0
+        },
+        "callback_to_worker": {
+          "n": 148,
+          "sum_ns": 514076,
+          "mean_ms": 0.0035,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "native_step",
+        "delivery": "first",
+        "topic": "gift_item.debit",
+        "append_to_callback": {
+          "n": 400,
+          "sum_ns": 15694724000,
+          "mean_ms": 39.2368,
+          "p95_le_ms": 256,
+          "gt_4096ms": 0
+        },
+        "callback_to_worker": {
+          "n": 400,
+          "sum_ns": 4458710,
+          "mean_ms": 0.0111,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "native_step",
+        "delivery": "first",
+        "topic": "gift_item.debit.compensate",
+        "append_to_callback": {
+          "n": 200,
+          "sum_ns": 8451779000,
+          "mean_ms": 42.2589,
+          "p95_le_ms": 256,
+          "gt_4096ms": 0
+        },
+        "callback_to_worker": {
+          "n": 200,
+          "sum_ns": 2508666,
+          "mean_ms": 0.0125,
+          "p95_le_ms": 1,
+          "gt_4096ms": 0
+        }
+      },
+      {
+        "stage": "nest_start",
+        "delivery": "first",
+        "topic": "saga.start",
+        "append_to_callback": {
+          "n": 878,
+          "sum_ns": 4603276719000,
+          "mean_ms": 5242.912,
+          "p95_le_ms": 16384,
+          "gt_4096ms": 645
+        },
+        "callback_to_worker": {
+          "n": 878,
+          "sum_ns": 36159059250,
+          "mean_ms": 41.1834,
+          "p95_le_ms": 256,
+          "gt_4096ms": 0
+        }
+      }
+    ]
+  },
+  "m13": [
+    "BenchmarkBroadcastLedgerAtCapacity/publish-10         \t    2000\t   1092395 ns/op\t 1457394 B/op\t    2106 allocs/op",
+    "BenchmarkBroadcastLedgerAtCapacity/publish-10         \t    2000\t   1104753 ns/op\t 1438056 B/op\t    2105 allocs/op",
+    "BenchmarkBroadcastLedgerAtCapacity/publish-10         \t    2000\t   1092784 ns/op\t 1429683 B/op\t    2104 allocs/op",
+    "BenchmarkBroadcastLedgerAtCapacity/publish-10         \t    2000\t   1235244 ns/op\t 1348363 B/op\t    2112 allocs/op",
+    "BenchmarkBroadcastLedgerAtCapacity/publish-10         \t    2000\t   1224241 ns/op\t 1322178 B/op\t    2110 allocs/op",
+    "BenchmarkBroadcastLedgerAtCapacity/publish-10         \t    2000\t   1155923 ns/op\t 1310242 B/op\t    2109 allocs/op"
+  ],
+  "m14": {
+    "m14-game-baseline": [
+      "measure_test.go:199: level 2250 NPC/cell, 1000 players, window 1m0s; base (parent process, incl. Sync mirrors and client decode) CPU 91.3% of one core; views accepted 288097 stale 0 owner changes 100 re-enters 0; witness latency p50 6.37ms p99 33.72ms max 84.04ms (n=200000); mirrors 9972",
+      "measure_test.go:215: cell (0,0): reals 2473 ghosts 3605 | CPU 139.7% of one core | region beat p50 151.07ms p99 271.68ms max 308.00ms | out 407 msg/s 14755 KB/s, in 714 msg/s 1920 KB/s | ghost latency p50 117.70ms p99 311.03ms (n=14247) | handoffs 201 (p50 312.16ms p99 651.29ms), rejected 0 aborted 0 retransmits 372 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (1,0): reals 2546 ghosts 3509 | CPU 145.5% of one core | region beat p50 189.94ms p99 328.59ms max 381.59ms | out 375 msg/s 15956 KB/s, in 811 msg/s 1983 KB/s | ghost latency p50 138.77ms p99 347.04ms (n=15511) | handoffs 199 (p50 385.11ms p99 723.27ms), rejected 0 aborted 0 retransmits 372 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (0,1): reals 2497 ghosts 3434 | CPU 139.9% of one core | region beat p50 171.67ms p99 337.27ms max 388.82ms | out 369 msg/s 15476 KB/s, in 779 msg/s 1915 KB/s | ghost latency p50 123.95ms p99 325.49ms (n=15497) | handoffs 202 (p50 336.44ms p99 740.06ms), rejected 0 aborted 0 retransmits 363 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (1,1): reals 2481 ghosts 3483 | CPU 139.8% of one core | region beat p50 159.86ms p99 281.63ms max 297.00ms | out 400 msg/s 13990 KB/s, in 709 msg/s 1860 KB/s | ghost latency p50 124.93ms p99 306.46ms (n=14339) | handoffs 205 (p50 340.53ms p99 753.07ms), rejected 0 aborted 0 retransmits 372 | outbox drops 0 dispatch errors 0 conflicts 0"
+    ],
+    "m14-game-verified": [
+      "measure_test.go:199: level 2250 NPC/cell, 1000 players, window 1m0s; base (parent process, incl. Sync mirrors and client decode) CPU 179.8% of one core; views accepted 1050644 stale 58 owner changes 92 re-enters 0; witness latency p50 20.57ms p99 196.84ms max 342.85ms (n=200000); mirrors 9972",
+      "measure_test.go:215: cell (0,0): reals 2471 ghosts 3607 | CPU 134.0% of one core | region beat p50 9.90ms p99 38.76ms max 92.78ms | out 1540 msg/s 17071 KB/s, in 1620 msg/s 3526 KB/s | ghost latency p50 6.80ms p99 138.64ms (n=59384) | handoffs 201 (p50 17.19ms p99 104.58ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (1,0): reals 2549 ghosts 3504 | CPU 139.8% of one core | region beat p50 12.17ms p99 56.82ms max 102.64ms | out 1156 msg/s 19296 KB/s, in 1892 msg/s 3595 KB/s | ghost latency p50 8.05ms p99 135.59ms (n=69562) | handoffs 197 (p50 13.16ms p99 134.25ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (0,1): reals 2497 ghosts 3431 | CPU 139.3% of one core | region beat p50 11.13ms p99 51.20ms max 116.09ms | out 1328 msg/s 18290 KB/s, in 1797 msg/s 3481 KB/s | ghost latency p50 8.57ms p99 140.49ms (n=66062) | handoffs 200 (p50 11.72ms p99 133.59ms), rejected 0 aborted 0 retransmits 2 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (1,1): reals 2483 ghosts 3482 | CPU 135.0% of one core | region beat p50 10.35ms p99 48.61ms max 62.54ms | out 1551 msg/s 16675 KB/s, in 1571 msg/s 3393 KB/s | ghost latency p50 7.83ms p99 143.16ms (n=59311) | handoffs 204 (p50 20.21ms p99 117.09ms), rejected 0 aborted 0 retransmits 6 | outbox drops 0 dispatch errors 0 conflicts 0"
+    ],
+    "m14-witness-micro-before": [
+      "BenchmarkWitnessBeatScales/game         \t       5\t  98814858 ns/op\t      3501 ghosts/op\t       274.0 observers/op\t 5864488 B/op\t    1058 allocs/op",
+      "BenchmarkWitnessBeatScales/game         \t       5\t  98852125 ns/op\t      3501 ghosts/op\t       274.0 observers/op\t 5864488 B/op\t    1058 allocs/op",
+      "BenchmarkWitnessBeatScales/game         \t       5\t 101709033 ns/op\t      3501 ghosts/op\t       274.0 observers/op\t 5864484 B/op\t    1058 allocs/op",
+      "BenchmarkWitnessBeatScales/demo         \t       5\t   5584842 ns/op\t       624.0 ghosts/op\t       274.0 observers/op\t 3225364 B/op\t    1937 allocs/op",
+      "BenchmarkWitnessBeatScales/demo         \t       5\t   5167575 ns/op\t       624.0 ghosts/op\t       274.0 observers/op\t 3225364 B/op\t    1937 allocs/op",
+      "BenchmarkWitnessBeatScales/demo         \t       5\t   5303617 ns/op\t       624.0 ghosts/op\t       274.0 observers/op\t 3225364 B/op\t    1937 allocs/op"
+    ],
+    "m14-witness-micro-after-complete": [
+      "BenchmarkWitnessBeatScales/game         \t       5\t   6027167 ns/op\t      3501 ghosts/op\t       274.0 observers/op\t 5969704 B/op\t    1146 allocs/op",
+      "BenchmarkWitnessBeatScales/game         \t       5\t   5925342 ns/op\t      3501 ghosts/op\t       274.0 observers/op\t 5969704 B/op\t    1146 allocs/op",
+      "BenchmarkWitnessBeatScales/game         \t       5\t   5764767 ns/op\t      3501 ghosts/op\t       274.0 observers/op\t 5969704 B/op\t    1146 allocs/op",
+      "BenchmarkWitnessBeatScales/demo         \t       5\t   1798325 ns/op\t       624.0 ghosts/op\t       274.0 observers/op\t 3443416 B/op\t    2679 allocs/op",
+      "BenchmarkWitnessBeatScales/demo         \t       5\t   1748042 ns/op\t       624.0 ghosts/op\t       274.0 observers/op\t 3443416 B/op\t    2679 allocs/op",
+      "BenchmarkWitnessBeatScales/demo         \t       5\t   1790025 ns/op\t       624.0 ghosts/op\t       274.0 observers/op\t 3443416 B/op\t    2679 allocs/op"
+    ],
+    "m14-single-variable-control": [
+      "measure_test.go:199: level 2250 NPC/cell, 1000 players, window 1m0s; base (parent process, incl. Sync mirrors and client decode) CPU 98.9% of one core; views accepted 360675 stale 9 owner changes 97 re-enters 0; witness latency p50 5.60ms p99 24.74ms max 106.81ms (n=200000); mirrors 9973",
+      "measure_test.go:215: cell (0,0): reals 2474 ghosts 3606 | CPU 154.5% of one core | region beat p50 114.73ms p99 235.10ms max 261.56ms | out 684 msg/s 15393 KB/s, in 820 msg/s 2277 KB/s | ghost latency p50 84.28ms p99 230.48ms (n=19759) | handoffs 201 (p50 258.17ms p99 528.21ms), rejected 0 aborted 0 retransmits 297 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (1,0): reals 2546 ghosts 3508 | CPU 149.2% of one core | region beat p50 140.22ms p99 306.03ms max 336.70ms | out 452 msg/s 17259 KB/s, in 996 msg/s 2357 KB/s | ghost latency p50 91.55ms p99 266.23ms (n=25625) | handoffs 200 (p50 272.34ms p99 547.85ms), rejected 0 aborted 0 retransmits 315 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (0,1): reals 2496 ghosts 3434 | CPU 147.2% of one core | region beat p50 130.89ms p99 238.97ms max 354.65ms | out 505 msg/s 16326 KB/s, in 936 msg/s 2293 KB/s | ghost latency p50 86.97ms p99 247.16ms (n=24289) | handoffs 199 (p50 261.70ms p99 535.53ms), rejected 0 aborted 0 retransmits 302 | outbox drops 0 dispatch errors 0 conflicts 0",
+      "measure_test.go:215: cell (1,1): reals 2483 ghosts 3482 | CPU 145.6% of one core | region beat p50 122.26ms p99 249.79ms max 390.83ms | out 522 msg/s 14688 KB/s, in 850 msg/s 2212 KB/s | ghost latency p50 80.00ms p99 241.44ms (n=22362) | handoffs 202 (p50 255.55ms p99 653.63ms), rejected 0 aborted 0 retransmits 287 | outbox drops 0 dispatch errors 0 conflicts 0"
+    ]
+  },
+  "m16": {
+    "Config": {
+      "Entities": 10000,
+      "Players": 1000,
+      "MessageTargets": 1000,
+      "MessagesPerPlayer": 10,
+      "HeartbeatHz": 1,
+      "DirtyPercent": 1,
+      "Workers": 8,
+      "IOWorkers": 8,
+      "Queue": 65536,
+      "Duration": 30000000000,
+      "Frontend": "gate",
+      "SceneSync": true,
+      "SelfSync": false,
+      "HeartbeatDriver": "ticker",
+      "HeartbeatDelivery": "",
+      "Layout": "concentrated",
+      "ObservedBlocks": 4,
+      "Settle": 60000000000
+    },
+    "Platform": "darwin/arm64",
+    "GOMAXPROCS": 10,
+    "GoVersion": "go1.27.3",
+    "GateCompleted": 300000,
+    "GateRoundTrip": {
+      "Samples": 18750,
+      "Over50MS": 1166,
+      "NegativeDurations": 0,
+      "P50MS": 1.71,
+      "P95MS": 5.56,
+      "P99MS": 15.74,
+      "MaxMS": 151.609375,
+      "SamplesAtCeiling": 28
+    },
+    "CountsVerified": true,
+    "EntityValuesVerified": true,
+    "LatencyPassed": false,
+    "SyncReport": {
+      "Mode": "on_change",
+      "Frames": 13316,
+      "Updates": 223803,
+      "VisibleMin": 100,
+      "VisibleMax": 100,
+      "ValuesVerified": true,
+      "LatencyPassed": false,
+      "SettleMS": 31079.36925,
+      "SettleFlushCalls": 185,
+      "SettleFlushMS": 31038.793419,
+      "SettleFlushAvgMS": 167.77726172432432,
+      "PlannedToClient": {
+        "Samples": 74912,
+        "Over50MS": 72015,
+        "NegativeDurations": 0,
+        "P50MS": 100,
+        "P95MS": 100,
+        "P99MS": 100,
+        "MaxMS": 22103.879666,
+        "SamplesAtCeiling": 69888
+      },
+      "ChangedToClient": {
+        "Samples": 74912,
+        "Over50MS": 71762,
+        "NegativeDurations": 0,
+        "P50MS": 100,
+        "P95MS": 100,
+        "P99MS": 100,
+        "MaxMS": 22100.956791,
+        "SamplesAtCeiling": 69821
+      },
+      "CommittedToClient": {
+        "Samples": 74912,
+        "Over50MS": 71762,
+        "NegativeDurations": 0,
+        "P50MS": 100,
+        "P95MS": 100,
+        "P99MS": 100,
+        "MaxMS": 22100.954,
+        "SamplesAtCeiling": 69821
+      }
+    },
+    "Messages": {
+      "Planned": 300000,
+      "Accepted": 300000,
+      "Rejected": 0,
+      "Completed": 300000,
+      "EntityChanges": 3000,
+      "CompletedPerSecond": 9998.515415098624,
+      "FirstError": "",
+      "QueueWait": {
+        "Samples": 18750,
+        "Over50MS": 1278,
+        "NegativeDurations": 0,
+        "P50MS": 1.08,
+        "P95MS": 4.01,
+        "P99MS": 13.73,
+        "MaxMS": 150.82625,
+        "SamplesAtCeiling": 32
+      },
+      "Handler": {
+        "Samples": 18750,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 0.01,
+        "P95MS": 0.01,
+        "P99MS": 0.01,
+        "MaxMS": 3.004958,
+        "SamplesAtCeiling": 0
+      },
+      "Completion": {
+        "Samples": 18750,
+        "Over50MS": 1454,
+        "NegativeDurations": 0,
+        "P50MS": 6.63,
+        "P95MS": 13.03,
+        "P99MS": 26.67,
+        "MaxMS": 168.514375,
+        "SamplesAtCeiling": 40
+      },
+      "ChangedEntityCompletion": {
+        "Samples": 3000,
+        "Over50MS": 13,
+        "NegativeDurations": 0,
+        "P50MS": 6.64,
+        "P95MS": 12.87,
+        "P99MS": 27.05,
+        "MaxMS": 150.381666,
+        "SamplesAtCeiling": 6
+      },
+      "Harness": {
+        "AdmitLag": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 5.25,
+          "P95MS": 10.53,
+          "P99MS": 17.58,
+          "MaxMS": 32.718791,
+          "SamplesAtCeiling": 0
+        },
+        "ClientQueue": {
+          "Samples": 18750,
+          "Over50MS": 5,
+          "NegativeDurations": 0,
+          "P50MS": 0.16,
+          "P95MS": 0.8,
+          "P99MS": 2.54,
+          "MaxMS": 59.123583,
+          "SamplesAtCeiling": 0
+        }
+      },
+      "Server": {
+        "QueueWait": {
+          "Samples": 18750,
+          "Over50MS": 1042,
+          "NegativeDurations": 0,
+          "P50MS": 0.9,
+          "P95MS": 3.3,
+          "P99MS": 11.3,
+          "MaxMS": 148.875,
+          "SamplesAtCeiling": 19
+        },
+        "Completion": {
+          "Samples": 18750,
+          "Over50MS": 1042,
+          "NegativeDurations": 0,
+          "P50MS": 0.9,
+          "P95MS": 3.32,
+          "P99MS": 11.31,
+          "MaxMS": 148.876459,
+          "SamplesAtCeiling": 19
+        }
+      }
+    },
+    "Heartbeats": {
+      "Planned": 300000,
+      "Accepted": 300000,
+      "Rejected": 0,
+      "Completed": 300000,
+      "EntityChanges": 3000,
+      "CompletedPerSecond": 9998.515415098624,
+      "FirstError": "",
+      "QueueWait": {
+        "Samples": 18750,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 0.1,
+        "P95MS": 0.5,
+        "P99MS": 1.31,
+        "MaxMS": 35.870084,
+        "SamplesAtCeiling": 0
+      },
+      "Handler": {
+        "Samples": 18750,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 0.01,
+        "P95MS": 0.01,
+        "P99MS": 0.01,
+        "MaxMS": 1.654458,
+        "SamplesAtCeiling": 0
+      },
+      "Completion": {
+        "Samples": 18750,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 5.4,
+        "P95MS": 10.67,
+        "P99MS": 18.43,
+        "MaxMS": 49.777458,
+        "SamplesAtCeiling": 0
+      },
+      "ChangedEntityCompletion": {
+        "Samples": 3000,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 2.85,
+        "P95MS": 6.15,
+        "P99MS": 15.67,
+        "MaxMS": 45.364208,
+        "SamplesAtCeiling": 0
+      },
+      "Harness": {
+        "AdmitLag": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 5.25,
+          "P95MS": 10.53,
+          "P99MS": 17.58,
+          "MaxMS": 32.816583,
+          "SamplesAtCeiling": 0
+        },
+        "ClientQueue": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 0,
+          "P95MS": 0,
+          "P99MS": 0,
+          "MaxMS": 0,
+          "SamplesAtCeiling": 0
+        }
+      },
+      "Server": {
+        "QueueWait": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 0.1,
+          "P95MS": 0.5,
+          "P99MS": 1.31,
+          "MaxMS": 35.870084,
+          "SamplesAtCeiling": 0
+        },
+        "Completion": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 0.1,
+          "P95MS": 0.5,
+          "P99MS": 1.32,
+          "MaxMS": 35.870542,
+          "SamplesAtCeiling": 0
+        }
+      }
+    },
+    "EntityChangesPerSecond": 199.9703083019725
+  },
+  "m16_quiet_repeat": {
+    "Config": {
+      "Entities": 10000,
+      "Players": 1000,
+      "MessageTargets": 1000,
+      "MessagesPerPlayer": 10,
+      "HeartbeatHz": 1,
+      "DirtyPercent": 1,
+      "Workers": 8,
+      "IOWorkers": 8,
+      "Queue": 65536,
+      "Duration": 30000000000,
+      "Frontend": "gate",
+      "SceneSync": true,
+      "SelfSync": false,
+      "HeartbeatDriver": "ticker",
+      "HeartbeatDelivery": "",
+      "Layout": "concentrated",
+      "ObservedBlocks": 4,
+      "Settle": 60000000000
+    },
+    "Platform": "darwin/arm64",
+    "GOMAXPROCS": 10,
+    "GoVersion": "go1.27.3",
+    "GateCompleted": 300000,
+    "GateRoundTrip": {
+      "Samples": 18750,
+      "Over50MS": 1047,
+      "NegativeDurations": 0,
+      "P50MS": 1.65,
+      "P95MS": 5.71,
+      "P99MS": 18.44,
+      "MaxMS": 145.85125,
+      "SamplesAtCeiling": 10
+    },
+    "CountsVerified": true,
+    "EntityValuesVerified": true,
+    "LatencyPassed": false,
+    "SyncReport": {
+      "Mode": "on_change",
+      "Frames": 15942,
+      "Updates": 234825,
+      "VisibleMin": 100,
+      "VisibleMax": 100,
+      "ValuesVerified": true,
+      "LatencyPassed": false,
+      "SettleMS": 28406.547375,
+      "SettleFlushCalls": 183,
+      "SettleFlushMS": 28513.287914,
+      "SettleFlushAvgMS": 155.81031646994535,
+      "PlannedToClient": {
+        "Samples": 86662,
+        "Over50MS": 83476,
+        "NegativeDurations": 0,
+        "P50MS": 100,
+        "P95MS": 100,
+        "P99MS": 100,
+        "MaxMS": 20809.04575,
+        "SamplesAtCeiling": 81248
+      },
+      "ChangedToClient": {
+        "Samples": 86662,
+        "Over50MS": 82904,
+        "NegativeDurations": 0,
+        "P50MS": 100,
+        "P95MS": 100,
+        "P99MS": 100,
+        "MaxMS": 20797.819917,
+        "SamplesAtCeiling": 81013
+      },
+      "CommittedToClient": {
+        "Samples": 86662,
+        "Over50MS": 82904,
+        "NegativeDurations": 0,
+        "P50MS": 100,
+        "P95MS": 100,
+        "P99MS": 100,
+        "MaxMS": 20797.8185,
+        "SamplesAtCeiling": 81013
+      }
+    },
+    "Messages": {
+      "Planned": 300000,
+      "Accepted": 300000,
+      "Rejected": 0,
+      "Completed": 300000,
+      "EntityChanges": 3000,
+      "CompletedPerSecond": 9997.994416317279,
+      "FirstError": "",
+      "QueueWait": {
+        "Samples": 18750,
+        "Over50MS": 1357,
+        "NegativeDurations": 0,
+        "P50MS": 1.06,
+        "P95MS": 4.09,
+        "P99MS": 16.84,
+        "MaxMS": 158.716667,
+        "SamplesAtCeiling": 45
+      },
+      "Handler": {
+        "Samples": 18750,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 0.01,
+        "P95MS": 0.01,
+        "P99MS": 0.01,
+        "MaxMS": 2.271292,
+        "SamplesAtCeiling": 0
+      },
+      "Completion": {
+        "Samples": 18750,
+        "Over50MS": 1634,
+        "NegativeDurations": 0,
+        "P50MS": 6.51,
+        "P95MS": 13.27,
+        "P99MS": 28.03,
+        "MaxMS": 172.308542,
+        "SamplesAtCeiling": 57
+      },
+      "ChangedEntityCompletion": {
+        "Samples": 3000,
+        "Over50MS": 16,
+        "NegativeDurations": 0,
+        "P50MS": 6.66,
+        "P95MS": 13.27,
+        "P99MS": 28.89,
+        "MaxMS": 164.5355,
+        "SamplesAtCeiling": 9
+      },
+      "Harness": {
+        "AdmitLag": {
+          "Samples": 18750,
+          "Over50MS": 10,
+          "NegativeDurations": 0,
+          "P50MS": 5.18,
+          "P95MS": 10.3,
+          "P99MS": 18.93,
+          "MaxMS": 50.907125,
+          "SamplesAtCeiling": 0
+        },
+        "ClientQueue": {
+          "Samples": 18750,
+          "Over50MS": 240,
+          "NegativeDurations": 0,
+          "P50MS": 0.16,
+          "P95MS": 0.78,
+          "P99MS": 2.97,
+          "MaxMS": 78.767959,
+          "SamplesAtCeiling": 0
+        }
+      },
+      "Server": {
+        "QueueWait": {
+          "Samples": 18750,
+          "Over50MS": 1000,
+          "NegativeDurations": 0,
+          "P50MS": 0.88,
+          "P95MS": 3.33,
+          "P99MS": 14.29,
+          "MaxMS": 143.3215,
+          "SamplesAtCeiling": 9
+        },
+        "Completion": {
+          "Samples": 18750,
+          "Over50MS": 1000,
+          "NegativeDurations": 0,
+          "P50MS": 0.88,
+          "P95MS": 3.34,
+          "P99MS": 14.29,
+          "MaxMS": 143.323083,
+          "SamplesAtCeiling": 9
+        }
+      }
+    },
+    "Heartbeats": {
+      "Planned": 300000,
+      "Accepted": 300000,
+      "Rejected": 0,
+      "Completed": 300000,
+      "EntityChanges": 3000,
+      "CompletedPerSecond": 9997.994416317279,
+      "FirstError": "",
+      "QueueWait": {
+        "Samples": 18750,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 0.09,
+        "P95MS": 0.54,
+        "P99MS": 1.5,
+        "MaxMS": 45.342125,
+        "SamplesAtCeiling": 0
+      },
+      "Handler": {
+        "Samples": 18750,
+        "Over50MS": 0,
+        "NegativeDurations": 0,
+        "P50MS": 0.01,
+        "P95MS": 0.01,
+        "P99MS": 0.01,
+        "MaxMS": 2.881833,
+        "SamplesAtCeiling": 0
+      },
+      "Completion": {
+        "Samples": 18750,
+        "Over50MS": 316,
+        "NegativeDurations": 0,
+        "P50MS": 5.34,
+        "P95MS": 10.54,
+        "P99MS": 19.94,
+        "MaxMS": 79.490208,
+        "SamplesAtCeiling": 0
+      },
+      "ChangedEntityCompletion": {
+        "Samples": 3000,
+        "Over50MS": 3,
+        "NegativeDurations": 0,
+        "P50MS": 5.5,
+        "P95MS": 8.16,
+        "P99MS": 19.42,
+        "MaxMS": 73.076417,
+        "SamplesAtCeiling": 0
+      },
+      "Harness": {
+        "AdmitLag": {
+          "Samples": 18750,
+          "Over50MS": 10,
+          "NegativeDurations": 0,
+          "P50MS": 5.18,
+          "P95MS": 10.3,
+          "P99MS": 18.94,
+          "MaxMS": 50.9085,
+          "SamplesAtCeiling": 0
+        },
+        "ClientQueue": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 0,
+          "P95MS": 0,
+          "P99MS": 0,
+          "MaxMS": 0,
+          "SamplesAtCeiling": 0
+        }
+      },
+      "Server": {
+        "QueueWait": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 0.09,
+          "P95MS": 0.54,
+          "P99MS": 1.5,
+          "MaxMS": 45.342125,
+          "SamplesAtCeiling": 0
+        },
+        "Completion": {
+          "Samples": 18750,
+          "Over50MS": 0,
+          "NegativeDurations": 0,
+          "P50MS": 0.09,
+          "P95MS": 0.54,
+          "P99MS": 1.54,
+          "MaxMS": 45.38825,
+          "SamplesAtCeiling": 0
+        }
+      }
+    },
+    "EntityChangesPerSecond": 199.95988832634558
+  }
+}

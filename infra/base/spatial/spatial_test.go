@@ -28,6 +28,34 @@ func TestGridTerrainAtomicMovesAndBounds(t *testing.T) {
 	}
 }
 
+func TestUnorderedBlockIDsPreservePrefixAndMembership(t *testing.T) {
+	idx, err := NewBlockIndex(Rect{Max: Point{X: 20, Y: 20}}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{5, -1, 2, 2} {
+		idx.Add(id, Point{})
+	}
+	idx.Add(5, Point{X: 15}) // the general-purpose index still supports multi-block IDs
+	for _, block := range []int64{-1, 0, 1, 3, 4} {
+		got := idx.AppendUnorderedBlockIDs([]int64{99, 77}, block)
+		if !slices.Equal(got[:2], []int64{99, 77}) {
+			t.Fatal(got)
+		}
+		slices.Sort(got[2:])
+		var want []int64
+		switch block {
+		case 0:
+			want = []int64{-1, 2, 5}
+		case 1:
+			want = []int64{5}
+		}
+		if !slices.Equal(got[2:], want) || !slices.Equal(idx.QueryBlockIndex(block), want) {
+			t.Fatalf("block %d: %v vs %v", block, got, want)
+		}
+	}
+}
+
 func TestDistanceOperationsDoNotOverflow(t *testing.T) {
 	min := Point{X: math.MinInt64, Y: math.MinInt64}
 	max := Point{X: math.MaxInt64, Y: math.MaxInt64}

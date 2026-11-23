@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,8 +44,14 @@ type syncLoadReport struct {
 	VisibleMin, VisibleMax        int
 	ValuesVerified, LatencyPassed bool
 	// SettleMS 是负载结束后客户端终值收敛用的时间（上限 gameConfig.Settle）。
-	SettleMS                                            float64
+	SettleMS float64
+	// 收尾窗口的 Manager.Counters 差分（含后台 Flush，不含开场与负载期）。
+	SettleFlushCalls                                    uint64
+	SettleFlushMS, SettleFlushAvgMS                     float64
 	PlannedToClient, ChangedToClient, CommittedToClient latencyResult
+	// 同一批正式变化按实际解码时刻相对计划发压截止分层。100ms 档用 All 的宽桶，不能用在 100ms 封顶的窄表。
+	CommittedDeliveries syncDeliveryReport
+	CommittedP99LimitMS int // 只表示提交到客户端的门槛，不改变业务、心跳或 Gate RTT
 	// SelfOnline / SelfStranded 是自身视图在负载结束时的在线连接数与滞留玩家数（selfsync.Online / Stranded；
 	// 场景 Sync 下为 0）。独立 Gate 下没有嵌入 TCP 的出站计数，滞留玩家数从这里看。
 	SelfOnline, SelfStranded int `json:",omitempty"`
@@ -65,15 +69,19 @@ type syncGameLoad struct {
 	manager  *entitysync.Manager
 	interest *policy.Interest // 自身视图下为 nil
 	bounds   spatial.Rect     // 场景 Sync 的 AOI 范围
+	layout   spatial.BlockLayout
 	// gateTransport 只在独立 Gate 下非 nil，由 gateFrontend 接上 Game Ingress。
-	gateTransport                   *gatewiring.Transport
-	self                            bool
-	selfSync                        *selfsync.SelfSync
-	sessionsMu                      sync.RWMutex
-	sessions                        map[int64]entitysync.SessionID
-	clients                         []syncLoadClient
-	frames, updates                 atomic.Uint64
-	measuring                       atomic.Bool
+	gateTransport   *gatewiring.Transport
+	self            bool
+	selfSync        *selfsync.SelfSync
+	sessionsMu      sync.RWMutex
+	sessions        map[int64]entitysync.SessionID
+	clients         []syncLoadClient
+	frames, updates atomic.Uint64
+	measuring       atomic.Bool
+	// 该窗口在发压前一次性发布；初始全量和预热变化仍更新客户端镜像。
+	window                          atomic.Pointer[syncMeasureWindow]
+	deliveries                      syncDeliveryHist
 	planned, changedTime, committed timings
 }
 
@@ -135,7 +143,11 @@ func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, lane entitysync.
 	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
 	// 右侧留出 ObservedBlocks 个块的余量，让覆盖扇出的块都在边界内。
 	load.bounds = spatial.Rect{Max: spatial.Point{X: side*30 + 500 + int64(c.ObservedBlocks)*loadBlockSize, Y: side*30 + 500}}
-	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: load.bounds, BlockSize: loadBlockSize, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49}})
+	load.layout, err = spatial.NewBlockLayout(load.bounds, loadBlockSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: load.bounds, BlockSize: loadBlockSize, EnterRadius: 150, LeaveRadius: loadLeaveRadius, MaxVisible: 49}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,11 +352,11 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 				client.refs[object.Ref] = update.SubjectID
 				load.updates.Add(1)
 				// 新进入 AOI 的全量携带历史状态，不是当时已订阅的变化交付样本。
-				if load.measuring.Load() && !update.Full && previous.value.Changed > 0 {
+				if w := load.window.Load(); load.measuring.Load() && !update.Full && previous.value.Changed > 0 && w.includes(previous.value.Planned) {
 					now := time.Now()
+					load.recordDelivery(w, previous.value.Committed, now)
 					load.planned.add(now.Sub(loadTime(previous.value.Planned)), true)
 					load.changedTime.add(now.Sub(loadTime(previous.value.Changed)), true)
-					load.committed.add(now.Sub(loadTime(previous.value.Committed)), true)
 					if c := tail.Load(); c != nil {
 						planned, changed, committed := loadTime(previous.value.Planned), loadTime(previous.value.Changed), loadTime(previous.value.Committed)
 						c.observe("sync", now.Sub(planned), tailPart{"business", changed.Sub(planned)}, tailPart{"commit", committed.Sub(changed)}, tailPart{"deliver", now.Sub(committed)})
@@ -357,149 +369,28 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 	}(received)
 }
 
-// wanted 是玩家 index 的客户端此刻应该持有的对象：场景是 AOI 可见集合加自己，自身视图只有自己。
-func (load *syncGameLoad) wanted(index int) []int64 {
-	if load.self {
-		return []int64{load.units[index].ID()}
-	}
-	observer, _ := load.observerOf(load.units[index].ID())
-	if load.config.ObservedBlocks > 0 {
-		// 有覆盖扇出时可见集合不只是距离：取 Interest 归并全部来源（距离、块覆盖、self）之后要订阅的集合。
-		seen := load.interest.Seen(observer)
-		if !slices.Contains(seen, load.units[index].ID()) {
-			seen = append(seen, load.units[index].ID())
-		}
-		return seen
-	}
-	return append(load.interest.Visible(observer), load.units[index].ID())
-}
-func (load *syncGameLoad) valuesMatch() bool {
-	for index := range load.clients {
-		if load.clientMismatch(index) != "" {
-			return false
-		}
-	}
-	return true
-}
-
-// sessionObjectLimit 是 Manager 给每个会话的对象上限（ManagerConfig.Limits 用缺省值，frame.DefaultLimits）。
-// 覆盖扇出下应见集合可以超过它：超出的对象按框架既定行为暂缓、会话不关（over_limit.go）。
-var sessionObjectLimit = frame.DefaultLimits().MaxObjects
-
-// clientMismatch 核对玩家 index 的客户端：应见集合不超过会话上限时两边集合与值都必须一致；超过时客户端
-// 必须恰好持有上限个对象、每个都在应见集合里、值与 DAO 一致——暂缓哪几个由框架决定，不在核对范围内。
-// 一致时返回空串，否则返回首错描述。
-func (load *syncGameLoad) clientMismatch(index int) string {
-	wanted := load.wanted(index)
-	want := min(len(wanted), sessionObjectLimit)
-	client := &load.clients[index]
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if got := len(client.objects); got != want {
-		// 首错定位：列出多出与缺少的对象，以及缺少的对象此刻在 Manager 里是否订阅给了这个会话。
-		var missing, extra []string
-		observer, _ := load.observerOf(load.units[index].ID())
-		for _, id := range wanted {
-			if _, ok := client.objects[id]; !ok {
-				missing = append(missing, fmt.Sprintf("%d(subscribed=%v)", id, slices.Contains(load.manager.Subscribers(id), entitysync.SessionID(observer))))
-			}
-		}
-		for id := range client.objects {
-			if !slices.Contains(wanted, id) {
-				extra = append(extra, strconv.FormatInt(id, 10))
-			}
-		}
-		return fmt.Sprintf("client=%d want count=%d (seen %d, session limit %d) got=%d missing=%v extra=%v wanted=%v", index, want, len(wanted), sessionObjectLimit, got, missing, extra, wanted)
-	}
-	for id, v := range client.objects {
-		if !slices.Contains(wanted, id) {
-			return fmt.Sprintf("client=%d holds %d that is not in its seen set (seen %d)", index, id, len(wanted))
-		}
-		u := load.units[entity.GetUniqueIDFromEntityID(id)-1]
-		if v.value.X != u.state.GetX() || v.value.HP != u.state.GetHP() {
-			return fmt.Sprintf("client=%d subject=%d want X/HP=%d/%d got=%d/%d", index, id, u.state.GetX(), u.state.GetHP(), v.value.X, v.value.HP)
-		}
-	}
-	return ""
-}
-
-// 仅在业务未启动或已 Shutdown 时读 DAO；不会在客户端网络 goroutine 读 Entity。
-func (load *syncGameLoad) awaitValues(t *testing.T, network loadFrontend) time.Duration {
-	t.Helper()
-	began := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), load.config.Settle)
-	defer cancel()
-	nextReport := began.Add(10 * time.Second)
-	for !load.valuesMatch() {
-		if now := time.Now(); now.After(nextReport) {
-			nextReport = now.Add(10 * time.Second)
-			t.Logf("Sync settling %s: %s", now.Sub(began).Round(time.Second), load.settleDiagnostic())
-		}
-		if failure := network.currentFailure(); failure != nil {
-			t.Logf("Sync settle state: %s", load.settleDiagnostic())
-			t.Logf("Sync mismatch: %s", load.mismatch())
-			client := &load.clients[0]
-			client.mu.Lock()
-			t.Logf("Sync diagnostic frames=%d updates=%d first-client=%v", load.frames.Load(), load.updates.Load(), client.objects)
-			client.mu.Unlock()
-			t.Fatal(failure)
-		}
-		if err := load.manager.Flush(ctx); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("Sync final view/DAO values did not converge")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	return time.Since(began)
-}
 func (load *syncGameLoad) finish(t *testing.T, network loadFrontend) *syncLoadReport {
-	settled := load.awaitValues(t, network)
+	settled, flush, checked := load.awaitValues(t, network)
 	load.measuring.Store(false)
+	// 等已经通过 measuring 检查的解码退出，避免各统计表读取在同一条增量的两侧。
+	for i := range load.clients {
+		load.clients[i].mu.Lock()
+		load.clients[i].mu.Unlock()
+	}
 	mode := load.manager.Mode().String()
 	if load.self {
 		mode = "self:" + mode
 	}
-	report := &syncLoadReport{Mode: mode, Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, SettleMS: float64(settled) / float64(time.Millisecond), PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: math.MaxInt}
+	report := &syncLoadReport{Mode: mode, Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, SettleMS: float64(settled) / float64(time.Millisecond), PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: checked.minHeld, VisibleMax: checked.maxHeld}
+	report.CommittedDeliveries = load.deliveries.result()
+	if all := report.CommittedDeliveries.All; all.Samples != report.CommittedToClient.Samples || all.Over50MS != report.CommittedToClient.Over50MS {
+		t.Fatalf("sync delivery split does not reconcile with stock latency histogram: %+v vs %+v", all, report.CommittedToClient)
+	}
+	report.SettleFlushCalls, report.SettleFlushMS, report.SettleFlushAvgMS = flush.calls, flush.ms, flush.avgMS
 	if load.self {
 		report.SelfOnline, report.SelfStranded = load.selfSync.Online(), load.selfSync.Stranded()
 	}
-	for index := range load.clients {
-		client := &load.clients[index]
-		client.mu.Lock()
-		report.VisibleMin = min(report.VisibleMin, len(client.objects))
-		report.VisibleMax = max(report.VisibleMax, len(client.objects))
-		client.mu.Unlock()
-	}
-	report.LatencyPassed = report.CommittedToClient.Samples > 0 && report.CommittedToClient.P99MS <= 50 && report.CommittedToClient.NegativeDurations == 0 && report.ChangedToClient.NegativeDurations == 0 && report.PlannedToClient.NegativeDurations == 0
+	report.CommittedP99LimitMS = load.config.syncP99LimitMS(mode)
+	report.LatencyPassed = report.passesSyncLatency()
 	return report
-}
-
-// settleDiagnostic 是收敛期间的进度：Manager 的健康计数（pending、over_limit_waiting 等）、累计帧数、
-// 未收敛的客户端数与它们离应持有数还差多少个对象。
-func (load *syncGameLoad) settleDiagnostic() string {
-	short, behind := 0, 0
-	for index := range load.clients {
-		if load.clientMismatch(index) == "" {
-			continue
-		}
-		behind++
-		want := min(len(load.wanted(index)), sessionObjectLimit)
-		client := &load.clients[index]
-		client.mu.Lock()
-		short += max(0, want-len(client.objects))
-		client.mu.Unlock()
-	}
-	return fmt.Sprintf("clients behind=%d short objects=%d frames=%d manager{%s}", behind, short, load.frames.Load(), load.manager.CheckHealth(context.Background()).Message)
-}
-
-func (load *syncGameLoad) mismatch() string {
-	for index := range load.clients {
-		if message := load.clientMismatch(index); message != "" {
-			return message
-		}
-	}
-	return "no mismatch"
 }

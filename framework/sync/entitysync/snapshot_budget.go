@@ -203,10 +203,11 @@ type snapshotCandidate struct {
 
 // snapshotPlan 是本轮全部有预算的路的计划：order 按路号连续排列，同一路内保持该路的轮转顺序。
 type snapshotPlan struct {
-	selected    map[*subscription]bool
-	order       []snapshotCandidate // 数量预选与字节准入共用顺序，不能再按会话重新争抢额度
-	charges     []snapshotCharge    // 仅计划预留；真正尝试 Push 的会话才结算窗口与游标
-	byteBlocked []bool              // 按路；遇到放不下的冷对象的路，懒分配
+	selected           map[*subscription]bool
+	order              []snapshotCandidate // 数量预选与字节准入共用顺序，不能再按会话重新争抢额度
+	charges            []snapshotCharge    // 仅计划预留；真正尝试 Push 的会话才结算窗口与游标
+	byteBlocked        []bool              // 按路；遇到放不下的冷对象的路，懒分配
+	removedForCapacity bool                // 捕获结束后，容量裁决是否确实删过已选的新对象
 }
 
 // selectedFor 是 class 这一路本轮的入选集合；不设预算的路（或整轮没有预算）返回 nil，表示该路全部快照照常捕获。
@@ -345,6 +346,43 @@ func (m *Manager) planLane(plan *snapshotPlan, index uint8, lane *snapshotLane, 
 		if limit.MaxObjects > 0 && planned >= remaining {
 			break
 		}
+	}
+}
+
+// deferForCapacity 只移除已选且确认因容量暂缓的新对象；未设预算的路没有预选项。
+func (plan *snapshotPlan) deferForCapacity(sub *subscription) {
+	if plan != nil && plan.selected[sub] {
+		delete(plan.selected, sub)
+		plan.removedForCapacity = true
+	}
+}
+
+// rotateCapacityOnlyPlans：整路预选已由对象上限明确暂缓，没有可发送前缀。
+// 让下一会话先挑冷请求，而非让同一满会话的其余请求连续用尽捕获名额。
+// 只移会话轮转位置，不动实体序号或窗口计费。混合计划、字节阻挡仍沿用原准入/重试规则。
+func (m *Manager) rotateCapacityOnlyPlans(plan *snapshotPlan) {
+	// 捕获会把已有引用的刷新补进 selected，却不进冷 order，不能用等长推断没有删除。
+	if plan == nil || !plan.removedForCapacity {
+		return
+	}
+	for start := 0; start < len(plan.order); {
+		index := plan.order[start].lane
+		end := start
+		allDeferred := !plan.blocked(index)
+		for end < len(plan.order) && plan.order[end].lane == index {
+			if plan.selected[plan.order[end].sub] {
+				allDeferred = false
+			}
+			end++
+		}
+		if allDeferred {
+			lane := m.lanes[index]
+			for _, item := range plan.order[start:end] {
+				lane.snapshotCursor[item.class] = item.sessionID
+				lane.snapshotNextClass = 1 - item.class
+			}
+		}
+		start = end
 	}
 }
 

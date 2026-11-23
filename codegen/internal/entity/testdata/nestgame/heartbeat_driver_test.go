@@ -57,6 +57,14 @@ func beatChanges(index int, beats int64, dirty int) int64 {
 	return n
 }
 
+// beatFlags 以回调开始时刻归窗；晚到或排空的回调照常执行，但不推进正式样本序号。
+func beatFlags(began, from, end time.Time, measured *atomic.Uint64) (outside, sample bool) {
+	if !inLoadWindow(began, from, end) {
+		return true, false
+	}
+	return false, (measured.Add(1)-1)%16 == 0
+}
+
 // beatLoad 是 heartbeat 模式的心跳：一个驱动，每个 Unit 一个登记。beats 只在对应 Unit 的实体锁内写（回调里），
 // 停机之后读。
 type beatLoad struct {
@@ -66,9 +74,10 @@ type beatLoad struct {
 	period   time.Duration
 	dirty    int
 	beats    []int64
-	// interval 是同一登记相邻两拍的业务时间差（Beat.Elapsed，非首拍），只在测量窗口内记。
+	// 同一登记的两个真实业务时刻都在 (from,end] 才记间隔；Beat.Elapsed 已截断，不能用来还原上一拍。
+	from, end time.Time // driver.Start 前写定
+	lastBeat  []time.Time
 	interval  timings
-	measuring atomic.Bool
 	// onBeat 在回调里改完 DAO 之后调用（压测接计数与 Sync），返回错误时本拍回滚。
 	onBeat func(u *Unit, change bool, b heartbeat.Beat) error
 }
@@ -81,16 +90,14 @@ func newBeatLoad(units []*Unit, period time.Duration, dirty int, delivery string
 		return nil, fmt.Errorf("ROOST_NEST_GAME_HEARTBEAT_DELIVERY: %w", err)
 	}
 	driver := heartbeat.NewDriver(heartbeat.Config{Name: "nest-game", Delivery: parsed})
-	load := &beatLoad{driver: driver, delivery: driver.Delivery(), period: period, dirty: dirty, beats: make([]int64, len(units)), onBeat: onBeat}
+	load := &beatLoad{driver: driver, delivery: driver.Delivery(), period: period, dirty: dirty, beats: make([]int64, len(units)), lastBeat: make([]time.Time, len(units)), onBeat: onBeat}
 	for i, u := range units {
 		index, unit := i, u
 		reg, err := load.driver.NewHost(unit).Register("perf.game.heartbeat", period, func(b heartbeat.Beat) error {
 			change := (int64(index)+load.beats[index])%100 < int64(load.dirty)
 			unit.heartbeat.Tick(change)
 			load.beats[index]++
-			if !b.First && load.measuring.Load() {
-				load.interval.add(b.Elapsed, true)
-			}
+			load.observeInterval(index, b)
 			if load.onBeat != nil {
 				return load.onBeat(unit, change, b)
 			}
@@ -106,19 +113,30 @@ func newBeatLoad(units []*Unit, period time.Duration, dirty int, delivery string
 	return load, nil
 }
 
+// 普通 10µs 桶到 100ms 封顶，会把超时截成合格值。仅 interval 用 200µs 桶到 2s，
+// 高于所有可配档位的判决线（最高 1s+50ms），每条判决线都正好是桶界。
+const beatIntervalBucket = 200 * time.Microsecond
+
+func (l *beatLoad) observeInterval(index int, b heartbeat.Beat) {
+	prev := l.lastBeat[index]
+	l.lastBeat[index] = b.Now // 只由对应 Unit 的实体锁内访问。
+	if !b.First && inLoadWindow(prev, l.from, l.end) && inLoadWindow(b.Now, l.from, l.end) {
+		l.interval.addWithBucket(b.Now.Sub(prev), true, beatIntervalBucket)
+	}
+}
+
 // start 接上 Nest 并启动驱动。
-func (l *beatLoad) start(client nest.Client, access *entity.ManagerAccess) error {
+func (l *beatLoad) start(client nest.Client, access *entity.ManagerAccess, from, end time.Time) error {
 	manager := access.Manager()
 	if err := l.driver.Bind(client, func(id int64) entity.IThreadSafeEntity { return manager.Get(id) }); err != nil {
 		return err
 	}
-	l.measuring.Store(true)
+	l.from, l.end = from, end
 	return l.driver.Start()
 }
 
 // stop 停驱动：Stop 返回后不再投递，已在 Nest 队列里的拍由随后的 engine.Shutdown 执行完。
 func (l *beatLoad) stop(ctx context.Context) error {
-	l.measuring.Store(false)
 	return l.driver.Stop(ctx)
 }
 
@@ -139,7 +157,7 @@ type beatReport struct {
 // （相位与启停时刻差一拍以内，另留一拍余量）；每个 Unit 的 DAO 与“按拍数算出的改值次数”一致；间隔 P99 不超过
 // 档位 + 50ms。duration 为 0 时不核对拍数。
 func (l *beatLoad) verify(units []*Unit, duration time.Duration) beatReport {
-	r := beatReport{Delivery: l.delivery, PeriodMS: float64(l.period) / float64(time.Millisecond), Driver: l.driver.Stats(), Interval: l.interval.result(), BeatsMin: -1}
+	r := beatReport{Delivery: l.delivery, PeriodMS: float64(l.period) / float64(time.Millisecond), Driver: l.driver.Stats(), Interval: l.interval.resultWithBucket(beatIntervalBucket), BeatsMin: -1}
 	var problems []error
 	s := r.Driver
 	if s.SkippedInflight+s.SkippedQueueFull+s.SkippedRejected+s.Stalled > 0 {
@@ -167,8 +185,9 @@ func (l *beatLoad) verify(units []*Unit, duration time.Duration) beatReport {
 	if duration > 0 && (float64(r.BeatsMin) < r.ExpectedPerUnit-2 || float64(r.BeatsMax) > r.ExpectedPerUnit+2) {
 		problems = append(problems, fmt.Errorf("beats per unit %d..%d, want %.1f ± 2", r.BeatsMin, r.BeatsMax, r.ExpectedPerUnit))
 	}
-	if r.Interval.Samples > 0 && r.Interval.P99MS > r.PeriodMS+50 {
-		problems = append(problems, fmt.Errorf("beat interval p99 %.2fms over period %.0fms + 50ms", r.Interval.P99MS, r.PeriodMS))
+	// 短窗中每个 Unit 可能只有一拍，没有相邻正式拍时不凭空要求 interval 样本。
+	if !r.Interval.passes(r.PeriodMS+50, false) {
+		problems = append(problems, fmt.Errorf("beat interval p99 %.2fms (limit %.0fms), negative %d", r.Interval.P99MS, r.PeriodMS+50, r.Interval.NegativeDurations))
 	}
 	if err := errors.Join(problems...); err != nil {
 		r.Problem = err.Error()
@@ -240,10 +259,11 @@ func runHeartbeatDriverCheck(t *testing.T, firstUnique int64, delivery string) b
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if err := load.start(engine, access); err != nil {
+	const run = 500 * time.Millisecond
+	from := time.Now()
+	if err := load.start(engine, access, from, from.Add(run)); err != nil {
 		t.Fatal(err)
 	}
-	const run = 500 * time.Millisecond
 	time.Sleep(run)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

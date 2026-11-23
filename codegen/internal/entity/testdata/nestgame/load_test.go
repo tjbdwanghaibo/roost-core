@@ -42,7 +42,14 @@ type gameConfig struct {
 	ObservedBlocks int
 	// Settle 是负载结束后等客户端终值收敛的上限（ROOST_NEST_GAME_SETTLE，缺省 10s）。
 	Settle time.Duration
+	// Warmup 是计时窗口之前照常发压、不计时延的预热时长（ROOST_NEST_GAME_WARMUP，缺省 0，整秒）。开局几秒里
+	// 超额暂缓、Interest 收紧冷却等状态还在建立（M-16 c4 同步模式前 15s 积压到秒级、随后回落），预热让时延门槛
+	// 只评估稳态。计划时刻落在预热期的请求、心跳和同步变化都不进任何时延统计；数量与终值核对仍覆盖预热加计时窗口。
+	Warmup time.Duration
 }
+
+// total 是实际发压时长：预热加计时窗口。
+func (c gameConfig) total() time.Duration { return c.Warmup + c.Duration }
 
 func envInt(t *testing.T, key string, fallback int) int {
 	t.Helper()
@@ -59,14 +66,18 @@ func envInt(t *testing.T, key string, fallback int) int {
 // 延迟直方图固定容量，每 16 次按序采样；超 50ms 的数量和最大值覆盖全部完成事件。
 type timings struct {
 	mu       sync.Mutex
-	buckets  [10001]uint64 // 10us 一个桶，量化向上取整，最后一桶包含触顶及溢出样本。
+	buckets  [10001]uint64 // 默认每桶 10µs，量化向上取整，最后一桶包含触顶及溢出样本。
 	samples  uint64
 	over50   atomic.Uint64
 	negative atomic.Uint64
 	max      atomic.Int64
 }
 
-func (h *timings) add(d time.Duration, sample bool) {
+const latencyBucket = 10 * time.Microsecond
+
+func (h *timings) add(d time.Duration, sample bool) { h.addWithBucket(d, sample, latencyBucket) }
+
+func (h *timings) addWithBucket(d time.Duration, sample bool, bucket time.Duration) {
 	if d < 0 {
 		h.negative.Add(1)
 	}
@@ -83,7 +94,10 @@ func (h *timings) add(d time.Duration, sample bool) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	i := min(int((max(d, 0)+10*time.Microsecond-1)/(10*time.Microsecond)), len(h.buckets)-1)
+	i := 0
+	if d > 0 {
+		i = int(min((d-1)/bucket+1, time.Duration(len(h.buckets)-1)))
+	}
 	h.buckets[i]++
 	h.samples++
 }
@@ -94,7 +108,14 @@ type latencyResult struct {
 	SamplesAtCeiling                     uint64
 }
 
-func (h *timings) result() latencyResult {
+// 仅在确实没有正式事件时允许空直方图；P99MS 的数值零本身不能作为通过证据。
+func (r latencyResult) passes(limitMS float64, required bool) bool {
+	return (!required || r.Samples > 0) && r.P99MS <= limitMS && r.NegativeDurations == 0
+}
+
+func (h *timings) result() latencyResult { return h.resultWithBucket(latencyBucket) }
+
+func (h *timings) resultWithBucket(bucket time.Duration) latencyResult {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	q := func(p float64) float64 {
@@ -103,10 +124,10 @@ func (h *timings) result() latencyResult {
 		for i, n := range h.buckets {
 			sum += n
 			if sum >= want {
-				return float64(i) / 100
+				return float64(time.Duration(i)*bucket) / float64(time.Millisecond)
 			}
 		}
-		return 100
+		panic("invalid latency histogram")
 	}
 	return latencyResult{
 		Samples: h.samples, Over50MS: h.over50.Load(), NegativeDurations: h.negative.Load(),
@@ -118,6 +139,7 @@ func (h *timings) result() latencyResult {
 type loadCounters struct {
 	planned, accepted, rejected                       uint64 // 只由 ticker 调度者写；调度完后读取。
 	completed, changed                                atomic.Uint64
+	outsideCompleted, outsideChanged                  atomic.Uint64 // 仅窗外完成时写；W=0 的 ticker 热路径不多做原子加。
 	firstError                                        string
 	firstErrorAt                                      time.Time
 	queueWait, handler, completion, changedCompletion timings
@@ -133,6 +155,7 @@ type loadCounters struct {
 // sent 是模拟客户端把请求写进 TCP 之前的时刻；不经 Gate 的直接投递没有客户端，sent 等于 admitted。
 type streamResult struct {
 	Planned, Accepted, Rejected, Completed, EntityChanges uint64
+	MeasuredCompleted, MeasuredEntityChanges              uint64 // 正式窗口，不含预热（beat 亦不含截止后的回调）。
 	CompletedPerSecond                                    float64
 	FirstError                                            string
 	// FirstErrorAt 是首个拒绝的墙钟时刻（RFC3339Nano），与 ClientFirstFailure.At 比先后，定位哪一层先出错。
@@ -157,8 +180,29 @@ type serverResult struct {
 	QueueWait, Completion latencyResult
 }
 
+// 每个实际完成的事件都计入全程完整性核对；窗外只跳过延迟统计。
+func (c *loadCounters) recordCompletion(in invocation, latency time.Duration) bool {
+	c.completed.Add(1)
+	if in.change {
+		c.changed.Add(1)
+	}
+	if in.warmup {
+		c.outsideCompleted.Add(1)
+		if in.change {
+			c.outsideChanged.Add(1)
+		}
+		return false
+	}
+	c.completion.add(latency, in.sample)
+	if in.change {
+		c.changedCompletion.add(latency, true)
+	}
+	return true
+}
+
 func (c *loadCounters) result(elapsed float64) streamResult {
 	return streamResult{
+		MeasuredCompleted: c.completed.Load() - c.outsideCompleted.Load(), MeasuredEntityChanges: c.changed.Load() - c.outsideChanged.Load(),
 		Planned: c.planned, Accepted: c.accepted, Rejected: c.rejected, Completed: c.completed.Load(),
 		EntityChanges: c.changed.Load(), CompletedPerSecond: float64(c.completed.Load()) / elapsed, FirstError: c.firstError, FirstErrorAt: wallTime(c.firstErrorAt),
 		QueueWait: c.queueWait.result(), Handler: c.handler.result(), Completion: c.completion.result(), ChangedEntityCompletion: c.changedCompletion.result(),
@@ -171,6 +215,8 @@ type invocation struct {
 	planned, admitted, sent time.Time
 	change, sample          bool
 	heartbeat               bool
+	// warmup 表示事件在计时窗外：ticker 为预热计划，beat 也可能是截止后才开始的回调。照常执行与计数。
+	warmup bool
 }
 type gameSample struct {
 	Seconds              float64
@@ -305,6 +351,22 @@ func eventOffset(sequence uint64, rate int) time.Duration {
 	return time.Duration(sequence/uint64(rate))*time.Second + time.Duration(sequence%uint64(rate))*time.Second/time.Duration(rate)
 }
 
+// eventsDue 计算 (start,start+elapsed] 的计划数；实际输入的 W、D 均为整秒。
+func eventsDue(elapsed time.Duration, rate int) uint64 {
+	return uint64(elapsed/time.Second)*uint64(rate) + uint64(elapsed%time.Second)*uint64(rate)/uint64(time.Second)
+}
+
+// 事件序号从 0 起，计划时刻用序号 + 1。两段分别是 (start,from] 和 (from,end]。
+// 正式流从首条起每 16 条取一条，小流也有样本；W=0 时与原 ticker 抽样逐条相同。
+func tickerFlags(sequence, warmupEvents uint64) (warmup, sample bool) {
+	if sequence < warmupEvents {
+		return true, false
+	}
+	return false, (sequence-warmupEvents)%16 == 0
+}
+
+func inLoadWindow(at, from, end time.Time) bool { return at.After(from) && !at.After(end) }
+
 func TestNestGameLoad(t *testing.T) {
 	output := os.Getenv("ROOST_NEST_GAME_OUTPUT")
 	if output == "" {
@@ -325,6 +387,11 @@ func TestNestGameLoad(t *testing.T) {
 	c.Duration, err = time.ParseDuration(duration)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if warmup := os.Getenv("ROOST_NEST_GAME_WARMUP"); warmup != "" {
+		if c.Warmup, err = time.ParseDuration(warmup); err != nil || c.Warmup < 0 || c.Warmup > time.Hour || c.Warmup%time.Second != 0 {
+			t.Fatalf("ROOST_NEST_GAME_WARMUP must be whole seconds in 0..1h, got %q", warmup)
+		}
 	}
 	c.Settle = 10 * time.Second
 	if settle := os.Getenv("ROOST_NEST_GAME_SETTLE"); settle != "" {
@@ -452,9 +519,11 @@ func TestNestGameLoad(t *testing.T) {
 		ended := time.Now()
 		entity.CurrentGuardScope().Guard().AppendPostRelease(func() {
 			completed := time.Now()
+			if !counters.recordCompletion(in, completed.Sub(in.planned)) {
+				return
+			}
 			counters.queueWait.add(began.Sub(in.admitted), in.sample)
 			counters.handler.add(ended.Sub(began), in.sample)
-			counters.completion.add(completed.Sub(in.planned), in.sample)
 			counters.admitLag.add(in.admitted.Sub(in.planned), in.sample)
 			counters.clientQueue.add(in.sent.Sub(in.admitted), in.sample)
 			counters.serverQueue.add(began.Sub(in.sent), in.sample)
@@ -466,11 +535,6 @@ func TestNestGameLoad(t *testing.T) {
 				}
 				c.observe(stream, completed.Sub(in.planned), tailPart{"admit", in.admitted.Sub(in.planned)}, tailPart{"client", in.sent.Sub(in.admitted)}, tailPart{"queue", began.Sub(in.sent)}, tailPart{"handler", ended.Sub(began)}, tailPart{"release", completed.Sub(ended)})
 			}
-			if in.change {
-				counters.changedCompletion.add(completed.Sub(in.planned), true)
-				counters.changed.Add(1)
-			}
-			counters.completed.Add(1)
 		})
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
@@ -478,10 +542,13 @@ func TestNestGameLoad(t *testing.T) {
 	// handler 相同；没有计划时刻，Completion 从回调开始算（服务端：handler + 释放），驱动与快池的迟到看 Beats.Interval。
 	var beats *beatLoad
 	var beatSeq atomic.Uint64
+	// 起止时刻在 engine 启动前写定，之后只读。
+	var start, measureFrom, end time.Time
 	if c.HeartbeatDriver == heartbeatDriverBeat {
 		beats, err = newBeatLoad(units, beatPeriod, c.DirtyPercent, c.HeartbeatDelivery, func(u *Unit, change bool, _ heartbeat.Beat) error {
 			began := time.Now()
-			in := invocation{planned: began, admitted: began, sent: began, change: change, sample: beatSeq.Add(1)%16 == 0, heartbeat: true}
+			outside, sample := beatFlags(began, measureFrom, end, &beatSeq)
+			in := invocation{planned: began, admitted: began, sent: began, change: change, heartbeat: true, warmup: outside, sample: sample}
 			if change && stateSync != nil {
 				if err := stateSync.changed(u, in); err != nil {
 					return err
@@ -490,17 +557,14 @@ func TestNestGameLoad(t *testing.T) {
 			ended := time.Now()
 			entity.CurrentGuardScope().Guard().AppendPostRelease(func() {
 				completed := time.Now()
+				if !heartbeats.recordCompletion(in, completed.Sub(began)) {
+					return
+				}
 				heartbeats.handler.add(ended.Sub(began), in.sample)
-				heartbeats.completion.add(completed.Sub(began), in.sample)
 				heartbeats.serverDone.add(completed.Sub(began), in.sample)
 				if c := tail.Load(); c != nil {
 					c.observe("heartbeat", completed.Sub(began), tailPart{"handler", ended.Sub(began)}, tailPart{"release", completed.Sub(ended)})
 				}
-				if change {
-					heartbeats.changedCompletion.add(completed.Sub(began), true)
-					heartbeats.changed.Add(1)
-				}
-				heartbeats.completed.Add(1)
 			})
 			return nil
 		})
@@ -508,7 +572,7 @@ func TestNestGameLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), c.Duration+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.total()+30*time.Second)
 	defer cancel()
 	// 唯一正式 ticker 只负责投递；组件、DAO 与 Guard 全部由业务池处理。
 	// 各实体的到期相位均匀分散，用绝对计划时间计算应投数量，ticker 变慢不能偷偷降低输入率。
@@ -519,7 +583,7 @@ func TestNestGameLoad(t *testing.T) {
 	}
 	counters := [2]*loadCounters{&messages, &heartbeats}
 	expected := make([][2]int64, c.Entities)
-	var start, end time.Time
+	warmupEvents := [2]uint64{eventsDue(c.Warmup, rates[0]), eventsDue(c.Warmup, rates[1])}
 	done := make(chan struct{})
 	var stopped bool
 	var samples []gameSample
@@ -530,12 +594,12 @@ func TestNestGameLoad(t *testing.T) {
 		}
 		now := time.Now()
 		if c := tail.Load(); c != nil {
-			c.observeTick(now)
+			c.observeTick(now, measureFrom, end)
 		}
-		elapsed := min(now.Sub(start), c.Duration)
+		elapsed := min(now.Sub(start), c.total())
 		var due [2]uint64
 		for k, rate := range rates {
-			due[k] = uint64(elapsed/time.Second)*uint64(rate) + uint64(elapsed%time.Second)*uint64(rate)/uint64(time.Second)
+			due[k] = eventsDue(elapsed, rate)
 		}
 		for messages.planned < due[0] || heartbeats.planned < due[1] {
 			k := 0
@@ -556,7 +620,8 @@ func TestNestGameLoad(t *testing.T) {
 			change := (uint64(index)+round)%100 < uint64(c.DirtyPercent)
 			planned := start.Add(eventOffset(sequence+1, rates[k]))
 			admitted := time.Now()
-			in := invocation{planned: planned, admitted: admitted, sent: admitted, change: change, sample: sequence%16 == 0, heartbeat: k == 1}
+			warmup, sample := tickerFlags(sequence, warmupEvents[k])
+			in := invocation{planned: planned, admitted: admitted, sent: admitted, change: change, sample: sample, heartbeat: k == 1, warmup: warmup}
 			var dispatchErr error
 			if k == 0 && network != nil {
 				dispatchErr = network.dispatch(index, in)
@@ -628,7 +693,11 @@ func TestNestGameLoad(t *testing.T) {
 			QueuePeak: "not exported: per-connection queue depth lives in unexported gateway.tcpSession and there is no resident-bytes gauge (KNOWN-LIMITS embedded TCP outbound)"}
 	}
 	start = time.Now().Add(100 * time.Millisecond)
-	end = start.Add(c.Duration)
+	measureFrom = start.Add(c.Warmup)
+	end = start.Add(c.total())
+	if stateSync != nil {
+		stateSync.setMeasureWindow(measureFrom, end)
+	}
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +711,7 @@ func TestNestGameLoad(t *testing.T) {
 	if beats != nil {
 		time.Sleep(time.Until(start))
 		beatStarted = time.Now()
-		if err := beats.start(engine, access); err != nil {
+		if err := beats.start(engine, access, measureFrom, end); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = beats.stop(context.Background()) })
@@ -696,16 +765,16 @@ func TestNestGameLoad(t *testing.T) {
 		embedded.OutboundClean = delta.BudgetExhausted == 0 && delta.Overflow == 0 && delta.PushClosed == 0 && delta.WriteErrors == 0 && delta.PushRefusedRetried == 0 && delta.PushRefusedClosed == 0
 		embedded.Completed = embeddedNetwork.completed.Load()
 		embedded.RoundTrip = embeddedNetwork.roundTrip.result()
-		if embedded.Completed != r.Messages.Completed {
+		if embedded.Completed != r.Messages.Completed || embeddedNetwork.measuredReplies() != r.Messages.MeasuredCompleted {
 			r.CountsVerified = false
 		}
-		if embedded.RoundTrip.P99MS > 50 {
+		if !embedded.RoundTrip.passes(50, rates[0] > 0) {
 			r.LatencyPassed = false
 		}
 		r.Embedded = embedded
 		outboundStart = &embedded.CountersAtStart
 	}
-	r.Minutes = summarizeMinutes(samples, c.Duration, outboundStart)
+	r.Minutes = summarizeMinutes(samples, c.total(), outboundStart)
 	if syncReport != nil {
 		r.EntityValuesVerified = r.EntityValuesVerified && syncReport.ValuesVerified
 		r.LatencyPassed = r.LatencyPassed && syncReport.LatencyPassed
@@ -719,10 +788,10 @@ func TestNestGameLoad(t *testing.T) {
 		r.GateEnabled = true
 		r.GateCompleted = gateNetwork.completed.Load()
 		r.GateRoundTrip = gateNetwork.roundTrip.result()
-		if r.GateCompleted != r.Messages.Completed {
+		if r.GateCompleted != r.Messages.Completed || gateNetwork.measuredReplies() != r.Messages.MeasuredCompleted {
 			r.CountsVerified = false
 		}
-		if r.GateRoundTrip.P99MS > 50 {
+		if !r.GateRoundTrip.passes(50, rates[0] > 0) {
 			r.LatencyPassed = false
 		}
 	}
@@ -744,17 +813,17 @@ func TestNestGameLoad(t *testing.T) {
 		}
 	}
 	for k, stream := range []streamResult{r.Messages, r.Heartbeats} {
-		want := uint64(c.Duration/time.Second) * uint64(rates[k])
+		want, wantMeasured := eventsDue(c.total(), rates[k]), eventsDue(c.Duration, rates[k])
 		if k == 1 && beats != nil {
 			// heartbeat 驱动：拍数由相位与启停时刻决定，核对在 beats.verify（每个 Unit duration / 档位 ± 2、无跳拍）；
 			// 这里只要求投递的都执行了。
-			want = stream.Planned
+			want, wantMeasured = stream.Planned, beatSeq.Load()
 		}
-		if stream.Planned != want || stream.Accepted != want || stream.Completed != want || stream.Rejected != 0 {
+		if stream.Planned != want || stream.Accepted != want || stream.Completed != want || stream.MeasuredCompleted != wantMeasured || stream.Rejected != 0 {
 			r.CountsVerified = false
 		}
-		if stream.Completed > 0 && (stream.Completion.P99MS > 50 || stream.ChangedEntityCompletion.P99MS > 50 || stream.Completion.NegativeDurations > 0 || stream.ChangedEntityCompletion.NegativeDurations > 0 || stream.QueueWait.NegativeDurations > 0 ||
-			stream.Harness.AdmitLag.NegativeDurations > 0 || stream.Harness.ClientQueue.NegativeDurations > 0 || stream.Server.QueueWait.NegativeDurations > 0 || stream.Server.Completion.NegativeDurations > 0) {
+		if !stream.Completion.passes(50, rates[k] > 0 || (k == 1 && beats != nil)) || !stream.ChangedEntityCompletion.passes(50, stream.MeasuredEntityChanges > 0) || stream.QueueWait.NegativeDurations > 0 ||
+			stream.Harness.AdmitLag.NegativeDurations > 0 || stream.Harness.ClientQueue.NegativeDurations > 0 || stream.Server.QueueWait.NegativeDurations > 0 || stream.Server.Completion.NegativeDurations > 0 {
 			r.LatencyPassed = false
 		}
 	}
@@ -778,7 +847,7 @@ func TestNestGameLoad(t *testing.T) {
 		fmt.Printf("embedded scene_sync=%v self_sync=%v roundtrip_p99=%.3fms budget_exhausted=%d push_refused=retried:%d/closed:%d overflow=%d push_closed=%d write_errors=%d write_loops=%d->%d outbound_clean=%v\n",
 			e.SceneSync, e.SelfSync, e.RoundTrip.P99MS, d.BudgetExhausted, d.PushRefusedRetried, d.PushRefusedClosed, d.Overflow, d.PushClosed, d.WriteErrors, e.GoroutinesAtStart.WriteLoops, e.GoroutinesAtEnd.WriteLoops, e.OutboundClean)
 	}
-	if !r.CountsVerified || !r.EntityValuesVerified || !r.LatencyPassed {
+	if r.ClientFirstFailure != nil || !r.CountsVerified || !r.EntityValuesVerified || !r.LatencyPassed {
 		t.Fatal("business load gate failed; full result retained")
 	}
 }

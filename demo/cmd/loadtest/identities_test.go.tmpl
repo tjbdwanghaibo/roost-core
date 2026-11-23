@@ -2,11 +2,18 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/modules/alliance"
 	gamelogin "{{MODULE}}/game/modules/login"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 
@@ -16,6 +23,63 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 )
+
+// Exercise the shipped actions with a scripted transport, not a live service.
+// The key includes the original start frame's seq and session, NOT the poll's.
+func TestAlliancePollEvidenceUsesStartedOperation(t *testing.T) {
+	const owner int64 = 100082
+	const session = "private:original-session"
+	for _, tc := range []struct{ start, op, kind string }{
+		{"found_alliance", alliance.OpFound, alliancefound.Type},
+		{"donate_alliance", alliance.OpDonate, alliancedonate.Type},
+		{"claim_alliance_reward", alliance.OpReward, alliancereward.Type},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			key := alliance.BusinessKey(tc.op, owner, session, 79)
+			actualKey := key
+			answer := func(req *transport.Packet) []*transport.Packet {
+				if req.MsgID == msgid.MsgAllianceOpStatus {
+					p, err := pb.UnmarshalAllianceOpStatusRequest(req.Payload)
+					if err != nil || p.Op != tc.op || p.SagaKey != actualKey {
+						t.Errorf("poll did not use actual operation: %v", err)
+					}
+					data, err := pb.MarshalAllianceOpStatusResponse(&pb.AllianceOpStatusResponse{Status: "waiting", Step: 1})
+					return answerTo(t, req, data, err)
+				}
+				data, err := pb.MarshalAllianceResponse(&pb.AllianceResponse{SagaKey: key})
+				return answerTo(t, req, data, err)
+			}
+			protocols := protocol.NewRegistry(pbCodec{})
+			actions := action.NewRegistry()
+			registerCalls(actions, protocols)
+			_, sess := newScriptedGame(t, protocols, answer)
+			rb := robot.NewContext(robot.Config{ID: 35, PlayerID: 900035, Protocols: protocols})
+			rb.SetSession(sess)
+			if r := alliancePollReceipt(rb, tc.op, alliance.BusinessKey(tc.op, rb.PlayerID, session, 79)); r.id != "" {
+				t.Fatal("provisional identity is not an authenticated binding")
+			}
+			adoptPlayer(rb, owner)
+			if err := actions.Run(context.Background(), rb, tc.start, nil); err != nil {
+				t.Fatal(err)
+			}
+			check := func(param any, want string) {
+				t.Helper()
+				err := actions.Run(context.Background(), rb, "alliance_op_status", param)
+				if err == nil || !strings.HasSuffix(err.Error(), want) || strings.Contains(err.Error(), session) {
+					t.Errorf("invalid/redaction-unsafe diagnostic: %v", err)
+				}
+			}
+			check(nil, fmt.Sprintf("saga_record=%s saga_type=%s saga_player=%d", saga.IDOf(tc.kind, key), tc.kind, owner))
+			actualKey = alliance.BusinessKey(tc.op, owner, session, 78)
+			check(&pb.AllianceOpStatusRequest{Op: tc.op, SagaKey: actualKey}, "saga_record=unknown")
+			for _, bad := range []string{"", key+"x", alliance.BusinessKey(tc.op, 900035, session, 79), alliance.BusinessKey("other", owner, session, 79)} {
+				if r := alliancePollReceipt(rb, tc.op, bad); r.id != "" {
+					t.Fatal("accepted malformed/other owner's/other operation's key")
+				}
+			}
+		})
+	}
+}
 
 // -identities：login_as 点名的身份在哪个 game 上玩。表里的身份在它的 sid 上建角（进服票据也是那个服的），connect 拨
 // 它的地址；不在表里的（含机器人自己的 ""）用 -server-id 与 -endpoint。alliance_cross_join 靠它把两名玩家放在两个

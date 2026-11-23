@@ -756,32 +756,17 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 
 // blockCandidates keeps the original Block index's per-block scan and reusable work buffers.
 func (m *AOI) blockCandidates(observer *interestObserver, work *aoiWorkspace) {
-	blocks := work.blocks[:0]
-	for block := range observer.blocks {
-		blocks = append(blocks, block)
-	}
-	slices.Sort(blocks)
-	work.blocks = blocks
-	// Admit new candidates nearest-first: block-order admission could let a
-	// farther subject enter and be evicted by a nearer one within the same
-	// evaluation, emitting a transient Enter+Leave pair downstream.
+	// m.index holds one point per subject (indexNewSubject/MoveSubject); extra
+	// observed blocks live elsewhere. No writes overlap this read phase. Thus
+	// each ID occurs once; admitNearest supplies the total order before events.
 	candidates := work.candidates[:0]
-	if work.seen == nil {
-		work.seen = make(map[int64]struct{})
-	}
-	seen := work.seen
-	clear(seen)
 	query := work.query[:0]
-	for _, block := range blocks {
-		query = m.index.AppendBlockIDs(query[:0], block)
+	for block := range observer.blocks {
+		query = m.index.AppendUnorderedBlockIDs(query[:0], block)
 		for _, subject := range query {
 			if _, alreadyVisible := observer.visible[subject]; alreadyVisible {
 				continue
 			}
-			if _, duplicate := seen[subject]; duplicate {
-				continue
-			}
-			seen[subject] = struct{}{}
 			// 自身和进入半径外的实体不会入场，排序前排除；距离判断保留溢出安全语义。
 			if at, exists := m.subjects[subject]; exists && subject != observer.self && spatial.WithinDistance(observer.at, at, observer.enter) {
 				candidates = append(candidates, entryCandidate{subject: subject, at: at, distance: spatial.DistanceSquared(observer.at, at)})
@@ -789,20 +774,20 @@ func (m *AOI) blockCandidates(observer *interestObserver, work *aoiWorkspace) {
 		}
 	}
 	work.query, work.candidates = query, candidates
-	work.seenPeak = max(work.seenPeak, len(seen))
 }
 
 // admitNearest 按距离从近到远（同距按 ID）让候选入选，满额时只淘汰严格更远的成员。
 // 最近的剩余候选都无法替换时，后续候选也不会改变可见集；这个被拒的距离记作未入选下界。
 // 等距离仍保留原成员；成功腾出位置后 evaluatePair 不会再次淘汰。
 func (m *AOI) admitNearest(observer *interestObserver, candidates []entryCandidate) {
-	slices.SortFunc(candidates, func(a, b entryCandidate) int {
-		if order := cmp.Compare(a.distance, b.distance); order != 0 {
-			return order
-		}
-		return cmp.Compare(a.subject, b.subject)
-	})
 	limit, bounded := m.visibleLimit(observer)
+	// New entrants arrive nearest-first: a later candidate can never evict an
+	// earlier entrant. At most limit can enter; retain one more to reproduce
+	// the first rejection (and its distance bound for moved-only evaluations).
+	if bounded && limit < len(candidates)/4 {
+		candidates = nearestPrefix(candidates, limit+1)
+	}
+	slices.SortFunc(candidates, compareEntry)
 	for _, candidate := range candidates {
 		if bounded && len(observer.visible) >= limit && !m.evictFarther(observer, candidate.at) {
 			noteRefused(observer, candidate.distance)
@@ -810,6 +795,43 @@ func (m *AOI) admitNearest(observer *interestObserver, candidates []entryCandida
 		}
 		m.evaluatePair(observer, candidate.subject, candidate.at, false)
 	}
+}
+
+func compareEntry(a, b entryCandidate) int {
+	if order := cmp.Compare(a.distance, b.distance); order != 0 {
+		return order
+	}
+	return cmp.Compare(a.subject, b.subject)
+}
+
+// nearestPrefix keeps the least k candidates in the input buffer. A max heap
+// makes the worst kept candidate the cutoff; the caller sorts the short prefix.
+func nearestPrefix(all []entryCandidate, k int) []entryCandidate {
+	best := all[:k]
+	sink := func(i int) {
+		x := best[i]
+		for i < k/2 {
+			j := 2*i + 1
+			if j+1 < k && compareEntry(best[j], best[j+1]) < 0 {
+				j++
+			}
+			if compareEntry(x, best[j]) >= 0 {
+				break
+			}
+			best[i], i = best[j], j
+		}
+		best[i] = x
+	}
+	for i := k/2 - 1; i >= 0; i-- {
+		sink(i)
+	}
+	for _, x := range all[k:] {
+		if compareEntry(x, best[0]) < 0 {
+			best[0] = x
+			sink(0)
+		}
+	}
+	return best
 }
 
 // movedMember 报告 ids（升序）里是否有当前可见成员。

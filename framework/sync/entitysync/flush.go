@@ -313,7 +313,7 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 	// 准入：会话有序处理（冷创建计费会话按计划顺序在前，其余按 ID），
 	// 每帧成功后推进线协议状态，该会话全部帧成功后结算订阅。
 	// 超额准入先于两种预算：只有放得下的新对象才去争发送与快照额度（over_limit.go）。
-	m.admitWithinLimits(work)
+	m.admitWithinLimits(work, plan)
 	sessionIDs := make([]SessionID, 0, len(work))
 	for sid, batch := range work {
 		if len(batch.entries) == 0 && !emptyFulls[sid] {
@@ -494,6 +494,7 @@ func (m *Manager) prepareSubscribersLocked(subj *subject, work map[SessionID]*fl
 // deferUnselectedSnapshotsLocked 在冷创建预算生效时（selected 非 nil）处理未入选的全量：会话已持有
 // 引用的视图替换仍是一次对象更新，补选进 selected；其余未入选的全量排到下一窗口。调用方持有 subj.mu。
 func (m *Manager) deferUnselectedSnapshotsLocked(subj *subject, held map[SessionID]bool, work map[SessionID]*flushSession, selected map[*subscription]bool) {
+	var deferred uint64
 	for sid, sub := range subj.subscribers {
 		if sub.waitsForRoom() {
 			continue // 超额暂缓的订阅不进快照预算，也不排进等待表
@@ -505,9 +506,15 @@ func (m *Manager) deferUnselectedSnapshotsLocked(subj *subject, held map[Session
 			}
 		}
 		if sub.kind == kindSnapshot && !held[sid] && !selected[sub] {
-			m.deferSnapshot(subj)
-			m.snapshotsDeferred.Add(1)
+			// 等待表按 subject 去重；首个延期保留原来的登记时刻，计数仍按订阅。
+			if deferred == 0 {
+				m.deferSnapshot(subj)
+			}
+			deferred++
 		}
+	}
+	if deferred != 0 {
+		m.snapshotsDeferred.Add(deferred)
 	}
 }
 

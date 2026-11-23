@@ -178,6 +178,103 @@ func TestWholeEntitySplitRetryContinuesFrameAndContentBaselines(t *testing.T) {
 	}
 }
 
+// 已满会话独占冷计划并被容量暂缓时，下一轮该让有空位的会话先选；同轮已有对象的刷新与冷名额无关。
+func TestSnapshotBudgetRotatesPastCapacityOnlyPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refresh int64 // 0 为不刷新的对照；10、11 分别在暂缓的那一路和另一路
+	}{{"control", 0}, {"same_lane_refresh", 10}, {"other_lane_refresh", 11}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRecordingTransport()
+			budget := SnapshotBudget{MaxObjects: 1}
+			m := newTestManager(t, r, ManagerConfig{
+				Limits: frame.Limits{MaxObjects: 1}, SnapshotBudget: budget,
+				Namespaces: map[string]NamespaceLimits{"terrain": {MaxObjects: 1, SnapshotBudget: budget}},
+			})
+			open(t, m, 1, 2, 3)
+			add := func(sid SessionID, id int64, namespace string) {
+				t.Helper()
+				mustRegister(t, m, nsSubject(id, namespace))
+				mustSubscribe(t, m, sid, id, entity.SyncProfile{})
+			}
+			add(2, 20, "player")
+			mustFlush(t, m)
+			add(1, 10, "player")
+			add(1, 11, "terrain")
+			mustFlush(t, m)
+			r.take(1)
+			r.take(2)
+			// 最后一次真正的准入是会话 1；轮转下一个是已满的会话 2。
+			for id := int64(21); id <= 26; id++ {
+				add(2, id, "player")
+			}
+			add(3, 30, "player")
+			if tc.refresh != 0 {
+				mustSubscribe(t, m, 1, tc.refresh, entity.SyncProfile{Key: "refresh"})
+			}
+			after := m.session(2).snapshotAfter.get(0, snapshotArrival)
+			mustFlush(t, m)
+			if m.Counters().OverLimitDeferred != 1 || len(r.take(2)) != 0 || len(r.take(3)) != 0 {
+				t.Fatal("expected one capacity deferral and no cold push")
+			}
+			if tc.refresh != 0 {
+				f := oneFrame(t, r, 1)
+				if len(f.objects) != 1 || f.objects[tc.refresh] != frame.ObjectUpdate || !f.updates[tc.refresh].Full {
+					t.Fatalf("not an existing-object full refresh: %+v", f)
+				}
+			} else if len(r.take(1)) != 0 {
+				t.Fatal("unexpected push in control")
+			}
+			if cursor := m.lanes[0].snapshotCursor[snapshotArrival]; cursor != 2 {
+				t.Errorf("capacity-deferred session cursor = %d, want 2", cursor)
+			}
+			if got := m.session(2).snapshotAfter.get(0, snapshotArrival); got != after {
+				t.Errorf("capacity deferral advanced entity sequence: %d -> %d", after, got)
+			}
+			mustFlush(t, m)
+			f := oneFrame(t, r, 3)
+			if len(f.objects) != 1 || f.objects[30] != frame.ObjectCreate || len(m.session(3).objects) != 1 ||
+				len(r.take(2)) != 0 || len(m.session(2).objects) != 1 || m.Counters().OverLimitDeferred != 1 {
+				t.Fatal("expected session 3's create before the full session's remaining cold requests")
+			}
+		})
+	}
+}
+
+// 只有全部因容量暂缓且未被字节门阻挡的路可以移动轮转位置；不计入实际 Push。
+func TestCapacityOnlyRotationIsLaneLocalAndDoesNotCharge(t *testing.T) {
+	lanes := []*snapshotLane{{}, {}, {snapshotNextClass: snapshotRecovery}}
+	m := &Manager{lanes: lanes}
+	a, b, c, d := &subscription{}, &subscription{}, &subscription{}, &subscription{}
+	p := &snapshotPlan{
+		order:    []snapshotCandidate{{sub: a, sessionID: 1}, {sub: b, sessionID: 2}, {sub: c, lane: 1, sessionID: 3}, {sub: d, lane: 2, class: snapshotRecovery, sessionID: 4}},
+		selected: map[*subscription]bool{a: true, b: true, c: true, d: true},
+	}
+	p.deferForCapacity(&subscription{}) // 未选项（如不限预算的路）不应触发扫描
+	if p.removedForCapacity {
+		t.Fatal("capacity deferral outside the plan counted as a removal")
+	}
+	p.deferForCapacity(a) // 路 0 仍有未暂缓的 b
+	p.deferForCapacity(c)
+	p.deferForCapacity(d)
+	p.block(1, len(lanes)) // 路 1 的后缀不能被越过
+	m.rotateCapacityOnlyPlans(p)
+	if lanes[0].snapshotCursor != [2]SessionID{} || lanes[1].snapshotCursor != [2]SessionID{} || lanes[2].snapshotCursor != [2]SessionID{0, 4} {
+		t.Fatalf("unexpected cursors: %v %v %v", lanes[0].snapshotCursor, lanes[1].snapshotCursor, lanes[2].snapshotCursor)
+	}
+	if lanes[0].snapshotNextClass != snapshotArrival || lanes[1].snapshotNextClass != snapshotArrival || lanes[2].snapshotNextClass != snapshotArrival {
+		t.Fatal("class rotation did not follow the last capacity-only candidate")
+	}
+	if len(p.charges) != 0 {
+		t.Fatal("capacity deferral reserved a cold charge")
+	}
+	for _, l := range lanes {
+		if l.windowAllowance != (snapshotAllowance{}) || len(l.windowSessions) != 0 {
+			t.Fatal("capacity deferral was charged as a push")
+		}
+	}
+}
+
 func TestSnapshotBudgetRotatesAndDoesNotDelayLiveUpdates(t *testing.T) {
 	r := newRecordingTransport()
 	m := newTestManager(t, r, ManagerConfig{SnapshotBudget: SnapshotBudget{MaxObjects: 1, PerSessionObjects: 1}})

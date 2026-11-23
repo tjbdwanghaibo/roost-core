@@ -712,21 +712,16 @@ func (m *AOI) evaluateObserverReference(observer *interestObserver, work *aoiWor
 		at, exists := m.subjects[subject]
 		m.evaluatePair(observer, subject, at, !exists)
 	}
-	blocks := work.blocks[:0]
+	blocks := make([]int64, 0, len(observer.blocks))
 	for block := range observer.blocks {
 		blocks = append(blocks, block)
 	}
 	slices.Sort(blocks)
-	work.blocks = blocks
 	// Admit new candidates nearest-first: block-order admission could let a
 	// farther subject enter and be evicted by a nearer one within the same
 	// evaluation, emitting a transient Enter+Leave pair downstream.
 	candidates := work.candidates[:0]
-	if work.seen == nil {
-		work.seen = make(map[int64]struct{})
-	}
-	seen := work.seen
-	clear(seen)
+	seen := make(map[int64]struct{})
 	query := work.query[:0]
 	for _, block := range blocks {
 		query = m.index.AppendBlockIDs(query[:0], block)
@@ -744,7 +739,6 @@ func (m *AOI) evaluateObserverReference(observer *interestObserver, work *aoiWor
 		}
 	}
 	work.query, work.candidates = query, candidates
-	work.seenPeak = max(work.seenPeak, len(seen))
 	slices.SortFunc(candidates, func(a, b entryCandidate) int {
 		if order := cmp.Compare(a.distance, b.distance); order != 0 {
 			return order
@@ -1138,9 +1132,9 @@ func TestAOIMovedOnlyEvaluationMatchesFullRecompute(t *testing.T) {
 }
 
 func TestAOIWorkspaceDropsOversizedScratch(t *testing.T) {
-	w := aoiWorkspace{visible: make([]int64, 0, aoiWorkspaceLimit+1), blocks: make([]int64, 0, aoiWorkspaceLimit+1), query: make([]int64, 0, aoiWorkspaceLimit+1), candidates: make([]entryCandidate, 0, aoiWorkspaceLimit+1), seen: map[int64]struct{}{1: {}}, seenPeak: aoiWorkspaceLimit + 1}
+	w := aoiWorkspace{visible: make([]int64, 0, aoiWorkspaceLimit+1), query: make([]int64, 0, aoiWorkspaceLimit+1), candidates: make([]entryCandidate, 0, aoiWorkspaceLimit+1)}
 	w.release()
-	if w.visible != nil || w.blocks != nil || w.query != nil || w.candidates != nil || w.seen != nil {
+	if w.visible != nil || w.query != nil || w.candidates != nil {
 		t.Fatal("oversized scratch retained")
 	}
 }

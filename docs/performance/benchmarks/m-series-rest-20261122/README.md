@@ -2,6 +2,8 @@
 
 计划与原始命令见 [remaining §3](../../../maintenance/evidence/known-limits-remaining-20261114/remaining.md#3-m空闲机器上的运行序列)。维护者 11-22 要求把未运行的 M-3、M-4、M-6、M-7、M-8、M-10～M-14、M-16、M-17 全部跑完，并定了压缩口径：每轮（含环境起停）约 10 分钟、每档 1 个样本、缩短时长、全部串行。**下面每项写的是实际用的参数，不是计划口径**；单样本数字只作同机同时段对照，不作容量保证。
 
+**M-16 后续复盘（不覆盖下列历史判决）：** [一次更新与整轮验收如何走完、历次改动的去留](review/README.md)；[逐档耗时与 CSV](review/README.md)；[已复现的轮转边界及验收盲区](review/README.md)。
+
 ## 环境与前提
 
 - 源码：main `50896601`（v1.60.0 之后一个文档提交），在 scratchpad 的干净 detached worktree 里跑（主检出不动）；M-8 另开一个只改 `SyncApplyMaxExtraViews` 为 16 的诊断 worktree（diff 原文 `m8/diag-build.diff`，不入库，用完已删）。
@@ -34,15 +36,27 @@
 | M-3 | 已测（各 1 次 3 min） | batch / dispatch 投递业务延迟同量级；dispatch 分配多 18%、短池作业数 6.7 倍 |
 | M-4 | 已测（各 1 次） | periodic / on_change 五个场景差异都在单样本噪声内 |
 | M-6 | 已测（1 次 4 min） | 独立 Gate + self_sync 1000 人通过，计数 / 值核对一致 |
-| M-7 | 已测（80s，计划 120s 撞空闲超时作废） | 健康 1000 + 停读 50：驻留峰值 35 / 101 MiB，预算拒绝 0，停读 50 条全被写期限关掉 |
+| M-7 | 修后两档各 120s 通过 | 20 / 100 轮每秒，驻留峰值 33.91 / 99.67 MiB，无预算拒绝；两档各 50 条写期限关闭，健康端保持 |
 | M-8 | 已测（各 1 次 200 tick） | ApplySync 16 视野：200 tick 中 46 tick 有日志积压（p99 110 条），政策阶段 p95 31.7ms 超过半周期 |
 | M-10 | 已测（1 次） | 256 kB/s 追平并回到实时；64 kB/s 被 Gate 以 `send_budget` 期限断开，`player_tcp_write_deadline_total{deadline="send_budget"}`=1 |
 | M-11 | 已测（各 1 轮） | effect workers 16 / 1 吞吐差 ≤4%，retryable / unknown 都是 0 |
-| M-12 | 已测（同秒 100 / 200 各 1 次，不做爬坡） | 100 人 96 / 100、200 人 182 / 200；World 热点 `nest: sync timeout` 0，失败全在 saga 状态轮询 |
-| M-13 | 已测（count 3） | 账本满 1000 条：发布 / 撤回每次约 1.1～1.3ms（私有单机 / Cluster），重载 0.44～0.46ms；计划的 publish 2000x 撞夹具上限 |
-| M-14 | 已测（各 1 次 60s） | demo 尺度达标；game 尺度每格 region beat p50 96～116ms（20Hz 周期 50ms），ghost 延迟 p99 约 150ms |
-| M-16 | **未完成** | 1000 人集中布局经 Gate 两档开场即失败（客户端读期限）；改 400 人：c0 通过，c4 收尾不收敛（期望 376 > 会话上限 100） |
+| M-12 | 同秒档错误率超限，未做爬坡 | 历史 96/100、182/200；新私有 200 档 148/200，52 个逾期操作读回均到预期协调器终态 |
+| M-13 | 已测（count 3） | 账本满 1000 条：发布 / 撤回每次约 1.1～1.3ms（私有单机 / Cluster），重载 0.44～0.46ms；修复夹具后 publish 2000x × 3 两种环境均通过 |
+| M-14 | 已定位 Cell 热点，未交付生产优化 | game 原算法跟不上 20Hz；候选加快 Cell 却让 Base witness p99 失守，受控对照后撤出默认路径 |
+| M-16 | **功能与收尾通过，Sync 延迟未通过** | 1000 人 c4：全员终验正确；后续 AOI 优化的高位统计对照，收尾 25.07 / 23.88s，提交→客户端 p99 桶上界 10.50 / 10.55s，[分段与对照](review/README.md) |
 | M-17 | 已测（各 120s） | strict 50 连接约 890 次/s；pipelined 同一实体 104 次/s、每次一条 fsync |
+
+## 修复分支复测
+
+以下为 `0ced5d3e` 后同机、串行、私有依赖的复测；后文保留历史结果。正式负载间用同一把锁串行，不保证宿主空闲。除 M-13、微基准和最终 M-16 c4 的两次运行外，每档仅一次，不作生产容量承诺。[机器可读测量摘录](review/measurements.json)含原判决、逐操作读回和四格采样。
+
+- **M-7**：正式 120s 两档均通过。1000 健康 + 50 停读，20 / 100 轮每秒，峰值 35,552,352 / 104,514,704 字节，预算 268,435,456 字节。两档均无预算拒绝、无溢出关闭，50 条停读均按 5s 写期限关闭；发压截止已读业务帧 2,399,912 / 11,999,909。未延长窗口等客户端排空。健康端 30s 心跳，不计 ACK，认证后等待所有会话登记再取基线。
+- **M-12**：全新私有实例，原 200 同秒配置、错误率上限 0，148/200 个场景在预算内成功（26% 失败，0 取消/丢弃）。新诊断只在计时及指标采样后按实际操作 ID 读回：34 笔 `alliance_found` 已 `completed`，18 笔故意把第二次赠礼发给不存在收件人的 `gift_item` 已 `compensated`。这些是预期协调器终态，不是独立账本核对，更不是 52 个及时成功。首投 `gift_item.deliver` / `alliance_found.found` 追加→回调 >4.096s 分别 40/430、12/185；回调→worker 均 0。只定位到回调之前，未证明是哪种上游排队，不改并发、超时或业务协议。历史 100/200 两档未收集逐笔终态，4/18 笔不以新样本补判；爬坡仍未测。
+- **M-13**：每次用到期的最老一条换入一封，持续保持满 1000 条。单机 `publish 2000x × 3`：1,092,395 / 1,104,753 / 1,092,784 ns/op；3 主 3 从 Cluster：1,235,244 / 1,224,241 / 1,155,923 ns/op。只修基准时钟，不改邮件服务。
+- **M-14**：只对 game 尺度的 Cell `(1,0)` 子进程采样，[profile](review/m14-baseline-cell-1-0.pprof) 在 24.25s 内采得 33.99 CPU 秒；region beat 累计 13.61s，其中 witness 13.60s（半径候选 5.49s，截断全排 4.43s）。[候选补丁](review/README.md) 保持未截断按 ID、截断按距离/ID 以及相同 wire 字节；同一 274 观察者单核 game / demo 每拍中位分别从 98.85 / 5.30ms 降到 5.93 / 1.79ms，但分配略增。2×2、2250 NPC/格、1000 玩家、5% 活跃、60s 的进程级复测：候选四格区拍 p50 9.90–12.17ms、p99 38.76–56.82ms；Base 接受 1,050,644 份视野，witness p99 **196.84ms，FAIL**。保留相同 EntitySync 等依赖、只切回旧 witness 的对照：区拍 p50 114.73–140.22ms、p99 235.10–306.03ms；Base 接受 360,675 份，witness p99 **24.74ms，PASS**。早先整版基线相应为 p50 151.07–189.94ms、Base p99 33.72ms。三个窗口各一轮；不能用 p99 PASS 证明区拍达标。**不启用候选**，默认仍是旧选择算法，只保留独立正确性参照和可重复微基准。下一步先定位高视野产出下 Base 接收、解码、分派和 Sync 的开销；减少发视野的频率或缩小半径不算修复。
+- **M-16**：1000 玩家、10000 实体、4 个额外覆盖块、消息每人每秒 10、心跳 1Hz、dirty 1%、集中布局、30s 发压、原 60s 收尾上限。修前 52s 仍有 241 人落后、差 4152 个对象，随后 Gate 读超时；中间 A/E 样本 32–52s 帧数不变，191 人差 2015 个对象，最终逾期。三会话小例子验证：满会话整批因容量暂缓、没发出帧时反复抢到捕获名额。仅在整路预选全部经容量裁决暂缓时轮换会话；不把暂缓计作 Push，不越过字节门或可尝试的请求，不调整 B/C/D。修后 **31.079s** 全员终验通过（每人 100 个、成员在 `Seen∪self`、逐对象 DAO 正确；不指定哪 100 个），185 次 Flush，平均 167.78ms。本轮无 Gate 读错误；消息、心跳各完成 300000/300000，分别约 9998.5/s，变化 199.97/s。提交→客户端延迟 74912 个样本中 71762 个超过 50ms，69821 个达到直方图上沿 100ms，最大 22100.954ms；p99 只能报告 ≥100ms，不能报告精确 100ms。**整档 FAIL**。待所有包回归退出后，用同一二进制和全新私有 NATS 再跑一轮：全员 28.407s 通过终验，183 次 Flush，均值 155.81ms；无网络错误，业务与心跳计数均正确；提交→客户端 82904/86662 个样本超过 50ms，p99 再度封顶，最大 20797.819ms，整档仍 FAIL。两次均可证明完整性和收尾通过、时延不通过；不能拆分 A、E、预算轮转各自的端到端收益。
+
+**其余已测项的分流**：M-1/2 所见调度、每拍分配成本没有新的错误基线；M-3/4/6 只有特定负载下的方式对照，M-5 已归因；M-8 的 16 额外视野是超支持档诊断，不抬生产上限。M-9 的超限重复请求及槽复用已有后续修复，不按旧数据重复改。M-10 慢链路触发预算期限属现有契约；M-11 没有证据证明调低并发能解决随段下降。M-15 已修的登录争用不重做，千人同点下 Base 饱和另查。M-17 同实体确认速率不以放松持久语义换吞吐；M-18 的 policy/编码测量不等于经 Gate 的容量。上述并非本轮重跑或全数关闭。
 
 ## M-3（No.9）nest-game 心跳投递 batch / dispatch
 
@@ -217,7 +231,7 @@ DEMO_ROBOT_MIRROR_OFFSET=21000 DEMO_ROBOT_COUNT=$n DEMO_ROBOT_MODE=burst DEMO_RO
 
 ## M-14（No.72）CellWorld demo / game 尺度
 
-命令（每种 1 次，计划 2 次交替改 1 次）：`ROOST_CELLWORLD_PERF=1 ROOST_CELLWORLD_PERF_SCALE=$scale ROOST_CELLWORLD_PERF_COUNT=1000 ROOST_CELLWORLD_PERF_NPCS=2250 ROOST_CELLWORLD_PERF_ACTIVE=5 ROOST_CELLWORLD_PERF_SECONDS=60 go test ./gameplay/cellworld -run '^TestCellWorldMeasure$' -count=1 -timeout 5m -v`。4 Cell、每格约 2500 Real，1000 玩家，20Hz。两次都 PASS（用例不设延迟门槛）。
+命令（每种 1 次，计划 2 次交替改 1 次）：`ROOST_CELLWORLD_PERF=1 ROOST_CELLWORLD_PERF_SCALE=$scale ROOST_CELLWORLD_PERF_COUNT=1000 ROOST_CELLWORLD_PERF_NPCS=2250 ROOST_CELLWORLD_PERF_ACTIVE=5 ROOST_CELLWORLD_PERF_SECONDS=60 go test ./gameplay/cellworld -run '^TestCellWorldMeasure$' -count=1 -timeout 5m -v`。4 Cell、每格约 2500 Real，1000 玩家，20Hz。两次都 PASS。用例检查 witness 有样本、p99 ≤ 50ms 且 Base 无新增 replica gap；它**不**断言 region beat ≤ 50ms。因此测试通过不等于每格达到 20Hz。
 
 | 指标 | demo（cell 7500 / ghost 900 / view 800 / 主视野 64） | game（cell 12800 / ghost 7000 / view 6800 / 主视野 128） |
 | --- | --- | --- |

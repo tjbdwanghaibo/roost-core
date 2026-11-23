@@ -14,10 +14,8 @@ const (
 // aoiWorkspace 只保存计算中的 ID 和值，不保存 observer 或对外返回的事件。
 // 串行阶段独占 serialWork；每个并行 worker 独占自己的工作区，屏障后才回收。
 type aoiWorkspace struct {
-	visible, blocks, query []int64
-	candidates             []entryCandidate
-	seen                   map[int64]struct{}
-	seenPeak               int
+	visible, query []int64
+	candidates     []entryCandidate
 	// fullScans 计本工作区做过的完整候选遍历次数，屏障后由 collectScans 归入 AOI.fullScans。
 	fullScans int
 }
@@ -31,11 +29,6 @@ func (w *aoiWorkspace) release() {
 	} else {
 		w.visible = w.visible[:0]
 	}
-	if cap(w.blocks) > aoiWorkspaceLimit {
-		w.blocks = nil
-	} else {
-		w.blocks = w.blocks[:0]
-	}
 	if cap(w.query) > aoiWorkspaceLimit {
 		w.query = nil
 	} else {
@@ -46,12 +39,6 @@ func (w *aoiWorkspace) release() {
 	} else {
 		w.candidates = w.candidates[:0]
 	}
-	if w.seenPeak > aoiWorkspaceLimit {
-		w.seen = nil
-	} else {
-		clear(w.seen)
-	}
-	w.seenPeak = 0
 }
 
 func (m *AOI) refreshObserver(o *interestObserver, reason observerDirty) {

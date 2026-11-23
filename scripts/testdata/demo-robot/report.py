@@ -6,6 +6,8 @@ import re
 import shutil
 import sys
 
+from poll_evidence import summarize as poll_outcomes
+
 action, directory = sys.argv[1:3]
 out = Path(directory)
 if action == "copy-dependency-logs":
@@ -48,6 +50,11 @@ for source in sources:
             matches.append({"file": str(source.relative_to(out)), "line": number, "matches": matched, "text": line})
 (out / "diagnostic-matches.json").write_text(json.dumps(matches, ensure_ascii=False, indent=2) + "\n")
 report = json.loads((out / "robot.json").read_text()) if (out / "robot.json").exists() else {}
+# Optional evidence must not change the original runner/cleanup exit code.
+try:
+    readback = poll_outcomes(out)
+except (OSError, UnicodeError) as err:
+    readback = {'state': 'unreadable', 'failures': None, 'read_error': type(err).__name__}
 summary = {
     "exit_code": int(sys.argv[3]),
     "unit": "whole demo scenarios; count and scenario latency are not message TPS or request latency",
@@ -65,6 +72,7 @@ summary = {
     # （excluding_ms）；demo 的 p95 门槛判的是 groups.saga.excluding_ms，saga 组自身只报告。
     "groups": report.get("groups"),
     "logged_occurrences": counts,
+    "status_poll_readback": readback,
     "startup_saga_replay": replay,
     "log_files_scanned": [str(p.relative_to(out)) for p in sources if p.exists()],
     "observation_limit": "Robot JSON supplies aggregate stats and a run-level final error, not individual robot error details. Retry nodes do not log every intermediate Saga status. Logged counts are occurrences, not total polls, outstanding Sagas, or unique affected robots. WorldStats and RecordEnter address World; AddExp locks Player and World together, so its timeout does not isolate which lock caused delay. Other nest timeouts are not attributed to World without source/context evidence.",

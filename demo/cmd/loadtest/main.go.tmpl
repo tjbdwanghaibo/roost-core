@@ -41,6 +41,10 @@ import (
 
 	"{{MODULE}}/game/battle"
 	"{{MODULE}}/game/clientsync"
+	"{{MODULE}}/game/modules/alliance"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/loadtest/playertcp"
 	"{{MODULE}}/protocol/msgid"
@@ -883,6 +887,37 @@ const profileRenameAnswerKey = "profile_rename_answer"
 // of the json tag) or the blackboard. The generated pb types carry no
 // GetCode(), so each call checks Code itself: a coded failure from the server
 // is a failed robot, which is what makes this a regression test.
+// Keep the server-returned key private. Verify its binding once, on successful
+// start, using the same BusinessKey and type constants as StartAllianceOp.
+// No new requests, sleeps, retries or hashes in the poll loop.
+type allianceReceipt struct {
+	owner int64
+	op, key, kind, id string
+}
+
+func alliancePollReceipt(rb *robot.Context, op, key string) (r allianceReceipt) {
+	v, _ := rb.Blackboard.Get("player_id") // adopted after login; never runner's provisional number
+	owner, ok := v.(int64)
+	if !ok || owner <= 0 || owner != rb.PlayerID { return r }
+	var kind string
+	switch op {
+	case alliance.OpFound: kind = alliancefound.Type
+	case alliance.OpDonate: kind = alliancedonate.Type
+	case alliance.OpReward: kind = alliancereward.Type
+	default: return r
+	}
+	parts := strings.SplitN(key, ":", 3)
+	if len(parts) != 3 { return r }
+	i := strings.LastIndexByte(parts[2], ':')
+	if i <= 0 { return r }
+	seq, err := strconv.ParseUint(parts[2][i+1:], 10, 32)
+	if err != nil || alliance.BusinessKey(op, owner, parts[2][:i], uint32(seq)) != key { return r }
+	return allianceReceipt{owner, op, key, kind, saga.IDOf(kind, key)}
+}
+
+type allianceStill struct { status string; step int32 }
+func (s allianceStill) Error() string { return fmt.Sprintf("alliance saga still %s (step %d)", s.status, s.step) }
+
 func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// enter_game is registered by the login in use (robotLogin.registerEnter):
 	// what a session must send before EnterGame depends on how it shook hands.
@@ -1172,6 +1207,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			rb.Blackboard.Set("alliance_op", op)
 			rb.Blackboard.Set("alliance_saga", resp.SagaKey)
+			rb.Blackboard.Set("alliance_poll_receipt", alliancePollReceipt(rb, op, resp.SagaKey))
 			return nil
 		})
 	}
@@ -1179,7 +1215,10 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		action.MapField[pb.AllianceResponse]("Name", "alliance_name"), allianceStarted("found"))
 	action.MustRegisterCall[pb.DonateAllianceRequest, pb.AllianceResponse](actions, protocols, "donate_alliance", msgid.MsgDonateAlliance, allianceStarted("donate"))
 	action.MustRegisterCall[pb.ClaimAllianceRewardRequest, pb.AllianceResponse](actions, protocols, "claim_alliance_reward", msgid.MsgClaimAllianceReward, allianceStarted("reward"))
-	action.MustRegisterCall[pb.AllianceOpStatusRequest, pb.AllianceOpStatusResponse](actions, protocols, "alliance_op_status", msgid.MsgAllianceOpStatus,
+	// OnResp cannot see parameter overrides. Keep the normal call/codec; only
+	// annotate the exact request matching the receipt (the shipped demo path).
+	poll := action.NewRegistry()
+	action.MustRegisterCall[pb.AllianceOpStatusRequest, pb.AllianceOpStatusResponse](poll, protocols, "alliance_op_status", msgid.MsgAllianceOpStatus,
 		action.MapField[pb.AllianceOpStatusResponse]("Op", "alliance_op"),
 		action.MapField[pb.AllianceOpStatusResponse]("SagaKey", "alliance_saga"),
 		action.OnResp(func(rb *robot.Context, resp *pb.AllianceOpStatusResponse) error {
@@ -1195,8 +1234,23 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 				}
 				return nil
 			}
-			return fmt.Errorf("alliance saga still %s (step %d)", resp.Status, resp.Step)
+			return allianceStill{resp.Status, resp.Step}
 		}))
+	actions.MustRegister(action.Func{ActionName: "alliance_op_status", Handle: func(ctx context.Context, rb *robot.Context, param any) error {
+		raw, _ := rb.Blackboard.Get("alliance_poll_receipt")
+		r, _ := raw.(allianceReceipt)
+		op, _ := rb.Blackboard.Get("alliance_op")
+		key, _ := rb.Blackboard.Get("alliance_saga")
+		matched := param == nil && r.id != "" && r.owner == rb.PlayerID && op == r.op && key == r.key
+		if matched { param = &pb.AllianceOpStatusRequest{Op: r.op, SagaKey: r.key} }
+		err := poll.Run(ctx, rb, "alliance_op_status", param)
+		var still allianceStill
+		if errors.As(err, &still) {
+			if !matched { return fmt.Errorf("%w saga_record=unknown", err) }
+			return fmt.Errorf("%w saga_record=%s saga_type=%s saga_player=%d", err, r.id, r.kind, r.owner)
+		}
+		return err
+	}})
 	actions.MustRegister(action.Func{ActionName: "expect_alliance_op", Handle: func(_ context.Context, rb *robot.Context, param any) error {
 		want := action.ParamsOf(rb, param).String("status", "completed")
 		got, _ := rb.Blackboard.Get("alliance_op_status")

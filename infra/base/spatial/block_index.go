@@ -205,17 +205,24 @@ func (i *BlockIndex) QueryBlockIndex(index int64) []int64 {
 // AppendBlockIDs 将一个块的 ID 排序后追加到 dst；只排序新增部分。
 // 单块内 ID 唯一，无需去重 map；调用方独占 dst，可在查询间复用。
 func (i *BlockIndex) AppendBlockIDs(dst []int64, index int64) []int64 {
+	start := len(dst)
+	dst = i.AppendUnorderedBlockIDs(dst, index)
+	slices.Sort(dst[start:])
+	return dst
+}
+
+// AppendUnorderedBlockIDs appends one block's unique members, in no specified
+// order. The returned data belongs to the caller. Use AppendBlockIDs for ID order.
+func (i *BlockIndex) AppendUnorderedBlockIDs(dst []int64, index int64) []int64 {
 	block := i.blockAt(index)
 	if block == nil {
 		return dst
 	}
-	start := len(dst)
 	block.mu.RLock()
 	for id := range block.ids {
 		dst = append(dst, id)
 	}
 	block.mu.RUnlock()
-	slices.Sort(dst[start:])
 	return dst
 }
 

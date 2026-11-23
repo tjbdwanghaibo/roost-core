@@ -67,10 +67,11 @@ type tailCollector struct {
 	stop    chan struct{}
 	done    sync.WaitGroup
 
+	lastTick time.Time // 只由调度 ticker goroutine 访问，正式窗口内第一个 tick 不报 gap。
+
 	// 以下只由采集 goroutine 访问。
 	captures     int
-	pending      int       // 待保存的长尾 trace 编号，-1 表示没有
-	lastTick     time.Time // 只由调度 ticker goroutine 访问
+	pending      int // 待保存的长尾 trace 编号，-1 表示没有
 	saving       [][2]float64
 	saveFailures []string
 }
@@ -164,7 +165,10 @@ func (c *tailCollector) observeAbove(stream string, total time.Duration, parts .
 
 // observeTick 由唯一的调度 ticker goroutine 调用：相邻两次回调间隔超过阈值一半（正常 10ms）时
 // 记为 tick 流事件，让分析能在 trace 中认出 ticker goroutine，并区分“投递晚了”与“排队 / 执行慢”。
-func (c *tailCollector) observeTick(now time.Time) {
+func (c *tailCollector) observeTick(now, from, end time.Time) {
+	if !inLoadWindow(now, from, end) {
+		return
+	}
 	last := c.lastTick
 	c.lastTick = now
 	if last.IsZero() {

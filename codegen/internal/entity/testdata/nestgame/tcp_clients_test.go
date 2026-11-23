@@ -28,12 +28,13 @@ type loadFrontend interface {
 // loadClients 是模拟玩家：每玩家一条 TCP 连接、一个发请求协程（一次只有一条在途请求）与一个读协程。
 // 读协程把 Sync 帧交给 onSync，其余帧当回包交给发请求协程。
 type loadClients struct {
-	jobs      []chan invocation
-	conns     []net.Conn
-	wait      sync.WaitGroup
-	readWait  sync.WaitGroup
-	completed atomic.Uint64
-	roundTrip timings
+	jobs           []chan invocation
+	conns          []net.Conn
+	wait           sync.WaitGroup
+	readWait       sync.WaitGroup
+	completed      atomic.Uint64
+	outsideReplies atomic.Uint64
+	roundTrip      timings
 	// stream 是长尾采集里往返时延的流名（gate / embedded）。
 	stream    string
 	mu        sync.Mutex
@@ -104,16 +105,7 @@ func (clients *loadClients) connect(t *testing.T, addr string, players, maxPaylo
 				sequence++
 				// sent 是请求离开模拟客户端的时刻，服务端分段从这里起算（见 streamResult）。
 				began := time.Now()
-				var payload [26]byte
-				binary.LittleEndian.PutUint64(payload[:8], uint64(loadTimestamp(in.planned)))
-				binary.LittleEndian.PutUint64(payload[8:16], uint64(loadTimestamp(in.admitted)))
-				binary.LittleEndian.PutUint64(payload[16:24], uint64(loadTimestamp(began)))
-				if in.change {
-					payload[24] = 1
-				}
-				if in.sample {
-					payload[25] = 1
-				}
+				payload := encodeLoadRequest(in, began)
 				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				err := wire.Write(conn, []*wire.Packet{{MsgID: 1, Seq: sequence, Payload: payload[:]}}, maxPayload)
 				if err == nil {
@@ -133,24 +125,61 @@ func (clients *loadClients) connect(t *testing.T, addr string, players, maxPaylo
 					clients.recordFailure(err)
 					continue
 				}
-				roundTrip := time.Since(began)
-				clients.roundTrip.add(roundTrip, in.sample)
-				if c := tail.Load(); c != nil {
-					c.observe(clients.stream, roundTrip)
-				}
-				clients.completed.Add(1)
+				clients.recordReply(in, time.Since(began))
 			}
 		})
 	}
 }
 
+// 回包可能落在预热结束甚至整个负载结束之后；按原请求的计划窗口归类，不按到达时刻。
+func (clients *loadClients) recordReply(in invocation, roundTrip time.Duration) {
+	clients.completed.Add(1)
+	if in.warmup {
+		clients.outsideReplies.Add(1)
+		return
+	}
+	clients.roundTrip.add(roundTrip, in.sample)
+	if c := tail.Load(); c != nil {
+		c.observe(clients.stream, roundTrip)
+	}
+}
+
+func (clients *loadClients) measuredReplies() uint64 {
+	return clients.completed.Load() - clients.outsideReplies.Load()
+}
+
+// 请求负载第 25 字节的标志位。
+const (
+	loadFlagSample = 1 << iota
+	loadFlagWarmup
+)
+
+// encodeLoadRequest 是模拟客户端的请求负载：计划、准入、发出三个时刻，改值标志与采样 / 预热标志。
+func encodeLoadRequest(in invocation, sent time.Time) [26]byte {
+	var payload [26]byte
+	binary.LittleEndian.PutUint64(payload[:8], uint64(loadTimestamp(in.planned)))
+	binary.LittleEndian.PutUint64(payload[8:16], uint64(loadTimestamp(in.admitted)))
+	binary.LittleEndian.PutUint64(payload[16:24], uint64(loadTimestamp(sent)))
+	if in.change {
+		payload[24] = 1
+	}
+	if in.sample {
+		payload[25] |= loadFlagSample
+	}
+	if in.warmup {
+		payload[25] |= loadFlagWarmup
+	}
+	return payload
+}
+
 // decodeLoadRequest 是服务端对模拟客户端请求的解码（独立 Gate 的 Game Ingress 与嵌入 TCP 共用）。
 func decodeLoadRequest(id uint32, kind wire.PayloadKind, payload []byte) (invocation, error) {
-	if id != 1 || kind != wire.PayloadProtobuf || len(payload) != 26 {
+	if id != 1 || kind != wire.PayloadProtobuf || len(payload) != 26 || payload[24] > 1 || payload[25]&^(loadFlagSample|loadFlagWarmup) != 0 {
 		return invocation{}, gateway.ErrInvalidRequest
 	}
 	return invocation{planned: loadTime(int64(binary.LittleEndian.Uint64(payload))), admitted: loadTime(int64(binary.LittleEndian.Uint64(payload[8:]))),
-		sent: loadTime(int64(binary.LittleEndian.Uint64(payload[16:]))), change: payload[24] == 1, sample: payload[25] == 1}, nil
+		sent: loadTime(int64(binary.LittleEndian.Uint64(payload[16:]))), change: payload[24] == 1,
+		sample: payload[25]&loadFlagSample != 0, warmup: payload[25]&loadFlagWarmup != 0}, nil
 }
 
 func (clients *loadClients) dispatch(index int, in invocation) error {

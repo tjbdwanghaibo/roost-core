@@ -23,7 +23,9 @@ case "${1:-}" in
   --check-spatial) test_pattern='^TestSpatialComponentNestCommitAndRollback$'; label_prefix=spatial-check ;;
   # 心跳驱动接线短测（几百毫秒，D20 第 4 期）：生成的 Unit 由 gameplay/heartbeat 驱动，拍数与 DAO 一致、无跳拍。
   --check-heartbeat) test_pattern='^TestHeartbeatDriverTicksGeneratedUnits$'; label_prefix=heartbeat-check ;;
-  *) echo "Usage: $0 [--check-spatial|--check-heartbeat]" >&2; exit 2 ;;
+  # 夹具纯逻辑：预热窗口、抽样、终验与时延门槛（不起依赖，秒级）。
+  --check-fixture) test_pattern='^(TestBeatIntervalGateBucketEdges|TestBeatIntervalRequiresAdjacentMeasuredBeats|TestBeatWindowAndSamples|TestLoadRequestCarriesSampleAndWarmupFlags|TestSettleAllClientsDeadlineAndNetwork|TestSettleFlushWindow|TestSettleFullSubsetRequiresPinnedSelf|TestSettleSeenActuallyTightensAndRelaxes|TestSettleSeenBlockBoundaryAndCommittedRedeclaration|TestSettleStrictCapMembersAndValues|TestSyncP99HighPressureScope|TestSyncWarmupWindowAndDeliveryCut|TestSyncWideP99GateBoundaries|TestTickTailRequiresAdjacentMeasuredTicks|TestTickerWarmupPlanAndSamples|TestWarmupCompletionAndRoundTripGate)$'; label_prefix=fixture-check ;;
+  *) echo "Usage: $0 [--check-spatial|--check-heartbeat|--check-fixture]" >&2; exit 2 ;;
 esac
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 label="${ROOST_PERF_LABEL:-$label_prefix-$(date +%Y%m%d-%H%M%S)}"

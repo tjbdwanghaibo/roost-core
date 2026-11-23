@@ -1,0 +1,89 @@
+{
+ "main": "0ced5d3e",
+ "branch": "fix commit on main (squashed from the review branch)",
+ "fixture": "branch fixture on both sides",
+ "runs": {
+  "ab-branch-c0-w30-q1119-1": {
+   "counts": true,
+   "values": true,
+   "latency_passed": true,
+   "sync_limit_ms": 50,
+   "sync_samples": 103115,
+   "sync_over50": 61,
+   "sync_wide_p50_p95_p99_le_ms": [
+    10,
+    20,
+    30
+   ],
+   "sync_max_ms": 123.2,
+   "settle_s": 0.0,
+   "business_p99_ms": 17.32,
+   "heartbeat_p99_ms": 12.7,
+   "gate_rtt_p99_ms": 12.85
+  },
+  "ab-branch-c4-w30-q1119-1": {
+   "counts": true,
+   "values": true,
+   "latency_passed": false,
+   "sync_limit_ms": 100,
+   "sync_samples": 285948,
+   "sync_over50": 285948,
+   "sync_wide_p50_p95_p99_le_ms": [
+    210,
+    420,
+    480
+   ],
+   "sync_max_ms": 534.7,
+   "settle_s": 7.2,
+   "business_p99_ms": 22.54,
+   "heartbeat_p99_ms": 17.04,
+   "gate_rtt_p99_ms": 10.56
+  },
+  "ab-branch-c4-w30-q1119-2": {
+   "counts": true,
+   "values": true,
+   "latency_passed": false,
+   "sync_limit_ms": 100,
+   "sync_samples": 282441,
+   "sync_over50": 282441,
+   "sync_wide_p50_p95_p99_le_ms": [
+    220,
+    780,
+    1000
+   ],
+   "sync_max_ms": 1109.9,
+   "settle_s": 6.84,
+   "business_p99_ms": 23.33,
+   "heartbeat_p99_ms": 18.62,
+   "gate_rtt_p99_ms": 9.85
+  },
+  "ab-main-c0-w30-q1119-1": {
+   "counts": true,
+   "values": true,
+   "latency_passed": false,
+   "sync_limit_ms": 50,
+   "sync_samples": 100938,
+   "sync_over50": 69722,
+   "sync_wide_p50_p95_p99_le_ms": [
+    760,
+    3740,
+    3920
+   ],
+   "sync_max_ms": 3965.8,
+   "settle_s": 0.0,
+   "business_p99_ms": 100,
+   "heartbeat_p99_ms": 31.19,
+   "gate_rtt_p99_ms": 98.81
+  },
+  "ab-main-c4-w30-q1119-1": {
+   "report": null,
+   "result": "FAIL: final values not converged within 60s settle",
+   "last_settling": "settle_test.go:303: Sync settling 51s: clients behind=267 short objects=6072 frames=12664 manager{subjects=10000/65536 sessions=1000/65536 subscriptions=930620 "
+  },
+  "ab-main-c4-w30-q1119-2": {
+   "report": null,
+   "result": "FAIL: final values not converged within 60s settle",
+   "last_settling": "settle_test.go:303: Sync settling 52s: clients behind=205 short objects=2573 frames=15691 manager{subjects=10000/65536 sessions=1000/65536 subscriptions=932351 "
+  }
+ }
+}

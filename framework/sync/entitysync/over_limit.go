@@ -241,7 +241,7 @@ func compareOverLimitRank(a, b overLimitRank) int {
 
 // admitWithinLimits 是 Flush 的超额准入：捕获之后、发送预算 / 快照预算与组帧之前，让每个会话本批的新对象不超出
 // 各类的持有上限（见本文件开头）。会话按 ID 顺序处理，结果与通知顺序确定。调用方持有 flushGate。
-func (m *Manager) admitWithinLimits(work map[SessionID]*flushSession) {
+func (m *Manager) admitWithinLimits(work map[SessionID]*flushSession, plan *snapshotPlan) {
 	var over []SessionID
 	for sid, batch := range work {
 		if m.batchOverLimit(batch) {
@@ -253,8 +253,9 @@ func (m *Manager) admitWithinLimits(work map[SessionID]*flushSession) {
 	}
 	slices.Sort(over)
 	for _, sid := range over {
-		m.degradeBatch(sid, work[sid])
+		m.degradeBatch(sid, work[sid], plan)
 	}
+	m.rotateCapacityOnlyPlans(plan)
 }
 
 // batchOverLimit 报告本批是否有某一类会超出上限。没有新对象（常见）时一次遍历就返回，不分配。
@@ -299,7 +300,7 @@ func (m *Manager) batchOverLimit(batch *flushSession) bool {
 
 // degradeBatch 处理一个超额的会话本批：每个超出的类里按 overLimitRank 留下前“空位”个新对象，钉住的放不下时先让
 // 已持有的低优先级对象让位，其余暂缓。被暂缓的项移出本批（entries / settlements 成对）。
-func (m *Manager) degradeBatch(sid SessionID, batch *flushSession) {
+func (m *Manager) degradeBatch(sid SessionID, batch *flushSession, plan *snapshotPlan) {
 	sess := batch.session
 	classes := len(m.overLimitWaiting)
 	creates := make([][]int, classes) // 每类新对象在本批里的下标
@@ -343,7 +344,7 @@ func (m *Manager) degradeBatch(sid SessionID, batch *flushSession) {
 			} else {
 				deferred++
 			}
-			m.deferCreate(sid, batch, item.index)
+			m.deferCreate(sid, batch, item.index, plan)
 			dropped = true
 		}
 		m.noteOverLimit(sid, c, held, limit, deferred, evicted, blocked)
@@ -385,7 +386,7 @@ func (m *Manager) rankCreates(batch *flushSession, indexes []int) []rankedCreate
 }
 
 // deferCreate 把本批的一个新对象移出（kind 置 0，由 degradeBatch 压实），订阅仍是本轮捕获的那一个时标为超额暂缓。
-func (m *Manager) deferCreate(sid SessionID, batch *flushSession, index int) {
+func (m *Manager) deferCreate(sid SessionID, batch *flushSession, index int, plan *snapshotPlan) {
 	batch.entries[index].kind = 0
 	settle := batch.settlements[index]
 	subj, sub := settle.subj, settle.sub
@@ -393,6 +394,7 @@ func (m *Manager) deferCreate(sid SessionID, batch *flushSession, index int) {
 	sub.inFlight = false
 	if subj.subscribers[sid] == sub && sub.revision == settle.revision && sub.kind == kindSnapshot && sub.lifetime == batch.session.lifetime {
 		m.markOverLimitLocked(subj, sid, sub, false)
+		plan.deferForCapacity(sub)
 	}
 	subj.mu.Unlock()
 }

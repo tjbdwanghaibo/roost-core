@@ -2272,18 +2272,88 @@ func BenchmarkTCPHandshake(b *testing.B) {
 	}
 }
 
+// startBudgetDrillHealthyClient 只用于已认证的健康连接。服务端按入站帧刷新 idle，客户端光读推送不会保活。
+func startBudgetDrillHealthyClient(t *testing.T, server *TCPServer, connection net.Conn, received *atomic.Int64) {
+	t.Helper()
+	var workers sync.WaitGroup
+	readerDone := make(chan struct{})
+	workers.Go(func() {
+		defer close(readerDone)
+		for {
+			frame, release, err := server.readFrame(connection)
+			if err != nil {
+				return
+			}
+			release()
+			if frame.flags&flagServerPush != 0 && frame.messageID == pushTestMessageID {
+				received.Add(1) // 心跳 ACK 是控制帧，不计入健康业务推送。
+			}
+		}
+	})
+	workers.Go(func() {
+		defer connection.Close() // 写失败也唤醒读协程。
+		ticker := time.NewTicker(server.config.IdleTimeout / 3)
+		defer ticker.Stop()
+		for seq := uint32(2); ; seq++ { // 认证用了 1；此后唯一的客户端写方发普通空载心跳。
+			select {
+			case <-readerDone:
+				return
+			case <-ticker.C:
+				if err := connection.SetWriteDeadline(time.Now().Add(server.config.WriteTimeout)); err != nil {
+					return
+				}
+				if err := wire.Write(connection, []*wire.Packet{{Seq: seq}}, int(server.config.MaxPayloadBytes)); err != nil {
+					return
+				}
+			}
+		}
+	})
+	t.Cleanup(func() {
+		_ = connection.Close() // 即使收发正在阻塞，两边也都能退出。
+		workers.Wait()
+	})
+}
+
+func TestOutboundBudgetHealthyClientHeartbeat(t *testing.T) {
+	const idle = time.Second
+	server, runtime, closed := pushServer(t, func(c *TCPConfig) { c.IdleTimeout = idle })
+	connection := dialAuthenticated(t, server, "healthy")
+	var received atomic.Int64
+	startBudgetDrillHealthyClient(t, server, connection, &received)
+	waitRegistered(t, runtime, 7, 1)
+
+	select {
+	case event := <-closed:
+		t.Fatalf("healthy connection closed before the post-idle push: %+v", event)
+	case <-time.After(2 * idle):
+	}
+	if got := received.Load(); got != 0 {
+		t.Fatalf("heartbeats alone counted as %d business pushes, want 0", got)
+	}
+	if err := server.pushPlayerKind(t.Context(), 7, pushTestMessageID, []byte("post-idle"), flagSync); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); received.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	if got := received.Load(); got != 1 {
+		t.Fatalf("received %d business pushes after the idle boundary, want 1", got)
+	}
+}
+
 // TestOutboundBudgetDrill 是全进程出站驻留预算（player_access.tcp.outbound.resident_bytes，缺省 256 MiB）在停读客户端与
 // 更高推送量下的演练（KNOWN-LIMITS“嵌入 TCP 出站”：缺省预算在停读客户端 / 更高推送量下是否够用）。真实回环 TCP：
-// 健康客户端一直读，停读客户端握手后不再读（读缓冲调小，内核替它缓存的字节少）；推送端每秒 DRILL_RATE 轮、每轮给
+// 健康客户端持续读推送并发心跳，停读客户端握手后不再读（读缓冲调小，内核替它缓存的字节少）；推送端每秒 DRILL_RATE 轮、每轮给
 // 每个玩家推一帧 DRILL_FRAME_BYTES 字节，持续 DRILL_SECONDS 秒。逐毫秒采样预算的驻留字节取峰值（生产没有驻留 Gauge，
-// 这里在包内直接读），统计因预算被拒的推送、每连接上限溢出关闭、写期限到期关闭与健康连接收到的帧。
+// 这里在包内直接读），统计因预算被拒的推送、每连接上限溢出关闭、写期限到期关闭与发压截止时健康端已读的业务帧。
+// 已读数不等于最终送达数：最后一轮返回后立即取快照，不排空队列或 socket。
 //
 // 只在设置 ROOST_TCP_BUDGET_DRILL=1 时运行（测量，不是回归）；结果写日志，设 DRILL_OUT 时另写一行 JSON 到该文件。
 // 参数：DRILL_HEALTHY（缺省 1000）、DRILL_STALLED（100）、DRILL_FRAME_BYTES（4096）、DRILL_RATE（20）、DRILL_SECONDS（30）、
 // DRILL_BUDGET（字节，0 = 缺省 256 MiB）、DRILL_WRITE_TIMEOUT（缺省 5s，同 player_access.tcp.write_timeout 缺省）。
 // 断言只有不变式：驻留峰值不超过预算、预算拒绝计数与推送端看到的拒绝数一致、健康连接没有被关闭。
 func TestOutboundBudgetDrill(t *testing.T) {
-	if os.Getenv("ROOST_TCP_BUDGET_DRILL") == "" {
+	if os.Getenv("ROOST_TCP_BUDGET_DRILL") != "1" {
 		t.Skip("set ROOST_TCP_BUDGET_DRILL=1 to run the outbound budget drill (a measurement)")
 	}
 	envInt := func(name string, fallback int) int {
@@ -2334,7 +2404,6 @@ func TestOutboundBudgetDrill(t *testing.T) {
 
 	players := healthy + stalled
 	var received atomic.Int64
-	var readers sync.WaitGroup
 	for player := 1; player <= players; player++ {
 		connection := dialAuthenticated(t, server, strconv.Itoa(player))
 		_ = connection.SetReadDeadline(time.Time{})
@@ -2342,20 +2411,20 @@ func TestOutboundBudgetDrill(t *testing.T) {
 			_ = connection.(*net.TCPConn).SetReadBuffer(4 << 10)
 			continue
 		}
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
-			for {
-				frame, release, err := server.readFrame(connection)
-				if err != nil {
-					return
-				}
-				release()
-				if frame.messageID == pushTestMessageID {
-					received.Add(1)
-				}
-			}
-		}()
+		startBudgetDrillHealthyClient(t, server, connection, &received)
+	}
+	// ACK 先于 registerSession；本夹具每条连接独占一个 SessionID。等健康和停读会话全部登记后才取基线、发压。
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		server.mu.RLock()
+		registered := len(server.sessions)
+		server.mu.RUnlock()
+		if registered == players {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("registered %d of %d authenticated sessions before sampling", registered, players)
+		}
+		time.Sleep(time.Millisecond)
 	}
 
 	budgetBefore := counterValue("player_tcp_outbound_budget_exhausted_total")
@@ -2409,6 +2478,7 @@ func TestOutboundBudgetDrill(t *testing.T) {
 		}
 		wg.Wait()
 	}
+	receivedAtPushCutoff := received.Load()
 	elapsed := time.Since(start)
 	stopSampling()
 	<-sampled
@@ -2419,9 +2489,10 @@ func TestOutboundBudgetDrill(t *testing.T) {
 		"elapsed_seconds": elapsed.Seconds(), "budget_bytes": config.OutboundResidentBytes, "write_timeout": config.WriteTimeout.String(),
 		"peak_resident_bytes": peak.Load(), "pushes_accepted": pushed.Load(), "pushes_refused_by_budget": refused.Load(),
 		"pushes_to_closed_or_missing": closed.Load(), "budget_exhausted_total": budgetRefusals,
-		"overflow_closes":         counterValue("player_tcp_outbound_overflow_total") - overflowBefore,
-		"write_timeout_closes":    labeledCounter("player_tcp_write_deadline_total", "deadline", "write_timeout") - writeTimeoutBefore,
-		"healthy_frames_received": received.Load(),
+		"overflow_closes":                        counterValue("player_tcp_outbound_overflow_total") - overflowBefore,
+		"write_timeout_closes":                   labeledCounter("player_tcp_write_deadline_total", "deadline", "write_timeout") - writeTimeoutBefore,
+		"healthy_frames_received":                receivedAtPushCutoff, // 旧字段保留，与明确标注截止点的字段同值。
+		"healthy_frames_received_at_push_cutoff": receivedAtPushCutoff,
 	}
 	line, _ := json.Marshal(result)
 	t.Logf("outbound budget drill: %s", line)

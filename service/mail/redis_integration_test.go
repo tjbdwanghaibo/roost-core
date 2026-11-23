@@ -425,7 +425,7 @@ func BenchmarkBroadcastLedgerAtCapacity(b *testing.B) {
 		// 预先放满：第 k 封在 base+k+1 过期，publish 子项每前进一秒回收一封。
 		base := int64(1_900_000_000)
 		for k := range DefaultMaxActiveBroadcasts {
-			if _, err := index.Publish(ctx, benchBroadcast(k, base, base+int64(k)+1), base, DefaultMaxActiveBroadcasts); err != nil {
+			if _, err := index.Publish(ctx, benchBroadcast(k, base), base, DefaultMaxActiveBroadcasts); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -434,14 +434,13 @@ func BenchmarkBroadcastLedgerAtCapacity(b *testing.B) {
 	b.Run("publish", func(b *testing.B) {
 		index, base := newIndex(b)
 		b.ReportAllocs()
-		i := 0
+		k := DefaultMaxActiveBroadcasts
 		for b.Loop() {
-			now := base + int64(i) + 1 // 第 i 封此刻过期、被回收
-			mail := DefaultMaxActiveBroadcasts + i
-			if _, err := index.Publish(ctx, benchBroadcast(mail, now, now+int64(DefaultMaxActiveBroadcasts)+1), now, DefaultMaxActiveBroadcasts); err != nil {
+			mail := benchBroadcast(k, base)
+			if _, err := index.Publish(ctx, mail, mail.CreatedAtUnix, DefaultMaxActiveBroadcasts); err != nil {
 				b.Fatal(err)
 			}
-			i++
+			k++
 		}
 	})
 	b.Run("revoke", func(b *testing.B) {
@@ -494,12 +493,4 @@ func BenchmarkBroadcastLedgerAtCapacity(b *testing.B) {
 			}
 		}
 	})
-}
-
-func benchBroadcastID(k int) string { return fmt.Sprintf("bench-broadcast-%06d", k) }
-
-// benchBroadcast 是一封约 150 字节账本记录的广播（账本只记 ID、范围与时间）。
-func benchBroadcast(k int, createdAt, expiresAt int64) Envelope {
-	return Envelope{ID: benchBroadcastID(k), Audience: AudienceBroadcast, Scope: ServerScope(int32(1 + k%4)),
-		Subject: "maintenance compensation", CreatedAtUnix: createdAt, ExpiresAtUnix: expiresAt}
 }
