@@ -1,0 +1,39 @@
+{
+  "first": {
+    "copy_lower_ns": 1361387253,
+    "copy_upper_ns": 1363841980,
+    "dense_repeat": 65312,
+    "hint_calls": 314781,
+    "hint_success": 203,
+    "object_ns": 11836742608,
+    "repeat": 314578,
+    "target_object_ns": 11815372139
+  },
+  "formal": {
+    "copy_lower_ns": 2757432596,
+    "copy_upper_ns": 2761615856,
+    "dense_repeat": 132460,
+    "hint_calls": 657773,
+    "hint_success": 528,
+    "object_ns": 24001035734,
+    "repeat": 657245,
+    "target_object_ns": 23962375199
+  },
+  "second": {
+    "copy_lower_ns": 1379207070,
+    "copy_upper_ns": 1380916230,
+    "dense_repeat": 66274,
+    "hint_calls": 338736,
+    "hint_success": 321,
+    "object_ns": 12020215217,
+    "repeat": 338415,
+    "target_object_ns": 12003174151
+  },
+  "tail": {
+    "copy_lower_ns": 942534179,
+    "copy_upper_ns": 943652545,
+    "eligible_union_ns": 10511856875,
+    "facts": 3,
+    "target_object_ns": 8238169087
+  }
+}

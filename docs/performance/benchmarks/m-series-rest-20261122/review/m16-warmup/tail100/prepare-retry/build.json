@@ -1,0 +1,19 @@
+{
+  "head": "24b704bf1627d4db3f64c4f87880bfce808af326",
+  "parent_overlay": "deac044b07d8bad3a78d8ace28e4e766f2d4a3e7c3c807010de1da20b3f3fbfa",
+  "sources": {
+    "framework/entity/m16_prepare_meter_test.go": "cc701d4c09692742d56b404c5316a9257fc159dbd553d48c6cf3d884800142fc",
+    "framework/entity/subject_sync.go": "93f56f134586722355c1516901b84130ffb736d9ee2c57b2f19429cdbbc10926",
+    "framework/sync/entitysync/drain.go": "89890ee6a22fc2811166ce6657d055d4ada0b740890f27ce9831f48de428e87a",
+    "framework/sync/entitysync/flush.go": "6f6c3e47cb4c0d97d26f248914a944b2201645f2b0d211e74979b095f23c6166",
+    "framework/sync/entitysync/m16_gap.go": "9c29a442aec8733d545a53943aedf1f7cf4a164b90139b68724a88d046121faf",
+    "framework/sync/entitysync/m16_prepare_meter_test.go": "047bcac9465d4c32e653edf9b53f8f435ac69940a018e27ac8243cf38f32f62a"
+  },
+  "patch": "b037b65fe7abf88a5ed23748c3f52d0c0f3111616aadd010e95eec891bf7c07a",
+  "trace": "649bdf48789ff642a1340cedf21ae428eb3388e7fb5b7f49d502ba991f62a5b2",
+  "tiny": "61f5847ec9738b8a7b58d61097a76690b4c5bb8e86f5609c67421e808c81d0cf",
+  "small_ready": "7d9ed33c8f5d8e46031d3327394e16464158117b027f4c82abbecccdde0a83fe",
+  "builddir": "obs1",
+  "meter_transform": "932f90ff948e3e99e03739fecddebdb3db487d32626c8242c8deeb56d8bbf2ae",
+  "runtime": "go version go1.27.3 darwin/arm64"
+}
