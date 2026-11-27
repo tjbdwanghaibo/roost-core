@@ -1,0 +1,167 @@
+package decisionai
+
+import (
+	"errors"
+	"fmt"
+	"maps"
+	"reflect"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"{{MODULE}}/game/entities/player"
+)
+
+var ErrStaleChoice = errors.New("decisionai: stale or foreign choice")
+
+// Factory allocates a FRESH, named strategy and independent running tree. Factory
+// and Init must not launch work: Init can fail or the current strategy may refuse.
+type Factory func(*Lease) (ai.Strategy, error)
+
+// Executor has its own non-beating Controller, never the selector slot or the
+// generated Monster loop. All methods run serialized under this Player's guard.
+type Executor struct {
+	owner     *player.Player
+	ctl       *ai.Controller
+	factories map[string]Factory
+	live      *Lease
+	applied   Choice
+	busy      bool
+	switching bool
+}
+
+func NewExecutor(p *player.Player, hooks ai.ControllerHooks, factories map[string]Factory) (*Executor, error) {
+	if !guarded(p) {
+		return nil, ErrGuard
+	}
+	if hooks.OnError == nil || len(factories) == 0 {
+		return nil, errors.New("decisionai: factories and error sink required")
+	}
+	for name, f := range factories {
+		if name == "" || f == nil {
+			return nil, errors.New("decisionai: invalid factory")
+		}
+	}
+	if hooks.Context == nil {
+		hooks.Context = func(now time.Time) *ai.Context { return &ai.Context{Owner: p, Now: now} }
+	}
+	return &Executor{owner: p, ctl: ai.NewController(hooks), factories: maps.Clone(factories)}, nil
+}
+
+// Active reports the last successful selection. It is NOT the last requested
+// name; a refusal, factory error or Init failure leaves this and the tree intact.
+func (e *Executor) Active() Choice { return e.applied }
+func (e *Executor) enter() error {
+	if !guarded(e.owner) {
+		return ErrGuard
+	}
+	if e.ctl.Closed() {
+		return ai.ErrControllerClosed
+	}
+	if e.busy {
+		return ai.ErrReentrantSwitch
+	}
+	e.busy = true
+	return nil
+}
+func (e *Executor) Apply(c Choice) error {
+	if err := e.enter(); err != nil {
+		return err
+	}
+	defer func() { e.busy = false }()
+	r := e.owner.Dao().GetAiDecision()
+	if c.owner != e.owner || c.version <= 0 || c.version != r.GetVersion() || c.name != r.GetDesired() {
+		return ErrStaleChoice
+	}
+	if e.live != nil && c.name == e.applied.name {
+		e.applied = c
+		return nil
+	} // a new input, NOT a new leaf
+	makeStrategy := e.factories[c.name]
+	if makeStrategy == nil {
+		return fmt.Errorf("decisionai: no factory for %q", c.name)
+	}
+	lease := &Lease{executor: e}
+	next, err := makeStrategy(lease)
+	if err != nil {
+		return err
+	}
+	if next == nil || (reflect.ValueOf(next).Kind() == reflect.Pointer && reflect.ValueOf(next).IsNil()) || next.Name() != c.name {
+		return fmt.Errorf("decisionai: invalid factory result for %q", c.name)
+	}
+	e.switching = true
+	defer func() { e.switching = false }()
+	if err = e.ctl.SetStrategy(next); err != nil {
+		return err
+	}
+	e.live, e.applied = lease, c
+	return nil
+}
+func (e *Executor) Tick(now time.Time) error {
+	if err := e.enter(); err != nil {
+		return err
+	}
+	defer func() { e.busy = false }()
+	e.ctl.Tick(now)
+	return nil
+}
+func (e *Executor) Close() error {
+	if !guarded(e.owner) {
+		return ErrGuard
+	}
+	if e.busy {
+		return ai.ErrReentrantSwitch
+	}
+	e.busy = true
+	defer func() { e.busy = false }()
+	e.live = nil
+	e.ctl.Close("owner unloaded")
+	e.applied = Choice{}
+	return nil
+}
+
+// Lease is an in-process instance token. Capture THIS token when launching an
+// action; never look up the current executor as a substitute when a reply arrives.
+// A reused numeric action ID cannot route an old instance's result into a new one.
+type Lease struct{ executor *Executor }
+
+func (l *Lease) ActionEnd(id int64, kind actionflow.ActionKind, why actionflow.ActionReason) bool {
+	if l == nil || l.executor == nil {
+		return false
+	}
+	e := l.executor
+	if !guarded(e.owner) || e.switching || e.live != l {
+		return false
+	}
+	e.ctl.OnActionEnd(id, kind, why)
+	return true
+}
+
+// WorkHooks are the application-owned leaves. Start should return the real
+// actionflow ID (unique within this executor instance); Abort ends a running
+// branch on replacement or unload. Keep callbacks under the guard, without I/O.
+type WorkHooks struct {
+	Start  func(name string, l *Lease, ctx *ai.Context) (int64, error)
+	Abort  func(name string, l *Lease, id int64)
+	Result func(name string, status ai.Status)
+}
+
+func WorkFactories(h WorkHooks) (map[string]Factory, error) {
+	if h.Start == nil || h.Abort == nil || h.Result == nil {
+		return nil, errors.New("decisionai: incomplete work hooks")
+	}
+	factories := map[string]Factory{}
+	for _, name := range []string{Watch, Assist} {
+		factories[name] = func(lease *Lease) (ai.Strategy, error) {
+			leaf := &ai.TaskflowAction[struct{}]{
+				Launch: func(c *ai.BehaviorContext[struct{}]) (int64, error) { return h.Start(name, lease, c.Core) },
+				Succeeded: func(reason actionflow.ActionReason) bool {
+					return reason.Err == nil && reason.Result.Status == actionflow.ActionStatusSuccess
+				},
+				OnInterrupt: func(id int64) { h.Abort(name, lease, id) },
+			}
+			return ai.NewBehaviorStrategy[struct{}](leaf, ai.BehaviorStrategyOptions[struct{}]{Name: name, OnResult: func(status ai.Status) { h.Result(name, status) }}), nil
+		}
+	}
+	return factories, nil
+}

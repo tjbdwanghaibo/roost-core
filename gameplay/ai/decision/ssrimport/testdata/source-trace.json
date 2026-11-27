@@ -1,0 +1,113 @@
+[
+  {
+    "stage": "alpha",
+    "active": [
+      8,
+      9
+    ],
+    "effects": []
+  },
+  {
+    "stage": "alpha",
+    "active": [
+      9
+    ],
+    "effects": []
+  },
+  {
+    "stage": "alpha",
+    "active": [
+      9
+    ],
+    "effects": []
+  },
+  {
+    "stage": "alpha",
+    "active": [
+      9
+    ],
+    "effects": [
+      {
+        "id": 6,
+        "name": "mark",
+        "arg": 20
+      },
+      {
+        "id": 3,
+        "name": "mark",
+        "arg": 10
+      },
+      {
+        "id": 7,
+        "name": "mark",
+        "arg": 30
+      }
+    ]
+  },
+  {
+    "stage": "beta",
+    "active": [
+      16
+    ],
+    "effects": [
+      {
+        "id": 11,
+        "name": "mark",
+        "arg": 50
+      },
+      {
+        "id": 13,
+        "name": "mark",
+        "arg": 60
+      }
+    ]
+  },
+  {
+    "stage": "beta",
+    "active": [
+      16
+    ],
+    "effects": []
+  },
+  {
+    "stage": "beta",
+    "active": [
+      16
+    ],
+    "effects": [
+      {
+        "id": 15,
+        "name": "mark",
+        "arg": 70
+      }
+    ]
+  },
+  {
+    "stage": "alpha",
+    "active": [
+      8,
+      9
+    ],
+    "effects": []
+  },
+  {
+    "stage": "alpha",
+    "active": [
+      9
+    ],
+    "effects": [
+      {
+        "id": 10,
+        "name": "mark",
+        "arg": 40
+      }
+    ]
+  },
+  {
+    "stage": "alpha",
+    "active": [
+      9
+    ],
+    "effects": []
+  }
+]

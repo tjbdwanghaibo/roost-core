@@ -1,0 +1,160 @@
+package decisionai
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/entities/player"
+)
+
+type getter struct{ p *player.Player }
+
+func (g getter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if g.p.ID() != id {
+		return nil, fmt.Errorf("unexpected id %d", id)
+	}
+	return g.p, nil
+}
+func (g getter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		p, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = p
+	}
+	return out, nil
+}
+
+type journal struct {
+	reject atomic.Bool
+	writes atomic.Int64
+	last   atomic.Pointer[dataengine.CommitRecord]
+}
+
+func (j *journal) Commit(_ context.Context, r dataengine.CommitRecord) error {
+	if j.reject.Load() {
+		return errors.New("journal refused")
+	}
+	copy := dataengine.CloneCommitRecord(r)
+	j.last.Store(&copy)
+	j.writes.Add(1)
+	return nil
+}
+
+var handler = nest.NewHandlerName("decisionAITestOwnerOperation")
+
+type fixture struct {
+	p *player.Player
+	s *Selector
+	j *journal
+	n *nest.NestMgr
+}
+
+func newFixture(t *testing.T, dao *db.PlayerDao) *fixture {
+	t.Helper()
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(97331, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	param := &entity.EntityCreateParam{Id: id, Kind: player.EntityKindPlayer, IsCreate: dao == nil}
+	if dao != nil {
+		param.Dao = map[string]entity.DaoInterface{db.PlayerDaoCollection: dao}
+	}
+	v, err := entity.BuildEntity(param)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fixture{p: v.(*player.Player), j: &journal{}}
+	f.n = nest.NewEngine(nest.NestOptionWithGetter(getter{f.p}), nest.NestOptionWithTransactionCommitter(f.j), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.n.MustRegisterHandlerWithMeta(handler, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		if es[0] != f.p {
+			return nil, errors.New("wrong owner")
+		}
+		return nil, args[0].(func() error)()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err = f.n.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.n.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.must(t, func() error { var err error; f.s, err = NewSelector(f.p); return err })
+	return f
+}
+func (f *fixture) run(body func() error) error {
+	_, err := f.n.Request(context.Background(), handler, f.p.ID(), nest.NewParams(body))
+	return err
+}
+func (f *fixture) must(t *testing.T, body func() error) {
+	t.Helper()
+	if err := f.run(body); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *fixture) pick(t *testing.T, seq int64, help bool) Choice {
+	t.Helper()
+	var c atomic.Pointer[Choice]
+	f.must(t, func() error {
+		if err := f.s.Tick(Frame{Sequence: seq, Tick: seq, NeedsHelp: help}); err != nil {
+			return err
+		}
+		return f.s.PublishChoice(func(x Choice) { c.Store(&x) })
+	})
+	if c.Load() == nil {
+		t.Fatal("no committed choice")
+	}
+	return *c.Load()
+}
+
+type workLog struct {
+	leases                     []*Lease
+	started, aborted, finished []string
+}
+
+func (w *workLog) factories(t *testing.T) map[string]Factory {
+	t.Helper()
+	factories, err := WorkFactories(WorkHooks{Start: func(name string, l *Lease, _ *ai.Context) (int64, error) {
+		w.leases = append(w.leases, l)
+		w.started = append(w.started, name)
+		return 17, nil
+	}, Abort: func(name string, _ *Lease, _ int64) { w.aborted = append(w.aborted, name) }, Result: func(name string, status ai.Status) {
+		w.finished = append(w.finished, fmt.Sprintf("%s:%d", name, status))
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return factories
+}
+func (f *fixture) executor(t *testing.T, factories map[string]Factory) *Executor {
+	t.Helper()
+	var e *Executor
+	f.must(t, func() error {
+		var err error
+		e, err = NewExecutor(f.p, ai.ControllerHooks{OnError: func(err error) { t.Error(err) }}, factories)
+		return err
+	})
+	return e
+}
+func (f *fixture) applyTick(t *testing.T, e *Executor, c Choice) {
+	t.Helper()
+	f.must(t, func() error {
+		if err := e.Apply(c); err != nil {
+			return err
+		}
+		return e.Tick(time.Time{})
+	})
+}

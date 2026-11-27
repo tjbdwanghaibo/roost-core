@@ -1,0 +1,12 @@
+[
+  {"now":10,"fields":{"gate":0}},
+  {"now":10,"event":"pulse","fields":{"value":6}},
+  {"now":10,"event":"pulse","fields":{"value":7}},
+  {"now":11,"fields":{"gate":1}},
+  {"now":11,"event":"advance"},
+  {"now":11,"event":"advance"},
+  {"now":12},
+  {"now":12,"event":"reset"},
+  {"now":12,"event":"pulse","fields":{"value":7}},
+  {"now":12,"event":"pulse","fields":{"value":7}}
+]

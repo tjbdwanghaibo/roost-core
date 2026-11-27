@@ -1,0 +1,8 @@
+package dbdef
+
+// One durable desired-state register, not a queue of externally visible actions.
+type AiDecisionState struct {
+	Version   int64  `store:"1"`
+	StateJSON string `store:"2"`
+	Desired   string `store:"3"`
+}

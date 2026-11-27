@@ -1,0 +1,329 @@
+package decisionai
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai/decision"
+)
+
+func TestDecisionAISameBeatAndInputIdentity(t *testing.T) {
+	f := newFixture(t, nil)
+	var out atomic.Pointer[Choice]
+	f.must(t, func() error {
+		if err := f.s.Tick(Frame{Sequence: 1, Tick: 8}); err != nil {
+			return err
+		}
+		if f.p.Dao().GetAiDecision().GetDesired() != Watch {
+			return errors.New("tick did not select watch")
+		}
+		if err := f.s.Event(Frame{Sequence: 2, Tick: 8}, ai.Event{Kind: CallForHelp}); err != nil {
+			return err
+		}
+		return f.s.PublishChoice(func(c Choice) { out.Store(&c) })
+	})
+	if c := out.Load(); c == nil || c.Version() != 2 || c.Name() != Assist || f.j.writes.Load() != 1 {
+		t.Fatalf("same-frame event/commit: %+v writes=%d", c, f.j.writes.Load())
+	}
+	if err := f.run(func() error { return f.s.Event(Frame{Sequence: 2, Tick: 8}, ai.Event{Kind: CallForHelp}) }); !errors.Is(err, ErrReplay) {
+		t.Fatalf("retry: %v", err)
+	}
+	if err := f.run(func() error { return f.s.Tick(Frame{Sequence: 4, Tick: 9}) }); !errors.Is(err, ErrSequence) {
+		t.Fatalf("gap: %v", err)
+	}
+	if err := f.run(func() error {
+		return f.s.Event(Frame{Sequence: 3, Tick: 8}, ai.Event{Kind: CallForHelp, Data: "client payload"})
+	}); err == nil {
+		t.Fatal("unexpected data accepted")
+	}
+	if f.j.writes.Load() != 1 {
+		t.Fatal("rejected input wrote")
+	}
+}
+func TestDecisionAIRejectRestoreAndRetry(t *testing.T) {
+	f := newFixture(t, nil)
+	var out atomic.Pointer[Choice]
+	operation := func() error {
+		if err := f.s.Tick(Frame{Sequence: 1, Tick: 4, NeedsHelp: true}); err != nil {
+			return err
+		}
+		return f.s.PublishChoice(func(c Choice) { out.Store(&c) })
+	}
+	f.j.reject.Store(true)
+	if err := f.run(operation); err == nil {
+		t.Fatal("journal refused but reported success")
+	}
+	if out.Load() != nil {
+		t.Fatal("failed commit published a choice")
+	}
+	f.must(t, func() error {
+		r := f.p.Dao().GetAiDecision()
+		if r.GetVersion() != 0 || r.GetStateJSON() != "" || r.GetDesired() != "" {
+			return errors.New("undo left partial data")
+		}
+		return nil
+	})
+	f.j.reject.Store(false)
+	f.must(t, operation)
+	if out.Load() == nil || f.j.writes.Load() != 1 {
+		t.Fatal("retry not committed once")
+	}
+	// Actual full BSON mutation from generated DAO, not an in-memory blackboard or
+	// copying the old Player. Roundtrip its bytes through a file into a fresh DAO.
+	rec := f.j.last.Load()
+	if rec == nil {
+		t.Fatal("missing generated commit")
+	}
+	// First creation materializes the Player's installed DAOs. AI-only has one;
+	// with combat there is also combat_state. Validate the entire exact set,
+	// then restore the AI owner specifically from the Player document.
+	want := make(map[dataengine.DocumentKey]bool)
+	if err := nesttest.With(context.Background(), f.n, f.p, func() {
+		f.p.RangeDao(func(d entity.DaoInterface) {
+			want[dataengine.DocumentKey{Database: d.DbName(), Scope: dataengine.ResolveDatabaseScope(d), Resource: d.CollName(), ID: d.Id()}] = true
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var m dataengine.Mutation
+	for _, first := range rec.Mutations {
+		if !want[first.Key] || first.Kind != dataengine.MutationPut || first.ExpectedVersion != 0 || first.NextVersion != 1 || len(first.Data) == 0 {
+			t.Fatalf("unexpected first-write mutation: %+v", first.Key)
+		}
+		delete(want, first.Key)
+		if first.Key.Resource == db.PlayerDaoCollection && first.Key.ID == f.p.ID() {
+			m = first
+		}
+	}
+	if len(want) != 0 || len(m.Data) == 0 {
+		t.Fatalf("missing generated mutation: remaining=%v", want)
+	}
+	path := filepath.Join(t.TempDir(), "player.bson")
+	if err := os.WriteFile(path, m.Data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao := db.NewPlayerDao()
+	if err = dao.RestorePersisted(b, m.Schema, m.NextVersion); err != nil {
+		t.Fatal(err)
+	}
+	again := newFixture(t, dao)
+	var restored atomic.Pointer[Choice]
+	again.must(t, func() error { return again.s.PublishChoice(func(c Choice) { restored.Store(&c) }) })
+	if c := restored.Load(); c == nil || c.Name() != Assist || c.Version() != 1 {
+		t.Fatalf("restored %+v", c)
+	}
+	if err := again.run(func() error { return again.s.Tick(Frame{Sequence: 1, Tick: 4, NeedsHelp: true}) }); !errors.Is(err, ErrReplay) {
+		t.Fatalf("restore replay %v", err)
+	}
+	if again.j.writes.Load() != 0 {
+		t.Fatal("reload/duplicate rewrote the DAO")
+	}
+	again.must(t, func() error {
+		if err := again.s.Tick(Frame{Sequence: 2, Tick: 5}); err != nil {
+			return err
+		}
+		if again.p.Dao().GetAiDecision().GetDesired() != Watch {
+			return errors.New("next logical tick did not switch selection")
+		}
+		return nil
+	})
+}
+func TestDecisionAIRunningAndInterrupt(t *testing.T) {
+	f := newFixture(t, nil)
+	w := &workLog{}
+	e := f.executor(t, w.factories(t))
+	c := f.pick(t, 1, false)
+	f.applyTick(t, e, c)
+	same := f.pick(t, 2, false)
+	f.applyTick(t, e, same)
+	f.applyTick(t, e, same)
+	if !slices.Equal(w.started, []string{Watch}) || len(w.aborted) != 0 || len(w.finished) != 0 {
+		t.Fatalf("running leaf restarted: %+v", w)
+	}
+	c = f.pick(t, 3, true)
+	f.applyTick(t, e, c)
+	if !slices.Equal(w.started, []string{Watch, Assist}) || !slices.Equal(w.aborted, []string{Watch}) || len(w.finished) != 0 {
+		t.Fatalf("transition: %+v", w)
+	}
+	f.must(t, e.Close)
+	if !slices.Equal(w.aborted, []string{Watch, Assist}) {
+		t.Fatal("close did not interrupt the running leaf")
+	}
+}
+
+type fallible struct {
+	ai.Strategy
+	allow  *bool
+	broken bool
+}
+
+func (s *fallible) CanStopByNext(ai.Strategy) bool { return s.allow == nil || *s.allow }
+func (s *fallible) Init(ctx *ai.Context) error {
+	if s.broken {
+		return errors.New("cannot initialize")
+	}
+	return s.Strategy.Init(ctx)
+}
+func (s *fallible) Stop(ctx *ai.Context, reason string) {
+	if st, ok := s.Strategy.(ai.StoppableStrategy); ok {
+		st.Stop(ctx, reason)
+	}
+}
+func TestDecisionAISwitchFailureKeepsRunning(t *testing.T) {
+	f := newFixture(t, nil)
+	w := &workLog{}
+	factories := w.factories(t)
+	watch, assist := factories[Watch], factories[Assist]
+	allow, broken := false, true
+	factories[Watch] = func(l *Lease) (ai.Strategy, error) {
+		s, err := watch(l)
+		return &fallible{Strategy: s, allow: &allow}, err
+	}
+	factories[Assist] = func(l *Lease) (ai.Strategy, error) {
+		s, err := assist(l)
+		return &fallible{Strategy: s, broken: broken}, err
+	}
+	e := f.executor(t, factories)
+	old := f.pick(t, 1, false)
+	f.applyTick(t, e, old)
+	target := f.pick(t, 2, true)
+	if err := f.run(func() error { return e.Apply(target) }); !errors.Is(err, ai.ErrStrategyRejected) {
+		t.Fatalf("refusal: %v", err)
+	}
+	allow = true
+	if err := f.run(func() error { return e.Apply(target) }); !errors.Is(err, ai.ErrStrategyInit) {
+		t.Fatalf("Init: %v", err)
+	}
+	f.must(t, func() error {
+		if e.Active() != old {
+			return errors.New("failed selection advertised active")
+		}
+		return e.Tick(time.Time{})
+	})
+	if !slices.Equal(w.started, []string{Watch}) || len(w.aborted) != 0 {
+		t.Fatalf("failed switch restarted or interrupted old leaf: %+v", w)
+	}
+	broken = false
+	f.applyTick(t, e, target)
+	if !slices.Equal(w.aborted, []string{Watch}) || len(w.started) != 2 {
+		t.Fatalf("retry did not switch: %+v", w)
+	}
+	if err := f.run(func() error { return e.Apply(old) }); !errors.Is(err, ErrStaleChoice) {
+		t.Fatalf("old choice reused: %v", err)
+	}
+}
+func TestDecisionAILateReceiptCannotAdvanceReplacement(t *testing.T) {
+	f := newFixture(t, nil)
+	w := &workLog{}
+	e := f.executor(t, w.factories(t))
+	f.applyTick(t, e, f.pick(t, 1, false))
+	old := w.leases[0]
+	f.applyTick(t, e, f.pick(t, 2, true))
+	current := w.leases[1]
+	why := actionflow.NewActionResultReason(actionflow.ActionResult{Status: actionflow.ActionStatusSuccess})
+	f.must(t, func() error {
+		if old.ActionEnd(17, 0, why) {
+			return errors.New("old lease delivered")
+		}
+		return e.Tick(time.Time{})
+	})
+	if len(w.finished) != 0 || len(w.started) != 2 {
+		t.Fatal("stale numeric id advanced the new task")
+	}
+	f.must(t, func() error {
+		if !current.ActionEnd(17, 0, why) {
+			return errors.New("current lease rejected")
+		}
+		return e.Tick(time.Time{})
+	})
+	if !slices.Equal(w.finished, []string{fmt.Sprintf("%s:%d", Assist, ai.StatusSuccess)}) {
+		t.Fatalf("current result %v", w.finished)
+	}
+	f.must(t, e.Close)
+	f.must(t, func() error {
+		if current.ActionEnd(17, 0, why) {
+			return errors.New("closed lease delivered")
+		}
+		return nil
+	})
+}
+func TestDecisionAIGuardAndArbitrationFailClosed(t *testing.T) {
+	f := newFixture(t, nil)
+	foreign := newFixture(t, nil)
+	if _, err := NewSelector(f.p); !errors.Is(err, ErrGuard) {
+		t.Fatalf("no guard: %v", err)
+	}
+	var tickErr error
+	if err := nesttest.With(context.Background(), f.n, f.p, func() {
+		if !entity.CurrentGuardScope().Guard().GuardedEntity(f.p) || nest.CurrentRollbackTx() != nil {
+			tickErr = errors.New("expected memory handler with owner, without rollback")
+			return
+		}
+		tickErr = f.s.Tick(Frame{Sequence: 1, Tick: 1})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(tickErr, ErrGuard) {
+		t.Fatalf("owned but no transaction: %v", tickErr)
+	}
+	if err := f.run(func() error { return foreign.s.Tick(Frame{Sequence: 1, Tick: 1}) }); !errors.Is(err, ErrGuard) {
+		t.Fatalf("different locked instance of same id: %v", err)
+	}
+	custom, err := decision.Compile(decision.Definition{Schema: decision.Schema, Name: "ambiguous", Start: "ready", Stages: []decision.Stage{{Name: "ready", Tick: []decision.Node{{Kind: "do", Actions: []decision.Action{{ID: 1, Kind: "emit", Name: Watch}, {ID: 2, Kind: "emit", Name: Assist}}}}}}}, Vocabulary())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.run(func() error {
+		s, err := NewSelectorWithProgram(f.p, custom)
+		if err != nil {
+			return err
+		}
+		return s.Tick(Frame{Sequence: 1, Tick: 1})
+	}); err == nil || !strings.Contains(err.Error(), "expected one named selection") {
+		t.Fatalf("ambiguous choice %v", err)
+	}
+	if f.j.writes.Load() != 0 || foreign.j.writes.Load() != 0 {
+		t.Fatal("invalid input dirtied a DAO")
+	}
+	f.pick(t, 1, false)
+	f.must(t, func() error {
+		if _, err := NewSelectorWithProgram(f.p, custom); !errors.Is(err, ai.ErrStrategyInit) {
+			return fmt.Errorf("existing wrong plan accepted: %v", err)
+		}
+		return nil
+	})
+	f.must(t, func() error {
+		r := f.p.Dao().GetAiDecision()
+		old := r.GetStateJSON()
+		for _, raw := range []string{`{"unknown":1,` + old[1:], `{"stage":"ready",` + old[1:]} {
+			r.SetStateJSON(raw)
+			if err := f.s.PublishChoice(func(Choice) { t.Error("published invalid state") }); err == nil {
+				return errors.New("live selector accepted a malformed save")
+			}
+			if _, err := NewSelector(f.p); !errors.Is(err, ai.ErrStrategyInit) {
+				return fmt.Errorf("non-canonical save accepted: %v", err)
+			}
+		}
+		r.SetStateJSON(old)
+		return nil
+	})
+}

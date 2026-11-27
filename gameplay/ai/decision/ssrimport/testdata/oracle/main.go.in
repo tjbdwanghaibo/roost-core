@@ -1,0 +1,172 @@
+// Test driver. SRCMOD is replaced with the pinned checkout's Go module path by replay.py.
+package main
+
+import (
+	ai "SRCMOD/kingdom/modules/ai_engine"
+	_ "SRCMOD/kingdom/modules/ai_engine/internal"
+	ep "SRCMOD/kingdom/utils/editor_parser"
+	"WLOG"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+)
+
+type input struct {
+	Now    int64
+	Event  string
+	Fields map[string]int64
+}
+type effect struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Arg  int64  `json:"arg"`
+}
+type row struct {
+	Stage   string   `json:"stage"`
+	Active  []int64  `json:"active"`
+	Effects []effect `json:"effects"`
+}
+type synthetic struct {
+	engine  ai.Engine
+	in      input
+	effects []effect
+	roots   map[int64]string
+}
+
+// Copy() in the pinned SSR version does not copy rootImpl.nm. Observe the active
+// root via the engine's own topology instead of deriving stage from requested actions.
+func (s *synthetic) stage() string {
+	name := ""
+	s.engine.RangeRunDataTriggers(func(n *ai.NodeTopologyInfo, c *ai.NodeConstInfo) {
+		if n.IsRoot && c.Typo == ai.NodeTypeRoot {
+			name = s.roots[n.Id]
+		}
+	})
+	if name == "" {
+		panic("no active root")
+	}
+	return name
+}
+func (s *synthetic) active() []int64 {
+	ids := []int64{}
+	s.engine.RangeRunDataTriggers(func(n *ai.NodeTopologyInfo, c *ai.NodeConstInfo) {
+		if n.IsRoot && c.Typo == ai.NodeTypeEvent {
+			ids = append(ids, n.Id)
+		}
+	})
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+func (s *synthetic) EventTemplate(id uint32) (ai.EventChecker, ai.EventArgsParser) {
+	switch id {
+	case 11:
+		return ai.EventCheckerCommon, ai.DefaultEventParamsParser
+	case 12, 13:
+		return ai.EventCheckerNoParams, ai.DefaultEventParamsParser
+	}
+	return nil, nil
+}
+func (s *synthetic) ConditionTemplate(id int64) (ai.ConditionChecker, ai.ConditionArgsParser) {
+	if id != 21 {
+		return nil, nil
+	}
+	return func(left, right []interface{}, c ep.Compare, data ai.RunData) bool {
+		v, ok := s.in.Fields["gate"]
+		if !ok {
+			panic("gate missing")
+		}
+		return c(v, right[0])
+	}, ai.DefaultConditionParamsParser
+}
+func (s *synthetic) ActionTemplate(id int64) (ai.ActionWorker, ai.ActionParamParser) {
+	switch id {
+	case 31:
+		return func(p []interface{}, d ai.RunData) {
+			s.effects = append(s.effects, effect{Name: "mark", Arg: p[0].(int64)})
+			d.RTLog("mark", 0)
+		}, ai.DefaultActionParamsParser
+	case 32:
+		return func(p []interface{}, d ai.RunData) {
+			if !s.engine.SetNextStage(p[0].(string), s.in.Now) {
+				panic("invalid stage")
+			}
+		}, ai.DefaultActionParamsParser
+	}
+	return nil, nil
+}
+func main() {
+	c, e := ai.GenConfDataFromJson(os.Args[1])
+	if e != nil {
+		panic(e)
+	}
+	s := &synthetic{roots: map[int64]string{}}
+	for _, n := range c {
+		if n.Root() {
+			s.roots[n.Id()] = n.UniqueName()
+		}
+	}
+	stub := ai.NewEngineStub()
+	if e = stub.Build("fixture", c, s); e != nil {
+		panic(e)
+	}
+	s.engine = stub.Copy()
+	s.engine.InitRunData(s, ai.DefaultDataBuilder, func(node, msg string, level wlog.LogLevel) {
+		var id int64
+		if _, err := fmt.Sscanf(node, "action|%d", &id); err != nil {
+			panic(err)
+		}
+		s.effects[len(s.effects)-1].ID = id
+		fmt.Fprintf(os.Stderr, "emit node=%d active-root=%s CurStageName=%q\n", id, s.stage(), s.engine.CurStageName())
+	}, 0, false)
+	if !s.engine.SetNextStage("alpha", 0) {
+		panic("missing start")
+	}
+	buf, e := os.ReadFile(os.Args[2])
+	if e != nil {
+		panic(e)
+	}
+	var inputs []input
+	if e = json.Unmarshal(buf, &inputs); e != nil {
+		panic(e)
+	}
+	out := []row{}
+	for _, in := range inputs {
+		s.in = in
+		s.effects = []effect{}
+		if in.Event == "" {
+			s.engine.OnTick(in.Now)
+		} else {
+			var id uint32
+			var fields []string
+			var args []interface{}
+			switch in.Event {
+			case "pulse":
+				id = 11
+				v, ok := in.Fields["value"]
+				if !ok {
+					panic("value missing")
+				}
+				fields = []string{"value"}
+				args = []interface{}{v}
+			case "advance":
+				id = 12
+			case "reset":
+				id = 13
+			default:
+				panic("unknown event")
+			}
+			data, e := ai.BuildEventData(id, func(uint32, ...interface{}) []string { return fields }, args...)
+			if e != nil {
+				panic(e)
+			}
+			s.engine.OnEvent(data)
+		}
+		out = append(out, row{s.stage(), s.active(), s.effects})
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if e = enc.Encode(out); e != nil {
+		panic(e)
+	}
+}
