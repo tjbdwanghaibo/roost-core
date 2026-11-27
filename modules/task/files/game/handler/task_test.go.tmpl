@@ -55,7 +55,7 @@ var taskTestTables = map[string]any{}
 // taskRows 用 rows 作为整张任务表装载，经实际生成的登记、校验与请求快照，不给业务代码留测试开关。
 // 工程 configs/data 里别的表原样带上（联动里的 bag / shop 等仍能读到各自的规则），再盖上 taskTestTables 的行。
 // 缺省 Store 与 RuntimeConfig 由 newTaskFixture 在用例结束时换回。
-func taskRows(t *testing.T, rows ...schema.Task) {
+func taskRows(t *testing.T, rows ...schema.Task) (string, *configdata.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	tables := map[string][]map[string]json.RawMessage{}
@@ -116,9 +116,11 @@ func taskRows(t *testing.T, rows ...schema.Task) {
 	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err != nil {
+	store := configdata.NewStore(registry, dir)
+	if _, err := store.Load(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	return dir, store
 }
 
 // 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。

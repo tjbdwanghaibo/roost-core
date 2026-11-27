@@ -33,11 +33,39 @@ func (h Host) activate(d Definition, event string, factTime, now, generation int
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if d.Trigger == "event" && (event != d.Event || hooks.Eligible == nil) {
-		return Snapshot{}, ErrDenied
+	live := event == d.Event
+	recoverFirst := d.Trigger == "event_history" && generation == 1
+	if d.Trigger == "event" || d.Trigger == "event_history" {
+		if hooks.Eligible == nil || (!live && !recoverFirst) {
+			return Snapshot{}, ErrDenied
+		}
+		event = d.Event // 对账本身可能没有事件；Eligible 核对的是该定义所绑定的事实。
 	}
 	if hooks.Eligible != nil && !hooks.Eligible(h.Owner, event) {
 		return Snapshot{}, ErrDenied
+	}
+	if recoverFirst {
+		if hooks.LookupFact == nil {
+			return Snapshot{}, fmt.Errorf("%w: event_history logic %q requires LookupFact", ErrRule, d.Logic)
+		}
+		if live && (factTime <= 0 || factTime > now) {
+			return Snapshot{}, ErrRule
+		}
+		at, found, err := hooks.LookupFact(h.Owner, d.Event)
+		if err != nil {
+			// 即使提供器返回 ErrDenied 也是读取失败，不能被 Reconcile 当成不符合资格跳过。
+			return Snapshot{}, fmt.Errorf("activity %d lookup %q: %w", d.ID, d.Event, err)
+		}
+		if found {
+			if at <= 0 || at > now {
+				return Snapshot{}, fmt.Errorf("%w: activity %d invalid historical event time %d", ErrRule, d.ID, at)
+			}
+			if !live || at < factTime {
+				factTime = at
+			}
+		} else if !live {
+			return Snapshot{}, ErrDenied
+		}
 	}
 	anchor := d.StartMilli
 	if d.Trigger != "fixed" {
@@ -100,18 +128,25 @@ func (h Host) Reopen(d Definition, event string, factTime, now, nextGeneration i
 }
 
 // Reconcile 首次加载、进入和业务操作使用同一入口。fixed 自动激活；created 只在调用方
-// 有持久创建事实时激活。event 只响应同一实体事务中的可信事件，不通过客户端查询触发。
+// 有持久创建事实时激活。event 只响应实时事件；event_history 还可读取宿主的已存事实。
 func (h Host) Reconcile(definitions []Definition, event string, createdAt, now int64) error {
 	for _, d := range definitions {
 		if d.Disabled || d.Scope != h.Scope {
 			continue
 		}
-		if d.Trigger == "event" && d.Event != event || d.Trigger == "created" && createdAt == 0 {
-			continue
-		}
-		fact := createdAt
-		if d.Trigger == "event" {
-			fact = now
+		var fact int64
+		switch d.Trigger {
+		case "created":
+			if createdAt == 0 {
+				continue
+			}
+			fact = createdAt
+		case "event", "event_history":
+			if event == d.Event {
+				fact = now // 只有同一事务中的匹配事件才带实时凭据。
+			} else if d.Trigger == "event" {
+				continue
+			}
 		}
 		if _, err := h.Activate(d, event, fact, now); err != nil {
 			if err == ErrDenied {

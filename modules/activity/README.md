@@ -23,8 +23,9 @@
   - 包级函数（`game/components/activity/`）：`Definitions(scope)`（读配置表并校验）、`Validate(d)`、`ResumePending(ctx, registry, views, complete)`（锁外继续未完成的异步工作，`resume.go`）、`StartDriver(owned, kind, advance)`（给 Remote 宿主用的恢复扫描，`driver.go`）、`ScanHost` / `ScanCapability(scope)`（恢复扫描的宿主：宿主模块的 manager 发布、RPC Mod 在就绪点把扫描交给它，见 [modules/README](../README.md) 的“后台循环：manager”）、`CoordinatorKey(token)`（映射到框架跨服汇聚服务的窗口键，`coordinator.go`）、`NewComponent`（三种宿主共用的组件工厂）。
   - 类型：`Token`（一期活动在某阶段某流程版本的完整身份）、`Snapshot`（一期活动的只读快照）、`Context`（回调参数，`Key(action)` 给出稳定的幂等键）、`Flow{Name, Due}`、`Phase` 及常量 `Initializing`、`Warmup`、`Open`、`Settling`、`Ended`。
 - **登记点 / 钩子**
-  - `activity.Register(name string, hooks activity.Hooks)`（`game/components/activity/types.go`）：把一段活动逻辑登记到配置表 `Logic` 列引用的名字上。只在进程启动时（`init`）登记，重名或空名 panic。`Hooks` 有四个可选回调：
+  - `activity.Register(name string, hooks activity.Hooks)`（`game/components/activity/types.go`）：把一段活动逻辑登记到配置表 `Logic` 列引用的名字上。只在进程启动时（`init`）登记，重名或空名 panic。`Hooks` 提供以下回调：
     - `Eligible(owner, event) bool`：解锁条件。在宿主实体的事务里调用，读实体的真实状态。
+    - `LookupFact(owner, event) (at int64, found bool, err error)`：仅 `event_history` 的首次激活使用；在同一把锁内只读当前宿主的持久首次事件时间（Unix 毫秒），不做 I/O。
     - `Enter(Context) (pending bool, err error)`：每进入一个阶段调用一次，在宿主实体的事务里。只能改本次已锁住的实体的 DAO 或登记可靠 effect。返回 `pending=true` 只允许在 `Initializing` 与 `Settling` 阶段，表示要等后台工作完成。返回错误则整笔事务回滚。
     - `Flow(Context) (Flow, error)`：自定义流程的期限到了时调用，在事务里，返回下一个流程。
     - `Resume(ctx, registry, snapshot) (done bool, err error)`：在事务之外的 I/O 段继续 `pending` 的工作；返回 `done=true` 后引擎再用原 `Token` 调 `Complete`。可能被重复调用，外部副作用必须幂等。
@@ -83,7 +84,7 @@
 
 - `roost module verify activity`：23 个场景（`./game/components/activity` 与 `./game/handler`，`^TestActivity`）；与 `enter` 的联动 3 个场景（`./game/handler` 与 `./game/controllers`），与 `profile`、`leaderboard`、`mailbox` 的联动各 1 个场景。
 - 场景是离线的：真实的 Nest 引擎、生成的 DAO 与实体定时器；提交器是替身。覆盖五阶段与期限、异步初始化与结算、零预热、独立解锁与重复激活、初始化失败回滚、定时器回调出错时保留期限并回滚、循环的有界补期与规则冻结、自定义流程与迟到事件、时钟回拨与显式重开、参与资格不是个人实例、`pending` 经 BSON 往返恢复、并发激活只有一个锚点；规则校验、业务日历不按 24 小时、重叠周期拒绝、跳过空期的有界查找、`Resume` 重试、驱动停止时保留在途工作、汇聚键、相对日历等到业务日界。
-- 与 `enter` 的联动：一个场景直接调建档初始化，验证重连不重置创建锚点；另一个经 `gamelogin.RunEntered` 真正执行登记的进入钩子（正式 Nest、生成的 Sender 与 handler），验证钩子按玩家号定位到 `Player`、对账激活、`Resume` 报告完成后用原 `Token` 确认 `pending`，重连再进入不重复 `Resume`、不改时间线。
+- 与 `enter` 的联动：锚点场景用真实建档事务、`MarshalPersist` / `RestorePersisted` 重建的冷 Player 验证重连与迟到加载；覆盖实时与历史同在、缺失后重查、非法时间或读取失败、资格/截止、已激活规则冻结、提交失败及唤醒回滚。另一个场景经 `gamelogin.RunEntered` 真正执行登记的进入钩子（正式 Nest、生成的 Sender 与 handler），验证钩子按玩家号定位到 `Player`、对账激活、`Resume` 报告完成后用原 `Token` 确认 `pending`，重连再进入不重复 `Resume`、不改时间线。
 - 离线验收记录见 [证据](../../docs/maintenance/evidence/module-activity-20261112/README.md)。真实档另跑 [scripts/test-activity-real.sh](../../scripts/test-activity-real.sh)：精简正式配方经 account、玩家 TCP `EnterGame`、Nest 与 Mongo/文件 WAL，Player 活动先换服再 SIGKILL、同 WAL 重启；到期前已进入游戏，随后只读 Mongo 观察持久定时器推进到 Ended，最后才发 `ActivityView`。World/Alliance 的权威迁移与恢复扫描在同一档分别核对，见 [2026-11-14 证据](../../docs/maintenance/evidence/operations-real-20261114/README.md)。
 - 真实档只验证一个事件触发周期，允许 Mongo 正常投影，不是仅 WAL 恢复；未覆盖真实奖励回调、长时间运行、离线玩家准点结算或容量。完整 game-demo 的 Player DAO 已有 64 个顶层字段，不能继续叠装 activity；该档实际使用 casual 配方与报告中的 18 模块组合。
 
@@ -113,8 +114,8 @@
 | --- | --- |
 | ID / Version | ID 为 1..128，不回收；规则变化提升 Version |
 | Scope | `player`、`world`、`alliance` |
-| Trigger | `fixed` 用 StartMilli；`created` 用可信的持久创建时间；`event` 用同事务业务事件及 Eligible |
-| Event / Logic | `event` 触发必须同时填事件名和已登记的逻辑；逻辑没有 `Eligible` 回调时拒绝激活 |
+| Trigger | `fixed` 用 StartMilli；`created` 用持久创建时间；`event` 只响应实时事件；`event_history` 还允许以本宿主已持久的首次事件时间补激活 |
+| Event / Logic | 两种事件触发都要填事件名和已登记的逻辑，都要求 `Eligible`；`event_history` 另外要求 `LookupFact` |
 | DelayMillis | 非 `fixed` 触发时，从事实时间起延后多久开期；`fixed` 必须为 0 |
 | WarmupMillis / OpenMillis | 预热可为 0，开启必须大于 0；各不超过 366 天 |
 | Repeat / Period | `none`；`interval` 的 Period 是毫秒，且不小于预热加开启；`daily` / `weekly` 的 Period 是日数 / 周数（1～366） |
@@ -122,7 +123,7 @@
 | Catchup | `queue` 保留每期责任；`skip_empty` 仅允许 Logic 为空的纯展示活动 |
 | Disabled | 不再创建新实例；已激活实例继续执行被冻结的规则 |
 
-日历规则冻结业务时区和日界。固定日期的日历活动，StartMilli 必须落在业务日界；创建或解锁触发的日历活动从“事实时间 + DelayMillis”之后的首个业务日界开期，恰好位于日界时使用该时刻。每周活动从首期锚点按 N 周重复；需要固定周一时，配置周一的固定锚点。日历按日期计算，跨夏令时不等于固定 24 小时。按总截止裁剪本期后，只和实际存在的下一期检查重叠；真正重叠仍报错。`created` / `event` 的宿主若按事实时间、延迟、日历对齐及预热算出的首期开启时刻已达到总截止，只跳过该定义，不阻断首登或其他活动。相反，事实时间在有效窗口内的宿主即使迟到对账，也照常补期。
+日历规则冻结业务时区和日界。固定日期的日历活动，StartMilli 必须落在业务日界；创建或解锁触发的日历活动从“事实时间 + DelayMillis”之后的首个业务日界开期，恰好位于日界时使用该时刻。每周活动从首期锚点按 N 周重复；需要固定周一时，配置周一的固定锚点。日历按日期计算，跨夏令时不等于固定 24 小时。按总截止裁剪本期后，只和实际存在的下一期检查重叠；真正重叠仍报错。非 `fixed` 触发的宿主若按事实时间、延迟、日历对齐及预热算出的首期开启时刻已达到总截止，只跳过该定义，不阻断首登或其他活动。相反，事实时间在有效窗口内的宿主即使迟到对账，也照常补期。
 
 默认首次解锁持久生效，重复事件不重置时间。`Reopen` 只允许已彻底结束的序列，必须传旧代际加 1；重复同代际请求返回现有实例。无限循环的规则不通过热更自动结束。
 
@@ -147,6 +148,32 @@ func init() {
 ```
 
 规则使用 `Scope=player, Trigger=event, Event=profile.level_up, Logic=growth20`。与 `profile` 同装时，升级事实、`Eligible` 和活动激活在同一笔 `Player` 事务里；拒绝提交会一起回滚。没有 `enter` 时，`created` 触发的活动要由业务提供真实的创建时间，不能拿每次登录时间冒充。
+
+### 追溯首次事件（可选）
+
+只在**定义和逻辑都选用**时追溯：`Trigger=event_history`，登记 `Eligible` 和 `LookupFact`。不增加表列，不会把使用同一 `Logic` 的普通 `event` 变成追溯规则。比如下例绑定 `Scope=player, Event=created, Logic=first_enter_history`，同装 `enter` 时首次初始化在 Player 事务中发布这个实时事件，`PlayerDao.Enter` 保存其原始毫秒。若只是按建档时间排期，应继续用更简单的 `created`；此例演示其他具有同样持久事实的业务事件怎样接入：
+
+```go
+activity.Register("first_enter_history", activity.Hooks{
+    Eligible: func(owner entity.IThreadSafeEntity, event string) bool {
+        _, ok := owner.(view.PlayerEntity)
+        return ok && event == "created" // 业务有额外资格条件时在这里检查
+    },
+    LookupFact: func(owner entity.IThreadSafeEntity, event string) (int64, bool, error) {
+        p, ok := owner.(view.PlayerEntity)
+        if !ok || event != "created" {
+            return 0, false, fmt.Errorf("unexpected first-enter owner/event: %T/%q", owner, event)
+        }
+        first := p.Dao().GetEnter()
+        return first.GetFirstAt(), first.GetInitialized(), nil
+    },
+})
+```
+
+- 对账先看已有记录：即使重放、配置热更或事实后来变化，也不重查、不挪锚点。尚未激活且有资格时，提供器收到**定义绑定的事件名**，不是触发此次查询的无关事件。匹配的实时事件与历史同时存在，取较早的可信时间；只有实时事件时沿用实时触发时刻。`Reconcile` 的 `createdAt` 不是事件时间输入。普通查看不提供实时事件，没有历史就不写实例、不记负缓存，下一次可再查。
+- 提供器只读已加载的权威 Owner DAO，查的是**首次发生该事件**，不是当前状态、最近更新时间或客户端时间。`found=true` 要有正值且不晚于服务端当前时刻；非法时间、缺少提供器、读取错误不能回退到实时或伪造 `now`。错误交回 Nest 回滚，本次其他定义的写入也不提交。
+- 选定时间仍须经过原来的延迟、业务日界、预热与总截止。即使晚到的记录已到结算期，也只按冻结规则、既有推进预算和 `Rearm` 处理，不默认补发奖励。`Reopen` 是显式开启**新代际**：需匹配的可信事件和该代际的事实时间，不重用第一代的历史事实。
+- 宿主范围：Player 的查看、同事务业务事件及 `enter` 对账都走同一组件；World 和 Alliance 的权威 `Pulse` / 扫描也走该入口。提供器必须登记在**实际拥有该实体的服务**。World 已有 `ActivityWorldDao.CreatedAt`，Alliance 已有持久建盟时间（`ActivityCreatedAt()` 按毫秒返回并检查有效联盟）；它们只证明创建，不证明其他成就。没有持久首达时间的玩家等级、联盟人数等只能继续用实时 `event`，不能拿建档时间或另一个宿主的事实替代。无需同步新字段、查远端或开放客户端上报时间。
 
 ## 异步完成与可选组合
 

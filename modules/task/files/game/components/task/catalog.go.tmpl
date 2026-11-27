@@ -21,8 +21,43 @@ const (
 // TaskDefinition 直接使用任务配置行。同一条 Nest 消息读取同一份配置快照。
 type TaskDefinition = schema.Task
 
+// 对象类型由可选桥在包初始化时登记，运行时只读。一个类型对应一种明确的计量口径。
+type objectSource struct{ event, kind string }
+type objectKey struct {
+	source objectSource
+	id     int64
+}
+
+var objectSources = map[objectSource]bool{}
+
+// 只有 with/bag 安装这个只读来源。目录不持有玩家状态，count 只在领奖事务中调用。
+const taskModeHeld = "held"
+
+type heldItemSource struct {
+	valid func(itemID, target int64) bool
+	count func(Owner, int64) int64
+}
+
+var heldItems *heldItemSource
+
 func taskRowUsable(row TaskDefinition) bool {
 	if row.Disabled || row.ID < 1 || row.ID > TaskMaxID || row.Target <= 0 || row.Event == "" || row.Previous < 0 || row.Previous > TaskMaxID {
+		return false
+	}
+	switch row.Mode {
+	case "":
+		if row.ObjectKind == "" {
+			if row.ObjectID != 0 {
+				return false
+			}
+		} else if row.ObjectID <= 0 || !objectSources[objectSource{row.Event, row.ObjectKind}] {
+			return false
+		}
+	case taskModeHeld:
+		if row.Event != "bag.held" || row.ObjectKind != "item" || row.ObjectID <= 0 || heldItems == nil || !heldItems.valid(row.ObjectID, row.Target) {
+			return false
+		}
+	default:
 		return false
 	}
 	switch row.Period {
@@ -38,7 +73,8 @@ func taskRowUsable(row TaskDefinition) bool {
 type taskIndex struct {
 	table       *configdata.Table[int64, schema.Task]
 	definitions map[int64]TaskDefinition
-	events      map[string][]TaskDefinition
+	events      map[string][]TaskDefinition // 仅匿名事件行
+	objects     map[objectKey][]TaskDefinition
 }
 
 var currentTaskIndex atomic.Pointer[taskIndex]
@@ -48,7 +84,7 @@ func taskDefinitions() *taskIndex {
 	if cached := currentTaskIndex.Load(); cached != nil && cached.table == table {
 		return cached
 	}
-	index := &taskIndex{table: table, definitions: map[int64]TaskDefinition{}, events: map[string][]TaskDefinition{}}
+	index := &taskIndex{table: table, definitions: map[int64]TaskDefinition{}, events: map[string][]TaskDefinition{}, objects: map[objectKey][]TaskDefinition{}}
 	rows := map[int64]TaskDefinition{}
 	for _, row := range table.Rows() {
 		rows[row.ID] = row
@@ -83,7 +119,13 @@ func taskDefinitions() *taskIndex {
 		return true
 	}
 	for _, row := range table.Rows() {
-		if validate(row.ID) {
+		if !validate(row.ID) || row.Mode == taskModeHeld { // 持有行仅供领奖查定义，不进任何累计索引
+			continue
+		}
+		if row.ObjectKind != "" {
+			key := objectKey{objectSource{row.Event, row.ObjectKind}, row.ObjectID}
+			index.objects[key] = append(index.objects[key], row)
+		} else {
 			index.events[row.Event] = append(index.events[row.Event], row)
 		}
 	}

@@ -88,6 +88,9 @@ type Hooks struct {
 	// Resume 在锁外 I/O 段继续 pending 工作；成功后再经 Complete 提交完成事实。
 	// 可能重试/迁移后重入，所有外部写必须使用稳定键，不从实时排行榜重算已冻结的奖励。
 	Resume func(context.Context, *app.Registry, Snapshot) (bool, error)
+	// LookupFact 仅供 event_history 的首次激活：在当前 Owner 的 Nest 锁内只读本地持久事实，
+	// 返回该事件首次发生的 Unix 毫秒；不存在返回 found=false，读取失败返回 err。禁止 I/O。
+	LookupFact func(owner entity.IThreadSafeEntity, event string) (at int64, found bool, err error)
 }
 
 var hookRegistry = struct {

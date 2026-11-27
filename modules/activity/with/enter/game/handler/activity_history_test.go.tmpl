@@ -1,0 +1,217 @@
+package handler
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/components/activity"
+	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
+)
+
+var registerHistoryTestHooks sync.Once
+
+func activityHistoryRule() activity.Definition {
+	registerHistoryTestHooks.Do(func() {
+		eligible := func(owner entity.IThreadSafeEntity, event string) bool {
+			_, ok := owner.(view.PlayerEntity)
+			return ok && event == "created"
+		}
+		lookup := func(owner entity.IThreadSafeEntity, event string) (int64, bool, error) {
+			if event != "created" {
+				return 0, false, errors.New("lookup received unrelated event")
+			}
+			state := owner.(view.PlayerEntity).Dao().GetEnter()
+			return state.GetFirstAt(), state.GetInitialized(), nil
+		}
+		activity.Register("test_first_enter", activity.Hooks{Eligible: eligible, LookupFact: lookup})
+		activity.Register("test_first_enter_denied", activity.Hooks{Eligible: func(entity.IThreadSafeEntity, string) bool { return false }, LookupFact: lookup})
+		activity.Register("test_no_history_reader", activity.Hooks{Eligible: eligible})
+		activity.Register("test_broken_history_reader", activity.Hooks{Eligible: eligible, LookupFact: func(entity.IThreadSafeEntity, string) (int64, bool, error) {
+			return 0, false, activity.ErrDenied // 读取失败，即使这个错误恰好也是资格错误。
+		}})
+	})
+	d := activityRule()
+	d.Trigger, d.Event, d.Logic = "event_history", "created", "test_first_enter"
+	d.StartMilli = 0
+	return d
+}
+
+func initHistoryPlayer(t *testing.T, f *activityFixture) {
+	t.Helper()
+	if err := f.call(0, func(p *player.Player) error { _, err := p.EnterComp().Init(f.now.Load()); return err }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 以生成 DAO 的持久投影重建同 ID 的冷 Owner。后续查询不能靠原组件的内存或重放 EnterFirst。
+func reloadHistoryPlayer(t *testing.T, f *activityFixture) {
+	t.Helper()
+	dao := db.NewPlayerDao()
+	p := f.players[0]
+	dao.SetId(p.ID())
+	if err := f.call(0, func(owner *player.Player) error {
+		return dao.RestorePersisted(owner.Dao().MarshalPersist(dataengine.AllFields), db.PlayerDaoSchemaVersion, 1)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cold, err := entity.BuildEntity(&entity.EntityCreateParam{Id: p.ID(), Kind: player.EntityKindPlayer, Dao: map[string]entity.DaoInterface{db.PlayerDaoCollection: dao}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.{{TIMER_COMPONENT}}Comp().OnDestroy(0)
+	f.players[0], f.getter.values[p.ID()] = cold.(*player.Player), cold
+}
+
+func activityHistoricalAnchors(t *testing.T) {
+	reconcile := func(f *activityFixture, event string) error {
+		return f.call(0, func(p *player.Player) error { return p.ActivityComp().Reconcile(event, 0) })
+	}
+	assertEmpty := func(t *testing.T, f *activityFixture) {
+		t.Helper()
+		f.do(t, 0, func(h activity.Host) error {
+			if h.Book.RecordsLen() != 0 || h.Book.GetTimerID() != 0 || h.Book.GetNextDue() != 0 {
+				return fmt.Errorf("unexpected record or wakeup: %d/%d/%d", h.Book.RecordsLen(), h.Book.GetTimerID(), h.Book.GetNextDue())
+			}
+			return nil
+		})
+	}
+	for _, event := range []string{"", "created"} {
+		t.Run("late reconciliation/event="+event, func(t *testing.T) {
+			f := newActivityFixture(t)
+			activityRows(t)
+			at := f.now.Load()
+			initHistoryPlayer(t, f)
+			reloadHistoryPlayer(t, f)
+			now := f.now.Add((24 * time.Hour).Milliseconds())
+			d := activityHistoryRule()
+			d.DelayMillis, d.OpenMillis, d.UntilMilli = 5000, (48 * time.Hour).Milliseconds(), now+15000
+			activityRows(t, d)
+			f.commit.reject.Store(true)
+			if err := reconcile(f, event); err == nil {
+				t.Fatal("commit rejection swallowed")
+			}
+			f.commit.reject.Store(false)
+			assertEmpty(t, f)
+			if err := reconcile(f, event); err != nil {
+				t.Fatal(err)
+			}
+			v := f.view(t, 0)
+			if v.Start != at+d.DelayMillis || v.OpenAt != v.Start+d.WarmupMillis || v.CloseAt != d.UntilMilli || v.Token.Phase != activity.Open {
+				t.Fatalf("did not use the first event: %+v", v)
+			}
+			f.do(t, 0, func(h activity.Host) error {
+				if h.Book.GetNextDue() != v.CloseAt || h.Book.GetTimerID() == 0 {
+					return errors.New("recovered open window not armed")
+				}
+				return nil
+			})
+			d.Version, d.DelayMillis, d.Logic = 2, 0, "test_broken_history_reader"
+			activityRows(t, d)
+			f.now.Add(100)
+			if err := reconcile(f, "created"); err != nil {
+				t.Fatal(err)
+			}
+			if replay := f.view(t, 0); replay != v {
+				t.Fatalf("replay/table reload changed frozen record: %+v -> %+v", v, replay)
+			}
+		})
+	}
+	t.Run("missing retries only when a fact exists", func(t *testing.T) {
+		f := newActivityFixture(t)
+		d := activityHistoryRule()
+		activityRows(t, d)
+		if err := f.call(0, func(p *player.Player) error { return p.ActivityComp().Reconcile("other", f.now.Load()-100) }); err != nil {
+			t.Fatal(err)
+		}
+		assertEmpty(t, f) // neither now nor the caller's unrelated createdAt qualifies
+		activityRows(t)   // record first enter while the definition is offline
+		at := f.now.Load()
+		initHistoryPlayer(t, f)
+		f.now.Add(100)
+		activityRows(t, d)
+		if err := reconcile(f, ""); err != nil || f.view(t, 0).Start != at {
+			t.Fatalf("retry did not recover %d: %v", at, err)
+		}
+	})
+	t.Run("real first enter before stored timestamp", func(t *testing.T) {
+		f := newActivityFixture(t)
+		activityRows(t, activityHistoryRule())
+		initHistoryPlayer(t, f) // EnterFirst is published before Init stores FirstAt
+		if v := f.view(t, 0); v.Start != f.now.Load() {
+			t.Fatal(v)
+		}
+	})
+	t.Run("eligibility and exclusive cutoff", func(t *testing.T) {
+		f := newActivityFixture(t)
+		activityRows(t)
+		initHistoryPlayer(t, f)
+		d := activityHistoryRule()
+		d.DelayMillis = 100
+		d.UntilMilli = f.now.Load() + d.DelayMillis + d.WarmupMillis
+		denied := d
+		denied.ID, denied.UntilMilli, denied.Logic = 2, 0, "test_first_enter_denied"
+		f.now.Add(86400000)
+		activityRows(t, d, denied)
+		if err := reconcile(f, ""); err != nil {
+			t.Fatal(err)
+		}
+		assertEmpty(t, f)
+		d.UntilMilli++ // opening just inside the cutoff: late settlement, not a new window
+		activityRows(t, d, denied)
+		if err := reconcile(f, ""); err != nil {
+			t.Fatal(err)
+		}
+		if v := f.view(t, 0); v.CloseAt != d.UntilMilli || v.Token.Phase != activity.Ended || v.CompletedThrough != 1 {
+			t.Fatal(v)
+		}
+	})
+	t.Run("lookup errors roll back even on live event", func(t *testing.T) {
+		f := newActivityFixture(t)
+		d := activityHistoryRule()
+		d.ID = 2 // the fixed rule is written first in the same Nest transaction
+		for _, c := range []struct {
+			logic string
+			want  error
+		}{{"test_broken_history_reader", activity.ErrDenied}, {"test_no_history_reader", activity.ErrRule}} {
+			d.Logic = c.logic
+			activityRows(t, activityRule(), d)
+			if err := reconcile(f, "created"); !errors.Is(err, c.want) {
+				t.Fatalf("%s: %v", c.logic, err)
+			}
+			assertEmpty(t, f)
+		}
+		// Ordinary event with the very same (broken) provider must never call it.
+		d.Trigger, d.Logic = "event", "test_broken_history_reader"
+		activityRows(t, d)
+		if err := reconcile(f, ""); err != nil {
+			t.Fatal(err)
+		}
+		assertEmpty(t, f)
+		if err := reconcile(f, "created"); err != nil || f.view(t, 0).Start != f.now.Load() {
+			t.Fatalf("ordinary live event changed: %v", err)
+		}
+	})
+	t.Run("invalid stored time never falls back to now", func(t *testing.T) {
+		f := newActivityFixture(t)
+		activityRows(t)
+		initHistoryPlayer(t, f)
+		activityRows(t, activityHistoryRule())
+		for _, at := range []int64{0, f.now.Load() + 1} {
+			if err := f.call(0, func(p *player.Player) error { p.Dao().GetEnter().SetFirstAt(at); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err := reconcile(f, "created"); !errors.Is(err, activity.ErrRule) {
+				t.Fatalf("invalid stored time %d: %v", at, err)
+			}
+			assertEmpty(t, f)
+		}
+	})
+}

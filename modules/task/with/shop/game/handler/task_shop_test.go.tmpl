@@ -2,29 +2,74 @@ package handler
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"testing"
 
 	"{{MODULE}}/configs/schema"
 	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 )
 
-// 场景用到的商品自己带（盖在工程商品表的同号行上）：1 号商品每份 1 个 1001、10 金币、不限购。
+// 两种商品都发 1001，第二种商品号恰与道具号相同，用来证明两者不是同一类对象。
 // 1001 这件道具由 task_bag_test.go 带上——shop 依赖 bag，装了 shop 就一定有那组联动。
 func init() {
-	taskTestTables["shop_goods"] = []schema.ShopGoods{{ID: 1, ItemID: 1001, ItemCount: 1, Price: 10}}
+	taskTestTables["shop_goods"] = []schema.ShopGoods{
+		{ID: 1, ItemID: 1001, ItemCount: 4, Price: 10},
+		{ID: 1001, ItemID: 1001, ItemCount: 2, Price: 10},
+	}
 }
 
 func taskBuy(f *taskFixture, key string, count int64) error {
+	return taskBuyGoods(f, key, 1, count)
+}
+
+func taskBuyGoods(f *taskFixture, key string, goodsID, count int64) error {
 	RegisterShopBuyNestHandlers()
-	_, err := sender.NewShopBuySender(f.engine).Sync_ShopBuy(context.Background(), f.player.ID(), &pb.ShopBuyRequest{Key: key, GoodsID: 1, Count: count})
+	_, err := sender.NewShopBuySender(f.engine).Sync_ShopBuy(context.Background(), f.player.ID(), &pb.ShopBuyRequest{Key: key, GoodsID: goodsID, Count: count})
 	return err
 }
+
+func taskShopRows() []schema.Task {
+	var rows []schema.Task
+	for _, selector := range []struct {
+		kind string
+		id   int64
+	}{{"", 0}, {"goods", 1}, {"item", 1001}, {"item", 1}, {"goods", 1001}} {
+		row := taskRow(10+int64(len(rows)), "shop.bought", "daily")
+		row.Target = 100
+		row.ObjectKind, row.ObjectID = selector.kind, selector.id
+		rows = append(rows, row)
+	}
+	return rows
+}
+
 func TestWithTaskShopReportsBoughtQuantityOnce(t *testing.T) {
+	t.Run("gained and held are independent", func(t *testing.T) {
+		f := newTaskFixture(t)
+		gained := taskRow(10, "shop.bought", "daily")
+		gained.ObjectKind, gained.ObjectID, gained.Target = "item", 1001, 4
+		held := taskHeldRow(11)
+		held.Target = 4
+		taskRows(t, gained, held)
+		taskCoins(t, f, 100)
+		if err := taskBuy(f, "buy", 1); err != nil {
+			t.Fatal(err)
+		}
+		taskDiscard(t, f, 1001, 3)
+		if _, err := f.claim(11); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+			t.Fatalf("old purchase snapshot authorised held claim: %v", err)
+		}
+		f.mustClaim(t, 10, 7, 97)
+		taskGrant(t, f, 1001, 3)
+		f.mustClaim(t, 11, 7, 104)
+		if got := f.facts(t); !reflect.DeepEqual(got.progress, map[int64]int64{10: 4}) {
+			t.Fatalf("mixed gained and held: %v", got)
+		}
+	})
 	f := newTaskFixture(t)
-	row := taskRow(10, "shop.bought", "daily")
-	row.Target = 10
-	taskRows(t, row)
+	taskRows(t, taskShopRows()...)
 	taskCoins(t, f, 100)
 	if err := taskBuy(f, "buy", 3); err != nil {
 		t.Fatal(err)
@@ -32,13 +77,35 @@ func TestWithTaskShopReportsBoughtQuantityOnce(t *testing.T) {
 	if err := taskBuy(f, "buy", 3); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.facts(t); got.progress[10] != 3 || got.coins != 70 || got.commits != 2 {
+	if got := f.facts(t); !reflect.DeepEqual(got.progress, map[int64]int64{10: 3, 11: 3, 12: 12}) || got.coins != 70 || got.commits != 2 {
 		t.Fatalf("purchase=%v", got)
+	}
+	// 同一商品、不同回执是真实的新购买；Held 从 12 变 20，本次增加量仅 8。
+	if err := taskBuy(f, "again", 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.facts(t); !reflect.DeepEqual(got.progress, map[int64]int64{10: 5, 11: 5, 12: 20}) || taskHeld(t, f, 1001) != 20 {
+		t.Fatalf("second purchase=%v", got)
+	}
+	if err := f.report("shop.bought", 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.advance(11, 1); !errors.Is(err, apperrors.ErrTaskIncomplete) {
+		t.Fatalf("advance without goods fact: %v", err)
+	}
+	if got := f.facts(t); !reflect.DeepEqual(got.progress, map[int64]int64{10: 8, 11: 5, 12: 20}) {
+		t.Fatalf("anonymous report counted as object: %v", got)
+	}
+	if err := taskBuyGoods(f, "other-sku", 1001, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.facts(t); !reflect.DeepEqual(got.progress, map[int64]int64{10: 9, 11: 5, 12: 22, 14: 1}) {
+		t.Fatalf("same item, different goods: %v", got)
 	}
 }
 func TestWithTaskShopRefusalDoesNotAdvance(t *testing.T) {
 	f := newTaskFixture(t)
-	taskRows(t, taskRow(10, "shop.bought", "daily"))
+	taskRows(t, taskShopRows()...)
 	if err := taskBuy(f, "buy", 1); err == nil {
 		t.Fatal("unfunded purchase accepted")
 	}
@@ -46,7 +113,7 @@ func TestWithTaskShopRefusalDoesNotAdvance(t *testing.T) {
 }
 func TestWithTaskShopCommitFailureRevertsProgressAndGoods(t *testing.T) {
 	f := newTaskFixture(t)
-	taskRows(t, taskRow(10, "shop.bought", "daily"))
+	taskRows(t, taskShopRows()...)
 	taskCoins(t, f, 100)
 	before := f.facts(t)
 	f.committer.reject.Store(true)
@@ -61,7 +128,7 @@ func TestWithTaskShopCommitFailureRevertsProgressAndGoods(t *testing.T) {
 	if err := taskBuy(f, "buy", 1); err != nil {
 		t.Fatal(err)
 	}
-	if f.facts(t).progress[10] != 1 {
+	if !reflect.DeepEqual(f.facts(t).progress, map[int64]int64{10: 1, 11: 1, 12: 4}) {
 		t.Fatal("retry counted wrong")
 	}
 }

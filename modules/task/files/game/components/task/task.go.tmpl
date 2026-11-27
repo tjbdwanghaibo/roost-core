@@ -97,21 +97,25 @@ func (component *Component) unlocked(definition TaskDefinition, now int64) bool 
 	return taskPeriodDay(previous.Period, now) <= state.GetDay() && claimed
 }
 
-// Report 按事件推进所有已解锁的任务。次数由服务端提供；无匹配任务时零写入。
+// Report 按匿名事件推进所有已解锁的非对象任务。次数由服务端提供；无匹配任务时零写入。
 // 它不判重：事件提供方必须在首次业务生效时调用，与业务在同一笔 Player 事务里提交。
 // 一次事件只推进当时已解锁的任务，不把同一个事件沿前置链重复消费。
 func (component *Component) Report(event string, n, nowUnixMilli int64) error {
 	if n <= 0 {
 		return apperrors.ErrTaskCountInvalid
 	}
-	for _, definition := range taskDefinitions().events[event] {
+	component.advanceRows(taskDefinitions().events[event], n, nowUnixMilli)
+	return nil
+}
+
+// 匿名上报与可信对象事件共用加法和解锁规则，两组索引互斥。
+func (component *Component) advanceRows(rows []TaskDefinition, n, nowUnixMilli int64) {
+	for _, definition := range rows {
 		if !component.unlocked(definition, nowUnixMilli) {
 			continue
 		}
 		component.advance(definition, n, nowUnixMilli)
 	}
-
-	return nil
 }
 
 // Advance 是直接按任务号推进的服务端入口。未解锁任务返回 task_incomplete，拒绝前不写。
@@ -124,20 +128,25 @@ func (component *Component) Advance(taskID, n, nowUnixMilli int64) (int64, error
 	if n <= 0 {
 		return 0, apperrors.ErrTaskCountInvalid
 	}
-	if !component.unlocked(definition, nowUnixMilli) {
+	// 按任务号的调用不携带对象事实，不能用于绕过对象匹配。
+	if definition.ObjectKind != "" || !component.unlocked(definition, nowUnixMilli) {
 		return 0, apperrors.ErrTaskIncomplete
 	}
 	return component.advance(definition, n, nowUnixMilli), nil
 }
 
-func (component *Component) advance(definition TaskDefinition, n, now int64) int64 {
-	state := component.period(definition.Period)
-	day := taskPeriodDay(definition.Period, now)
+// 仅在有效推进或成功发奖后调用；不回拨、不清除本周期的其它任务。
+func resetTaskPeriodIfNewer(state taskProgress, day int64) {
 	if day > state.GetDay() {
 		state.SetDay(day)
 		state.SetProgress(nil)
 		state.SetClaimed(nil)
 	}
+}
+
+func (component *Component) advance(definition TaskDefinition, n, now int64) int64 {
+	state := component.period(definition.Period)
+	resetTaskPeriodIfNewer(state, taskPeriodDay(definition.Period, now))
 	progress, _ := state.GetProgress(definition.ID)
 	if progress >= definition.Target {
 		return progress
@@ -159,22 +168,35 @@ func (component *Component) Claim(taskID, nowUnixMilli int64) (TaskClaimResult, 
 		return TaskClaimResult{}, apperrors.ErrTaskUnknown
 	}
 	state := component.period(definition.Period)
-	if taskPeriodDay(definition.Period, nowUnixMilli) > state.GetDay() {
-		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
-	}
-	if claimed, _ := state.GetClaimed(taskID); claimed {
-		return TaskClaimResult{}, apperrors.ErrTaskClaimed
+	day := taskPeriodDay(definition.Period, nowUnixMilli)
+	previousDay := state.GetDay()
+	if day > previousDay {
+		if definition.Mode != taskModeHeld { // 旧累计不能补领。持有量来自当前背包，无需先有本周期事件。
+			return TaskClaimResult{}, apperrors.ErrTaskIncomplete
+		}
+	} else {
+		if claimed, _ := state.GetClaimed(taskID); claimed {
+			return TaskClaimResult{}, apperrors.ErrTaskClaimed
+		}
+		if definition.Mode == taskModeHeld && day < previousDay {
+			return TaskClaimResult{}, apperrors.ErrTaskIncomplete
+		}
 	}
 	if !component.unlocked(definition, nowUnixMilli) {
 		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
 	}
-	if progress, _ := state.GetProgress(taskID); progress < definition.Target {
+	if definition.Mode == taskModeHeld {
+		if heldItems.count(component.owner, definition.ObjectID) < definition.Target {
+			return TaskClaimResult{}, apperrors.ErrTaskIncomplete
+		}
+	} else if progress, _ := state.GetProgress(taskID); progress < definition.Target {
 		return TaskClaimResult{}, apperrors.ErrTaskIncomplete
 	}
 	reward := TaskReward{Kind: definition.RewardKind, ID: definition.RewardID, Count: definition.RewardCount}
 	if err := grantTaskReward(component.owner, reward); err != nil {
 		return TaskClaimResult{}, err
 	}
+	resetTaskPeriodIfNewer(state, day)
 	state.SetClaimedKey(taskID, true)
 	return TaskClaimResult{Reward: reward.Count, RewardKind: reward.Kind, RewardID: reward.ID, Balance: component.owner.Wallet().Balance()}, nil
 }

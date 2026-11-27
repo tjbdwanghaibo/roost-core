@@ -35,7 +35,7 @@ func Validate(d Definition) error {
 			return invalid()
 		}
 	case "created":
-	case "event":
+	case "event", "event_history":
 		if d.Event == "" || d.Logic == "" {
 			return invalid()
 		}

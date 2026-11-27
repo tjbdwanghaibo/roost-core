@@ -9,7 +9,7 @@ import (
 
 // 场景用到的道具自己带（盖在工程道具表的同号行上），工程改 configs/table/item.csv 不影响这组场景。
 func init() {
-	taskTestTables["item"] = []schema.Item{{ID: 1001, Name: "task-test-item", MaxStack: 99}}
+	taskTestTables["item"] = []schema.Item{{ID: 1001, Name: "task-test-item", MaxStack: 99}, {ID: 1002, Name: "task-other-item", MaxStack: 99}}
 }
 
 func taskItem(f *taskFixture, t *testing.T, id, count int64) {
@@ -22,6 +22,8 @@ func taskItem(f *taskFixture, t *testing.T, id, count int64) {
 	f.mustAdvance(t, 10, 2, 2)
 }
 func TestWithTaskBagGrantsItemOnlyOnce(t *testing.T) {
+	t.Run("claim-time ownership", testHeldBagAtClaim)
+	t.Run("item-only reload", testHeldBagReload)
 	f := newTaskFixture(t)
 	taskItem(f, t, 1001, 2)
 	result, err := f.claim(10)
@@ -39,6 +41,8 @@ func TestWithTaskBagGrantsItemOnlyOnce(t *testing.T) {
 	}
 }
 func TestWithTaskBagFullInventoryDoesNotClaim(t *testing.T) {
+	t.Run("rollover reward refusal and retry", testHeldBagRollover)
+	t.Run("rollover keeps reward callback progress", testHeldRewardCallback)
 	f := newTaskFixture(t)
 	taskItem(f, t, 1001, math.MaxInt64)
 	if _, err := f.claim(10); err == nil {
@@ -49,6 +53,7 @@ func TestWithTaskBagFullInventoryDoesNotClaim(t *testing.T) {
 	}
 }
 func TestWithTaskBagCommitFailureCanRetry(t *testing.T) {
+	t.Run("current-cycle predecessor", testHeldBagPredecessor)
 	f := newTaskFixture(t)
 	taskItem(f, t, 1001, 2)
 	before := f.facts(t)

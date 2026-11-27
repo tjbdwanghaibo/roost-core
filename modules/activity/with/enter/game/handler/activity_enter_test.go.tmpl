@@ -7,7 +7,12 @@ import (
 	"{{MODULE}}/game/components/activity"
 )
 
-func TestWithActivityEnterKeepsCreationAnchorOnReconnect(t *testing.T) {
+func TestWithActivityEnterActivationAnchors(t *testing.T) {
+	t.Run("created on reconnect", activityCreationAnchor)
+	t.Run("first event from owner history", activityHistoricalAnchors)
+}
+
+func activityCreationAnchor(t *testing.T) {
 	f := newActivityFixture(t)
 	d := activityRule()
 	d.Trigger = "created"

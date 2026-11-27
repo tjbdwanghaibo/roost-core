@@ -1,7 +1,8 @@
 package schema
 
 // Activity 是活动定义，不含业务流程或奖励。ID 不复用；改规则必须提升 Version。
-// Trigger: fixed 用 StartMilli；created 由建档事实提供时间；event 由可信业务事件触发。
+// Trigger: fixed 用 StartMilli；created 用创建事实；event 只响应实时事件。
+// event_history 显式允许用当前宿主已持久化的首次事件时间补激活。
 // Repeat: none / interval / daily / weekly。日历活动从业务日界开期，Period 是日/周数。
 // Catchup: queue 保留每期责任；skip_empty 只允许没有 Logic 的纯展示活动跳过完整过期的期次。
 //
@@ -10,7 +11,7 @@ type Activity struct {
 	ID           int32  `csv:"id" json:"id" required:"true" unique:"true" min:"1" max:"128"`
 	Version      int64  `csv:"version" json:"version" min:"1"`
 	Scope        string `csv:"scope" json:"scope" required:"true" enum:"player|world|alliance"`
-	Trigger      string `csv:"trigger" json:"trigger" required:"true" enum:"fixed|created|event"`
+	Trigger      string `csv:"trigger" json:"trigger" required:"true" enum:"fixed|created|event|event_history"`
 	Event        string `csv:"event" json:"event"`
 	StartMilli   int64  `csv:"start_milli" json:"start_milli"`
 	DelayMillis  int64  `csv:"delay_millis" json:"delay_millis" min:"0"`

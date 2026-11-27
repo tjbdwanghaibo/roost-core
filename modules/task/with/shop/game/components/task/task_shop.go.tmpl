@@ -2,6 +2,16 @@ package task
 
 import "{{MODULE}}/game/event"
 
+var (
+	boughtGoods = objectSource{"shop.bought", "goods"} // GoodsID → Count（份）
+	gainedItem  = objectSource{"shop.bought", "item"}  // ItemID → Gained（个）
+)
+
+func init() {
+	objectSources[boughtGoods] = true
+	objectSources[gainedItem] = true
+}
+
 // OnShopBought 把购买第一次生效作为 "shop.bought" 事件推进任务（按购买份数记），与购买同一笔事务提交；
 // 事件提供方负责去重（回执重放不发布）。同一笔购买的扣款另由 OnWalletSpent 记一次 "wallet.spent"。
 //
@@ -9,5 +19,11 @@ import "{{MODULE}}/game/event"
 //
 //roost:listen
 func (c *Component) OnShopBought(ev event.ShopBought) error {
-	return c.Report("shop.bought", ev.Count, ev.NowUnixMilli)
+	if err := c.Report("shop.bought", ev.Count, ev.NowUnixMilli); err != nil {
+		return err
+	}
+	objects := taskDefinitions().objects
+	c.advanceRows(objects[objectKey{boughtGoods, ev.GoodsID}], ev.Count, ev.NowUnixMilli)
+	c.advanceRows(objects[objectKey{gainedItem, ev.ItemID}], ev.Gained, ev.NowUnixMilli)
+	return nil
 }

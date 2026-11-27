@@ -54,6 +54,22 @@ func TestTaskCatalogRefusesUnusableEntries(t *testing.T) {
 	invalid[5].Period = "hourly"
 	invalid[6].RewardKind = "missing"
 	invalid[7].RewardID = 1
+	for _, selector := range []struct {
+		kind string
+		id   int64
+	}{{"", 7}, {"goods", 0}, {"item", -1}, {"typo", 1}, {"item", 1}} {
+		bad := row // battle 没有任何可验证的对象来源
+		bad.ObjectKind, bad.ObjectID = selector.kind, selector.id
+		invalid = append(invalid, bad)
+	}
+	held := row
+	held.Mode, held.Event, held.ObjectKind, held.ObjectID = "held", "bag.held", "item", 1001
+	if heldItems == nil && taskRowUsable(held) {
+		t.Fatal("held row accepted without bag")
+	}
+	badMode, wrongKind, wrongEvent, missingID := held, held, held, held
+	badMode.Mode, wrongKind.ObjectKind, wrongEvent.Event, missingID.ObjectID = "typo", "goods", "shop.bought", 0
+	invalid = append(invalid, badMode, wrongKind, wrongEvent, missingID)
 	for _, bad := range invalid {
 		if taskRowUsable(bad) {
 			t.Fatalf("invalid row accepted: %+v", bad)
@@ -62,31 +78,37 @@ func TestTaskCatalogRefusesUnusableEntries(t *testing.T) {
 }
 
 func TestTaskConfigRejectsInvalidPeriodsAndNonpositiveTargets(t *testing.T) {
-	header := "id,event,period,target,previous,reward_kind,reward_id,reward_count,disabled\n"
-	for _, sample := range []struct{ row, field string }{
-		{"10,win,hourly,2,0,coins,0,7,false\n", "period"},
-		{"10,win,daily,0,0,coins,0,7,false\n", "target"},
-	} {
-		rows, err := generated.ConvertTaskCSV(strings.NewReader(header + sample.row))
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	dir := t.TempDir()
+	entries, err := os.ReadDir("../../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == "_manifest.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../../configs/data", entry.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}
-		dir := t.TempDir()
-		entries, err := os.ReadDir("../../../configs/data")
-		if err != nil {
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == "_manifest.json" {
-				continue
-			}
-			raw, err := os.ReadFile(filepath.Join("../../../configs/data", entry.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0600); err != nil {
-				t.Fatal(err)
-			}
+	}
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	store := configdata.NewStore(registry, dir)
+	const header = "id,event,period,target,previous,reward_kind,reward_id,reward_count,disabled"
+	const row = "10,shop.bought,daily,2,0,coins,0,7,false"
+	reloadCSV := func(csv string) error {
+		t.Helper()
+		rows, err := generated.ConvertTaskCSV(strings.NewReader(csv))
+		if err != nil {
+			t.Fatal(err)
 		}
 		raw, err := json.Marshal(rows)
 		if err != nil {
@@ -95,11 +117,30 @@ func TestTaskConfigRejectsInvalidPeriodsAndNonpositiveTargets(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "task.json"), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		registry := configdata.NewRegistry()
-		if err := generated.RegisterGeneratedConfigData(registry); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err == nil || !strings.Contains(err.Error(), sample.field) {
+		_, err = store.Reload(context.Background())
+		return err
+	}
+	if err := reloadCSV(header + ",object_kind,object_id\n" + row + ",goods,1\n"); err != nil {
+		t.Fatal(err)
+	}
+	if rows := generated.TaskTable().Rows(); len(rows) != 1 || rows[0].ObjectKind != "goods" || rows[0].ObjectID != 1 {
+		t.Fatalf("selector lost by converter: %+v", rows)
+	}
+	if len(taskDefinitions().events["shop.bought"]) != 0 {
+		t.Fatal("object row in anonymous index")
+	}
+	if err := reloadCSV(header + "\n" + row + "\n"); err != nil {
+		t.Fatalf("legacy CSV reload: %v", err)
+	}
+	idx := taskDefinitions()
+	if rows := idx.events["shop.bought"]; len(rows) != 1 || rows[0].ID != 10 || rows[0].Mode != "" || rows[0].ObjectKind != "" || rows[0].ObjectID != 0 || len(idx.objects) != 0 {
+		t.Fatalf("reloaded legacy row is not anonymous: %+v", rows)
+	}
+	for _, sample := range []struct{ row, field string }{
+		{"10,win,hourly,2,0,coins,0,7,false\n", "period"},
+		{"10,win,daily,0,0,coins,0,7,false\n", "target"},
+	} {
+		if err := reloadCSV(header + "\n" + sample.row); err == nil || !strings.Contains(err.Error(), sample.field) {
 			t.Fatalf("invalid %s config accepted or wrong rejection: %v", sample.field, err)
 		}
 	}

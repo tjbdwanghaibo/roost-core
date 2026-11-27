@@ -15,4 +15,9 @@ type Task struct {
 	RewardID    int64  `csv:"reward_id" json:"reward_id" min:"0"`
 	RewardCount int64  `csv:"reward_count" json:"reward_count" min:"1"`
 	Disabled    bool   `csv:"disabled" json:"disabled"`
+	// 可缺列：空种类、0 号表示旧的匿名事件。非匿名对象必须来自相应的服务端联动。
+	ObjectKind string `csv:"object_kind" json:"object_kind"`
+	ObjectID   int64  `csv:"object_id" json:"object_id"`
+	// Mode 缺列或为空沿用累计；held 在领奖事务读取当前库存，不记 Progress。
+	Mode string `csv:"mode" json:"mode"`
 }
