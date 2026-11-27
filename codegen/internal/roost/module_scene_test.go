@@ -21,7 +21,7 @@ func TestModuleSceneInstallsAndKeepsPublicViewsSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify scene: %v %+v", err, report)
 	}
-	want := map[string]int{"actor": 14, "scenespace": 3, "scene": 29}
+	want := map[string]int{"actor": 14, "scenespace": 4, "scene": 29}
 	for _, result := range report.Modules {
 		if !result.OK || result.Skipped != 0 || result.Passed != want[result.Name] {
 			t.Fatalf("%+v", result)

@@ -50,4 +50,4 @@ return space.SetRegionMode(observer, regionsummary.Off)
 
 前两组帧逐字节相等；后两组是不同信息量的表示，不是无损压缩。另一个含自身/近景/队伍重叠的同会话 Detail→Count 用了 112 B，独占远区个体消失，切回后无 marker 残留。内部移动、私有移动、满额拒绝各无额外帧；另验跨区、删除、新会话基线、并发关闭查询。
 
-从本检出构建 `roost`，`project new … -template game --skip-deps`、`module add scenespace`，go.mod replace 到本检出。安装工程运行 `go test -p=2 -race -count=3 -run '^TestSceneSpace' ./game/modules/scene`；3 项均通过，含真实 `Enter/QueueMove/Forget/SetRegionMode` 与解码器。未跑千人负载、TCP/Gate、引擎 UI，不外推线上容量。
+从本检出构建 `roost`，`project new … -template game --skip-deps`、`module add scenespace`，go.mod replace 到本检出。安装工程运行 `go test -p=2 -race -count=3 -run '^TestSceneSpace' ./game/modules/scene`；4 项均通过，含真实 `Enter/QueueMove/Forget/SetRegionMode` 与解码器，以及移动的提交后发布晚于 `Forget` 时不把已离开对象重新计进区域层（两者分属不同实体的提交后回调，互不保序）。未跑千人负载、TCP/Gate、引擎 UI，不外推线上容量。

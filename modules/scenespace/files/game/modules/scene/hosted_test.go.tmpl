@@ -124,6 +124,31 @@ func verifyRegionLayer(t *testing.T) {
 	check(space.Forget(unitID)); flush(); if len(held)!=0 || m.AuditStats().Subscriptions!=0 {t.Fatalf("forget: %v",held)}
 }
 
+// 移动的提交后发布（actor 的 AfterCommit）与 Scene 侧 Forget（Scene 的 AfterCommit）分属两个实体，互不保序：
+// 发布已从 positions 读到条目、尚未拿到位置锁时，Forget 删掉条目并撤出区域层；随后的发布不能把已离开的
+// 对象重新计进区域数、加回详情视图（之后的 Hide/Leave 不再清它，计数会永久多 1）。
+func TestSceneSpaceMoveAfterForgetDoesNotRecount(t *testing.T) {
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+	if err != nil { t.Fatal(err) }
+	defer m.Close(context.Background())
+	const unitID int64 = 25<<entity.UniqueIDShift | 2<<entity.EntityKindShift | 1
+	cfg := DefaultConfig(); cfg.RegionSummary = &regionsummary.Config{View: 20, DetailView: 21, DetailProfile: Public, Public: func(id int64) bool { return id == unitID }, Areas: []regionsummary.Area{
+		{SubjectID: 8001, Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}},
+	}}
+	space, err := NewSpace(m, cfg, 1)
+	if err != nil { t.Fatal(err) }
+	defer space.Close()
+	unit := &regionTestObject{entity.NewEntityBase(unitID, entity.EntityCategory(1), true, 2)}
+	unit.SetSyncState(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: unitID, Namespace: "landmark", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) { return entity.TakeFrozenSyncPayload(1, []byte{1}), nil }}}))
+	if err := space.Enter(unit, spatial.Point{X: 400, Y: 400}); err != nil { t.Fatal(err) }
+	entry, ok := space.positions.Load(unitID) // 发布已读到条目
+	if !ok { t.Fatal("entered unit has no committed position") }
+	if err := space.Forget(unitID); err != nil { t.Fatal(err) } // Scene 侧先完成离开
+	space.publishMove(unitID, entry.(*committedPosition), spatial.Point{X: 450, Y: 400}) // 发布这才拿到位置锁
+	if members, _ := space.Interest.ViewMembers(21); len(members) != 0 { t.Fatalf("departed unit put back into the detail view: %v", members) }
+	if markers, _ := space.Interest.ViewMembers(20); len(markers) != 0 { t.Fatalf("departed unit recounted: %v", markers) }
+}
+
 func TestSceneSpaceNoNewManagerOrDefaultMapOnInvalidHost(t *testing.T) {
 	s, err := NewHostedSpace(policy.InterestConfig{}, 1, 42, entity.SyncProfile{})
 	if err == nil || s != nil {

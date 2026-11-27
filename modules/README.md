@@ -50,7 +50,7 @@
 | [servertime](servertime/README.md) | 服务器时间：客户端拿到服务器的业务时间、当前业务日、前后两个业务日、本业务日起点与下一次每日重置的时刻（拉取 `ServertimeSync`，原样带回 `ClientTick`；推送 `ServertimeNow`）；给别的功能调的纯函数 `servertime.At(nowUnixMilli)` / `Now()`，与 `clock.BusinessDay` 同一份日历；`ServertimePushNow` 按能力名取玩家 TCP 传输；对外展示的时区名写在 `game/modules/servertime/servertime_zone.go` | 无（玩家 TCP 接入安装时代办） | 无 | 12 |
 | [rehome](rehome/README.md) | 单个玩家换服（改绑 game sid）：申请协议 `RehomeApply` 与服务端入口 `Move`；account 的发起 / 提交 / 中止，结论按它带回的当前绑定判定；源服从“离开中”的标记起在写闸门拒绝这名玩家新的请求，受理之后断开会话、等在途的请求执行完、复核检查、跑离开钩子，再交出实体（之后拒写），目标服首次进入时到达；可去的服与冷却写在 `game/modules/rehome/rehome_rules.go`；三个登记点（换服前检查、离开时、到达后）；给 saga 准入用的 `rehome.Binding`（这名玩家现在绑定在哪个服、是否正在换服）；受理之后的后台步骤在 manager `NewRehomeBackground` 里执行，停机时取消、按崩溃处理。game-demo 用的就是它 | 无（要求业务服务 `uses: [account]`） | `PlayerDao.Rehome`（只落库） | 50 |
 | [actor](actor/README.md) | 共用 Body：移动、定身/沉默、心跳、存档位置与提交后位置通知；可独立安装 | 无（代办 heartbeat） | Player 的 Actor / ActorSaved | 14 |
-| [scenespace](scenespace/README.md) | 普通地图的空间与视野，借用宿主的同步管理器，不自建会话或默认图 | 无 | 无 | 3 |
+| [scenespace](scenespace/README.md) | 普通地图的空间与视野，借用宿主的同步管理器，不自建会话或默认图 | 无 | 无 | 4 |
 | [scene](scene/README.md) | 多地图/分线、进出与排空、Block AOI、时间域、区域回调与幂等交互；自身和公开视图分离 | actor、scenespace | SceneDao；Player 场景交互回执 | 29 |
 | [monster](monster/README.md) | 正式实体生命周期、实体事务内直接决策的巡逻与追击、死亡隐藏、同 ID 分代重生 | actor、scene | MonsterDao（运行时重建） | 27 |
 | [cellspace](cellspace/README.md) | 可选的两格玩家装配、区域和速度意图。新工程 `-template game -recipe cellworld` 组合登录、存档和进场，不必复制 demo | cellworld、heartbeat | `CellPlayer` 由 cellworld 提供；区域不持久、不开分区不建化身 | 1 |

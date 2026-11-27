@@ -3,4 +3,4 @@ summary: 普通场景空间与视野，借用宿主的同步管理器，不安�
 verify:
   packages: [./game/modules/scene]
   run: ^TestSceneSpace
-  pass: 3
+  pass: 4
