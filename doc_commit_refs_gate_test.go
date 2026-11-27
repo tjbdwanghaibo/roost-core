@@ -33,7 +33,13 @@ var commitTokenRE = regexp.MustCompile("`([0-9a-f]{7,40})`")
 // documentedCommitExemptions 是有意引用、不在 HEAD 历史里的提交（例如说明某个分支上的原始提交与最终合入
 // 版本不同）。键是文档里写的短 SHA，值写明它在哪个分支、为什么必须保留。保持很小：能改成 main 上的提交号
 // 就改；条目不再被任何文档引用、或已能在 HEAD 历史里找到时，本测试要求删掉它。
-var documentedCommitExemptions = map[string]string{}
+var documentedCommitExemptions = map[string]string{
+	// SSR 是另一个仓库（ssr），不在 roost-core 历史里；ssrimport 的来源方言与 oracle 都钉在这个 SSR 提交上。
+	"854fe4f7": "SSR 仓库的源提交（另一个仓库），SSR 对照文档与 ssrimport 的来源基点",
+	"854fe4f7d8492fe7e42fb143515b9cc814d5d99f": "同上，ssrimport README 写完整 SHA 以便 replay.py 钉住 SSR 检出",
+	// SSR-AI-REUSE 的代码对照是在 fix/main-review-fixes 的隔离树上做的，记录的是当时实际对照的树。
+	"24b704bf": "fix/main-review-fixes 分支上的隔离评估基点（SSR-AI-REUSE 对照所用的 core 树），未合入 main",
+}
 
 // docCommitIncident 是本门禁要抓的那一次：该提交的 KNOWN-LIMITS 写着 rebase 前的 `b717fd14`。
 const (
