@@ -34,7 +34,7 @@ go test -count=1 -v ./game/modules/decisionai -run '^TestDecisionAI'
 1. 在拥有此 Player 的严格 Nest undo handler 中构造 Selector（每个实体可复用）。传 `Frame` 调 `Tick` 或 `Event`，把错误返回给 Nest。也可先用 `decision.Decode(raw, decisionai.Vocabulary())` 编译业务原生定义，再传 `NewSelectorWithProgram`；要换词表、输入来源或不止一个意图，另写自己的 `ai.DecisionHost`。
 2. 在选择 handler **最后**调用 `PublishChoice`。提交后回调只接收不可变选择；不要在已解锁的回调里驱动实体。用线程安全邮箱或调用方局部值接收；进程在发布前中断，可从新装载的 Player 再 `PublishChoice`，不用重跑已经提交的输入。
 3. 在后续该实体的 Guard 内 `Apply(choice)` 并检查返回值，再按宿主拍 `Tick(now)`。未选中时不运行；`Active()` 才是最后一次成功应用的选择。切换被拒、工厂错误或新策略 Init 失败时旧实例仍能继续 Tick。同一执行器只建一次，不在每拍重建，也不连续把两个策略放进同一 Controller。
-4. 业务启动动作时捕获本次 `Lease`，回执到达时在同一 Player Guard 内用这个 `lease.ActionEnd(id, kind, reason)` 发送。过期实例不再能投递，即使动作数字 ID 被新实例重用。一次实例内仍要求独立动作 ID，不把“收到回执时的当前 lease”错当成启动时 lease。卸载时在有 owner guard 和 undo 的生命周期业务入口 `Close`。选择器、执行器的宿主回调不做网络或磁盘 I/O。
+4. 业务启动动作时捕获本次 `Lease`，回执到达时在同一 Player Guard 内用这个 `lease.ActionEnd(id, kind, reason)` 发送。投递期间（与 `Tick` 期间一样）不能在策略回调里 `Apply`：返回 `ai.ErrReentrantSwitch`，在回调返回后再应用。过期实例不再能投递，即使动作数字 ID 被新实例重用。一次实例内仍要求独立动作 ID，不把“收到回执时的当前 lease”错当成启动时 lease。卸载时在有 owner guard 和 undo 的生命周期业务入口 `Close`。选择器、执行器的宿主回调不做网络或磁盘 I/O。
 
 ## 联动
 
@@ -44,7 +44,7 @@ go test -count=1 -v ./game/modules/decisionai -run '^TestDecisionAI'
 
 ## 验证范围
 
-`module.yaml` 声明 **6 个顶层场景**，不以测试包编译替代运行：
+`module.yaml` 声明 **7 个顶层场景**，不以测试包编译替代运行：
 
 | 场景 | 判据 |
 | --- | --- |
@@ -53,6 +53,7 @@ go test -count=1 -v ./game/modules/decisionai -run '^TestDecisionAI'
 | 跨拍运行、中断 | 相同选择连续 Apply/Tick 只启动一次；换名只中断旧叶子；关闭中断当前叶子 |
 | 切换失败 | 旧策略拒绝和新 Init 失败，都保留旧实例、进度、活动版本；故障解除后可应用同一选择 |
 | 回执隔离 | 新旧执行实例故意使用相同动作 ID，旧 lease 不能推进新树，正确 lease 可以，关闭后不能 |
+| 回执投递中切换 | 自定义策略在 `OnActionEnd` 里同步 `Apply`：与 Tick 回调内一样返回 `ai.ErrReentrantSwitch`，`Active()` 与旧实例不变，不留下延后后被拒的切换 |
 | 拒绝错误宿主与配置 | 无锁、已持锁但无 undo、同 ID 异实例、注入双意图定义均零写；不接纳不同计划、重复字段或未知字段的存档 |
 
 持久化覆盖真实生成 DAO 编解码、真实 Nest 回滚、可拒绝提交器以及从提交字节新建实体。未连生产数据库、未运行跨进程的动作恢复；动作启动/中断用可观察的业务叶子钩子验证，非实机负载或网络验收。
