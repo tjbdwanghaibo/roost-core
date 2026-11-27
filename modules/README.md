@@ -12,6 +12,11 @@
 
 | 模块 | 做什么 | 依赖 | 状态字段 | 场景数 |
 | --- | --- | --- | --- | --- |
+| [itemuse](itemuse/README.md) | 服务端使用道具：按用法表扣物、应用本地效果、保留最近成功序号的实际结果 | bag | Player 的成功序号（本人同步）、最近成交回执（私有） | 8 |
+| [quota](quota/README.md) | 玩家日／周／终身限次；同一规则供不同业务在宿主事务内共同消费 | 无业务模块 | PlayerDao.Quota（不下发） | 6 |
+| [quota_alliance](quota_alliance/README.md) | 将同一限次组件挂在权威联盟上；全体成员共享，不在 Player 上复制联盟账本 | quota、alliance | AllianceDao.QuotaAlliance（不下发） | 2 |
+| [reward](reward/README.md) | 从奖励组抽取确定的物品清单；可供宝箱、订单或副本调用，不负责发货 | 无业务模块；configdata | 无 | 9 |
+| [unlock](unlock/README.md) | 玩家功能解锁：留存首次认证记录，服务端按当前开关检查准入 | 无 | PlayerDao.Unlock（不下发） | 6 |
 | [rules](rules/README.md) | 进入/重连推送完整规则快照，RulesGet 补取；同一 Player Nest 中读取各功能 PB | enter | 无 | 10 |
 | [gift](gift/README.md) | 玩家送礼：按归属扣物与退款、幂等邮件投递、查结果 | bag、mailbox、rehome | 共享 `PlayerDao.SagaReceipts` | 7 |
 | [purchase](purchase/README.md) | 充值发货：platform 验签与订单去重、Redis 顺序待发、Player 常量大小游标；金币内置，道具与入场补发联动；渠道缺省拒绝 | wallet、托管 platform；bag / enter 联动 | `PlayerDao.Purchase`（只落库） | 23；bag 4、enter 2 条联动 |
@@ -27,6 +32,7 @@
 | [task](task/README.md) | 事件任务：每日/每周/永久与前置链，配置表，金币/道具奖励；事务内事件联动 | wallet；bag 等联动 | `PlayerDao.Task`（同步） | 29；八组联动 25 条 |
 | [stamina](stamina/README.md) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/components/stamina/rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 26 |
 | [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
+| [ai](ai/README.md) | 实体决策树选策、独立行为树跨拍执行；显式接入，不接管 Monster 的既有 AI、心跳或动作 | 无业务模块；Nest + 有 DAO 的 Player 示例宿主 | 私有决策游标、输入版本和期望执行策略 | 6 |
 | [skillbook](skillbook/README.md) | 技能目录：服务启动时编译 `game/modules/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
 | [activity](activity/README.md) | 共用 activity.Component 五阶段活动状态机：一次性/日历循环、可信条件解锁、自定义流程、有界恢复；个人宿主 | 无；configdata / 个人持久定时器由安装器接入 | PlayerDao.Activity（只落库） | 21 |
 | [activity_world](activity_world/README.md) | 全服/服务器组权威 Entity，独立服务、ownership 恢复扫描 | activity | ActivityWorldDao.ActivityWorld（只落库） | 6 |
@@ -65,6 +71,9 @@
 
 | 联动 | 做什么 | 场景数 |
 | --- | --- | --- |
+| itemuse + reward | 每个箱子独立抽一次，合并清单入包；重试使用最近成交回执 | 4 |
+| itemuse + profile | 经验道具在原 Player 事务调用 AddExp；升级失败一起回滚 | 3 |
+| unlock + profile | 在同一玩家事务内显式读取权威等级认证，不推断历史首次达标时间 | 2 |
 | activity + enter | 持久创建锚点与进入对账，锁外恢复 pending | 1 |
 | activity + profile | 升级与条件解锁在同一 Player 事务 | 1 |
 | activity + leaderboard | 活动实例分榜身份 | 1 |
