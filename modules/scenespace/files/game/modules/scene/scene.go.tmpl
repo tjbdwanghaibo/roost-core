@@ -99,6 +99,9 @@ type committedPosition struct {
 	mu     sync.Mutex
 	point  spatial.Point
 	player bool
+	// removed 由 Forget 在位置锁内置位：移动发布与 Forget 分属不同实体的提交后回调、互不保序，
+	// 发布可能拿着 Forget 之前读到的旧条目，拿到锁后必须放弃，不能把已离开的对象重新计进区域层。
+	removed bool
 }
 type SensedActor struct {
 	ID       int64
@@ -232,6 +235,7 @@ func (s *Space) Forget(id int64) error {
 	if entry, ok := s.positions.LoadAndDelete(id); ok {
 		position := entry.(*committedPosition)
 		position.mu.Lock()
+		position.removed = true
 		s.index.Remove(id, position.point)
 		if s.summary != nil { s.summary.Forget(id) }
 		position.mu.Unlock()
@@ -256,17 +260,24 @@ func (s *Space) QueueMove(value entity.IThreadSafeEntity, at spatial.Point) erro
 		if !ok {
 			return
 		}
-		position := entry.(*committedPosition)
-		position.mu.Lock()
-		defer position.mu.Unlock()
-		s.index.Move(id, position.point, at)
-		position.point = at
-		if s.summary != nil { s.summary.Place(id, at) }
+		s.publishMove(id, entry.(*committedPosition), at)
 	}
 	if !nest.AfterCommit(publish) {
 		publish()
 	}
 	return nil
+}
+
+// publishMove 在位置锁内发布一次已提交的移动。position 是先前从 positions 读到的条目。
+func (s *Space) publishMove(id int64, position *committedPosition, at spatial.Point) {
+	position.mu.Lock()
+	defer position.mu.Unlock()
+	if position.removed {
+		return
+	}
+	s.index.Move(id, position.point, at)
+	position.point = at
+	if s.summary != nil { s.summary.Place(id, at) }
 }
 
 func (s *Space) Close() {
