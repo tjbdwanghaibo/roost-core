@@ -517,19 +517,79 @@ func (in *Interest) AttachView(playerID int64, id ViewID) error {
 	if _, attached := v.players[playerID]; attached {
 		return nil
 	}
-	if len(r.attached[playerID]) >= r.maxViews {
+	if err := r.canAttachLocked(playerID, v, len(r.attached[playerID])); err != nil {
+		return err
+	}
+	r.attachAndRecordLocked(playerID, v)
+	return nil
+}
+
+func (r *viewRegistry) canAttachLocked(playerID int64, v *view, retained int) error {
+	if retained >= r.maxViews {
 		metrics.IncCounter(viewLimitMetric, metrics.Labels{"reason": "views_per_player"}, 1)
 		return fmt.Errorf("%w: player %d already has %d views", ErrViewLimit, playerID, r.maxViews)
 	}
 	if len(v.players) >= r.maxPlayers {
 		metrics.IncCounter(viewLimitMetric, metrics.Labels{"reason": "players_per_view"}, 1)
-		return fmt.Errorf("%w: view %d already has %d players", ErrViewLimit, id, r.maxPlayers)
+		return fmt.Errorf("%w: view %d already has %d players", ErrViewLimit, v.id, r.maxPlayers)
 	}
+	return nil
+}
+
+func (r *viewRegistry) attachAndRecordLocked(playerID int64, v *view) {
 	r.attachLocked(playerID, v)
 	if v.spatial {
 		r.record(viewOp{kind: opSpatialAttach, handle: v.handle, player: playerID})
 	} else if len(v.members) > 0 {
 		r.record(viewOp{kind: opRelation, handle: v.handle, enter: true, layer: v.layer, players: []int64{playerID}, subjects: sortedIDs(v.members)})
+	}
+}
+
+// SelectRelationView selects one of two map-owned relation sources (or neither, selected=0)
+// for a current main observer. Validate capacity before dropping anything. The registration
+// log receives the detach/attach pair under one lock, not in two separately drainable calls.
+// Other sources of the same subjects, including the main view, remain untouched.
+func (in *Interest) SelectRelationView(playerID int64, a, b, selected ViewID) error {
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if a == b || (selected != 0 && selected != a && selected != b) {
+		return ErrInterestConfig
+	}
+	first, err := r.lookup(a, false)
+	if err != nil {
+		return err
+	}
+	second, err := r.lookup(b, false)
+	if err != nil {
+		return err
+	}
+	if r.mains[playerID] == nil {
+		return ErrInterestUnknown
+	}
+	retained := len(r.attached[playerID])
+	var next *view
+	for _, v := range [2]*view{first, second} {
+		_, attached := v.players[playerID]
+		if v.id == selected && !attached {
+			next = v
+		}
+		if v.id != selected && attached {
+			retained--
+		}
+	}
+	if next != nil {
+		if err := r.canAttachLocked(playerID, next, retained); err != nil {
+			return err
+		}
+	}
+	for _, v := range [2]*view{first, second} {
+		if _, attached := v.players[playerID]; attached && v.id != selected {
+			r.detachLocked(playerID, v)
+		}
+	}
+	if next != nil {
+		r.attachAndRecordLocked(playerID, next)
 	}
 	return nil
 }

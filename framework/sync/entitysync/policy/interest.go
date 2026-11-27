@@ -878,7 +878,13 @@ func (in *Interest) Visible(playerID int64) []int64 {
 
 // Seen 返回玩家经任一视野（含 self）持有的全部目标（升序），即本 Interest 要它订阅的集合。先执行已登记的条目并
 // 归并 AOI 的变化；遍历全部 pair，供诊断与压测核对，不要放在热路径上。
-func (in *Interest) Seen(playerID int64) []int64 {
+func (in *Interest) Seen(playerID int64) []int64 { return in.SeenWithoutViews(playerID) }
+
+// SeenWithoutViews omits contributions made solely by the named business views. A subject
+// held by any other source is kept (including self/main). Excluded IDs must denote the same
+// live views throughout this call: their owner must serialize RemoveView/redefinition with
+// the query; a numeric ViewID is not a generation token. Like Seen, this is not authorization.
+func (in *Interest) SeenWithoutViews(playerID int64, excluded ...ViewID) []int64 {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
@@ -886,10 +892,31 @@ func (in *Interest) Seen(playerID int64) []int64 {
 	}
 	in.drainLogLocked()
 	in.drainAOILocked()
+	var handles []int64
+	if len(excluded) > 0 {
+		r := &in.registry
+		r.mu.Lock()
+		for _, id := range excluded {
+			if v := r.views[id]; v != nil {
+				handles = append(handles, v.handle)
+			}
+		}
+		r.mu.Unlock()
+	}
 	var seen []int64
 	for key, current := range in.held {
-		if key.observer == playerID && len(current.layers) > 0 {
+		if key.observer != playerID || len(current.layers) == 0 {
+			continue
+		}
+		if len(handles) == 0 {
 			seen = append(seen, key.subject)
+			continue
+		}
+		for source := range current.layers {
+			if !slices.Contains(handles, source.view) {
+				seen = append(seen, key.subject)
+				break
+			}
 		}
 	}
 	slices.Sort(seen)

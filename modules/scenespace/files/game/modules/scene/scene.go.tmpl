@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/regionsummary"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -35,11 +36,17 @@ type Config struct {
 	Surface   movement.Surface
 	Regions   []Region
 	Objects   []Object
+	// RegionSummary is nil unless this map explicitly publishes coarse public counts.
+	RegionSummary *regionsummary.Config
 }
 
 func (c Config) Clone() Config {
 	c.Regions = slices.Clone(c.Regions)
 	c.Objects = slices.Clone(c.Objects)
+	if c.RegionSummary != nil {
+		summary := c.RegionSummary.Clone()
+		c.RegionSummary = &summary
+	}
 	return c
 }
 
@@ -85,6 +92,7 @@ type Space struct {
 	positions    sync.Map // entity ID -> *committedPosition；位置锁按实体分，不串行化整个场景。
 	index        *spatial.BlockIndex
 	closed       atomic.Bool
+	summary      *regionsummary.Map
 }
 
 type committedPosition struct {
@@ -134,7 +142,24 @@ func newSpace(config Config, playerKind entity.EntityKind, metadata policy.ViewI
 		interest.Close()
 		return nil, err
 	}
+	if config.RegionSummary != nil {
+		space.summary, err = regionsummary.New(cfg.Manager, interest, config.Bounds, *config.RegionSummary)
+		if err != nil {
+			interest.Close()
+			return nil, err
+		}
+	}
 	return space, nil
+}
+
+// SetRegionMode selects the map's dedicated region layer: Off, public Detail, or Count for
+// the same area and cohort. The authenticated controller grants it; LOD alone grants nothing.
+func (s *Space) SetRegionMode(observer int64, mode regionsummary.Mode) error {
+	if s.summary == nil {
+		if mode == regionsummary.Off { return nil }
+		return errors.New("scene: region layer not enabled for this map")
+	}
+	return s.summary.SetMode(observer, mode)
 }
 
 // BindMetadata 把场景时间域放进全场关系视图；成员不需要靠近某一点才能收到时停/倍速。
@@ -186,6 +211,7 @@ func (s *Space) EnterRegistered(id int64, at spatial.Point, view policy.Observer
 			s.index.Add(id, at)
 		}
 		pos.point = at
+		if s.summary != nil { s.summary.Place(id, at) }
 		pos.mu.Unlock()
 	}
 	return nil
@@ -207,6 +233,7 @@ func (s *Space) Forget(id int64) error {
 		position := entry.(*committedPosition)
 		position.mu.Lock()
 		s.index.Remove(id, position.point)
+		if s.summary != nil { s.summary.Forget(id) }
 		position.mu.Unlock()
 	}
 	if entity.GetEntityKindFromID(id) == s.playerKind {
@@ -234,6 +261,7 @@ func (s *Space) QueueMove(value entity.IThreadSafeEntity, at spatial.Point) erro
 		defer position.mu.Unlock()
 		s.index.Move(id, position.point, at)
 		position.point = at
+		if s.summary != nil { s.summary.Place(id, at) }
 	}
 	if !nest.AfterCommit(publish) {
 		publish()
@@ -241,7 +269,11 @@ func (s *Space) QueueMove(value entity.IThreadSafeEntity, at spatial.Point) erro
 	return nil
 }
 
-func (s *Space) Close() { s.closed.Store(true); s.Interest.Close() }
+func (s *Space) Close() {
+	s.closed.Store(true)
+	if s.summary != nil { s.summary.Close() }
+	s.Interest.Close()
+}
 
 // Sense 用独立的块索引查询已提交站位，不读取另一个实体的 DAO、不取另一个实体锁。
 // 这只是决策候选；命中/伤害必须在参与者 Nest 事务内重新判定场景、距离与存活代际。
@@ -306,6 +338,7 @@ func (s *Space) Placement(preferred spatial.Point) (spatial.Point, error) {
 // Nearby 是公开的已提交空间结果，供附近聊天/AI；它不能证明目标当前仍在场。
 // 真正修改目标时仍须在包含目标的 Nest 事务中重查位置与场景。
 func (s *Space) Nearby(playerID int64) []int64 {
+	if s.summary != nil { return s.summary.OrdinarySeen(playerID) }
 	ids := s.Interest.Seen(playerID)
 	slices.Sort(ids)
 	return ids

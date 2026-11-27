@@ -5,6 +5,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/regionsummary"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+	"slices"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"testing"
 )
@@ -71,6 +76,52 @@ func TestSceneSpaceRejoinAndForgetUseTheSameMainView(t *testing.T) {
 	if _, ok := s.Interest.ObserverView(observer); ok {
 		t.Fatal("observer still registered after leave")
 	}
+	if err := s.SetRegionMode(observer, regionsummary.Count); err == nil { t.Fatal("unconfigured map granted counts") }
+	verifyRegionLayer(t)
+}
+
+type regionTestObject struct{ *entity.EntityBase }
+func (o *regionTestObject) Base() *entity.EntityBase { return o.EntityBase }
+
+// Exercise the installed map's actual Enter, QueueMove, Forget, configuration and public API.
+func verifyRegionLayer(t *testing.T) {
+	t.Helper()
+	decoder := entitysync.NewDecoder(frame.DefaultLimits())
+	held := map[int64]bool{}; counts := map[int64]uint64{}
+	push := func(_ context.Context, _ entitysync.SessionID, data []byte) error {
+		f, err := decoder.Decode(data); if err != nil { return err }
+		if f.Kind == frame.Full { clear(held); clear(counts) }
+		for _, obj := range f.Objects {
+			if obj.Operation == frame.ObjectRemove { delete(held,obj.SubjectID); delete(counts,obj.SubjectID); continue }
+			for _, comp := range obj.Components { u := comp.Update; held[u.SubjectID] = true
+				if u.Namespace == regionsummary.Namespace { var v wrapperspb.UInt64Value; if err:=proto.Unmarshal(u.Payload.BytesCopy(),&v); err!=nil{return err}; counts[u.SubjectID]=v.Value }
+			}
+		}
+		return nil
+	}
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(push)})
+	check := func(err error) { t.Helper(); if err!=nil { t.Fatal(err) } }; check(err); defer m.Close(context.Background())
+	const observer = 19
+	const playerID = observer<<entity.UniqueIDShift | 1<<entity.EntityKindShift | 1
+	const unitID = 25<<entity.UniqueIDShift | 2<<entity.EntityKindShift | 1
+	const west, east = 8001,8002
+	cfg:=DefaultConfig(); cfg.RegionSummary=&regionsummary.Config{View:20, DetailView:21, DetailProfile:Public, Public:func(id int64)bool{return id==unitID}, Areas:[]regionsummary.Area{
+		{SubjectID:west, Bounds:spatial.Rect{Max:spatial.Point{X:500,Y:1000}}},
+		{SubjectID:east, Bounds:spatial.Rect{Min:spatial.Point{X:500},Max:spatial.Point{X:1000,Y:1000}}},
+	}}
+	space,err:=NewSpace(m,cfg,1); check(err); defer space.Close(); check(m.OpenSession(observer))
+	check(space.EnterRegistered(playerID,spatial.Point{X:50,Y:50},policy.ObserverView{}))
+	unit:=&regionTestObject{entity.NewEntityBase(unitID,entity.EntityCategory(1),true,2)}
+	unit.SetSyncState(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled:true, SubjectID:unitID, Namespace:"landmark", Packer:entity.SubjectSyncPackFunc{Snapshot:func(p entity.SyncProfile)(entity.FrozenSyncPayload,error){return entity.TakeFrozenSyncPayload(1,[]byte{1}),nil}}}))
+	check(space.Enter(unit,spatial.Point{X:400,Y:400}))
+	flush:=func(){t.Helper(); for range 3 { check(m.Flush(context.Background())) }}
+	check(space.SetRegionMode(observer,regionsummary.Detail)); flush()
+	if !held[unitID] || len(held)!=1 || len(space.Nearby(observer))!=0 {t.Fatalf("detail: held=%v nearby=%v",held,space.Nearby(observer))}
+	check(space.SetRegionMode(observer,regionsummary.Count)); flush(); if len(held)!=1 || counts[west]!=1 {t.Fatalf("count: %v %v",held,counts)}
+	check(space.QueueMove(unit,spatial.Point{X:500,Y:400})); flush(); if len(held)!=1 || counts[east]!=1 {t.Fatalf("cross: %v %v",held,counts)}
+	check(space.QueueMove(unit,spatial.Point{X:60,Y:50})); flush(); if !held[unitID] || counts[west]!=1 || len(held)!=2 || !slices.Equal(space.Nearby(observer),[]int64{unitID}) {t.Fatalf("real near source: %v %v",held,counts)}
+	check(space.SetRegionMode(observer,regionsummary.Detail)); flush(); if len(held)!=1 || !held[unitID] {t.Fatalf("back to detail: %v",held)}
+	check(space.Forget(unitID)); flush(); if len(held)!=0 || m.AuditStats().Subscriptions!=0 {t.Fatalf("forget: %v",held)}
 }
 
 func TestSceneSpaceNoNewManagerOrDefaultMapOnInvalidHost(t *testing.T) {
