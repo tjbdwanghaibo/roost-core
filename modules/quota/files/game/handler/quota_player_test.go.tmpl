@@ -235,13 +235,21 @@ func TestQuotaPlayerRestoresPersistentBook(t *testing.T) {
 	hosts := quotaHosts{p.ID(): p}
 	f := newQuotaFixture(t, hosts)
 	f.must(t, p.ID(), quotaConsume(1, 4))
+	// 同一笔提交里可能还有 Player 的伴生实体（装了 combat 时有 combat_state），按 Key 找 Player 那一条。
 	record := f.journal.last.Load()
-	if record == nil || len(record.Mutations) != 1 {
+	if record == nil {
 		t.Fatal("missing player commit")
 	}
-	m := record.Mutations[0]
-	if m.Kind != dataengine.MutationPut || m.Key.Resource != db.PlayerDaoCollection || m.Key.ID != p.ID() {
-		t.Fatalf("unexpected write: %+v", m.Key)
+	var m dataengine.Mutation
+	found := 0
+	for _, candidate := range record.Mutations {
+		if candidate.Key.Resource == db.PlayerDaoCollection && candidate.Key.ID == p.ID() {
+			m = candidate
+			found++
+		}
+	}
+	if found != 1 || m.Kind != dataengine.MutationPut {
+		t.Fatalf("want one player full write, got %d in %d mutations (kind %v)", found, len(record.Mutations), m.Kind)
 	}
 	dao := db.NewPlayerDao()
 	if err := dao.RestorePersisted(m.Data, m.Schema, m.NextVersion); err != nil {
