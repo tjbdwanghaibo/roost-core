@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -80,6 +81,75 @@ func TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission(t *testing
 	}
 	if manager.Get(701) != nil || !value.IsRemoved() || value.prepared != 1 {
 		t.Fatalf("delete was not finalized: managed=%v removed=%t prepared=%d", manager.Get(701), value.IsRemoved(), value.prepared)
+	}
+}
+
+const (
+	deleteCompanionPrincipalKind entity.EntityKind = 251
+	deleteCompanionChildKind     entity.EntityKind = 252
+)
+
+type deleteCompanionPrincipal struct{ *deleteTestEntity }
+type deleteCompanionChild struct{ *entity.EntityBase }
+
+func (child *deleteCompanionChild) Base() *entity.EntityBase       { return child.EntityBase }
+func (*deleteCompanionChild) OnDestroy(entity.EntityDestroyReason) {}
+
+var registerDeleteCompanionKinds sync.Once
+
+// 事务内删档准入后，内存收尾传 deleteFromDB=false；它必须明确告诉 Destroy 持久数据已删，结束主实体身份：
+// 已分离、仍在内存的伴生实体不再保留旧声明，同号新建的主实体不能直接 Attach。
+func TestDataEngineDeleteEndsDetachedCompanionDeclaration(t *testing.T) {
+	registerDeleteCompanionKinds.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: 1, Kind: deleteCompanionPrincipalKind,
+			DaoBuilders: []entity.DaoBuilderFunc{func() entity.DaoInterface { return &unloadHeroDAO{} }},
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				return &deleteCompanionPrincipal{&deleteTestEntity{EntityBase: entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)}}, nil
+			},
+		})
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: 1, Kind: deleteCompanionChildKind, NoPersist: true,
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				return &deleteCompanionChild{entity.NewEntityBaseWithMutex(param.Id, param.Category, true, param.Mutex, param.Kind)}, nil
+			},
+		})
+		if err := entity.RegisterCompanionKind[*deleteCompanionPrincipal, *deleteCompanionChild](deleteCompanionPrincipalKind, deleteCompanionChildKind); err != nil {
+			panic(err)
+		}
+	})
+	manager := entity.NewEntityManager()
+	p, err := manager.Create(&entity.EntityCreateParam{IsCreate: true, Kind: deleteCompanionPrincipalKind, UniqueID: 7051})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := manager.Create(&entity.EntityCreateParam{IsCreate: true, Kind: deleteCompanionChildKind, CompanionOf: p.ID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.DetachCompanion(c.ID()); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{Projector: &Projector{}, access: entity.NewManagerAccess(manager)}
+	unregister, err := runtime.access.RegisterDeleteAdmitter(runtime.admitEntityDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unregister()
+	_, err = corenest.RunIsolatedTransaction(context.Background(), &deleteRecordingCommitter{}, "delete-companion-principal", func() (any, error) {
+		return nil, manager.Destroy(context.Background(), p, 1, true)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.Get(p.ID()) != nil {
+		t.Fatal("deleted principal was not finalized")
+	}
+	if _, err := manager.Create(&entity.EntityCreateParam{IsCreate: true, Kind: deleteCompanionPrincipalKind, UniqueID: 7051}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AttachCompanion(c.ID()); !errors.Is(err, entity.ErrCompanionRelation) {
+		t.Fatalf("detached child kept the deleted principal's declaration: %v", err)
 	}
 }
 

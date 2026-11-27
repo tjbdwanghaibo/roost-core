@@ -251,9 +251,40 @@ func (m *EntityManager) persistentCreateAdmitter(kind EntityKind) CreateAdmitter
 	return m.createAdmitter.fn
 }
 
+// persistedDeletedKey 是 WithPersistedDeleted 的 ctx 键。
+type persistedDeletedKey struct{}
+
+// WithPersistedDeleted 返回一个 ctx，告诉 Destroy(deleteFromDB=false) 这个实例的持久数据已经被删除、本次只是删除的
+// 内存收尾（DataEngine 事务内删档准入后的 AfterAdmission）。只给框架持 permit 的删除路径用：Destroy 据此结束主实体
+// 身份（清掉已分离伴生实体上的声明），而不是从 reason 推断——业务用 DestroyReasonCommon 或领域别名做的离线卸载
+// 同样传 false，那不是删除。
+func WithPersistedDeleted(permit entitypermit.Token, ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !permit.Valid() {
+		return ctx
+	}
+	return context.WithValue(ctx, persistedDeletedKey{}, true)
+}
+
+// endsIdentity 判断这次 Destroy 是否结束实体身份：真正删除持久数据（本次删档，或 WithPersistedDeleted 标明的删档收尾），
+// 或没有持久数据可重新载入的 kind 被业务移出（不是框架的 MemoryUnload）。持久 kind 只从内存卸载不结束身份，
+// 不论 reason 是什么：重新载入的是同一个实体。
+func endsIdentity(ctx context.Context, e IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) bool {
+	if deleteFromDB {
+		return true
+	}
+	if deleted, _ := ctx.Value(persistedDeletedKey{}).(bool); deleted {
+		return true
+	}
+	return !isEntityKindPersistent(e.GetEntityKind()) && reason != DestroyReasonMemoryUnload
+}
+
 // Destroy 在Entity锁内准入持久删除，再移出内存。等锁和准入前可取消；
 // 已准入或结果未知后仍完成隔离与生命周期收尾，不能用取消撤销可能已持久的删除。
 // 确定拒绝保留活实体；用户OnDestroy回调不支持强制中断。
+// deleteFromDB=false 只从内存卸载，不论 reason：持久实体的伴生声明等身份事实保留，重新载入后沿用。
 func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) error {
 	if m == nil || e == nil || e.Base() == nil {
 		return ErrEntityNil
@@ -317,7 +348,7 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 		e.UnTouch()
 		return ErrEntityNotManaged
 	}
-	m.retireCompanionLocked(e, deleteFromDB || reason != DestroyReasonMemoryUnload)
+	m.retireCompanionLocked(e, endsIdentity(ctx, e, reason, deleteFromDB))
 	m.removing[id] = struct{}{}
 	e.SetRemoved()
 	m.entities.Del(e.ID())
