@@ -41,6 +41,9 @@ DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTA
 
 [Chunk 同步与原生 PhysX](CHUNK-PHYSICS.md)：可选原生 CPU 后端、Nest 瞬态物理结果提交、区域基线/增量，以及本地 Unity 双视图验收。当前正式装配与验证范围见 [物理房间 service](PHYSICS-ROOM-SERVICE.md)；Linux 运行尚未验收。
 
+
+[实体 AI 的决策树、行为树与选策接线](AI-DECISIONS.md)：用同一权威输入产生有序意图、复用跨拍执行策略；[与关卡规则逐步对照](AI-DECISION-VS-LEVEL.md)。
+
 [通用 LevelComponent](LEVEL-COMPONENT.md)：借鉴 ssr 的多阶段／ECA 与变量作用域，接入 Nest 事务、宿主时钟和外部动作回执；包含 UGC／PvE 配置与正式生成消费者。
 
 ## 次核心模块
