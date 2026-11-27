@@ -9,6 +9,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
@@ -86,8 +87,10 @@ func (runtime *Runtime) deferEntityDelete(tx *corenest.RollbackTx, value entity.
 		}
 	}
 	tx.AfterAdmission(func() {
-		// 删除已准入：实体本身没有了，lifetime=resident 的实例同样移出内存。
-		if err := runtime.access.Destroy(entity.WithResidentRelease(context.Background()), value, reason, false); err != nil {
+		// 删除已准入：实体本身没有了，lifetime=resident 的实例同样移出内存。持久数据已删，用 WithPersistedDeleted
+		// 明确告诉 Destroy 这是删档收尾（结束伴生声明等身份事实），不能让它从 reason 推断：业务离线卸载同样传 false。
+		ctx := entity.WithPersistedDeleted(entitypermit.System(), entity.WithResidentRelease(context.Background()))
+		if err := runtime.access.Destroy(ctx, value, reason, false); err != nil {
 			runtime.fail(fmt.Errorf("dataengine delete: finalize in-memory entity %d: %w", value.ID(), err))
 		}
 	})

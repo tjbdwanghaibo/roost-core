@@ -20,19 +20,27 @@ const (
 type companionTestPrincipal struct{ *mgrTestEntity }
 type companionTestChild struct{ *mgrTestEntity }
 
-func companionFixture(t *testing.T) *EntityManager {
+func companionFixture(t *testing.T) *EntityManager { return companionFixtureWith(t, false) }
+
+// companionFixtureWith 的 persistentPrincipal 让主实体 kind 带 DAO（持久 kind）：只从内存卸载后它会从库重新载入。
+func companionFixtureWith(t *testing.T, persistentPrincipal bool) *EntityManager {
 	t.Helper()
 	isolateEntityRegistry(t)
 	old := companionRegistry.Load()
 	t.Cleanup(func() { companionRegistry.Store(old) })
 	for _, kind := range []EntityKind{companionTestP, companionTestC} {
-		RegisterEntityBuilder(&EntityBuilderParam{Kind: kind, Category: testEntityCategory, NoPersist: true, Builder: func(p *EntityCreateParam) (IThreadSafeEntity, error) {
+		param := &EntityBuilderParam{Kind: kind, Category: testEntityCategory, NoPersist: true, Builder: func(p *EntityCreateParam) (IThreadSafeEntity, error) {
 			e := &mgrTestEntity{EntityBase: NewEntityBaseWithMutex(p.Id, p.Category, true, p.Mutex, p.Kind)}
 			if p.Kind == companionTestP {
 				return &companionTestPrincipal{e}, nil
 			}
 			return &companionTestChild{e}, nil
-		}})
+		}}
+		if persistentPrincipal && kind == companionTestP {
+			param.NoPersist = false
+			param.DaoBuilders = []DaoBuilderFunc{func() DaoInterface { return &factoryTestDao{coll: "companion_principal"} }}
+		}
+		RegisterEntityBuilder(param)
 	}
 	if err := RegisterCompanionKind[*companionTestPrincipal, *companionTestChild](companionTestP, companionTestC); err != nil {
 		t.Fatal(err)
@@ -263,6 +271,52 @@ func TestCompanionDeleteVersusExplicitColdRestore(t *testing.T) {
 	_ = makeCompanion(t, m, EntityCreateParam{IsCreate: true, Kind: companionTestP, Id: pid})
 	if m.AttachCompanion(cid) == nil {
 		t.Fatal("detached live child retained a deleted principal's authority")
+	}
+}
+
+// 持久主实体只从内存卸载（业务的离线卸载：DestroyReasonCommon 或领域别名，deleteFromDB=false）不是删除：
+// 已分离、仍在内存的伴生实体保留声明，主实体从库重新载入后可以直接 Attach。
+func TestCompanionBusinessUnloadKeepsDetachedDeclaration(t *testing.T) {
+	m := companionFixtureWith(t, true)
+	p, c := testPair(t, m)
+	pid, cid := p.ID(), c.ID()
+	if e := m.DetachCompanion(cid); e != nil {
+		t.Fatal(e)
+	}
+	const offline EntityDestroyReason = 3 // 业务领域别名
+	for _, reason := range []EntityDestroyReason{DestroyReasonCommon, offline} {
+		if err := m.Destroy(context.Background(), p, reason, false); err != nil {
+			t.Fatal(err)
+		}
+		p = makeCompanion(t, m, EntityCreateParam{Kind: companionTestP, Id: pid})
+		if err := m.AttachCompanion(cid); err != nil {
+			t.Fatalf("memory-only unload (reason %d) wiped the detached declaration: %v", reason, err)
+		}
+		if SnapshotCompanionDomain(c).Root != p {
+			t.Fatal("reloaded principal not attached")
+		}
+		if e := m.DetachCompanion(cid); e != nil {
+			t.Fatal(e)
+		}
+	}
+	// 没有 permit 的标记无效，仍按离线卸载处理。
+	if err := m.Destroy(WithPersistedDeleted(entitypermit.Token{}, context.Background()), p, offline, false); err != nil {
+		t.Fatal(err)
+	}
+	p = makeCompanion(t, m, EntityCreateParam{Kind: companionTestP, Id: pid})
+	if err := m.AttachCompanion(cid); err != nil {
+		t.Fatalf("unauthorized delete marker ended the principal identity: %v", err)
+	}
+	if e := m.DetachCompanion(cid); e != nil {
+		t.Fatal(e)
+	}
+	// DataEngine 删档准入后的内存收尾：明确的删除信号结束主实体身份，同号新主实体不继承旧声明。
+	if err := m.Destroy(WithPersistedDeleted(entitypermit.System(), context.Background()), p, offline, false); err != nil {
+		t.Fatal(err)
+	}
+	_ = makeCompanion(t, m, EntityCreateParam{Kind: companionTestP, Id: pid, IsCreate: true})
+	if err := m.AttachCompanion(cid); !errors.Is(err, ErrCompanionRelation) {
+		t.Fatalf("detached child kept a deleted principal's declaration: %v", err)
 	}
 }
 

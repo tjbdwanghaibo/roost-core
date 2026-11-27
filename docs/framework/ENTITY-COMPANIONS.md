@@ -44,6 +44,7 @@ if err != nil { return nil, err }
 - `multi(P,A,C)` 和 `multi(C,A,P)` 都按实际物理域顺序获取、验证；**逻辑参与者不会因锁去重而消失**，三个目标仍可见，两个实体的修改仍是两份记录。原有显式传统组锁的限制不因伴生而放开。普通无伴生 kind 不进入伴生 handler 分支。
 - 本地运维/装配要在**任何 Guard 之外**做立即切换，可用 `manager.AttachCompanion(childID)` / `manager.DetachCompanion(childID)`，不能拿 manager 入口绕过在途 handler 的提交边界。在生命周期变更期间遇锁冲突应遵守返回的错误，不应本地持锁自旋。
 - 关系变更不是独立的业务 WAL 或跨服迁移凭据。冷恢复时不能仅凭可推导 ID 恢复写权；有权威关系记录的上层可在装配时显式声明已脱开的从属关系，再在确认为本服、当前实例有效时重新合上。进程间、实体重新创建与故障续做仍由原来的持久生命周期策略负责。
+- 主实体离开内存时，仍在内存的已脱开伴生是否保留声明，只看持久数据是否真的删除，不看 destroy reason：持久主实体 `Destroy(..., deleteFromDB=false)`（业务离线卸载用 `DestroyReasonCommon` 或领域别名、框架 `MemoryUnload` 都一样）只是卸载，主实体从库重新载入后可以直接 `AttachCompanion`；删档（`deleteFromDB=true`，含 DataEngine 事务内删档准入后的内存收尾）结束主实体身份，清掉这些声明，同号新建的主实体须重新显式声明。不落库的主实体 kind 没有可重新载入的数据，业务的 Destroy 即结束身份，只有框架 `MemoryUnload` 保留声明。
 
 ## 和 Remote 怎么配合
 
