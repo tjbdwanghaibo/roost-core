@@ -133,6 +133,12 @@ func (l *Lease) ActionEnd(id int64, kind actionflow.ActionKind, why actionflow.A
 	if !guarded(e.owner) || e.switching || e.live != l {
 		return false
 	}
+	// 投递期间与 Tick 一样占住执行器：策略回调里的 SetStrategy 会被 Controller 延后并先返回 nil，
+	// 若此时放行 Apply，live / applied 会先改成之后可能被拒绝的选择。动作可在 Tick 的 Start 里同步结束，
+	// 所以这里不拒绝已占用时的投递，只在返回时恢复原值。
+	busy := e.busy
+	e.busy = true
+	defer func() { e.busy = busy }()
 	e.ctl.OnActionEnd(id, kind, why)
 	return true
 }

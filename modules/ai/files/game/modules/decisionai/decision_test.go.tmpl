@@ -327,3 +327,59 @@ func TestDecisionAIGuardAndArbitrationFailClosed(t *testing.T) {
 		return nil
 	})
 }
+
+// endApplier 是业务自定义的策略：动作结束时同步调用 Apply，且拒绝被替换。
+type endApplier struct {
+	ai.Strategy
+	onEnd func()
+}
+
+func (s *endApplier) CanStopByNext(ai.Strategy) bool { return false }
+func (s *endApplier) OnActionEnd(ctx *ai.Context, id int64, kind actionflow.ActionKind, why actionflow.ActionReason) {
+	s.onEnd()
+	s.Strategy.OnActionEnd(ctx, id, kind, why)
+}
+
+// Lease.ActionEnd 把回执交给 Controller 的策略回调；回调里请求的切换会被 Controller 延后、SetStrategy 先返回 nil。
+// 若 Apply 在这里放行，就会把 Active 与 live lease 改成一个之后可能被拒绝的选择：Active 谎报、旧实例的回执也被丢弃。
+// 与 Tick 回调里一样，回执投递期间的 Apply 必须拒绝，旧实例与 Active 保持不变。
+func TestDecisionAIApplyInsideActionEndIsRejected(t *testing.T) {
+	f := newFixture(t, nil)
+	w := &workLog{}
+	factories := w.factories(t)
+	watch := factories[Watch]
+	var e *Executor
+	var target Choice
+	var applyErr error
+	applied := false
+	factories[Watch] = func(l *Lease) (ai.Strategy, error) {
+		s, err := watch(l)
+		return &endApplier{Strategy: s, onEnd: func() { applied, applyErr = true, e.Apply(target) }}, err
+	}
+	var reported []error
+	f.must(t, func() error {
+		var err error
+		e, err = NewExecutor(f.p, ai.ControllerHooks{OnError: func(err error) { reported = append(reported, err) }}, factories)
+		return err
+	})
+	old := f.pick(t, 1, false)
+	f.applyTick(t, e, old)
+	target = f.pick(t, 2, true)
+	why := actionflow.NewActionResultReason(actionflow.ActionResult{Status: actionflow.ActionStatusSuccess})
+	f.must(t, func() error {
+		if !w.leases[0].ActionEnd(17, 0, why) {
+			return errors.New("current lease rejected")
+		}
+		return nil
+	})
+	if !applied || !errors.Is(applyErr, ai.ErrReentrantSwitch) {
+		t.Fatalf("Apply inside ActionEnd: called=%v err=%v", applied, applyErr)
+	}
+	if e.Active() != old || len(reported) != 0 {
+		t.Fatalf("active=%+v want %+v, deferred errors=%v", e.Active(), old, reported)
+	}
+	f.must(t, func() error { return e.Tick(time.Time{}) })
+	if !slices.Equal(w.finished, []string{fmt.Sprintf("%s:%d", Watch, ai.StatusSuccess)}) {
+		t.Fatalf("old instance lost its own result: %v", w.finished)
+	}
+}

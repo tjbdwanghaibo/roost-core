@@ -32,7 +32,7 @@
 | [task](task/README.md) | 事件任务：每日/每周/永久与前置链，配置表，金币/道具奖励；事务内事件联动 | wallet；bag 等联动 | `PlayerDao.Task`（同步） | 29；八组联动 25 条 |
 | [stamina](stamina/README.md) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/components/stamina/rules.go`，统一 rules 下发上限/周期 | wallet、rules | `PlayerDao.Stamina`（同步） | 26 |
 | [shop](shop/README.md) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录为配置表 `shop_goods.csv`，统一 rules 下发 | wallet、bag、rules | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 20 |
-| [ai](ai/README.md) | 实体决策树选策、独立行为树跨拍执行；显式接入，不接管 Monster 的既有 AI、心跳或动作 | 无业务模块；Nest + 有 DAO 的 Player 示例宿主 | 私有决策游标、输入版本和期望执行策略 | 6 |
+| [ai](ai/README.md) | 实体决策树选策、独立行为树跨拍执行；显式接入，不接管 Monster 的既有 AI、心跳或动作 | 无业务模块；Nest + 有 DAO 的 Player 示例宿主 | 私有决策游标、输入版本和期望执行策略 | 7 |
 | [skillbook](skillbook/README.md) | 技能目录：服务启动时编译 `game/modules/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 11 |
 | [activity](activity/README.md) | 共用 activity.Component 五阶段活动状态机：一次性/日历循环、可信条件解锁、自定义流程、有界恢复；个人宿主 | 无；configdata / 个人持久定时器由安装器接入 | PlayerDao.Activity（只落库） | 21 |
 | [activity_world](activity_world/README.md) | 全服/服务器组权威 Entity，独立服务、ownership 恢复扫描 | activity | ActivityWorldDao.ActivityWorld（只落库） | 6 |

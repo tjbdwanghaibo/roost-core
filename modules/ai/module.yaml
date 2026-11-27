@@ -9,4 +9,4 @@ state:
 verify:
   packages: [./game/modules/decisionai]
   run: ^TestDecisionAI
-  pass: 6
+  pass: 7
