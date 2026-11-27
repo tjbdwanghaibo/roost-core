@@ -224,13 +224,21 @@ func TestUnlockReloadPlayerKeepsFirstRecord(t *testing.T) {
 			record, _ = p.Unlock().Record(1)
 			return nil
 		})
+		// 同一笔提交里可能还有 Player 的伴生实体（装了 combat 时有 combat_state），按 Key 找 Player 那一条。
 		committed := f.journal.last.Load()
-		if committed == nil || len(committed.Mutations) != 1 {
+		if committed == nil {
 			t.Fatal("missing player commit")
 		}
-		m := committed.Mutations[0]
-		if m.Kind != dataengine.MutationPut || m.Key.Resource != db.PlayerDaoCollection || m.Key.ID != f.p.ID() {
-			t.Fatalf("not a player full write: %+v", m.Key)
+		var m dataengine.Mutation
+		found := 0
+		for _, candidate := range committed.Mutations {
+			if candidate.Key.Resource == db.PlayerDaoCollection && candidate.Key.ID == f.p.ID() {
+				m = candidate
+				found++
+			}
+		}
+		if found != 1 || m.Kind != dataengine.MutationPut {
+			t.Fatalf("want one player full write, got %d in %d mutations (kind %v)", found, len(committed.Mutations), m.Kind)
 		}
 		if err := dao.RestorePersisted(m.Data, m.Schema, m.NextVersion); err != nil {
 			t.Fatal(err)
