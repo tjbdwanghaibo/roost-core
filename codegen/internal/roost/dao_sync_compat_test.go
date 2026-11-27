@@ -40,10 +40,14 @@ func daoTestGenerate(t *testing.T, fields, nested []string) string {
 	def, out := t.TempDir(), t.TempDir()
 	var source strings.Builder
 	source.WriteString("package def\n\n//roost:dao coll=probes db=game dbscope=sid\ntype ProbeDao struct {\n")
-	field := func(name string) {
-		typ := "int32"
-		if name == "Detail" {
-			typ = "Pair"
+	// 规格为 "Name" 或 "Name Type"；不写类型时 Detail 是 Pair，其余是 int32。
+	field := func(spec string) {
+		name, typ, explicit := strings.Cut(spec, " ")
+		if !explicit {
+			typ = "int32"
+			if name == "Detail" {
+				typ = "Pair"
+			}
 		}
 		fmt.Fprintf(&source, "%s %s `store:%q`\n", name, typ, strings.ToLower(name))
 	}
@@ -149,6 +153,37 @@ func TestDAOSyncReleaseGeneratedVersions(t *testing.T) {
 				if gold != tc.gold || left != tc.left {
 					t.Errorf("old reader (patch=%t): gold=%d, left=%d; want %d, %d", patch, gold, left, tc.gold, tc.left)
 				}
+			}
+		})
+	}
+}
+
+// map 值为切片时 protobuf 需要包装消息；它的名字必须只由元素类型决定，
+// 否则前面多生成一个消息就会让已发布的包装消息“改名”，合法的追加被门禁拒绝。
+func TestDAOSyncReleaseMapOfSliceWrappers(t *testing.T) {
+	daoTestProtoc(t)
+	bag := "Bag map[string][]int32"
+	for _, tc := range []struct {
+		name                           string
+		prevFields, prevNested, fields []string
+		nested                         []string
+		want                           string
+	}{
+		{"append after map of slice", []string{"Gold", bag}, []string{"Left"}, []string{"Gold", bag, "Detail"}, []string{"Left"}, ""},
+		{"earlier nested type gains map of slice", []string{"Gold", bag, "Detail"}, []string{"Left"}, []string{"Gold", bag, "Detail"}, []string{"Left", "Tags map[string][]string", "Codes map[int32][]int32"}, ""},
+		{"element type change", []string{"Gold", bag}, []string{"Left"}, []string{"Gold", "Bag map[string][]int64"}, []string{"Left"},
+			"SyncProbeDaoBagField #1 (value): map<string,roost.dao.sync.SyncListInt32> changed to map<string,roost.dao.sync.SyncListInt64>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := daoTestGenerate(t, tc.prevFields, tc.prevNested)
+			current := daoTestGenerate(t, tc.fields, tc.nested)
+			out, err := daoTestVerify(previous, current)
+			if tc.want == "" {
+				if err != nil || !strings.Contains(out, "compatible:") {
+					t.Fatalf("expected compatible: %q %v", out, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
 			}
 		})
 	}

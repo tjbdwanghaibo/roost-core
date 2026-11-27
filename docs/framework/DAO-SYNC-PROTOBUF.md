@@ -81,6 +81,7 @@ Go 用 `ApplySyncPlayerDao(patch, previous)` 返回新的累积视图，Full 时
 
 ## 升级与验证
 
+Protobuf map 的值不能是 repeated，所以值为切片的 map（如 `map[string][]int32`）由列表包装消息承载：`message SyncListInt32 { repeated int32 values = 1; }`。包装名只由元素 PB 类型决定（基础类型首字母大写，如 `SyncListInt32`、`SyncListString`、`SyncListBytes`；嵌套类型保留其同步消息名，如 `SyncListSyncPair`），同一元素类型在一个 `dao_sync.proto` 内共用一条，与字段、嵌套类型或 DAO 的生成顺序无关。生成的消息名由业务类型名拼出，若业务类型名使框架消息重名（例如嵌套类型叫 `ListInt32`），生成直接报错，需改业务类型名。
 DAO `sync_format=3`（字段号 2047）；EntitySync 外层编码号仍是 2，外层帧/内容版本机制不变。Go/C#/C++ 拒绝旧格式。服务端、proto、生成 Apply 和客户端 SDK 需配套重生成，停止旧连接后重连拿全量。BSON/WAL 格式不变，不需要清库。字段号仍依据定义顺序；生成器不会给旧字段锁号，也不会自动协商旧 schema。
 
 ### 发布前：比较上次发给客户端的 schema
@@ -100,6 +101,7 @@ roost framework verify-dao-sync \
 | `.proto` 只重排声明，老字段的号、名字、类型等不变 | 通过；按消息名与字段号比较，不按行号。 |
 | 在 Go DAO 定义中互换两个 `int32` 的位置 | 拒绝；老号易主，旧客户端可能解码成功但读错值。检查包括 DAO 顶层、嵌套全量、嵌套 patch 和集合包装消息。 |
 | 在末尾追加字段，或加入不替换旧消息的新消息 | 通过；旧读者可忽略未知号。顶层固定的 `sync_format=2047` 不算业务字段上界，已有空号也不视为可填。 |
+| 值为切片的 map 之后追加字段，或在其前面新增嵌套类型/字段 | 通过；列表包装按元素类型命名，不随生成顺序改名。改 map 的元素类型（如 `[]int32` → `[]int64`）仍拒绝：值类型从 `SyncListInt32` 变为 `SyncListInt64`。 |
 | 保号改名、删除、换号、改标量/引用类型、列表/映射形状发生变化 | 拒绝。即使普通 Protobuf 的同号同型改名在线上字节层面合法，两份导出也不能证明它不是删旧建新；本门禁不提供改名白名单。仅 Go 侧改名且导出的所有消息/字段身份完全不变时不会触发。 |
 | 删除字段并写 `reserved`，或释放旧的 `reserved` 数字/名字再用 | 拒绝。`reserved` 不能证明删除对现存客户端安全，也不能豁免易主。若历史输入已有 `reserved`，必须完整保留其号码与名字；DAO 生成器没有用于改名、退役或显式锁号的 tag，不应手改导出绕过检查。 |
 
