@@ -202,14 +202,20 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 			admissionStart := startNestStage(stages)
 			syncMutation.Admit()
 			observeNestStage(handler, "admission", admissionStart)
+			// Admit 之后提交点已越过：handler 的内存修改不能撤销，同步门也只能走到终态（Confirm）。publish 复核失败
+			// （例如另一个 worker 恰在首次 validate 之后 fence 了引擎）与 commitDurable 同样处理：仍记录提交事实并 Confirm，
+			// 只是关系不发布、回复 ErrAfterCommitFailed。若在这里提前返回，已 Admit 未 Confirm 的门永不放行，
+			// 该实体及其组内成员此后的 Sync 提交全部阻塞，消息还可能被当作未提交重排。
+			var changeErr error
 			if owner != nil && frame.change != nil {
-				if err := frame.change.publish(); err != nil {
-					return ret, err
+				if publishErr := frame.change.publish(); publishErr != nil {
+					changeErr = errors.Join(ErrAfterCommitFailed, publishErr)
 				}
 			}
 			owner.markTransactionAdmitted()
 			owner.markTransactionCommitted()
 			syncMutation.Confirm()
+			err = changeErr
 		}
 		return ret, err
 	}
