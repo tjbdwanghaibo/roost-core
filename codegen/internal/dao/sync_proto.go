@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/format"
 	"go/parser"
+	"go/token"
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
@@ -19,6 +20,8 @@ type syncSchema struct {
 	messages []protocol.StructDef
 	helpers  strings.Builder
 	shapes   map[string]syncShape
+	// lists 记录已生成的 map 值列表包装消息（元素 PB 类型 → 消息名），同一元素类型共用一条。
+	lists map[string]string
 }
 
 func syncField(name, typ string, number int) protocol.FieldDef {
@@ -93,8 +96,10 @@ func (s *syncSchema) expression(expr ast.Expr) (syncShape, error) {
 		}
 		// Protobuf map 不能直接存 repeated，生成显式列表消息；bytes 是合法 map value。
 		if strings.HasPrefix(value.protobuf, "[]") && value.protobuf != "[]byte" {
-			wrapper := fmt.Sprintf("SyncList%d", len(s.messages))
-			s.messages = append(s.messages, protocol.StructDef{Name: wrapper, Fields: []protocol.FieldDef{syncField("Values", value.protobuf, 1)}})
+			wrapper, err := s.listWrapper(value.protobuf)
+			if err != nil {
+				return syncShape{}, err
+			}
 			value.encode = wrapper + "{Values:" + value.encode + "}"
 			value.decode = fmt.Sprintf(value.decode, "(%s).Values")
 			value.protobuf = wrapper
@@ -107,6 +112,39 @@ func (s *syncSchema) expression(expr ast.Expr) (syncShape, error) {
 	default:
 		return syncShape{}, fmt.Errorf("unsupported sync expression %T", expr)
 	}
+}
+
+// listWrapper 返回 map 值列表的包装消息名。名字只由元素 PB 类型决定（SyncListInt32、SyncListSyncPair），
+// 不能用生成顺序编号：发版门禁按消息名比对，前面多生成一个消息就会让已发布的包装“改名”，
+// 合法的末尾追加被判为不兼容。元素保留 Sync 前缀，使业务类型（SyncListSyncX）与基础类型（SyncListInt32）不同名。
+func (s *syncSchema) listWrapper(list string) (string, error) {
+	elem := strings.TrimPrefix(list, "[]")
+	if name, ok := s.lists[elem]; ok {
+		return name, nil
+	}
+	name := "SyncList"
+	for rest := elem; ; {
+		if rest == "[]byte" {
+			name += "Bytes"
+			break
+		}
+		if strings.HasPrefix(rest, "[]") {
+			name += "List"
+			rest = rest[2:]
+			continue
+		}
+		if !token.IsIdentifier(rest) {
+			return "", fmt.Errorf("unsupported sync map list element %s", elem)
+		}
+		name += strings.ToUpper(rest[:1]) + rest[1:]
+		break
+	}
+	if s.lists == nil {
+		s.lists = make(map[string]string)
+	}
+	s.lists[elem] = name
+	s.messages = append(s.messages, protocol.StructDef{Name: name, Fields: []protocol.FieldDef{syncField("Values", list, 1)}})
+	return name, nil
 }
 
 func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
@@ -212,6 +250,15 @@ func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
 	}
 	if len(s.messages) == 0 {
 		return nil, nil, nil
+	}
+	// 生成的消息名由业务类型名拼出（Sync<X>、SyncOptional<X>、SyncPatch<X>、SyncList<元素>…），
+	// 业务类型恰好取了 ListInt32、OptionalPair 之类的名字时会与框架消息同名；同名会让一个 Go 类型覆盖另一个，必须在这里拒绝。
+	names := make(map[string]bool, len(s.messages))
+	for _, message := range s.messages {
+		if names[message.Name] {
+			return nil, nil, fmt.Errorf("DAO sync message %s is generated twice; rename the DAO or nested type that produces it", message.Name)
+		}
+		names[message.Name] = true
 	}
 	goSource, protoSource, err := protocol.DataSchema(pkg, "roost.dao.sync", s.messages)
 	if err != nil {
