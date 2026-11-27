@@ -43,7 +43,9 @@ type IThreadSafeEntityBase interface {
 	GUId() int64
 	GetEntityCategory() EntityCategory
 	GetEntityKind() EntityKind
-	GetMutex() lock.Mutex
+	// GetMutex exposes lock identity only. Lock/Unlock panic with ErrEntityLockScope,
+	// TryLock and timed waits fail, and LockContext returns ErrEntityLockScope.
+	GetMutex() publicEntityMutex
 }
 
 // Getter 按 ID 取实体，不存在答 (nil, nil)（ManagerAccess：没有加载器、加载器确认不存在，或不持久的种类不在内存）。
@@ -117,8 +119,14 @@ type Guardable interface {
 // EntityCreateParam 是创建或加载实体的参数。
 type EntityCreateParam struct {
 	IsCreate bool
-	Category EntityCategory
-	Kind     EntityKind
+	// CompanionOf explicitly identifies the principal. A cold restore only declares
+	// the relation; it never attaches a newly loaded instance.
+	CompanionOf int64
+	// CompanionDetached declares an explicitly unbound child on fresh creation.
+	// Remote participants must bootstrap this way then attach via authorized Nest admission.
+	CompanionDetached bool
+	Category          EntityCategory
+	Kind              EntityKind
 	// Id 在构建实体前规范为完整 EntityID；显式给出的 Id 必须已是完整 EntityID。UniqueID 只在自己生成原始唯一号的
 	// 创建 / 加载边界使用。
 	Id             int64
@@ -132,7 +140,8 @@ type EntityCreateParam struct {
 	Dao            map[string]DaoInterface
 	Sync           *EntitySyncCreateParam
 	Param          any
-	// Mutex 由所属 EntityManager 注入，生成的构造函数把它传给 EntityBase 构造函数。
+	// Mutex is an opaque constructor argument, not permission to acquire or release
+	// the manager's lock. Pass it through to NewEntityBaseWithMutex unchanged.
 	Mutex lock.Mutex
 	// RemoteRestore 只由持久聚合仓库设置。BuildEntity 在 OnInitFinish 之前、Manager 发布实体之前装入它。
 	RemoteRestore *RemoteVersionVector

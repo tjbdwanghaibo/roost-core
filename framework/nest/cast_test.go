@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 const (
@@ -71,10 +72,10 @@ func TestCastPlayerCanCastAllianceAndOtherByCategoryOrder(t *testing.T) {
 	getter.Add(alliance)
 	getter.Add(other)
 
-	_, release := entity.NewGuardScope("cast_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 	defer release()
 	guard := entity.GetEntityGuard()
-	if !guard.RequireEntity(player) {
+	if !guard.RequireEntity(entitypermit.System(), player) {
 		t.Fatal("lock player")
 	}
 
@@ -105,10 +106,10 @@ func TestCastAllianceCanCastOtherByCategoryOrder(t *testing.T) {
 	getter.Add(alliance)
 	getter.Add(other)
 
-	_, release := entity.NewGuardScope("cast_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 	defer release()
 	guard := entity.GetEntityGuard()
-	if !guard.RequireEntity(alliance) {
+	if !guard.RequireEntity(entitypermit.System(), alliance) {
 		t.Fatal("lock alliance")
 	}
 
@@ -151,9 +152,9 @@ func TestCastRejectsReverseCategoryOrder(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bindCastGetter(t, getter)
-			_, release := entity.NewGuardScope("cast_test")
+			_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 			defer release()
-			if !entity.GetEntityGuard().RequireEntity(tc.locked) {
+			if !entity.GetEntityGuard().RequireEntity(entitypermit.System(), tc.locked) {
 				t.Fatalf("lock %s", tc.name)
 			}
 			_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(tc.targetID))
@@ -174,9 +175,9 @@ func TestCastRejectsRemoteAfterLocalBeforePreparingDistributedLock(t *testing.T)
 	player := newMockEntityWithKind(playerID, castPlayerCategory, castPlayerKind)
 	getter.Add(player)
 
-	_, release := entity.NewGuardScope("cast_remote_order_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_remote_order_test")
 	defer release()
-	if !entity.GetEntityGuard().RequireEntity(player) {
+	if !entity.GetEntityGuard().RequireEntity(entitypermit.System(), player) {
 		t.Fatal("lock player")
 	}
 	_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(remoteID))
@@ -189,7 +190,7 @@ func TestCastRejectsInvalidTargetID(t *testing.T) {
 	getter := newMockGetter()
 	bindCastGetter(t, getter)
 
-	_, release := entity.NewGuardScope("cast_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 	defer release()
 
 	_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(102))
@@ -211,9 +212,9 @@ func TestCastReusesARemoteManagedEntityDeclaredBeforeDispatch(t *testing.T) {
 	remote := newMockEntityWithKind(remoteID, entity.EntityCategoryRemote, nestRemoteManagedKind)
 	getter.Add(remote)
 
-	_, release := entity.NewGuardScope("cast_declared_remote_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_declared_remote_test")
 	defer release()
-	if !entity.GetEntityGuard().RequireEntity(remote) {
+	if !entity.GetEntityGuard().RequireEntity(entitypermit.System(), remote) {
 		t.Fatal("lock the declared remote entity")
 	}
 	got, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(remoteID))
@@ -233,7 +234,7 @@ func TestCastRejectsDynamicRemoteManagedEntity(t *testing.T) {
 	msg := &Msg{getter: getter}
 	releaseCurrent := pushCurrentNestDispatchMsg(msg)
 	defer releaseCurrent()
-	_, releaseGuard := entity.NewGuardScope("cast_test")
+	_, releaseGuard := entity.NewGuardScope(entitypermit.System(), "cast_test")
 	defer releaseGuard()
 	_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(remoteID))
 	if !errors.Is(err, entity.ErrRemoteWriteCapabilityDisabled) {
@@ -262,7 +263,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 		}
 	})
 	t.Run("guard scope without dispatch message", func(t *testing.T) {
-		_, release := entity.NewGuardScope("cast_test")
+		_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 		defer release()
 		if _, err := guardFixtureCastMulti(target); !errors.Is(err, ErrCastNoContext) {
 			t.Fatalf("err=%v, want ErrCastNoContext", err)
@@ -271,7 +272,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 	t.Run("dispatch message without getter", func(t *testing.T) {
 		release := pushCurrentNestDispatchMsg(&Msg{})
 		defer release()
-		_, releaseGuard := entity.NewGuardScope("cast_test")
+		_, releaseGuard := entity.NewGuardScope(entitypermit.System(), "cast_test")
 		defer releaseGuard()
 		if _, err := guardFixtureCastMulti(target); !errors.Is(err, ErrCastGetterNotSet) {
 			t.Fatalf("err=%v, want ErrCastGetterNotSet", err)
@@ -279,7 +280,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 	})
 	t.Run("zero target id", func(t *testing.T) {
 		bindCastGetter(t, getter)
-		_, release := entity.NewGuardScope("cast_test")
+		_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 		defer release()
 		_, err := guardFixtureCastMulti(NewCastTarget(0))
 		// 门口的守卫给出干净的 "index=0 id=0"；越过它会撞上 NormalizeFullID，
@@ -290,7 +291,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 	})
 	t.Run("getter has no such entity", func(t *testing.T) {
 		bindCastGetter(t, getter)
-		_, release := entity.NewGuardScope("cast_test")
+		_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 		defer release()
 		missingID := mustBuildCastID(t, 311, castOtherCategory, castOtherKind)
 		_, err := guardFixtureCastMulti(NewCastTarget(missingID))
@@ -311,9 +312,9 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 		actualID := mustBuildCastID(t, 112, castPlayerCategory, castPlayerKind)
 		liar.Add(alliance)
 		liar.swap[requestedID] = newMockEntityWithKind(actualID, castPlayerCategory, castPlayerKind)
-		_, release := entity.NewGuardScope("cast_test")
+		_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 		defer release()
-		if !entity.GetEntityGuard().RequireEntity(alliance) {
+		if !entity.GetEntityGuard().RequireEntity(entitypermit.System(), alliance) {
 			t.Fatal("lock alliance")
 		}
 		if _, err := guardFixtureCastMulti(NewCastTarget(requestedID)); !errors.Is(err, ErrCastDeadlockRisk) {
@@ -354,9 +355,9 @@ func TestCastThreeReportsTypeMismatchOnEveryPosition(t *testing.T) {
 	getter.Add(newMockEntityWithKind(allianceID, castAllianceCategory, castAllianceKind))
 	getter.Add(newMockEntityWithKind(otherID, castOtherCategory, castOtherKind))
 	getter.Add(newMockEntityWithKind(other2ID, castOtherCategory, castOtherKind))
-	_, release := entity.NewGuardScope("cast_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 	defer release()
-	if !entity.GetEntityGuard().RequireEntity(player) {
+	if !entity.GetEntityGuard().RequireEntity(entitypermit.System(), player) {
 		t.Fatal("lock player")
 	}
 	a, o1, o2 := NewCastTarget(allianceID), NewCastTarget(otherID), NewCastTarget(other2ID)
@@ -423,9 +424,9 @@ func TestTypedCastsRefuseTheWrongEntityType(t *testing.T) {
 	getter.Add(player)
 	getter.Add(newMockEntityWithKind(allianceID, castAllianceCategory, castAllianceKind))
 	getter.Add(newMockEntityWithKind(otherID, castOtherCategory, castOtherKind))
-	_, release := entity.NewGuardScope("cast_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 	defer release()
-	if !entity.GetEntityGuard().RequireEntity(player) {
+	if !entity.GetEntityGuard().RequireEntity(entitypermit.System(), player) {
 		t.Fatal("lock player")
 	}
 
@@ -461,9 +462,9 @@ func TestCastMultiRefusesAGetterThatReturnsTheWrongCount(t *testing.T) {
 	base.Add(player)
 	base.Add(newMockEntityWithKind(allianceID, castAllianceCategory, castAllianceKind))
 	base.Add(newMockEntityWithKind(otherID, castOtherCategory, castOtherKind))
-	_, release := entity.NewGuardScope("cast_test")
+	_, release := entity.NewGuardScope(entitypermit.System(), "cast_test")
 	defer release()
-	if !entity.GetEntityGuard().RequireEntity(player) {
+	if !entity.GetEntityGuard().RequireEntity(entitypermit.System(), player) {
 		t.Fatal("lock player")
 	}
 	_, err := guardFixtureCastMulti(NewCastTarget(allianceID), NewCastTarget(otherID))

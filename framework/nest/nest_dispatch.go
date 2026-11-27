@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -75,6 +76,11 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		releaseCtx()
 		err = requeueOrAnnotateNotRequeued(mgr, msg, err)
 		handOverAwaitPlan(msg, err)
+		if req := msg.peerContinuation; req != nil && err == nil && msg.RetChan != nil {
+			req.Continuation.Context, req.Continuation.RetChan = msg.Context.Clone(), msg.RetChan
+			msg.RetChan = nil
+			msg.afterQueue = func() { mgr.dispatchGroupTransitionContinuation(req) }
+		}
 		replyDispatch(msg, ret, err)
 		cost := time.Since(start)
 		mgr.recordDispatch(cost)
@@ -101,6 +107,11 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 	}
 
 	// 准备 Remote 实体（取得分布式写权限并从库加载）。
+	if remoteStage {
+		if err = declareCompanionRemote(msg); err != nil {
+			return
+		}
+	}
 	if msg.HasRemote {
 		if err = prepareRemoteWriteBatch(mgr.remoteManager, msg); err != nil {
 			return
@@ -131,6 +142,9 @@ func finishDispatchResources(mgr *NestMgr, msg *Msg, err error) error {
 		err = errors.Join(err, fmt.Errorf("nest: finish remote write batch: %w", remoteErr))
 	}
 	observeNestStage(msg.Name, "remote_confirm", remoteStart)
+	if len(msg.companionRefs.touched) > 0 {
+		err = errors.Join(err, msg.localExecutor(msg.companionRefs.release))
+	}
 	if msg.prepared != nil {
 		err = errors.Join(err, msg.localExecutor(msg.prepared.release))
 		msg.prepared = nil
@@ -243,7 +257,7 @@ func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 			err = joinRecoveredError(err, r)
 		}
 	}()
-	_, releaseGuardScope := entity.NewGuardScope("nest:" + msg.Name)
+	_, releaseGuardScope := entity.NewGuardScope(entitypermit.System(), "nest:"+msg.Name)
 	releaseCurrentMsg := pushCurrentNestDispatchMsg(msg)
 	defer releaseCurrentMsg()
 	defer func() {
@@ -266,7 +280,12 @@ func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 	case MsgTypeMultiGroup:
 		ret, err = mgr.multiGroupDispatch(msg.Name, msg.GroupTIds, msg.Params)
 	case MsgTypeBroadcast:
-		mgr.broadcastDispatch(msg.Name, msg.Tids, msg.Params)
+		// 公开广播每目标独立一条消息：争锁或迁移时只重排本目标，不重演之前的提交。
+		if len(msg.Tids) == 1 {
+			ret, err = mgr.singleDispatch(msg.Name, msg.Tids[0], msg.Params)
+		} else {
+			mgr.broadcastDispatch(msg.Name, msg.Tids, msg.Params)
+		}
 	case MsgTypeGroupTransition:
 		ret, err = mgr.groupTransitionDispatch(msg.GroupTransition)
 	}
@@ -454,8 +473,11 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 		return nil, err
 	}
 	lockStart := startNestStage(mgr.stageMetrics)
-	_, releaseLocks, err := lockDispatchEntitiesForHandlerWithStore(mgr.groupLockManager(), guard, lockEs, groupStoreOf(mgr.getter))
+	participants, view, releaseLocks, err := mgr.lockOrdinaryDispatch(guard, lockEs)
 	observeNestStage(name, "lock", lockStart)
+	if err == errDispatchCompanionInstead {
+		return mgr.dispatchCompanions(entry, name, es, params, opts...)
+	}
 	if err != nil {
 		if errors.Is(err, ErrLockTimeout) && mgr.beforeIOPreparation() && slices.ContainsFunc(lockEs, entity.IThreadSafeEntity.IsRemoved) {
 			// 引用之后、取锁之前被驱逐（RequireEntity 拒绝已摘除实体）：handler 仍未开始，
@@ -485,11 +507,32 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 			slog.Error("nest entity release panic", "handler", name, "err", err)
 		}
 	}()
-	return mgr.invokeHandlerTransaction(entry, es, name, release, func() (any, error) {
-		msg := currentNestDispatchMsg()
+	msg := currentNestDispatchMsg()
+	if participants != nil && msg == nil {
+		// 包内直接派发也要有段身份：独立事务在准备/提交时 CurrentRollbackTx() 已恢复成外层，
+		// 此时由 runTransaction 遮蔽该帧的 guard。空消息不携带业务目标、引擎、写门或其他授权。
+		msg = &Msg{Name: name}
+		defer pushCurrentNestDispatchMsg(msg)()
+	}
+	if participants != nil && fctx.CurrentContext() == nil {
+		// 无请求上下文的包内夹具仍要绑定真正的 rollback tx；不可把 durable handler 当成裸内存写。
+		_, closeCtx := fctx.NewContext()
+		defer closeCtx()
+	}
+	earlyRelease := release
+	if msg != nil && msg.Type == MsgTypeBroadcast {
+		earlyRelease = nil // 与多目标广播一致：在锁内完成本目标事务。
+	}
+	if participants == nil {
+		participants = es // 无锁组：保留既有参与者与参数。
+	}
+	return mgr.invokeHandlerTransaction(entry, participants, name, earlyRelease, func() (any, error) {
 		if msg != nil {
 			msg.handlerEntities = es
 			defer func() { msg.handlerEntities = nil }()
+		}
+		if view != nil {
+			defer view.beginHandler()()
 		}
 		return entry.handler(es, params, opts...)
 	})
@@ -546,7 +589,7 @@ func lockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafe
 		if useTryLock {
 			ok = tryRequireDispatchEntity(guard, e)
 		} else {
-			ok = guard.RequireEntity(e)
+			ok = guard.RequireEntity(entitypermit.System(), e)
 		}
 		if !ok {
 			releaseDispatchEntities(guard, acquired)
@@ -561,7 +604,7 @@ func tryRequireDispatchEntity(guard *entity.EntityGuard, ent entity.IThreadSafeE
 	if guard == nil {
 		return false
 	}
-	return guard.TryRequireEntity(ent)
+	return guard.TryRequireEntity(entitypermit.System(), ent)
 }
 
 // releaseDispatchEntities 逆序放掉本次派发取得的实体锁。只放 acquired：Guard 本身和它上面的其他持有（handler 新建的实体、
@@ -570,9 +613,17 @@ func releaseDispatchEntities(guard *entity.EntityGuard, acquired []entity.IThrea
 	if guard == nil {
 		return
 	}
-	for i := len(acquired) - 1; i >= 0; i-- {
-		if acquired[i] != nil {
-			guard.ReleaseEntity(acquired[i].GUId())
+	remaining := len(acquired)
+	defer func() {
+		// 一个 release hook panic 也须在仍持组锁时释放其余实例。正常路径不额外递归。
+		if remaining != 0 {
+			releaseDispatchEntities(guard, acquired[:remaining])
+		}
+	}()
+	for remaining != 0 {
+		remaining--
+		if e := acquired[remaining]; e != nil {
+			guard.ReleaseEntityInstance(entitypermit.System(), e) // Destroy/同 ID 重建后也只放本次取得的旧实例。
 		}
 	}
 }
@@ -582,12 +633,15 @@ func releaseDispatchEntities(guard *entity.EntityGuard, acquired []entity.IThrea
 // Cast 取得的实体——连同 post-release 回调一起释放，不跨后续目标持有。某个目标加载失败、取锁失败或 handler panic
 // 只记录日志，不影响后续目标。
 func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
+	if currentNestDispatchMsg() == nil {
+		// 包内直接调用同样维持广播的 strict 锁内提交约束。
+		defer pushCurrentNestDispatchMsg(&Msg{Type: MsgTypeBroadcast, Name: name})()
+	}
 	entry, ok := mgr.getHandlerEntry(NewHandlerName(name))
 	if !ok || entry.handler == nil {
 		return
 	}
 
-	oneEntity := make([]entity.IThreadSafeEntity, 1)
 	for _, id := range ids {
 		// 每个目标开始前的检查：前一个目标 fence 了引擎（或取消了请求）后，其余目标不再执行（广播没有交回）。
 		if err := mgr.checkHandlerStart(); err != nil {
@@ -624,36 +678,17 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 			continue
 		}
 		func() {
-			// 目标自己的 Guard 作用域：handler 看到的 CurrentGuardScope 就是它；作用域结束释放本目标取得的全部锁与
-			// post-release 回调，与单目标派发的边界一致。
-			scope, releaseScope := entity.NewGuardScope("nest:broadcast:" + name)
-			defer releaseScope()
-			guard := scope.Guard()
-			lockStart := startNestStage(mgr.stageMetrics)
-			locked := guard.RequireEntity(e)
-			observeNestStage(name, "lock", lockStart)
-			if !locked {
-				e.UnTouch()
-				return
-			}
+			// 旧的内部多目标广播保持逐目标失败隔离，绝不把后续目标的冲突作为整批错误返回。
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("nest broadcast handler panic", "id", meta.FullID, "handler", name, "err", r)
+					slog.Error("nest broadcast target panic", "id", meta.FullID, "handler", name, "err", r)
 				}
 			}()
-			// 清理各自独立：释放 hook panic 也必须归还 Touch，并留在逐实体恢复边界内。
-			defer func() { oneEntity[0] = nil }()
 			defer e.UnTouch()
-			defer func() {
-				defer observeNestStage(name, "release", startNestStage(mgr.stageMetrics))
-				// 按实例释放本目标的实例（被同 ID 新实例取代时只放旧锁）；新实例等其余锁随作用域结束一起释放。
-				guard.ReleaseEntityInstance(e)
-			}()
-			oneEntity[0] = e
-			// 广播没有提前放锁闭包：pipelined handler 在这条路径上按 strict 锁内提交执行。
-			if _, err := mgr.invokeHandlerTransaction(entry, oneEntity, name, nil, func() (any, error) {
-				return entry.handler(oneEntity, params)
-			}); err != nil {
+			_, releaseScope := entity.NewGuardScope(entitypermit.System(), "nest:broadcast:"+name)
+			defer releaseScope()
+			es := []entity.IThreadSafeEntity{e}
+			if _, err := mgr.dispatchLoadedEntities(entry, name, es, es, params); err != nil {
 				slog.Debug("nest broadcast handler failed", "id", meta.FullID, "handler", name, "err", err)
 			}
 		}()
@@ -695,6 +730,11 @@ func compareEntityIDs(guidI, guidJ int64) int {
 // prepareRemoteWriteBatch 在派发前为消息的 Remote 目标准入一个带 fence 的写批次（取得写权限并加载）。
 func prepareRemoteWriteBatch(manager entity.IRemoteEntityManager, msg *Msg) error {
 	ids := extractRemoteIds(msg)
+	if len(msg.companionRemoteIDs) != 0 {
+		ids = append(ids, msg.companionRemoteIDs...)
+		slices.Sort(ids)
+		ids = slices.Compact(ids)
+	}
 	if len(ids) == 0 {
 		return nil
 	}

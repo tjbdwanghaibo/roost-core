@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 type lateLocalStepLoader struct {
@@ -57,8 +59,8 @@ func TestLateRunLocalAfterNonNestLeaderLoadCompletedDoesNotBlock(t *testing.T) {
 			}
 			y := mustBuildTestEntityID(t, 5592, testEntityCategoryPlayer, EntityKindNone)
 			// 领头方持有 X 的锁，所以 flight 带 leaderSteps / leaderAway（RR-27 的交回领头方路径）。
-			err := WithGuardScope("late_local_step_leader", func(scope *GuardScope) error {
-				if !scope.Guard().RequireEntity(x) {
+			err := WithGuardScope(entitypermit.System(), "late_local_step_leader", func(scope *GuardScope) error {
+				if !scope.Guard().RequireEntity(entitypermit.System(), x) {
 					return errors.New("lock x")
 				}
 				_, err := access.Get(context.Background(), y, EntityCategoryNone)
@@ -101,8 +103,8 @@ func (l *publishUnderOwnGuardLoader) LoadEntity(ctx context.Context, id int64, _
 	var addErr error
 	if err := RunLocal(ctx, func() {
 		l.locked <- lockableElsewhere(l.x)
-		addErr = WithGuardScope("load_publish", func(scope *GuardScope) error {
-			if !scope.Guard().RequireEntity(value) {
+		addErr = WithGuardScope(entitypermit.System(), "load_publish", func(scope *GuardScope) error {
+			if !scope.Guard().RequireEntity(entitypermit.System(), value) {
 				return errors.New("publish could not lock the loaded entity")
 			}
 			return l.manager.TryAdd(value)
@@ -133,8 +135,8 @@ func TestNonNestLeaderHoldingAnotherLockColdLoadsWithoutDeadlock(t *testing.T) {
 	done := make(chan leaderResult, 1)
 	go func() {
 		var got leaderResult
-		got.err = WithGuardScope("non_nest_leader", func(scope *GuardScope) error {
-			if !scope.Guard().RequireEntity(x) {
+		got.err = WithGuardScope(entitypermit.System(), "non_nest_leader", func(scope *GuardScope) error {
+			if !scope.Guard().RequireEntity(entitypermit.System(), x) {
 				return errors.New("leader could not lock X")
 			}
 			var err error
@@ -180,14 +182,14 @@ func (l *publishLocksLeaderHeldLoader) LoadEntity(ctx context.Context, id int64,
 	value := newMgrTestEntity(id, testEntityCategoryPlayer)
 	var addErr error
 	if err := RunLocal(ctx, func() {
-		addErr = WithGuardScope("load_publish_locks_x", func(scope *GuardScope) error {
-			if !scope.Guard().RequireEntity(l.x) {
+		addErr = WithGuardScope(entitypermit.System(), "load_publish_locks_x", func(scope *GuardScope) error {
+			if !scope.Guard().RequireEntity(entitypermit.System(), l.x) {
 				return errors.New("publish could not lock X")
 			}
 			if l.panics {
 				panic("publish step panicked")
 			}
-			if !scope.Guard().RequireEntity(value) {
+			if !scope.Guard().RequireEntity(entitypermit.System(), value) {
 				return errors.New("publish could not lock the loaded entity")
 			}
 			return l.manager.TryAdd(value)
@@ -218,8 +220,8 @@ func TestNonNestLeaderHoldingLockNeededByPublishDoesNotDeadlock(t *testing.T) {
 	}
 	leadWhileHoldingX := func(access *ManagerAccess, x IThreadSafeEntity, y int64, budget time.Duration, done chan<- leaderResult) {
 		var got leaderResult
-		got.err = WithGuardScope("non_nest_leader_holding_x", func(scope *GuardScope) error {
-			if !scope.Guard().RequireEntity(x) {
+		got.err = WithGuardScope(entitypermit.System(), "non_nest_leader_holding_x", func(scope *GuardScope) error {
+			if !scope.Guard().RequireEntity(entitypermit.System(), x) {
 				return errors.New("leader could not lock X")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), budget)

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 const (
@@ -168,12 +170,12 @@ func TestEntityManagerCreateByUniqueIDGetsItsOwnLock(t *testing.T) {
 		if got := value.GetMutex().LockId(); got != value.ID() {
 			t.Fatalf("entity %d holds the lock of id %d", value.ID(), got)
 		}
-		if value.GetMutex() != manager.locks.GetLock(value.ID()) {
+		if testSystemMutex(value) != manager.locks.GetLock(value.ID()) {
 			t.Fatalf("entity %d does not use the LockManager lock of its own id", value.ID())
 		}
 	}
 	// 一个实体的锁被别的 goroutine 持有时，另一个实体的锁必须仍可取得。
-	first, second := created[0].GetMutex(), created[1].GetMutex()
+	first, second := testSystemMutex(created[0]), testSystemMutex(created[1])
 	held, release := make(chan struct{}), make(chan struct{})
 	go func() {
 		first.Lock()
@@ -192,7 +194,7 @@ func TestEntityManagerCreateByUniqueIDGetsItsOwnLock(t *testing.T) {
 func TestEntityManagerCreateInScopeLocksBeforePublication(t *testing.T) {
 	manager := NewEntityManager()
 	id := mustBuildTestEntityID(t, 99, testEntityCategory, testEntityKind)
-	err := WithGuardScope("create_publish_order", func(scope *GuardScope) error {
+	err := WithGuardScope(entitypermit.System(), "create_publish_order", func(scope *GuardScope) error {
 		value, err := manager.CreateInScope(scope, &EntityCreateParam{
 			Id:       id,
 			UniqueID: 99,
@@ -207,8 +209,8 @@ func TestEntityManagerCreateInScopeLocksBeforePublication(t *testing.T) {
 		}
 		locked := make(chan bool, 1)
 		go func() {
-			if value.GetMutex().TryLock() {
-				value.GetMutex().Unlock()
+			if testSystemMutex(value).TryLock() {
+				testSystemMutex(value).Unlock()
 				locked <- true
 				return
 			}
@@ -422,9 +424,9 @@ func TestEntityManagerCreateOutsideATransactionGoesThroughTheCreateAdmitter(t *t
 	var admitted []EntityKind
 	unregister, err := manager.RegisterCreateAdmitter(func(_ context.Context, create func(*GuardScope) (IThreadSafeEntity, error)) (IThreadSafeEntity, error) {
 		var created IThreadSafeEntity
-		err := WithGuardScope("test_create_admitter", func(scope *GuardScope) error {
-			restore := scope.Guard().SwapCreatedEntityCapturer(acceptingCapturer{})
-			defer scope.Guard().SwapCreatedEntityCapturer(restore)
+		err := WithGuardScope(entitypermit.System(), "test_create_admitter", func(scope *GuardScope) error {
+			restore := scope.Guard().SwapCreatedEntityCapturer(entitypermit.System(), acceptingCapturer{})
+			defer scope.Guard().SwapCreatedEntityCapturer(entitypermit.System(), restore)
 			value, err := create(scope)
 			if value != nil {
 				admitted = append(admitted, value.GetEntityKind())
@@ -459,7 +461,7 @@ func TestEntityManagerCreateOutsideATransactionGoesThroughTheCreateAdmitter(t *t
 	}
 
 	bareID := mustBuildTestEntityID(t, 63, testEntityCategory, newAggregatePersistentKind)
-	err = WithGuardScope("bare", func(scope *GuardScope) error {
+	err = WithGuardScope(entitypermit.System(), "bare", func(scope *GuardScope) error {
 		_, err := manager.CreateInScope(scope, &EntityCreateParam{IsCreate: true, Kind: newAggregatePersistentKind, Id: bareID})
 		return err
 	})

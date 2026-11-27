@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 // batchEntity 让定时窗口测试遵守正式实体的加锁与提交边界。
@@ -24,8 +25,8 @@ func newBatchEntity(state *entity.SubjectSyncState) *batchEntity {
 func commitBatchChange(t *testing.T, m *Manager, e *batchEntity, change func()) {
 	t.Helper()
 	var mutation *entity.SyncMutation
-	err := entity.WithGuardScope("batch window test", func(scope *entity.GuardScope) error {
-		if !scope.Guard().RequireEntity(e) {
+	err := entity.WithGuardScope(entitypermit.System(), "batch window test", func(scope *entity.GuardScope) error {
+		if !scope.Guard().RequireEntity(entitypermit.System(), e) {
 			return errors.New("batch entity lock unavailable")
 		}
 		mutation = entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)

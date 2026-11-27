@@ -1,0 +1,71 @@
+package registry_test
+
+import (
+	"errors"
+	"os"
+	"testing"
+
+	"example.com/companions/game/entities/archive"
+	"example.com/companions/game/entities/journal"
+	"example.com/companions/internal/registry"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+func TestGeneratedPair(t *testing.T) {
+	if err := registry.RegisterAll(); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	mgr := entity.NewEntityManager(entity.WithEntityIDGenerator(func() (uint64, error) {
+		calls++
+		return 0, errors.New("unexpected new unique ID")
+	}))
+	access := entity.NewManagerAccess(mgr)
+	p, err := access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: archive.EntityKindArchive, UniqueID: 73})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := journal.CreateJournalForPrincipal(access, p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.UniqueID() != 73 || child.ID() == p.ID() || child.GetEntityKind() != journal.EntityKindJournal {
+		t.Fatalf("identity: %d, %d", p.ID(), child.ID())
+	}
+	id, err := entity.CompanionID(p.ID(), journal.EntityKindJournal)
+	if err != nil || mgr.Get(id) != child {
+		t.Fatalf("exact lookup by derived id: %d, %v", id, err)
+	}
+	remoteKind := os.Getenv("COMPANION_FIXTURE_REMOTE_KIND")
+	if entity.IsEntityKindRemoteManaged(archive.EntityKindArchive) != (remoteKind == "Archive") || entity.IsEntityKindRemoteManaged(journal.EntityKindJournal) != (remoteKind == "Journal") {
+		t.Fatalf("wrong fixture policies for remote kind %q", remoteKind)
+	}
+	snap := entity.SnapshotCompanionDomain(child)
+	if remoteKind == "" {
+		if snap.Root != p || len(snap.Members) != 2 {
+			t.Fatalf("local child not attached: %+v", snap)
+		}
+	} else {
+		if snap.Root != child || len(snap.Members) != 0 {
+			t.Fatalf("remote participant attached without exclusive grant: %+v", snap)
+		}
+		if err := mgr.AttachCompanion(child.ID()); !errors.Is(err, entity.ErrCompanionScope) {
+			t.Fatalf("direct attach for a registered Remote-managed kind must require a handler scope: %v", err)
+		}
+		if entity.SnapshotCompanionDomain(child).Root != child {
+			t.Fatal("rejected attach changed the child's domain")
+		}
+	}
+	if _, err := journal.CreateJournalForPrincipal(access, p.ID()); err == nil || mgr.Get(id) != child {
+		t.Fatal("duplicate Create must fail without replacing the child")
+	}
+	if _, err := journal.CreateJournalForPrincipal(access, child.ID()); err == nil {
+		t.Fatal("accepted child as principal")
+	}
+	if _, err := journal.CreateJournalForPrincipal(access, 0); err == nil {
+		t.Fatal("accepted missing principal ID")
+	}
+	if calls != 0 {
+		t.Fatalf("ID generator called %d times", calls)
+	}
+}

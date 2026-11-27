@@ -478,9 +478,9 @@ func TestMemoryHandlerCreateHoldsLockUntilHandlerEnds(t *testing.T) {
 func tryLockElsewhere(e entity.IThreadSafeEntity) bool {
 	done := make(chan bool)
 	go func() {
-		ok := e.GetMutex().TryLock()
+		ok := physicalTestLock(e).TryLock()
 		if ok {
-			e.GetMutex().Unlock()
+			physicalTestLock(e).Unlock()
 		}
 		done <- ok
 	}()

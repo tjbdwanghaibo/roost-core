@@ -27,6 +27,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 )
 
 // 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
@@ -141,9 +142,7 @@ func (f *profileFixture) mustAddExp(t *testing.T, amount int64, wantGained int32
 func (f *profileFixture) facts(t *testing.T) profileFacts {
 	t.Helper()
 	var got profileFacts
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		dao := f.player.Dao()
 		got.name, got.level, got.exp = dao.GetProfile().GetName(), dao.GetProfile().GetLevel(), dao.GetProfilePrivate().GetExp()
 	}); err != nil {
@@ -690,9 +689,7 @@ func TestProfileExpStaysOutOfTheHalfOthersMaySee(t *testing.T) {
 	packed := func(mask uint64) (*db.SyncPlayerDaoProfileField, *db.SyncPlayerDaoProfilePrivateField) {
 		t.Helper()
 		var raw []byte
-		if err := f.engine.RunLocal(context.Background(), func() {
-			f.player.GetMutex().Lock()
-			defer f.player.GetMutex().Unlock()
+		if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 			raw = f.player.Dao().MarshalSync(mask)
 		}); err != nil {
 			t.Fatal(err)
@@ -716,9 +713,7 @@ func TestProfileExpStaysOutOfTheHalfOthersMaySee(t *testing.T) {
 	dirtied := func(change func()) uint64 {
 		t.Helper()
 		take := func() (mask uint64) {
-			if err := f.engine.RunLocal(context.Background(), func() {
-				f.player.GetMutex().Lock()
-				defer f.player.GetMutex().Unlock()
+			if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 				mask = f.player.Dao().DirtyTracker().TakeEntitySyncDirty()
 			}); err != nil {
 				t.Fatal(err)

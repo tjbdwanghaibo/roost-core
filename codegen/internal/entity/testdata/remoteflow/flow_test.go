@@ -54,6 +54,32 @@ func (l vaultLoader) LookupLocalRemoteEntity(id int64, kind entity.EntityKind) e
 	return l.values[id]
 }
 
+var inspectVault = nest.NewHandlerName("fixture_inspect_vault")
+
+// 与写请求一样声明实体 ID。只取这一份驻留实例的两个 DAO 值，不能因准入重载而把权威值误当作旧实例的内存值。
+func registerVaultInspection(scheduler *nest.NestMgr) {
+	scheduler.MustRegisterHandlerWithMeta(inspectVault, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		if es[0] != params[0] {
+			return nil, errors.New("vault instance changed before inspection")
+		}
+		vault := es[0].(interface {
+			BalanceDao() *BalanceDao
+			ItemsDao() *ItemsDao
+		})
+		return syncedVaultSnapshot{Balance: vault.BalanceDao().GetValue(), Items: vault.ItemsDao().GetValue()}, nil
+	}, nest.HandlerMeta{Durability: nest.DurabilityMemory})
+}
+
+func residentVaultValues(t *testing.T, ctx context.Context, scheduler *nest.NestMgr, vault entity.IThreadSafeEntity) (int64, int64) {
+	t.Helper()
+	result, err := scheduler.Request(ctx, inspectVault, vault.ID(), nest.Params{vault})
+	if err != nil {
+		t.Fatalf("inspect resident vault %d: %v", vault.ID(), err)
+	}
+	v := result.(syncedVaultSnapshot)
+	return v.Balance, v.Items
+}
+
 type noEffects struct{}
 
 func (noEffects) Publish(context.Context, engine.OutboxItem) error {
@@ -327,6 +353,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 				options = append(options, nest.NestOptionWithSyncTimeout(60*time.Second))
 			}
 			scheduler := nest.NewEngine(options...)
+			registerVaultInspection(scheduler)
 			businessErr := errors.New("business rejection")
 			for _, name := range []nest.HandlerName{update, reject, panicName, warmup} {
 				durability := policy
@@ -387,10 +414,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			settled := make(map[int64]int64, len(ids))
 			var settledAboveSuccess int64
 			for _, id := range ids {
-				vault := loader.values[id]
-				vault.GetMutex().Lock()
-				balance, items := vault.balance.GetValue(), vault.items.GetValue()
-				vault.GetMutex().Unlock()
+				balance, items := residentVaultValues(t, ctx, scheduler, loader.values[id])
 				if balance != items || !expected[id].contains(balance) {
 					t.Fatalf("rollback lost id=%d %d/%d%s", id, balance, items, expected[id].suffix())
 				}

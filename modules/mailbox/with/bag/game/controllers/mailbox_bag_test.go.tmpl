@@ -7,16 +7,18 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	"{{MODULE}}/configs/schema"
 	"{{MODULE}}/game/handler"
 	sender "{{MODULE}}/game/handler/syncsender"
 	gamemailbox "{{MODULE}}/game/modules/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 // mailbox 与 bag 的联动在端点上的规则：道具邮件走同样的三步领取，道具进背包。
@@ -74,9 +76,7 @@ func withMailboxBagItem(t *testing.T, itemID, amount int64) []byte {
 // withMailboxBagCount 在业务 worker 上持实体锁读玩家 A 背包里 itemID 的数量与背包的种类数。
 func withMailboxBagCount(t *testing.T, f *mailboxEndpointFixture, itemID int64) (count int64, kinds int) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		count = f.player.BagComp().Count(itemID)
 		kinds = f.player.Dao().GetBag().ItemsLen()
 	}); err != nil {

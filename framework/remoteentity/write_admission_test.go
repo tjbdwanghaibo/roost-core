@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
@@ -766,7 +767,7 @@ func TestStaleWriteTargetHeldByTheCallerIsRefusedNotUnloaded(t *testing.T) {
 		t.Fatalf("B write: %v", err)
 	}
 	stale := a.manager.Get(id).(*reloadableFullDocEntity)
-	mu := stale.GetMutex()
+	mu := entity.SystemMutex(entitypermit.System(), stale)
 	mu.Lock()
 	batch, err := a.mgr.PrepareRemoteWriteBatch(entity.WithRemoteWriteTargetHeld(ctx), []int64{id})
 	mu.Unlock()

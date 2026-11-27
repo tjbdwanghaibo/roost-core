@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
@@ -13,19 +15,32 @@ import (
 // entityLockGroupDispatchRetryMax 是取锁期间锁组变化时重新取锁的最大次数。
 const entityLockGroupDispatchRetryMax = 4
 
-// EntityLockGroupScope 是 handler 执行期间当前 goroutine 持有的锁组：同组实体共用一把组锁，handler 可经它读取
-// 同组的其他实体。按 goroutine 登记，嵌套时保留上一层。
+// EntityLockGroupScope 只在所属 handler 的 goroutine、Guard 与事务里授予成员访问权。
+// 其成员取自已加锁、已纳入本次事务的快照，不是可按 ID 查询任意实体的仓库。
+// Get/Range 返回的是借用的业务指针；不得保存、交给其他 goroutine 或在 handler 结束后使用。
 type EntityLockGroupScope struct {
 	groupID int64
-	store   entityGroupStore
-	prev    *EntityLockGroupScope
+	guard   *entity.GuardScope
+	tx      *RollbackTx
+	frame   *nestDispatchFrame
+	ctx     *fctx.Context
+	members map[int64]dispatchGroupSnapshot
+	anchors []dispatchGroupSnapshot // 显式目标；全已失效就不再借出其他成员。
+	domains map[int64]entity.CompanionDomainSnapshot
+	ids     []int64
 }
+
+// ErrGroupMemberUnavailable 表示当前没有唯一、有效的同组成员授权，或实例的类型不符。
+var ErrGroupMemberUnavailable = errors.New("nest: group member unavailable in current handler scope")
+
+// ErrPeerGroupUnsupported 表示当前对等锁组不能安全组成事务（例如含 Remote 或已绑定的伴生域）。
+var ErrPeerGroupUnsupported = errors.New("nest: unsupported peer group dispatch")
 
 // entityGroupStore 是 Getter 可选实现的锁组查询与迁移能力（ManagerAccess 实现）。
 type entityGroupStore interface {
 	GetGroupEntity(groupID, entityID int64) entity.IThreadSafeEntity
 	GetGroupEntities(groupID int64) []entity.IThreadSafeEntity
-	UpdateEntityGroup(entity.IThreadSafeEntity, int64) error
+	UpdateEntityGroup(entitypermit.Token, entity.IThreadSafeEntity, int64) error
 }
 
 func groupStoreOf(getter entity.Getter) entityGroupStore {
@@ -38,7 +53,9 @@ var entityLockGroupScopes sync.Map // map[int64]*EntityLockGroupScope
 // CurrentEntityLockGroup 返回当前 goroutine 持有的锁组作用域；不在锁组内时为 nil。
 func CurrentEntityLockGroup() *EntityLockGroupScope {
 	if value, ok := entityLockGroupScopes.Load(goroutine.GoID()); ok {
-		if scope, ok := value.(*EntityLockGroupScope); ok {
+		if scope, ok := value.(*EntityLockGroupScope); ok && (scope.members == nil ||
+			(scope.frame != nil && scope.frame == currentNestDispatchFrame() && scope.frame.guard == scope.guard &&
+				scope.guard == entity.CurrentGuardScope() && scope.ctx == fctx.CurrentContext() && scope.tx == CurrentRollbackTx())) {
 			return scope
 		}
 	}
@@ -54,26 +71,34 @@ func (s *EntityLockGroupScope) GroupID() int64 {
 
 // Get 返回同组中的实体；实体不在本组（或已迁出）时返回 nil。
 func (s *EntityLockGroupScope) Get(entityID int64) entity.IThreadSafeEntity {
-	if s == nil || s.groupID == 0 || entityID == 0 || s.store == nil {
+	// 先验证当前 goroutine 的登记，再接触 Guard、成员和实体；跨 goroutine 的旧 scope 不能读别人的 Guard。
+	if s == nil || s != CurrentEntityLockGroup() || entityID == 0 || s.members == nil {
 		return nil
 	}
-	ent := s.store.GetGroupEntity(s.groupID, entityID)
-	if ent == nil || ent.Base() == nil || ent.Base().GroupLockID() != s.groupID {
+	snap, ok := s.members[entityID]
+	if !ok || !s.validMember(snap) || !slices.ContainsFunc(s.anchors, s.validMember) {
 		return nil
 	}
-	return ent
+	return snap.ent
+}
+
+func (s *EntityLockGroupScope) validMember(snap dispatchGroupSnapshot) bool {
+	e := snap.ent
+	if snap.groupID != s.groupID || e.IsRemoved() || e.IsClear() || e.Base().GroupLockID() != s.groupID ||
+		e.Base().GroupEpoch() != snap.epoch || e.Base().GroupTransitionPending() || !s.guard.Guard().GuardedEntity(e) {
+		return false
+	}
+	d, tracked := s.domains[e.GUId()]
+	return !tracked || d.Valid()
 }
 
 // Range 遍历仍属于本组的实体，fn 返回 false 时停止。
 func (s *EntityLockGroupScope) Range(fn func(entity.IThreadSafeEntity) bool) {
-	if s == nil || s.groupID == 0 || fn == nil || s.store == nil {
+	if s == nil || fn == nil || s != CurrentEntityLockGroup() {
 		return
 	}
-	for _, ent := range s.store.GetGroupEntities(s.groupID) {
-		if ent == nil || ent.Base() == nil || ent.Base().GroupLockID() != s.groupID {
-			continue
-		}
-		if !fn(ent) {
+	for _, id := range s.ids {
+		if ent := s.Get(id); ent != nil && !fn(ent) {
 			return
 		}
 	}
@@ -93,27 +118,52 @@ func GroupEntityAs[T entity.IThreadSafeEntity](scope *EntityLockGroupScope, enti
 	return typed, true
 }
 
-// pushEntityLockGroupScope 为当前 goroutine 登记锁组作用域，返回恢复上一层的函数；groupID 为 0 时不登记。
-func pushEntityLockGroupScope(groupID int64, store entityGroupStore) func() {
-	if groupID == 0 {
+// GetGroupMember 取得本 handler 唯一显式锁组中已登记参与当前事务的本地成员。
+// 未分组目标不影响该唯一组；多个显式组仍可一起派发，但此无组参数的查询拒绝歧义。
+func GetGroupMember[T entity.IThreadSafeEntity](id int64) (T, error) {
+	v, ok := GroupEntityAs[T](CurrentEntityLockGroup(), id)
+	if !ok {
+		return v, ErrGroupMemberUnavailable
+	}
+	return v, nil
+}
+
+// installPeerGroupScope(nil) 在独立事务的整个生命期遮蔽外层授权，包括它的快照和提交钩子。
+func installPeerGroupScope(scope *EntityLockGroupScope) func() {
+	gid := goroutine.GoID()
+	prev, had := entityLockGroupScopes.Load(gid)
+	if scope != nil {
+		entityLockGroupScopes.Store(gid, scope)
+	} else if had {
+		entityLockGroupScopes.Delete(gid)
+	} else {
 		return func() {}
 	}
-	prev := CurrentEntityLockGroup()
-	scope := &EntityLockGroupScope{groupID: groupID, store: store, prev: prev}
-	entityLockGroupScopes.Store(goroutine.GoID(), scope)
 	return func() {
-		cur := CurrentEntityLockGroup()
-		if cur != scope {
-			entityLockGroupScopes.Delete(goroutine.GoID())
-			return
-		}
-		if scope.prev != nil {
-			entityLockGroupScopes.Store(goroutine.GoID(), scope.prev)
+		if had {
+			entityLockGroupScopes.Store(gid, prev)
 		} else {
-			entityLockGroupScopes.Delete(goroutine.GoID())
+			entityLockGroupScopes.Delete(gid)
 		}
-		scope.prev = nil
 	}
+}
+
+func suspendPeerGroupScope() func() { return installPeerGroupScope(nil) }
+
+func (s *EntityLockGroupScope) beginHandler() func() {
+	s.guard, s.tx, s.frame, s.ctx = entity.CurrentGuardScope(), CurrentRollbackTx(), currentNestDispatchFrame(), fctx.CurrentContext()
+	restore := installPeerGroupScope(s)
+	return func() {
+		restore()
+		// 捕获出去的 scope 不延长实例与事务的寿命；Get/Range 总在身份检查成功后才读这些字段。
+		s.members, s.ids, s.anchors, s.domains = nil, nil, nil, nil
+		s.guard, s.tx, s.frame, s.ctx = nil, nil, nil, nil
+	}
+}
+
+// 低层兼容取锁入口仅报告所持组的 ID；没有事务成员快照，不授予原始指针访问权。
+func pushEntityLockGroupScope(groupID int64, _ entityGroupStore) func() {
+	return installPeerGroupScope(&EntityLockGroupScope{groupID: groupID})
 }
 
 // entityLockGroupLockManager 管理按组 ID 引用计数的组锁；最后一个引用释放时删除条目。组锁只 TryLock，不等待。
@@ -186,14 +236,7 @@ func captureDispatchGroupSnapshots(lockEs []entity.IThreadSafeEntity, storage []
 		if ent == nil || ent.Base() == nil {
 			continue
 		}
-		base := ent.Base()
-		ret = append(ret, dispatchGroupSnapshot{
-			ent:      ent,
-			groupID:  base.GroupLockID(),
-			epoch:    base.GroupEpoch(),
-			state:    base.GroupTransitionState(),
-			targetID: base.GroupTransitionTargetID(),
-		})
+		ret = capturePeerSnapshot(ret, ent)
 	}
 	return ret
 }
@@ -214,6 +257,15 @@ func resolveDispatchGroupIDFromSnapshots(snapshots []dispatchGroupSnapshot) (int
 			return 0, ErrEntityLockGroupMix
 		}
 	}
+	// 伴生派发是在目标无显式组时选中的。若在它重新拍关系快照前实体入组，不能以旧入口只锁
+	// 伴生域、漏掉对等成员；明确拒绝这次组合，正常的后续派发会依据实际组选择入口。
+	if groupID != 0 {
+		for _, s := range snapshots {
+			if entity.IsCompanionParticipant(s.ent.GetEntityKind()) {
+				return 0, ErrPeerGroupUnsupported
+			}
+		}
+	}
 	return groupID, nil
 }
 
@@ -221,7 +273,7 @@ func resolveDispatchGroupIDFromSnapshots(snapshots []dispatchGroupSnapshot) (int
 // 其余变化返回 ErrEntityLockGroupChanged（调用方放锁重试）。
 func validateDispatchGroupSnapshots(snapshots []dispatchGroupSnapshot) error {
 	for _, snap := range snapshots {
-		if snap.ent == nil || snap.ent.Base() == nil {
+		if snap.ent == nil || snap.ent.Base() == nil || snap.ent.IsRemoved() || snap.ent.IsClear() {
 			return ErrEntityLockGroupChanged
 		}
 		base := snap.ent.Base()

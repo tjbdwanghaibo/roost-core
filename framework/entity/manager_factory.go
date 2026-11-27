@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 )
 
@@ -37,7 +38,7 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 		}
 	}
 	var result IThreadSafeEntity
-	err := WithGuardScope("entity_create", func(scope *GuardScope) error {
+	err := WithGuardScope(entitypermit.System(), "entity_create", func(scope *GuardScope) error {
 		value, err := m.CreateInScope(scope, param)
 		if err != nil {
 			return err
@@ -116,9 +117,9 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 	if err := guard.lockCreated(value, capturer); err != nil {
 		return nil, abandonCreated(abandon, param, err)
 	}
-	if err := m.TryAdd(value); err != nil {
+	if err := m.tryAdd(value, param); err != nil {
 		if lockedNow {
-			guard.ReleaseEntityInstance(value)
+			guard.ReleaseEntityInstance(entitypermit.System(), value)
 		}
 		if capturer != nil && errors.Is(err, ErrEntityRemoved) && guard.revokedInThisGuard(m, value.ID()) {
 			// removing 是本 handler 自己留下的——同一 Guard 上较早在同一个 Manager 上撤销了同 ID 的新建（例如嵌套
@@ -190,6 +191,8 @@ func (m *EntityManager) createdRevoker(guard *EntityGuard, e IThreadSafeEntity) 
 //
 // 实体从未进入已提交的持久化记录：事务回滚时它的变更随 RollbackTx 一起丢弃，这里不做删除准入。
 func (m *EntityManager) revokeCreated(guard *EntityGuard, e IThreadSafeEntity) {
+	releaseDomains, _ := m.acquireRetireDomains(e, true)
+	defer releaseDomains()
 	id := e.ID()
 	m.addMu.Lock()
 	if m.entities.Get(id) != e {
@@ -197,6 +200,7 @@ func (m *EntityManager) revokeCreated(guard *EntityGuard, e IThreadSafeEntity) {
 		m.addMu.Unlock()
 		return
 	}
+	m.retireCompanionLocked(e, true)
 	m.removing[id] = struct{}{}
 	e.SetRemoved()
 	m.entities.Del(id)
@@ -239,6 +243,9 @@ func (m *EntityManager) build(param *EntityCreateParam) (IThreadSafeEntity, erro
 	}
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
+	if err := normalizeCompanionCreate(param); err != nil {
+		return nil, err
+	}
 	if param.IsCreate && param.Id == 0 && param.UniqueID == 0 {
 		if m.idGen == nil {
 			return nil, ErrIDGeneratorRequired
@@ -257,15 +264,12 @@ func (m *EntityManager) build(param *EntityCreateParam) (IThreadSafeEntity, erro
 	if err := param.NormalizeID(param.Kind); err != nil {
 		return nil, err
 	}
-	if param.Mutex == nil {
-		param.Mutex = m.locks.GetLock(param.Id)
+	native := param.Mutex
+	if native == nil {
+		native = m.locks.GetLock(param.Id)
 	}
-	if param.Mutex.LockId() != param.Id {
-		return nil, fmt.Errorf("entity manager: mutex id=%d does not match entity id=%d", param.Mutex.LockId(), param.Id)
+	if native.LockId() != param.Id {
+		return nil, fmt.Errorf("entity manager: mutex id=%d does not match entity id=%d", native.LockId(), param.Id)
 	}
-	value, err := BuildEntity(param)
-	if err != nil {
-		return nil, err
-	}
-	return value, nil
+	return buildEntity(param, native)
 }

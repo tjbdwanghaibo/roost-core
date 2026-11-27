@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 // 实体事件的单测。登记表在第一次 Publish 时冻结，所以本文件的全部监听都在 init 里登记，每个场景用自己的 kind。
@@ -155,8 +157,8 @@ func registerDepthStep[E any](next any, name string) {
 // withLockedEntity 在新的 Guard 作用域里锁住 ent 后执行 fn。
 func withLockedEntity(t *testing.T, ent IThreadSafeEntity, fn func() error) error {
 	t.Helper()
-	return WithGuardScope("entity_event_test", func(scope *GuardScope) error {
-		if !scope.Guard().RequireEntity(ent) {
+	return WithGuardScope(entitypermit.System(), "entity_event_test", func(scope *GuardScope) error {
+		if !scope.Guard().RequireEntity(entitypermit.System(), ent) {
 			t.Fatal("RequireEntity failed")
 		}
 		return fn()

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
@@ -1126,11 +1127,14 @@ func (m *Manager) quarantineEntries(entries []*remoteWriteEntry, cause error) er
 
 func (m *Manager) rollbackRemoteEntries(entries []*remoteWriteEntry) {
 	for _, entry := range entries {
-		if entry == nil || entry.entity == nil || !entry.finalized || entry.entity.GetMutex() == nil {
+		if entry == nil || entry.entity == nil || !entry.finalized {
+			continue
+		}
+		mu := entity.SystemMutex(entitypermit.System(), entry.entity)
+		if mu == nil {
 			continue
 		}
 		func() {
-			mu := entry.entity.GetMutex()
 			mu.Lock()
 			// 自定义回滚 hook panic 也必须解锁，不能把后续业务 worker 永久卡住。
 			defer mu.Unlock()

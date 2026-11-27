@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
 
 type nullCommitter struct{}
@@ -147,17 +148,23 @@ func TestBeatRunsUnderTheEntityLockInsideATransaction(t *testing.T) {
 				return nil, nil
 			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 		})
-		e := newHBEntity(t, f.driver, 1, kindShort)
+		id := mustID(t, 1, kindShort)
+		physical := lock.NewDefaultMutex(id)
+		e := newHBEntityWithMutex(f.driver, id, kindShort, physical)
 		f.manager.Add(e)
+		if !physical.TryLock() {
+			t.Fatal("test lock unavailable before dispatch")
+		}
+		physical.Unlock()
 		var inTx, lockedElsewhere, onShort atomic.Bool
 		r, _ := e.host.Register("x", 50*time.Millisecond, func(Beat) error {
 			inTx.Store(nest.CurrentRollbackTx() != nil)
 			onShort.Store(fctx.InShortWorker())
 			got := make(chan bool)
 			go func() { // 另一个 goroutine 取不到锁，说明回调期间锁被持有
-				ok := e.GetMutex().TryLock()
+				ok := physical.TryLock()
 				if ok {
-					e.GetMutex().Unlock()
+					physical.Unlock()
 				}
 				got <- ok
 			}()

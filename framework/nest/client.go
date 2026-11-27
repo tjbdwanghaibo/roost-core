@@ -24,7 +24,7 @@ type Client interface {
 	RequestMultiGroup(context.Context, HandlerName, [][]int64, Params, ...SendOpt) (any, error)
 }
 
-// DispatchBroadcast 按锁组与 worker 拆批，准入一组相互独立的单实体投递。准入中途失败时，失败之前已准入的投递
+// DispatchBroadcast 按独立目标准入；组关系可在准入后变化，每条广播的重排边界因此必须是单个目标。失败之前已准入的投递
 // 仍可能执行；需要全有或全无语义的调用方应使用 DispatchMulti。
 func (mgr *NestMgr) DispatchBroadcast(ctx context.Context, name HandlerName, ids []int64, params Params, opts ...SendOpt) error {
 	if len(ids) == 0 {
@@ -37,18 +37,16 @@ func (mgr *NestMgr) DispatchBroadcast(ctx context.Context, name HandlerName, ids
 	if err != nil {
 		return err
 	}
-	var admissionErr error
-	mgr.dispatcher.ForEachSpliceBatch(fullIDs, func(_ int, batch []int64, _ []int) {
-		if admissionErr != nil {
-			return
-		}
+	for _, id := range fullIDs {
 		msg := GenMsg(MsgTypeBroadcast)
-		msg.Tids = append(msg.Tids[:0], batch...)
+		msg.Tids = append(msg.Tids[:0], id)
 		prepareClientMessage(ctx, msg, name, params, false, opts...)
 		checkRemoteIds(msg, msg.Tids)
-		admissionErr = mgr.admit(msg, opts...)
-	})
-	return admissionErr
+		if err := mgr.admit(msg, opts...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var _ Client = (*NestMgr)(nil)

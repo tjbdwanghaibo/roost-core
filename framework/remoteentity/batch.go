@@ -872,11 +872,13 @@ func (b *remoteWriteBatch) Abort(ctx context.Context, cause error) error {
 			return
 		}
 		if b.finalized {
+			// 这里只查询已有的作用域；快阶段之外不能为了查询而借出一个独立 Guard。
+			scope := entity.CurrentGuardScope()
 			for _, entry := range b.entries {
 				if entry == nil || !entry.finalized || entry.entity == nil {
 					continue
 				}
-				if entity.GetEntityGuard().Guarded(entry.entity.GUId()) {
+				if scope != nil && scope.Guard().GuardedEntity(entry.entity) {
 					if p, ok := entry.entity.(entity.IRemoteCommitParticipant); ok {
 						p.RollbackRemoteCommit(entry.commit.Clone())
 					}

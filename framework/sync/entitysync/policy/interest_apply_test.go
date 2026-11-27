@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
@@ -704,7 +705,7 @@ func queueAcrossHideShow(t *testing.T, m *entitysync.Manager, in *Interest) int 
 	queuedA, queueB, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
-		_, closeScope := entity.NewGuardScope("commit-x")
+		_, closeScope := entity.NewGuardScope(entitypermit.System(), "commit-x")
 		defer closeScope()
 		x := entity.BeginSyncMutation([]entity.IThreadSafeEntity{a, b}, m)
 		if err := in.QueueMove(a, cutTo[cutA]); err != nil {
@@ -846,7 +847,7 @@ func commitInScope(t *testing.T, m *entitysync.Manager, in *Interest, es []*queu
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, closeScope := entity.NewGuardScope("commit")
+		_, closeScope := entity.NewGuardScope(entitypermit.System(), "commit")
 		defer closeScope()
 		locked := make([]entity.IThreadSafeEntity, len(es))
 		for i, e := range es {

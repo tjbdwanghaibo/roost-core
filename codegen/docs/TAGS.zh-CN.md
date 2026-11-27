@@ -28,7 +28,7 @@
 | --- | --- | --- |
 | `//roost:dao` | DAO 定义 struct；生成事务化读写、持久与同步代码 | `coll`、`db`、`dbscope`、`schema`；或独立 flag `nocoll` |
 | `//roost:redisdao` | Redis DAO 定义 struct；生成 Redis 访问包装 | 必需 `key`、`prefix`；可选 `mode`、`key_type`、`version`、`ttl`、`name` |
-| `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service`、`preload`、`preload_order`、`snapshots`、`ownership` |
+| `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service`、`preload`、`preload_order`、`snapshots`、`ownership`、`companionOf` |
 | `//roost:component type=N` | 组件声明；供 ID 空间检查。组件包写法写在 `game/components/<包>/` 里（2026-11-16 起模块统一用它，2026-11-18 起 `roost add component` 也生成它）；实体包里只剩生成的定时器 / 心跳 / 行为 / 时间域组件（实体的基础设施） | `type` 为组件类型号，按组件分配：同一个组件挂在几种实体上都用同一个号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
 | `//roost:listen` | 实体方法或组件方法；标成实体事件的监听，生成 `<实体>_event_gen.go` 的登记（见[实体事件](#实体事件roostlisten)） | 可选 `priority=<整数>`（-1000～1000，缺省 0，大的先执行） |
 | `//roost:mirror` | 手写只读 DTO；生成读取器 | `entityKind`、`coll`，对应拥有者 kind 与 DAO 集合 |
@@ -154,6 +154,7 @@ type Player struct {
 | 参数 / tag | 含义 |
 | --- | --- |
 | `id` / `entityKind` / `category` | 类型编号、kind 表达式、category 表达式；必须与注册的 kind/category 一致 |
+| `companionOf=Archive` | 可选，当前工程 `game/entities/<包>` 中唯一的主实体结构体名。两种实体均需可导出的类型与包内 kind 常量；不要求 Remote。只声明类型对，不会自动创建实例 |
 | `businessPool=short` | 默认短业务池；`long` 为长业务池。多目标有 long 则整条消息走 long；io 不是业务池 |
 | `remote=managed` | Remote 托管，配套 `RemoteEntityBase`、Remote category 与运行时 Mod；普通实体用 `none` |
 | `noPersist=true` | 声明实体不持久；不代替 DAO 字段逐项表达意图 |
@@ -167,6 +168,30 @@ type Player struct {
 | `ownership=shared` | 共享 kind（缺省 `exclusive`）：这个 kind 的每个实体生来就是共享模式——第一次认领（写准入的首写认领、`ClaimRemoteOwnership`）一条插入就写成共享的所有权记录，没有“先独占认领、再切共享”的中间态，两个进程同时第一次写都成功；不能退出共享（`LeaveRemoteSharedMode` 拒绝）。生成的登记调 `entity.DeclareRemoteSharedKind`。只能写在 `remote=managed` 上；每次读写都走共享准入（分布式锁 + 写许可），只给“多个进程都要写、没有天然 owner”的实体用（facebook 模块的 `Facebook`）。契约见 [REMOTE_ENTITY“共享 kind”](../../docs/framework/REMOTE_ENTITY.md#共享-kindownershipshared) |
 | `comp:"CompTypeProfile"` / `comp:"bag.CompTypeBag"` | 组件类型号表达式：不带包名是实体包里的组件，带包名是组件包写法（字段类型 `*bag.Component`，类型号与工厂登记在组件包里，见下段）；可加 `,cold` 声明按需初始化 |
 | `dao:"players"` | DAO 装配名称；可加 `,cold` 声明按需初始化，不是 DAO 定义字段的能力选项 |
+
+### 伴生实体：一个声明，两种 ID
+
+例如 `Archive` 和 `Journal` 是两个普通本地实体，只在 `Journal` 上写 `//roost:entity entityKind=EntityKindJournal companionOf=Archive`。`roost generate` 在工程 `internal/registry` 的 `post` 阶段登记这对类型（已完成两端 kind 与 builder 注册）；不会让 `journal` 导入 `archive`，所以主实体的业务方法仍能使用子包。主名不能指向自身、另一个伴生实体或多个同名实体；两端显式声明不同 `service` 时拒绝生成。
+
+```go
+// principal 已在当前 manager 中，传的是完整 ID 而不是 UniqueID。
+child, err := journal.CreateJournalForPrincipal(access, principal.ID())
+if err != nil { return err }
+// 使用新建的 child；不要再为它分配 unique。
+```
+
+在有权访问该域的 Nest handler 中取已挂接的对象，不加载也不创建：
+
+```go
+child, err := entity.GetCompanion[*journal.Journal]()
+if err != nil { return err }
+```
+
+创建失败要处理 `err`；这不是 GetOrCreate。新对象沿用主实体的 unique，只换 kind，完整 ID 不相等。子实体仍是独立的实体。只计算地址用 `entity.CompanionID(principal.ID(), journal.EntityKindJournal)`，地址不是访问或挂接授权；普通 `NewJournal` / lifecycle 入口也不是“创建并挂接”的替代。未声明 `companionOf` 的项目不生成配对或 helper。
+
+两端均为普通本地 kind 时，`CreateJournalForPrincipal` 新建并挂接。**任一端为 `remote=managed` 时，创建成功只表示子实体已创建、关系已声明，尚未挂接**（`CompanionDetached: true`）。随后须在覆盖两端且已获相关 Remote 实例独占写许可的 Nest handler 内显式调用 `entity.AttachCompanion(child.ID())`，待事务成功后才生效；不能用直接的 manager 调用、主 ID 或本地存在的对象代替写许可。`ownership=shared` 不能参与这种配对。
+
+### 实体归属服务
 
 `service=<name>` 只在实体标记上声明一次（不在 `roost.yaml` 再写一份）。取值必须是 `roost.yaml` 声明的业务服务、带 Nest；`remote=managed` 时还要有 `remote_entity`，否则 `roost generate` 报出实体与服务名。声明之后：锁住这个 kind 的 `//roost:nest` handler 只在归属服务的 Nest 引擎上注册（生成 `Register<File>NestHandlersOn(mgr)`，由 `internal/registry/ownership_gen.go` 的 `NewOwnedNestHandlersMod` 在归属服务的 Provide 里注册），别的服务发过去得到“handler 未注册”；`remote=managed` 的归属 kind 进 `ForeignKinds(service)`，每个装 `remote_entity` 的服务的 RemoteEntityMod 带 `WithForeignKinds(registry.ForeignKinds("<service>")...)`，别的服务的进程认领与写许可前被拒（`entity.ErrRemoteKindNotOwned`）；本地 kind 的 `service=` 只影响 handler 注册；doctor 的 `entity-owner` 检查别的服务构造了它的 Sender 或用了它实体包的 lifecycle（`LifecycleFromRegistry` / `NewLifecycle`，v1.47.0 起由 generate 生成）。一个 handler 锁住两个不同服务的 kind、同一源文件里 handler 归属不一致、方法 handler 或原生步骤 handler 锁住归属 kind、同一实体包里两个实体声明不同服务，都在生成期拒绝。改了 `service=` 先 `roost project sync` 再 `roost generate`（bootstrap 与生成物不一致时 generate 拒绝并给出这条命令）。
 

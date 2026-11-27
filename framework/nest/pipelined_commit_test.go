@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -212,7 +213,7 @@ func TestPipelinedCommitReleasesLocksBeforeDurable(t *testing.T) {
 	lockObserved := make(chan struct{})
 	go func() {
 		<-committer.enqueued
-		mu := ent.GetMutex()
+		mu := physicalTestLock(ent)
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			if mu.TryLock() {
@@ -494,7 +495,7 @@ func TestPipelinedCascadedReadGatesBothRepliesInOrder(t *testing.T) {
 		c, releaseCtx := fctx.NewContext()
 		c.MergeMeta(fctx.RequestMeta{Source: "nest", Handler: name})
 		defer releaseCtx()
-		_, releaseScope := entity.NewGuardScope("test:" + name)
+		_, releaseScope := entity.NewGuardScope(entitypermit.System(), "test:"+name)
 		defer releaseScope()
 		return run()
 	}
@@ -578,9 +579,9 @@ func TestPipelinedAdmissionRunsBeforeUnlock(t *testing.T) {
 			defer releaseContext()
 			id, ent := newAsyncPilotEntity(t, 9801, 10)
 			es := []entity.IThreadSafeEntity{ent}
-			scope, closeScope := entity.NewGuardScope("admission-boundary")
+			scope, closeScope := entity.NewGuardScope(entitypermit.System(), "admission-boundary")
 			defer closeScope()
-			if !scope.Guard().RequireEntity(ent) {
+			if !scope.Guard().RequireEntity(entitypermit.System(), ent) {
 				t.Fatal("lock entity")
 			}
 			msg := &Msg{Tid: id, RetChan: make(chan any, 1)}
@@ -599,7 +600,7 @@ func TestPipelinedAdmissionRunsBeforeUnlock(t *testing.T) {
 			var admittedAtRelease int32
 			release := func() {
 				admittedAtRelease = admitted.Load()
-				scope.Guard().ReleaseEntity(id)
+				scope.Guard().ReleaseEntity(entitypermit.System(), id)
 				// 精确控制持久化时机，无需 sleep：只有释放锁后才 resolve ticket。
 				committer.resolveAll(nil)
 			}

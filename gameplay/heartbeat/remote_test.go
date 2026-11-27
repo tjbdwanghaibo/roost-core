@@ -92,10 +92,10 @@ func (b *fakeRemoteBatch) Close(context.Context) error {
 	return nil
 }
 
-func lockedTransition(t *testing.T, e entity.IThreadSafeRemoteEntity, states ...entity.RemoteOwnershipState) {
+func lockedTransition(t *testing.T, e *remoteHBEntity, states ...entity.RemoteOwnershipState) {
 	t.Helper()
-	e.GetMutex().Lock()
-	defer e.GetMutex().Unlock()
+	e.fixtureMu.Lock()
+	defer e.fixtureMu.Unlock()
 	for _, s := range states {
 		if err := e.TransitionRemoteOwnership(s); err != nil {
 			t.Fatal(err)
@@ -131,7 +131,7 @@ func TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats(t *testing.T) {
 			p := &proc{remote: &fakeRemoteManager{sid: sid, auth: auth}}
 			p.f = newNestFixture(t, nil, nest.NestOptionWithRemoteEntityManager(p.remote))
 			p.remote.manager = p.f.manager
-			e := &remoteHBEntity{RemoteEntityBase: entity.NewRemoteEntityBase(id, entity.EntityCategoryRemote, true, kindRemote)}
+			e := newRemoteHBEntity(id)
 			e.host = p.f.driver.NewHost(e)
 			p.e = e
 			r, err := e.host.Register("x", 50*time.Millisecond, func(Beat) error { logEvent(name); return nil })
@@ -226,7 +226,7 @@ func newSharedTestProc(t *testing.T, unique int64) (*nestFixture, *fakeRemoteMan
 	remote := &fakeRemoteManager{sid: 1, auth: &remoteAuthority{owner: 1}}
 	f := newNestFixture(t, nil, nest.NestOptionWithRemoteEntityManager(remote))
 	remote.manager = f.manager
-	e := &remoteHBEntity{RemoteEntityBase: entity.NewRemoteEntityBase(mustID(t, unique, kindRemote), entity.EntityCategoryRemote, true, kindRemote)}
+	e := newRemoteHBEntity(mustID(t, unique, kindRemote))
 	e.host = f.driver.NewHost(e)
 	f.manager.Add(e)
 	return f, remote, e
@@ -242,9 +242,9 @@ func TestRegisterOnASharedRemoteEntityIsRejected(t *testing.T) {
 		} {
 			_, _, e := newSharedTestProc(t, 50+int64(len(states)))
 			lockedTransition(t, e, states...)
-			e.GetMutex().Lock()
+			e.fixtureMu.Lock()
 			r, err := e.host.Register("x", 100*time.Millisecond, func(Beat) error { return nil })
-			e.GetMutex().Unlock()
+			e.fixtureMu.Unlock()
 			if err == nil {
 				t.Fatalf("Register on a Remote entity in %s succeeded (registration %v), want a refusal", e.RemoteOwnershipState(), r != nil)
 			}
@@ -264,12 +264,12 @@ func TestEnteringRemoteSharedModeStopsTheHeartbeat(t *testing.T) {
 		f.driver.config.Logger = slog.New(logs)
 		lockedTransition(t, e, entity.RemoteOwnershipLocalOwned)
 		var runs atomic.Int32
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		r, err := e.host.Register("x", 50*time.Millisecond, func(Beat) error { runs.Add(1); return nil })
 		if err == nil {
 			err = r.Start()
 		}
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -281,9 +281,9 @@ func TestEnteringRemoteSharedModeStopsTheHeartbeat(t *testing.T) {
 		lockedTransition(t, e, entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared)
 		before := runs.Load()
 		stepIdle(f, 100)
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		active := r.Active()
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		if active || runs.Load() != before {
 			t.Fatalf("after entering shared mode: registration active=%v, callbacks run %d (want stopped, 0); stats %+v",
 				active, runs.Load()-before, f.driver.Stats())
@@ -297,19 +297,19 @@ func TestEnteringRemoteSharedModeStopsTheHeartbeat(t *testing.T) {
 		}
 
 		// 共享期间 Start 返回错误、不启动。
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		err = r.Start()
 		active = r.Active()
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		if !errors.Is(err, ErrHeartbeatRemoteShared) || active {
 			t.Fatalf("Start in shared mode: err %v active %v, want ErrHeartbeatRemoteShared and still stopped", err, active)
 		}
 
 		// LeaveRemoteSharedMode：Shared → Draining → LocalOwned 之后业务重新 Start，照常跳。
 		lockedTransition(t, e, entity.RemoteOwnershipDraining, entity.RemoteOwnershipLocalOwned)
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		err = r.Start()
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		if err != nil {
 			t.Fatalf("Start after leaving shared mode: %v", err)
 		}
@@ -328,19 +328,19 @@ func TestFirstAdmissionIntoSharedModeStopsTheHeartbeat(t *testing.T) {
 		f, remote, e := newSharedTestProc(t, 71)
 		remote.shared.Store(true)
 		var runs atomic.Int32
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		r, err := e.host.Register("x", 50*time.Millisecond, func(Beat) error { runs.Add(1); return nil })
 		if err == nil {
 			err = r.Start()
 		}
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		if err != nil {
 			t.Fatalf("Register on an Unknown Remote entity: %v", err)
 		}
 		stepIdle(f, 100)
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		active := r.Active()
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		if e.RemoteOwnershipState() != entity.RemoteOwnershipShared {
 			t.Fatalf("admission left the instance in %s, want shared", e.RemoteOwnershipState())
 		}
@@ -360,26 +360,26 @@ func TestSharedModeStopsEveryRegistrationAndWarnsAtALimitedRate(t *testing.T) {
 		f, _, e1 := newSharedTestProc(t, 81)
 		logs := &countingHandler{}
 		f.driver.config.Logger = slog.New(logs)
-		e2 := &remoteHBEntity{RemoteEntityBase: entity.NewRemoteEntityBase(mustID(t, 82, kindRemote), entity.EntityCategoryRemote, true, kindRemote)}
+		e2 := newRemoteHBEntity(mustID(t, 82, kindRemote))
 		e2.host = f.driver.NewHost(e2)
 		f.manager.Add(e2)
 
 		var regs []*Reg
 		for _, e := range []*remoteHBEntity{e1, e2} {
 			lockedTransition(t, e, entity.RemoteOwnershipLocalOwned)
-			e.GetMutex().Lock()
+			e.fixtureMu.Lock()
 			for i, period := range []time.Duration{50 * time.Millisecond, time.Second} {
 				r, err := e.host.Register(fmt.Sprint("r", i), period, func(Beat) error { return nil })
 				if err == nil {
 					err = r.Start()
 				}
 				if err != nil {
-					e.GetMutex().Unlock()
+					e.fixtureMu.Unlock()
 					t.Fatal(err)
 				}
 				regs = append(regs, r)
 			}
-			e.GetMutex().Unlock()
+			e.fixtureMu.Unlock()
 		}
 		stepIdle(f, 10)
 
@@ -405,9 +405,10 @@ func TestSharedModeStopsEveryRegistrationAndWarnsAtALimitedRate(t *testing.T) {
 			t.Fatalf("warns after the interval = %d, want 2", logs.count())
 		}
 		for _, r := range regs {
-			r.host.owner.GetMutex().Lock()
+			mu := r.host.owner.(*remoteHBEntity).fixtureMu
+			mu.Lock()
 			active := r.Active()
-			r.host.owner.GetMutex().Unlock()
+			mu.Unlock()
 			if active {
 				t.Fatalf("registration %s on entity %d still active in shared mode", r.Name(), r.host.id)
 			}
@@ -425,14 +426,14 @@ func TestLeavingSharedModeDoesNotResumeTheHeartbeat(t *testing.T) {
 		f, _, e := newSharedTestProc(t, 91)
 		lockedTransition(t, e, entity.RemoteOwnershipLocalOwned)
 		var runs atomic.Int32
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		r, err := e.host.Register("x", 50*time.Millisecond, func(Beat) error { runs.Add(1); return nil })
 		if err != nil {
-			e.GetMutex().Unlock()
+			e.fixtureMu.Unlock()
 			t.Fatal(err)
 		}
 		r.Start()
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		stepIdle(f, 20)
 
 		lockedTransition(t, e, entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared)
@@ -440,18 +441,18 @@ func TestLeavingSharedModeDoesNotResumeTheHeartbeat(t *testing.T) {
 		lockedTransition(t, e, entity.RemoteOwnershipDraining, entity.RemoteOwnershipLocalOwned)
 		before := runs.Load()
 		stepIdle(f, 50)
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		active := r.Active()
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		if active || runs.Load() != before {
 			t.Fatalf("back to local ownership without Start: active=%v, callbacks run %d (want stopped, 0); stats %+v",
 				active, runs.Load()-before, f.driver.Stats())
 		}
 
-		e.GetMutex().Lock()
+		e.fixtureMu.Lock()
 		r.Start()
 		active = r.Active()
-		e.GetMutex().Unlock()
+		e.fixtureMu.Unlock()
 		stepIdle(f, 20)
 		if !active || runs.Load()-before < 3 {
 			t.Fatalf("after Start back in local ownership: active=%v, beats %d (want ≥ 3)", active, runs.Load()-before)

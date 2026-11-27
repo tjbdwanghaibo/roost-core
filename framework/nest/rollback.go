@@ -74,6 +74,8 @@ type RollbackParticipant interface {
 // RollbackTx 保存业务回滚与持久化参与者，执行时序由 execution.go 管理。
 // 准入前归持锁的业务 goroutine；pipelined 转交完成池后，业务侧不再操作该对象。
 type RollbackTx struct {
+	// 只由框架在明确的锁内提交边界发布；不能用业务可调用的 Commit/AfterAdmission 提前触发。
+	companionChanges       []*entity.CompanionChange
 	id                     TransactionID
 	policy                 RollbackPolicy
 	durability             DurabilityPolicy
@@ -122,6 +124,8 @@ type RollbackTx struct {
 	// dispatch 是以本事务为自身事务的派发消息（嵌套的 RunIsolatedTransaction / 无派发调用为 nil）；
 	// 越过提交点时在它上面记录，dispatchNest 据此不再重新准入。
 	dispatch *Msg
+	// 仅锁内确定提交时发布的对等组成员变更；预留由 dispatch frame 在同一 worker 上释放。
+	peerChange *peerGroupChange
 	// enclosing 是本事务开始时已在执行的外层事务（handler 内嵌套的 RunIsolatedTransaction 才有；消息自己的事务为 nil）。
 	// snapshotted 是本事务以可回滚策略捕获（登记了快照 / tracker 恢复）的实体。嵌套事务提交前据此拒绝写外层会回滚的实体。
 	enclosing   *RollbackTx

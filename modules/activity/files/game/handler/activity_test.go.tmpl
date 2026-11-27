@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
@@ -314,16 +315,18 @@ func TestActivityTimerErrorKeepsDeadlineAndRollsBackHook(t *testing.T) {
 		t.Fatal("timer swallowed settlement failure")
 	}
 	// 只读快照不改定时器（fixture.do 会重新设期限）。
-	f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		p := f.players[0]
-		p.GetMutex().Lock()
-		defer p.GetMutex().Unlock()
-		h := p.ActivityComp().Host()
-		v, _ := h.Views()
-		if v[0].Token != before.Token || h.Book.GetCursor() == 99 || h.Book.GetTimerID() != timer {
-			t.Errorf("rollback lost state: %+v timer=%d/%d", v, h.Book.GetTimerID(), timer)
-		}
-	})
+		return nesttest.With(context.Background(), f.engine, p, func() {
+			h := p.ActivityComp().Host()
+			v, _ := h.Views()
+			if v[0].Token != before.Token || h.Book.GetCursor() == 99 || h.Book.GetTimerID() != timer {
+				t.Errorf("rollback lost state: %+v timer=%d/%d", v, h.Book.GetTimerID(), timer)
+			}
+		})
+	}(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestActivityLoopBoundedCatchupAndFrozenDefinition(t *testing.T) {

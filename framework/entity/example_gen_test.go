@@ -132,12 +132,8 @@ func Example_generatedEntityFactory() {
 	fmt.Printf("touched, removed=%v\n", player.IsRemoved())
 	player.UnTouch()
 
-	// Guard 使用
-	guard := entity.GetEntityGuard()
-	ok := guard.RequireEntity(player)
-	fmt.Printf("guard_acquired=%v\n", ok)
-	guard.ReleaseAll()
-	entity.EntityGuardRelease(guard)
+	// 实体从构造起由框架管理锁；业务把修改交给 Nest handler，不手动取放锁。
+	fmt.Printf("manual_lock_denied=%v\n", !player.GetMutex().TryLock())
 
 	// Verify no IThreadSafeEntity stored in EntityBase
 	_ = player.Base().GetMutex()
@@ -148,6 +144,6 @@ func Example_generatedEntityFactory() {
 	// Output:
 	// entity_id=10241029, storage_id=10241029
 	// touched, removed=false
-	// guard_acquired=true
+	// manual_lock_denied=true
 	// no interface reference in EntityBase
 }

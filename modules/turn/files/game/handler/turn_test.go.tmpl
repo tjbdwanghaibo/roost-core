@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -149,7 +150,9 @@ func (f *turnFixture) tick(t *testing.T) {
 }
 func (f *turnFixture) locked(t *testing.T, fn func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() { f.value.GetMutex().Lock(); defer f.value.GetMutex().Unlock(); fn() }); err != nil {
+	if err := nesttest.With(context.Background(), f.engine, f.value, func() {
+		fn()
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

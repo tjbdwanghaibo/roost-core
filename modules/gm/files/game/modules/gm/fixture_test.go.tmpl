@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 )
 
@@ -93,7 +94,9 @@ func (f *gmFixture) execute(name, payload string) (admin.Result, error) {
 }
 func (f *gmFixture) read(t *testing.T, target entity.IThreadSafeEntity, read func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() { target.GetMutex().Lock(); defer target.GetMutex().Unlock(); read() }); err != nil {
+	if err := nesttest.With(context.Background(), f.engine, target, func() {
+		read()
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

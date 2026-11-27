@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"testing"
 )
 
@@ -11,9 +13,7 @@ import (
 func robotRead[T any](t *testing.T, engine *nest.NestMgr, target entity.IThreadSafeEntity, read func() T) T {
 	t.Helper()
 	var value T
-	if err := engine.RunLocal(context.Background(), func() {
-		target.GetMutex().Lock()
-		defer target.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), engine, target, func() {
 		value = read()
 	}); err != nil {
 		t.Fatal(err)

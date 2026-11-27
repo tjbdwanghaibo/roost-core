@@ -366,6 +366,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{Workers: 4, QueueCap: 64}))
 	options = append(options, extra...)
 	rig.scheduler = nest.NewEngine(options...)
+	registerVaultInspection(rig.scheduler)
 	rig.scheduler.MustRegisterHandlerWithMeta(rig.write, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		for _, e := range es {
 			vault := e.(*SyncedVault)
@@ -538,9 +539,7 @@ func (rig *rejectRig) memory(t *testing.T, id int64) (int64, int64) {
 	if vault == nil {
 		t.Fatalf("SyncedVault %d is not resident", id)
 	}
-	vault.GetMutex().Lock()
-	defer vault.GetMutex().Unlock()
-	return vault.balance.GetValue(), vault.items.GetValue()
+	return residentVaultValues(t, rig.ctx, rig.scheduler, vault)
 }
 
 // stored 读真实 Mongo 里两份 Remote 信封文档；found=false 表示两份都不存在。

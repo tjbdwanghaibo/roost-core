@@ -20,6 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -221,9 +222,7 @@ type mailboxSnapshot struct {
 func (f *mailboxFixture) snapshot(t *testing.T) mailboxSnapshot {
 	t.Helper()
 	var out mailboxSnapshot
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		out.coins = f.player.Dao().GetWallet().GetCoins()
 		out.ledger = f.player.MailboxComp().LedgerSize()
 	}); err != nil {
@@ -237,9 +236,7 @@ func (f *mailboxFixture) snapshot(t *testing.T) mailboxSnapshot {
 func (f *mailboxFixture) recorded(t *testing.T, mailID string) bool {
 	t.Helper()
 	var out bool
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		out = f.player.MailboxComp().Claimed(mailID)
 	}); err != nil {
 		t.Fatal(err)
@@ -677,8 +674,8 @@ func TestMailboxRegisterGrantRefusesBadRegistrations(t *testing.T) {
 			mailboxcomp.RegisterMailboxGrant(mailboxTestVoucher, mailboxcomp.MailboxGrant{Grant: grant.Grant})
 		},
 		"a type game/modules/mailbox does not know": func() { mailboxcomp.RegisterMailboxGrant("gem", grant) },
-		"the built-in coins again":          func() { mailboxcomp.RegisterMailboxGrant(gamemailbox.TypeCoins, grant) },
-		"a registered grant once again":     func() { mailboxcomp.RegisterMailboxGrant(mailboxTestChest, grant) },
+		"the built-in coins again":                  func() { mailboxcomp.RegisterMailboxGrant(gamemailbox.TypeCoins, grant) },
+		"a registered grant once again":             func() { mailboxcomp.RegisterMailboxGrant(mailboxTestChest, grant) },
 	} {
 		if !panics(register) {
 			t.Errorf("%s: RegisterMailboxGrant did not panic", name)

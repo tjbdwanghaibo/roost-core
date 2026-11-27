@@ -2,10 +2,13 @@ package entity
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
 
 // EntityBuilderFunc 按参数构建实体（生成的 NewXxx）；返回的实体必须是指针实现的 IThreadSafeEntity。
@@ -264,6 +267,7 @@ func GetAllEntityBuilders() []*EntityBuilderParam {
 func ResetEntityRegistryForTest() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
+	companionRegistry.Store(nil)
 	for i := range kindEntries {
 		kindEntries[i].Store(nil)
 		lockRankByKind[i].Store(0)
@@ -316,6 +320,16 @@ func resolveEntityBuilder(param *EntityCreateParam) (*EntityBuilderParam, error)
 // 加载器使用。顺序：规范 ID → 新建时创建 DAO → 持久 kind 绑定 DaoAggregate → builder（内部创建组件并 InitAll）→
 // 策略与指针校验 → 恢复 Remote 版本 → 生命周期与同步 → OnInitFinish。
 func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
+	if param == nil {
+		return nil, fmt.Errorf("entity create param is nil")
+	}
+	return buildEntity(param, param.Mutex)
+}
+
+func buildEntity(param *EntityCreateParam, native lock.Mutex) (IThreadSafeEntity, error) {
+	if err := normalizeCompanionCreate(param); err != nil {
+		return nil, err
+	}
 	bp, err := resolveEntityBuilder(param)
 	if err != nil {
 		return nil, err
@@ -340,10 +354,25 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 		bindDaoAggregate(param.Dao)
 	}
 
+	// Never put a manager lock on the caller's params. Builders, initializers and
+	// hooks see a one-build handoff only. Even an unused handoff expires on return.
+	if native != nil {
+		if _, view := native.(publicEntityMutex); view {
+			return nil, fmt.Errorf("%w: a public view or prior handoff cannot supply a native mutex", ErrEntityLockScope)
+		}
+		handoff := newConstructorMutex(native)
+		defer handoff.grant.Store(nil)
+		builderParam := *param
+		builderParam.Mutex = handoff
+		param = &builderParam
+	}
 	// 构建实体（组件在 Builder 内创建并 InitAll）。
 	e, err := bp.Builder(param)
 	if err != nil {
 		return nil, fmt.Errorf("build entity category %d: %w", param.Category, err)
+	}
+	if IsCompanionParticipant(param.Kind) && (e == nil || reflect.TypeOf(e) != relationKind(param.Kind).typ || reflect.ValueOf(e).IsNil() || e.Base() == nil || e.ID() != param.Id || e.GetEntityKind() != param.Kind || e.GetEntityCategory() != param.Category || gateOf(e) == nil) {
+		return nil, fmt.Errorf("%w: builder returned mismatched companion instance, kind=%d id=%d", ErrCompanionKind, param.Kind, param.Id)
 	}
 	if err := validateBuiltEntityPolicy(bp, e); err != nil {
 		return nil, err
@@ -351,6 +380,9 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	// 注册的 builder 构建出的实体必须是指针：Guard 按实例比较，值类型实现进入 Guard 后才 panic 太晚。
 	if err := requirePointerEntity(e); err != nil {
 		return nil, fmt.Errorf("entity kind %d: %w", bp.Kind, err)
+	}
+	if err := requireNativeMutexView(e); err != nil {
+		return nil, err
 	}
 	if param.RemoteRestore != nil {
 		remote, ok := e.(IThreadSafeRemoteEntity)

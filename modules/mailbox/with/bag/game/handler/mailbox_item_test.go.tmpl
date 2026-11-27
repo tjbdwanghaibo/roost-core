@@ -16,6 +16,7 @@ import (
 	"{{MODULE}}/protocol/pb"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -69,9 +70,7 @@ func withMailboxBagLoadItems(t *testing.T) {
 func withMailboxBagItems(t *testing.T, f *mailboxFixture) map[int64]int64 {
 	t.Helper()
 	items := map[int64]int64{}
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		f.player.Dao().GetBag().RangeItems(func(itemID, count int64) bool {
 			items[itemID] = count
 			return true

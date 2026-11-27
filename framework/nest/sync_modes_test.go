@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
@@ -98,9 +99,9 @@ func TestNestSyncModesShareCommitAndUnlockBoundaries(t *testing.T) {
 		t.Run(mode.String(), func(t *testing.T) {
 			_, e := newAsyncPilotEntity(t, 9900, 10)
 			m, frames, packs := syncTestManager(t, e, mode)
-			scope, closeScope := entity.NewGuardScope("sync-modes")
+			scope, closeScope := entity.NewGuardScope(entitypermit.System(), "sync-modes")
 			defer closeScope()
-			scope.Guard().RequireEntity(e)
+			scope.Guard().RequireEntity(entitypermit.System(), e)
 			_, err := invokeWithTransaction(HandlerMeta{}, []entity.IThreadSafeEntity{e}, nil, "write", nil, completionRoute{}, func() (any, error) { e.dao.Value = 11; e.MarkSyncDirty(1); return nil, nil }, m)
 			if err != nil {
 				t.Fatal(err)
@@ -119,7 +120,7 @@ func TestNestSyncModesShareCommitAndUnlockBoundaries(t *testing.T) {
 				t.Fatal("sent before all locks released")
 			default:
 			}
-			scope.Guard().ReleaseAll()
+			scope.Guard().ReleaseAll(entitypermit.System())
 			if err = m.Flush(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -172,9 +173,9 @@ func TestNestSyncRollbackPreservesOlderPending(t *testing.T) {
 	_, e := newAsyncPilotEntity(t, 9902, 10)
 	m, frames, _ := syncTestManager(t, e, entitysync.ModeOnChange)
 	e.MarkSyncDirty(2)
-	scope, closeScope := entity.NewGuardScope("sync-rollback")
+	scope, closeScope := entity.NewGuardScope(entitypermit.System(), "sync-rollback")
 	defer closeScope()
-	scope.Guard().RequireEntity(e)
+	scope.Guard().RequireEntity(entitypermit.System(), e)
 	rejection := errors.New("reject")
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityMemory}, []entity.IThreadSafeEntity{e}, nil, "reject", nil, completionRoute{}, func() (any, error) {
 		CurrentRollbackTx().DeferRollback(func() error { e.dao.Value = 10; return nil })
@@ -185,7 +186,7 @@ func TestNestSyncRollbackPreservesOlderPending(t *testing.T) {
 	if !errors.Is(err, rejection) {
 		t.Fatal(err)
 	}
-	scope.Guard().ReleaseAll()
+	scope.Guard().ReleaseAll(entitypermit.System())
 	if err = m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -199,15 +200,15 @@ func TestNestPipelinedSyncWaitsForConfirmationAndUnlock(t *testing.T) {
 	defer closeContext()
 	_, e := newAsyncPilotEntity(t, 9903, 10)
 	m, frames, packs := syncTestManager(t, e, entitysync.ModeOnChange)
-	scope, closeScope := entity.NewGuardScope("sync-pipelined")
+	scope, closeScope := entity.NewGuardScope(entitypermit.System(), "sync-pipelined")
 	defer closeScope()
-	scope.Guard().RequireEntity(e)
+	scope.Guard().RequireEntity(entitypermit.System(), e)
 	committer := newPipelinedTestCommitter(false)
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}, []entity.IThreadSafeEntity{e}, committer, "pipeline", func() {
 		if packs.Load() != 1 {
 			t.Errorf("capture did not run under lock")
 		}
-		scope.Guard().ReleaseAll()
+		scope.Guard().ReleaseAll(entitypermit.System())
 		if err := m.Flush(context.Background()); err != nil {
 			t.Error(err)
 		}
@@ -221,7 +222,7 @@ func TestNestPipelinedSyncWaitsForConfirmationAndUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope.Guard().ReleaseAll() // drains post-commit callbacks on the inline path
+	scope.Guard().ReleaseAll(entitypermit.System()) // drains post-commit callbacks on the inline path
 	if err = m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -240,9 +241,9 @@ func TestNestSyncRejectedCommitDoesNotFreezeOrPublish(t *testing.T) {
 	defer endContext()
 	_, e := newAsyncPilotEntity(t, 9904, 10)
 	m, frames, packs := syncTestManager(t, e, entitysync.ModeOnChange)
-	scope, endScope := entity.NewGuardScope("rejected-sync")
+	scope, endScope := entity.NewGuardScope(entitypermit.System(), "rejected-sync")
 	defer endScope()
-	scope.Guard().RequireEntity(e)
+	scope.Guard().RequireEntity(entitypermit.System(), e)
 	rejection := errors.New("wal refused")
 	committer := &recordingCommitter{err: rejection}
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, []entity.IThreadSafeEntity{e}, committer, "reject", nil, completionRoute{}, func() (any, error) {
@@ -254,7 +255,7 @@ func TestNestSyncRejectedCommitDoesNotFreezeOrPublish(t *testing.T) {
 	if err == nil {
 		t.Fatal("rejection lost")
 	}
-	scope.Guard().ReleaseAll()
+	scope.Guard().ReleaseAll(entitypermit.System())
 	if err = m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -333,9 +334,9 @@ func TestSyncRemoteConfirmationIsSeparateFromLocalCommit(t *testing.T) {
 	defer endContext()
 	_, e := newAsyncPilotEntity(t, 9907, 10)
 	m, frames, _ := syncTestManager(t, e, entitysync.ModeOnChange)
-	scope, endScope := entity.NewGuardScope("remote-sync")
+	scope, endScope := entity.NewGuardScope(entitypermit.System(), "remote-sync")
 	defer endScope()
-	scope.Guard().RequireEntity(e)
+	scope.Guard().RequireEntity(entitypermit.System(), e)
 	batch := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
 	defer batch.Finish(false)
 	// 本测试直接模拟“本地事务已持久提交”：这个事实由提交路径显式记录（remoteCommitted），finishRemoteWriteBatch 不从 nil 错误推断。
@@ -350,7 +351,7 @@ func TestSyncRemoteConfirmationIsSeparateFromLocalCommit(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	scope.Guard().ReleaseAll()
+	scope.Guard().ReleaseAll(entitypermit.System())
 	batch.Release()
 	if err := m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
@@ -383,17 +384,22 @@ func TestPipelinedSyncReleasesDynamicLocksBeforeDurableWait(t *testing.T) {
 	_, b := newAsyncPilotEntity(t, 9909, 20)
 	m, _, _ := syncTestManager(t, a, entitysync.ModeOnChange)
 	b.EnableSync(entity.EntitySyncCreateParam{Enabled: true, EntityID: b.ID(), Packer: entity.SubjectSyncPackFunc{}})
-	scope, endScope := entity.NewGuardScope("pipeline-dynamic-locks")
+	scope, endScope := entity.NewGuardScope(entitypermit.System(), "pipeline-dynamic-locks")
 	defer endScope()
-	scope.Guard().RequireEntity(a)
+	scope.Guard().RequireEntity(entitypermit.System(), a)
 	committer := newPipelinedTestCommitter(false)
 	unlocked := make(chan struct{})
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}, []entity.IThreadSafeEntity{a}, committer, "dynamic-locks", func() {
-		scope.Guard().ReleaseEntity(a.ID())
+		scope.Guard().ReleaseEntity(entitypermit.System(), a.ID())
 		// 只有另一个 goroutine 确实取得 Cast 的锁后，才允许 WAL 确认。
-		go func() { b.GetMutex().Lock(); b.GetMutex().Unlock(); close(unlocked); committer.resolveAll(nil) }()
+		go func() {
+			physicalTestLock(b).Lock()
+			physicalTestLock(b).Unlock()
+			close(unlocked)
+			committer.resolveAll(nil)
+		}()
 	}, completionRoute{}, func() (any, error) {
-		scope.Guard().RequireEntity(b)
+		scope.Guard().RequireEntity(entitypermit.System(), b)
 		entity.CurrentSyncMutation().Include([]entity.IThreadSafeEntity{b})
 		a.dao.Value++
 		a.MarkSyncDirty(1)
@@ -406,5 +412,5 @@ func TestPipelinedSyncReleasesDynamicLocksBeforeDurableWait(t *testing.T) {
 	if b.LastCommitLSN() != 1 {
 		t.Fatalf("dynamic LSN=%d", b.LastCommitLSN())
 	}
-	scope.Guard().ReleaseAll()
+	scope.Guard().ReleaseAll(entitypermit.System())
 }

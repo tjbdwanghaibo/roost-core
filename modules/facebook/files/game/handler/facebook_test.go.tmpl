@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -194,12 +195,12 @@ func TestFacebookInvitesAreBoundedAndPruned(t *testing.T) {
 		t.Fatal("expired invites did not release capacity")
 	}
 	var kept int
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		v := f.values[f.inbox(t, 102)].(*facebookentity.Facebook)
-		v.GetMutex().Lock()
-		defer v.GetMutex().Unlock()
-		kept = v.Dao().InvitesLen()
-	}); err != nil {
+		return nesttest.With(context.Background(), f.engine, v, func() {
+			kept = v.Dao().InvitesLen()
+		})
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	if kept != 1 {
@@ -314,21 +315,27 @@ func (f *facebookFixture) facts(t *testing.T) map[int64]bson.M {
 	t.Helper()
 	out := map[int64]bson.M{}
 	var decodeErr error
-	err := f.engine.RunLocal(context.Background(), func() {
+	err := func() error {
 		for id, value := range f.values {
-			value.GetMutex().Lock()
-			raw := value.(*facebookentity.Facebook).Dao().Marshal()
-			value.GetMutex().Unlock()
+
+			var raw []byte
+			if err := nesttest.With(context.Background(), f.engine, value, func() {
+				raw = value.(*facebookentity.Facebook).Dao().Marshal()
+			}); err != nil {
+				return err
+			}
 			var doc bson.M
 			decoder := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(raw)))
 			decoder.DefaultDocumentM()
 			if err := decoder.Decode(&doc); err != nil {
 				decodeErr = err
-				return
+				return err
 			}
 			out[id] = doc
 		}
-	})
+
+		return nil
+	}()
 	if err != nil {
 		t.Fatal(err)
 	}

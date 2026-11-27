@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -110,11 +111,11 @@ func TestCastPipelinedReleasesAndStampsWithoutSync(t *testing.T) {
 	_, closeContext := fctx.NewContext()
 	defer closeContext()
 	_, primary, other, getter := castTransactionEntities(t)
-	scope, closeScope := entity.NewGuardScope("cast-pipelined")
+	scope, closeScope := entity.NewGuardScope(entitypermit.System(), "cast-pipelined")
 	defer closeScope()
 	pop := pushCurrentNestDispatchMsg(&Msg{getter: getter})
 	defer pop()
-	if !scope.Guard().RequireEntity(primary) {
+	if !scope.Guard().RequireEntity(entitypermit.System(), primary) {
 		t.Fatal("primary lock")
 	}
 	committer := &castBoundaryCommitter{pipelinedTestCommitter: newPipelinedTestCommitter(false)}
@@ -130,7 +131,7 @@ func TestCastPipelinedReleasesAndStampsWithoutSync(t *testing.T) {
 	}
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackState, Durability: DurabilityPipelined},
 		[]entity.IThreadSafeEntity{primary}, committer, "cast-pipelined",
-		func() { scope.Guard().ReleaseEntity(primary.GUId()) }, completionRoute{}, func() (any, error) {
+		func() { scope.Guard().ReleaseEntity(entitypermit.System(), primary.GUId()) }, completionRoute{}, func() (any, error) {
 			cast, err := guardFixtureCastOne[*rollbackTestEntity](other.ID())
 			if err != nil {
 				return nil, err
@@ -231,10 +232,10 @@ func TestCastCaptureFailureFailsTheTransactionEvenIfSwallowed(t *testing.T) {
 			if target == nil {
 				t.Fatal("the Cast target disappeared")
 			}
-			if !target.GetMutex().TryLock() {
+			if !physicalTestLock(target).TryLock() {
 				t.Fatal("the Cast target's lock was not released when the transaction ended")
 			}
-			target.GetMutex().Unlock()
+			physicalTestLock(target).Unlock()
 		})
 	}
 }
@@ -361,8 +362,8 @@ func TestReleaseCastOfDestroyedInstanceKeepsRecreatedLock(t *testing.T) {
 			}
 			close(waiterTouched)
 			var locked bool
-			_ = entity.WithGuardScope("rr26_waiter", func(scope *entity.GuardScope) error {
-				locked = scope.Guard().RequireEntity(old)
+			_ = entity.WithGuardScope(entitypermit.System(), "rr26_waiter", func(scope *entity.GuardScope) error {
+				locked = scope.Guard().RequireEntity(entitypermit.System(), old)
 				return nil
 			})
 			old.UnTouch()

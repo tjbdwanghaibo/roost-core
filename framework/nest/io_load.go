@@ -175,7 +175,7 @@ func (mgr *NestMgr) beforeIOPreparation() bool {
 		return false
 	}
 	msg := currentNestDispatchMsg()
-	return msg != nil && msg.prepared == nil
+	return msg != nil && msg.Type != MsgTypeBroadcast && msg.prepared == nil
 }
 
 // declaredTargetCold 保留原错误，errors.Is 仍可判断 ErrColdLoadInLogic / ErrEntityNotFound / ErrLockTimeout。

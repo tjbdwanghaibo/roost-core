@@ -16,11 +16,24 @@ import (
 	"testing"
 	"time"
 
+	db "{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	scenes "{{MODULE}}/game/modules/scene/service"
+	logic "{{MODULE}}/game/modules/terrain"
+	runtime "{{MODULE}}/game/modules/terrain/service"
+	"{{MODULE}}/protocol/pb"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	building "{{MODULE}}/game/entities/terrain_building"
+	chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamescene "{{MODULE}}/game/modules/scene"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -28,18 +41,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	db "{{MODULE}}/db"
-	player "{{MODULE}}/game/entities/player"
-	sceneentity "{{MODULE}}/game/entities/scene"
-	building "{{MODULE}}/game/entities/terrain_building"
-	chunk "{{MODULE}}/game/entities/terrain_chunk"
-	"{{MODULE}}/game/handler"
-	sender "{{MODULE}}/game/handler/syncsender"
-	gamescene "{{MODULE}}/game/modules/scene"
-	scenes "{{MODULE}}/game/modules/scene/service"
-	logic "{{MODULE}}/game/modules/terrain"
-	runtime "{{MODULE}}/game/modules/terrain/service"
-	"{{MODULE}}/protocol/pb"
 )
 
 const terrainPlayer int64 = 97101
@@ -229,12 +230,12 @@ func (f *terrainFixture) query(key core.ChunkKey) logic.ChunkState {
 func (f *terrainFixture) player(fn func(*player.Player)) {
 	f.t.Helper()
 	id, _ := entity.BuildEntityID(terrainPlayer, player.EntityKindPlayer)
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		value := f.access.Manager().Get(id).(*player.Player)
-		value.GetMutex().Lock()
-		defer value.GetMutex().Unlock()
-		fn(value)
-	}); err != nil {
+		return nesttest.With(context.Background(), f.engine, value, func() {
+			fn(value)
+		})
+	}(); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -341,22 +342,26 @@ func (f *terrainFixture) assertMutationKeys(record dataengine.CommitRecord, want
 func (f *terrainFixture) documents() []terrainAggregate {
 	f.t.Helper()
 	var out []terrainAggregate
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
+		var visitErr error
+
 		f.access.Manager().Range(func(value entity.IThreadSafeEntity) bool {
 			if value.GetEntityKind() == sceneentity.EntityKindScene {
 				return true
 			}
-			value.GetMutex().Lock()
-			defer value.GetMutex().Unlock()
-			a := terrainAggregate{id: value.ID(), kind: value.GetEntityKind(), documents: map[string]terrainDoc{}}
-			value.(entity.Guardable).RangeDao(func(dao entity.DaoInterface) {
-				mutation := f.persistedSnapshot(dao, a.id)
-				a.documents[dao.CollName()] = terrainDoc{mutation.Data, mutation.Schema, mutation.ExpectedVersion}
+			visitErr = nesttest.With(context.Background(), f.engine, value, func() {
+				a := terrainAggregate{id: value.ID(), kind: value.GetEntityKind(), documents: map[string]terrainDoc{}}
+				value.(entity.Guardable).RangeDao(func(dao entity.DaoInterface) {
+					mutation := f.persistedSnapshot(dao, a.id)
+					a.documents[dao.CollName()] = terrainDoc{mutation.Data, mutation.Schema, mutation.ExpectedVersion}
+				})
+				out = append(out, a)
 			})
-			out = append(out, a)
-			return true
+			return visitErr == nil
 		})
-	}); err != nil {
+
+		return visitErr
+	}(); err != nil {
 		f.t.Fatal(err)
 	}
 	return out
@@ -758,27 +763,27 @@ func TestTerrainPackerExposesGroundAndHidesAuthorityLots(t *testing.T) {
 	built := f.must(terrainBuild(1))
 	unique, _ := logic.ChunkUnique(2, core.ChunkKey{})
 	id, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		value := f.access.Manager().Get(id).(*chunk.TerrainChunk)
-		value.GetMutex().Lock()
-		defer value.GetMutex().Unlock()
-		packer := chunk.NewTerrainChunkSyncPacker(value)
-		payload, err := packer.PackSubjectSnapshot(gamescene.Public)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		copy := db.NewTerrainChunkDao()
-		if err := copy.ApplySync(payload.BytesCopy()); err != nil {
-			t.Error(err)
-		}
-		if copy.HeightsLen() != core.ChunkPoints || copy.LotsLen() != 0 || copy.GetSceneID() != 2 {
-			t.Error("sync authority leaked or ground missing")
-		}
-		if _, err := packer.PackSubjectSnapshot(entity.SyncProfile{Key: "admin"}); !errors.Is(err, entity.ErrSyncViewUnknown) {
-			t.Error("unknown sync view allowed")
-		}
-	}); err != nil {
+		return nesttest.With(context.Background(), f.engine, value, func() {
+			packer := chunk.NewTerrainChunkSyncPacker(value)
+			payload, err := packer.PackSubjectSnapshot(gamescene.Public)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			copy := db.NewTerrainChunkDao()
+			if err := copy.ApplySync(payload.BytesCopy()); err != nil {
+				t.Error(err)
+			}
+			if copy.HeightsLen() != core.ChunkPoints || copy.LotsLen() != 0 || copy.GetSceneID() != 2 {
+				t.Error("sync authority leaked or ground missing")
+			}
+			if _, err := packer.PackSubjectSnapshot(entity.SyncProfile{Key: "admin"}); !errors.Is(err, entity.ErrSyncViewUnknown) {
+				t.Error("unknown sync view allowed")
+			}
+		})
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.sync.Flush(context.Background()); err != nil {

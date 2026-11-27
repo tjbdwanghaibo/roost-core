@@ -18,7 +18,11 @@ const OutputPath = "internal/registry/generated.go"
 // Generate writes the aggregate and reports whether the file changed, so a
 // no-op `roost generate` run stays quiet and leaves the mtime alone.
 func Generate(root string, modulePath string, registrations []Registration) (bool, error) {
-	content, err := render(modulePath, registrations)
+	pairs, err := companionPairs(root, modulePath)
+	if err != nil {
+		return false, err
+	}
+	content, err := render(modulePath, registrations, pairs...)
 	if err != nil {
 		return false, err
 	}
@@ -142,13 +146,16 @@ func ownImportPath(modulePath string) string {
 	return strings.TrimSuffix(modulePath, "/") + "/" + strings.TrimSuffix(OutputPath[:strings.LastIndex(OutputPath, "/")], "/")
 }
 
-func render(modulePath string, registrations []Registration) ([]byte, error) {
+func render(modulePath string, registrations []Registration, pairs ...companionPair) ([]byte, error) {
 	own := ownImportPath(modulePath)
 	external := make([]Registration, 0, len(registrations))
 	for _, registration := range registrations {
 		if registration.ImportPath != own {
 			external = append(external, registration)
 		}
+	}
+	for _, pair := range pairs {
+		external = append(external, Registration{ImportPath: pair.parent.path}, Registration{ImportPath: pair.child.path})
 	}
 	aliases := importAliases(external)
 	data := templateData{Imports: make([]importSpec, 0, len(aliases))}
@@ -179,6 +186,20 @@ func render(modulePath string, registrations []Registration) ([]byte, error) {
 			continue
 		}
 		data.Phases = append(data.Phases, phaseGroup{Name: registration.Phase, Calls: []call{entry}})
+	}
+
+	// post 期的第一批调用：kind 与 builder 都已登记，业务 post 函数也能使用关系。
+	if len(pairs) != 0 {
+		last := len(data.Phases) - 1
+		if last < 0 || data.Phases[last].Name != "post" {
+			data.Phases = append(data.Phases, phaseGroup{Name: "post"})
+			last++
+		}
+		calls := make([]call, 0, len(pairs))
+		for _, pair := range pairs {
+			calls = append(calls, pair.registration(aliases))
+		}
+		data.Phases[last].Calls = append(calls, data.Phases[last].Calls...)
 	}
 
 	var buf bytes.Buffer

@@ -13,11 +13,19 @@ import (
 	"testing"
 	"time"
 
+	gameactivity "{{MODULE}}/game/activity"
+	player "{{MODULE}}/game/entities/player"
+	world "{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/flags"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	gamemailbox "{{MODULE}}/game/modules/mailbox"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
@@ -27,13 +35,6 @@ import (
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	gameactivity "{{MODULE}}/game/activity"
-	player "{{MODULE}}/game/entities/player"
-	world "{{MODULE}}/game/entities/world"
-	"{{MODULE}}/game/flags"
-	"{{MODULE}}/game/handler"
-	syncsender "{{MODULE}}/game/handler/syncsender"
-	gamemailbox "{{MODULE}}/game/modules/mailbox"
 )
 
 // windowCoordinator is the coordinator as this test needs it: a score per
@@ -740,8 +741,8 @@ func TestActivitySettlementPaysCoinsIntoTheWallet(t *testing.T) {
 	mailer := &settleMailer{}
 	runner := &ActivityRunner{
 		coordinator: coordinator, mailer: mailer, nest: settledNest{},
-		redis:   settleBoard{entries: []fredis.Z{{Score: 3, Member: strconv.FormatInt(playerID, 10)}}},
-		prefix:  "settle-test", groupID: "west", gameSID: 1300, worldID: 1,
+		redis:  settleBoard{entries: []fredis.Z{{Score: 3, Member: strconv.FormatInt(playerID, 10)}}},
+		prefix: "settle-test", groupID: "west", gameSID: 1300, worldID: 1,
 		now: time.Now,
 	}
 	activityID := gameactivity.ID(time.Now().Unix())
@@ -788,9 +789,7 @@ func TestActivitySettlementPaysCoinsIntoTheWallet(t *testing.T) {
 		}
 	}
 	var coins int64
-	if err := engine.RunLocal(context.Background(), func() {
-		subject.GetMutex().Lock()
-		defer subject.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), engine, subject, func() {
 		coins = subject.Dao().GetWallet().GetCoins()
 	}); err != nil {
 		t.Fatal(err)

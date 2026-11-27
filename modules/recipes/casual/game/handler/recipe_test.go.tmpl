@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
@@ -97,9 +98,7 @@ func (f *recipeFixture) init() (gameenter.InitResult, error) {
 // snapshot 在业务 worker 上持实体锁读记录。
 func (f *recipeFixture) snapshot(t *testing.T) (initialized bool, firstAt int64) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		state := f.player.Dao().GetEnter()
 		initialized, firstAt = state.GetInitialized(), state.GetFirstAt()
 	}); err != nil {
@@ -111,9 +110,7 @@ func (f *recipeFixture) snapshot(t *testing.T) (initialized bool, firstAt int64)
 func (f *recipeFixture) coins(t *testing.T) int64 {
 	t.Helper()
 	var coins int64
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		coins = f.player.WalletComp().Balance()
 	}); err != nil {
 		t.Fatal(err)

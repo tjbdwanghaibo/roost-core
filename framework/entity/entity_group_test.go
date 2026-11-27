@@ -4,7 +4,33 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
+
+func TestPeerGroupInstanceMayNotBePublishedByTwoManagers(t *testing.T) {
+	a, b := NewEntityManager(), NewEntityManager()
+	e := newMgrTestEntity(2011, testEntityCategoryPlayer)
+	if err := a.TryAdd(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.UpdateEntityGroup(entitypermit.System(), e, 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.TryAdd(e); !errors.Is(err, ErrEntityNotManaged) {
+		t.Fatalf("second registration: %v", err)
+	}
+	if b.Get(e.ID()) != nil || b.GetGroupEntity(42, e.ID()) != nil || a.GetGroupEntity(42, e.ID()) != e {
+		t.Fatal("membership leaked between managers")
+	}
+	replacement := newMgrTestEntity(e.ID(), testEntityCategoryPlayer)
+	if err := b.TryAdd(replacement); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Base().GroupLockID() != 0 {
+		t.Fatal("replacement inherited group")
+	}
+}
 
 func TestEntityGroupBaseDefaultsAndMutation(t *testing.T) {
 	e := newMgrTestEntity(2001, testEntityCategoryPlayer)
@@ -19,7 +45,7 @@ func TestEntityGroupBaseDefaultsAndMutation(t *testing.T) {
 		t.Fatalf("default transition state = %v, want none", got)
 	}
 
-	e.Base().SetGroupLockIDForTest(3001)
+	e.Base().SetGroupLockIDForTest(entitypermit.System(), 3001)
 	if got := e.Base().GroupLockID(); got != 3001 {
 		t.Fatalf("group lock id = %d, want 3001", got)
 	}
@@ -27,7 +53,7 @@ func TestEntityGroupBaseDefaultsAndMutation(t *testing.T) {
 		t.Fatalf("group epoch = %d, want 1", got)
 	}
 
-	if !e.Base().BeginGroupTransition(EntityGroupTransitionJoin, 4001) {
+	if !e.Base().BeginGroupTransition(entitypermit.System(), EntityGroupTransitionJoin, 4001) {
 		t.Fatal("BeginGroupTransition should succeed from none state")
 	}
 	if got := e.Base().GroupTransitionState(); got != EntityGroupTransitionJoin {
@@ -36,10 +62,10 @@ func TestEntityGroupBaseDefaultsAndMutation(t *testing.T) {
 	if got := e.Base().GroupTransitionTargetID(); got != 4001 {
 		t.Fatalf("transition target = %d, want 4001", got)
 	}
-	if e.Base().BeginGroupTransition(EntityGroupTransitionLeave, 0) {
+	if e.Base().BeginGroupTransition(entitypermit.System(), EntityGroupTransitionLeave, 0) {
 		t.Fatal("BeginGroupTransition should reject while already pending")
 	}
-	e.Base().ClearGroupTransition()
+	e.Base().ClearGroupTransition(entitypermit.System())
 	if got := e.Base().GroupTransitionState(); got != EntityGroupTransitionNone {
 		t.Fatalf("transition state after clear = %v, want none", got)
 	}
@@ -50,7 +76,7 @@ func TestEntityGroupManagerIndexTracksAddUpdateRemove(t *testing.T) {
 	e1 := newMgrTestEntity(2101, testEntityCategoryPlayer)
 	e2 := newMgrTestEntity(2102, testEntityCategoryPlayer)
 
-	e1.Base().SetGroupLockIDForTest(9001)
+	e1.Base().SetGroupLockIDForTest(entitypermit.System(), 9001)
 	mgr.Add(e1)
 	mgr.Add(e2)
 
@@ -61,7 +87,7 @@ func TestEntityGroupManagerIndexTracksAddUpdateRemove(t *testing.T) {
 		t.Fatalf("ungrouped entity lookup returned %v, want nil", got)
 	}
 
-	if err := mgr.UpdateEntityGroup(e2, 9001); err != nil {
+	if err := mgr.UpdateEntityGroup(entitypermit.System(), e2, 9001); err != nil {
 		t.Fatalf("UpdateEntityGroup join: %v", err)
 	}
 	gotGroup := mgr.GetGroupEntities(9001)
@@ -69,7 +95,7 @@ func TestEntityGroupManagerIndexTracksAddUpdateRemove(t *testing.T) {
 		t.Fatalf("group entity count = %d, want 2", len(gotGroup))
 	}
 
-	if err := mgr.UpdateEntityGroup(e1, 9002); err != nil {
+	if err := mgr.UpdateEntityGroup(entitypermit.System(), e1, 9002); err != nil {
 		t.Fatalf("UpdateEntityGroup move: %v", err)
 	}
 	if got := mgr.GetGroupEntity(9001, e1.ID()); got != nil {
@@ -94,24 +120,24 @@ func TestEntityGroupManagerLifecycleEdges(t *testing.T) {
 	mgr := NewEntityManager()
 	e := newMgrTestEntity(2201, testEntityCategoryPlayer)
 
-	if err := mgr.UpdateEntityGroup(e, 9101); !errors.Is(err, ErrEntityNotManaged) {
+	if err := mgr.UpdateEntityGroup(entitypermit.System(), e, 9101); !errors.Is(err, ErrEntityNotManaged) {
 		t.Fatalf("UpdateEntityGroup before add err = %v, want ErrEntityNotManaged", err)
 	}
 	if got := e.Base().GroupLockID(); got != 0 {
 		t.Fatalf("unmanaged entity group = %d, want 0", got)
 	}
 
-	e.Base().SetGroupLockIDForTest(9101)
+	e.Base().SetGroupLockIDForTest(entitypermit.System(), 9101)
 	mgr.Add(e)
 	epoch := e.Base().GroupEpoch()
-	if err := mgr.UpdateEntityGroup(e, 9101); err != nil {
+	if err := mgr.UpdateEntityGroup(entitypermit.System(), e, 9101); err != nil {
 		t.Fatalf("UpdateEntityGroup same group: %v", err)
 	}
 	if got := e.Base().GroupEpoch(); got != epoch {
 		t.Fatalf("same group update epoch = %d, want %d", got, epoch)
 	}
 
-	if err := mgr.UpdateEntityGroup(e, 0); err != nil {
+	if err := mgr.UpdateEntityGroup(entitypermit.System(), e, 0); err != nil {
 		t.Fatalf("UpdateEntityGroup leave: %v", err)
 	}
 	if got := mgr.GetGroupEntity(9101, e.ID()); got != nil {
@@ -121,7 +147,7 @@ func TestEntityGroupManagerLifecycleEdges(t *testing.T) {
 		t.Fatalf("left group entity count = %d, want 0", len(got))
 	}
 
-	if err := mgr.UpdateEntityGroup(e, 9102); err != nil {
+	if err := mgr.UpdateEntityGroup(entitypermit.System(), e, 9102); err != nil {
 		t.Fatalf("UpdateEntityGroup rejoin: %v", err)
 	}
 	if err := mgr.Destroy(context.Background(), e, EntityDestroyReason(0), false); err != nil {

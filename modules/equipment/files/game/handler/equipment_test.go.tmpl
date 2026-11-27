@@ -19,18 +19,19 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 
 	"{{MODULE}}/configs/schema"
 	"{{MODULE}}/db"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
 	controller "{{MODULE}}/game/controllers"
 	playerentity "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/event"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 )
 
 type equipmentGetter map[int64]entity.IThreadSafeEntity
@@ -101,7 +102,9 @@ func newEquipmentFixture(t *testing.T) *equipmentFixture {
 }
 func (f *equipmentFixture) local(t *testing.T, fn func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() { f.player.GetMutex().Lock(); defer f.player.GetMutex().Unlock(); fn() }); err != nil {
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
+		fn()
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

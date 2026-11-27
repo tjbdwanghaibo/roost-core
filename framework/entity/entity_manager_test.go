@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 	"github.com/tjbdwanghaibo/roost-core/internal/rangecontract"
 )
@@ -172,9 +173,9 @@ func TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval(t *testing.T)
 		}
 		locked := make(chan bool, 1)
 		go func() {
-			acquired := got.GetMutex().TryLock()
+			acquired := testSystemMutex(got).TryLock()
 			if acquired {
-				got.GetMutex().Unlock()
+				testSystemMutex(got).Unlock()
 			}
 			locked <- acquired
 		}()
@@ -425,19 +426,17 @@ func TestEntityManager_ConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
-// destroyLockProbe 在初次 ctx 检查后报告取锁入口，避免把“尚未开始就取消”
-// 误当作“锁已被别的业务持有时仍可取消”。只在 Add 完成后启用屏障。
+// Report entry into the native cancellable wait (not merely a call to the
+// public getter). Destroy must cancel while another goroutine still owns it.
 type destroyLockProbe struct {
-	*mgrTestEntity
+	lock.Mutex
 	mutexReached chan struct{}
 	once         sync.Once
 }
 
-func (e *destroyLockProbe) GetMutex() lock.Mutex {
-	if e.mutexReached != nil {
-		e.once.Do(func() { close(e.mutexReached) })
-	}
-	return e.EntityBase.GetMutex()
+func (p *destroyLockProbe) LockContext(ctx context.Context) error {
+	p.once.Do(func() { close(p.mutexReached) })
+	return lock.LockContext(ctx, p.Mutex)
 }
 
 func TestEntityManagerDestroyCancelsWhileEntityLockIsHeld(t *testing.T) {
@@ -448,9 +447,10 @@ func TestEntityManagerDestroyCancelsWhileEntityLockIsHeld(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			mgr := NewEntityManager()
-			value := &destroyLockProbe{mgrTestEntity: newMgrTestEntity(1021, testEntityCategoryPlayer)}
+			probe := &destroyLockProbe{Mutex: lock.NewDefaultMutex(1021), mutexReached: make(chan struct{})}
+			value := newMgrTestEntity(1021, testEntityCategoryPlayer)
+			value.EntityBase = NewEntityBaseWithMutex(1021, testEntityCategoryPlayer, false, probe)
 			mgr.Add(value)
-			value.mutexReached = make(chan struct{})
 			var admissions atomic.Int32
 			_, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
 				admissions.Add(1)
@@ -459,7 +459,7 @@ func TestEntityManagerDestroyCancelsWhileEntityLockIsHeld(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mu := value.EntityBase.GetMutex()
+			mu := testSystemMutex(value)
 			mu.Lock()
 			ctx, cancel := context.WithCancel(context.Background())
 			result := make(chan error, 1)
@@ -479,7 +479,7 @@ func TestEntityManagerDestroyCancelsWhileEntityLockIsHeld(t *testing.T) {
 				result <- mgr.Destroy(ctx, value, testDestroyCommon, durable)
 			}()
 			select {
-			case <-value.mutexReached:
+			case <-probe.mutexReached:
 			case <-time.After(time.Second):
 				t.Fatal("Destroy did not reach the entity mutex")
 			}
@@ -505,9 +505,13 @@ func TestEntityManagerWithLockedRunsUnderTheEntityLockOnlyForTheManagedInstance(
 	mgr := NewEntityManager()
 	value := newMgrTestEntity(1031, testEntityCategoryPlayer)
 	mgr.Add(value)
-	mu := value.GetMutex()
+	mu := testSystemMutex(value)
+	var empty entitypermit.Token
+	if err := mgr.WithLocked(empty, context.Background(), value, func() { t.Fatal("unprivileged callback ran") }); !errors.Is(err, ErrEntityLockScope) {
+		t.Fatalf("maintenance-only WithLocked: %v", err)
+	}
 	ran := false
-	if err := mgr.WithLocked(context.Background(), value, func() {
+	if err := mgr.WithLocked(entitypermit.System(), context.Background(), value, func() {
 		ran = true
 		taken := make(chan bool, 1)
 		go func() { taken <- mu.TryLock() }()
@@ -524,7 +528,7 @@ func TestEntityManagerWithLockedRunsUnderTheEntityLockOnlyForTheManagedInstance(
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		result <- mgr.WithLocked(ctx, value, func() { t.Error("fn ran while another goroutine held the lock") })
+		result <- mgr.WithLocked(entitypermit.System(), ctx, value, func() { t.Error("fn ran while another goroutine held the lock") })
 	}()
 	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("WithLocked with the lock held elsewhere = %v, want DeadlineExceeded", err)
@@ -532,13 +536,13 @@ func TestEntityManagerWithLockedRunsUnderTheEntityLockOnlyForTheManagedInstance(
 	mu.Unlock()
 
 	stale := newMgrTestEntity(1031, testEntityCategoryPlayer)
-	if err := mgr.WithLocked(context.Background(), stale, func() { t.Error("fn ran for an instance that is not managed") }); !errors.Is(err, ErrEntityNotManaged) {
+	if err := mgr.WithLocked(entitypermit.System(), context.Background(), stale, func() { t.Error("fn ran for an instance that is not managed") }); !errors.Is(err, ErrEntityNotManaged) {
 		t.Fatalf("WithLocked of an unmanaged instance = %v, want ErrEntityNotManaged", err)
 	}
 	if err := mgr.Destroy(context.Background(), value, testDestroyCommon, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.WithLocked(context.Background(), value, func() { t.Error("fn ran for a removed instance") }); !errors.Is(err, ErrEntityRemoved) {
+	if err := mgr.WithLocked(entitypermit.System(), context.Background(), value, func() { t.Error("fn ran for a removed instance") }); !errors.Is(err, ErrEntityRemoved) {
 		t.Fatalf("WithLocked of a removed instance = %v, want ErrEntityRemoved", err)
 	}
 }
@@ -575,7 +579,7 @@ func TestEntityManagerDestroyPreservesReentrantLockOwnership(t *testing.T) {
 	mgr := NewEntityManager()
 	value := newMgrTestEntity(1023, testEntityCategoryPlayer)
 	mgr.Add(value)
-	mu := value.GetMutex()
+	mu := testSystemMutex(value)
 	mu.Lock()
 	defer mu.Unlock()
 	if err := mgr.Destroy(context.Background(), value, testDestroyCommon, false); err != nil {
@@ -617,7 +621,7 @@ func entityManagerOps(grouped bool, rangeOf func(mgr *EntityManager, access *Man
 				}
 				e := newMgrTestEntity(id, testEntityCategoryPlayer)
 				if grouped {
-					e.Base().SetGroupLockIDForTest(contractGroupID)
+					e.Base().SetGroupLockIDForTest(entitypermit.System(), contractGroupID)
 				}
 				mgr.Add(e)
 			},

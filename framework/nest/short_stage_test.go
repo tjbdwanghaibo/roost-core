@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -159,7 +160,7 @@ func TestShortBroadcastReportsColdTargetAndContinues(t *testing.T) {
 	defer slog.SetDefault(old)
 	_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler(name.String()))
 	defer release()
-	_, end := entity.NewGuardScope("broadcast-cold")
+	_, end := entity.NewGuardScope(entitypermit.System(), "broadcast-cold")
 	defer end()
 	mgr.broadcastDispatch(name.String(), []int64{cold, hot.ID()}, nil)
 	if calls != 1 || loader.calls.Load() != 0 || hot.touches != hot.untouches {

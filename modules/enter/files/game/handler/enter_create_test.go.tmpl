@@ -14,6 +14,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
@@ -104,9 +105,7 @@ func (f *enterCreateFixture) built(t *testing.T) bool {
 // state 在业务 worker 上持实体锁读整条记录。
 func (f *enterCreateFixture) state(t *testing.T) (initialized bool, firstAt int64, fresh bool) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		state := f.player.Dao().GetEnter()
 		initialized, firstAt, fresh = state.GetInitialized(), state.GetFirstAt(), state.GetFresh()
 	}); err != nil {

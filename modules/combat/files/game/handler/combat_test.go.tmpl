@@ -18,25 +18,26 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	corecombat "github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	"{{MODULE}}/db"
 	combatcomp "{{MODULE}}/game/components/combat"
+	gameheartbeat "{{MODULE}}/game/modules/heartbeat"
+	"{{MODULE}}/game/modules/skillbook"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 	controller "{{MODULE}}/game/controllers"
 	player "{{MODULE}}/game/entities/player"
 	sender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/modules/actor"
 	gamecombat "{{MODULE}}/game/modules/combat"
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
-	gameheartbeat "{{MODULE}}/game/modules/heartbeat"
-	"{{MODULE}}/game/modules/skillbook"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 )
 
 type combatGetter map[int64]entity.IThreadSafeEntity
@@ -181,17 +182,7 @@ func (f *combatFixture) must(t *testing.T, fn func() error) {
 
 func (f *combatFixture) read(t *testing.T, fn func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		for _, p := range f.players {
-			p.GetMutex().Lock()
-		}
-		defer func() {
-			for i := len(f.players) - 1; i >= 0; i-- {
-				f.players[i].GetMutex().Unlock()
-			}
-		}()
-		fn()
-	}); err != nil {
+	if err := nesttest.WithMany(context.Background(), f.engine, f.players, fn); err != nil {
 		t.Fatal(err)
 	}
 }

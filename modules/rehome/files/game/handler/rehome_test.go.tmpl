@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -179,9 +180,7 @@ func (f *rehomeFixture) advance(d time.Duration) int64 {
 // record 在业务 worker 上持实体锁读记录。
 func (f *rehomeFixture) record(t *testing.T) (record rehomeRecord) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		state := f.player.Dao().GetRehome()
 		record = rehomeRecord{
 			pendingID: state.GetPendingID(), pendingFrom: state.GetPendingFrom(), pending: state.GetPendingTo(), pendingAt: state.GetPendingAt(),

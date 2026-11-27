@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"testing"
 )
 
@@ -29,7 +30,7 @@ func TestReviewFailedEntityBuildMustNotPersistItsDAO(t *testing.T) {
 	manager := entity.NewEntityManager()
 	id := mustBuildCastID(t, 39101, 1, reviewFailedBuildKind)
 	committer := &recordingCommitter{}
-	err := entity.WithGuardScope("review_failed_create", func(scope *entity.GuardScope) error {
+	err := entity.WithGuardScope(entitypermit.System(), "review_failed_create", func(scope *entity.GuardScope) error {
 		_, err := RunIsolatedTransaction(context.Background(), committer, "review_failed_create", func() (any, error) {
 			_, err := manager.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Category: 1, Kind: reviewFailedBuildKind})
 			if !errors.Is(err, reviewBuildRejected) {

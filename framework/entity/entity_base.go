@@ -30,7 +30,8 @@ type EntityBase struct {
 	notAutoPersist bool
 	lifetime       EntityLifetime
 	tryTouch       atomic.Int32
-	mu             lock.Mutex
+	mu             lock.Mutex // framework protocol; never returned by GetMutex
+	mutexView      nativeMutexView
 	groupLockID    atomic.Int64
 	groupEpoch     atomic.Uint64
 	groupState     atomic.Int32
@@ -94,12 +95,21 @@ func NewEntityBase(id int64, category EntityCategory, notAutoPersist bool, kinds
 
 // NewEntityBaseWithMutex 与 NewEntityBase 相同，但使用指定的实体锁（nil 时新建可重入锁）。
 func NewEntityBaseWithMutex(id int64, category EntityCategory, notAutoPersist bool, mu lock.Mutex, kinds ...EntityKind) *EntityBase {
+	switch provided := mu.(type) {
+	case *constructorMutex:
+		mu = provided.take(id)
+	case publicEntityMutex:
+		panic(ErrEntityLockScope) // a public view is never a native constructor input
+	}
 	if mu == nil {
 		mu = lock.NewReentrantMutex(id)
 	}
 	kind := EntityKindNone
 	if len(kinds) > 0 {
 		kind = kinds[0]
+	}
+	if IsCompanionParticipant(kind) {
+		mu = newCompanionGate(id, mu)
 	}
 	return &EntityBase{
 		id:             id,
@@ -108,6 +118,7 @@ func NewEntityBaseWithMutex(id int64, category EntityCategory, notAutoPersist bo
 		notAutoPersist: notAutoPersist,
 		lifetime:       DefaultEntityLifetime(notAutoPersist, RemotePolicyNone),
 		mu:             mu,
+		mutexView:      nativeMutexView{id: mu.LockId()},
 	}
 }
 
@@ -154,11 +165,11 @@ func (e *EntityBase) SetSyncState(syncState *SubjectSyncState) {
 			if fn == nil {
 				return nil
 			}
-			if entitySyncLockedInCurrentGuard(entityID) || e.GetMutex() == nil {
+			if entitySyncLockedInCurrentGuard(entityID, e) || e.mu == nil {
 				return fn()
 			}
-			e.GetMutex().Lock()
-			defer e.GetMutex().Unlock()
+			e.mu.Lock()
+			defer e.mu.Unlock()
 			return fn()
 		})
 	}
@@ -213,6 +224,9 @@ func (e *EntityBase) StorageID() int64 {
 }
 
 func (e *EntityBase) SetID(id int64) {
+	if g, ok := e.mu.(*companionGate); ok && id != g.id {
+		panic("entity: companion entrance identity is immutable")
+	}
 	e.id = id
 }
 
@@ -238,11 +252,13 @@ func (e *EntityBase) GetEntityKind() EntityKind {
 	return e.kind
 }
 
-func (e *EntityBase) GetMutex() lock.Mutex {
-	if e == nil {
+// GetMutex exposes only lock identity. Nest handlers, hooks and callers outside
+// a frame all receive the same non-operational facade.
+func (e *EntityBase) GetMutex() publicEntityMutex {
+	if e == nil || e.mu == nil {
 		return nil
 	}
-	return e.mu
+	return &e.mutexView
 }
 
 // AutoPersist 报告实体是否自动持久化。

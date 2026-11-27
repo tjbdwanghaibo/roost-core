@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -165,6 +166,10 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 		if e == nil {
 			return nil, fmt.Errorf("%w: index=%d id=%d", ErrEntityNotFound, i, targets[i].ID)
 		}
+		// 逻辑实体已被捕获才可复用；仅有物理锁或相同 ID 不是这笔事务的写权限。
+		if entity.IsCompanionParticipant(e.GetEntityKind()) && !current.companionCall.permits(e) {
+			return nil, fmt.Errorf("%w: companion %d not captured by current handler", ErrCastUndeclaredTarget, e.GUId())
+		}
 		lockEs = append(lockEs, e)
 	}
 	if !guard.CheckContainAllLock(lockEs) {
@@ -183,7 +188,7 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 			releaseCastEntities(guard, lockedNow)
 			return nil, ErrEntityNotFound
 		}
-		if !guard.RequireEntity(e) {
+		if !guard.RequireEntity(entitypermit.System(), e) {
 			e.UnTouch()
 			releaseCastEntities(guard, lockedNow)
 			if e.IsRemoved() || e.IsClear() {
@@ -222,14 +227,21 @@ func ReleaseCast(e entity.IThreadSafeEntity) {
 	if e == nil || entity.CurrentGuardScope() == nil {
 		return
 	}
-	entity.GetEntityGuard().ReleaseEntityInstance(e)
+	if msg := currentNestDispatchMsg(); msg != nil && msg.companionCall != nil && slices.Contains(msg.companionCall.members, e) {
+		return
+	}
+	// A grouped member is a dispatch participant, not a transient Cast borrow.
+	if holdsPeerChangeSubject(e) || e.Base() != nil && e.Base().GroupLockID() != 0 {
+		return
+	}
+	entity.GetEntityGuard().ReleaseEntityInstance(entitypermit.System(), e)
 }
 
 // releaseCastEntities 归还本次 Cast 刚取得的锁（取锁中途失败）。这些实例刚由本 goroutine 加锁、就是各自 ID 的当前登记，
 // 按实例释放与按 ID 等价；用按实例的入口与 ReleaseCast 保持同一语义。
 func releaseCastEntities(guard *entity.EntityGuard, es []entity.IThreadSafeEntity) {
 	for _, e := range es {
-		guard.ReleaseEntityInstance(e)
+		guard.ReleaseEntityInstance(entitypermit.System(), e)
 	}
 }
 

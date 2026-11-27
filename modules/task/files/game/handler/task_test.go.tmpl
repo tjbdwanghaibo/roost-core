@@ -24,6 +24,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
@@ -194,6 +195,16 @@ func newTaskFixture(t *testing.T) *taskFixture {
 	f.player = built.(*playerentity.Player)
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(taskGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	seed := nest.NewHandlerName("task_fixture_zero_initial_balance")
+	f.engine.MustRegisterHandlerWithMeta(seed, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if len(es) != 1 || es[0] != f.player {
+			return nil, errors.New("wrong task fixture subject")
+		}
+		if wallet := f.player.Dao().GetWallet(); wallet.GetCoins() != 0 {
+			wallet.SetCoins(0)
+		}
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +220,12 @@ func newTaskFixture(t *testing.T) *taskFixture {
 			t.Fatal(err)
 		}
 	}
-	// 场景从已建档角色开始；建档已走真实Nest事务，下面只统计被测业务的提交。
+	// 保留真实建档和模块事件。Task 的场景前提是已建档、零余额；可选配方可能在
+	// EnterFirst 赠币。这里设置初始状态，不模拟消费（不能凭空发一个 WalletSpent）。
+	if _, err := f.engine.Request(context.Background(), seed, id, nil); err != nil {
+		t.Fatal(err)
+	}
+	// 下面只统计被测业务的提交。
 	f.committer.commits.Store(0)
 	return f
 }
@@ -253,9 +269,7 @@ func (f *taskFixture) mustClaim(t *testing.T, taskID, wantReward, wantBalance in
 // locked 在业务 worker 上持实体锁执行 body。
 func (f *taskFixture) locked(t *testing.T, body func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		body()
 	}); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 // Test-local entity category constants (moved to game/view in production code).
@@ -156,15 +158,15 @@ func TestEntityGuardReleaseContinuesAfterHookPanic(t *testing.T) {
 	})
 	defer unregister()
 
-	guard := GetEntityGuard()
-	if !guard.RequireEntity(e1) {
+	guard := BorrowIndependentGuard(entitypermit.System())
+	if !guard.RequireEntity(entitypermit.System(), e1) {
 		t.Fatal("lock e1")
 	}
-	if !guard.RequireEntity(e2) {
+	if !guard.RequireEntity(entitypermit.System(), e2) {
 		t.Fatal("lock e2")
 	}
-	guard.ReleaseAll()
-	defer EntityGuardRelease(guard)
+	guard.ReleaseAll(entitypermit.System())
+	defer EntityGuardRelease(entitypermit.System(), guard)
 
 	if len(guard.eMap) != 0 {
 		t.Fatalf("all locks should be released, remaining=%d", len(guard.eMap))
@@ -181,28 +183,28 @@ func TestEntityReleaseHooksAreManagerScoped(t *testing.T) {
 	var firstCalls, secondCalls int
 	defer firstManager.RegisterOnEntityRelease(func(IThreadSafeEntity) { firstCalls++ })()
 	defer secondManager.RegisterOnEntityRelease(func(IThreadSafeEntity) { secondCalls++ })()
-	guard := GetEntityGuard()
-	if !guard.RequireEntity(first) {
+	guard := BorrowIndependentGuard(entitypermit.System())
+	if !guard.RequireEntity(entitypermit.System(), first) {
 		t.Fatal("lock first")
 	}
-	guard.ReleaseAll()
-	EntityGuardRelease(guard)
+	guard.ReleaseAll(entitypermit.System())
+	EntityGuardRelease(entitypermit.System(), guard)
 	if firstCalls != 1 || secondCalls != 0 {
 		t.Fatalf("manager hook isolation failed: first=%d second=%d", firstCalls, secondCalls)
 	}
 }
 
 func TestEntityGuardReleaseAllPostReleaseIdempotent(t *testing.T) {
-	guard := GetEntityGuard()
-	defer EntityGuardRelease(guard)
+	guard := BorrowIndependentGuard(entitypermit.System())
+	defer EntityGuardRelease(entitypermit.System(), guard)
 
 	count := 0
 	guard.AppendPostRelease(func() {
 		count++
 	})
 
-	guard.ReleaseAll()
-	guard.ReleaseAll()
+	guard.ReleaseAll(entitypermit.System())
+	guard.ReleaseAll(entitypermit.System())
 
 	if count != 1 {
 		t.Fatalf("post-release callback should run once, got %d", count)
@@ -212,8 +214,8 @@ func TestEntityGuardReleaseAllPostReleaseIdempotent(t *testing.T) {
 func TestEntityGuardPostReleaseRunsOutsideReleasedScope(t *testing.T) {
 	e := newTestEntity(11, testEntityCategoryPlayer)
 	run := false
-	err := WithGuardScope("post_release_scope", func(scope *GuardScope) error {
-		if !scope.Guard().RequireEntity(e) {
+	err := WithGuardScope(entitypermit.System(), "post_release_scope", func(scope *GuardScope) error {
+		if !scope.Guard().RequireEntity(entitypermit.System(), e) {
 			t.Fatal("RequireEntity should succeed")
 		}
 		scope.Guard().AppendPostRelease(func() {
@@ -221,8 +223,8 @@ func TestEntityGuardPostReleaseRunsOutsideReleasedScope(t *testing.T) {
 			if CurrentGuardScope() != nil {
 				t.Fatal("post-release callback must not inherit the released guard scope")
 			}
-			if err := WithGuardScope("post_release_reacquire", func(next *GuardScope) error {
-				if !next.Guard().RequireEntity(e) {
+			if err := WithGuardScope(entitypermit.System(), "post_release_reacquire", func(next *GuardScope) error {
+				if !next.Guard().RequireEntity(entitypermit.System(), e) {
 					t.Fatal("post-release callback should be able to reacquire entity")
 				}
 				return nil
@@ -477,11 +479,11 @@ func (m *mockDao) CleanDirty()      {}
 // paths never need the snapshot.
 func TestEntityGuardEntitiesSnapshotCannotMutateTheLedger(t *testing.T) {
 	e := newTestEntity(11, testEntityCategoryPlayer)
-	guard := GetEntityGuard()
-	if !guard.RequireEntity(e) {
+	guard := BorrowIndependentGuard(entitypermit.System())
+	if !guard.RequireEntity(entitypermit.System(), e) {
 		t.Fatal("RequireEntity should succeed")
 	}
-	defer guard.ReleaseAll()
+	defer EntityGuardRelease(entitypermit.System(), guard)
 
 	if !guard.Guarded(e.GUId()) || guard.GuardedCount() != 1 {
 		t.Fatalf("guarded=%v count=%d", guard.Guarded(e.GUId()), guard.GuardedCount())

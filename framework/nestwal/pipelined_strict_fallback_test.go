@@ -17,6 +17,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -353,7 +354,7 @@ func (f *fallbackFixture) watch() <-chan visibility {
 			done <- v
 			return
 		}
-		mu := f.live.GetMutex()
+		mu := entity.SystemMutex(entitypermit.System(), f.live)
 		deadline := time.Now().Add(5 * time.Second)
 		for !(v.lockFree && v.syncReady) && time.Now().Before(deadline) {
 			if !v.lockFree && mu.TryLock() {
@@ -387,8 +388,8 @@ func TestBroadcastPipelinedIsInvisibleUntilFsync(t *testing.T) {
 			select {
 			case <-f.gate.entered:
 				// fsync 进行中：worker 仍持锁，提交后的一切都还不可见。
-				if f.live.GetMutex().TryLock() {
-					f.live.GetMutex().Unlock()
+				if mu := entity.SystemMutex(entitypermit.System(), f.live); mu.TryLock() {
+					mu.Unlock()
 					t.Errorf("broadcast %s: entity lock was released while the commit fsync was in progress", meta.Durability)
 				}
 				if f.live.Sync().SyncCommitReady() {
@@ -450,7 +451,7 @@ func TestPipelinedFastPathStillReleasesLockBeforeFsync(t *testing.T) {
 		replied <- reply{ret, err, f.syncs()}
 	}()
 	waitGate(t, f.gate.entered, "the pipelined batch fsync")
-	mu := f.live.GetMutex()
+	mu := entity.SystemMutex(entitypermit.System(), f.live)
 	deadline := time.Now().Add(5 * time.Second)
 	for !mu.TryLock() {
 		if time.Now().After(deadline) {

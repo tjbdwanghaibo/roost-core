@@ -10,11 +10,18 @@ import (
 	"testing"
 	"time"
 
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/game/managers"
+	gamerehome "{{MODULE}}/game/modules/rehome"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
@@ -22,12 +29,6 @@ import (
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	wiringde "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
-	playerentity "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/handler"
-	"{{MODULE}}/game/managers"
-	gamerehome "{{MODULE}}/game/modules/rehome"
-	apperrors "{{MODULE}}/internal/errors"
-	"{{MODULE}}/protocol/pb"
 )
 
 // 端点与驱动器在这里离线跑通整条链：account 是真实的 service/account.Service（存储换成进程内的），
@@ -198,10 +199,10 @@ func newRehomeWorld(t *testing.T, servers ...int32) *rehomeWorld {
 	w.accounts, err = svcaccount.New(svcaccount.Config{
 		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](), Identities: versionstore.NewMemoryStore[string, svcaccount.IdentityRecord](),
 		AccountIDs: svcaccount.NewMemoryAccountIDs(), Games: []svcaccount.GameSpec{{Name: "main"}},
-		Roles:    svcaccount.NewMemoryRoles(),
-		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
-		Names:    names,
-		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Roles:   svcaccount.NewMemoryRoles(),
+		Servers: versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Names:   names,
+		Slots:   versionstore.NewMemoryStore[string, svcaccount.Slot](),
 		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
 			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
 		}),
@@ -383,9 +384,7 @@ func (w *rehomeWorld) settled(server *rehomeServer) (gamerehome.Whereabouts, boo
 // intent 读档里的换服记录（意图的 ID 与目标、上次到达的时间、次数）。
 func (w *rehomeWorld) intent() (pendingID string, pendingTo int32, lastAt int64, count int32) {
 	w.t.Helper()
-	if err := w.engine.RunLocal(context.Background(), func() {
-		w.player.GetMutex().Lock()
-		defer w.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), w.engine, w.player, func() {
 		state := w.player.Dao().GetRehome()
 		pendingID, pendingTo, lastAt, count = state.GetPendingID(), state.GetPendingTo(), state.GetLastAt(), state.GetCount()
 	}); err != nil {

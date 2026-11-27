@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"{{MODULE}}/game/components/activity"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 )
 
 func TestWithActivityEnterSeasonCutoff(t *testing.T) {
@@ -33,9 +35,7 @@ func TestWithActivityEnterSeasonCutoff(t *testing.T) {
 		if ok, at := f.snapshot(t); !ok || at != now {
 			t.Fatalf("initialized=%v firstAt=%d", ok, at)
 		}
-		if err := f.engine.RunLocal(context.Background(), func() {
-			f.player.GetMutex().Lock()
-			defer f.player.GetMutex().Unlock()
+		if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 			book := f.player.ActivityBook()
 			r, ok := book.GetRecords(healthy.ID)
 			if book.RecordsLen() != 1 || !ok || activity.Phase(r.GetPhase()) != activity.Open {

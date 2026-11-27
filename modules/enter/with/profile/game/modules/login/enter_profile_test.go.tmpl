@@ -1,16 +1,17 @@
 package login_test
 
 import (
+	gameprofile "{{MODULE}}/game/components/profile"
+	gamelogin "{{MODULE}}/game/modules/login"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	"reflect"
 	"strings"
 	"testing"
-	gameprofile "{{MODULE}}/game/components/profile"
-	gamelogin "{{MODULE}}/game/modules/login"
 
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
@@ -100,9 +101,7 @@ func (f *enterProfileFixture) create(name string) error {
 // state 在业务 worker 上持实体锁读名字与“建成了没有”。
 func (f *enterProfileFixture) state(t *testing.T) (name string, built bool) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		name, built = f.player.ProfileComp().DisplayName(), f.player.EnterComp().Built()
 	}); err != nil {
 		t.Fatal(err)

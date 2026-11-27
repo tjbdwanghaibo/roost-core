@@ -168,7 +168,7 @@ func (e *EntityBase) guardedByCurrentScope() bool {
 	if !ok || current == nil {
 		return false
 	}
-	return current.Base() == e || sameMutex(current.GetMutex(), e.mu)
+	return current.Base() == e || sameMutex(systemMutex(current), e.mu)
 }
 
 // pushEvent 检查三道上限后把 typ 压栈。超出上限时不压栈、不执行监听，返回带完整事件链（含这一次）的错误。

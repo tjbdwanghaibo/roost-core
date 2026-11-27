@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
@@ -651,19 +652,22 @@ func (p *npcProc) mustRun(id int64, fn func(*remoteNPC) error) {
 // 没有持久字段（HasRemoteCommitLocked 恒为 false），所以全部写都不产生 Remote 提交。
 type remoteNPC struct {
 	*entity.RemoteEntityBase
-	who      string
-	proc     *npcProc
-	log      *npcLog
-	host     *heartbeat.Host
-	mb       *MapBasic
-	move     *Move
-	behavior *actionflow.Behavior
-	ai       *ai.Controller
+	fixtureMu lock.Mutex // 供测试在 fenced/shared 等不能发业务请求的状态下读取快照。
+	who       string
+	proc      *npcProc
+	log       *npcLog
+	host      *heartbeat.Host
+	mb        *MapBasic
+	move      *Move
+	behavior  *actionflow.Behavior
+	ai        *ai.Controller
 }
 
 func (p *npcProc) build(id int64) (*remoteNPC, error) {
+	mu := lock.NewReentrantMutex(id)
 	e := &remoteNPC{
-		RemoteEntityBase: entity.NewRemoteEntityBase(id, entity.EntityCategoryRemote, true, kindRemoteNPC),
+		RemoteEntityBase: entity.NewRemoteEntityBaseWithMutex(id, entity.EntityCategoryRemote, true, mu, kindRemoteNPC),
+		fixtureMu:        mu,
 		who:              fmt.Sprintf("%s%d", p.name, p.loads.Add(1)),
 		log:              p.log,
 		proc:             p,
@@ -714,8 +718,8 @@ func (*remoteNPC) RollbackRemoteCommit(entity.RemoteCommit)          {}
 
 // locked 在实体锁内读状态（不经 Nest、不走 Remote 写准入）。
 func locked[T any](e *remoteNPC, fn func(*remoteNPC) T) T {
-	e.GetMutex().Lock()
-	defer e.GetMutex().Unlock()
+	e.fixtureMu.Lock()
+	defer e.fixtureMu.Unlock()
 	return fn(e)
 }
 

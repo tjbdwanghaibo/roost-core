@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 )
 
@@ -187,7 +188,7 @@ func TestCreateInScopePipelinedWithoutWatermarkWaitsForDurable(t *testing.T) {
 				t.Fatal("transaction was not enqueued")
 			}
 			// 取得新实体的锁即证明 handler 已返回、准入后提前释放已经完成；此后只剩 ticket 持久化。
-			mu := created.GetMutex()
+			mu := physicalTestLock(created)
 			mu.Lock()
 			mu.Unlock()
 			if err := f.sync.Flush(context.Background()); err != nil {
@@ -366,7 +367,7 @@ func TestCreateOutsideTransactionUnchanged(t *testing.T) {
 	}
 	scopedID := mustBuildCastID(t, 9752, entity.EntityCategory(1), createdInScopeKind)
 	var viaScope entity.IThreadSafeEntity
-	if err := entity.WithGuardScope("outside_nest", func(scope *entity.GuardScope) error {
+	if err := entity.WithGuardScope(entitypermit.System(), "outside_nest", func(scope *entity.GuardScope) error {
 		viaScope, err = f.manager.CreateInScope(scope, &entity.EntityCreateParam{IsCreate: true, Id: scopedID, Category: entity.EntityCategory(1), Kind: createdInScopeKind})
 		return err
 	}); err != nil {
@@ -531,7 +532,7 @@ func TestLifecycleCreateInHandlerWaitsForDurable(t *testing.T) {
 				t.Fatal("transaction was not enqueued")
 			}
 			// 已有实体的锁可取得即证明 handler 已返回、准入后提前释放已完成（新实体在旧实现里早已解锁）。
-			mu := f.existing.GetMutex()
+			mu := physicalTestLock(f.existing)
 			mu.Lock()
 			mu.Unlock()
 			if err := f.sync.Flush(context.Background()); err != nil {
@@ -653,10 +654,10 @@ func TestLifecycleCreateOutsideNestUnchanged(t *testing.T) {
 		if f.manager.Get(e.ID()) != entity.IThreadSafeEntity(e) || !e.Sync().SyncCommitReady() {
 			t.Fatalf("entity %d created outside Nest is not immediately published", e.ID())
 		}
-		if !e.GetMutex().TryLock() {
+		if !physicalTestLock(e).TryLock() {
 			t.Fatalf("entity %d created outside Nest is still locked", e.ID())
 		}
-		e.GetMutex().Unlock()
+		physicalTestLock(e).Unlock()
 		if err := f.sync.Register(e.Sync()); err != nil {
 			t.Fatal(err)
 		}
@@ -908,7 +909,7 @@ func TestAFailedCreateLeavesNoPersistentWrite(t *testing.T) {
 				id := mustBuildCastID(t, base, 1, failedCreateKind)
 				planFailedCreate(t, id, failedCreatePlan{stage: stage})
 				committer := &recordingCommitter{}
-				err := entity.WithGuardScope("failed_create_isolated", func(*entity.GuardScope) error {
+				err := entity.WithGuardScope(entitypermit.System(), "failed_create_isolated", func(*entity.GuardScope) error {
 					_, err := RunIsolatedTransaction(context.Background(), committer, "failed_create_isolated", func() (any, error) {
 						if _, err := manager.Create(failedCreateParam(id)); !errors.Is(err, errFailedCreateRejected) {
 							t.Errorf("create err=%v, want the initialization failure", err)

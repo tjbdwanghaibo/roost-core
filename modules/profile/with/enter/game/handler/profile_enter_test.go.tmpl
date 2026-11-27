@@ -11,6 +11,8 @@ import (
 	sender "{{MODULE}}/game/handler/syncsender"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 )
 
 var profileEnterLevelUps atomic.Int64
@@ -86,9 +88,7 @@ func TestWithProfileEnterReloadKeepsStoredLevel(t *testing.T) {
 	}
 	f.mustAddExp(t, 250, 2)
 	var raw []byte
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		raw = f.player.Dao().Marshal()
 	}); err != nil {
 		t.Fatal(err)
@@ -102,12 +102,20 @@ func TestWithProfileEnterReloadKeepsStoredLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := loaded.(*player.Player)
+	// The same ID is now served by the reloaded instance, not the old fixture.
+	reloaded := nest.NewEngine(nest.NestOptionWithGetter(profileGetter{p.ID(): p}))
+	if err := reloaded.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reloaded.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	var level int32
 	var exp int64
 	var initialized bool
-	if err := f.engine.RunLocal(context.Background(), func() {
-		p.GetMutex().Lock()
-		defer p.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), reloaded, p, func() {
 		level = p.Profile().Level()
 		exp = p.Profile().Exp()
 		initialized = p.Dao().GetEnter().GetInitialized()

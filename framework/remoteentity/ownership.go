@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 var _ entity.RemoteOwnershipManager = (*Manager)(nil)
@@ -270,11 +271,12 @@ func (m *Manager) settleIndeterminateOwnership(wrapper *remoteEntityWrapper, exp
 // freezeAttachedLive 把内存实例停在 Recovering。Draining 可以直接转过去；Sharing（EnterShared 在途）必须先经
 // Fenced，这是状态表唯一允许的路径。
 func freezeAttachedLive(live entity.IThreadSafeRemoteEntity) error {
-	if live == nil || live.GetMutex() == nil {
+	mu := entity.SystemMutex(entitypermit.System(), live)
+	if mu == nil {
 		return nil
 	}
-	live.GetMutex().Lock()
-	defer live.GetMutex().Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	if err := live.TransitionRemoteOwnership(entity.RemoteOwnershipRecovering); err == nil {
 		return nil
 	}
@@ -286,11 +288,12 @@ func freezeAttachedLive(live entity.IThreadSafeRemoteEntity) error {
 
 // transitionAttachedLive 在实例自己的锁下把已加载的实例转到 state；实例为 nil 时什么也不做。
 func transitionAttachedLive(live entity.IThreadSafeRemoteEntity, state entity.RemoteOwnershipState) error {
-	if live == nil || live.GetMutex() == nil {
+	mu := entity.SystemMutex(entitypermit.System(), live)
+	if mu == nil {
 		return nil
 	}
-	live.GetMutex().Lock()
-	defer live.GetMutex().Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	return live.TransitionRemoteOwnership(state)
 }
 
@@ -388,11 +391,31 @@ func (m *Manager) transitionLiveOwnership(ctx context.Context, wrapper *remoteEn
 			return fmt.Errorf("remote_entity: load live entity %d for transition: %w", wrapper.id, err)
 		}
 	}
-	if live == nil || live.GetMutex() == nil {
-		return nil
+	// 已绑定的成员必须先经受权事务显式拆开。Attach 和转换持同一个写门，故这里检查为
+	// 单独实例之后，到权威 CAS 之前不可能重新绑定。持写门绝不等待伴生域锁，忙则拒绝。
+	if entity.IsCompanionParticipant(wrapper.kind) {
+		local, ok := m.backend.(entity.IRemoteEntityLocalLookup)
+		if !ok || live == nil || !live.Touch() {
+			return fmt.Errorf("%w: cannot verify live companion %d", entity.ErrRemoteOwnerTransition, wrapper.id)
+		}
+		defer live.UnTouch()
+		mu := entity.SystemMutex(entitypermit.System(), live)
+		if mu == nil || !mu.TryLock() {
+			return fmt.Errorf("%w: companion %d is unavailable or busy", entity.ErrRemoteOwnerTransition, wrapper.id)
+		}
+		defer mu.Unlock()
+		s := entity.SnapshotCompanionDomain(live)
+		if local.LookupLocalRemoteEntity(wrapper.id, wrapper.kind) != live || !s.Valid() || s.Root != live || len(s.Members) != 0 {
+			return fmt.Errorf("%w: explicitly detach companion domain before changing ownership of %d", entity.ErrRemoteOwnerTransition, wrapper.id)
+		}
+	} else {
+		mu := entity.SystemMutex(entitypermit.System(), live)
+		if mu == nil {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
 	}
-	live.GetMutex().Lock()
-	defer live.GetMutex().Unlock()
 	remote, ok := live.(entity.IThreadSafeRemoteEntity)
 	if !ok {
 		return nil
@@ -426,11 +449,12 @@ func (m *Manager) applyLiveOwnership(ctx context.Context, wrapper *remoteEntityW
 			return fmt.Errorf("remote_entity: load live entity %d for ownership apply: %w", wrapper.id, err)
 		}
 	}
-	if live == nil || live.GetMutex() == nil {
+	mu := entity.SystemMutex(entitypermit.System(), live)
+	if mu == nil {
 		return nil
 	}
-	live.GetMutex().Lock()
-	defer live.GetMutex().Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	live.SetExcludeSId(excludeSID)
 	if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
 		version := remote.RemoteVersionVector()
@@ -449,17 +473,15 @@ func (m *Manager) applyLiveOwnership(ctx context.Context, wrapper *remoteEntityW
 
 // restoreOwnershipAfterTransitionFailure 在转换被证明未发生时，把实例恢复到租约对应的本地模式。
 func (m *Manager) restoreOwnershipAfterTransitionFailure(live entity.IThreadSafeRemoteEntity, lease entity.RemoteEntityMarkerLease) error {
-	if live == nil || live.GetMutex() == nil {
+	mu := entity.SystemMutex(entitypermit.System(), live)
+	if mu == nil {
 		return nil
 	}
-	live.GetMutex().Lock()
-	defer live.GetMutex().Unlock()
-	if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
-		target := entity.RemoteOwnershipLocalOwned
-		if lease.Shared {
-			target = entity.RemoteOwnershipShared
-		}
-		return remote.TransitionRemoteOwnership(target)
+	mu.Lock()
+	defer mu.Unlock()
+	target := entity.RemoteOwnershipLocalOwned
+	if lease.Shared {
+		target = entity.RemoteOwnershipShared
 	}
-	return nil
+	return live.TransitionRemoteOwnership(target)
 }

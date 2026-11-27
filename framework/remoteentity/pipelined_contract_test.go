@@ -5,9 +5,11 @@ package remoteentity
 import (
 	"context"
 	"errors"
+
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -53,7 +55,7 @@ func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 				started := make(chan confirmStart, 1)
 				beforeWait := func(f reloadFixture, commits []entity.RemoteCommit) {
 					// Remote 确认在 I/O 准备阶段、本地锁释放之后开始：记下此刻本地记录是否已 fsync、实体锁是否已释放。
-					mu := live.GetMutex()
+					mu := entity.SystemMutex(entitypermit.System(), live)
 					free := mu.TryLock()
 					if free {
 						mu.Unlock()

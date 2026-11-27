@@ -10,6 +10,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
@@ -218,7 +219,7 @@ func (f *unloadFixture) heroState() (level int32, version uint64, ok bool) {
 	if value == nil {
 		return 0, 0, false
 	}
-	mu := value.GetMutex()
+	mu := entity.SystemMutex(entitypermit.System(), value)
 	mu.Lock()
 	defer mu.Unlock()
 	return value.level, value.version, true

@@ -707,10 +707,10 @@ func TestPipelinedReleasePanicStillCompletesAndReplies(t *testing.T) {
 			if entity.CurrentGuardScope() != nil {
 				t.Error("Guard scope leaked")
 			}
-			if !ent.GetMutex().TryLock() {
+			if !physicalTestLock(ent).TryLock() {
 				t.Fatal("entity remained locked")
 			}
-			ent.GetMutex().Unlock()
+			physicalTestLock(ent).Unlock()
 			if engine.completions != nil && len(engine.completions.chains) != 0 {
 				t.Error("completion ordering link leaked")
 			}
@@ -783,9 +783,9 @@ func TestAsyncCompletionWaitsForEntityRelease(t *testing.T) {
 	name := NewHandlerName("completion_unlock")
 	engine.MustRegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		AfterCommit(func() {
-			free := e.GetMutex().TryLock()
+			free := physicalTestLock(e).TryLock()
 			if free {
-				e.GetMutex().Unlock()
+				physicalTestLock(e).Unlock()
 			}
 			completed <- free
 		})
@@ -862,9 +862,9 @@ func TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged(t *testing.T) {
 		name := NewHandlerName("non_async_" + durability.String())
 		engine.MustRegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 			AfterCommit(func() {
-				free := e.GetMutex().TryLock()
+				free := physicalTestLock(e).TryLock()
 				if free {
-					e.GetMutex().Unlock()
+					physicalTestLock(e).Unlock()
 				}
 				lockFree.Store(free)
 				onDispatch.Store(currentNestDispatchMsg() != nil)

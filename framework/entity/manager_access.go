@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -660,11 +661,14 @@ func (access *ManagerAccess) GetGroupEntities(groupID int64) []IThreadSafeEntity
 }
 
 // UpdateEntityGroup 更新实体所属锁组（0 表示离开）。
-func (access *ManagerAccess) UpdateEntityGroup(value IThreadSafeEntity, groupID int64) error {
+func (access *ManagerAccess) UpdateEntityGroup(permit entitypermit.Token, value IThreadSafeEntity, groupID int64) error {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged
 	}
-	return access.manager.UpdateEntityGroup(value, groupID)
+	return access.manager.UpdateEntityGroup(permit, value, groupID)
 }
 
 // Create 见 EntityManager.Create。
@@ -732,11 +736,14 @@ func (access *ManagerAccess) Unload(ctx context.Context, value IThreadSafeEntity
 }
 
 // WithLocked 见 EntityManager.WithLocked。
-func (access *ManagerAccess) WithLocked(ctx context.Context, value IThreadSafeEntity, fn func()) error {
+func (access *ManagerAccess) WithLocked(permit entitypermit.Token, ctx context.Context, value IThreadSafeEntity, fn func()) error {
+	if !permit.Valid() {
+		return ErrEntityLockScope
+	}
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged
 	}
-	return access.manager.WithLocked(ctx, value, fn)
+	return access.manager.WithLocked(permit, ctx, value, fn)
 }
 
 // UnloadRemoteEntity 实现 IRemoteEntityUnloader，与 Unload 同一路径。

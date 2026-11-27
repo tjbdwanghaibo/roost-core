@@ -1,8 +1,6 @@
 package player
 
 import (
-	attributecomp "{{MODULE}}/game/components/attribute"
-	gameprofile "{{MODULE}}/game/components/profile"
 	"context"
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -10,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	attributecomp "{{MODULE}}/game/components/attribute"
+	gameprofile "{{MODULE}}/game/components/profile"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -21,19 +21,23 @@ import (
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
 )
 
-// isolatedLocked 在持有 subject 锁的 Guard 作用域里跑一笔独立事务。组件发布实体事件（属性变化、装备变化、升级）
-// 要求当前 Guard 持有发布事件的实体：正式路径上由 Nest 派发取锁，这些测试直接调组件方法，所以在这里取锁。
+// 每次操作都是发给 subject 的独立 Nest 消息。由框架在锁内调用组件、回滚或提交。
 func isolatedLocked(subject *Player, committer nest.TransactionCommitter, handler string, call func() (any, error)) (any, error) {
-	var out any
-	err := entity.WithGuardScope(handler, func(scope *entity.GuardScope) error {
-		if !scope.Guard().RequireEntity(subject) {
-			return errors.New("the player could not be locked")
+	engine := nest.NewEngine(nest.NestOptionWithGetter(playerGetter{subject}), nest.NestOptionWithTransactionCommitter(committer))
+	name := nest.NewHandlerName(handler)
+	if err := engine.RegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if len(es) != 1 || es[0] != subject {
+			return nil, errors.New("wrong attribute subject")
 		}
-		var err error
-		out, err = nest.RunIsolatedTransaction(context.Background(), committer, handler, call)
-		return err
-	})
-	return out, err
+		return call()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict}); err != nil {
+		return nil, err
+	}
+	if err := engine.Start(); err != nil {
+		return nil, err
+	}
+	defer engine.Shutdown(context.Background())
+	return engine.Request(context.Background(), name, subject.ID(), nil)
 }
 
 // attributeCommitter keeps nothing: this test is about the container, not
@@ -177,7 +181,9 @@ func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc, err := patch.Values()
- if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	// profile_private 是档案里只给本人的那一半（等级内经验）；别人看得到的那一半是 profile（名字、等级）。
 	for _, name := range []string{"profile_private", "bag", "attribute_base", "attribute_final"} {
 		if _, exists := doc[name]; exists {
@@ -203,7 +209,9 @@ func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc, err = patch.Values()
- if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	// 增量补丁只有改了的位置：实体 ID 只在全量里（增量沿用基线的）。
 	if _, moved := doc["pos_x"]; !moved || len(doc) != 1 {
 		t.Fatalf("delta sent unchanged fields: %v", doc)

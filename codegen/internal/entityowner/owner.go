@@ -27,6 +27,8 @@ type Owned struct {
 	Entity string
 	// Kind 是实体包里的 EntityKind 常量名（标记的 entityKind=，缺省 EntityKind<Entity>）。
 	Kind string
+	// CompanionOf 是同一工程中的主实体结构体名；空表示不声明伴生关系。
+	CompanionOf string
 	// Service 是 service= 的值；没有声明时为 ""（只出现在 Entities / LocalPreloads 的结果里）。
 	Service string
 	// Remote 表示 remote=managed。
@@ -189,7 +191,7 @@ func scanFile(path string, all bool) ([]Owned, error) {
 			if !declared && !hasPreload {
 				if all {
 					if entityName := structAfter(structs, position.Line); entityName != "" {
-						out = append(out, Owned{Entity: entityName, Kind: kindName(params, entityName), Remote: remote,
+						out = append(out, Owned{Entity: entityName, Kind: kindName(params, entityName), Remote: remote, CompanionOf: params["companionOf"],
 							NoPersist: noPersist, Dir: filepath.Dir(path), Position: where})
 					}
 				}
@@ -205,15 +207,16 @@ func scanFile(path string, all bool) ([]Owned, error) {
 			}
 			kind := kindName(params, entityName)
 			out = append(out, Owned{
-				Entity:    entityName,
-				Kind:      kind,
-				Service:   service,
-				Remote:    remote,
-				Preload:   hasPreload,
-				Order:     order,
-				NoPersist: noPersist,
-				Dir:       filepath.Dir(path),
-				Position:  where,
+				Entity:      entityName,
+				Kind:        kind,
+				CompanionOf: params["companionOf"],
+				Service:     service,
+				Remote:      remote,
+				Preload:     hasPreload,
+				Order:       order,
+				NoPersist:   noPersist,
+				Dir:         filepath.Dir(path),
+				Position:    where,
 			})
 		}
 	}

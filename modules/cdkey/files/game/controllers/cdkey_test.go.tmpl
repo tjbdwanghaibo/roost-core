@@ -14,19 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
-	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
-	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
-	"github.com/tjbdwanghaibo/roost-core/service/directory"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"{{MODULE}}/configs/schema"
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
@@ -36,6 +23,20 @@ import (
 	mailbox "{{MODULE}}/game/modules/mailbox"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // 正式生成 Sender/Nest/controller/directory/mail 链路；只有提交器与服务存储在内存，不声称网络或真实持久依赖验收。
@@ -244,12 +245,12 @@ func (f *cdkeyFixture) redeem(playerID int64, code string) (gamecdkey.Intent, er
 func (f *cdkeyFixture) size(t *testing.T, playerID int64) int {
 	t.Helper()
 	size := 0
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		p := f.players[playerID]
-		p.GetMutex().Lock()
-		defer p.GetMutex().Unlock()
-		size = p.Dao().GetCdkey().ReceiptsLen()
-	}); err != nil {
+		return nesttest.With(context.Background(), f.engine, p, func() {
+			size = p.Dao().GetCdkey().ReceiptsLen()
+		})
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	return size
@@ -259,13 +260,18 @@ func (f *cdkeyFixture) size(t *testing.T, playerID int64) int {
 func (f *cdkeyFixture) restart(t *testing.T) {
 	t.Helper()
 	documents := map[int64][]byte{}
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		for playerID, value := range f.players {
-			value.GetMutex().Lock()
-			documents[playerID] = value.Dao().Marshal()
-			value.GetMutex().Unlock()
+
+			if err := nesttest.With(context.Background(), f.engine, value, func() {
+				documents[playerID] = value.Dao().Marshal()
+			}); err != nil {
+				return err
+			}
 		}
-	}); err != nil {
+
+		return nil
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.engine.Shutdown(context.Background()); err != nil {

@@ -407,7 +407,7 @@ func notifySubjectSyncDirty(notifier SubjectSyncDirtyNotifier, state *SubjectSyn
 	notifier(state)
 }
 
-func entitySyncLockedInCurrentGuard(entityID int64) bool {
+func entitySyncLockedInCurrentGuard(entityID int64, base *EntityBase) bool {
 	if entityID == 0 {
 		return false
 	}
@@ -415,8 +415,11 @@ func entitySyncLockedInCurrentGuard(entityID int64) bool {
 	if scope == nil || scope.Guard() == nil {
 		return false
 	}
-	ok := scope.Guard().Guarded(entityID)
-	return ok
+	held := scope.Guard().eMap[entityID]
+	// A second instance built against the same native mutex is already protected;
+	// reacquiring it would deadlock for a non-reentrant custom mutex. Same ID by
+	// itself is not enough (a destroyed/rebuilt instance may have a fresh lock).
+	return held != nil && (held.Base() == base || sameMutex(systemMutex(held), base.mu))
 }
 
 // PrepareViews 捕获明确指定的视图：空列表表示无人需要该类内容。

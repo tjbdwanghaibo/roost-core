@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
@@ -30,7 +31,7 @@ func entityCreateAdmitter(committer corenest.TransactionCommitter, fail func(err
 			return nil, fmt.Errorf("dataengine create: a persistent entity created outside a transaction waits for its commit: %w", err)
 		}
 		var created entity.IThreadSafeEntity
-		err := entity.WithGuardScope(entityCreateHandler, func(scope *entity.GuardScope) error {
+		err := entity.WithGuardScope(entitypermit.System(), entityCreateHandler, func(scope *entity.GuardScope) error {
 			_, err := corenest.RunIsolatedTransaction(ctx, committer, entityCreateHandler, func() (any, error) {
 				value, err := create(scope)
 				created = value

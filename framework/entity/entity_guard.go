@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
@@ -74,6 +75,7 @@ func runOnEntityRelease(ent IThreadSafeEntity) {
 // EntityGuard 记录一个 goroutine 在 Guard 作用域内持有的实体锁，按锁序等级避免死锁。只由持有它的业务 goroutine 使用；
 // 作用域结束时释放全部锁、执行 post-release 回调并归还池。
 type EntityGuard struct {
+	independent  bool
 	syncMutation *SyncMutation
 	// createdCapturer 是当前在本 Guard 上执行的 Nest handler（事务或 memory 快路径）；只由持有 Guard 的
 	// 业务 goroutine 读写。非 nil 时 handler 内新建实体沿用本 Guard 持锁并按锁序取锁。
@@ -125,7 +127,10 @@ var guardScopes goroutine.LocalMap[*GuardScope]
 
 // NewGuardScope 在当前 goroutine 上开启一个新的 Guard 作用域，返回释放函数：释放全部锁、执行 post-release 回调、
 // 恢复上一层作用域并归还 Guard。I/O worker 上调用会 panic（I/O 池不得取实体锁）。
-func NewGuardScope(name string) (*GuardScope, func()) {
+func NewGuardScope(permit entitypermit.Token, name string) (*GuardScope, func()) {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if fctx.InIOWorker() {
 		panic(fctx.ErrGuardInIOWorker)
 	}
@@ -142,8 +147,11 @@ func NewGuardScope(name string) (*GuardScope, func()) {
 }
 
 // WithGuardScope 在新的 Guard 作用域内执行 fn，结束时释放作用域。
-func WithGuardScope(name string, fn func(*GuardScope) error) error {
-	scope, release := NewGuardScope(name)
+func WithGuardScope(permit entitypermit.Token, name string, fn func(*GuardScope) error) error {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
+	scope, release := NewGuardScope(permit, name)
 	defer release()
 	if fn == nil {
 		return nil
@@ -205,21 +213,52 @@ func releaseGuardScope(scope *GuardScope) {
 	guardPool.Put(guard)
 }
 
-// GetEntityGuard 返回当前 Guard 作用域的 Guard；没有作用域时返回一个独立 Guard，调用方必须用 EntityGuardRelease 释放。
-func GetEntityGuard() *EntityGuard {
-	if scope := CurrentGuardScope(); scope != nil {
-		return scope.guard
+// GetEntityGuard 只查询当前作用域；在 handler 外没有 Guard 时返回 nil，不从池里借对象。
+func GetEntityGuard() *EntityGuard { return CurrentGuardScope().Guard() }
+
+// BorrowIndependentGuard 是框架维护入口，取得的独立 Guard 必须在同一 goroutine 归还。
+func BorrowIndependentGuard(permit entitypermit.Token) *EntityGuard {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
 	}
-	return guardPool.Get().(*EntityGuard)
+	g := guardPool.Get().(*EntityGuard)
+	gid := goroutine.GoID()
+	n, _ := independentGuards.Load(gid)
+	independentGuards.Store(gid, n+1)
+	g.independent = true
+	return g
+}
+
+var independentGuards goroutine.LocalMap[int]
+
+func insideAnyGuard() bool {
+	if CurrentGuardScope() != nil {
+		return true
+	}
+	n, _ := independentGuards.Load(goroutine.GoID())
+	return n != 0
 }
 
 // EntityGuardRelease 释放 guard。它属于当前作用域时什么也不做（由作用域释放）；否则立即释放。
-func EntityGuardRelease(guard *EntityGuard) {
+func EntityGuardRelease(permit entitypermit.Token, guard *EntityGuard) {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if guard == nil {
 		return
 	}
 	if scope := CurrentGuardScope(); scope != nil && scope.guard == guard {
 		return
+	}
+	if guard.independent {
+		gid := goroutine.GoID()
+		n, _ := independentGuards.Load(gid)
+		if n <= 1 {
+			independentGuards.Delete(gid)
+		} else {
+			independentGuards.Store(gid, n-1)
+		}
+		guard.independent = false
 	}
 	doGuardReleaseInCurrentGoroutine(guard)
 }
@@ -255,17 +294,23 @@ func (e *EntityGuard) clean() {
 // BindCreatedEntityCapturer 让本 Guard 上后续的 CreateInScope 把新实体交给 capturer，
 // 返回的函数恢复先前的值（嵌套事务各自捕获自己的新实体）。只由持有该 Guard 的
 // 业务 goroutine 调用；Nest 在调用业务 handler 期间绑定当前事务。
-func (e *EntityGuard) BindCreatedEntityCapturer(capturer CreatedEntityCapturer) (restore func()) {
+func (e *EntityGuard) BindCreatedEntityCapturer(permit entitypermit.Token, capturer CreatedEntityCapturer) (restore func()) {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if e == nil {
 		return func() {}
 	}
-	previous := e.SwapCreatedEntityCapturer(capturer)
+	previous := e.SwapCreatedEntityCapturer(permit, capturer)
 	return func() { e.createdCapturer = previous }
 }
 
 // SwapCreatedEntityCapturer 是 BindCreatedEntityCapturer 的无分配形式：换入 capturer 并返回先前的值，
 // 调用方用返回值再换回。Nest 的 memory 快路径每条消息都要绑定，不为此分配恢复闭包。
-func (e *EntityGuard) SwapCreatedEntityCapturer(capturer CreatedEntityCapturer) (previous CreatedEntityCapturer) {
+func (e *EntityGuard) SwapCreatedEntityCapturer(permit entitypermit.Token, capturer CreatedEntityCapturer) (previous CreatedEntityCapturer) {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if e == nil {
 		return nil
 	}
@@ -276,22 +321,26 @@ func (e *EntityGuard) SwapCreatedEntityCapturer(capturer CreatedEntityCapturer) 
 
 // RequireEntity 等待取得实体锁，成功返回 true。已持有时直接返回 true；取锁后发现实体已清理或已摘除时解锁并返回 false。
 // I/O worker 上调用会 panic。
-func (e *EntityGuard) RequireEntity(ent IThreadSafeEntity) bool {
+func (e *EntityGuard) RequireEntity(permit entitypermit.Token, ent IThreadSafeEntity) bool {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if fctx.InIOWorker() {
 		panic(fctx.ErrGuardInIOWorker)
 	}
 	if ent == nil {
 		return false
 	}
-	gId := ent.GUId()
-	mu := ent.GetMutex()
+	gId := guardEntityID(ent)
+	mu := systemMutex(ent)
 	if gId == 0 || mu == nil {
 		return false
 	}
 
 	held, stale := e.holding(ent)
 	if held {
-		return true
+		_, participant := mu.(*companionGate)
+		return !participant || !ent.IsRemoved() && !ent.IsClear()
 	}
 
 	mu.Lock()
@@ -304,21 +353,25 @@ func (e *EntityGuard) RequireEntity(ent IThreadSafeEntity) bool {
 }
 
 // TryRequireEntity 不等待地取得实体锁：锁被占用、实体已清理或已摘除时返回 false。
-func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
+func (e *EntityGuard) TryRequireEntity(permit entitypermit.Token, ent IThreadSafeEntity) bool {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if fctx.InIOWorker() {
 		panic(fctx.ErrGuardInIOWorker)
 	}
 	if ent == nil {
 		return false
 	}
-	gId := ent.GUId()
-	mu := ent.GetMutex()
+	gId := guardEntityID(ent)
+	mu := systemMutex(ent)
 	if gId == 0 || mu == nil {
 		return false
 	}
 	held, stale := e.holding(ent)
 	if held {
-		return true
+		_, participant := mu.(*companionGate)
+		return !participant || !ent.IsRemoved() && !ent.IsClear()
 	}
 	if !mu.TryLock() {
 		return false
@@ -339,8 +392,12 @@ func requirePointerEntity(ent IThreadSafeEntity) error {
 	if ent == nil {
 		return ErrEntityNil
 	}
-	if reflect.TypeOf(ent).Kind() != reflect.Pointer {
+	v := reflect.ValueOf(ent)
+	if v.Kind() != reflect.Pointer {
 		return fmt.Errorf("%w: %T is a value type (the guard compares entity instances)", ErrEntityNotPointer, ent)
+	}
+	if v.IsNil() {
+		return ErrEntityNil
 	}
 	return nil
 }
@@ -351,14 +408,23 @@ func requirePointerEntity(ent IThreadSafeEntity) error {
 // current == ent 直接比较接口值：实体实现必须是指针（契约，入口由 requirePointerEntity 校验），
 // 这里不再做可比较性判断。
 func (e *EntityGuard) holding(ent IThreadSafeEntity) (held bool, stale IThreadSafeEntity) {
-	current, ok := e.eMap[ent.GUId()]
+	current, ok := e.eMap[guardEntityID(ent)]
 	if !ok {
 		return false, nil
 	}
-	if current == ent || sameMutex(current.GetMutex(), ent.GetMutex()) {
+	if current == ent || sameMutex(systemMutex(current), systemMutex(ent)) {
 		return true, nil
 	}
 	return false, current
+}
+
+// guardEntityID uses the immutable entrance identity for participants. A waiter
+// need not touch mutable Base fields while a concurrent removal clears them.
+func guardEntityID(ent IThreadSafeEntity) int64 {
+	if g := gateOf(ent); g != nil {
+		return g.id
+	}
+	return ent.GUId()
 }
 
 // sameMutex 报告 a、b 是否是同一把锁。直接用 == 比较两个 lock.Mutex 接口值不安全：自定义 Mutex 若是不可比较的值类型
@@ -397,15 +463,15 @@ func (e *EntityGuard) hold(id int64, ent, stale IThreadSafeEntity) {
 // Nest 之外（Create 自建的短作用域、独立 WithGuardScope）沿用原来的等待取锁。
 func (e *EntityGuard) lockCreated(ent IThreadSafeEntity, capturer CreatedEntityCapturer) error {
 	if capturer != nil && !e.mayLockEntity(ent, e.maxLockedGroup()) {
-		if e.TryRequireEntity(ent) {
+		if e.TryRequireEntity(entitypermit.System(), ent) {
 			return nil
 		}
-		if ent.GetMutex() == nil || ent.GUId() == 0 {
+		if systemMutex(ent) == nil || ent.GUId() == 0 {
 			return fmt.Errorf("entity guard scope lock failed: %d", ent.ID())
 		}
 		return capturer.CreatedEntityLockBusy(ent.ID())
 	}
-	if !e.RequireEntity(ent) {
+	if !e.RequireEntity(entitypermit.System(), ent) {
 		return fmt.Errorf("entity guard scope lock failed: %d", ent.ID())
 	}
 	return nil
@@ -443,7 +509,10 @@ func (e *EntityGuard) CheckContainAllIDs(ids []int64) bool {
 // maxLockedGroup 返回本 Guard 持有的锁中最高的锁序等级；没有持有时为 -1。
 func (e *EntityGuard) maxLockedGroup() int {
 	maxLockedGroup := -1
-	for id := range e.eMap {
+	for id, ent := range e.eMap {
+		if g := gateOf(ent); g != nil {
+			id = g.current.Load().native.LockId()
+		}
 		if group := GetEntityGroup(id); group > maxLockedGroup {
 			maxLockedGroup = group
 		}
@@ -457,7 +526,13 @@ func (e *EntityGuard) mayLock(id int64, maxLockedGroup int) bool {
 	if _, held := e.eMap[id]; held {
 		return true
 	}
-	return GetEntityGroup(id) > maxLockedGroup
+	rank := GetEntityGroup(id)
+	if IsCompanionKind(GetEntityKindFromID(id)) {
+		if p, err := PrincipalID(id); err == nil {
+			rank = min(rank, GetEntityGroup(p))
+		}
+	}
+	return rank > maxLockedGroup
 }
 
 // mayLockEntity 是按实例的 mayLock：同 ID 但换了锁的新实例不是“已持有”，而它的锁组与
@@ -465,6 +540,14 @@ func (e *EntityGuard) mayLock(id int64, maxLockedGroup int) bool {
 func (e *EntityGuard) mayLockEntity(ent IThreadSafeEntity, maxLockedGroup int) bool {
 	if held, _ := e.holding(ent); held {
 		return true
+	}
+	if g := gateOf(ent); g != nil {
+		if g.current.Load().owner.Load() == goroutine.GoID() {
+			return true
+		}
+		if IsCompanionKind(GetEntityKindFromID(g.id)) {
+			return false
+		}
 	}
 	return GetEntityGroup(ent.GUId()) > maxLockedGroup
 }
@@ -480,7 +563,10 @@ func (e *EntityGuard) AppendPostRelease(f func()) {
 // 随后回到 eMap：锁序判断与 Guarded 仍要算上这把锁，Guard 释放时解锁。
 // 调用方持有实例指针、要释放的是“这个实例的锁”时用 ReleaseEntityInstance：handler 内 Destroy 后同 ID 重建，
 // 按 ID 释放放掉的是新实例的锁。
-func (e *EntityGuard) ReleaseEntity(id int64) {
+func (e *EntityGuard) ReleaseEntity(permit entitypermit.Token, id int64) {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	ent := e.eMap[id]
 	if ent != nil {
 		e.doReleaseEntity(id, ent)
@@ -496,18 +582,21 @@ func (e *EntityGuard) ReleaseEntity(id int64) {
 // 按 ID 释放不够：handler 内 Destroy X 再新建同 ID 的 X 后，旧 X 的清理若被别的访问者的 Touch 推迟（最后一次 UnTouch
 // 才清零 ID），旧 X 的 GUId 仍非零，按它的 ID 释放会在 handler 中途放掉新 X 的锁。
 // ent 的 ID 已清零时它不会是 eMap 的当前登记（按 ID 查不到），只查 superseded。
-func (e *EntityGuard) ReleaseEntityInstance(ent IThreadSafeEntity) {
+func (e *EntityGuard) ReleaseEntityInstance(permit entitypermit.Token, ent IThreadSafeEntity) {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if e == nil || ent == nil {
 		return
 	}
-	if id := ent.GUId(); id != 0 {
+	if id := guardEntityID(ent); id != 0 {
 		if held, _ := e.holding(ent); held {
-			e.ReleaseEntity(id)
+			e.ReleaseEntity(entitypermit.System(), id)
 			return
 		}
 	}
 	for i := len(e.superseded) - 1; i >= 0; i-- {
-		if held := e.superseded[i]; held.ent == ent || sameMutex(held.ent.GetMutex(), ent.GetMutex()) {
+		if held := e.superseded[i]; held.ent == ent || sameMutex(systemMutex(held.ent), systemMutex(ent)) {
 			e.superseded = append(e.superseded[:i], e.superseded[i+1:]...)
 			e.doReleaseEntity(held.id, held.ent)
 			return
@@ -527,7 +616,10 @@ func (e *EntityGuard) restoreSuperseded(id int64) {
 }
 
 // ReleaseAll 释放本 Guard 持有的全部锁并执行 post-release 回调；Guard 本身不归还池。
-func (e *EntityGuard) ReleaseAll() {
+func (e *EntityGuard) ReleaseAll(permit entitypermit.Token) {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	callbacks := e.releaseEntities()
 	e.runPostRelease(callbacks)
 }
@@ -582,7 +674,7 @@ func (e *EntityGuard) safeReleaseEntity(id int64, ent IThreadSafeEntity) {
 
 // doReleaseEntity 解锁 ent，并在它仍是 id 的当前实例时从 eMap 删除（被取代的旧实例不在 eMap 里）。
 func (e *EntityGuard) doReleaseEntity(id int64, ent IThreadSafeEntity) {
-	mu := ent.GetMutex()
+	mu := systemMutex(ent)
 	defer func() {
 		if current, ok := e.eMap[id]; ok && current == ent {
 			delete(e.eMap, id)
@@ -607,6 +699,9 @@ func (e *EntityGuard) Guarded(id int64) bool {
 // handler 销毁并重建同一 ID 后，重建的实例有新锁，加锁之前不算持有。要对手里的实例指针跳过加锁时必须问这个，而不是 Guarded。
 func (e *EntityGuard) GuardedEntity(ent IThreadSafeEntity) bool {
 	if e == nil || ent == nil {
+		return false
+	}
+	if g := gateOf(ent); g != nil && (ent.IsRemoved() || ent.IsClear()) {
 		return false
 	}
 	held, _ := e.holding(ent)

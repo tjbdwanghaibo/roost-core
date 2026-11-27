@@ -11,6 +11,7 @@ import (
 	"{{MODULE}}/game/modules/purchase"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -27,9 +28,7 @@ func purchaseItemGrant() purchase.Grant {
 func purchaseBagCount(t *testing.T, f *purchaseFixture) int64 {
 	t.Helper()
 	var count int64
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.target.GetMutex().Lock()
-		defer f.target.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.target, func() {
 		count = f.target.BagComp().Count(1001)
 	}); err != nil {
 		t.Fatal(err)

@@ -233,17 +233,17 @@ func TestTryBatchLockBusyConvertsToSingleJob(t *testing.T) {
 		return nil, nil
 	})
 	engine := startTryBatchEngine(t, getter, WorkerPoolConfig{Workers: 2, QueueCap: 16})
-	ent.GetMutex().Lock()
+	physicalTestLock(ent).Lock()
 	hb := newHandBackRecorder()
 	if err := engine.DispatchTryBatch(context.Background(), []TryBatchTarget{{Handler: NewHandlerName("tb_lock_beat"), ID: idA}}, hb.handBack); err != nil {
-		ent.GetMutex().Unlock()
+		physicalTestLock(ent).Unlock()
 		t.Fatal(err)
 	}
 	waitFor(t, "conversion", func() bool { return engine.Stats().Queue.Short.TryBatchConverted == 1 })
 	if ran.Load() != 0 {
 		t.Fatal("beat ran while the entity lock was held")
 	}
-	ent.GetMutex().Unlock()
+	physicalTestLock(ent).Unlock()
 	waitFor(t, "converted beat", func() bool { return ran.Load() == 1 })
 	if handedBack, n := hb.snapshot(); n != 0 {
 		t.Fatalf("handed back %v", handedBack)
@@ -588,8 +588,8 @@ func TestTryBatchBusyTargetIsHandedBackAfterFenceInsideGroup(t *testing.T) {
 		return nil, nil
 	})
 	engine = startTryBatchEngine(t, getter, WorkerPoolConfig{Workers: 1, QueueCap: 16})
-	busy.GetMutex().Lock() // Nest 作业顺序之外的持有者：批量作业 Try 取不到
-	unlock := sync.OnceFunc(func() { busy.GetMutex().Unlock() })
+	physicalTestLock(busy).Lock() // Nest 作业顺序之外的持有者：批量作业 Try 取不到
+	unlock := sync.OnceFunc(func() { physicalTestLock(busy).Unlock() })
 	t.Cleanup(unlock)
 	hb := newHandBackRecorder()
 	if err := engine.DispatchTryBatch(context.Background(), []TryBatchTarget{{Handler: name, ID: busyID}, {Handler: name, ID: fenceID}}, hb.handBack); err != nil {

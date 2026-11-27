@@ -12,12 +12,16 @@ import (
 	"testing"
 	"time"
 
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	"{{MODULE}}/protocol/pb"
 	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
@@ -27,9 +31,6 @@ import (
 	wiringmail "github.com/tjbdwanghaibo/roost-core/wiring/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	wiringnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
-	playerentity "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/handler"
-	"{{MODULE}}/protocol/pb"
 )
 
 // 真实依赖档（显式 -tags integration，ROOST_MAILBOX_IT_NATS_URL 与 ROOST_MAILBOX_IT_REDIS_ADDR 必填）：邮件端点经生成工程
@@ -364,9 +365,7 @@ func (env *mailboxRealEnv) claimUntilDone(t *testing.T, mailID string, within ti
 
 func (env *mailboxRealEnv) wallet(t *testing.T) (coins int64, ledger int) {
 	t.Helper()
-	if err := env.engine.RunLocal(context.Background(), func() {
-		env.player.GetMutex().Lock()
-		defer env.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), env.engine, env.player, func() {
 		coins = env.player.Dao().GetWallet().GetCoins()
 		ledger = env.player.MailboxComp().LedgerSize()
 	}); err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
 	"{{MODULE}}/protocol/pb"
@@ -100,9 +101,7 @@ func newWalletFixture(t *testing.T, others ...entity.IThreadSafeEntity) *walletF
 // snapshot 在业务 worker 上持实体锁读余额与回执数。
 func (f *walletFixture) snapshot(t *testing.T) (coins int64, receipts int) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		coins = f.player.Dao().GetWallet().GetCoins()
 		receipts = f.player.Dao().GetWalletLedger().ReceiptsLen()
 	}); err != nil {
@@ -598,9 +597,7 @@ func (f *walletFixture) vaultCall(vault *walletVault, op, key string, delta int6
 // vaultState 在业务 worker 上持金库的锁读余额、回执数与已监听到的扣款。
 func (f *walletFixture) vaultState(t *testing.T, vault *walletVault) (coins int64, receipts int, spent []int64) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		vault.GetMutex().Lock()
-		defer vault.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, vault, func() {
 		coins = vault.WalletState().GetCoins()
 		receipts = vault.WalletLedger().ReceiptsLen()
 		spent = append([]int64(nil), vault.spent...)

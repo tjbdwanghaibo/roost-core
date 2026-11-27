@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
@@ -33,6 +34,8 @@ type GroupTransitionRequest struct {
 	Attempts      int
 	Deadline      time.Time
 	Continuation  *GroupTransitionContinuation
+	// 旧异步消息只可迁移发起时的实例；同 ID 重建不能接管它。
+	instance entity.IThreadSafeEntity
 }
 
 // GroupTransitionContinuation 是迁移成功后要派发的业务消息；它接管发起方消息的回复通道。
@@ -63,7 +66,8 @@ func GroupTransitionWithContinuation(name HandlerName, params Params) GroupTrans
 }
 
 // RequestJoinEntityLockGroup 请求把实体加入锁组 groupID。请求异步执行；实体已有待定迁移时返回
-// ErrEntityGroupTransitionPending。
+// ErrEntityGroupTransitionPending。这是事务外独立请求，不属于业务 handler 的提交；
+// handler 应使用 JoinEntityGroup / LeaveEntityGroup，不能通过此入口提前改变迁移门或转交回复。
 func (mgr *NestMgr) RequestJoinEntityLockGroup(entityID int64, groupID int64, opts ...GroupTransitionOption) error {
 	if groupID == 0 {
 		return ErrInvalidEntityLockGroup
@@ -87,6 +91,26 @@ func (mgr *NestMgr) RequestMoveEntityLockGroup(entityID int64, groupID int64, op
 // requestEntityLockGroupTransition 在实体上登记待定迁移（此后该实体的普通派发以 ErrEntityGroupTransitionPending
 // 重新准入），再派发一条迁移消息。
 func (mgr *NestMgr) requestEntityLockGroupTransition(entityID int64, state entity.EntityGroupTransitionState, targetGroupID int64, opts ...GroupTransitionOption) error {
+	opt := &GroupTransitionOptions{}
+	for _, fn := range opts {
+		if fn != nil {
+			fn(opt)
+		}
+	}
+	if msg := currentNestDispatchMsg(); msg != nil && msg.txInFlight || CurrentRollbackTx() != nil {
+		// A legacy request with a reply continuation is not an independent transition:
+		// stage it on this exact transaction. Never transfer the reply on rejection.
+		f := currentNestDispatchFrame()
+		if msg == nil || msg.engine != mgr || opt.Continuation == nil || opt.Continuation.Handler == "" || msg.RetChan == nil || f == nil || f.subject == nil || f.subject.GUId() != entityID || msg.awaitPlan != nil {
+			return ErrIndependentGroupRequestInHandler
+		}
+		if err := stagePeerGroupTransition(targetGroupID, state == entity.EntityGroupTransitionMove); err != nil {
+			return err
+		}
+		cont := *opt.Continuation
+		f.change.cont = &cont
+		return nil
+	}
 	if mgr == nil || mgr.dispatcher == nil || mgr.getter == nil {
 		return ErrNestStopped
 	}
@@ -99,21 +123,24 @@ func (mgr *NestMgr) requestEntityLockGroupTransition(entityID int64, state entit
 	if err != nil {
 		return err
 	}
-	if ent == nil || ent.Base() == nil {
+	if ent == nil || ent.Base() == nil || !ent.Touch() {
 		return ErrEntityNotFound
 	}
-	if !ent.Base().BeginGroupTransition(state, targetGroupID) {
+	defer ent.UnTouch()
+	if err := checkPeerGroupKind(ent); err != nil {
+		return err
+	}
+	if !beginIndependentGroupChange(ent, state, targetGroupID) {
 		return ErrEntityGroupTransitionPending
 	}
-	opt := &GroupTransitionOptions{}
-	for _, fn := range opts {
-		if fn != nil {
-			fn(opt)
+	queued := false
+	defer func() {
+		if !queued {
+			ent.Base().ClearGroupTransition(entitypermit.System())
 		}
-	}
+	}()
 	if opt.Continuation != nil {
 		if err := bindGroupTransitionContinuation(opt.Continuation); err != nil {
-			ent.Base().ClearGroupTransition()
 			return err
 		}
 	}
@@ -123,6 +150,7 @@ func (mgr *NestMgr) requestEntityLockGroupTransition(entityID int64, state entit
 	msg.Name = "entity_lock_group_transition"
 	msg.GroupTransition = &GroupTransitionRequest{
 		EntityID:      meta.FullID,
+		instance:      ent,
 		TargetGroupID: targetGroupID,
 		State:         state,
 		Deadline:      time.Now().Add(entityGroupTransitionLockTimeout),
@@ -130,7 +158,16 @@ func (mgr *NestMgr) requestEntityLockGroupTransition(entityID int64, state entit
 	}
 	bindMsgContext(msg, false)
 	observeEntityGroupTransition(msg.GroupTransition, "request")
-	mgr.dispatcher.sendMsg(msg)
+	if err := mgr.dispatcher.TrySendMsg(msg); err != nil {
+		// 入队失败不留下 pending，也不截走调用方回复。
+		if cont := opt.Continuation; cont != nil && cont.RetChan != nil {
+			if cur := currentNestDispatchMsg(); cur != nil {
+				cur.RetChan, cont.RetChan = cont.RetChan, nil
+			}
+		}
+		return err
+	}
+	queued = true
 	return nil
 }
 
@@ -159,12 +196,13 @@ func (mgr *NestMgr) groupTransitionDispatch(req *GroupTransitionRequest) (ret an
 	if err != nil {
 		return nil, err
 	}
-	if ent == nil || ent.Base() == nil || !ent.Touch() {
+	if ent == nil || req.instance != nil && req.instance != ent || ent.Base() == nil || !ent.Touch() {
 		return nil, ErrEntityNotFound
 	}
 	defer ent.UnTouch()
 
-	groupIDs := transitionLockGroupIDs(ent.Base().GroupLockID(), req.TargetGroupID, req.State)
+	from, epoch := ent.Base().GroupLockID(), ent.Base().GroupEpoch()
+	groupIDs := transitionLockGroupIDs(from, req.TargetGroupID, req.State)
 	unlockGroups, ok := mgr.tryLockEntityLockGroups(groupIDs)
 	if !ok {
 		return nil, mgr.retryGroupTransition(req, "group_lock_busy")
@@ -177,13 +215,16 @@ func (mgr *NestMgr) groupTransitionDispatch(req *GroupTransitionRequest) (ret an
 	}
 	defer releaseDispatchEntities(guard, acquired)
 
+	if ent.Base().GroupLockID() != from || ent.Base().GroupEpoch() != epoch {
+		return nil, mgr.retryGroupTransition(req, "group_changed")
+	}
 	if ent.Base().GroupTransitionState() != req.State ||
 		ent.Base().GroupTransitionTargetID() != req.TargetGroupID {
 		return nil, fmt.Errorf("%w: stale transition", ErrEntityGroupTransitionPending)
 	}
 	groups := groupStoreOf(mgr.getter)
 	if groups == nil {
-		ent.Base().ClearGroupTransition()
+		ent.Base().ClearGroupTransition(entitypermit.System())
 		return nil, ErrEntityNotFound
 	}
 
@@ -193,14 +234,18 @@ func (mgr *NestMgr) groupTransitionDispatch(req *GroupTransitionRequest) (ret an
 	case entity.EntityGroupTransitionLeave:
 		targetGroupID = 0
 	default:
-		ent.Base().ClearGroupTransition()
+		ent.Base().ClearGroupTransition(entitypermit.System())
 		return nil, ErrInvalidEntityLockGroup
 	}
-	if err := groups.UpdateEntityGroup(ent, targetGroupID); err != nil {
-		ent.Base().ClearGroupTransition()
+	if err := checkPeerGroupKind(ent); err != nil {
+		ent.Base().ClearGroupTransition(entitypermit.System())
 		return nil, err
 	}
-	ent.Base().ClearGroupTransition()
+	if err := groups.UpdateEntityGroup(entitypermit.System(), ent, targetGroupID); err != nil {
+		ent.Base().ClearGroupTransition(entitypermit.System())
+		return nil, err
+	}
+	ent.Base().ClearGroupTransition(entitypermit.System())
 	observeEntityGroupTransition(req, "success")
 	mgr.dispatchGroupTransitionContinuation(req)
 	return nil, nil
@@ -223,6 +268,7 @@ func (mgr *NestMgr) retryGroupTransition(req *GroupTransitionRequest, reason str
 		return err
 	}
 	if mgr.dispatcher == nil {
+		mgr.abortGroupTransition(req)
 		return ErrNestStopped
 	}
 	observeEntityGroupTransition(req, "retry")
@@ -233,7 +279,10 @@ func (mgr *NestMgr) retryGroupTransition(req *GroupTransitionRequest, reason str
 	if cur := currentNestDispatchMsg(); cur != nil {
 		msg.Context = cur.Context.Clone()
 	}
-	mgr.dispatcher.delaySendMsg(entityGroupTransitionRetryDelay, msg)
+	if err := mgr.dispatcher.TryDelaySendMsg(entityGroupTransitionRetryDelay, msg); err != nil {
+		mgr.abortGroupTransition(req)
+		return err
+	}
 	return ErrEntityGroupTransitionScheduled
 }
 
@@ -248,12 +297,12 @@ func (mgr *NestMgr) abortGroupTransition(req *GroupTransitionRequest) {
 	}
 	meta := entity.ResolveEntityID(fullID)
 	ent, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
-	if err != nil || ent == nil || ent.Base() == nil {
+	if err != nil || ent == nil || req.instance != nil && req.instance != ent || ent.Base() == nil {
 		return
 	}
 	if ent.Base().GroupTransitionState() == req.State &&
 		ent.Base().GroupTransitionTargetID() == req.TargetGroupID {
-		ent.Base().ClearGroupTransition()
+		ent.Base().ClearGroupTransition(entitypermit.System())
 	}
 }
 
@@ -311,6 +360,8 @@ func transitionLockGroupIDs(currentGroupID int64, targetGroupID int64, state ent
 	}
 	switch state {
 	case entity.EntityGroupTransitionJoin:
+		// 旧 Join 也允许对已入组实例发起，不能漏掉原组锁。
+		add(currentGroupID)
 		add(targetGroupID)
 	case entity.EntityGroupTransitionLeave:
 		add(currentGroupID)
@@ -459,7 +510,7 @@ func entityGroupTransitionStateName(state entity.EntityGroupTransitionState) str
 
 // currentNestDispatchMsgs 按 goroutine 记录正在派发的消息，供 handler 内的框架入口取得所属消息的提交事实与
 // Remote 批次（按 goroutine ID 分片的读写锁表，见 goroutine.LocalMap）。
-var currentNestDispatchMsgs goroutine.LocalMap[*Msg]
+var currentNestDispatchMsgs goroutine.LocalMap[*nestDispatchFrame]
 
 // pushCurrentNestDispatchMsg 把 msg 登记为当前 goroutine 的派发消息，返回恢复上一层登记的函数。
 func pushCurrentNestDispatchMsg(msg *Msg) func() {
@@ -468,12 +519,12 @@ func pushCurrentNestDispatchMsg(msg *Msg) func() {
 	}
 	gid := goroutine.GoID()
 	prev, _ := currentNestDispatchMsgs.Load(gid)
-	if prev == msg {
+	if prev != nil && prev.msg == msg {
 		// 只省掉当前消息身份的重复登记；Guard、事务与 fctx 仍各自建立作用域。
 		// 外层持有同一登记，内层退出（包括 panic）不能删除它。
 		return func() {}
 	}
-	currentNestDispatchMsgs.Store(gid, msg)
+	currentNestDispatchMsgs.Store(gid, &nestDispatchFrame{msg: msg})
 	return func() {
 		if prev != nil {
 			currentNestDispatchMsgs.Store(gid, prev)
@@ -485,6 +536,14 @@ func pushCurrentNestDispatchMsg(msg *Msg) func() {
 
 // currentNestDispatchMsg 返回当前 goroutine 正在派发的消息；不在派发中时为 nil。
 func currentNestDispatchMsg() *Msg {
-	msg, _ := currentNestDispatchMsgs.Load(goroutine.GoID())
-	return msg
+	frame := currentNestDispatchFrame()
+	if frame != nil {
+		return frame.msg
+	}
+	return nil
+}
+
+func currentNestDispatchFrame() *nestDispatchFrame {
+	frame, _ := currentNestDispatchMsgs.Load(goroutine.GoID())
+	return frame
 }

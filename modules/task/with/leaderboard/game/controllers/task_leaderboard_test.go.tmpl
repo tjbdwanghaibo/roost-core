@@ -9,17 +9,19 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"{{MODULE}}/configs/schema"
+	player "{{MODULE}}/game/entities/player"
+	handler "{{MODULE}}/game/handler"
+	"{{MODULE}}/game/modules/leaderboard"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
-	"{{MODULE}}/configs/schema"
-	player "{{MODULE}}/game/entities/player"
-	handler "{{MODULE}}/game/handler"
-	"{{MODULE}}/game/modules/leaderboard"
 )
 
 type taskRankMethods = svcrank.Rank
@@ -112,9 +114,7 @@ func taskRankFixture(t *testing.T) (*app.Registry, *taskRank, *taskRankCommitter
 	}
 	progress := func() int64 {
 		var n int64
-		if err := engine.RunLocal(context.Background(), func() {
-			p.GetMutex().Lock()
-			defer p.GetMutex().Unlock()
+		if err := nesttest.With(context.Background(), engine, p, func() {
 			n, _ = p.Dao().GetTask().GetPermanent().GetProgress(10)
 		}); err != nil {
 			t.Fatal(err)

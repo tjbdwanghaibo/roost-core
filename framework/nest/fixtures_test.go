@@ -15,6 +15,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 )
 
 // Tests exercise dispatch internals through an explicitly constructed engine;
@@ -308,9 +309,12 @@ func (g *mockGetter) GetGroupEntities(groupID int64) []entity.IThreadSafeEntity 
 	return g.groups.GetGroupEntities(groupID)
 }
 
-func (g *mockGetter) UpdateEntityGroup(value entity.IThreadSafeEntity, groupID int64) error {
+func (g *mockGetter) UpdateEntityGroup(permit entitypermit.Token, value entity.IThreadSafeEntity, groupID int64) error {
+	if !permit.Valid() {
+		panic(entity.ErrEntityLockScope)
+	}
 	if g.groups == nil {
 		return entity.ErrEntityNotManaged
 	}
-	return g.groups.UpdateEntityGroup(value, groupID)
+	return g.groups.UpdateEntityGroup(entitypermit.System(), value, groupID)
 }

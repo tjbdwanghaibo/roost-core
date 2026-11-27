@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/container"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
@@ -107,12 +108,14 @@ func (m *EntityManager) Add(e IThreadSafeEntity) {
 }
 
 // TryAdd 登记实体：ID 重复返回 ErrEntityExists，同 ID 实例仍在移除收尾返回 ErrEntityRemoved。
-func (m *EntityManager) TryAdd(e IThreadSafeEntity) error {
-	if e == nil || e.Base() == nil {
-		return ErrEntityNil
-	}
-	// 手工构造、不经注册 builder 的实体在这里进入框架：同样要求是指针。
+func (m *EntityManager) TryAdd(e IThreadSafeEntity) error { return m.tryAdd(e, nil) }
+
+func (m *EntityManager) tryAdd(e IThreadSafeEntity, param *EntityCreateParam) error {
+	// 手工构造、不经注册 builder 的实体在这里进入框架：同样要求是非 nil 指针。
 	if err := requirePointerEntity(e); err != nil {
+		return err
+	}
+	if err := requireNativeMutexView(e); err != nil {
 		return err
 	}
 	id := e.ID()
@@ -125,8 +128,24 @@ func (m *EntityManager) TryAdd(e IThreadSafeEntity) error {
 	if existing != nil {
 		return fmt.Errorf("%w: %d", ErrEntityExists, id)
 	}
+	if err := m.checkCompanionInstance(e); err != nil {
+		return err
+	}
+	// Registration is per instance, not per numeric ID. In particular, two
+	// independent manager/group coordinators cannot protect the same object.
+	if e.IsRemoved() || e.IsClear() {
+		return ErrEntityRemoved
+	}
+	if !e.Base().owner.CompareAndSwap(nil, m) {
+		return ErrEntityNotManaged
+	}
+	if gateOf(e) != nil {
+		if err := m.initializeCompanionLocked(e, param); err != nil {
+			e.Base().setOwner(nil)
+			return err
+		}
+	}
 	m.entities.Add(id, e)
-	e.Base().setOwner(m)
 	m.addGroupIndexLockedByManager(e)
 	return nil
 }
@@ -254,6 +273,13 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	if err != nil {
 		return err
 	}
+	releaseDomains, err := m.acquireRetireDomains(e, false)
+	if err != nil {
+		mu.Unlock()
+		e.UnTouch()
+		return err
+	}
+	defer releaseDomains()
 	var admissionErr error
 	if deleteFromDB {
 		admission, err := m.admitDelete(ctx, e, reason)
@@ -291,6 +317,7 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 		e.UnTouch()
 		return ErrEntityNotManaged
 	}
+	m.retireCompanionLocked(e, deleteFromDB || reason != DestroyReasonMemoryUnload)
 	m.removing[id] = struct{}{}
 	e.SetRemoved()
 	m.entities.Del(e.ID())
@@ -319,10 +346,13 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 
 // WithLocked 取得 e 的引用与实体锁（等待受 ctx 约束），确认它仍是本 Manager 托管的当前实例后执行 fn，fn 返回后解锁、
 // 归还引用。e 已移除或已不是当前托管实例时返回 ErrEntityRemoved / ErrEntityNotManaged，ctx 先结束时返回 ctx 的错误，
-// 这些情况下 fn 都不执行。fn 在持锁时运行，不能做 I/O 或等待；实体锁可重入，fn 里再取同一把锁不阻塞。
+// 这些情况下 fn 都不执行。fn 在持锁时运行，不能做 I/O 或等待；回调不获原生锁，不能用 GetMutex 再取锁或提前解锁。
 // 要取实体锁：在本地执行入口（业务池，或 Nest 未装配时就地）调用。框架用它在实体锁内登记 DataEngine 的卸载屏障
 // （entity.unload，D16）。
-func (m *EntityManager) WithLocked(ctx context.Context, e IThreadSafeEntity, fn func()) error {
+func (m *EntityManager) WithLocked(permit entitypermit.Token, ctx context.Context, e IThreadSafeEntity, fn func()) error {
+	if !permit.Valid() {
+		return ErrEntityLockScope
+	}
 	if m == nil || e == nil || e.Base() == nil {
 		return ErrEntityNil
 	}
@@ -347,7 +377,7 @@ func (m *EntityManager) lockManaged(ctx context.Context, e IThreadSafeEntity) (l
 	if !e.Touch() {
 		return nil, ErrEntityRemoved
 	}
-	mu := e.GetMutex()
+	mu := systemMutex(e)
 	if mu == nil {
 		e.UnTouch()
 		return nil, ErrEntityNil
@@ -509,12 +539,24 @@ func (m *EntityManager) removeGroupIndexLocked(groupID int64, entityID int64) {
 }
 
 // UpdateEntityGroup 更新实体的锁组与 Manager 的成员索引。调用方负责持有相应的实体锁 / 组锁。
-func (m *EntityManager) UpdateEntityGroup(e IThreadSafeEntity, groupID int64) error {
+func (m *EntityManager) UpdateEntityGroup(permit entitypermit.Token, e IThreadSafeEntity, groupID int64) error {
+	if !permit.Valid() {
+		panic(ErrEntityLockScope)
+	}
 	if m == nil || e == nil || e.Base() == nil {
 		return ErrEntityNil
 	}
-	if m.entities.Get(e.ID()) != e {
+	// 生命周期增删也是 addMu → groupMu。身份校验不能放在索引更新的临界区外，
+	// 否则旧实例可能覆盖重建实例，或把已销毁实体重新插入组索引。
+	m.addMu.Lock()
+	defer m.addMu.Unlock()
+	if m.entities.Get(e.ID()) != e || e.Base().owningManager() != m || e.IsRemoved() || e.IsClear() {
 		return ErrEntityNotManaged
+	}
+	if groupID != 0 {
+		if err := checkGroupMemberKindLocked(e); err != nil {
+			return err
+		}
 	}
 	oldGroupID := e.Base().GroupLockID()
 	if oldGroupID == groupID {

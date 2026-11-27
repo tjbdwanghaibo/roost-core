@@ -23,6 +23,7 @@ type EntityDef struct {
 	Name            string // struct name, e.g. "Player"
 	EntityKind      string // concrete entity kind constant, e.g. "EntityKindPlayer"
 	Category        string // optional category constant expression from the marker
+	CompanionOf     string // 主实体结构体名；配对由工程总 registry 登记，子实体包不导入主实体包
 	BusinessPool    string
 	RemotePolicy    string // entity.RemotePolicy constant expression
 	Lifetime        string // entity.EntityLifetime constant expression
@@ -276,6 +277,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					ent := EntityDef{
 						Name:            typeSpec.Name.Name,
 						EntityKind:      m.params["entityKind"],
+						CompanionOf:     m.params["companionOf"],
 						Category:        strings.TrimSpace(m.params["category"]),
 						SourceFile:      filePath,
 						ExistingMethods: methods[typeSpec.Name.Name],
@@ -359,6 +361,9 @@ func parseMarkerParams(s string) (map[string]string, error) {
 // validateMarkerValues rejects values outside the spellings the parsers
 // accept; each of them used to fall back to a default instead.
 func validateMarkerValues(params map[string]string) error {
+	if name, ok := params["companionOf"]; ok && (!token.IsIdentifier(name) || !ast.IsExported(name)) {
+		return fmt.Errorf("companionOf=%q must name an exported entity struct in this project", name)
+	}
 	// Mirror 第 5 步：旧的 remote=mirror 只是元数据，生成的仍是可写 Entity；迁移到 //roost:mirror DTO。
 	if v, ok := params["remote"]; ok && parseRemoteParam(v) == "entity.RemotePolicyMirror" {
 		return errors.New(remoteMirrorMigration)

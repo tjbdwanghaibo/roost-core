@@ -505,7 +505,7 @@ func registerDestroyThenRecreate(t *testing.T, mgr *NestMgr, access *entity.Mana
 		if run.createErr != nil {
 			return nil, run.createErr
 		}
-		run.sameMutex = run.fresh.GetMutex() == run.old.GetMutex()
+		run.sameMutex = physicalTestLock(run.fresh) == physicalTestLock(run.old)
 		run.freshLockableElsewhere = tryLockElsewhere(run.fresh)
 		if err := MarkPersist(run.fresh.(*rollbackTestEntity).dao, 1); err != nil && meta.Rollback != RollbackNone {
 			return nil, err
@@ -702,7 +702,7 @@ func TestDestroyThenRecreateSameIDRemoteEntityLocksNewInstance(t *testing.T) {
 		if run.createErr != nil {
 			return nil, run.createErr
 		}
-		run.sameMutex = run.fresh.GetMutex() == run.old.GetMutex()
+		run.sameMutex = physicalTestLock(run.fresh) == physicalTestLock(run.old)
 		run.freshLockableElsewhere = tryLockElsewhere(run.fresh)
 		return "ok", nil
 	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})

@@ -3,6 +3,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -64,7 +65,11 @@ func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 	if err := m.RemoteWriteBatch.FinalizeLocked(outcome); err != nil {
 		return err
 	}
-	for _, commit := range m.RemoteWriteBatch.Commits() {
+	commits := m.RemoteWriteBatch.Commits()
+	if m.companionChangePending && len(commits) != 0 {
+		return fmt.Errorf("%w: remote data writes and companion transitions must be separate messages", ErrCompanionChangeUnsupported)
+	}
+	for _, commit := range commits {
 		commit := commit.Clone()
 		kind := dataengine.MutationPut
 		if commit.Delete {
@@ -105,6 +110,8 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	switch {
 	case m.remoteIndeterminate:
 		// WAL 里可能已有这笔事务：Close 把持有的门与租约交给 Manager 按状态驱动的收尾处理。
+	case m.companionEmptyConfirmed:
+		committed = true // 确认过的空批次不再重复 Commit，但仍按原契约 Close、执行 Confirm/AfterCommit。
 	case m.remoteCommitted:
 		_, err = batch.Commit(ctx)
 		committed = err == nil
@@ -368,30 +375,36 @@ func (t MsgType) String() string {
 type Msg struct {
 	// 请求与目标。单目标直接存 Tid；多目标保留调用顺序、重复项和组边界。
 	// 调度器另建排序去重的 ID 集合，不能原地改写这里的业务参数。
-	Name            string
-	Tids            []int64
-	GroupTIds       [][]int64
-	Params          []any
-	Context         fctx.ContextSnapshot
-	RetChan         chan any
-	GroupTransition *GroupTransitionRequest
-	Tid             int64
-	RefCount        int
-	PendingRequeues int
-	Type            MsgType
-	Cost            bool
-	HasRemote       bool
+	Name                    string
+	Tids                    []int64
+	GroupTIds               [][]int64
+	Params                  []any
+	Context                 fctx.ContextSnapshot
+	RetChan                 chan any
+	GroupTransition         *GroupTransitionRequest
+	Tid                     int64
+	RefCount                int
+	PendingRequeues         int
+	Type                    MsgType
+	Cost                    bool
+	HasRemote               bool
+	companionRefs           preparedGetter // I/O 发现关系时固定候选生存期，在业务池归还。
+	companionChangePending  bool           // 仅对 Remote 生命周期事务设置，禁止同批 Remote 数据写。
+	companionEmptyConfirmed bool           // 本地提交已确定且 Remote 空批次已在锁内确认。
 
 	// Remote 批次与发布责任。FinalizeLocked 在业务锁内生成提交内容；
 	// I/O 阶段确认/关闭批次，未决结果连同 Sync 门和回调移交持久结论处理者。
 	RemoteWriteBatch    entity.RemoteWriteBatch
 	remoteSyncMutation  *entity.SyncMutation
 	postRemoteCommit    []func()
-	remoteFinalized     bool // 已完成批次内容归集，不能重复 Finalize。
-	remoteIndeterminate bool // 本地持久结果未知，收尾不能推断为 Abort。
-	remoteCommitted     bool // 本地持久提交成功，Remote 收尾须 Commit，不能因释放错误 Abort。
-	remoteConfirmed     bool // Remote Commit 也成功；其后的错误归为提交后失败。
-	remotePartRejected  bool // 本地已提交，Remote 明确拒绝；与 confirmed 互斥，未知不置位。
+	companionRemoteIDs  []int64                  // I/O 阶段预声明的关系成员，业务锁内仍须重验。
+	companionGrants     map[int64]companionGrant // 候选实例和写门内确认的独占租约。
+	companionCall       *companionCall           // 只在当前业务函数内有效。
+	remoteFinalized     bool                     // 已完成批次内容归集，不能重复 Finalize。
+	remoteIndeterminate bool                     // 本地持久结果未知，收尾不能推断为 Abort。
+	remoteCommitted     bool                     // 本地持久提交成功，Remote 收尾须 Commit，不能因释放错误 Abort。
+	remoteConfirmed     bool                     // Remote Commit 也成功；其后的错误归为提交后失败。
+	remotePartRejected  bool                     // 本地已提交，Remote 明确拒绝；与 confirmed 互斥，未知不置位。
 
 	// 消息自身事务。handler goroutine 写，派发收尾在 handler/续行结束后读取。
 	txInFlight                   bool // 自身事务正在执行；识别嵌套事务还必须检查入口的 claimsMessage。
@@ -412,11 +425,12 @@ type Msg struct {
 	afterUnlock   []func()           // Guard 释放后执行，不能与 Remote 确认后的回调合并。
 
 	// Await 只持有当前业务段的数据；恢复段正常入队，不复用原段的 ID tail。
-	awaitPlan       *awaitPlan
-	resumeEntry     *handlerEntry
-	handlerEntities []entity.IThreadSafeEntity
-	ioWork          func()
-	afterQueue      func() // 原段释放 tail 后启动 I/O，不进入上下文快照。
+	awaitPlan        *awaitPlan
+	resumeEntry      *handlerEntry
+	handlerEntities  []entity.IThreadSafeEntity
+	ioWork           func()
+	peerContinuation *GroupTransitionRequest // 成员关系已明确提交；仅成功收尾后转交 reply。
+	afterQueue       func()                  // 原段释放 tail 后启动 I/O，不进入上下文快照。
 
 	// 观测与调度标志。转 I/O 保留作业身份和 tail，不重复准入或释放消息。
 	queuedAt     time.Time

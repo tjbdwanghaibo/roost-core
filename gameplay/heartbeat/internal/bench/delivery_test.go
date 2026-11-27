@@ -20,15 +20,13 @@ import (
 
 // 对比二：投递方式（经真实 Nest 引擎）。一次进程只跑一组参数，由脚本循环调用并交替顺序：
 //
-//	HB_DELIVERY=1 HB_MODE=x|y|z|c|none HB_ACTIVE=0.2 HB_RES=10ms HB_PERIOD=100ms HB_SHARDS=1 HB_OUT=<jsonl> \
+//	HB_DELIVERY=1 HB_MODE=x|z|c|none HB_ACTIVE=0.2 HB_RES=10ms HB_PERIOD=100ms HB_SHARDS=1 HB_OUT=<jsonl> \
 //	  go test -run TestDeliveryRun -count=1 -timeout 0 ./gameplay/heartbeat/internal/bench
 //
 // 模式：
 //
 //	x     每拍每个到期登记一条单目标 nest.Dispatch（正式链路：准入、同 ID 顺序、实体锁、事务收尾）
-//	y     ssr 式：每条消息带一批（HB_BATCH，缺省 64）登记，投给“承载实体”（HB_CARRIERS 个，轮转），
-//	      handler 在快池 worker 上逐个对目标实体 TryLock、执行回调、解锁；TryLock 失败的登记交回驱动，
-//	      下一格重投（handler 内不能 Dispatch）。**绕过 Nest 对目标实体的准入顺序、Guard 与事务**，见报告风险一节
+//	y     已停用：历史承载 handler 直接手锁其它实体，与原生锁仅由 Nest 持有的契约不兼容。不要把拒锁计为可比的投递数据。
 //	z     nest.DispatchBroadcast：本格到期的全部实体一次调用，Nest 按锁组与 worker 散列拆成至多 32 个一批，
 //	      每批一个作业（等批内全部前驱），worker 上逐个加锁、每个目标各自一个事务
 //	c     nest.DispatchTryBatch（正式实现采用）：每 HB_BATCH（缺省 64）个到期登记一个 Nest 批量作业，worker 逐目标在
@@ -53,30 +51,21 @@ import (
 // 组大小 / 时间片（framework/nest 的 tryBatchGroup / tryBatchSlice）是编译期常数，测更小的组或时间片按 §3G 的做法
 // 在临时工作树里改常数后跑本用例。
 
-const (
-	hbKind      entity.EntityKind = 201
-	carrierKind entity.EntityKind = 202
-)
+const hbKind entity.EntityKind = 201
 
 var (
-	hbHandler      = nest.NewHandlerName("hb_bench_beat")
-	carrierHandler = nest.NewHandlerName("hb_bench_carrier")
-	bizHandler     = nest.NewHandlerName("hb_bench_biz")
-	run            *deliveryRun // 一个进程只跑一组；handler 经它找到计数器
+	hbHandler  = nest.NewHandlerName("hb_bench_beat")
+	bizHandler = nest.NewHandlerName("hb_bench_biz")
+	run        *deliveryRun // 一个进程只跑一组；handler 经它找到计数器
 )
 
 func init() {
 	entity.MustRegisterEntityKindDefs(
 		entity.EntityKindDef{Kind: hbKind, Category: 1, BusinessPool: entity.BusinessPoolShort},
-		entity.EntityKindDef{Kind: carrierKind, Category: 1, BusinessPool: entity.BusinessPoolShort},
 	)
 	nest.MustRegisterMemoryHandler(hbHandler, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		e := es[0].(*hbEntity)
 		run.beat(e, e.reg)
-		return nil, nil
-	})
-	nest.MustRegisterMemoryHandler(carrierHandler, func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-		run.carry(params[0].(*carrierBatch))
 		return nil, nil
 	})
 	nest.MustRegisterMemoryHandler(bizHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
@@ -102,11 +91,6 @@ type hbReg struct {
 	inflight atomic.Bool
 	planned  int64 // 本拍计划时刻（相对 origin 的纳秒）；驱动写、回调读，经 Nest 准入建立先后
 	params   nest.Params
-}
-
-type carrierBatch struct {
-	regs  []*hbReg
-	shard *driverShard
 }
 
 type getter map[int64]entity.IThreadSafeEntity
@@ -226,7 +210,7 @@ type deliveryConfig struct {
 	Shards    int     `json:"shards"`
 	Workers   int     `json:"workers"`
 	Batch     int     `json:"batch"`
-	Carriers  int     `json:"carriers"`
+	Carriers  int     `json:"carriers"` // 保留历史报告格式；合法模式不使用承载实体。
 	BizRate   int     `json:"biz_rate"`
 	CallbackU int     `json:"callback_us"`
 	BizU      int     `json:"biz_us"`
@@ -248,32 +232,27 @@ type deliveryRun struct {
 	entities  []*hbEntity
 	hot       []*hbEntity // HB_HOT 个热点实体（有心跳登记）
 	regs      []*hbReg
-	carriers  []int64
 	shards    []*driverShard
 
 	interval, absDev, lateness, bizLatency *histogram
 	beats, skipped, queueFull, admitErr    counter
-	tryFail, admissions, bizSent, bizFail  counter
+	admissions, bizSent, bizFail           counter
 	handedBack                             counter
 	driverBusy, genBusy                    atomic.Int64 // 纳秒，只计测量窗口
-	batchPool                              sync.Pool
 }
 
 type driverShard struct {
 	idx     int
 	sched   *TierRing
 	regs    []*hbReg // 下标 = 本片登记序号（Step 返回的 id）
-	retryM  sync.Mutex
-	retry   []*hbReg // y 模式 TryLock 失败、等待重投的登记
 	ids     []int64
 	elig    []*hbReg
 	targets []nest.TryBatchTarget
-	carry   int
 }
 
 func (r *deliveryRun) now() int64 { return int64(time.Since(r.origin)) }
 
-// beat 是心跳回调（x / z 在 Nest handler 里、y 在承载 handler 持目标锁时调用）：清在途、记间隔与偏差、推进位置。
+// beat 是 Nest handler 内的心跳回调：清在途、记间隔与偏差、推进位置。
 func (r *deliveryRun) beat(e *hbEntity, reg *hbReg) {
 	now := r.now()
 	reg.inflight.Store(false)
@@ -312,32 +291,6 @@ func (r *deliveryRun) beat(e *hbEntity, reg *hbReg) {
 	e.work = x
 }
 
-// carry 是 y 模式的承载 handler：逐个 TryLock 目标实体的锁（不经 Guard、不开事务），拿不到就交回驱动重投。
-func (r *deliveryRun) carry(b *carrierBatch) {
-	var failed []*hbReg
-	for _, reg := range b.regs {
-		mu := reg.ent.GetMutex()
-		if !mu.TryLock() {
-			failed = append(failed, reg)
-			continue
-		}
-		if !reg.ent.IsRemoved() {
-			r.beat(reg.ent, reg)
-		}
-		mu.Unlock()
-	}
-	if len(failed) > 0 {
-		if r.measuring.Load() {
-			r.tryFail.add(failed[0].index, uint64(len(failed)))
-		}
-		b.shard.retryM.Lock()
-		b.shard.retry = append(b.shard.retry, failed...)
-		b.shard.retryM.Unlock()
-	}
-	b.regs = b.regs[:0]
-	r.batchPool.Put(b)
-}
-
 // handBack 是 c 模式的交回回调（Nest worker 上调用）：没有执行的拍清在途、计数。
 func (r *deliveryRun) handBack(target nest.TryBatchTarget, _ error) {
 	reg := target.Params[0].(*hbReg)
@@ -363,12 +316,6 @@ func (r *deliveryRun) deliver(s *driverShard, due []int64, planned int64) {
 	measuring := r.measuring.Load()
 	ctx := context.Background()
 	s.elig = s.elig[:0]
-	if r.cfg.Mode == "y" {
-		s.retryM.Lock()
-		s.elig = append(s.elig, s.retry...) // 重投的登记保持在途、保持原计划时刻
-		s.retry = s.retry[:0]
-		s.retryM.Unlock()
-	}
 	for _, id := range due {
 		reg := s.regs[id]
 		if !reg.inflight.CompareAndSwap(false, true) {
@@ -422,27 +369,6 @@ func (r *deliveryRun) deliver(s *driverShard, due []int64, planned int64) {
 				if measuring {
 					r.admitErr.add(s.idx, 1)
 				}
-			} else if measuring {
-				r.admissions.add(s.idx, 1)
-			}
-		}
-	case "y":
-		for off := 0; off < len(s.elig); off += r.cfg.Batch {
-			end := min(off+r.cfg.Batch, len(s.elig))
-			b := r.batchPool.Get().(*carrierBatch)
-			b.shard = s
-			b.regs = append(b.regs[:0], s.elig[off:end]...)
-			carrier := r.carriers[s.carry%len(r.carriers)]
-			s.carry++
-			if err := r.mgr.Dispatch(ctx, carrierHandler, carrier, nest.Params{b}); err != nil {
-				for _, reg := range b.regs {
-					reg.inflight.Store(false)
-				}
-				if measuring {
-					r.queueFull.add(s.idx, uint64(len(b.regs)))
-				}
-				b.regs = b.regs[:0]
-				r.batchPool.Put(b)
 			} else if measuring {
 				r.admissions.add(s.idx, 1)
 			}
@@ -573,7 +499,6 @@ func TestDeliveryRun(t *testing.T) {
 		Shards:    envInt(t, "HB_SHARDS", 1),
 		Workers:   envInt(t, "HB_WORKERS", 8),
 		Batch:     envInt(t, "HB_BATCH", 64),
-		Carriers:  envInt(t, "HB_CARRIERS", 64),
 		BizRate:   envInt(t, "HB_BIZ_RATE", 5000),
 		CallbackU: envInt(t, "HB_CB_US", 0),
 		BizU:      envInt(t, "HB_BIZ_US", 0),
@@ -583,6 +508,13 @@ func TestDeliveryRun(t *testing.T) {
 		MeasureS:  envFloat(t, "HB_MEASURE_S", 15),
 		Gomaxproc: runtime.GOMAXPROCS(0),
 		Label:     os.Getenv("HB_LABEL"),
+	}
+	switch cfg.Mode {
+	case "x", "z", "c", "none":
+	case "y":
+		t.Fatal("HB_MODE=y is retired: business handlers cannot lock native entities; use HB_MODE=c for batched Nest delivery")
+	default:
+		t.Fatalf("unknown HB_MODE=%q", cfg.Mode)
 	}
 	res, err := time.ParseDuration(cfg.Res)
 	if err != nil {
@@ -597,10 +529,9 @@ func TestDeliveryRun(t *testing.T) {
 		cfg: cfg, res: res, period: int64(Periods[tier]),
 		interval: newHistogram(), absDev: newHistogram(), lateness: newHistogram(), bizLatency: newHistogram(),
 	}
-	r.batchPool.New = func() any { return &carrierBatch{regs: make([]*hbReg, 0, cfg.Batch)} }
 	run = r
 
-	g := make(getter, cfg.Entities+cfg.Carriers)
+	g := make(getter, cfg.Entities)
 	for i := range cfg.Entities {
 		id, err := entity.BuildEntityID(int64(i+1), hbKind)
 		if err != nil {
@@ -614,14 +545,6 @@ func TestDeliveryRun(t *testing.T) {
 		}
 		g[id] = e
 		r.entities = append(r.entities, e)
-	}
-	for i := range cfg.Carriers {
-		id, err := entity.BuildEntityID(int64(i+1), carrierKind)
-		if err != nil {
-			t.Fatal(err)
-		}
-		g[id] = &hbEntity{EntityBase: entity.NewEntityBase(id, 1, true, carrierKind)}
-		r.carriers = append(r.carriers, id)
 	}
 	r.mgr = nest.NewEngine(nest.NestOptionWithGetter(g),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: cfg.Workers}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
@@ -719,7 +642,7 @@ func TestDeliveryRun(t *testing.T) {
 	out["hb_skipped_total"] = r.skipped.sum()
 	out["hb_queue_full_total"] = r.queueFull.sum()
 	out["hb_admit_err_total"] = r.admitErr.sum()
-	out["y_trylock_fail_total"] = r.tryFail.sum()
+	out["y_trylock_fail_total"] = 0 // 旧聚合器也会读取此字段；当前模式从不执行承载 handler。
 	out["c_handed_back_total"] = r.handedBack.sum()
 	out["c_converted_per_s"] = float64(converted1-converted0) / sec
 	if beats := r.beats.sum(); beats > 0 {

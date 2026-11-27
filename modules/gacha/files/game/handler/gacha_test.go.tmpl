@@ -20,9 +20,11 @@ import (
 	playerentity "{{MODULE}}/game/entities/player"
 	gamegacha "{{MODULE}}/game/components/gacha"
 	sender "{{MODULE}}/game/handler/syncsender"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -123,7 +125,9 @@ func newGachaFixture(t *testing.T, coins int64) *gachaFixture {
 // local 只在业务 worker 持实体锁读写夹具前置状态，场景的动作仍走正式生成 Sender。
 func (f *gachaFixture) local(t *testing.T, fn func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() { f.player.GetMutex().Lock(); defer f.player.GetMutex().Unlock(); fn() }); err != nil {
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
+		fn()
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

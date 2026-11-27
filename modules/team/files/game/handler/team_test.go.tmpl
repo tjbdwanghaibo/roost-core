@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -238,26 +239,31 @@ func (f *teamFixture) facts(t *testing.T) map[int64]bson.M {
 	t.Helper()
 	out := map[int64]bson.M{}
 	var decodeErr error
-	err := f.engine.RunLocal(context.Background(), func() {
+	err := func() error {
 		for id, value := range f.values {
-			value.GetMutex().Lock()
+
 			var raw []byte
-			if v, ok := value.(*team.Team); ok {
-				raw = v.Dao().Marshal()
-			} else {
-				raw = value.(*player.Player).Dao().Marshal()
+			if err := nesttest.With(context.Background(), f.engine, value, func() {
+				if v, ok := value.(*team.Team); ok {
+					raw = v.Dao().Marshal()
+				} else {
+					raw = value.(*player.Player).Dao().Marshal()
+				}
+			}); err != nil {
+				return err
 			}
-			value.GetMutex().Unlock()
 			var doc bson.M
 			decoder := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(raw)))
 			decoder.DefaultDocumentM()
 			if err := decoder.Decode(&doc); err != nil {
 				decodeErr = err
-				return
+				return err
 			}
 			out[id] = doc
 		}
-	})
+
+		return nil
+	}()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,12 +431,12 @@ func TestTeamExpiredInvitationsReleaseCapacity(t *testing.T) {
 	f.invite(t, 101, 102)
 	f.accept(t, 102)
 	var count int
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		v := f.values[f.teamID].(*team.Team)
-		v.GetMutex().Lock()
-		defer v.GetMutex().Unlock()
-		count = v.Dao().InvitesLen()
-	}); err != nil {
+		return nesttest.With(context.Background(), f.engine, v, func() {
+			count = v.Dao().InvitesLen()
+		})
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {

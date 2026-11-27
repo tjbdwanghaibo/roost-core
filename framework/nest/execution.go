@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
@@ -116,10 +117,24 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 		}
 		meta.Durability = DurabilityMemory
 	}
-	msg := currentNestDispatchMsg()
+	frame := currentNestDispatchFrame()
+	var msg *Msg
+	if frame != nil {
+		msg = frame.msg
+	}
 	// 消息自己的事务正在执行（txInFlight），或这不是消息自己的事务入口（消息自己的事务结束后的收尾阶段：Guard post-release、
 	// 解锁后回调，此时 txInFlight 已复位而 Remote 批次要到 finishRemoteWriteBatch 才收尾）：都不是消息自己的事务。
 	nested := msg != nil && (msg.txInFlight || !claimsMessage)
+	if nested && frame.guard != nil {
+		// 包括独立事务的提交回调：共享 goroutine 不代表可以沿用外层的组变更授权。
+		previous := frame.guard
+		frame.guard = nil
+		defer func() { frame.guard = previous }()
+	}
+	// 独立事务不能继承外层 handler 的伴生写权，哪怕恰在同一 goroutine/Guard 中。
+	if !claimsMessage && msg != nil && msg.companionCall != nil {
+		defer entity.PushCompanionScope(entitypermit.System(), nil, nil)()
+	}
 	if nested && msg.RemoteWriteBatch != nil {
 		// 带 Remote 批次的消息里嵌套独立事务：批次只能随消息自己的事务 Commit / Abort。嵌套事务若经过批次分支，
 		// 会替外层 finalize 并置 remoteCommitted，外层失败时批次仍被 Commit、回复误报已提交。维护者决定直接拒绝、
@@ -151,7 +166,7 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 			// 即使某个 release hook panic，也先清理剩余动态锁，再开放完成屏障。
 			defer func() {
 				if scope := entity.CurrentGuardScope(); scope != nil && scope.Guard() != nil {
-					scope.Guard().ReleaseAll()
+					scope.Guard().ReleaseAll(entitypermit.System())
 				}
 				syncMutation.Release()
 			}()
@@ -167,16 +182,31 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 		owner = msg
 		owner.txInFlight = true
 		owner.txNoRollback = meta.Rollback == RollbackNone
+		frame.subject = peerHandlerSubject(msg, es)
+		frame.policy = meta.Durability
+		frame.guard, frame.ctx = entity.CurrentGuardScope(), fctx.CurrentContext()
+		defer frame.finishPeerChange()
 		defer func() { owner.txInFlight = false }()
 	}
 	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
 		// 从这里起 handler 的修改不能撤销：失败也不再重排。
 		owner.markNoRollbackHandlerStarted()
 		ret, err = invokeMemoryHandler(handler, stages, call)
+		if owner != nil {
+			err = peerContinuationOutcome(frame, err)
+		}
+		if err == nil && owner != nil && frame.change != nil {
+			err = frame.change.validate()
+		}
 		if err == nil {
 			admissionStart := startNestStage(stages)
 			syncMutation.Admit()
 			observeNestStage(handler, "admission", admissionStart)
+			if owner != nil && frame.change != nil {
+				if err := frame.change.publish(); err != nil {
+					return ret, err
+				}
+			}
 			owner.markTransactionAdmitted()
 			owner.markTransactionCommitted()
 			syncMutation.Confirm()
@@ -213,6 +243,13 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 		owner.markNoRollbackHandlerStarted()
 	}
 	ret, err = callTransactionHandler(tx, call)
+	if owner != nil && frame.change != nil {
+		tx.peerChange = frame.change
+		err = peerContinuationOutcome(frame, err)
+		if err == nil {
+			err = tx.peerChange.validate()
+		}
+	}
 	if busy := tx.createLockBusy; busy != nil && tx.policy != RollbackNone && !errors.Is(err, ErrLockTimeout) {
 		// handler 内新建实体遇到锁冲突而业务吞掉了错误：仍整条回滚并以锁超时重新准入，
 		// 不能提交一个缺了新实体的结果。RollbackNone 不撤销内存修改，强制重做会重复生效，交由业务决定。
@@ -258,7 +295,7 @@ func takesPipelinedCompletion(meta HandlerMeta, releaseLocks func(), msg *Msg) b
 // 业务调用期间把事务绑定到当前 Guard，handler 内 CreateInScope 新建的实体因此进入本事务。
 func callTransactionHandler(tx *RollbackTx, call func() (any, error)) (any, error) {
 	if scope := entity.CurrentGuardScope(); scope != nil && scope.Guard() != nil {
-		defer scope.Guard().BindCreatedEntityCapturer(tx)()
+		defer scope.Guard().BindCreatedEntityCapturer(entitypermit.System(), tx)()
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -277,8 +314,8 @@ func callTransactionHandler(tx *RollbackTx, call func() (any, error)) (any, erro
 func invokeMemoryHandler(handler string, stages bool, call func() (any, error)) (any, error) {
 	if scope := entity.CurrentGuardScope(); scope != nil && scope.Guard() != nil {
 		guard := scope.Guard()
-		previous := guard.SwapCreatedEntityCapturer(memoryHandlerCreates{})
-		defer guard.SwapCreatedEntityCapturer(previous)
+		previous := guard.SwapCreatedEntityCapturer(entitypermit.System(), memoryHandlerCreates{})
+		defer guard.SwapCreatedEntityCapturer(entitypermit.System(), previous)
 	}
 	return invokeBusinessHandler(handler, stages, call)
 }
@@ -351,6 +388,31 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 		}
 	}
 	tx.scheduleBestEffort(publisher)
+	var changeErr error
+	if msg != nil && msg.companionChangePending {
+		// 没有 Remote 数据要提交（FinalizeLocked 已核实），本地提交也已确定。仍持全部原锁和写门，
+		// 由批次同步确认空结果后，才能发布新关系；能力不能证实时绝不应用。
+		proof, ok := msg.RemoteWriteBatch.(emptyCompanionConfirmer)
+		msg.companionEmptyConfirmed = ok && proof.ConfirmEmptyCompanionLocked()
+		if !msg.companionEmptyConfirmed {
+			changeErr = errors.Join(ErrAfterCommitFailed, ErrCompanionChangeUnsupported)
+		}
+	}
+	if changeErr == nil {
+		for _, ch := range tx.companionChanges {
+			ch.Apply()
+		}
+	}
+	tx.companionChanges = nil
+	if changeErr == nil && tx.peerChange != nil {
+		// 提交已确定，仍在同一 worker 的原实体 / 组锁内。不交给 AfterCommit 或完成泵。
+		if err := tx.peerChange.publish(); err != nil {
+			changeErr = errors.Join(ErrAfterCommitFailed, err)
+		}
+	}
+	if changeErr != nil {
+		return errors.Join(tx.Commit(), changeErr)
+	}
 	return tx.Commit()
 }
 

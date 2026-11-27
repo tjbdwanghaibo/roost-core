@@ -166,6 +166,12 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
+		for _, ent := range entities {
+			// 总装配用工程的实体索引（game/entities/*/*.go）。不要接受索引无法登记的关系。
+			if ent.CompanionOf != "" && (view.Root == "" || filepath.Dir(dir) != filepath.Join(view.Root, "game", "entities")) {
+				return fmt.Errorf("%s: companionOf=%s must be declared in game/entities/<package> so project registration can resolve it", ent.SourceFile, ent.CompanionOf)
+			}
+		}
 		// 实体事件：整个工程算一次登记计划（规则违反在这里整体报出），提示只打印一次。
 		var plan *eventPlan
 		if view.Root != "" && *output == "" {

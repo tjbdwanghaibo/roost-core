@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -809,9 +810,10 @@ func TestRemoteRollbackPanicReleasesLocalLock(t *testing.T) {
 	// Entity mutex 支持同 goroutine 重入，必须从另一个 goroutine 验证解锁。
 	unlocked := make(chan bool, 1)
 	go func() {
-		ok := live.GetMutex().TryLock()
+		mu := entity.SystemMutex(entitypermit.System(), live)
+		ok := mu.TryLock()
 		if ok {
-			live.GetMutex().Unlock()
+			mu.Unlock()
 		}
 		unlocked <- ok
 	}()

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
@@ -473,8 +474,6 @@ type tryBatchExec struct {
 	mgr        *NestMgr
 	msg        *Msg
 	getter     entity.Getter
-	locks      *entityLockGroupLockManager
-	store      entityGroupStore
 	releaseCtx func()
 	releaseMsg func()
 	// ctx / ctxSnapshot：本段的请求上下文与它建立时的快照。每个目标开始前恢复快照（前一个目标写进上下文的 KV、
@@ -521,7 +520,7 @@ func (exec *tryBatchExec) flushHandBacks(b *tryBatchJob) {
 
 // beginTryBatch 建立本段的请求上下文（批的上下文快照与当前帧号）并登记当前消息。
 func (mgr *NestMgr) beginTryBatch(b *tryBatchJob) *tryBatchExec {
-	exec := &tryBatchExec{mgr: mgr, getter: loadedGetter{mgr.getter}, locks: mgr.groupLockManager(), store: groupStoreOf(mgr.getter)}
+	exec := &tryBatchExec{mgr: mgr, getter: loadedGetter{mgr.getter}}
 	exec.msg = GenMsg(MsgTypeTryBatch)
 	exec.msg.Context = b.context
 	exec.releaseCtx = ensureNestContext(mgr, exec.msg)
@@ -622,13 +621,17 @@ func (exec *tryBatchExec) run(item *tryBatchItem) (busy bool, handBack error) {
 	if rejectPendingEntityGroupTransition([]entity.IThreadSafeEntity{e}) != nil {
 		return true, nil
 	}
+	// 单目标 Try 快径不建立隐式参与者事务；按普通冲突的 tail 规则原位转单目标作业。
+	if e.Base().GroupLockID() != 0 || entity.IsCompanionParticipant(e.GetEntityKind()) {
+		return true, nil
+	}
 	return exec.runLocked(entry, e, item)
 }
 
 // runLocked 在目标自己的 Guard 作用域里 Try 取锁、执行事务、释放。handler 与收尾的 panic 只影响本目标。
 func (exec *tryBatchExec) runLocked(entry handlerEntry, e entity.IThreadSafeEntity, item *tryBatchItem) (busy bool, handBack error) {
 	name := exec.msg.Name
-	scope, releaseScope := entity.NewGuardScope("nest:try_batch")
+	scope, releaseScope := entity.NewGuardScope(entitypermit.System(), "nest:try_batch")
 	es := []entity.IThreadSafeEntity{e}
 	var err error
 	locked := false
@@ -642,7 +645,7 @@ func (exec *tryBatchExec) runLocked(entry handlerEntry, e entity.IThreadSafeEnti
 			releaseScope()
 			exec.msg.runAfterUnlock()
 		}()
-		releaseLocks, ok := tryLockTryBatchTarget(exec.locks, scope.Guard(), e, exec.store)
+		releaseLocks, ok := tryLockTryBatchTarget(scope.Guard(), e)
 		if !ok {
 			return
 		}
@@ -702,28 +705,16 @@ func (mgr *NestMgr) invokeTryBatchTransaction(meta HandlerMeta, es []entity.IThr
 	return ret, err
 }
 
-// tryLockTryBatchTarget 只 Try 取目标的实体锁（有锁组时组锁同样 Try，沿用 lockDispatchEntitiesWithGroup），取锁后核对
-// 锁组没有变化。取不到返回 false，不重试、不等待。
-func tryLockTryBatchTarget(locks *entityLockGroupLockManager, guard *entity.EntityGuard, e entity.IThreadSafeEntity, store entityGroupStore) (func(), bool) {
+// 批处理快径只服务未分组的单目标。组成员由完整派发捕获同组事务参与者；
+// 加锁前后都核对成员代际，防止在外层检查与实际取锁之间加入组。
+func tryLockTryBatchTarget(guard *entity.EntityGuard, e entity.IThreadSafeEntity) (func(), bool) {
 	lockEs := []entity.IThreadSafeEntity{e}
 	var storage [1]dispatchGroupSnapshot
 	snapshots := captureDispatchGroupSnapshots(lockEs, storage[:0])
-	groupID, err := resolveDispatchGroupIDFromSnapshots(snapshots)
-	if err != nil {
+	if len(snapshots) != 1 || snapshots[0].groupID != 0 || !guard.TryRequireEntity(entitypermit.System(), e) {
 		return nil, false
 	}
-	var release func()
-	if groupID == 0 {
-		if !guard.TryRequireEntity(e) {
-			return nil, false
-		}
-		release = func() { guard.ReleaseEntityInstance(e) }
-	} else {
-		_, release, err = lockDispatchEntitiesWithGroup(locks, guard, lockEs, groupID, store)
-		if err != nil {
-			return nil, false
-		}
-	}
+	release := func() { guard.ReleaseEntityInstance(entitypermit.System(), e) }
 	if validateDispatchGroupSnapshots(snapshots) != nil {
 		release()
 		return nil, false

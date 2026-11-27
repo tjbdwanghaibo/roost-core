@@ -40,28 +40,32 @@ func TestSceneSyncObserverForwardsCommitWakeAndRetraction(t *testing.T) {
   manager,err:=entitysync.NewManager(entitysync.ManagerConfig{Mode:entitysync.ModeOnChange,Interval:time.Hour,Transport:entitysync.TransportFunc(func(_ context.Context,_ entitysync.SessionID,b []byte)error{frames<-append([]byte(nil),b...);return nil})})
   if err!=nil{t.Fatal(err)}
   defer manager.Close(context.Background())
-  engine:=nest.NewEngine(nest.NestOptionWithEntitySync(&observer))
+  entities:=entity.NewEntityManager()
+  engine:=nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(entities)),nest.NestOptionWithEntitySync(&observer))
   defer engine.Shutdown(context.Background())
   if err:=observer.attach(manager);err!=nil{t.Fatal(err)}
   pack:=func(entity.SyncProfile)(entity.FrozenSyncPayload,error){packs.Add(1);return entity.CopyFrozenSyncPayload(1,[]byte{1}),nil}
-  state:=entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled:true,SubjectID:42,Namespace:"test",Packer:entity.SubjectSyncPackFunc{Snapshot:pack,Delta:func(p entity.SyncProfile,_ uint64)(entity.FrozenSyncPayload,error){return pack(p)}}})
-  e:=&observerTestEntity{entity.NewEntityBase(42,entity.EntityCategoryWorld,true)}
+  const testKind entity.EntityKind = 233
+  entity.MustRegisterEntityKindCategory(testKind,entity.EntityCategoryWorld)
+  id,err:=entity.BuildEntityID(42,testKind);if err!=nil{t.Fatal(err)}
+  e:=&observerTestEntity{entity.NewEntityBase(id,entity.EntityCategoryWorld,true,testKind)}
+  state:=entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled:true,SubjectID:id,Namespace:"test",Packer:entity.SubjectSyncPackFunc{Snapshot:pack,Delta:func(p entity.SyncProfile,_ uint64)(entity.FrozenSyncPayload,error){
+   if s:=entity.CurrentGuardScope();s==nil || !s.Guard().GuardedEntity(e){t.Error("delta capture outside held subject")};return pack(p)
+  }}})
+  if err:=entities.TryAdd(e);err!=nil{t.Fatal(err)}
   e.SetSyncState(state)
   if err:=manager.Register(state);err!=nil{t.Fatal(err)}
   if err:=manager.OpenSession(1);err!=nil{t.Fatal(err)}
-  if err:=manager.Subscribe(1,42,entity.SyncProfile{});err!=nil{t.Fatal(err)}
+  if err:=manager.Subscribe(1,id,entity.SyncProfile{});err!=nil{t.Fatal(err)}
   if err:=manager.Flush(context.Background());err!=nil{t.Fatal(err)}
   <-frames;packs.Store(0)
   if err:=manager.Start(context.Background());err!=nil{t.Fatal(err)}
-  var mutation *entity.SyncMutation
-  if err:=entity.WithGuardScope("observer test",func(scope *entity.GuardScope)error{
-   if !scope.Guard().RequireEntity(e){t.Fatal("lock")}
-   mutation=entity.BeginSyncMutation([]entity.IThreadSafeEntity{e},&observer)
-   state.MarkDirty(1);mutation.Admit();mutation.Confirm()
-   if packs.Load()!=1{t.Fatal("capture was not forwarded while locked")}
-   return nil
-  });err!=nil{t.Fatal(err)}
-  mutation.Release();synctest.Wait()
+  name:=nest.NewHandlerName("observer_test_dirty")
+  engine.MustRegisterHandlerWithMeta(name,func(_ []entity.IThreadSafeEntity,_ []any,_ ...nest.HandlerOption)(any,error){state.MarkDirty(1);return nil,nil},nest.HandlerMeta{})
+  if err:=engine.Start();err!=nil{t.Fatal(err)}
+  if _,err:=engine.Request(context.Background(),name,id,nil);err!=nil{t.Fatal(err)}
+  synctest.Wait()
+  if packs.Load()!=1{t.Fatalf("expected one locked capture, got %d",packs.Load())}
   select{case <-frames: default:t.Fatal("release wake did not reach the manager")}
   observer.RetractSyncSubject(state)
   if err:=manager.Flush(context.Background());err!=nil{t.Fatal(err)}

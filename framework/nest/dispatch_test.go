@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
 
@@ -38,15 +39,14 @@ type groupFlipEntity struct {
 	mu *groupFlipMutex
 }
 
-func (e *groupFlipEntity) GetMutex() lock.Mutex { return e.mu }
-
 // newGroupFlipEntity 建一个初始不在锁组里的实体；第一次被 Lock 后它搬到 newGroup。
 // uniqueID 4251～4259 只给本文件用（同包其他用例的 42xx 号见 group_lock_test.go）。
 func newGroupFlipEntity(t *testing.T, uniqueID int64, newGroup int64) *groupFlipEntity {
 	t.Helper()
-	base := newMockEntity(mustBuildCastID(t, uniqueID, entity.EntityCategory(1), nestLocalKind), entity.EntityCategory(1))
-	e := &groupFlipEntity{mockEntity: base}
-	e.mu = &groupFlipMutex{Mutex: base.GetMutex(), flip: func() { base.Base().SetGroupLockIDForTest(newGroup) }}
+	id := mustBuildCastID(t, uniqueID, entity.EntityCategory(1), nestLocalKind)
+	e := &groupFlipEntity{mockEntity: &mockEntity{}}
+	e.mu = &groupFlipMutex{Mutex: lock.NewReentrantMutex(id), flip: func() { e.Base().SetGroupLockIDForTest(entitypermit.System(), newGroup) }}
+	e.EntityBase = entity.NewEntityBaseWithMutex(id, entity.EntityCategory(1), false, e.mu)
 	return e
 }
 
@@ -57,8 +57,11 @@ func TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool(t *testin
 	locks := newEntityLockGroupLockManager()
 	e := newGroupFlipEntity(t, 4251, 9105)
 
-	// 没有作用域：GetEntityGuard 从池里取一个独立 Guard，归还的责任在取得它的调用方。
-	guard := entity.GetEntityGuard()
+	// 没有作用域：只有框架可以显式借出一个独立 Guard，由借出方归还。
+	if entity.GetEntityGuard() != nil {
+		t.Fatal("public query borrowed a guard outside a handler")
+	}
+	guard := entity.BorrowIndependentGuard(entitypermit.System())
 	var returned atomic.Int32
 	countReturn := func() { returned.Add(1) }
 	guard.AppendPostRelease(countReturn) // Guard 每被归还池一次，挂在上面的回调就跑一次（归还时清空）
@@ -83,7 +86,7 @@ func TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool(t *testin
 		t.Fatal("refused dispatch locking leaked a lock-group scope")
 	}
 
-	entity.EntityGuardRelease(guard) // 调用方自己归还，正好一次
+	entity.EntityGuardRelease(entitypermit.System(), guard) // 调用方自己归还，正好一次
 	if n := returned.Load(); n != 1 {
 		t.Fatalf("caller release returned the guard %d time(s), want 1", n)
 	}
@@ -94,7 +97,7 @@ func TestDispatchLockingGroupRetryInScopeKeepsGuardUntilScopeEnds(t *testing.T) 
 	e := newGroupFlipEntity(t, 4252, 9106)
 	var returned atomic.Int32
 
-	err := entity.WithGuardScope("dispatch-guard-scope-test", func(scope *entity.GuardScope) error {
+	err := entity.WithGuardScope(entitypermit.System(), "dispatch-guard-scope-test", func(scope *entity.GuardScope) error {
 		guard := scope.Guard()
 		guard.AppendPostRelease(func() { returned.Add(1) })
 		_, releaseLocks, err := lockDispatchEntitiesForHandler(locks, guard, []entity.IThreadSafeEntity{e})
@@ -153,21 +156,21 @@ func TestDispatchEntriesRequireGuardScope(t *testing.T) {
 		t.Fatal("handler ran without a guard scope")
 	}
 
-	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 9107) {
+	if !e.Base().BeginGroupTransition(entitypermit.System(), entity.EntityGroupTransitionJoin, 9107) {
 		t.Fatal("BeginGroupTransition should succeed")
 	}
 	_, err := mgr.groupTransitionDispatch(&GroupTransitionRequest{EntityID: id, TargetGroupID: 9107, State: entity.EntityGroupTransitionJoin})
 	if !errors.Is(err, errDispatchWithoutGuardScope) {
 		t.Fatalf("groupTransitionDispatch without guard scope err = %v, want errDispatchWithoutGuardScope", err)
 	}
-	if !e.GetMutex().TryLock() {
+	if !physicalTestLock(e).TryLock() {
 		t.Fatal("refused group transition still holds the entity lock")
 	}
-	e.GetMutex().Unlock()
+	physicalTestLock(e).Unlock()
 
 	// 同样的调用放进作用域里照常执行。
-	e.Base().ClearGroupTransition()
-	err = entity.WithGuardScope("dispatch-guard-scope-test", func(*entity.GuardScope) error {
+	e.Base().ClearGroupTransition(entitypermit.System())
+	err = entity.WithGuardScope(entitypermit.System(), "dispatch-guard-scope-test", func(*entity.GuardScope) error {
 		_, err := mgr.singleDispatch(name.String(), id, nil)
 		return err
 	})
@@ -218,7 +221,7 @@ func TestBroadcastReleasePanicBalancesTouchesAndContinues(t *testing.T) {
 		calls = append(calls, es[0].ID())
 		return nil, nil
 	}, HandlerMeta{})
-	scope, end := entity.NewGuardScope("broadcast-release")
+	scope, end := entity.NewGuardScope(entitypermit.System(), "broadcast-release")
 	defer end()
 	var escaped any
 	func() {
@@ -279,7 +282,7 @@ func TestDispatchRoutesPreserveArgumentsAndReleaseOnEveryOutcome(t *testing.T) {
 					}
 					return "ok", nil
 				}, HandlerMeta{})
-				scope, end := entity.NewGuardScope("route-lifecycle")
+				scope, end := entity.NewGuardScope(entitypermit.System(), "route-lifecycle")
 				defer end()
 				var ret any
 				var err error

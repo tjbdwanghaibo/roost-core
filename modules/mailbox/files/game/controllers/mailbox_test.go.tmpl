@@ -10,15 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	mailboxcomp "{{MODULE}}/game/components/mailbox"
 	playerentity "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
@@ -27,6 +18,17 @@ import (
 	"{{MODULE}}/game/view"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 // 端点的三步串接在这里离线跑通：mail 服务是真实的 service/mail.Service（存储换成进程内的），
@@ -375,9 +377,7 @@ func (f *mailboxEndpointFixture) list(t *testing.T, playerID int64, cursor strin
 // wallet 在业务 worker 上持实体锁读玩家 A 的余额与账本大小。
 func (f *mailboxEndpointFixture) wallet(t *testing.T) (coins int64, ledger int) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		coins = f.player.Dao().GetWallet().GetCoins()
 		ledger = f.player.MailboxComp().LedgerSize()
 	}); err != nil {

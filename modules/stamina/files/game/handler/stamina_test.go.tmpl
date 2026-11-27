@@ -20,6 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
@@ -127,9 +128,7 @@ type staminaFacts struct {
 func (f *staminaFixture) facts(t *testing.T) staminaFacts {
 	t.Helper()
 	var out staminaFacts
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		state := f.player.Dao().GetStamina()
 		out = staminaFacts{value: state.GetValue(), settledAt: state.GetSettledAt(), refillDay: state.GetRefillDay(), refillCount: state.GetRefillCount()}
 		out.coins = f.player.Dao().GetWallet().GetCoins()

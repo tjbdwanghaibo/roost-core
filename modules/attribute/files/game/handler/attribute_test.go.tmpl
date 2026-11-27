@@ -17,9 +17,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 	db "{{MODULE}}/db"
 	attributecomp "{{MODULE}}/game/components/attribute"
 	controller "{{MODULE}}/game/controllers"
@@ -29,6 +29,7 @@ import (
 	gameattr "{{MODULE}}/game/modules/gameplay/attribute"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
 )
 
 type attributeGetter map[int64]entity.IThreadSafeEntity
@@ -105,7 +106,9 @@ func newAttributeFixture(t *testing.T, others ...entity.IThreadSafeEntity) *attr
 }
 func (f *attributeFixture) local(t *testing.T, fn func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() { f.player.GetMutex().Lock(); defer f.player.GetMutex().Unlock(); fn() }); err != nil {
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
+		fn()
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -511,9 +514,7 @@ func newAttributeTower(t *testing.T, unique int64) *attributeTower {
 func (f *attributeFixture) towerSnapshot(t *testing.T, tower *attributeTower) attributeSnapshot {
 	t.Helper()
 	out := attributeSnapshot{Base: map[int32]int64{}, Gear: map[int32]int64{}, Final: map[int32]int64{}, Level: tower.level}
-	if err := f.engine.RunLocal(context.Background(), func() {
-		tower.GetMutex().Lock()
-		defer tower.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, tower, func() {
 		tower.dao.GetAttributeBase().RangeValues(func(k int32, v int64) bool { out.Base[k] = v; return true })
 		tower.dao.GetAttributeGear().RangeValues(func(k int32, v int64) bool { out.Gear[k] = v; return true })
 		tower.dao.GetAttributeFinal().RangeValues(func(k int32, v int64) bool { out.Final[k] = v; return true })

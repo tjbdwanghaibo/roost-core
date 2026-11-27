@@ -14,15 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	runentity "{{MODULE}}/game/entities/dungeon"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
@@ -30,6 +21,16 @@ import (
 	logic "{{MODULE}}/game/modules/dungeon"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 const dungeonNow int64 = 1900000000
@@ -157,12 +158,12 @@ func (f *dungeonFixture) player(t *testing.T, fn func(*player.Player)) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		p := f.manager.Get(id).(*player.Player)
-		p.GetMutex().Lock()
-		defer p.GetMutex().Unlock()
-		fn(p)
-	}); err != nil {
+		return nesttest.With(context.Background(), f.engine, p, func() {
+			fn(p)
+		})
+	}(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -189,35 +190,39 @@ type dungeonAggregate struct {
 func (f *dungeonFixture) documents(t *testing.T) []dungeonAggregate {
 	t.Helper()
 	out := []dungeonAggregate{}
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
+		var visitErr error
+
 		f.manager.Range(func(value entity.IThreadSafeEntity) bool {
-			value.GetMutex().Lock()
-			defer value.GetMutex().Unlock()
-			a := dungeonAggregate{id: value.ID(), kind: entity.ResolveEntityID(value.ID()).Kind, documents: map[string]dungeonDocument{}}
-			value.(entity.Guardable).RangeDao(func(dao entity.DaoInterface) {
-				// 所有生成/手写DAO共用正式MutationParticipant快照，不按具体类型分支或遗漏附加DAO。
-				participant, ok := dao.(nest.MutationParticipant)
-				if !ok {
-					t.Errorf("DAO %T has no persistence participant", dao)
-					return
-				}
-				mutation, err := participant.PrepareMutation(nest.PersistChange{Mask: dataengine.AllFields})
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				version := dao.(interface{ DirtyTracker() *dataengine.Tracker }).DirtyTracker().Version()
-				if mutation.Kind != dataengine.MutationPut || mutation.Key.ID != a.id || mutation.Key.ID != dao.Id() || mutation.Key.Database != dao.DbName() || mutation.Key.Resource != dao.CollName() || mutation.Schema != dao.(dataengine.Descriptor).SchemaVersion() || mutation.ExpectedVersion != version || mutation.NextVersion != version+1 || len(mutation.Data) == 0 {
-					t.Errorf("invalid full persistence snapshot for %T: key=%+v schema=%d version=%d/%d", dao, mutation.Key, mutation.Schema, mutation.ExpectedVersion, mutation.NextVersion)
-					return
-				}
-				// 这里只冻结当前版本，不AcceptMutation，也不把伪造的下一版本当成已提交事实。
-				a.documents[dao.CollName()] = dungeonDocument{raw: mutation.Data, schema: mutation.Schema, version: mutation.ExpectedVersion}
+			visitErr = nesttest.With(context.Background(), f.engine, value, func() {
+				a := dungeonAggregate{id: value.ID(), kind: entity.ResolveEntityID(value.ID()).Kind, documents: map[string]dungeonDocument{}}
+				value.(entity.Guardable).RangeDao(func(dao entity.DaoInterface) {
+					// 所有生成/手写DAO共用正式MutationParticipant快照，不按具体类型分支或遗漏附加DAO。
+					participant, ok := dao.(nest.MutationParticipant)
+					if !ok {
+						t.Errorf("DAO %T has no persistence participant", dao)
+						return
+					}
+					mutation, err := participant.PrepareMutation(nest.PersistChange{Mask: dataengine.AllFields})
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					version := dao.(interface{ DirtyTracker() *dataengine.Tracker }).DirtyTracker().Version()
+					if mutation.Kind != dataengine.MutationPut || mutation.Key.ID != a.id || mutation.Key.ID != dao.Id() || mutation.Key.Database != dao.DbName() || mutation.Key.Resource != dao.CollName() || mutation.Schema != dao.(dataengine.Descriptor).SchemaVersion() || mutation.ExpectedVersion != version || mutation.NextVersion != version+1 || len(mutation.Data) == 0 {
+						t.Errorf("invalid full persistence snapshot for %T: key=%+v schema=%d version=%d/%d", dao, mutation.Key, mutation.Schema, mutation.ExpectedVersion, mutation.NextVersion)
+						return
+					}
+					// 这里只冻结当前版本，不AcceptMutation，也不把伪造的下一版本当成已提交事实。
+					a.documents[dao.CollName()] = dungeonDocument{raw: mutation.Data, schema: mutation.Schema, version: mutation.ExpectedVersion}
+				})
+				out = append(out, a)
 			})
-			out = append(out, a)
-			return true
+			return visitErr == nil
 		})
-	}); err != nil {
+
+		return visitErr
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	return out

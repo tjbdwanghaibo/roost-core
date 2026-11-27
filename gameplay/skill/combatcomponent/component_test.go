@@ -33,13 +33,15 @@ func (e *combatTestEntity) RangeDao(f func(entity.DaoInterface)) {
 }
 
 type testGetter struct {
-	mu       sync.RWMutex
-	entities map[int64]entity.IThreadSafeEntity
-	groups   *entity.EntityManager
+	*entity.ManagerAccess // delegate group coordination; the fixture never publishes membership manually
+	mu                    sync.RWMutex
+	entities              map[int64]entity.IThreadSafeEntity
+	groups                *entity.EntityManager
 }
 
 func newTestGetter() *testGetter {
-	return &testGetter{entities: make(map[int64]entity.IThreadSafeEntity), groups: entity.NewEntityManager()}
+	groups := entity.NewEntityManager()
+	return &testGetter{ManagerAccess: entity.NewManagerAccess(groups), entities: make(map[int64]entity.IThreadSafeEntity), groups: groups}
 }
 
 func (g *testGetter) Add(e entity.IThreadSafeEntity) {
@@ -74,10 +76,6 @@ func (g *testGetter) GetGroupEntity(groupID, entityID int64) entity.IThreadSafeE
 
 func (g *testGetter) GetGroupEntities(groupID int64) []entity.IThreadSafeEntity {
 	return g.groups.GetGroupEntities(groupID)
-}
-
-func (g *testGetter) UpdateEntityGroup(value entity.IThreadSafeEntity, groupID int64) error {
-	return g.groups.UpdateEntityGroup(value, groupID)
 }
 
 func newCombatTestEntity(t *testing.T, uniqueID int64) (*combatTestEntity, int64) {

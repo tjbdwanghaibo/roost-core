@@ -25,6 +25,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -197,9 +198,7 @@ func newBagFixture(t *testing.T, others ...entity.IThreadSafeEntity) *bagFixture
 // locked 在业务 worker 上持实体锁执行 read：只用来读，写入一律走 Nest handler。
 func (f *bagFixture) locked(t *testing.T, read func()) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		read()
 	}); err != nil {
 		t.Fatal(err)
@@ -772,9 +771,7 @@ func (f *bagFixture) stashCall(stash *bagStash, op string, itemID, count int64) 
 func (f *bagFixture) wantStash(t *testing.T, stash *bagStash, when string, want map[int64]int64) {
 	t.Helper()
 	got := map[int64]int64{}
-	if err := f.engine.RunLocal(context.Background(), func() {
-		stash.GetMutex().Lock()
-		defer stash.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, stash, func() {
 		stash.BagState().RangeItems(func(itemID, count int64) bool {
 			got[itemID] = count
 			return true

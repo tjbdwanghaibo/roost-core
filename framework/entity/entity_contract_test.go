@@ -3,6 +3,8 @@ package entity
 import (
 	"context"
 	"errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 	"strings"
 	"sync"
@@ -13,9 +15,9 @@ import (
 func lockableElsewhere(e IThreadSafeEntity) bool {
 	done := make(chan bool)
 	go func() {
-		ok := e.GetMutex().TryLock()
+		ok := testSystemMutex(e).TryLock()
 		if ok {
-			e.GetMutex().Unlock()
+			testSystemMutex(e).Unlock()
 		}
 		done <- ok
 	}()
@@ -40,12 +42,12 @@ func TestGuardLocksNewInstanceWithDifferentMutex(t *testing.T) {
 		t.Run(via, func(t *testing.T) {
 			old, fresh := guardInstancePair(t, false)
 			guard := newEntityGuard()
-			if !guard.RequireEntity(old) {
+			if !guard.RequireEntity(entitypermit.System(), old) {
 				t.Fatal("setup: lock old")
 			}
-			ok := guard.RequireEntity(fresh)
+			ok := guard.RequireEntity(entitypermit.System(), fresh)
 			if via == "TryRequireEntity" {
-				ok = guard.TryRequireEntity(fresh)
+				ok = guard.TryRequireEntity(entitypermit.System(), fresh)
 			}
 			if !ok {
 				t.Fatalf("%s(fresh) = false", via)
@@ -56,7 +58,7 @@ func TestGuardLocksNewInstanceWithDifferentMutex(t *testing.T) {
 			if !guard.GuardedEntity(fresh) {
 				t.Fatal("GuardedEntity(fresh) = false after locking it")
 			}
-			guard.ReleaseAll()
+			guard.ReleaseAll(entitypermit.System())
 			if !lockableElsewhere(old) || !lockableElsewhere(fresh) {
 				t.Fatalf("locks leaked after ReleaseAll: old free=%v fresh free=%v", lockableElsewhere(old), lockableElsewhere(fresh))
 			}
@@ -68,13 +70,13 @@ func TestGuardLocksNewInstanceWithDifferentMutex(t *testing.T) {
 func TestGuardTreatsInstanceSharingTheHeldMutexAsHeld(t *testing.T) {
 	old, dup := guardInstancePair(t, true)
 	guard := newEntityGuard()
-	if !guard.RequireEntity(old) || !guard.RequireEntity(dup) || !guard.TryRequireEntity(dup) {
+	if !guard.RequireEntity(entitypermit.System(), old) || !guard.RequireEntity(entitypermit.System(), dup) || !guard.TryRequireEntity(entitypermit.System(), dup) {
 		t.Fatal("RequireEntity / TryRequireEntity on a held mutex must succeed")
 	}
 	if !guard.GuardedEntity(dup) {
 		t.Fatal("GuardedEntity(dup sharing the held mutex) = false")
 	}
-	guard.ReleaseAll()
+	guard.ReleaseAll(entitypermit.System())
 	if !lockableElsewhere(old) {
 		t.Fatal("the shared mutex is still locked after ReleaseAll: it was locked twice")
 	}
@@ -84,10 +86,10 @@ func TestGuardTreatsInstanceSharingTheHeldMutexAsHeld(t *testing.T) {
 func TestGuardLockOrderCheckUsesInstance(t *testing.T) {
 	old, fresh := guardInstancePair(t, false)
 	guard := newEntityGuard()
-	if !guard.RequireEntity(old) {
+	if !guard.RequireEntity(entitypermit.System(), old) {
 		t.Fatal("setup: lock old")
 	}
-	defer guard.ReleaseAll()
+	defer guard.ReleaseAll(entitypermit.System())
 	if guard.CheckContainAllLock([]IThreadSafeEntity{fresh}) {
 		t.Fatal("CheckContainAllLock accepted a new same-group instance whose lock is not held")
 	}
@@ -100,17 +102,17 @@ func TestGuardLockOrderCheckUsesInstance(t *testing.T) {
 func TestGuardReleaseEntityKeepsSupersededLockAccounted(t *testing.T) {
 	old, fresh := guardInstancePair(t, false)
 	guard := newEntityGuard()
-	if !guard.RequireEntity(old) || !guard.RequireEntity(fresh) {
+	if !guard.RequireEntity(entitypermit.System(), old) || !guard.RequireEntity(entitypermit.System(), fresh) {
 		t.Fatal("setup")
 	}
-	guard.ReleaseEntity(fresh.GUId())
+	guard.ReleaseEntity(entitypermit.System(), fresh.GUId())
 	if !lockableElsewhere(fresh) {
 		t.Fatal("ReleaseEntity did not release the current instance")
 	}
 	if lockableElsewhere(old) || !guard.GuardedEntity(old) {
 		t.Fatal("the superseded instance's lock must stay held and accounted until the guard releases")
 	}
-	guard.ReleaseAll()
+	guard.ReleaseAll(entitypermit.System())
 	if !lockableElsewhere(old) {
 		t.Fatal("superseded lock leaked after ReleaseAll")
 	}
@@ -142,7 +144,7 @@ func TestGuardUncomparableCustomMutexValueDoesNotPanic(t *testing.T) {
 			old := &testEntity{EntityBase: NewEntityBaseWithMutex(id, testEntityCategoryPlayer, false, oldMu, EntityKindNone)}
 			fresh := &testEntity{EntityBase: NewEntityBaseWithMutex(id, testEntityCategoryPlayer, false, freshMu, EntityKindNone)}
 			guard := newEntityGuard()
-			if !guard.RequireEntity(old) {
+			if !guard.RequireEntity(entitypermit.System(), old) {
 				t.Fatal("setup: lock old")
 			}
 			defer func() {
@@ -152,24 +154,24 @@ func TestGuardUncomparableCustomMutexValueDoesNotPanic(t *testing.T) {
 			}()
 			switch via {
 			case "RequireEntity":
-				if !guard.RequireEntity(fresh) {
+				if !guard.RequireEntity(entitypermit.System(), fresh) {
 					t.Fatal("RequireEntity(fresh) = false")
 				}
 			case "TryRequireEntity":
-				if !guard.TryRequireEntity(fresh) {
+				if !guard.TryRequireEntity(entitypermit.System(), fresh) {
 					t.Fatal("TryRequireEntity(fresh) = false")
 				}
 			case "GuardedEntity":
 				if guard.GuardedEntity(fresh) {
 					t.Fatal("GuardedEntity(fresh) = true before locking it: an uncomparable mutex was taken as the held one")
 				}
-				guard.ReleaseAll()
+				guard.ReleaseAll(entitypermit.System())
 				return
 			}
 			if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
 				t.Fatal("the fresh instance's own mutex is not held after locking it")
 			}
-			guard.ReleaseAll()
+			guard.ReleaseAll(entitypermit.System())
 			if !lockableElsewhere(old) || !lockableElsewhere(fresh) {
 				t.Fatalf("locks leaked after ReleaseAll: old free=%v fresh free=%v", lockableElsewhere(old), lockableElsewhere(fresh))
 			}
@@ -217,35 +219,35 @@ func TestGuardCustomMutexWithFuncInInterfaceFieldDoesNotPanic(t *testing.T) {
 		t.Run(via, func(t *testing.T) {
 			old, fresh := pair(t, funcHook, false)
 			guard := newEntityGuard()
-			if !guard.RequireEntity(old) {
+			if !guard.RequireEntity(entitypermit.System(), old) {
 				t.Fatal("setup: lock old")
 			}
 			defer noPanic(t, via)
 			switch via {
 			case "RequireEntity":
-				if !guard.RequireEntity(fresh) {
+				if !guard.RequireEntity(entitypermit.System(), fresh) {
 					t.Fatal("RequireEntity(fresh) = false")
 				}
 			case "TryRequireEntity":
-				if !guard.TryRequireEntity(fresh) {
+				if !guard.TryRequireEntity(entitypermit.System(), fresh) {
 					t.Fatal("TryRequireEntity(fresh) = false")
 				}
 			case "GuardedEntity":
 				if guard.GuardedEntity(fresh) {
 					t.Fatal("GuardedEntity(fresh) = true before locking it: a mutex holding a func was taken as the held one")
 				}
-				guard.ReleaseAll()
+				guard.ReleaseAll(entitypermit.System())
 				return
 			case "ReleaseEntityInstance":
 				// old 被 fresh 取代、锁转入 superseded：释放 old 要比较 fresh 与 old 的锁（holding）和 superseded 里的锁。
-				if !guard.RequireEntity(fresh) {
+				if !guard.RequireEntity(entitypermit.System(), fresh) {
 					t.Fatal("setup: lock fresh")
 				}
-				guard.ReleaseEntityInstance(old)
+				guard.ReleaseEntityInstance(entitypermit.System(), old)
 				if !lockableElsewhere(old) || lockableElsewhere(fresh) {
 					t.Fatalf("ReleaseEntityInstance(old): old free=%v (want true) fresh free=%v (want false)", lockableElsewhere(old), lockableElsewhere(fresh))
 				}
-				guard.ReleaseAll()
+				guard.ReleaseAll(entitypermit.System())
 				if !lockableElsewhere(fresh) {
 					t.Fatal("fresh lock leaked after ReleaseAll")
 				}
@@ -254,7 +256,7 @@ func TestGuardCustomMutexWithFuncInInterfaceFieldDoesNotPanic(t *testing.T) {
 			if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
 				t.Fatal("the fresh instance's own mutex is not held after locking it")
 			}
-			guard.ReleaseAll()
+			guard.ReleaseAll(entitypermit.System())
 			if !lockableElsewhere(old) || !lockableElsewhere(fresh) {
 				t.Fatalf("locks leaked after ReleaseAll: old free=%v fresh free=%v", lockableElsewhere(old), lockableElsewhere(fresh))
 			}
@@ -264,14 +266,14 @@ func TestGuardCustomMutexWithFuncInInterfaceFieldDoesNotPanic(t *testing.T) {
 		// 接口字段装的是可比较值、两份包装共用同一把不可重入的底层锁：必须认出是同一把锁，否则第二次加锁会自锁。
 		old, fresh := pair(t, func() any { return "observer" }, true)
 		guard := newEntityGuard()
-		if !guard.RequireEntity(old) {
+		if !guard.RequireEntity(entitypermit.System(), old) {
 			t.Fatal("setup: lock old")
 		}
 		defer noPanic(t, "RequireEntity(shared)")
-		if !guard.GuardedEntity(fresh) || !guard.TryRequireEntity(fresh) {
+		if !guard.GuardedEntity(fresh) || !guard.TryRequireEntity(entitypermit.System(), fresh) {
 			t.Fatal("a wrapper with a comparable interface field sharing the held lock must count as held")
 		}
-		guard.ReleaseAll()
+		guard.ReleaseAll(entitypermit.System())
 		if !lockableElsewhere(old) {
 			t.Fatal("shared lock leaked after ReleaseAll")
 		}
@@ -284,17 +286,17 @@ func TestGuardReleaseEntityInstanceReleasesOnlyThatInstance(t *testing.T) {
 	t.Run("superseded_old", func(t *testing.T) {
 		old, fresh := guardInstancePair(t, false)
 		guard := newEntityGuard()
-		if !guard.RequireEntity(old) || !guard.RequireEntity(fresh) {
+		if !guard.RequireEntity(entitypermit.System(), old) || !guard.RequireEntity(entitypermit.System(), fresh) {
 			t.Fatal("setup")
 		}
-		guard.ReleaseEntityInstance(old)
+		guard.ReleaseEntityInstance(entitypermit.System(), old)
 		if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
 			t.Fatal("ReleaseEntityInstance(old) released the re-created instance's lock")
 		}
 		if !lockableElsewhere(old) || guard.GuardedEntity(old) {
 			t.Fatal("ReleaseEntityInstance(old) did not release the superseded instance's own lock")
 		}
-		guard.ReleaseAll()
+		guard.ReleaseAll(entitypermit.System())
 		if !lockableElsewhere(fresh) {
 			t.Fatal("fresh lock leaked after ReleaseAll")
 		}
@@ -302,17 +304,17 @@ func TestGuardReleaseEntityInstanceReleasesOnlyThatInstance(t *testing.T) {
 	t.Run("current_restores_superseded", func(t *testing.T) {
 		old, fresh := guardInstancePair(t, false)
 		guard := newEntityGuard()
-		if !guard.RequireEntity(old) || !guard.RequireEntity(fresh) {
+		if !guard.RequireEntity(entitypermit.System(), old) || !guard.RequireEntity(entitypermit.System(), fresh) {
 			t.Fatal("setup")
 		}
-		guard.ReleaseEntityInstance(fresh)
+		guard.ReleaseEntityInstance(entitypermit.System(), fresh)
 		if !lockableElsewhere(fresh) {
 			t.Fatal("ReleaseEntityInstance(current) did not release it")
 		}
 		if lockableElsewhere(old) || !guard.GuardedEntity(old) {
 			t.Fatal("the superseded instance's lock must stay held and accounted until the guard releases")
 		}
-		guard.ReleaseAll()
+		guard.ReleaseAll(entitypermit.System())
 		if !lockableElsewhere(old) {
 			t.Fatal("superseded lock leaked after ReleaseAll")
 		}
@@ -320,26 +322,26 @@ func TestGuardReleaseEntityInstanceReleasesOnlyThatInstance(t *testing.T) {
 	t.Run("shared_mutex_duplicate", func(t *testing.T) {
 		old, dup := guardInstancePair(t, true)
 		guard := newEntityGuard()
-		if !guard.RequireEntity(old) {
+		if !guard.RequireEntity(entitypermit.System(), old) {
 			t.Fatal("setup")
 		}
-		guard.ReleaseEntityInstance(dup)
+		guard.ReleaseEntityInstance(entitypermit.System(), dup)
 		if !lockableElsewhere(old) || guard.GuardedCount() != 0 {
 			t.Fatal("ReleaseEntityInstance(duplicate sharing the held mutex) must release that mutex once")
 		}
-		guard.ReleaseAll()
+		guard.ReleaseAll(entitypermit.System())
 	})
 	t.Run("not_held", func(t *testing.T) {
 		old, fresh := guardInstancePair(t, false)
 		guard := newEntityGuard()
-		if !guard.RequireEntity(fresh) {
+		if !guard.RequireEntity(entitypermit.System(), fresh) {
 			t.Fatal("setup")
 		}
-		guard.ReleaseEntityInstance(old)
+		guard.ReleaseEntityInstance(entitypermit.System(), old)
 		if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
 			t.Fatal("ReleaseEntityInstance of an instance this guard never locked released another instance's lock")
 		}
-		guard.ReleaseAll()
+		guard.ReleaseAll(entitypermit.System())
 	})
 }
 

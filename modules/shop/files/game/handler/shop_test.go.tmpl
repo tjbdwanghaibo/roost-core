@@ -26,6 +26,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
@@ -247,9 +248,7 @@ type shopSnapshot struct {
 func (f *shopFixture) snapshot(t *testing.T) shopSnapshot {
 	t.Helper()
 	got := shopSnapshot{Items: map[int64]int64{}, Daily: map[int64]int64{}, Lifetime: map[int64]int64{}}
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		dao := f.player.Dao()
 		got.Coins = dao.GetWallet().GetCoins()
 		dao.GetBag().RangeItems(func(itemID, count int64) bool {

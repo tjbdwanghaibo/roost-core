@@ -9,6 +9,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
 
 // 测试用实体种类（本测试二进制内唯一）。
@@ -57,7 +58,11 @@ func (e *hbEntity) OnDestroy(entity.EntityDestroyReason) {
 
 func newHBEntity(t testing.TB, d *Driver, unique int64, kind entity.EntityKind) *hbEntity {
 	t.Helper()
-	e := &hbEntity{EntityBase: entity.NewEntityBase(mustID(t, unique, kind), entity.EntityCategoryOther, true, kind)}
+	return newHBEntityWithMutex(d, mustID(t, unique, kind), kind, nil)
+}
+
+func newHBEntityWithMutex(d *Driver, id int64, kind entity.EntityKind, mu lock.Mutex) *hbEntity {
+	e := &hbEntity{EntityBase: entity.NewEntityBaseWithMutex(id, entity.EntityCategoryOther, true, mu, kind)}
 	e.host = d.NewHost(e)
 	return e
 }
@@ -65,7 +70,13 @@ func newHBEntity(t testing.TB, d *Driver, unique int64, kind entity.EntityKind) 
 // remoteHBEntity 是 Remote 托管实体（嵌 RemoteEntityBase）。
 type remoteHBEntity struct {
 	*entity.RemoteEntityBase
-	host *Host
+	host      *Host
+	fixtureMu lock.Mutex // 注入底层测试锁，供模拟所有权管理器与只读断言同步。
+}
+
+func newRemoteHBEntity(id int64) *remoteHBEntity {
+	mu := lock.NewReentrantMutex(id)
+	return &remoteHBEntity{RemoteEntityBase: entity.NewRemoteEntityBaseWithMutex(id, entity.EntityCategoryRemote, true, mu, kindRemote), fixtureMu: mu}
 }
 
 func (e *remoteHBEntity) Base() *entity.EntityBase { return &e.RemoteEntityBase.EntityBase }

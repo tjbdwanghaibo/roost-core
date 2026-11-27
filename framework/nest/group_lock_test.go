@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 )
 
@@ -24,9 +25,9 @@ func TestEntityLockGroupScopeAvailableForGroupedDispatch(t *testing.T) {
 	e1 := newMockEntity(id1, entity.EntityCategory(1))
 	e2 := newMockEntity(id2, entity.EntityCategory(1))
 	otherGroup := newMockEntity(idOtherGroup, entity.EntityCategory(1))
-	e1.Base().SetGroupLockIDForTest(groupID)
-	e2.Base().SetGroupLockIDForTest(groupID)
-	otherGroup.Base().SetGroupLockIDForTest(groupID + 1)
+	e1.Base().SetGroupLockIDForTest(entitypermit.System(), groupID)
+	e2.Base().SetGroupLockIDForTest(entitypermit.System(), groupID)
+	otherGroup.Base().SetGroupLockIDForTest(entitypermit.System(), groupID+1)
 	getter.groups.Add(e1)
 	getter.groups.Add(e2)
 	getter.groups.Add(otherGroup)
@@ -104,7 +105,7 @@ func TestEntityLockGroupSnapshotDetectsMembershipChange(t *testing.T) {
 	e := newMockEntity(id, entity.EntityCategory(1))
 	snapshots := captureDispatchGroupSnapshots([]entity.IThreadSafeEntity{e}, nil)
 
-	e.Base().SetGroupLockIDForTest(9101)
+	e.Base().SetGroupLockIDForTest(entitypermit.System(), 9101)
 
 	if err := validateDispatchGroupSnapshots(snapshots); !errors.Is(err, ErrEntityLockGroupChanged) {
 		t.Fatalf("validateDispatchGroupSnapshots err = %v, want ErrEntityLockGroupChanged", err)
@@ -116,7 +117,7 @@ func TestEntityLockGroupSnapshotDetectsPendingTransition(t *testing.T) {
 	e := newMockEntity(id, entity.EntityCategory(1))
 	snapshots := captureDispatchGroupSnapshots([]entity.IThreadSafeEntity{e}, nil)
 
-	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 9102) {
+	if !e.Base().BeginGroupTransition(entitypermit.System(), entity.EntityGroupTransitionJoin, 9102) {
 		t.Fatal("BeginGroupTransition should succeed")
 	}
 
@@ -128,7 +129,7 @@ func TestEntityLockGroupSnapshotDetectsPendingTransition(t *testing.T) {
 // singleDispatchInGuardScope 在当前 goroutine 上建 Guard 作用域再直接调用 singleDispatch，与 runNestLogic 一致：
 // 派发取锁要求作用域。
 func singleDispatchInGuardScope(mgr *NestMgr, name string, id int64) (got any, err error) {
-	err = entity.WithGuardScope("group-lock-test", func(*entity.GuardScope) error {
+	err = entity.WithGuardScope(entitypermit.System(), "group-lock-test", func(*entity.GuardScope) error {
 		var dispatchErr error
 		got, dispatchErr = mgr.singleDispatch(name, id, nil)
 		return dispatchErr
@@ -140,7 +141,7 @@ func singleDispatchInGuardScope(mgr *NestMgr, name string, id int64) (got any, e
 // dispatchLoadedEntities 再取锁）一致：Guard 归作用域所有，作用域结束时只归还池一次。没有作用域时派发取锁直接返回
 // errDispatchWithoutGuardScope（见 dispatch_test.go），所以用例不能在裸 goroutine 里直接 GetEntityGuard。
 func withDispatchGuardScope(fn func(guard *entity.EntityGuard) error) error {
-	return entity.WithGuardScope("group-lock-test", func(scope *entity.GuardScope) error {
+	return entity.WithGuardScope(entitypermit.System(), "group-lock-test", func(scope *entity.GuardScope) error {
 		return fn(scope.Guard())
 	})
 }
@@ -149,7 +150,7 @@ func TestLockDispatchEntitiesForHandlerRetriesEpochChangeWhileWaiting(t *testing
 	locks := newEntityLockGroupLockManager()
 	id := mustBuildCastID(t, 4213, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
-	mu := e.GetMutex()
+	mu := physicalTestLock(e)
 	mu.Lock()
 
 	done := make(chan error, 1)
@@ -168,7 +169,7 @@ func TestLockDispatchEntitiesForHandlerRetriesEpochChangeWhileWaiting(t *testing
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	e.Base().SetGroupLockIDForTest(9103)
+	e.Base().SetGroupLockIDForTest(entitypermit.System(), 9103)
 	mu.Unlock()
 
 	select {
@@ -191,15 +192,15 @@ func TestLockDispatchEntitiesForHandlerDoesNotBlockGroupOnBusyExtraEntity(t *tes
 	extraID := mustBuildCastID(t, 4222, entity.EntityCategory(1), nestLocalKind)
 	grouped := newMockEntity(groupedID, entity.EntityCategory(1))
 	extra := newMockEntity(extraID, entity.EntityCategory(1))
-	grouped.Base().SetGroupLockIDForTest(groupID)
+	grouped.Base().SetGroupLockIDForTest(entitypermit.System(), groupID)
 
 	extraLocked := make(chan struct{})
 	releaseExtra := make(chan struct{})
 	go func() {
-		extra.GetMutex().Lock()
+		physicalTestLock(extra).Lock()
 		close(extraLocked)
 		<-releaseExtra
-		extra.GetMutex().Unlock()
+		physicalTestLock(extra).Unlock()
 	}()
 	<-extraLocked
 	defer close(releaseExtra)
@@ -230,7 +231,7 @@ func TestLockDispatchEntitiesForHandlerDoesNotBlockOnBusyGroupLock(t *testing.T)
 	groupID := int64(9203)
 	groupedID := mustBuildCastID(t, 4241, entity.EntityCategory(1), nestLocalKind)
 	grouped := newMockEntity(groupedID, entity.EntityCategory(1))
-	grouped.Base().SetGroupLockIDForTest(groupID)
+	grouped.Base().SetGroupLockIDForTest(entitypermit.System(), groupID)
 
 	groupLocked := make(chan struct{})
 	releaseGroup := make(chan struct{})
@@ -276,7 +277,7 @@ func TestEntityLockGroupDispatchRequeuesBusyGroupLock(t *testing.T) {
 	groupID := int64(9204)
 	groupedID := mustBuildCastID(t, 4242, entity.EntityCategory(1), nestLocalKind)
 	grouped := newMockEntity(groupedID, entity.EntityCategory(1))
-	grouped.Base().SetGroupLockIDForTest(groupID)
+	grouped.Base().SetGroupLockIDForTest(entitypermit.System(), groupID)
 	getter.Add(grouped)
 
 	InitNest(
@@ -353,7 +354,7 @@ func TestEntityLockGroupDispatchRequeuesBusyExtraEntity(t *testing.T) {
 	extraID := mustBuildCastID(t, 4232, entity.EntityCategory(1), nestLocalKind)
 	grouped := newMockEntity(groupedID, entity.EntityCategory(1))
 	extra := newMockEntity(extraID, entity.EntityCategory(1))
-	grouped.Base().SetGroupLockIDForTest(groupID)
+	grouped.Base().SetGroupLockIDForTest(entitypermit.System(), groupID)
 	getter.Add(grouped)
 	getter.Add(extra)
 
@@ -379,10 +380,10 @@ func TestEntityLockGroupDispatchRequeuesBusyExtraEntity(t *testing.T) {
 	extraLocked := make(chan struct{})
 	releaseExtra := make(chan struct{})
 	go func() {
-		extra.GetMutex().Lock()
+		physicalTestLock(extra).Lock()
 		close(extraLocked)
 		<-releaseExtra
-		extra.GetMutex().Unlock()
+		physicalTestLock(extra).Unlock()
 	}()
 	<-extraLocked
 
@@ -437,7 +438,7 @@ func testGroupReleasePanic(t *testing.T, partial bool) {
 		t.Fatal(err)
 	}
 	defer manager.RegisterOnEntityRelease(func(entity.IThreadSafeEntity) { panic("release hook failed") })()
-	scope, closeScope := entity.NewGuardScope("group-release-panic")
+	scope, closeScope := entity.NewGuardScope(entitypermit.System(), "group-release-panic")
 	defer closeScope()
 	locks := newEntityLockGroupLockManager()
 	entities := []entity.IThreadSafeEntity{ent}
@@ -446,10 +447,10 @@ func testGroupReleasePanic(t *testing.T, partial bool) {
 		busy := newMockEntity(busyID, entity.EntityCategory(1))
 		locked, unlock, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 		go func() {
-			busy.GetMutex().Lock()
+			physicalTestLock(busy).Lock()
 			close(locked)
 			<-unlock
-			busy.GetMutex().Unlock()
+			physicalTestLock(busy).Unlock()
 			close(done)
 		}()
 		<-locked
@@ -525,7 +526,7 @@ func TestGroupTransitionRequestsRefuseZeroGroupsUnknownEntitiesAndOverlaps(t *te
 	// Hold the entity's lock so the dispatched transition cannot complete:
 	// under the race detector the worker otherwise finishes the join before
 	// the second request is issued, and "pending" is no longer observable.
-	mu := ent.GetMutex()
+	mu := physicalTestLock(ent)
 	mu.Lock()
 	t.Cleanup(mu.Unlock)
 	if err := mgr.RequestJoinEntityLockGroup(id, 5); err != nil {
@@ -598,7 +599,7 @@ func TestEntityLockGroupTransitionPendingGatesNormalDispatch(t *testing.T) {
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 4401, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
-	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 8201) {
+	if !e.Base().BeginGroupTransition(entitypermit.System(), entity.EntityGroupTransitionJoin, 8201) {
 		t.Fatal("BeginGroupTransition should succeed")
 	}
 	getter.Add(e)
@@ -622,7 +623,7 @@ func TestEntityLockGroupTransitionPendingRequeuesSyncDispatch(t *testing.T) {
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 4451, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
-	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 8251) {
+	if !e.Base().BeginGroupTransition(entitypermit.System(), entity.EntityGroupTransitionJoin, 8251) {
 		t.Fatal("BeginGroupTransition should succeed")
 	}
 	getter.Add(e)
@@ -642,7 +643,7 @@ func TestEntityLockGroupTransitionPendingRequeuesSyncDispatch(t *testing.T) {
 	})
 
 	time.AfterFunc(30*time.Millisecond, func() {
-		e.Base().ClearGroupTransition()
+		e.Base().ClearGroupTransition(entitypermit.System())
 	})
 
 	got, err := Nest.Request(context.Background(), name, id, nil)
@@ -731,7 +732,7 @@ func TestEntityLockGroupTransitionRetriesWhenEntityLockBusy(t *testing.T) {
 	)
 	defer StopNest()
 
-	mu := e.GetMutex()
+	mu := physicalTestLock(e)
 	mu.Lock()
 	if err := Nest.RequestJoinEntityLockGroup(id, 8401); err != nil {
 		mu.Unlock()
@@ -758,12 +759,12 @@ func TestEntityLockGroupTransitionTimeoutClearsPending(t *testing.T) {
 	getter.groups.Add(e)
 	getter.Add(e)
 
-	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 8402) {
+	if !e.Base().BeginGroupTransition(entitypermit.System(), entity.EntityGroupTransitionJoin, 8402) {
 		t.Fatal("BeginGroupTransition should succeed")
 	}
 
 	mgr := &NestMgr{getter: getter}
-	mu := e.GetMutex()
+	mu := physicalTestLock(e)
 	locked := make(chan struct{})
 	release := make(chan struct{})
 	go func() {
@@ -774,7 +775,7 @@ func TestEntityLockGroupTransitionTimeoutClearsPending(t *testing.T) {
 	}()
 	awaitChan(t, locked, "the group transition to acquire the entity lock")
 	// 派发取锁要求 Guard 作用域（RR-20261006-12），与 runNestLogic 一致。
-	err := entity.WithGuardScope("group-transition-test", func(*entity.GuardScope) error {
+	err := entity.WithGuardScope(entitypermit.System(), "group-transition-test", func(*entity.GuardScope) error {
 		_, err := mgr.groupTransitionDispatch(&GroupTransitionRequest{
 			EntityID:      id,
 			TargetGroupID: 8402,

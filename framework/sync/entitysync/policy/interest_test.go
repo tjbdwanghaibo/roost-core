@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
@@ -864,7 +865,7 @@ func TestRemoteRejectKeepsCommittedLocalInterestFact(t *testing.T) {
 // 被拒绝的 Remote 实体的事实丢弃，已提交的本地实体的事实就绪。
 func TestRejectEntitiesJudgesEntitiesWithoutSyncStateByID(t *testing.T) {
 	m := newManager(t)
-	_, closeScope := entity.NewGuardScope("reject-entities")
+	_, closeScope := entity.NewGuardScope(entitypermit.System(), "reject-entities")
 	defer closeScope()
 	local := &queuedEntity{entity.NewEntityBase(2, entity.EntityCategory(4), true)}
 	remote := &queuedEntity{entity.NewEntityBase(3, entity.EntityCategory(4), true)}

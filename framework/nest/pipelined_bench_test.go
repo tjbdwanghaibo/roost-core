@@ -112,7 +112,7 @@ func BenchmarkCommitLockHold(b *testing.B) {
 			}()
 			<-committer.committing
 			start := time.Now()
-			mu := ent.GetMutex()
+			mu := physicalTestLock(ent)
 			for !mu.TryLock() {
 				time.Sleep(20 * time.Microsecond)
 			}

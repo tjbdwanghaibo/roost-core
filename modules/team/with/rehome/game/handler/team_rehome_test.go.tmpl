@@ -10,6 +10,7 @@ import (
 	sender "{{MODULE}}/game/handler/syncsender"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 )
 
 func TestWithTeamRehomeRejectsAPlayerInTeam(t *testing.T) {
@@ -22,12 +23,12 @@ func TestWithTeamRehomeRejectsAPlayerInTeam(t *testing.T) {
 		t.Fatalf("team allowed rehome: %v", err)
 	}
 	var pending string
-	if err := f.engine.RunLocal(context.Background(), func() {
+	if err := func() error {
 		p := f.values[f.playerID(101)].(*player.Player)
-		p.GetMutex().Lock()
-		defer p.GetMutex().Unlock()
-		pending = p.Dao().GetRehome().GetPendingID()
-	}); err != nil {
+		return nesttest.With(context.Background(), f.engine, p, func() {
+			pending = p.Dao().GetRehome().GetPendingID()
+		})
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	if pending != "" {

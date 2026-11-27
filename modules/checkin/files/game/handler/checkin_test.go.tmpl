@@ -18,6 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
@@ -118,9 +119,7 @@ func (f *checkinFixture) mustClaim(t *testing.T) *pb.CheckinClaimResponse {
 // snapshot 在业务 worker 上持实体锁读签到进度与余额。
 func (f *checkinFixture) snapshot(t *testing.T) (streak, total int32, coins int64) {
 	t.Helper()
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		state := f.player.Dao().GetCheckin()
 		streak, total = state.GetStreak(), state.GetTotal()
 		coins = f.player.Dao().GetWallet().GetCoins()
@@ -210,9 +209,7 @@ func TestCheckinKeepsPayingPastTheWalletReceiptWindow(t *testing.T) {
 		f.now.Add(int64(checkinDay / time.Millisecond))
 	}
 	var receipts int
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.player.GetMutex().Lock()
-		defer f.player.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.player, func() {
 		receipts = f.player.Dao().GetWalletLedger().ReceiptsLen()
 	}); err != nil {
 		t.Fatal(err)

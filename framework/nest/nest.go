@@ -236,7 +236,7 @@ func (mgr *NestMgr) groupLockManager() *entityLockGroupLockManager {
 	}
 	mgr.lifecycleMu.Lock()
 	if mgr.groupLocks == nil {
-		mgr.groupLocks = newEntityLockGroupLockManager()
+		mgr.groupLocks = groupLocksForGetter(mgr.getter)
 	}
 	locks := mgr.groupLocks
 	mgr.lifecycleMu.Unlock()
@@ -431,7 +431,7 @@ func NewEngine(opts ...NestOption) *NestMgr {
 		slowLockThreshold:      params.SlowLockThreshold,
 		stageMetrics:           params.StageMetrics,
 		stopDone:               make(chan struct{}),
-		groupLocks:             newEntityLockGroupLockManager(),
+		groupLocks:             groupLocksForGetter(params.Getter),
 		handlers:               snapshotHandlerEntries(),
 	}
 	if ret.entitySync != nil {

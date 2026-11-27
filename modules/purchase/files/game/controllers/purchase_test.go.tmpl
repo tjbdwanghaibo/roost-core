@@ -10,14 +10,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/modules/purchase"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/nesttest"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 )
 
 type purchaseGetter map[int64]entity.IThreadSafeEntity
@@ -159,9 +161,7 @@ func (f *purchaseFixture) facts(t *testing.T) (uint64, int64) {
 	t.Helper()
 	var sequence uint64
 	var coins int64
-	if err := f.engine.RunLocal(context.Background(), func() {
-		f.target.GetMutex().Lock()
-		defer f.target.GetMutex().Unlock()
+	if err := nesttest.With(context.Background(), f.engine, f.target, func() {
 		sequence = f.target.Dao().GetPurchase().GetApplied()
 		coins = f.target.WalletComp().Balance()
 	}); err != nil {

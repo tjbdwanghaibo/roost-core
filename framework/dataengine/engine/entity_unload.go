@@ -10,6 +10,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/internal/entitypermit"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
@@ -220,7 +221,7 @@ func (runtime *Runtime) raiseUnloadBarrier(ctx context.Context, value entity.ITh
 	}
 	var release func()
 	var barrierErr error
-	err := runtime.access.WithLocked(ctx, value, func() {
+	err := runtime.access.WithLocked(entitypermit.System(), ctx, value, func() {
 		if remote, ok := value.(entity.IThreadSafeRemoteEntity); ok && entity.IsEntityKindRemoteManaged(value.GetEntityKind()) {
 			switch state := remote.RemoteOwnershipState(); state {
 			case entity.RemoteOwnershipLocalOwned, entity.RemoteOwnershipShared:

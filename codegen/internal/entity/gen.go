@@ -50,7 +50,7 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 	}
 	data.NeedsRemove = data.HasDirty && !ent.NoPersist && !data.RemoteV2 && !hasMethod(ent, "PrepareDelete")
 	// dataengine 只在 Remote 远端提交的逐个 DAO 分支里用到：还没有 DAO 的 Remote 实体不能 import 它，否则 wire 编译不过。
-	data.ImportBlock = buildImportBlock(ent, data.RemoteV2 || data.NeedsRemove, data.RemoteV2 && data.HasDaos, data.NeedsRemove)
+	data.ImportBlock = buildImportBlock(ent, data.RemoteV2 || data.NeedsRemove || ent.CompanionOf != "", data.RemoteV2 && data.HasDaos, data.NeedsRemove)
 
 	tmpl, err := template.New("entity_wire").Funcs(template.FuncMap{
 		"deref":              derefType,
@@ -439,6 +439,24 @@ func register{{.Entity.Name}}Entity() {
 {{- end}}
 	})
 }
+
+{{- if .Entity.CompanionOf}}
+// Create{{.Entity.Name}}ForPrincipal 显式新建伴生实体。principalID 是主实体的完整 ID，不发新号；已存在时报错。
+// 一端为 Remote 托管时只声明未挂接的子实体；必须在有独占写许可的 Nest handler 中另行 AttachCompanion。
+func Create{{.Entity.Name}}ForPrincipal(access *entity.ManagerAccess, principalID int64) (*{{.Entity.Name}}, error) {
+	id, err := entity.CompanionID(principalID, {{.Entity.EntityKind}})
+	if err != nil { return nil, err }
+	detached := entity.IsEntityKindRemoteManaged(entity.GetEntityKindFromID(principalID)) || entity.IsEntityKindRemoteManaged({{.Entity.EntityKind}})
+	value, err := access.Create(&entity.EntityCreateParam{
+		IsCreate: true, Id: id, Kind: {{.Entity.EntityKind}},
+		CompanionOf: principalID, CompanionDetached: detached,
+	})
+	if err != nil { return nil, err }
+	child, ok := value.(*{{.Entity.Name}})
+	if !ok { return nil, fmt.Errorf("created {{.Entity.Name}} companion has type %T", value) }
+	return child, nil
+}
+{{- end}}
 
 func New{{.Entity.Name}}(param *entity.EntityCreateParam) (*{{.Entity.Name}}, error) {
 	e := &{{.Entity.Name}}{}
