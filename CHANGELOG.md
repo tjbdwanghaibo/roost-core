@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **Entity 伴生与对等组**（2026-11-27）：`//roost:entity companionOf=<主实体>` 让一个主实体（如 Player）在同一进程内按类型直取伴生实体（如 ActivityPlayer），两者共用一个本地锁域，仍各自持久与回滚；对等组改为派发时逐个 Try 锁全部成员并纳入同一事务与 Sync。锁由框架持有，旧的 `GetMutex().Lock` / `NewGuardScope` 外部取锁入口收紧。`ownership=shared` 不能参与伴生，`roost generate` 时直接报错；只从内存卸载（`deleteFromDB=false`，不论 reason）保留已脱开伴生的声明，只有真正删档才结束主实体身份；memory 快路径准入后组关系发布复核失败时仍确认同步门，回复 `ErrAfterCommitFailed`。见 [ENTITY-COMPANIONS](docs/framework/ENTITY-COMPANIONS.md)、[ENTITY-PEER-GROUPS](docs/framework/ENTITY-PEER-GROUPS.md)。
+- **DAO 同步 schema 发版兼容检查**（2026-11-27）：`roost verify-dao-sync` 把已发布的 DAO 同步 proto 与当前生成结果比较，拦下字段号易主、删除、类型变化等不兼容改动，末尾追加通过。值为切片的 map 的包装消息改为按元素类型命名（`SyncListInt32`、`SyncListSyncPair`），不再按生成顺序编号，前面新增字段不会让已发布的包装改名。见 [DAO-SYNC-PROTOBUF](docs/framework/DAO-SYNC-PROTOBUF.md)。
+- **场景区域详情与计数视图**（2026-11-27）：`gameplay/regionsummary` 给 scenespace 增加可选的公开区域详情 / 计数视图。区域层因宿主破坏视图所有权而失败关闭后，`Space.Nearby` 退回普通 AOI；移动的提交后发布晚于 Forget 时放弃，不再重新计数已离开对象。见 [REGION-SUMMARY](docs/framework/REGION-SUMMARY.md)。
+- **新业务模块 unlock / reward / itemuse / quota / quota_alliance 与可选实体 AI 模块**（2026-11-27）：task 区分任务状态与累计进度，activity 恢复锚点；`gameplay/ai/decision` 提供可配置决策策略，`modules/ai` 的 decisionai 在回执投递期间拒绝 Apply（返回 `ai.ErrReentrantSwitch`）。生成工程验收的联动检查覆盖全部 52 个已声明联动。见 [modules/README](modules/README.md)、[AI-DECISIONS](docs/framework/AI-DECISIONS.md)。
 - **生成物要求的最低 core 提到 v1.60.0**（2026-11-22）：v1.60.0 的 game-demo 分区接线用到新接口 `gateway.GameIngress.SessionAdmission` 与 `cellworld.Node.AttackReceiptSession`，v1.59.0 编译不了。`framework-compat` 的 minimum 组合同步钉到 v1.60.0。
 
 ## [v1.60.0] - 2026-11-22
