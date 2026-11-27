@@ -1,0 +1,11 @@
+package schema
+
+// RewardGroup 的 Draws 只作用于 weighted 行；Replacement 决定一行能否重复入选。
+// 每组 1..256 行，Draws 为 0..64；跨行上限在解析前统一检查。
+//
+//roost:table name=reward_group key=ID
+type RewardGroup struct {
+	ID          int64 `csv:"id" json:"id" required:"true" unique:"true" min:"1"`
+	Draws       int64 `csv:"draws" json:"draws" min:"0" max:"64"`
+	Replacement bool  `csv:"replacement" json:"replacement"`
+}

@@ -1,0 +1,100 @@
+package handler
+
+import (
+	"math"
+	"reflect"
+	"testing"
+
+	"{{MODULE}}/configs/schema"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func init() { useHasReward = true }
+
+const useGroup int64 = 4521
+
+func fixedUseDrop(row, item, n int64) schema.RewardEntry {
+	return schema.RewardEntry{ID: row, GroupID: useGroup, Kind: "fixed", ItemID: item, Count: n}
+}
+func useDrops(t *testing.T, f *useFixture, draws int64, entries ...schema.RewardEntry) {
+	t.Helper()
+	f.publish(t, map[string]any{
+		"item_use":     []schema.ItemUse{useRow(useSource, "reward.group", useGroup)},
+		"reward_group": []schema.RewardGroup{{ID:useGroup,Draws:draws,Replacement:true}}, "reward_entry": entries,
+	})
+}
+func TestWithItemuseRewardOpensMultipleBoxesAndReplaysOriginalLoot(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 2)
+	// 经过真实服务端随机抽样。两个加权候选给同一物品与数量，结果可精确断言而无需换随机源。
+	a := schema.RewardEntry{ID: 15, GroupID: useGroup, Kind: "weighted", ItemID: useFirst, Count: 1, Weight: 2}
+	b := a
+	b.ID = 16
+	b.Weight = 1
+	useDrops(t, f, 1, fixedUseDrop(3, useLast, 1), fixedUseDrop(5, useFirst, 2), a, b)
+	r := f.use(t, 1, useSource, 2)
+	if len(r.Items) != 2 || r.Items[0].ItemID != useFirst || r.Items[0].Count != 6 || r.Items[1].ItemID != useLast || r.Items[1].Count != 2 || r.Left != 0 {
+		t.Fatalf("loot %+v", r)
+	}
+	useDrops(t, f, 0, fixedUseDrop(9, useFirst, 81))
+	if again := f.use(t, 1, useSource, 2); !reflect.DeepEqual(again, r) {
+		t.Fatalf("rerolled %+v", again)
+	}
+	f.stock(t, 1, map[int64]int64{useSource: 0, useFirst: 6, useLast: 2})
+}
+func TestWithItemuseRewardBagAndCommitFailuresUndoPartialCredits(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 1)
+	f.seed(t, useLast, 3)
+	useDrops(t, f, 0, fixedUseDrop(1, useFirst, 2), fixedUseDrop(2, useLast, 1))
+	// useFirst 已入账，第二项超堆叠。两项、箱子和回执一起回滚。
+	f.refuse(t, 1, useSource, 1, apperrors.ErrBagStackFull)
+	f.stock(t, 0, map[int64]int64{useSource: 1, useFirst: 0, useLast: 3})
+	useDrops(t, f, 0, fixedUseDrop(1, useFirst, 2))
+	f.journal.reject.Store(true)
+	f.refuse(t, 1, useSource, 1, useRejected)
+	f.stock(t, 0, map[int64]int64{useSource: 1, useFirst: 0, useLast: 3})
+	f.journal.reject.Store(false)
+	// 被拒提交从未承诺旧清单。重试可用新配置，已成功后才稳定回放。
+	useDrops(t, f, 0, fixedUseDrop(1, useFirst, 9))
+	r := f.use(t, 1, useSource, 1)
+	if len(r.Items) != 1 || r.Items[0].Count != 9 {
+		t.Fatalf("retry %+v", r)
+	}
+	f.stock(t, 1, map[int64]int64{useSource: 0, useFirst: 9, useLast: 3})
+}
+func TestWithItemuseRewardEmptyRollConsumesButMalformedGroupDoesNot(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 2)
+	bad := schema.RewardEntry{ID: 1, GroupID: useGroup, Kind: "weighted", ItemID: useFirst, Count: 1, Weight: 1}
+	useDrops(t, f, 0, bad)
+	f.refuse(t, 1, useSource, 2, apperrors.ErrItemUseRule)
+	f.stock(t, 0, map[int64]int64{useSource: 2, useFirst: 0})
+	useDrops(t, f, 0, schema.RewardEntry{ID: 1, GroupID: useGroup, Kind: "chance", ItemID: useFirst, Count: 1, ChanceBP: 0})
+	r := f.use(t, 1, useSource, 2)
+	if len(r.Items) != 0 || r.Left != 0 {
+		t.Fatalf("empty %+v", r)
+	}
+	f.use(t, 1, useSource, 2)
+	f.stock(t, 1, map[int64]int64{useSource: 0, useFirst: 0})
+}
+func TestWithItemuseRewardLimitsRollsKindsTotalAndBoxCycles(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 5)
+	useDrops(t, f, 0, fixedUseDrop(1, useFirst, 1))
+	f.refuse(t, 1, useSource, 5, apperrors.ErrItemUseLimit)
+	useDrops(t, f, 0, fixedUseDrop(1, useFirst, math.MaxInt64))
+	f.refuse(t, 1, useSource, 1, apperrors.ErrItemUseLimit)
+	useDrops(t, f, 0, fixedUseDrop(1, useFirst, 500000))
+	f.refuse(t, 1, useSource, 2, apperrors.ErrItemUseLimit)
+	var entries []schema.RewardEntry
+	for i := int64(1); i <= 33; i++ {
+		entries = append(entries, fixedUseDrop(i, 9100+i, 1))
+	}
+	useDrops(t, f, 0, entries...)
+	f.refuse(t, 1, useSource, 1, apperrors.ErrItemUseLimit)
+	useDrops(t, f, 0, fixedUseDrop(1, useBook, 3))
+	f.publish(t, map[string]any{"item_use": []schema.ItemUse{useRow(useSource, "reward.group", useGroup), useRow(useBook, "reward.group", useGroup)}})
+	f.refuse(t, 1, useSource, 1, apperrors.ErrItemUseRule)
+	f.stock(t, 0, map[int64]int64{useSource: 5, useFirst: 0, useBook: 0})
+}

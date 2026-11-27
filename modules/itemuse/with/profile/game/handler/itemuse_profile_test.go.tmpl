@@ -1,0 +1,96 @@
+package handler
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"sync"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/game/components/profile"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/event"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+var useLevelChecks sync.Map // 仅测试，按实体实例隔离。未挂观察器的工程场景不受影响。
+func init() {
+	useHasProfile = true
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "ProfileLevelUp", "itemuse.test.profile", func(p *usePlayer, e event.ProfileLevelUp) error {
+		if fn, ok := useLevelChecks.Load(p); ok {
+			return fn.(func(event.ProfileLevelUp) error)(e)
+		}
+		return nil
+	})
+}
+func useExpFixture(t *testing.T, books, per int64) *useFixture {
+	t.Helper()
+	old := profile.CurrentConfig()
+	profile.UseConfig(profile.Config{ExpPerLevel: 100})
+	t.Cleanup(func() { profile.UseConfig(old) })
+	f := newUseFixture(t, nil)
+	f.must(t, func(p *usePlayer) error { _, err := p.Enter().Init(1730000000000); return err })
+	f.seed(t, useBook, books)
+	f.publish(t, map[string]any{"item_use": []schema.ItemUse{useRow(useBook, "profile.exp", per)}})
+	return f
+}
+func expectUseProfile(t *testing.T, f *useFixture, level int32, exp int64) {
+	t.Helper()
+	f.must(t, func(p *usePlayer) error {
+		if p.Profile().Level() != level || p.Profile().Exp() != exp {
+			return fmt.Errorf("profile=%d/%d want %d/%d", p.Profile().Level(), p.Profile().Exp(), level, exp)
+		}
+		return nil
+	})
+}
+func TestWithItemuseProfileAppliesBatchAndReplaysAfterLevelChange(t *testing.T) {
+	f := useExpFixture(t, 3, 60)
+	r := f.use(t, 1, useBook, 2)
+	if r.Applied != 120 || r.Left != 1 || len(r.Items) != 0 || r.Effect != "profile.exp" {
+		t.Fatalf("exp receipt %+v", r)
+	}
+	expectUseProfile(t, f, 2, 20)
+	f.must(t, func(p *usePlayer) error { _, err := p.Profile().AddExp(91); return err })
+	f.publish(t, map[string]any{"item_use": []schema.ItemUse{}})
+	if got := f.use(t, 1, useBook, 2); !reflect.DeepEqual(got, r) {
+		t.Fatalf("replay %+v", got)
+	}
+	expectUseProfile(t, f, 3, 11)
+	f.stock(t, 1, map[int64]int64{useBook: 1})
+}
+func TestWithItemuseProfileListenerAndCommitFailureRestoreSourceAndLevel(t *testing.T) {
+	f := useExpFixture(t, 1, 130)
+	refusal := errors.New("itemuse test level listener refused")
+	useLevelChecks.Store(f.p, func(ev event.ProfileLevelUp) error {
+		if ev.From != 1 || ev.To != 2 {
+			return fmt.Errorf("wrong level event %+v", ev)
+		}
+		return refusal
+	})
+	t.Cleanup(func() { useLevelChecks.Delete(f.p) })
+	f.refuse(t, 1, useBook, 1, refusal)
+	f.stock(t, 0, map[int64]int64{useBook: 1})
+	expectUseProfile(t, f, 1, 0)
+	useLevelChecks.Delete(f.p)
+	f.journal.reject.Store(true)
+	f.refuse(t, 1, useBook, 1, useRejected)
+	f.stock(t, 0, map[int64]int64{useBook: 1})
+	expectUseProfile(t, f, 1, 0)
+	f.journal.reject.Store(false)
+	f.use(t, 1, useBook, 1)
+	expectUseProfile(t, f, 2, 30)
+	f.stock(t, 1, map[int64]int64{useBook: 0})
+}
+func TestWithItemuseProfileRejectsMultiplicationAndLevelOverflow(t *testing.T) {
+	f := useExpFixture(t, 2, math.MaxInt64)
+	f.refuse(t, 1, useBook, 2, apperrors.ErrItemUseLimit)
+	expectUseProfile(t, f, 1, 0)
+	f.publish(t, map[string]any{"item_use": []schema.ItemUse{useRow(useBook, "profile.exp", 100)}})
+	f.must(t, func(p *usePlayer) error { p.Dao().GetProfile().SetLevel(math.MaxInt32); return nil })
+	f.refuse(t, 1, useBook, 1, apperrors.ErrProfileExpOverflow)
+	expectUseProfile(t, f, math.MaxInt32, 0)
+	f.stock(t, 0, map[int64]int64{useBook: 2})
+}

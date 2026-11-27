@@ -1,0 +1,17 @@
+package view
+
+// ItemUse 只在持当前 Player guard 的可回滚 Nest 事务中调用；将错误原样交还 Nest。
+type ItemUse interface {
+	Use(sequence, itemID, count int64) (ItemUseResult, error)
+}
+type ItemUseHolder interface{ ItemUse() ItemUse }
+
+type ItemUseGrant struct{ ItemID, Count int64 }
+
+// Items 是按 ItemID 升序合并的一份成交快照，离开实体锁后可用。Left 不是现在的库存。
+type ItemUseResult struct {
+	Sequence, ItemID, Count, Left int64
+	Effect                        string
+	Applied                       int64
+	Items                         []ItemUseGrant
+}

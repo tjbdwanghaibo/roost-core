@@ -1,0 +1,13 @@
+package controllers
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleItemUse 只将操作路由给认证会话的 Player，提交成功之前不确认清单。
+//
+//roost:endpoint nest=ItemUse
+func (controller *Controller) HandleItemUse(ctx *playeraccess.Context, req *pb.ItemUseRequest) (*pb.ItemUseResponse, error) {
+	return controller.dispatchItemUse(ctx, req)
+}

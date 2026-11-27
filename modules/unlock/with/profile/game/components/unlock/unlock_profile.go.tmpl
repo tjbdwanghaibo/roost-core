@@ -1,0 +1,8 @@
+package unlock
+
+import "{{MODULE}}/game/view"
+
+// 只在两模块同装时提供等级来源。调用点已锁定目标 Player；不接收客户端等级，不监听升级、不自动追溯。
+func init() {
+	profileLevel = func(player view.PlayerEntity) int32 { return player.Profile().Level() }
+}

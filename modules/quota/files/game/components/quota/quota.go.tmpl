@@ -1,0 +1,161 @@
+package quota
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/view"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+//roost:component type={{ID:component:Quota}}
+const CompTypeQuota entity.ComponentType = {{ID:component:Quota}}
+
+const MaxRuleID = schema.MaxQuotaID
+
+var (
+	ErrRule   = errors.New("quota: missing, invalid or wrong-host rule")
+	ErrAmount = errors.New("quota: amount must be positive")
+	ErrLimit  = errors.New("quota: insufficient remaining quota")
+	ErrState  = errors.New("quota: incompatible persisted entry")
+	ErrHost   = errors.New("quota: this operation requires the locked host; consume also requires rollback=undo")
+)
+
+func init() { entity.RegisterComponentFactory(CompTypeQuota, NewComponent) }
+
+type owner interface {
+	entity.IThreadSafeEntity
+	view.QuotaHolder
+}
+
+type Component struct {
+	entity.ComponentBase
+	owner owner
+}
+
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(owner)
+	if !ok {
+		return nil, fmt.Errorf("quota: invalid owner %T", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (*Component) Name() string { return "quota" }
+
+// 周一在业务日期上取，不把有夏令时的一周当成固定的 168 小时。
+func window(period string) (int32, error) {
+	switch period {
+	case "lifetime":
+		return 0, nil
+	case "daily", "weekly":
+		day := clock.BusinessDay(fctx.Now())
+		if period == "daily" {
+			return int32(day), nil
+		}
+		y, m, d := day.Date()
+		date := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		back := (int(date.Weekday()) + 6) % 7
+		y, m, d = date.AddDate(0, 0, -back).Date()
+		return int32(y*10000 + int(m)*100 + d), nil
+	default:
+		return 0, ErrRule
+	}
+}
+
+type balance struct {
+	book      *db.QuotaBook
+	entry     *db.QuotaEntry
+	period    string
+	window    int32
+	used      int64
+	remaining int64
+}
+
+// inspect 仅投影本期；拒绝或只读时不创建/清零条目。回拨时沿用最后成功消费的期次。
+func (c *Component) inspect(id int64) (balance, error) {
+	if !fctx.InNestHandler() || !entity.CurrentGuardScope().Guard().GuardedEntity(c.owner) {
+		return balance{}, ErrHost
+	}
+	if id <= 0 || id > MaxRuleID {
+		return balance{}, ErrRule
+	}
+	r, ok := generated.QuotaByID(schema.QuotaID(id))
+	if !ok || r.Scope != c.owner.QuotaScope() || r.Limit < 0 {
+		return balance{}, ErrRule
+	}
+	w, err := window(r.Period)
+	if err != nil {
+		return balance{}, err
+	}
+	b := balance{book: c.owner.QuotaBook(), period: r.Period, window: w}
+	if entry, found := b.book.GetEntries(id); found {
+		if entry == nil || entry.GetPeriod() != r.Period || entry.GetUsed() <= 0 || (entry.GetWindow() == 0) != (r.Period == "lifetime") {
+			return balance{}, ErrState
+		}
+		b.entry = entry
+		if w <= entry.GetWindow() {
+			b.window, b.used = entry.GetWindow(), entry.GetUsed()
+		}
+	}
+	b.remaining = max(0, r.Limit-b.used)
+	return b, nil
+}
+
+func (c *Component) Remaining(id int64) (int64, error) {
+	b, err := c.inspect(id)
+	return b.remaining, err
+}
+
+func (c *Component) allowed(id, amount int64) (balance, error) {
+	if amount <= 0 {
+		return balance{}, ErrAmount
+	}
+	b, err := c.inspect(id)
+	if err != nil {
+		return balance{}, err
+	}
+	if amount > b.remaining {
+		return balance{}, ErrLimit
+	}
+	return b, nil
+}
+
+func (c *Component) Check(id, amount int64) error {
+	_, err := c.allowed(id, amount)
+	return err
+}
+
+// Consume 在同一宿主事务内重新检查，成功后其它业务立即可见。
+func (c *Component) Consume(id, amount int64) error {
+	tx := nest.CurrentRollbackTx()
+	if tx == nil || tx.Policy() != nest.RollbackUndo {
+		return ErrHost
+	}
+	b, err := c.allowed(id, amount)
+	if err != nil {
+		return err
+	}
+	used := b.used + amount // amount <= limit-used；不会出现有符号加法溢出。
+	if b.entry == nil {
+		e := &db.QuotaEntry{}
+		e.SetPeriod(b.period)
+		e.SetWindow(b.window)
+		e.SetUsed(used)
+		b.book.SetEntriesKey(id, e)
+	} else {
+		if b.entry.GetWindow() != b.window {
+			b.entry.SetWindow(b.window)
+		}
+		b.entry.SetUsed(used)
+	}
+	return nil
+}

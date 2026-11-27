@@ -1,0 +1,132 @@
+package unlock
+
+import (
+	"fmt"
+	"strings"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/event"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+//roost:component type={{ID:component:Unlock}}
+const CompTypeUnlock entity.ComponentType = {{ID:component:Unlock}}
+
+const MaxFeatureID int64 = 4096
+
+// profileLevel 只在包初始化时由可选桥提供；没有权威来源时整行不可用。
+var profileLevel func(view.PlayerEntity) int32
+
+func init() { entity.RegisterComponentFactory(CompTypeUnlock, NewComponent) }
+
+type Component struct {
+	entity.ComponentBase
+	owner view.PlayerEntity
+}
+
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	owner, ok := value.(view.PlayerEntity)
+	if !ok {
+		return nil, fmt.Errorf("unlock component: owner %T does not implement view.PlayerEntity", value)
+	}
+	return &Component{owner: owner}, nil
+}
+
+func (c *Component) Name() string { return "unlock" }
+
+// 按本条 Nest 消息固定的配置快照取定义。未知类型、缺必要参数或多填互斥参数都不能放行。
+func definition(id int64) (schema.Unlock, bool) {
+	if id < 1 || id > MaxFeatureID {
+		return schema.Unlock{}, false
+	}
+	row, ok := generated.UnlockByID(id)
+	if ok {
+		switch row.Source {
+		case "fact":
+			ok = row.Fact != "" && strings.TrimSpace(row.Fact) == row.Fact && row.MinLevel == 0
+		case "profile.level":
+			ok = profileLevel != nil && row.MinLevel > 0 && row.Fact == ""
+		default:
+			ok = false
+		}
+	}
+	return row, ok
+}
+
+// Record 读历史，不看当前配置；下架/暂停不等于记录不存在。返回值不能用作当前准入结论。
+func (c *Component) Record(id int64) (view.UnlockRecord, bool) {
+	if id >= 1 && id <= MaxFeatureID {
+		if stamp, ok := c.owner.Dao().GetUnlock().GetRecords(id); ok && stamp != nil {
+			return view.UnlockRecord{RecordedAt: stamp.GetRecordedAt(), OccurredAt: stamp.GetOccurredAt()}, true
+		}
+	}
+	return view.UnlockRecord{}, false
+}
+
+// Require 是无写准入检查；调用者在执行业务修改的同一事务中调用，不能先跨请求检查再相信旧结果。
+func (c *Component) Require(id int64) error {
+	row, ok := definition(id)
+	if !ok {
+		return apperrors.ErrUnlockUnknown
+	}
+	if !row.Enabled {
+		return apperrors.ErrUnlockDisabled
+	}
+	record, ok := c.Record(id)
+	if !ok || record.RecordedAt <= 0 || record.OccurredAt < 0 || record.OccurredAt > record.RecordedAt || (row.Source == "fact" && record.OccurredAt == 0) {
+		return apperrors.ErrUnlockLocked
+	}
+	return nil
+}
+
+// GrantFact 只给已经验证权威事实的服务器代码用。fact 是来源名，不是凭证；occurredAt 必须是
+// 来源提供的原始 Unix 毫秒，不以收到/重试时间代替。开关暂停准入而非暂停记录。
+func (c *Component) GrantFact(id int64, fact string, occurredAt int64) (bool, error) {
+	row, ok := definition(id)
+	if !ok {
+		return false, apperrors.ErrUnlockUnknown
+	}
+	now := fctx.NowMilli()
+	if row.Source != "fact" || row.Fact != fact || occurredAt <= 0 || occurredAt > now {
+		return false, apperrors.ErrUnlockProof
+	}
+	return c.recordFirst(id, occurredAt, now)
+}
+
+// CertifyCurrent 从本 Player 当前权威状态显式建档。只有 profile 桥支持等级；
+// 现在达到门槛不能证明何时第一次达到，所以 OccurredAt 留 0，不回填过去的等级历史。
+func (c *Component) CertifyCurrent(id int64) (bool, error) {
+	row, ok := definition(id)
+	if !ok {
+		return false, apperrors.ErrUnlockUnknown
+	}
+	if row.Source != "profile.level" || profileLevel(c.owner) < row.MinLevel {
+		return false, apperrors.ErrUnlockProof
+	}
+	return c.recordFirst(id, 0, fctx.NowMilli())
+}
+
+// 先写记录再发事件：同一事务嵌套/重复认证不会重发；调用方必须向外返回错误。
+func (c *Component) recordFirst(id, occurredAt, now int64) (bool, error) {
+	if now <= 0 {
+		return false, apperrors.ErrUnlockProof
+	}
+	state := c.owner.Dao().GetUnlock()
+	if _, exists := state.GetRecords(id); exists {
+		return false, nil
+	}
+	stamp := &db.UnlockStamp{}
+	stamp.SetRecordedAt(now)
+	stamp.SetOccurredAt(occurredAt)
+	state.SetRecordsKey(id, stamp)
+	if err := c.owner.Publish(event.FeatureUnlocked{FeatureID: id, OccurredAt: occurredAt, RecordedAt: now}); err != nil {
+		return false, err
+	}
+	return true, nil
+}

@@ -1,0 +1,23 @@
+package handler
+
+import (
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:nest rollback=undo
+func handlerItemUse(target view.IItemUseEntity, request *pb.ItemUseRequest) (*pb.ItemUseResponse, error) {
+	if request == nil {
+		return nil, apperrors.ErrItemUseRequest
+	}
+	r, err := target.ItemUse().Use(request.Sequence, request.ItemID, request.Count)
+	if err != nil {
+		return nil, err
+	}
+	response := &pb.ItemUseResponse{Sequence: r.Sequence, ItemID: r.ItemID, Count: r.Count, Left: r.Left, Effect: r.Effect, Applied: r.Applied}
+	for _, g := range r.Items {
+		response.Items = append(response.Items, &pb.ItemUseGrant{ItemID: g.ItemID, Count: g.Count})
+	}
+	return response, nil
+}

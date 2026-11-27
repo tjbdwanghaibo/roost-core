@@ -1,0 +1,17 @@
+package view
+
+// UnlockRecord 是值副本。OccurredAt 为 0 表示不知道外部条件首次发生于何时。
+type UnlockRecord struct {
+	RecordedAt int64
+	OccurredAt int64
+}
+
+// Unlock 只在当前 Player 的 Nest 事务内调用；授予方法返回是否新建，错误必须交还 Nest。
+type Unlock interface {
+	Record(featureID int64) (UnlockRecord, bool)
+	Require(featureID int64) error
+	GrantFact(featureID int64, fact string, occurredAt int64) (bool, error)
+	CertifyCurrent(featureID int64) (bool, error)
+}
+
+type UnlockHolder interface{ Unlock() Unlock }

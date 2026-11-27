@@ -1,0 +1,228 @@
+package reward_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata/rules"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/game/modules/reward"
+)
+
+// 这些 ID 只在临时表里有意义。生产工程的两张奖励表既不复制也不修改。
+const fixtureGroupID int64 = 83
+
+type rewardFixture struct {
+	dir   string
+	store *configdata.Store
+}
+
+func newRewardFixture(t *testing.T) rewardFixture {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	dir := t.TempDir()
+	const source = "../../../configs/data"
+	files, err := os.ReadDir(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		name := file.Name()
+		if file.IsDir() || filepath.Ext(name) != ".json" || name == "_manifest.json" || name == "reward_group.json" || name == "reward_entry.json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(source, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// 生成的注册器也登记联装的表：保留对象配置；其余表不带任何行，
+		// 以免工程自有表对生产奖励组的外键反过来约束本夹具。
+		if payload, err := rules.Document(data); err == nil && len(payload) > 0 && payload[0] == '[' {
+			data = []byte("[]")
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	return rewardFixture{dir: dir, store: configdata.NewStore(registry, dir)}
+}
+
+// 每一代同时改组与行。两个不同权重的候选行承诺同样的物品，所以走真实 Roll
+// 与服务端 RNG 也能逐项断言清单，不会因随机选中了“另一行”而偶发失败。
+func (f rewardFixture) publish(t *testing.T, draws, itemID, count int64) {
+	t.Helper()
+	groups := []schema.RewardGroup{{ID: fixtureGroupID, Draws: draws, Replacement: true}, {ID: 84}, {ID: 85}}
+	rows := []schema.RewardEntry{
+		{ID: 15, GroupID: fixtureGroupID, ItemID: itemID, Count: count, Weight: 5, Kind: "weighted"},
+		{ID: 11, GroupID: 84, ItemID: 3, Count: 47, Kind: "fixed"},
+		{ID: 13, GroupID: fixtureGroupID, ItemID: 7, Count: 1, ChanceBP: 10000, Kind: "chance"},
+		{ID: 12, GroupID: fixtureGroupID, ItemID: 7, Count: 2, Kind: "fixed"},
+		{ID: 14, GroupID: fixtureGroupID, ItemID: itemID, Count: count, Weight: 2, Kind: "weighted"},
+	}
+	for name, value := range map[string]any{"reward_group.json": groups, "reward_entry.json": rows} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.dir, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.store.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkRoll(t *testing.T, groupID int64, want ...reward.Item) {
+	t.Helper()
+	got, err := reward.Roll(groupID)
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("Roll(%d) = %+v, %v; want %+v and no error", groupID, got, err, want)
+	}
+}
+
+func TestRewardRollReadsOneConfigSnapshot(t *testing.T) {
+	f := newRewardFixture(t)
+	f.publish(t, 2, 11, 4)
+	old := []reward.Item{{ItemID: 7, Count: 3}, {ItemID: 11, Count: 8}}
+	checkRoll(t, fixtureGroupID, old...)
+	checkRoll(t, 84, reward.Item{ItemID: 3, Count: 47})
+	for _, id := range []int64{85, 86} { // 空组 / 未知组
+		if got, err := reward.Roll(id); got != nil || err == nil {
+			t.Fatalf("Roll(%d) = %+v, %v; want nil and an error", id, got, err)
+		}
+	}
+	func() {
+		_, release := fctx.NewContext() // 请求建立时绑定上一代快照。
+		defer release()
+		f.publish(t, 1, 19, 2)
+		checkRoll(t, fixtureGroupID, old...)
+	}()
+	checkRoll(t, fixtureGroupID, reward.Item{ItemID: 7, Count: 3}, reward.Item{ItemID: 19, Count: 2})
+}
+
+func TestRewardOrderSavesManifestWithoutShipping(t *testing.T) {
+	f := newRewardFixture(t)
+	f.publish(t, 2, 11, 4)
+	// 此消费端的订单只承诺物品，不发货。连同已有库存序列化，检查保存后重读的完整业务状态。
+	type order struct {
+		Status string
+		Items  []reward.Item
+	}
+	type shop struct {
+		Orders map[string]order
+		Stock  map[int64]int64
+	}
+	book := shop{Orders: map[string]order{}, Stock: map[int64]int64{7: 39, 11: 1}}
+	place := func(key string, groupID int64) error {
+		items, err := reward.Roll(groupID)
+		if err != nil {
+			return err
+		}
+		book.Orders[key] = order{Status: "awaiting_fulfillment", Items: items}
+		return nil
+	}
+	if err := place("bad", 86); err == nil || len(book.Orders) != 0 {
+		t.Fatalf("failed roll created an order: %+v, %v", book.Orders, err)
+	}
+	if err := place("invoice-42", fixtureGroupID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := json.Marshal(book)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publish(t, 1, 19, 2)
+	var restored shop
+	if err := json.Unmarshal(saved, &restored); err != nil {
+		t.Fatal(err)
+	}
+	invoice := restored.Orders["invoice-42"]
+	want := []reward.Item{{ItemID: 7, Count: 3}, {ItemID: 11, Count: 8}}
+	if len(restored.Orders) != 1 || invoice.Status != "awaiting_fulfillment" || !slices.Equal(invoice.Items, want) || !maps.Equal(restored.Stock, map[int64]int64{7: 39, 11: 1}) {
+		t.Fatalf("saved order must promise the original manifest without crediting stock: %+v", restored)
+	}
+}
+
+func TestRewardBoxReceiptRetryReusesFrozenManifest(t *testing.T) {
+	f := newRewardFixture(t)
+	f.publish(t, 2, 11, 4)
+	// 只演示宿主的消费语义：序列化字节充当已提交的业务记录，不是线上开箱、背包或事务服务。
+	type boxState struct {
+		Boxes    int
+		Stock    map[int64]int64
+		Receipts map[string][]reward.Item
+	}
+	committed, err := json.Marshal(boxState{Boxes: 2, Stock: map[int64]int64{}, Receipts: map[string][]reward.Item{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rolls int
+	open := func(key string) ([]reward.Item, error) {
+		var s boxState
+		if err := json.Unmarshal(committed, &s); err != nil {
+			return nil, err
+		}
+		if prior, ok := s.Receipts[key]; ok {
+			return prior, nil // 在扣箱、重新读表之前处理重试。
+		}
+		if s.Boxes == 0 {
+			return nil, errors.New("no box")
+		}
+		rolls++
+		items, err := reward.Roll(fixtureGroupID)
+		if err != nil {
+			return nil, err
+		}
+		s.Boxes--
+		for _, item := range items {
+			s.Stock[item.ItemID] += item.Count
+		}
+		s.Receipts[key] = items
+		next, err := json.Marshal(s)
+		if err != nil {
+			return nil, err
+		}
+		committed = next
+		return items, nil
+	}
+	old := []reward.Item{{ItemID: 7, Count: 3}, {ItemID: 11, Count: 8}}
+	first, err := open("open-41")
+	if err != nil || !slices.Equal(first, old) || rolls != 1 {
+		t.Fatalf("first open = %+v, %v; rolls=%d", first, err, rolls)
+	}
+	first[0].Count = 999 // 客户端可改自己的返回值，不得污染已经保存的回执。
+	f.publish(t, 1, 19, 2)
+	beforeRetry := string(committed)
+	retry, err := open("open-41")
+	if err != nil || !slices.Equal(retry, old) || rolls != 1 || string(committed) != beforeRetry {
+		t.Fatalf("retry changed the receipt, debited another box or re-rolled: %+v, %v, rolls=%d", retry, err, rolls)
+	}
+	fresh, err := open("open-42")
+	want := []reward.Item{{ItemID: 7, Count: 3}, {ItemID: 19, Count: 2}}
+	if err != nil || !slices.Equal(fresh, want) || rolls != 2 {
+		t.Fatalf("new business key = %+v, %v (rolls=%d); want %+v from latest config", fresh, err, rolls, want)
+	}
+	var final boxState
+	if err := json.Unmarshal(committed, &final); err != nil {
+		t.Fatal(err)
+	}
+	if final.Boxes != 0 || len(final.Receipts) != 2 || !maps.Equal(final.Stock, map[int64]int64{7: 6, 11: 8, 19: 2}) {
+		t.Fatalf("want exactly two business debits and credits: %+v", final)
+	}
+}

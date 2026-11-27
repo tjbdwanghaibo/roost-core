@@ -1,0 +1,16 @@
+package dbdef
+
+// 玩家自己读取已成功序号；新命令恰好加一，最近一次超时可重放。
+type ItemUseState struct {
+	Sequence int64 `store:"1"`
+}
+
+// 服务端私有的一条成交回执；不按件展开，不保留增长的历史账本。
+type ItemUseReceipt struct {
+	ItemID  int64           `store:"1"`
+	Count   int64           `store:"2"`
+	Left    int64           `store:"3"`
+	Effect  string          `store:"4"`
+	Applied int64           `store:"5"`
+	Grants  map[int64]int64 `store:"6"`
+}

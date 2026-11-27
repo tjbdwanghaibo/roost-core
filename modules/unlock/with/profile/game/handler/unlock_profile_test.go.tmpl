@@ -1,0 +1,109 @@
+package handler
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	"{{MODULE}}/configs/schema"
+	profile "{{MODULE}}/game/components/profile"
+	"{{MODULE}}/game/event"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func init() { unlockTestWithProfile = true }
+
+func unlockLevelFixture(t *testing.T) *unlockFixture {
+	t.Helper()
+	f := newUnlockFixture(t, nil, schema.Unlock{ID: 11, Source: "profile.level", MinLevel: 2, Enabled: true})
+	f.must(t, func(p *unlockPlayer) error { _, err := p.Enter().Init(f.now.Load()); return err })
+	return f
+}
+
+func TestWithUnlockProfileCertifiesObservationNotHistoricalFirstLevel(t *testing.T) {
+	f := unlockLevelFixture(t)
+	before := f.journal.attempts.Load()
+	f.must(t, func(p *unlockPlayer) error {
+		if _, err := p.Unlock().GrantFact(11, "profile.level", 1); !errors.Is(err, apperrors.ErrUnlockProof) {
+			return fmt.Errorf("substitute proof %v", err)
+		}
+		if _, err := p.Unlock().CertifyCurrent(11); !errors.Is(err, apperrors.ErrUnlockProof) {
+			return fmt.Errorf("insufficient level %v", err)
+		}
+		return nil
+	})
+	if f.journal.attempts.Load() != before {
+		t.Fatal("low level denial wrote state")
+	}
+	f.must(t, func(p *unlockPlayer) error { _, err := p.Profile().AddExp(profile.ExpPerLevel()); return err })
+	f.now.Add(7 * 86400000)
+	now := f.now.Load()
+	unlockTestObservers.Store(f.p, func(p *unlockPlayer, ev event.FeatureUnlocked) error {
+		if ev != (event.FeatureUnlocked{FeatureID: 11, RecordedAt: now}) {
+			return fmt.Errorf("invented historical event time: %+v", ev)
+		}
+		return nil
+	})
+	f.must(t, func(p *unlockPlayer) error {
+		if err := p.Unlock().Require(11); !errors.Is(err, apperrors.ErrUnlockLocked) {
+			return fmt.Errorf("implicit certification: %v", err)
+		}
+		if first, err := p.Unlock().CertifyCurrent(11); !first || err != nil {
+			return fmt.Errorf("certify: %v %v", first, err)
+		}
+		r, ok := p.Unlock().Record(11)
+		if !ok || r.RecordedAt != now || r.OccurredAt != 0 {
+			return fmt.Errorf("wrong first record: %+v", r)
+		}
+		return p.Unlock().Require(11)
+	})
+	before = f.journal.attempts.Load()
+	f.now.Add(1000)
+	f.must(t, func(p *unlockPlayer) error {
+		if first, err := p.Unlock().CertifyCurrent(11); first || err != nil {
+			return fmt.Errorf("duplicate observation %v %v", first, err)
+		}
+		r, _ := p.Unlock().Record(11)
+		if r.RecordedAt != now || r.OccurredAt != 0 {
+			return fmt.Errorf("replaced observation %+v", r)
+		}
+		return nil
+	})
+	if f.journal.attempts.Load() != before {
+		t.Fatal("duplicate observation wrote state")
+	}
+}
+
+func TestWithUnlockProfileUpgradeAndCertificationRollBackTogether(t *testing.T) {
+	f := unlockLevelFixture(t)
+	upgrade := func(p *unlockPlayer) error {
+		if _, err := p.Profile().AddExp(profile.ExpPerLevel()); err != nil {
+			return err
+		}
+		if first, err := p.Unlock().CertifyCurrent(11); !first || err != nil {
+			return fmt.Errorf("same-tx current level not used: %v %v", first, err)
+		}
+		return p.Unlock().Require(11)
+	}
+	f.journal.reject.Store(true)
+	if err := f.run(upgrade); err == nil {
+		t.Fatal("commit rejection swallowed")
+	}
+	f.journal.reject.Store(false)
+	f.must(t, func(p *unlockPlayer) error {
+		if p.Profile().Level() != 1 || p.Profile().Exp() != 0 {
+			return errors.New("failed upgrade survived")
+		}
+		if _, ok := p.Unlock().Record(11); ok {
+			return errors.New("failed certification survived")
+		}
+		return nil
+	})
+	f.must(t, upgrade)
+	f.must(t, func(p *unlockPlayer) error {
+		if p.Profile().Level() != 2 {
+			return errors.New("wrong committed level")
+		}
+		return p.Unlock().Require(11)
+	})
+}

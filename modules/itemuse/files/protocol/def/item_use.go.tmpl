@@ -1,0 +1,31 @@
+//go:build protocoldef
+
+package protocoldef
+
+// 身份取认证会话；用法、奖励组、经验、目标和随机数均不由客户端提供。
+type ItemUseRequest struct {
+	Sequence int64 `pb:"1"`
+	ItemID   int64 `pb:"2"`
+	Count    int64 `pb:"3"`
+}
+type ItemUseGrant struct {
+	ItemID int64 `pb:"1"`
+	Count  int64 `pb:"2"`
+}
+type ItemUseResponse struct {
+	Code     int32           `pb:"1"`
+	Reason   string          `pb:"2"`
+	Sequence int64           `pb:"3"`
+	ItemID   int64           `pb:"4"`
+	Count    int64           `pb:"5"`
+	Left     int64           `pb:"6"`
+	Effect   string          `pb:"7"`
+	Applied  int64           `pb:"8"`
+	Items    []*ItemUseGrant `pb:"9"`
+}
+
+//roost:protocol group=game handler=itemuse
+type ItemUseProtocol interface {
+	//roost:msg id={{ID:protocol:ItemUse}}
+	ItemUse(ItemUseRequest) ItemUseResponse
+}

@@ -1,0 +1,47 @@
+// Package reward 只解析当前服务端配置的奖励组，不发奖、不持有玩家或随机数状态。
+package reward
+
+import (
+	"crypto/rand"
+	"fmt"
+	"math/big"
+	"strconv"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+
+	generated "{{MODULE}}/configs/generated"
+)
+
+// Item 是同一物品的合计数量。
+type Item struct {
+	ItemID, Count int64
+}
+
+// Roll 从同一配置快照解析一次奖励，按 ItemID 升序返回；调用方决定如何发放或防重。
+// GroupID 二级索引只复制本组的 k 行，不扫描其他组。每组耗时 O(k log k + draws*k)，空间 O(k)。
+func Roll(groupID int64) ([]Item, error) {
+	snap := configdata.ActiveSnapshot()
+	groups, ok := generated.RewardGroupTableFrom(snap)
+	if !ok {
+		return nil, fmt.Errorf("reward: missing reward_group table")
+	}
+	group, ok := groups.Get(groupID)
+	if !ok {
+		return nil, fmt.Errorf("reward: unknown group %d", groupID)
+	}
+	entries, ok := generated.RewardEntryTableFrom(snap)
+	if !ok {
+		return nil, fmt.Errorf("reward: missing reward_entry table")
+	}
+	rows := entries.GetByIndex("GroupID", strconv.FormatInt(groupID, 10))
+	return resolve(group, rows, serverRand)
+}
+
+// serverRand 在 [0,n) 内均匀采样，无取模偏差。调用者已校验 n > 0。
+func serverRand(n int64) (int64, error) {
+	v, err := rand.Int(rand.Reader, big.NewInt(n))
+	if err != nil {
+		return 0, err
+	}
+	return v.Int64(), nil
+}

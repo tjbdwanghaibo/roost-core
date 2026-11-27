@@ -1,0 +1,173 @@
+package reward
+
+import (
+	"cmp"
+	"fmt"
+	"math"
+	"slices"
+
+	"{{MODULE}}/configs/schema"
+)
+
+const (
+	maxEntries = 256
+	maxDraws   = 64
+	basis      = 10_000
+)
+
+// resolve 不改输入。先完整校验，再按行 ID 判定 chance，最后按同一顺序遍历权重区间。
+// rng(n) 的合法返回值为 [0,n)；任何错误都不返回已算出的部分奖励。
+func resolve(group schema.RewardGroup, entries []schema.RewardEntry, rng func(int64) (int64, error)) ([]Item, error) {
+	if group.ID <= 0 || group.Draws < 0 || group.Draws > maxDraws {
+		return nil, fmt.Errorf("reward: invalid group id=%d draws=%d", group.ID, group.Draws)
+	}
+	if len(entries) == 0 || len(entries) > maxEntries {
+		return nil, fmt.Errorf("reward group %d: need 1..%d entries, got %d", group.ID, maxEntries, len(entries))
+	}
+	rows := slices.Clone(entries)
+	slices.SortFunc(rows, func(a, b schema.RewardEntry) int { return cmp.Compare(a.ID, b.ID) })
+	pool, total, err := validateRows(group, rows)
+	if err != nil {
+		return nil, fmt.Errorf("reward group %d: %w", group.ID, err)
+	}
+
+	counts := make(map[int64]int64)
+	for _, row := range rows {
+		switch row.Kind {
+		case "weighted":
+			continue
+		case "chance":
+			if row.ChanceBP == 0 {
+				continue
+			}
+			if row.ChanceBP < basis {
+				x, err := sample(rng, basis)
+				if err != nil {
+					return nil, fmt.Errorf("reward group %d entry %d: %w", group.ID, row.ID, err)
+				}
+				if x >= row.ChanceBP {
+					continue
+				}
+			}
+		}
+		counts[row.ItemID] += row.Count
+	}
+	for d := int64(0); d < group.Draws; d++ {
+		x, err := sample(rng, total)
+		if err != nil {
+			return nil, fmt.Errorf("reward group %d draw %d: %w", group.ID, d+1, err)
+		}
+		for i, row := range pool {
+			if x < row.Weight {
+				counts[row.ItemID] += row.Count
+				if !group.Replacement {
+					total -= row.Weight
+					pool = slices.Delete(pool, i, i+1) // 只移除此行，余下的区间仍按 ID 排列。
+				}
+				break
+			}
+			x -= row.Weight
+		}
+	}
+
+	items := make([]Item, 0, len(counts))
+	for id, n := range counts {
+		items = append(items, Item{ItemID: id, Count: n})
+	}
+	slices.SortFunc(items, func(a, b Item) int { return cmp.Compare(a.ItemID, b.ItemID) })
+	return items, nil
+}
+
+func sample(rng func(int64) (int64, error), n int64) (int64, error) {
+	if rng == nil {
+		return 0, fmt.Errorf("missing random source")
+	}
+	x, err := rng(n)
+	if err != nil {
+		return 0, err
+	}
+	if x < 0 || x >= n {
+		return 0, fmt.Errorf("random value %d outside [0,%d)", x, n)
+	}
+	return x, nil
+}
+
+// validateRows 接受按 ID 排好的行。通过后，任意可达的随机结果都能安全累加到 int64。
+func validateRows(group schema.RewardGroup, rows []schema.RewardEntry) ([]schema.RewardEntry, int64, error) {
+	var pool []schema.RewardEntry
+	var total int64
+	upper := make(map[int64]int64)
+	for i, row := range rows {
+		if row.ID <= 0 || row.GroupID != group.ID || row.ItemID <= 0 || row.Count <= 0 {
+			return nil, 0, fmt.Errorf("invalid entry id=%d group=%d item=%d count=%d", row.ID, row.GroupID, row.ItemID, row.Count)
+		}
+		if i > 0 && row.ID == rows[i-1].ID {
+			return nil, 0, fmt.Errorf("duplicate entry id %d", row.ID)
+		}
+		switch row.Kind {
+		case "fixed":
+			if row.ChanceBP != 0 || row.Weight != 0 {
+				return nil, 0, fmt.Errorf("fixed entry %d needs zero chance and weight", row.ID)
+			}
+		case "chance":
+			if row.ChanceBP < 0 || row.ChanceBP > basis || row.Weight != 0 {
+				return nil, 0, fmt.Errorf("invalid chance or weight on chance entry %d", row.ID)
+			}
+			if row.ChanceBP == 0 {
+				continue // 不可能产生此行，不占数量上界。
+			}
+		case "weighted":
+			if row.ChanceBP != 0 || row.Weight <= 0 {
+				return nil, 0, fmt.Errorf("invalid chance or weight on weighted entry %d", row.ID)
+			}
+			if row.Weight > math.MaxInt64-total {
+				return nil, 0, fmt.Errorf("weight sum overflows at entry %d", row.ID)
+			}
+			total += row.Weight
+			pool = append(pool, row)
+			continue
+		default:
+			return nil, 0, fmt.Errorf("unknown kind %q on entry %d", row.Kind, row.ID)
+		}
+		if row.Count > math.MaxInt64-upper[row.ItemID] {
+			return nil, 0, fmt.Errorf("possible quantity overflows for item %d", row.ItemID)
+		}
+		upper[row.ItemID] += row.Count
+	}
+	if (group.Draws == 0) != (len(pool) == 0) || (!group.Replacement && group.Draws > int64(len(pool))) {
+		return nil, 0, fmt.Errorf("cannot draw %d times from %d weighted entries (replacement=%t)", group.Draws, len(pool), group.Replacement)
+	}
+	if err := checkWeightedCounts(group, pool, upper); err != nil {
+		return nil, 0, err
+	}
+	return pool, total, nil
+}
+
+// 每个物品单独求可达上界：有放回取最大 Count × Draws；无放回取前 Draws 个最大 Count。
+// 不把互斥的行全加，也不把不同物品相加。按数量排序的是副本，不改变真正的抽取区间。
+func checkWeightedCounts(group schema.RewardGroup, pool []schema.RewardEntry, upper map[int64]int64) error {
+	byCount := slices.Clone(pool)
+	slices.SortFunc(byCount, func(a, b schema.RewardEntry) int {
+		if a.Count != b.Count {
+			return cmp.Compare(b.Count, a.Count)
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
+	used := make(map[int64]int64)
+	for _, row := range byCount {
+		remaining := group.Draws - used[row.ItemID]
+		if remaining == 0 {
+			continue
+		}
+		n := int64(1)
+		if group.Replacement {
+			n = remaining
+		}
+		if row.Count > (math.MaxInt64-upper[row.ItemID])/n {
+			return fmt.Errorf("possible quantity overflows for item %d", row.ItemID)
+		}
+		upper[row.ItemID] += n * row.Count
+		used[row.ItemID] += n
+	}
+	return nil
+}

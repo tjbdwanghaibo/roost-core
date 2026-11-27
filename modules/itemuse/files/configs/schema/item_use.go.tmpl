@@ -1,0 +1,12 @@
+package schema
+
+// ItemUse 的 ID 是可使用的背包物品号；Effect 只查服务端本地注册表，Arg 的含义由效果定义。
+// 不引用可选模块的表。未知物品、未装桥和非法用法拒绝新请求，不退化为纯删除。
+//
+//roost:table name=item_use key=ID
+type ItemUse struct {
+	ID       int64  `csv:"id" json:"id" required:"true" unique:"true" min:"1"`
+	Effect   string `csv:"effect" json:"effect" required:"true"`
+	Arg      int64  `csv:"arg" json:"arg" min:"1"`
+	MaxBatch int64  `csv:"max_batch" json:"max_batch" min:"1" max:"32"`
+}

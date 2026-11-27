@@ -1,0 +1,35 @@
+name: itemuse
+summary: 同一 Player 事务按服务端道具用法表扣耗、应用效果和记录单调序号回执；可选开箱和经验书
+requires: [bag]
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, config, errcode]
+access:
+  transport: tcp
+  self_sync: true
+entity: Player
+state:
+  - {field: Itemuse, type: ItemUseState, store: itemuse, dao: 'persist,sync', comment: 本人同步的最后成功道具操作序号；不加入其他玩家可见视图。}
+  - {field: ItemuseReceipt, type: ItemUseReceipt, store: itemuse_receipt, dao: nosync, comment: 服务端保留最后成功请求的参数和实际结果。}
+component: ItemUse
+component_package: game/components/itemuse
+protocols: [ItemUse]
+errcodes: [itemuse_guard, itemuse_sequence, itemuse_conflict, itemuse_request, itemuse_rule, itemuse_limit]
+verify:
+  packages: [./game/handler]
+  run: ^TestItemUse
+  pass: 8
+with:
+  reward:
+    summary: 每箱独立调用 reward.Roll 并在原事务把有界合计清单入包
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithItemuseReward
+      pass: 4
+  profile:
+    summary: 同一 Player 调 Profile.AddExp；升级与监听共用扣书事务
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithItemuseProfile
+      pass: 3

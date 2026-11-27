@@ -1,0 +1,18 @@
+package itemuse
+
+import (
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func init() { RegisterEffect("profile.exp", useExp) }
+
+// 正值与批量已由 Use 校验；先除法判整次发放上限，再乘。AddExp 负责等级、存量溢出及升级监听。
+func useExp(p view.PlayerEntity, perItem, count int64, _ *Output) (int64, error) {
+	if perItem > MaxEffectUnits/count {
+		return 0, apperrors.ErrItemUseLimit
+	}
+	amount := perItem * count
+	_, err := p.Profile().AddExp(amount)
+	return amount, err
+}

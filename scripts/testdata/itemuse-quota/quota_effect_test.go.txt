@@ -1,0 +1,73 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"{{MODULE}}/game/components/itemuse"
+	"{{MODULE}}/game/view"
+)
+
+// 这段仅在仓库验收的消费工程内。quota 与 itemuse 在生产模板中不互相依赖；
+// 由项目的本地效果在 Use 的首次受理路径扣玩家额度，而不是在进 Use 前单独先扣一次。
+func init() {
+	itemuse.RegisterEffect("integration.budgeted", func(p view.PlayerEntity, key, count int64, out *itemuse.Output) (int64, error) {
+		if err := p.Quota().Consume(key, count); err != nil {
+			return 0, err
+		}
+		return count, out.Grant(1002, count)
+	})
+}
+
+func TestGeneratedItemUseAndOtherBusinessSharePlayerQuota(t *testing.T) {
+	p := quotaPlayer(t, 371, nil)
+	f := newQuotaFixture(t, quotaHosts{p.ID(): p})
+	if err := os.WriteFile(filepath.Join(f.dir, "item_use.json"), []byte(`[{"id":1001,"effect":"integration.budgeted","arg":1,"max_batch":2}]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.must(t, p.ID(), func(view.QuotaHolder) error {
+		_, err := p.Bag().Add(1001, 4)
+		return err
+	})
+	use := func(seq, count int64) error {
+		return f.run(p.ID(), func(view.QuotaHolder) error {
+			_, err := p.ItemUse().Use(seq, 1001, count)
+			return err
+		})
+	}
+	check := func(stock, gained, left int64) {
+		t.Helper()
+		f.must(t, p.ID(), func(h view.QuotaHolder) error {
+			q, err := h.Quota().Remaining(1)
+			if err != nil || q != left || p.Bag().Count(1001) != stock || p.Bag().Count(1002) != gained {
+				return fmt.Errorf("stock=%d/%d grants=%d/%d remaining=%d/%d err=%v", p.Bag().Count(1001), stock, p.Bag().Count(1002), gained, q, left, err)
+			}
+			return nil
+		})
+	}
+	if err := use(1, 2); err != nil {
+		t.Fatal(err)
+	}
+	check(2, 2, 3)
+	f.must(t, p.ID(), func(h view.QuotaHolder) error { return h.Quota().Consume(1, 1) })
+	if err := use(1, 2); err != nil {
+		t.Fatal(err)
+	}
+	check(2, 2, 2) // 重放已提交的序号，不再次调用效果，不重扣配额。
+	f.journal.reject.Store(true)
+	if err := use(2, 2); err == nil {
+		t.Fatal("expected commit rejection")
+	}
+	f.journal.reject.Store(false)
+	check(2, 2, 2) // 回滚覆盖已扣原物、已发新物、已消耗配额和未提交的回执。
+	if err := use(2, 2); err != nil {
+		t.Fatal(err)
+	}
+	check(0, 4, 0)
+}

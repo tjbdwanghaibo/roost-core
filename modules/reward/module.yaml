@@ -1,0 +1,10 @@
+name: reward
+summary: 服务端奖励组解析：固定项、独立概率项及加权有放回或无放回抽取，返回合并的物品清单；不发货、不操作玩家资产
+requires: []
+needs:
+  mods: [configdata]
+  features: [config]
+verify:
+  packages: [./game/modules/reward]
+  run: ^TestReward
+  pass: 9

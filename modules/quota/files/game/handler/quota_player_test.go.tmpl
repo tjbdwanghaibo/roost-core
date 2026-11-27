@@ -1,0 +1,255 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"testing"
+	"time"
+
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/components/quota"
+	"{{MODULE}}/game/view"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+func quotaConsume(key, amount int64) quotaBody {
+	return func(h view.QuotaHolder) error { return h.Quota().Consume(key, amount) }
+}
+
+func TestQuotaPlayerSharedBudgetAndOwners(t *testing.T) {
+	a, b := quotaPlayer(t, 17901, nil), quotaPlayer(t, 17902, nil)
+	f := newQuotaFixture(t, quotaHosts{a.ID(): a, b.ID(): b})
+	shop, promo := func(h view.QuotaHolder) error { return h.Quota().Consume(1, 2) }, func(h view.QuotaHolder) error { return h.Quota().Consume(1, 1) }
+	f.must(t, a.ID(), func(h view.QuotaHolder) error {
+		if err := shop(h); err != nil {
+			return err
+		}
+		if err := promo(h); err != nil {
+			return err
+		}
+		if err := b.Quota().Consume(1, 1); !errors.Is(err, quota.ErrHost) {
+			return fmt.Errorf("unlocked other owner: %v", err)
+		}
+		return nil
+	})
+	f.left(t, a.ID(), 1, 2)
+	f.left(t, b.ID(), 1, 5)
+	// 只剩一次两点的消费：两个请求直接消费，不依赖先前 Check 的结果。
+	result := make(chan error, 2)
+	for range 2 {
+		go func() { result <- f.run(a.ID(), quotaConsume(1, 2)) }()
+	}
+	var ok, denied int
+	for range 2 {
+		err := <-result
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, quota.ErrLimit):
+			denied++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if ok != 1 || denied != 1 {
+		t.Fatalf("accepted/denied=%d/%d", ok, denied)
+	}
+	f.left(t, a.ID(), 1, 0)
+	f.calls(t, 2)
+}
+
+func TestQuotaPlayerRejectionsAndBounds(t *testing.T) {
+	p := quotaPlayer(t, 17901, nil)
+	f := newQuotaFixture(t, quotaHosts{p.ID(): p})
+	if err := p.Quota().Consume(1, 1); !errors.Is(err, quota.ErrHost) {
+		t.Fatalf("outside Nest: %v", err)
+	}
+	if _, err := f.client.Request(context.Background(), quotaNoUndo, p.ID(), nest.NewParams(quotaConsume(1, 1))); !errors.Is(err, quota.ErrHost) {
+		t.Fatalf("locked but rollback=none: %v", err)
+	}
+	f.must(t, p.ID(), func(h view.QuotaHolder) error {
+		for _, tc := range []struct {
+			k, n int64
+			err  error
+		}{{0, 1, quota.ErrRule}, {-1, 1, quota.ErrRule}, {quota.MaxRuleID + 1, 1, quota.ErrRule}, {3, 1, quota.ErrRule}, {2, 1, quota.ErrRule}, {1, 0, quota.ErrAmount}, {1, -1, quota.ErrAmount}, {1, math.MinInt64, quota.ErrAmount}, {1, math.MaxInt64, quota.ErrLimit}} {
+			for _, call := range []func(int64, int64) error{h.Quota().Check, h.Quota().Consume} {
+				if err := call(tc.k, tc.n); !errors.Is(err, tc.err) {
+					return fmt.Errorf("%d,%d err=%v want %v", tc.k, tc.n, err, tc.err)
+				}
+			}
+		}
+		if h.QuotaBook().EntriesLen() != 0 {
+			return errors.New("refusals created entries")
+		}
+		return h.Quota().Check(1, 5)
+	})
+	f.calls(t, 0)
+	configdata.SetDefaultStore(nil)
+	fctx.SetRuntimeConfig(nil)
+	if err := f.run(p.ID(), quotaConsume(1, 1)); !errors.Is(err, quota.ErrRule) {
+		t.Fatalf("missing config: %v", err)
+	}
+	f.calls(t, 0)
+	f.rows(t, quotaRow(quota.MaxRuleID, "player", "lifetime", math.MaxInt64))
+	f.must(t, p.ID(), quotaConsume(quota.MaxRuleID, math.MaxInt64-1))
+	if err := f.run(p.ID(), quotaConsume(quota.MaxRuleID, 2)); !errors.Is(err, quota.ErrLimit) {
+		t.Fatal(err)
+	}
+	f.left(t, p.ID(), quota.MaxRuleID, 1)
+	f.must(t, p.ID(), quotaConsume(quota.MaxRuleID, 1))
+	f.left(t, p.ID(), quota.MaxRuleID, 0)
+	f.calls(t, 2)
+}
+
+func TestQuotaPlayerCalendarAndRollbackClock(t *testing.T) {
+	p := quotaPlayer(t, 17901, nil)
+	f := newQuotaFixture(t, quotaHosts{p.ID(): p})
+	f.rows(t, quotaRow(1, "player", "daily", 5), quotaRow(2, "player", "weekly", 5), quotaRow(3, "player", "lifetime", 5))
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cal, err := clock.NewCalendar(loc, 5*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := clock.ProcessCalendar()
+	clock.SetCalendar(cal)
+	t.Cleanup(func() { clock.SetCalendar(old) })
+	// 跨美国春季夏令时：周日 05:00 只换日，周一 05:00（09:00 UTC）才换周。
+	sun := time.Date(2025, 3, 9, 5, 0, 0, 0, loc)
+	mon := sun.AddDate(0, 0, 1)
+	f.now.Store(sun.UnixMilli() - 1)
+	f.must(t, p.ID(), func(h view.QuotaHolder) error {
+		for _, key := range []int64{1, 2, 3} {
+			if err := h.Quota().Consume(key, 3); err != nil {
+				return err
+			}
+		}
+		f.now.Store(sun.UnixMilli())
+		if n, _ := h.Quota().Remaining(1); n != 2 {
+			return fmt.Errorf("time changed within message: %d", n)
+		}
+		return nil
+	})
+	f.left(t, p.ID(), 1, 5)
+	f.left(t, p.ID(), 2, 2)
+	f.left(t, p.ID(), 3, 2)
+	f.calls(t, 1)
+	f.now.Store(mon.UnixMilli() - 1)
+	f.left(t, p.ID(), 2, 2)
+	f.now.Add(1)
+	f.left(t, p.ID(), 2, 5)
+	f.calls(t, 1)
+	f.must(t, p.ID(), func(h view.QuotaHolder) error {
+		for _, key := range []int64{1, 2} {
+			if err := h.Quota().Consume(key, 4); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	f.now.Store(sun.UnixMilli() - 1)
+	f.left(t, p.ID(), 1, 1)
+	f.left(t, p.ID(), 2, 1)
+	f.must(t, p.ID(), quotaConsume(2, 1))
+	f.now.Store(mon.UnixMilli())
+	f.left(t, p.ID(), 1, 1)
+	f.left(t, p.ID(), 2, 0)
+	f.left(t, p.ID(), 3, 2)
+	f.calls(t, 3)
+}
+
+func TestQuotaPlayerHotReloadAndValidation(t *testing.T) {
+	p := quotaPlayer(t, 17901, nil)
+	f := newQuotaFixture(t, quotaHosts{p.ID(): p})
+	f.must(t, p.ID(), quotaConsume(1, 4))
+	f.rows(t, quotaRow(1, "player", "daily", 2))
+	f.left(t, p.ID(), 1, 0)
+	if err := f.run(p.ID(), quotaConsume(1, 1)); !errors.Is(err, quota.ErrLimit) {
+		t.Fatal(err)
+	}
+	f.rows(t)
+	if err := f.run(p.ID(), quotaConsume(1, 1)); !errors.Is(err, quota.ErrRule) {
+		t.Fatal(err)
+	}
+	f.rows(t, quotaRow(1, "player", "weekly", 9))
+	if err := f.run(p.ID(), quotaConsume(1, 1)); !errors.Is(err, quota.ErrState) {
+		t.Fatal(err)
+	}
+	f.rows(t, quotaRow(1, "player", "daily", 9))
+	f.left(t, p.ID(), 1, 5)
+	for _, raw := range []string{
+		`[{"id":4097,"scope":"player","period":"daily","limit":1}]`,
+		`[{"id":0,"scope":"player","period":"daily","limit":1}]`,
+		`[{"id":1,"scope":"team","period":"daily","limit":1}]`,
+		`[{"id":1,"scope":"player","period":"hourly","limit":1}]`,
+		`[{"id":1,"scope":"player","period":"daily","limit":-1}]`,
+		`[{"id":1,"scope":"player","period":"daily","limit":9223372036854775808}]`,
+		`[{"id":1,"scope":"player","period":"daily","limit":1},{"id":1,"scope":"player","period":"weekly","limit":1}]`,
+	} {
+		if err := f.reload([]byte(raw)); err == nil {
+			t.Fatalf("invalid config loaded: %s", raw)
+		}
+		f.left(t, p.ID(), 1, 5)
+	}
+	f.calls(t, 1)
+}
+
+func TestQuotaPlayerAtomicRollback(t *testing.T) {
+	p := quotaPlayer(t, 17901, nil)
+	f := newQuotaFixture(t, quotaHosts{p.ID(): p})
+	abort := errors.New("other business failed")
+	consumeAndAbort := func(h view.QuotaHolder) error {
+		if err := h.Quota().Consume(1, 3); err != nil {
+			return err
+		}
+		return abort
+	}
+	if err := f.run(p.ID(), consumeAndAbort); !errors.Is(err, abort) {
+		t.Fatal(err)
+	}
+	f.left(t, p.ID(), 1, 5)
+	f.calls(t, 0)
+	f.must(t, p.ID(), quotaConsume(1, 3))
+	f.now.Add(7 * 86400000)
+	f.journal.reject.Store(true)
+	if err := f.run(p.ID(), quotaConsume(1, 1)); err == nil {
+		t.Fatal("failed commit reported success")
+	}
+	f.journal.reject.Store(false)
+	f.now.Add(-7 * 86400000)
+	f.left(t, p.ID(), 1, 2)
+	f.calls(t, 2)
+}
+
+func TestQuotaPlayerRestoresPersistentBook(t *testing.T) {
+	p := quotaPlayer(t, 17901, nil)
+	hosts := quotaHosts{p.ID(): p}
+	f := newQuotaFixture(t, hosts)
+	f.must(t, p.ID(), quotaConsume(1, 4))
+	record := f.journal.last.Load()
+	if record == nil || len(record.Mutations) != 1 {
+		t.Fatal("missing player commit")
+	}
+	m := record.Mutations[0]
+	if m.Kind != dataengine.MutationPut || m.Key.Resource != db.PlayerDaoCollection || m.Key.ID != p.ID() {
+		t.Fatalf("unexpected write: %+v", m.Key)
+	}
+	dao := db.NewPlayerDao()
+	if err := dao.RestorePersisted(m.Data, m.Schema, m.NextVersion); err != nil {
+		t.Fatal(err)
+	}
+	restored := quotaPlayer(t, 17901, dao)
+	hosts[p.ID()] = restored
+	f.left(t, restored.ID(), 1, 1)
+	f.must(t, restored.ID(), quotaConsume(1, 1))
+	f.left(t, restored.ID(), 1, 0)
+}

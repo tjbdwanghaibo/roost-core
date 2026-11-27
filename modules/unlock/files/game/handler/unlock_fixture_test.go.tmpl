@@ -1,0 +1,198 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/event"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+type unlockPlayer = playerentity.Player
+type unlockBody = func(*unlockPlayer) error
+
+var unlockTestHandler = nest.NewHandlerName("unlockModuleTestLocalTransaction")
+var unlockTestObservers sync.Map // 仅测试包使用，按实体实例隔离，不在产品组件内留开关。
+var unlockTestWithProfile bool
+
+func init() {
+	entity.RegisterEventListener(playerentity.EntityKindPlayer, "FeatureUnlocked", "unlock.test.observer", func(p *unlockPlayer, ev event.FeatureUnlocked) error {
+		if observer, ok := unlockTestObservers.Load(p); ok {
+			return observer.(func(*unlockPlayer, event.FeatureUnlocked) error)(p, ev)
+		}
+		return nil
+	})
+}
+
+type unlockGetter struct{ p *unlockPlayer }
+
+func (g unlockGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if g.p.ID() == id {
+		return g.p, nil
+	}
+	return nil, fmt.Errorf("unknown test entity %d", id)
+}
+func (g unlockGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		p, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = p
+	}
+	return out, nil
+}
+
+type unlockCommitter struct {
+	attempts atomic.Int64
+	commits  atomic.Int64
+	reject   atomic.Bool
+	last     atomic.Pointer[dataengine.CommitRecord]
+}
+
+func (c *unlockCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.attempts.Add(1)
+	if c.reject.Load() {
+		return errors.New("unlock test commit rejected")
+	}
+	copy := dataengine.CloneCommitRecord(record)
+	c.last.Store(&copy)
+	c.commits.Add(1)
+	return nil
+}
+
+type unlockFixture struct {
+	p       *unlockPlayer
+	engine  *nest.NestMgr
+	journal *unlockCommitter
+	dir     string
+	store   *configdata.Store
+	now     atomic.Int64
+}
+
+func unlockFactRow(id int64) schema.Unlock {
+	return schema.Unlock{ID: id, Source: "fact", Fact: "tutorial.completed", Enabled: true}
+}
+
+func (f *unlockFixture) rows(t *testing.T, rows ...schema.Unlock) {
+	t.Helper()
+	if rows == nil {
+		rows = []schema.Unlock{}
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "unlock.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 建真实 Player、真实生成登记表和 Nest undo 事务。只替换提交器，不连外部服务。
+func newUnlockFixture(t *testing.T, dao *db.PlayerDao, rows ...schema.Unlock) *unlockFixture {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previousStore); fctx.SetRuntimeConfig(previousConfig) })
+	f := &unlockFixture{dir: t.TempDir(), journal: &unlockCommitter{}}
+	// 联装的其余表沿用工程有效数据，只隔离本测试要热更的功能表；不沿用旧 manifest 的内容散列。
+	entries, err := os.ReadDir("../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".json" || name == "_manifest.json" || name == "unlock.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("../../configs/data", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.dir, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	f.store = configdata.NewStore(registry, f.dir)
+	f.rows(t, rows...)
+	f.now.Store(1730000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	playerentity.RegisterEntity()
+	id, err := entity.BuildEntityID(96032, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	param := &entity.EntityCreateParam{Id: id, Kind: playerentity.EntityKindPlayer, IsCreate: dao == nil}
+	if dao != nil {
+		param.Dao = map[string]entity.DaoInterface{db.PlayerDaoCollection: dao}
+	}
+	value, err := entity.BuildEntity(param)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.p = value.(*unlockPlayer)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(unlockGetter{f.p}), nest.NestOptionWithTransactionCommitter(f.journal),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine.MustRegisterHandlerWithMeta(unlockTestHandler, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, args[0].(unlockBody)(es[0].(*unlockPlayer))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+		unlockTestObservers.Delete(f.p)
+	})
+	return f
+}
+
+func (f *unlockFixture) run(body unlockBody) error {
+	_, err := f.engine.Request(context.Background(), unlockTestHandler, f.p.ID(), nest.NewParams(body))
+	return err
+}
+func (f *unlockFixture) must(t *testing.T, body unlockBody) {
+	t.Helper()
+	if err := f.run(body); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *unlockFixture) wantCounts(t *testing.T, records int, attempts, commits int64) {
+	t.Helper()
+	f.must(t, func(p *unlockPlayer) error {
+		if n := p.Dao().GetUnlock().RecordsLen(); n != records {
+			return fmt.Errorf("records=%d want %d", n, records)
+		}
+		return nil
+	})
+	if a, c := f.journal.attempts.Load(), f.journal.commits.Load(); a != attempts || c != commits {
+		t.Fatalf("attempts/commits=%d/%d want %d/%d", a, c, attempts, commits)
+	}
+}

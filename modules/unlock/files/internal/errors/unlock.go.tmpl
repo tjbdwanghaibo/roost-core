@@ -1,0 +1,10 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrUnlockUnknown  = errcode.Define({{ID:errcode:unlock_unknown}}, "unlock_unknown", "unknown or unsupported feature definition")
+	ErrUnlockDisabled = errcode.Define({{ID:errcode:unlock_disabled}}, "unlock_disabled", "feature is currently disabled")
+	ErrUnlockLocked   = errcode.Define({{ID:errcode:unlock_locked}}, "unlock_locked", "feature has no valid player record")
+	ErrUnlockProof    = errcode.Define({{ID:errcode:unlock_proof}}, "unlock_proof", "feature requirement is not proven")
+)

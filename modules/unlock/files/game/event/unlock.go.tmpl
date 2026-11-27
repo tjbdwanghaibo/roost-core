@@ -1,0 +1,9 @@
+package event
+
+// FeatureUnlocked 在首次写记录的同实体事务内同步发布，不是提交后回调。
+// 监听的 DAO 写入随记录提交/回滚；进程外动作不得在监听里直接执行。
+type FeatureUnlocked struct {
+	FeatureID  int64
+	RecordedAt int64 // 本次首次认证记录的业务时间，Unix 毫秒
+	OccurredAt int64 // 可信原始发生时刻，0 表示未知
+}

@@ -1,0 +1,194 @@
+package handler
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"sync"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/playeraccess"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/components/itemuse"
+	controller "{{MODULE}}/game/controllers"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+func TestItemUseAuthenticatedEndpointConsumesTwoConfiguredItems(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 3)
+	f.seed(t, useBook, 1)
+	reg := app.NewRegistry(viper.New())
+	if err := reg.Register("nest", nest.Client(f.engine)); err != nil {
+		t.Fatal(err)
+	}
+	ctl, err := controller.FromRegistry(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &playeraccess.Context{PlayerID: useRawID}
+	r, err := ctl.HandleItemUse(ctx, &pb.ItemUseRequest{Sequence: 1, ItemID: useSource, Count: 2})
+	if err != nil || r == nil || r.Code != 0 || r.Sequence != 1 || r.ItemID != useSource || r.Count != 2 || r.Left != 1 || r.Applied != 2 || r.Effect != "test.itemuse.local" || len(r.Items) != 1 || r.Items[0].ItemID != useFirst || r.Items[0].Count != 2 {
+		t.Fatalf("first receipt %+v %v", r, err)
+	}
+	r, err = ctl.HandleItemUse(ctx, &pb.ItemUseRequest{Sequence: 2, ItemID: useSource, Count: 2})
+	if err != nil || r == nil || r.Code != apperrors.ErrBagShort.Code() {
+		t.Fatalf("client rejection %+v %v", r, err)
+	}
+	r = f.use(t, 2, useBook, 1)
+	if r.Left != 0 || len(r.Items) != 1 || r.Items[0].ItemID != useLast || r.Items[0].Count != 1 {
+		t.Fatalf("second receipt %+v", r)
+	}
+	f.stock(t, 2, map[int64]int64{useSource: 1, useBook: 0, useFirst: 2, useLast: 1})
+}
+
+func TestItemUsePersistedReplayBeforeRemovedTablesOrInventory(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 1)
+	want := f.use(t, 1, useSource, 1)
+	var raw []byte
+	f.must(t, func(p *usePlayer) error { raw = p.Dao().Marshal(); return nil })
+	dao := db.NewPlayerDao()
+	if err := dao.RestorePersisted(raw, db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := newUseFixture(t, dao)
+	reloaded.publish(t, map[string]any{"item_use": []schema.ItemUse{}, "item": []schema.Item{}})
+	if got := reloaded.use(t, 1, useSource, 1); !reflect.DeepEqual(got, want) {
+		t.Fatalf("replay %+v want %+v", got, want)
+	}
+	reloaded.refuse(t, 2, useSource, 1, apperrors.ErrItemUseRule)
+	reloaded.stock(t, 1, map[int64]int64{useSource: 0, useFirst: 1})
+	if reloaded.journal.attempts.Load() != 0 {
+		t.Fatal("replay or refusal attempted a commit")
+	}
+}
+
+func TestItemUseRejectsCollisionSkippedStaleAndExhaustion(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 2)
+	f.use(t, 1, useSource, 1)
+	f.refuse(t, 1, useSource, 2, apperrors.ErrItemUseConflict)
+	f.refuse(t, 1, useBook, 1, apperrors.ErrItemUseConflict)
+	f.refuse(t, 3, useSource, 1, apperrors.ErrItemUseSequence)
+	f.use(t, 2, useSource, 1)
+	f.refuse(t, 1, useSource, 1, apperrors.ErrItemUseSequence)
+	f.refuse(t, 0, useSource, 1, apperrors.ErrItemUseSequence)
+	f.must(t, func(p *usePlayer) error { p.Dao().GetItemuse().SetSequence(math.MaxInt64); return nil })
+	f.refuse(t, 1, useSource, 1, apperrors.ErrItemUseSequence)
+	f.stock(t, math.MaxInt64, map[int64]int64{useSource: 0, useFirst: 2})
+}
+
+func TestItemUseRefusesInvalidBatchUnconfiguredAndShortStock(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 1)
+	f.seed(t, useLast, 1)
+	row := useRow(useSource, "test.itemuse.local", useFirst)
+	row.MaxBatch = 2
+	f.publish(t, map[string]any{"item_use": []schema.ItemUse{row}})
+	for _, n := range []int64{-1, 0, 3, 33, math.MaxInt64} {
+		f.refuse(t, 1, useSource, n, apperrors.ErrItemUseRequest)
+	}
+	f.refuse(t, 1, 0, 1, apperrors.ErrItemUseRequest)
+	f.refuse(t, 1, useLast, 1, apperrors.ErrItemUseRule)
+	f.refuse(t, 1, useSource, 2, apperrors.ErrBagShort)
+	f.stock(t, 0, map[int64]int64{useSource: 1, useFirst: 0, useLast: 1})
+}
+
+func TestItemUseCommitRejectionRestoresPreviousReceiptAndCanRetry(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 3)
+	old := f.use(t, 1, useSource, 1)
+	before := f.journal.commits.Load()
+	f.journal.reject.Store(true)
+	f.refuse(t, 2, useSource, 2, useRejected)
+	f.stock(t, 1, map[int64]int64{useSource: 2, useFirst: 1})
+	if got := f.use(t, 1, useSource, 1); !reflect.DeepEqual(got, old) {
+		t.Fatalf("lost prior receipt %+v", got)
+	}
+	if f.journal.commits.Load() != before {
+		t.Fatal("rejected or replayed transaction committed")
+	}
+	f.journal.reject.Store(false)
+	f.use(t, 2, useSource, 2)
+	f.stock(t, 2, map[int64]int64{useSource: 0, useFirst: 3})
+}
+
+func TestItemUseMissingBridgeFailsClosed(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 1)
+	names := []string{"test.missing.effect"}
+	if !useHasReward {
+		names = append(names, "reward.group")
+	}
+	if !useHasProfile {
+		names = append(names, "profile.exp")
+	}
+	for _, name := range names {
+		f.publish(t, map[string]any{"item_use": []schema.ItemUse{useRow(useSource, name, 1)}})
+		f.refuse(t, 1, useSource, 1, apperrors.ErrItemUseRule)
+	}
+	f.stock(t, 0, map[int64]int64{useSource: 1})
+}
+
+func TestItemUseConcurrentDuplicateCommitsOnlyOnce(t *testing.T) {
+	f := newUseFixture(t, nil)
+	f.seed(t, useSource, 1)
+	before := f.journal.commits.Load()
+	var group sync.WaitGroup
+	fail := make(chan error, 8)
+	for range 8 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			r, err := f.call(1, useSource, 1)
+			if err == nil && (r.Left != 0 || len(r.Items) != 1 || r.Items[0].Count != 1) {
+				err = fmt.Errorf("bad receipt %+v", r)
+			}
+			fail <- err
+		}()
+	}
+	group.Wait()
+	close(fail)
+	for err := range fail {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := f.journal.commits.Load() - before; n != 1 {
+		t.Fatalf("commits=%d", n)
+	}
+	f.stock(t, 1, map[int64]int64{useSource: 0, useFirst: 1})
+}
+
+func init() {
+	itemuse.RegisterEffect("test.itemuse.recursive", func(p view.PlayerEntity, arg, count int64, _ *itemuse.Output) (int64, error) {
+		_, err := p.ItemUse().Use(1, arg, count)
+		return 0, err
+	})
+}
+func TestItemUseRequiresExactGuardAndRejectsRecursiveEffects(t *testing.T) {
+	f := newUseFixture(t, nil)
+	other := newUseFixture(t, nil) // 同一 ID、不同实例及锁，不能以 ID 相等代替持锁。
+	if _, err := f.p.ItemUse().Use(1, useSource, 1); !errors.Is(err, apperrors.ErrItemUseGuard) {
+		t.Fatalf("unguarded: %v", err)
+	}
+	f.must(t, func(*usePlayer) error {
+		_, err := other.p.ItemUse().Use(1, useSource, 1)
+		if !errors.Is(err, apperrors.ErrItemUseGuard) {
+			return fmt.Errorf("wrong owner: %v", err)
+		}
+		return nil
+	})
+	f.seed(t, useSource, 1)
+	f.publish(t, map[string]any{"item_use": []schema.ItemUse{useRow(useSource, "test.itemuse.recursive", useSource)}})
+	f.refuse(t, 1, useSource, 1, apperrors.ErrItemUseGuard)
+	f.stock(t, 0, map[int64]int64{useSource: 1})
+}

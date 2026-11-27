@@ -1,0 +1,55 @@
+package itemuse
+
+import (
+	"regexp"
+	"sync"
+
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+const (
+	MaxBatch       int64 = 32
+	MaxEffectUnits int64 = 1_000_000
+	MaxGrantCount  int64 = 999_999 // 整笔所有物品的合计，不是每项各有一份预算。
+	MaxGrantKinds        = 32
+)
+
+// Effect 在原 Player 事务内同步运行；arg 来自服务端用法表。返回实际生效的单位数
+// （0..MaxEffectUnits）；通过 out.Grant 提出物品清单，不自行逐项发奖。任何错误均向外返回。
+// 不得保存参数指针、跨实体、开启新事务、做不可撤销的外部 I/O 或递归 Use。
+type Effect func(player view.PlayerEntity, arg, count int64, out *Output) (applied int64, err error)
+
+var effects sync.Map // string -> Effect；只新增，不能替换或卸载已登记的实现。
+var effectName = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,47}$`)
+
+// RegisterEffect 供工程可信服务端代码在 init 中注册。重复名属于安装错误，启动时即拒绝。
+func RegisterEffect(name string, apply Effect) {
+	if !effectName.MatchString(name) || apply == nil {
+		panic("itemuse: invalid effect registration")
+	}
+	if _, duplicate := effects.LoadOrStore(name, apply); duplicate {
+		panic("itemuse: duplicate effect " + name)
+	}
+}
+
+// Output 只在一次效果调用内有效；零值可用。按件数与种类限制聚合，绝不按件展开。
+type Output struct {
+	grants map[int64]int64
+	total  int64
+}
+
+func (o *Output) Grant(itemID, count int64) error {
+	if itemID <= 0 || count <= 0 || count > MaxGrantCount-o.total {
+		return apperrors.ErrItemUseLimit
+	}
+	if _, exists := o.grants[itemID]; !exists && len(o.grants) >= MaxGrantKinds {
+		return apperrors.ErrItemUseLimit
+	}
+	if o.grants == nil {
+		o.grants = make(map[int64]int64)
+	}
+	o.grants[itemID] += count
+	o.total += count
+	return nil
+}

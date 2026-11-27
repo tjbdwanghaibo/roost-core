@@ -1,0 +1,23 @@
+name: quota_alliance
+summary: 联盟服务中独立权威的联盟额度，复用 quota 的消费组件
+requires: [quota, alliance]
+needs:
+  mods: [nest]
+  features: [entity, dao, nest, config]
+entity: Alliance
+component: Quota
+component_package: game/components/quota
+state:
+  - field: QuotaAlliance
+    type: QuotaBook
+    store: quota_alliance
+    dao: persist,nosync
+    comment: 联盟全体成员共享的消费次数，仅写入联盟主 DAO。
+services:
+  alliance:
+    existing: true
+    mods: [configdata]
+verify:
+  packages: [./game/handler]
+  run: ^TestQuotaAlliance
+  pass: 2

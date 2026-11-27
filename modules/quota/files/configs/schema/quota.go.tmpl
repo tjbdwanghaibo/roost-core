@@ -1,0 +1,30 @@
+package schema
+
+import (
+	"fmt"
+	"strconv"
+)
+
+// QuotaID 保留宽整数，避免 CSV 转小整数先截断再校验。热更和启动读 JSON 时同样校验。
+const MaxQuotaID = 4096
+
+type QuotaID int64
+
+func (id *QuotaID) UnmarshalJSON(data []byte) error {
+	v, err := strconv.ParseInt(string(data), 10, 64)
+	if err != nil || v < 1 || v > MaxQuotaID {
+		return fmt.Errorf("quota id %s outside 1..%d", data, MaxQuotaID)
+	}
+	*id = QuotaID(v)
+	return nil
+}
+
+// Quota 的 ID、Scope、Period 上线后不可复用；限额可热更。
+//
+//roost:table name=quota key=ID
+type Quota struct {
+	ID     QuotaID `csv:"id" json:"id" required:"true" unique:"true" min:"1"`
+	Scope  string  `csv:"scope" json:"scope" required:"true" enum:"player|alliance"`
+	Period string  `csv:"period" json:"period" required:"true" enum:"daily|weekly|lifetime"`
+	Limit  int64   `csv:"limit" json:"limit" required:"true" min:"0"`
+}

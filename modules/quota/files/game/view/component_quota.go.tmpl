@@ -1,0 +1,17 @@
+package view
+
+import "{{MODULE}}/db"
+
+// Quota 是权威宿主本次 Nest 事务中的预算。查询不会预留或写入额度。
+type Quota interface {
+	Remaining(ruleID int64) (int64, error)
+	Check(ruleID, amount int64) error
+	Consume(ruleID, amount int64) error
+}
+
+// QuotaBook 由生成器交接到各自的 DAO；QuotaScope 来自实体类型，不由调用者选择。
+type QuotaHolder interface {
+	Quota() Quota
+	QuotaBook() *db.QuotaBook
+	QuotaScope() string
+}

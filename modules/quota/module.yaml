@@ -1,0 +1,18 @@
+name: quota
+summary: 同一 Player 事务共享的日、周和终身消费额度；联盟宿主显式安装 quota_alliance
+needs:
+  mods: [nest, configdata]
+  features: [entity, dao, nest, config]
+entity: Player
+component: Quota
+component_package: game/components/quota
+state:
+  - field: Quota
+    type: QuotaBook
+    store: quota
+    dao: persist,nosync
+    comment: 按规则键保存当前期已用次数，不同步给客户端。
+verify:
+  packages: [./game/handler]
+  run: ^TestQuotaPlayer
+  pass: 6

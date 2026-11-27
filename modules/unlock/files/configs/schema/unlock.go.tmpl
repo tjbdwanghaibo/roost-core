@@ -1,0 +1,13 @@
+package schema
+
+// Unlock 的 ID 是长期身份（1..4096）；停开改 Enabled，不复用旧号。
+// fact 行用 Fact 标识事实来源；profile.level 行只用 MinLevel，需 profile 桥。
+//
+//roost:table name=unlock key=ID
+type Unlock struct {
+	ID       int64  `csv:"id" json:"id" required:"true" unique:"true" min:"1" max:"4096"`
+	Enabled  bool   `csv:"enabled" json:"enabled"`
+	Source   string `csv:"source" json:"source" required:"true"`
+	Fact     string `csv:"fact" json:"fact"`
+	MinLevel int32  `csv:"min_level" json:"min_level" min:"0"`
+}

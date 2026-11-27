@@ -1,0 +1,12 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrItemUseGuard    = errcode.Define({{ID:errcode:itemuse_guard}}, "itemuse_guard", "requires a guarded player transaction; recursive use is forbidden")
+	ErrItemUseSequence = errcode.Define({{ID:errcode:itemuse_sequence}}, "itemuse_sequence", "sequence is stale, skipped or exhausted")
+	ErrItemUseConflict = errcode.Define({{ID:errcode:itemuse_conflict}}, "itemuse_conflict", "sequence was used with different parameters")
+	ErrItemUseRequest  = errcode.Define({{ID:errcode:itemuse_request}}, "itemuse_request", "invalid item or batch size")
+	ErrItemUseRule     = errcode.Define({{ID:errcode:itemuse_rule}}, "itemuse_rule", "item use rule or effect is unavailable")
+	ErrItemUseLimit    = errcode.Define({{ID:errcode:itemuse_limit}}, "itemuse_limit", "effect output or batch is out of bounds")
+)

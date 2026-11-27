@@ -1,0 +1,197 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/view"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+type quotaHosts map[int64]entity.IThreadSafeEntity
+
+func (g quotaHosts) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if p := g[id]; p != nil {
+		return p, nil
+	}
+	return nil, fmt.Errorf("unknown test host %d", id)
+}
+
+func (g quotaHosts) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+type quotaJournal struct {
+	calls  atomic.Int64
+	reject atomic.Bool
+	last   atomic.Pointer[dataengine.CommitRecord]
+}
+
+func (j *quotaJournal) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	j.calls.Add(1)
+	if j.reject.Load() {
+		return errors.New("quota test: rejected commit")
+	}
+	copy := dataengine.CloneCommitRecord(record)
+	j.last.Store(&copy)
+	return nil
+}
+
+type quotaFixture struct {
+	client  *nest.NestMgr
+	journal quotaJournal
+	store   *configdata.Store
+	dir     string
+	now     atomic.Int64
+}
+
+func quotaRow(id schema.QuotaID, scope, period string, limit int64) schema.Quota {
+	return schema.Quota{ID: id, Scope: scope, Period: period, Limit: limit}
+}
+
+func (f *quotaFixture) reload(raw []byte) error {
+	if err := os.WriteFile(filepath.Join(f.dir, "quota.json"), raw, 0600); err != nil {
+		return err
+	}
+	_, err := f.store.Reload(context.Background())
+	return err
+}
+
+func (f *quotaFixture) rows(t *testing.T, rows ...schema.Quota) {
+	t.Helper()
+	if rows == nil {
+		rows = []schema.Quota{}
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.reload(raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+var quotaAction = nest.NewHandlerName("testQuotaTransaction")
+var quotaNoUndo = nest.NewHandlerName("testQuotaNonUndoHandler")
+
+type quotaBody = func(view.QuotaHolder) error
+
+// 用两个真实生成的宿主和真实 Nest 锁、undo、配置快照，仅提交介质/Remote 准入为内存替身。
+func newQuotaFixture(t *testing.T, hosts quotaHosts, extra ...nest.NestOption) *quotaFixture {
+	t.Helper()
+	store, config := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(store); fctx.SetRuntimeConfig(config) })
+	f := &quotaFixture{dir: t.TempDir()}
+	// 保留已联装模块的表，避免破坏外部引用；测试写入自己的快照，不改工程数据。
+	entries, err := os.ReadDir("../../configs/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".json" || name == "_manifest.json" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join("../../configs/data", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(f.dir, name), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(r); err != nil {
+		t.Fatal(err)
+	}
+	f.store = configdata.NewStore(r, f.dir)
+	f.rows(t, quotaRow(1, "player", "daily", 5), quotaRow(2, "alliance", "weekly", 20))
+	f.now.Store(1730000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	opts := []nest.NestOption{nest.NestOptionWithGetter(hosts), nest.NestOptionWithTransactionCommitter(&f.journal), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{})}
+	f.client = nest.NewEngine(append(opts, extra...)...)
+	handler := func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, args[0].(quotaBody)(es[0].(view.QuotaHolder))
+	}
+	f.client.MustRegisterHandlerWithMeta(quotaAction, handler, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	f.client.MustRegisterHandlerWithMeta(quotaNoUndo, handler, nest.HandlerMeta{Rollback: nest.RollbackNone, Durability: nest.DurabilityMemory})
+	if err := f.client.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.client.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
+func (f *quotaFixture) run(id int64, fn quotaBody) error {
+	_, err := f.client.Request(context.Background(), quotaAction, id, nest.NewParams(fn))
+	return err
+}
+func (f *quotaFixture) must(t *testing.T, id int64, fn quotaBody) {
+	t.Helper()
+	if err := f.run(id, fn); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *quotaFixture) left(t *testing.T, id, key, want int64) {
+	t.Helper()
+	f.must(t, id, func(h view.QuotaHolder) error {
+		got, err := h.Quota().Remaining(key)
+		if err != nil || got != want {
+			return fmt.Errorf("remaining %d: got %d, %v; want %d", key, got, err, want)
+		}
+		return nil
+	})
+}
+func (f *quotaFixture) calls(t *testing.T, want int64) {
+	t.Helper()
+	if n := f.journal.calls.Load(); n != want {
+		t.Fatalf("durable submissions: %d want %d", n, want)
+	}
+}
+func quotaPlayer(t *testing.T, n int64, restored *db.PlayerDao) *player.Player {
+	t.Helper()
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(n, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	param := &entity.EntityCreateParam{IsCreate: restored == nil, Id: id, Kind: player.EntityKindPlayer}
+	if restored != nil {
+		param.Dao = map[string]entity.DaoInterface{db.PlayerDaoCollection: restored}
+	}
+	v, err := entity.BuildEntity(param)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.(*player.Player)
+}

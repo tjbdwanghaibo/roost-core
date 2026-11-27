@@ -1,0 +1,28 @@
+name: unlock
+summary: 玩家功能解锁事实与当前配置开关；服务端在同一 Player 事务中认证、检查、发布首次状态变化事件
+requires: []
+conflicts: []
+needs:
+  mods: [nest]
+  features: [entity, dao, config, errcode]
+entity: Player
+state:
+  - field: Unlock
+    type: UnlockState
+    store: unlock
+    dao: nosync
+    comment: Unlock 是服务端私有的玩家功能首次认证记录，暂停或移除配置不擦除事实。
+component: Unlock
+component_package: game/components/unlock
+errcodes: [unlock_unknown, unlock_disabled, unlock_locked, unlock_proof]
+verify:
+  packages: [./game/handler]
+  run: ^TestUnlock
+  pass: 6
+with:
+  profile:
+    summary: 按当前 Player 权威等级显式认证功能，不把观察时刻当作首次升级时刻
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithUnlockProfile
+      pass: 2

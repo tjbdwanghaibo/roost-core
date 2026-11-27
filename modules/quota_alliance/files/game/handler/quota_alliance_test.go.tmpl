@@ -1,0 +1,110 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+
+	"{{MODULE}}/game/components/quota"
+	"{{MODULE}}/game/entities/alliance"
+	"{{MODULE}}/game/view"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 真实 Remote 实体进入真实 Nest 请求；所有权与持久批次用测试替身，不访问集群。
+type quotaRemote struct {
+	entity.IRemoteEntityManager
+	fenced atomic.Bool
+}
+
+func (r *quotaRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (entity.RemoteWriteBatch, error) {
+	if r.fenced.Load() {
+		return nil, entity.ErrRemoteFenced
+	}
+	return quotaBatch(ids), nil
+}
+
+type quotaBatch []int64
+
+func (b quotaBatch) EntityIDs() []int64                                         { return b }
+func (quotaBatch) FinalizeLocked(entity.RemoteTransactionOutcome) error         { return nil }
+func (quotaBatch) Commits() []entity.RemoteCommit                               { return nil }
+func (quotaBatch) Commit(context.Context) ([]entity.RemoteCommitReceipt, error) { return nil, nil }
+func (quotaBatch) Abort(context.Context, error) error                           { return nil }
+func (quotaBatch) Indeterminate(context.Context, error) error                   { return nil }
+func (quotaBatch) Close(context.Context) error                                  { return nil }
+
+func quotaAlliance(t *testing.T, n int64) *alliance.Alliance {
+	t.Helper()
+	alliance.RegisterEntity()
+	id, err := entity.BuildEntityID(n, alliance.EntityKindAlliance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: alliance.EntityKindAlliance})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.(*alliance.Alliance)
+}
+
+func TestQuotaAllianceAuthorityAndIsolation(t *testing.T) {
+	a, b := quotaAlliance(t, 17901), quotaAlliance(t, 17902)
+	p := quotaPlayer(t, 17901, nil)
+	f := newQuotaFixture(t, quotaHosts{a.ID(): a, b.ID(): b, p.ID(): p}, nest.NestOptionWithRemoteEntityManager(&quotaRemote{}))
+	// 两个成员经玩法授权后路由到同一联盟，不根据成员号另建账本。
+	f.must(t, a.ID(), quotaConsume(2, 12))
+	f.must(t, a.ID(), quotaConsume(2, 8))
+	f.left(t, a.ID(), 2, 0)
+	f.left(t, b.ID(), 2, 20)
+	if err := f.run(a.ID(), quotaConsume(2, 1)); !errors.Is(err, quota.ErrLimit) {
+		t.Fatal(err)
+	}
+	if err := f.run(a.ID(), quotaConsume(1, 1)); !errors.Is(err, quota.ErrRule) {
+		t.Fatal(err)
+	}
+	if err := f.run(p.ID(), quotaConsume(2, 1)); !errors.Is(err, quota.ErrRule) {
+		t.Fatal(err)
+	}
+	f.must(t, p.ID(), func(h view.QuotaHolder) error {
+		if n := h.QuotaBook().EntriesLen(); n != 0 {
+			return fmt.Errorf("player contains %d entries after alliance uses", n)
+		}
+		return nil
+	})
+	f.must(t, a.ID(), func(h view.QuotaHolder) error {
+		e, ok := a.Dao().GetQuotaAlliance().GetEntries(2)
+		if !ok || e == nil || e.GetUsed() != 20 {
+			return errors.New("authoritative alliance DAO missing merged spend")
+		}
+		return nil
+	})
+}
+
+func TestQuotaAllianceRefusalAndRollback(t *testing.T) {
+	a := quotaAlliance(t, 17901)
+	r := &quotaRemote{}
+	f := newQuotaFixture(t, quotaHosts{a.ID(): a}, nest.NestOptionWithRemoteEntityManager(r))
+	abort := errors.New("alliance action failed after consume")
+	if err := f.run(a.ID(), func(h view.QuotaHolder) error {
+		if err := h.Quota().Consume(2, 10); err != nil {
+			return err
+		}
+		return abort
+	}); !errors.Is(err, abort) {
+		t.Fatal(err)
+	}
+	f.left(t, a.ID(), 2, 20)
+	r.fenced.Store(true)
+	if err := f.run(a.ID(), quotaConsume(2, 1)); !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatalf("non-owner accepted or unexpected error: %v", err)
+	}
+	r.fenced.Store(false)
+	f.left(t, a.ID(), 2, 20)
+	f.must(t, a.ID(), quotaConsume(2, 1))
+	f.left(t, a.ID(), 2, 19)
+}

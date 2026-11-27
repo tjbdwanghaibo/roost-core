@@ -1,0 +1,216 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata/rules"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/components/itemuse"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/view"
+	"{{MODULE}}/protocol/pb"
+)
+
+const (
+	useSource int64 = 8101
+	useBook   int64 = 8102
+	useFirst  int64 = 8111
+	useLast   int64 = 8112
+	useRawID  int64 = 96992
+)
+
+var useHasReward, useHasProfile bool // 安装了对应的桥测试文件才置位。
+
+func init() {
+	itemuse.RegisterEffect("test.itemuse.local", func(_ view.PlayerEntity, arg, count int64, out *itemuse.Output) (int64, error) {
+		return count, out.Grant(arg, count)
+	})
+}
+
+type usePlayer = playerentity.Player
+type useBody = func(*usePlayer) error
+type useGetter struct{ p *usePlayer }
+
+func (g useGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if g.p.ID() != id {
+		return nil, fmt.Errorf("unknown player %d", id)
+	}
+	return g.p, nil
+}
+func (g useGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		p, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = p
+	}
+	return out, nil
+}
+
+var useRejected = errors.New("itemuse test commit rejected")
+var useLocal = nest.NewHandlerName("itemuseTestLocalTransaction")
+
+type useJournal struct {
+	reject   atomic.Bool
+	commits  atomic.Int64
+	attempts atomic.Int64
+}
+
+func (j *useJournal) Commit(_ context.Context, _ dataengine.CommitRecord) error {
+	j.attempts.Add(1)
+	if j.reject.Load() {
+		return useRejected
+	}
+	j.commits.Add(1)
+	return nil
+}
+
+type useFixture struct {
+	p       *usePlayer
+	engine  *nest.NestMgr
+	journal *useJournal
+	dir     string
+	store   *configdata.Store
+}
+
+func useRow(id int64, name string, arg int64) schema.ItemUse {
+	return schema.ItemUse{ID: id, Effect: name, Arg: arg, MaxBatch: 32}
+}
+func (f *useFixture) publish(t *testing.T, tables map[string]any) {
+	t.Helper()
+	for name, rows := range tables {
+		raw, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.dir, name+".json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.store.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// BuildEntity 创建独立 Player/DAO。只装私有临时表；不替换默认 DAO provider/committer，不依赖用户表内任何样例 ID。
+func newUseFixture(t *testing.T, dao *db.PlayerDao) *useFixture {
+	t.Helper()
+	prev, cfg := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(prev); fctx.SetRuntimeConfig(cfg) })
+	f := &useFixture{journal: &useJournal{}, dir: t.TempDir()}
+	const source = "../../configs/data"
+	files, err := os.ReadDir(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		name := file.Name()
+		if file.IsDir() || filepath.Ext(name) != ".json" || name == "_manifest.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(source, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if doc, err := rules.Document(raw); err == nil && len(doc) > 0 && doc[0] == '[' {
+			raw = []byte("[]")
+		}
+		if err := os.WriteFile(filepath.Join(f.dir, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	f.store = configdata.NewStore(registry, f.dir)
+	f.publish(t, map[string]any{"item": []schema.Item{
+		{ID: useSource, Name: "box"}, {ID: useBook, Name: "book"}, {ID: useFirst, Name: "material"}, {ID: useLast, Name: "limited", MaxStack: 3},
+	}, "item_use": []schema.ItemUse{useRow(useSource, "test.itemuse.local", useFirst), useRow(useBook, "test.itemuse.local", useLast)}})
+	playerentity.RegisterEntity()
+	RegisterItemUseNestHandlers()
+	id, err := entity.BuildEntityID(useRawID, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	param := &entity.EntityCreateParam{Id: id, Kind: playerentity.EntityKindPlayer, IsCreate: dao == nil}
+	if dao != nil {
+		param.Dao = map[string]entity.DaoInterface{db.PlayerDaoCollection: dao}
+	}
+	value, err := entity.BuildEntity(param)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.p = value.(*usePlayer)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(useGetter{f.p}), nest.NestOptionWithTransactionCommitter(f.journal), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine.MustRegisterHandlerWithMeta(useLocal, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, args[0].(useBody)(es[0].(*usePlayer))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+func (f *useFixture) must(t *testing.T, fn useBody) {
+	t.Helper()
+	if _, err := f.engine.Request(context.Background(), useLocal, f.p.ID(), nest.NewParams(fn)); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *useFixture) seed(t *testing.T, id, n int64) {
+	t.Helper()
+	f.must(t, func(p *usePlayer) error { _, err := p.Bag().Add(id, n); return err })
+}
+func (f *useFixture) stock(t *testing.T, seq int64, want map[int64]int64) {
+	t.Helper()
+	f.must(t, func(p *usePlayer) error {
+		if s := p.Dao().GetItemuse().GetSequence(); s != seq {
+			return fmt.Errorf("sequence %d want %d", s, seq)
+		}
+		for id, n := range want {
+			if got := p.Bag().Count(id); got != n {
+				return fmt.Errorf("stock %d=%d want %d", id, got, n)
+			}
+		}
+		return nil
+	})
+}
+func (f *useFixture) call(seq, id, n int64) (*pb.ItemUseResponse, error) {
+	return sender.NewItemUseSender(f.engine).Sync_ItemUse(context.Background(), f.p.ID(), &pb.ItemUseRequest{Sequence: seq, ItemID: id, Count: n})
+}
+func (f *useFixture) use(t *testing.T, seq, id, n int64) *pb.ItemUseResponse {
+	t.Helper()
+	r, err := f.call(seq, id, n)
+	if err != nil || r == nil || r.Code != 0 {
+		t.Fatalf("Use: %+v, %v", r, err)
+	}
+	return r
+}
+func (f *useFixture) refuse(t *testing.T, seq, id, n int64, want error) {
+	t.Helper()
+	if _, err := f.call(seq, id, n); !errors.Is(err, want) {
+		t.Fatalf("Use(%d,%d,%d) error %v, want %v", seq, id, n, err, want)
+	}
+}

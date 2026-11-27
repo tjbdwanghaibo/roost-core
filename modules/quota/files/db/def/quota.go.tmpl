@@ -1,0 +1,12 @@
+package dbdef
+
+// 每一已消费规则只有一条记录，不记录每次调用，也不累积历史期次。
+type QuotaBook struct {
+	Entries map[int64]*QuotaEntry `store:"1"`
+}
+
+type QuotaEntry struct {
+	Period string `store:"1"` // 防止改周期后误认期次并重新发放。
+	Window int32  `store:"2"` // 业务日/业务周一日期；终身限额用 0。
+	Used   int64  `store:"3"`
+}

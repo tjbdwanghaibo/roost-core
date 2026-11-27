@@ -1,0 +1,123 @@
+package itemuse
+
+import (
+	"fmt"
+	"math"
+	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+//roost:component type={{ID:component:ItemUse}}
+const CompTypeItemUse entity.ComponentType = {{ID:component:ItemUse}}
+
+func init() { entity.RegisterComponentFactory(CompTypeItemUse, NewComponent) }
+
+type Component struct {
+	entity.ComponentBase
+	owner view.PlayerEntity
+	busy  bool // 只在 owner 的 guard 内访问；阻止效果或同步监听在回执写入前再次消费。
+}
+
+func NewComponent(value any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+	p, ok := value.(view.PlayerEntity)
+	if !ok {
+		return nil, fmt.Errorf("itemuse: %T is not a player", value)
+	}
+	return &Component{owner: p}, nil
+}
+func (c *Component) Name() string { return "itemuse" }
+
+func ordered(grants map[int64]int64) []view.ItemUseGrant {
+	var ids []int64
+	for id := range grants {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	var items []view.ItemUseGrant
+	for _, id := range ids {
+		items = append(items, view.ItemUseGrant{ItemID: id, Count: grants[id]})
+	}
+	return items
+}
+
+func replay(seq int64, r *db.ItemUseReceipt) view.ItemUseResult {
+	grants := make(map[int64]int64, r.GrantsLen())
+	r.RangeGrants(func(id, n int64) bool { grants[id] = n; return true })
+	return view.ItemUseResult{Sequence: seq, ItemID: r.GetItemID(), Count: r.GetCount(), Left: r.GetLeft(), Effect: r.GetEffect(), Applied: r.GetApplied(), Items: ordered(grants)}
+}
+
+// Use 的唯一消费路径：先验证持锁实例与回执，再看当前配置及库存。任一步失败必须交还 Nest；
+// 不在组件里“补偿”已经回滚的 DAO，也不在提交前把抽中的清单交给客户端。
+func (c *Component) Use(seq, itemID, count int64) (view.ItemUseResult, error) {
+	var zero view.ItemUseResult
+	p := c.owner
+	tx := nest.CurrentRollbackTx()
+	if tx == nil || tx.Policy() != nest.RollbackUndo || !entity.CurrentGuardScope().Guard().GuardedEntity(p) || c.busy {
+		return zero, apperrors.ErrItemUseGuard
+	}
+	state, receipt := p.Dao().GetItemuse(), p.Dao().GetItemuseReceipt()
+	high := state.GetSequence()
+	if seq > 0 && seq == high {
+		if itemID != receipt.GetItemID() || count != receipt.GetCount() {
+			return zero, apperrors.ErrItemUseConflict
+		}
+		return replay(seq, receipt), nil
+	}
+	if seq <= 0 || high == math.MaxInt64 || seq != high+1 {
+		return zero, apperrors.ErrItemUseSequence
+	}
+	if itemID <= 0 || count < 1 || count > MaxBatch {
+		return zero, apperrors.ErrItemUseRequest
+	}
+	row, ok := generated.ItemUseByID(itemID)
+	if !ok || row.Arg <= 0 || row.MaxBatch < 1 || row.MaxBatch > MaxBatch {
+		return zero, apperrors.ErrItemUseRule
+	}
+	if _, ok := generated.ItemByID(itemID); !ok {
+		return zero, apperrors.ErrItemUseRule
+	}
+	apply, ok := effects.Load(row.Effect)
+	if !ok {
+		return zero, apperrors.ErrItemUseRule
+	}
+	if count > row.MaxBatch {
+		return zero, apperrors.ErrItemUseRequest
+	}
+	c.busy = true
+	defer func() { c.busy = false }()
+	if _, err := p.Bag().Remove(itemID, count); err != nil {
+		return zero, err
+	}
+	var out Output
+	applied, err := apply.(Effect)(p, row.Arg, count, &out)
+	if err != nil {
+		return zero, err
+	}
+	if applied < 0 || applied > MaxEffectUnits {
+		return zero, apperrors.ErrItemUseLimit
+	}
+	items := ordered(out.grants)
+	for _, g := range items {
+		if g.ItemID == itemID { // 不能以自身为产物反复兑付。
+			return zero, apperrors.ErrItemUseRule
+		}
+		if _, err := p.Bag().Add(g.ItemID, g.Count); err != nil {
+			return zero, err
+		}
+	}
+	left := p.Bag().Count(itemID)
+	receipt.SetItemID(itemID)
+	receipt.SetCount(count)
+	receipt.SetLeft(left)
+	receipt.SetEffect(row.Effect)
+	receipt.SetApplied(applied)
+	receipt.SetGrants(out.grants)
+	state.SetSequence(seq)
+	return view.ItemUseResult{Sequence: seq, ItemID: itemID, Count: count, Left: left, Effect: row.Effect, Applied: applied, Items: items}, nil
+}

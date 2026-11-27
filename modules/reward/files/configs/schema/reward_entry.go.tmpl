@@ -1,0 +1,15 @@
+package schema
+
+// RewardEntry 的 ID 标识配置行，不是物品号；不放回时同一物品的其他行仍可入选。
+// fixed 必给，chance 各行独立判定万分率，weighted 按当前候选行的正整数权重抽取。
+//
+//roost:table name=reward_entry key=ID
+type RewardEntry struct {
+	ID       int64  `csv:"id" json:"id" required:"true" unique:"true" min:"1"`
+	GroupID  int64  `csv:"group_id" json:"group_id" min:"1" ref:"reward_group" index:"true"`
+	ItemID   int64  `csv:"item_id" json:"item_id" min:"1"`
+	Count    int64  `csv:"count" json:"count" min:"1"`
+	ChanceBP int64  `csv:"chance_bp" json:"chance_bp" min:"0" max:"10000"`
+	Weight   int64  `csv:"weight" json:"weight" min:"0"`
+	Kind     string `csv:"kind" json:"kind" required:"true" enum:"fixed|chance|weighted"`
+}

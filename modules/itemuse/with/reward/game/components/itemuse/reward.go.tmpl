@@ -1,0 +1,36 @@
+package itemuse
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/modules/reward"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+const MaxBoxBatch int64 = 4
+
+func init() { RegisterEffect("reward.group", openBoxes) }
+
+// 每箱独立调用真实 Roll，不将一次抽取乘数量；无命中仍成功消费。配置错误不当空奖。
+func openBoxes(_ view.PlayerEntity, group, count int64, out *Output) (int64, error) {
+	if count > MaxBoxBatch {
+		return 0, apperrors.ErrItemUseLimit
+	}
+	for range count {
+		items, err := reward.Roll(group)
+		if err != nil {
+			return 0, errcode.Wrap(apperrors.ErrItemUseRule, err, "group_id", group)
+		}
+		for _, item := range items {
+			// 不产出另一种当前可开箱物品，避免配置环让开箱无限自给；普通材料和经验书不受限。
+			if row, ok := generated.ItemUseByID(item.ItemID); ok && row.Effect == "reward.group" {
+				return 0, apperrors.ErrItemUseRule
+			}
+			if err := out.Grant(item.ItemID, item.Count); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return 0, nil
+}

@@ -1,0 +1,252 @@
+package handler
+
+import (
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/event"
+	"{{MODULE}}/game/view"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+)
+
+func TestUnlockDenialsAreReadOnly(t *testing.T) {
+	bad := unlockFactRow(2)
+	bad.Fact = ""
+	unknownSource := unlockFactRow(3)
+	unknownSource.Source = "client.says.so"
+	mixed := unlockFactRow(4)
+	mixed.MinLevel = 1
+	level := schema.Unlock{ID: 5, Enabled: true, Source: "profile.level", MinLevel: 2}
+	f := newUnlockFixture(t, nil, unlockFactRow(1), bad, unknownSource, mixed, level)
+	// 在调用方核对拒绝码后正常返回：若组件偷偷写了 DAO，事务会尝试提交，不能靠回滚掩盖。
+	f.must(t, func(p *unlockPlayer) error {
+		u := p.Unlock()
+		for _, id := range []int64{-1, 0, 2, 3, 4, 6, 4097} {
+			if !errors.Is(u.Require(id), apperrors.ErrUnlockUnknown) {
+				return fmt.Errorf("bad definition admitted: %d", id)
+			}
+			if first, err := u.GrantFact(id, "tutorial.completed", 1); first || !errors.Is(err, apperrors.ErrUnlockUnknown) {
+				return fmt.Errorf("unknown grant %d: %v %v", id, first, err)
+			}
+		}
+		if !errors.Is(u.Require(1), apperrors.ErrUnlockLocked) {
+			return errors.New("missing record admitted")
+		}
+		for _, proof := range []struct {
+			fact string
+			at   int64
+		}{{"", 1}, {"wrong", 1}, {"tutorial.completed", 0}, {"tutorial.completed", f.now.Load() + 1}} {
+			if first, err := u.GrantFact(1, proof.fact, proof.at); first || !errors.Is(err, apperrors.ErrUnlockProof) {
+				return fmt.Errorf("bad proof %+v: %v %v", proof, first, err)
+			}
+		}
+		if first, err := u.CertifyCurrent(1); first || !errors.Is(err, apperrors.ErrUnlockProof) {
+			return fmt.Errorf("missing fact: %v %v", first, err)
+		}
+		if !unlockTestWithProfile {
+			if !errors.Is(u.Require(5), apperrors.ErrUnlockUnknown) {
+				return errors.New("level without bridge admitted")
+			}
+			if _, err := u.CertifyCurrent(5); !errors.Is(err, apperrors.ErrUnlockUnknown) {
+				return fmt.Errorf("no level source: %v", err)
+			}
+		}
+		return nil
+	})
+	f.wantCounts(t, 0, 0, 0)
+}
+
+func TestUnlockFirstSourceTimeAndSingleEvent(t *testing.T) {
+	f := newUnlockFixture(t, nil, unlockFactRow(4096))
+	issue, original := f.now.Load(), f.now.Load()-86400000
+	var calls atomic.Int64
+	unlockTestObservers.Store(f.p, func(p *unlockPlayer, ev event.FeatureUnlocked) error {
+		calls.Add(1)
+		if ev != (event.FeatureUnlocked{FeatureID: 4096, RecordedAt: issue, OccurredAt: original}) {
+			return fmt.Errorf("wrong event: %+v", ev)
+		}
+		// 重入也只认已经写入的那份，不重发。
+		if first, err := p.Unlock().GrantFact(4096, "tutorial.completed", original); first || err != nil {
+			return fmt.Errorf("reentry=%v %v", first, err)
+		}
+		return p.Unlock().Require(4096)
+	})
+	f.must(t, func(p *unlockPlayer) error {
+		first, err := p.Unlock().GrantFact(4096, "tutorial.completed", original)
+		if !first || err != nil {
+			return fmt.Errorf("first=%v err=%v", first, err)
+		}
+		return nil
+	})
+	f.now.Add(1000)
+	f.must(t, func(p *unlockPlayer) error {
+		if first, err := p.Unlock().GrantFact(4096, "tutorial.completed", issue+1); first || err != nil {
+			return fmt.Errorf("duplicate=%v %v", first, err)
+		}
+		r, ok := p.Unlock().Record(4096)
+		if !ok || r != (view.UnlockRecord{RecordedAt: issue, OccurredAt: original}) {
+			return fmt.Errorf("duplicate changed first record: %+v %v", r, ok)
+		}
+		return nil
+	})
+	if calls.Load() != 1 {
+		t.Fatalf("events=%d", calls.Load())
+	}
+	f.wantCounts(t, 1, 1, 1)
+}
+
+func TestUnlockSwitchReloadCannotEraseOrFabricateFacts(t *testing.T) {
+	a, b := unlockFactRow(1), unlockFactRow(2)
+	a.Enabled = false
+	f := newUnlockFixture(t, nil, a, b)
+	f.must(t, func(p *unlockPlayer) error {
+		if _, err := p.Unlock().GrantFact(1, a.Fact, 7); err != nil {
+			return err
+		}
+		if !errors.Is(p.Unlock().Require(1), apperrors.ErrUnlockDisabled) {
+			return errors.New("grant bypassed pause")
+		}
+		return nil
+	})
+	a.Enabled = true
+	f.rows(t, a, b)
+	f.must(t, func(p *unlockPlayer) error {
+		if !errors.Is(p.Unlock().Require(2), apperrors.ErrUnlockLocked) {
+			return errors.New("switch alone admitted player")
+		}
+		return p.Unlock().Require(1)
+	})
+	a.Enabled = false
+	f.rows(t, a, b)
+	f.must(t, func(p *unlockPlayer) error {
+		if !errors.Is(p.Unlock().Require(1), apperrors.ErrUnlockDisabled) {
+			return errors.New("held record bypassed pause")
+		}
+		return nil
+	})
+	f.rows(t, b)
+	f.must(t, func(p *unlockPlayer) error {
+		r, ok := p.Unlock().Record(1)
+		if !ok || r.OccurredAt != 7 || !errors.Is(p.Unlock().Require(1), apperrors.ErrUnlockUnknown) {
+			return fmt.Errorf("retired record: %+v, %v", r, ok)
+		}
+		return nil
+	})
+	a.Enabled = true
+	f.rows(t, a, b)
+	f.must(t, func(p *unlockPlayer) error { return p.Unlock().Require(1) })
+	f.wantCounts(t, 1, 1, 1)
+}
+
+func TestUnlockEventMutationsRollBackTogether(t *testing.T) {
+	f := newUnlockFixture(t, nil, unlockFactRow(1), unlockFactRow(2))
+	var refuse atomic.Bool
+	refuse.Store(true)
+	rejected := errors.New("test listener refused")
+	unlockTestObservers.Store(f.p, func(p *unlockPlayer, ev event.FeatureUnlocked) error {
+		if ev.FeatureID != 1 {
+			return nil
+		}
+		if _, err := p.Unlock().GrantFact(2, "tutorial.completed", ev.OccurredAt); err != nil {
+			return err
+		}
+		if refuse.Load() {
+			return rejected
+		}
+		return nil
+	})
+	grant := func(p *unlockPlayer) error { _, err := p.Unlock().GrantFact(1, "tutorial.completed", 10); return err }
+	if err := f.run(grant); !errors.Is(err, rejected) {
+		t.Fatalf("listener refusal=%v", err)
+	}
+	f.wantCounts(t, 0, 0, 0)
+	refuse.Store(false)
+	f.journal.reject.Store(true)
+	if err := f.run(grant); err == nil {
+		t.Fatal("commit rejection swallowed")
+	}
+	f.wantCounts(t, 0, 1, 0)
+	f.journal.reject.Store(false)
+	f.must(t, grant)
+	f.wantCounts(t, 2, 2, 1)
+	f.must(t, grant)
+	f.wantCounts(t, 2, 2, 1)
+}
+
+func TestUnlockBusinessHandlerChecksAndWritesInOneTransaction(t *testing.T) {
+	f := newUnlockFixture(t, nil, unlockFactRow(1), unlockFactRow(2))
+	use := func(p *unlockPlayer) error {
+		if err := p.Unlock().Require(1); err != nil {
+			return err
+		}
+		_, err := p.Unlock().GrantFact(2, "tutorial.completed", 77)
+		return err
+	}
+	if err := f.run(use); !errors.Is(err, apperrors.ErrUnlockLocked) {
+		t.Fatalf("locked business: %v", err)
+	}
+	f.wantCounts(t, 0, 0, 0)
+	abort := errors.New("later business failed")
+	if err := f.run(func(p *unlockPlayer) error {
+		if _, err := p.Unlock().GrantFact(1, "tutorial.completed", 66); err != nil {
+			return err
+		}
+		if err := use(p); err != nil {
+			return err
+		}
+		return abort
+	}); !errors.Is(err, abort) {
+		t.Fatalf("handler refusal=%v", err)
+	}
+	f.wantCounts(t, 0, 0, 0)
+	f.must(t, func(p *unlockPlayer) error {
+		if _, err := p.Unlock().GrantFact(1, "tutorial.completed", 66); err != nil {
+			return err
+		}
+		return use(p)
+	})
+	f.wantCounts(t, 2, 1, 1)
+}
+
+func TestUnlockReloadPlayerKeepsFirstRecord(t *testing.T) {
+	dao := db.NewPlayerDao()
+	var record view.UnlockRecord
+	t.Run("save", func(t *testing.T) {
+		f := newUnlockFixture(t, nil, unlockFactRow(1))
+		f.must(t, func(p *unlockPlayer) error { _, err := p.Unlock().GrantFact(1, "tutorial.completed", 313); return err })
+		f.must(t, func(p *unlockPlayer) error {
+			record, _ = p.Unlock().Record(1)
+			return nil
+		})
+		committed := f.journal.last.Load()
+		if committed == nil || len(committed.Mutations) != 1 {
+			t.Fatal("missing player commit")
+		}
+		m := committed.Mutations[0]
+		if m.Kind != dataengine.MutationPut || m.Key.Resource != db.PlayerDaoCollection || m.Key.ID != f.p.ID() {
+			t.Fatalf("not a player full write: %+v", m.Key)
+		}
+		if err := dao.RestorePersisted(m.Data, m.Schema, m.NextVersion); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f := newUnlockFixture(t, dao, unlockFactRow(1))
+	f.now.Add(86400000)
+	f.must(t, func(p *unlockPlayer) error {
+		r, ok := p.Unlock().Record(1)
+		if !ok || r != record || r.OccurredAt != 313 || r.RecordedAt <= r.OccurredAt {
+			return fmt.Errorf("restored=%+v want %+v", r, record)
+		}
+		if first, err := p.Unlock().GrantFact(1, "tutorial.completed", 999); first || err != nil {
+			return fmt.Errorf("restored grant %v %v", first, err)
+		}
+		return p.Unlock().Require(1)
+	})
+	f.wantCounts(t, 1, 0, 0)
+}
