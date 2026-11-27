@@ -424,3 +424,24 @@ func TestInvalidSummaryDoesNotReserveViewsOrSubjects(t *testing.T) {
 		t.Fatal("failed constructor left relation behind")
 	}
 }
+
+// 宿主违反所有权契约（这里提前移除了专用详情视图）时，下一次提交后的放置让 Map 失败关闭。
+// 投影可以停，但普通 AOI 仍活着：场景的 Nearby（附近聊天、AI 候选）经 OrdinarySeen 查询，
+// 不能因此整图变空；宿主自己 Close 之后仍为空，避免旧句柄看到同号重定义的视图。
+func TestOrdinarySeenSurvivesBrokenRelation(t *testing.T) {
+	s := newScene(t, true)
+	s.show(50, spatial.Point{X: 3, Y: 3})
+	s.settle()
+	must(t, s.interest.RemoveView(config().DetailView))
+	s.show(100, spatial.Point{X: 70, Y: 80})
+	if err := s.overview.SetMode(observer, regionsummary.Count); err == nil {
+		t.Fatal("broken relation did not close the projection")
+	}
+	if ids := s.overview.OrdinarySeen(observer); !slices.Equal(ids, []int64{50}) {
+		t.Fatalf("ordinary AOI lost after projection failed closed: %v", ids)
+	}
+	s.overview.Close()
+	if s.overview.OrdinarySeen(observer) != nil {
+		t.Fatal("owner-closed map retained ordinary query")
+	}
+}
