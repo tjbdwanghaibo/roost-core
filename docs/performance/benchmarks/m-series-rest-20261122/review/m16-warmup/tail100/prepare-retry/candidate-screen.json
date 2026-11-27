@@ -1,0 +1,75 @@
+{
+  "conditions": {
+    "at_least_5pct_frozen_body_upper": true,
+    "both_halves_repeated_dense": true,
+    "dominant_outcome_on_hint_is_pending": true
+  },
+  "groups": {
+    "all": {
+      "all_object_ns": 61174368174,
+      "all_revision_copy_ns": 4853073329,
+      "hint_all_input_subs": 198337943,
+      "hint_calls": 1025141,
+      "hint_dense_calls": 199308,
+      "hint_pending_again": 1018503,
+      "hint_pending_dense_calls": 197975,
+      "hint_success_dirty_or_clean": 6638,
+      "lower_share_all_object": 0.0,
+      "pending_calls": 1025141,
+      "pending_object_ns": 37233520906,
+      "pending_revision_copy_ns": 4391609168,
+      "rejected_hint_revision_copy_upper_ns": 4391306418,
+      "upper_share_all_object": 0.07178343723158173
+    },
+    "first": {
+      "all_object_ns": 11836742608,
+      "all_revision_copy_ns": 1363848561,
+      "hint_all_input_subs": 64621491,
+      "hint_calls": 314781,
+      "hint_dense_calls": 65312,
+      "hint_pending_again": 314578,
+      "hint_pending_dense_calls": 65312,
+      "hint_success_dirty_or_clean": 203,
+      "lower_share_all_object": 0.0,
+      "pending_calls": 315916,
+      "pending_object_ns": 11817826866,
+      "pending_revision_copy_ns": 1363841980,
+      "rejected_hint_revision_copy_upper_ns": 1363841980,
+      "upper_share_all_object": 0.11522105575551095
+    },
+    "formal": {
+      "all_object_ns": 24001035734,
+      "all_revision_copy_ns": 2761640105,
+      "hint_all_input_subs": 130824497,
+      "hint_calls": 657773,
+      "hint_dense_calls": 132460,
+      "hint_pending_again": 657245,
+      "hint_pending_dense_calls": 132460,
+      "hint_success_dirty_or_clean": 528,
+      "lower_share_all_object": 0.0,
+      "pending_calls": 659932,
+      "pending_object_ns": 23966558459,
+      "pending_revision_copy_ns": 2761615856,
+      "rejected_hint_revision_copy_upper_ns": 2761615856,
+      "upper_share_all_object": 0.1150623617499923
+    },
+    "second": {
+      "all_object_ns": 12020215217,
+      "all_revision_copy_ns": 1380933773,
+      "hint_all_input_subs": 65342491,
+      "hint_calls": 338736,
+      "hint_dense_calls": 66274,
+      "hint_pending_again": 338415,
+      "hint_pending_dense_calls": 66274,
+      "hint_success_dirty_or_clean": 321,
+      "lower_share_all_object": 0.0,
+      "pending_calls": 339746,
+      "pending_object_ns": 12004883311,
+      "pending_revision_copy_ns": 1380916230,
+      "rejected_hint_revision_copy_upper_ns": 1380916230,
+      "upper_share_all_object": 0.11488282073743505
+    }
+  },
+  "meaning": "Hint is from the last actual Prepare commit_pending and a current Prepare is mandatory; subject ID stable within this fixture. Upper assumes entire revision-copy stage of every eligible rejected call disappears and ignores cost of new snapshots; only a same-schedule screen, not end-to-end savings.",
+  "worth_fixed": true
+}
