@@ -69,7 +69,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		fmt.Fprintln(stdout, "Go files are formatted")
 		return nil
 	case "framework":
-		return runFramework(args[1:], stdout, stderr)
+		return runFramework(ctx, args[1:], stdout, stderr)
 	case "client":
 		return runClient(args[1:], stdout, stderr)
 	case "help-make":
@@ -80,7 +80,10 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	}
 }
 
-func runFramework(args []string, stdout, stderr io.Writer) error {
+func runFramework(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "verify-dao-sync" {
+		return runVerifyDAOSync(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "verify" {
 		return errors.New("usage: roost framework verify [--manifest path] [--expected-release version] [--lock path] [--github-output path]")
 	}

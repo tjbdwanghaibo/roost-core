@@ -81,7 +81,31 @@ Go 用 `ApplySyncPlayerDao(patch, previous)` 返回新的累积视图，Full 时
 
 ## 升级与验证
 
-DAO `sync_format=3`（字段号 2047）；EntitySync 外层编码号仍是 2，外层帧/内容版本机制不变。Go/C#/C++ 拒绝旧格式。服务端、proto、生成 Apply 和客户端 SDK 需配套重生成，停止旧连接后重连拿全量。BSON/WAL 格式不变，不需要清库。字段号仍依据定义顺序，不提供旧 schema 兼容。
+DAO `sync_format=3`（字段号 2047）；EntitySync 外层编码号仍是 2，外层帧/内容版本机制不变。Go/C#/C++ 拒绝旧格式。服务端、proto、生成 Apply 和客户端 SDK 需配套重生成，停止旧连接后重连拿全量。BSON/WAL 格式不变，不需要清库。字段号仍依据定义顺序；生成器不会给旧字段锁号，也不会自动协商旧 schema。
+
+### 发布前：比较上次发给客户端的 schema
+
+业务项目应从**上一正式发布的归档**取出 `dao_sync.proto`，在本次 `roost generate` 完成后、发布客户端导出前运行：
+
+```bash
+roost framework verify-dao-sync \
+  --previous previous-release/dao_sync.proto \
+  --current shared/protocol/proto/dao_sync.proto
+```
+
+`--current` 指向 `client_export` 实际导出目录里的 `proto/dao_sync.proto`；没有客户端导出时可传本次生成的 `db/dao_sync.proto`。两个参数都是文件，不是目录。命令用 `ROOST_PROTOC` 或 PATH 上的 `protoc` 分别解析两份独立的 proto3 文件，仅使用临时描述符，不改输入、不访问网络。通过返回 0，并报告原有消息的尾部新增字段数及全新消息数；不兼容、输入错误或缺少工具均非零。在仓库源码中也可用 `go run ./codegen/cmd/roost framework verify-dao-sync` 加同样参数。此检查由持有历史产物的业务发布流程显式调用；`roost framework verify` 的版本锁与 `roost generate -check` 的生成物新鲜度不能替代它。首次发布应保存基线，而非把当前文件当作上一版与自己比。
+
+| 两次发布之间的变化 | 检查结果及理由 |
+| --- | --- |
+| `.proto` 只重排声明，老字段的号、名字、类型等不变 | 通过；按消息名与字段号比较，不按行号。 |
+| 在 Go DAO 定义中互换两个 `int32` 的位置 | 拒绝；老号易主，旧客户端可能解码成功但读错值。检查包括 DAO 顶层、嵌套全量、嵌套 patch 和集合包装消息。 |
+| 在末尾追加字段，或加入不替换旧消息的新消息 | 通过；旧读者可忽略未知号。顶层固定的 `sync_format=2047` 不算业务字段上界，已有空号也不视为可填。 |
+| 保号改名、删除、换号、改标量/引用类型、列表/映射形状发生变化 | 拒绝。即使普通 Protobuf 的同号同型改名在线上字节层面合法，两份导出也不能证明它不是删旧建新；本门禁不提供改名白名单。仅 Go 侧改名且导出的所有消息/字段身份完全不变时不会触发。 |
+| 删除字段并写 `reserved`，或释放旧的 `reserved` 数字/名字再用 | 拒绝。`reserved` 不能证明删除对现存客户端安全，也不能豁免易主。若历史输入已有 `reserved`，必须完整保留其号码与名字；DAO 生成器没有用于改名、退役或显式锁号的 tag，不应手改导出绕过检查。 |
+
+仓内定向回归：安装 `protoc` 后运行 `go test -p=2 ./codegen/internal/roost -run '^TestDAOSyncRelease' -count=1 -v`。用两版 DAO 定义实际生成导出，以新 schema 编码、旧 schema 解码，并断言旧字段读到的值。没有 `protoc` 时这些集成用例会跳过，不能算发布检查通过。
+
+范围限于导出的 `roost.dao.sync` 字段契约：识别同名同号、同类型字段的业务含义是否已变，需要人工审查；BSON `store` 键不是 PB 字段号。命令不比较 Apply 代码、业务语义、`sync_format` 的运行时值，也无法看到比所给基线更早的未保留历史。需故意破坏协议时，应安排客户端配套重生成、切断旧连接、重建全量，并作为显式的不兼容升级处理，不要将其宣称为此门禁通过。
 
 回归覆盖嵌套结构体、map 内 map、list 内对象、按索引修改、清空/密集回退、失败回滚、混合按索引与整体赋值、冻结/确认交错和预算回退。Go 金样在 `client/spec/dao-sync.json`、`dao-collections.json`，供 C# / C++ 实际解码应用。正式生成工程另以真实 TCP → Nest → DAO → Sync 验证失败 handler 与重连，存储用替身。
 
