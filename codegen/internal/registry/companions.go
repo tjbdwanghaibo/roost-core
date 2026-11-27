@@ -46,6 +46,13 @@ func companionPairs(root, module string) ([]companionPair, error) {
 		if parent.CompanionOf != "" {
 			return nil, fmt.Errorf("%s: companionOf=%s names an entity that is itself a companion; self, chains and cycles are not supported", child.Position, parent.Entity)
 		}
+		// 共享 kind 没有单一写权，伴生配对的挂接与联写都建立在独占写许可上：运行期 entity.RegisterCompanionKind 对任一端
+		// 是共享 kind 一律返回 ErrCompanionKind。在生成期报出具体是哪一端，不能让工程编译通过、起服装配时才含糊失败。
+		for _, end := range []entityowner.Owned{parent, child} {
+			if end.Shared {
+				return nil, fmt.Errorf("%s: companionOf=%s: %s is ownership=shared; a shared Remote kind cannot be a companion principal or companion (pairing needs exclusive write permits)", child.Position, parent.Entity, end.Entity)
+			}
+		}
 		if parent.Service != "" && child.Service != "" && parent.Service != child.Service {
 			return nil, fmt.Errorf("%s: companionOf=%s has incompatible service owners %q and %q", child.Position, parent.Entity, parent.Service, child.Service)
 		}
