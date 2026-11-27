@@ -19,7 +19,7 @@ return nil, nil
 return nil, nest.LeaveEntityGroup()
 ```
 
-- 先用**各自的单目标 handler**加入；第一名成员不成为组长。Join 不是从另一个组抢过来的 Move。明确成功的事务边界才发布新关系；Leave 返回到当前 handler 并不意味着原组已解锁。当前 handler 的视图保持到结束，下一次从 A 访问已离组的 B 才收到 `nil, nest.ErrGroupMemberUnavailable`。失败不发布；提交结果不确定时不发布并沿用 Nest 的 fence，不把不确定解释为成功。
+- 先用**各自的单目标 handler**加入；第一名成员不成为组长。Join 不是从另一个组抢过来的 Move。明确成功的事务边界才发布新关系；Leave 返回到当前 handler 并不意味着原组已解锁。当前 handler 的视图保持到结束，下一次从 A 访问已离组的 B 才收到 `nil, nest.ErrGroupMemberUnavailable`。失败不发布；提交结果不确定时不发布并沿用 Nest 的 fence，不把不确定解释为成功。提交已确定（含 `RollbackNone` + memory 的已准入修改）之后、发布前的复核才失败（例如引擎恰被另一个 worker fence）时，handler 的修改照常作为已提交保留、同步照常放行、消息不重排，只是关系不发布，回复带 `nest.ErrAfterCommitFailed`。
 - `GetGroupMember[T](id)` 只在当前 handler 的一个无歧义组视图内有效：类型不匹配、非成员、过期实例、子 goroutine、独立嵌套事务等不返回成员。不要把返回的实体指针缓存到下一条消息、回调或其他 goroutine；Go 的业务字段不是可自动撤销的引用。
 - 现有 `CurrentEntityLockGroup().Get/Range`、`GroupEntityAs` 也必须通过相同视图检查。显式目标数组仍保持调用方的顺序和重复项；组内的隐式成员不会追加到业务参数里。跨多个组的显式 multi 可以执行，但无组参数的 `GetGroupMember` 不选择默认组；业务应使用已显式声明的目标。
 - 框架用去重后的组锁按固定顺序 `Try`，在锁内收集实例并固定生命周期，再按实体锁序尝试加锁、校验成员代际；拿不到就释放已得资源，不持一组阻塞等另一组。真正可访问的成员分别进入事务和同步：A/B 是两个逻辑参与者，仍用各自已有的持久化与回滚协议。组锁不是单文档提交，也不替数据模型生成缺失的持久化适配器。大组会扩大每条消息的准备和快照成本，不宜把整张地图塞进一个组。
