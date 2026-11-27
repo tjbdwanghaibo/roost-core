@@ -1,0 +1,19 @@
+{
+  "schema": "roost.ai.decision/v1",
+  "name": "sentry",
+  "start": "watch",
+  "stages": [
+    {"name": "watch", "events": [
+      {"id": 1, "event": "sight", "enabled": true, "filter": {"field": "score", "op": "ge", "value": 2},
+       "body": [{"kind": "do", "actions": [{"id": 11, "kind": "stage", "name": "alert"}]}]},
+      {"id": 2, "event": "probe", "enabled": true, "once": true, "filter": {"field": "score", "op": "ge", "value": 2},
+       "body": [{"kind": "do", "actions": [{"id": 12, "kind": "emit", "name": "signal", "arg": 7}]}]}
+    ]},
+    {"name": "alert", "events": [
+      {"id": 3, "event": "order", "enabled": true, "filter": {"field": "score", "op": "ge", "value": 2},
+       "body": [{"kind": "do", "actions": [{"id": 13, "kind": "emit", "name": "signal", "arg": 7}]}]},
+      {"id": 4, "event": "arm", "enabled": true,
+       "body": [{"kind": "do", "actions": [{"id": 14, "kind": "emit", "name": "flash", "arg": 9, "delay": 2}]}]}
+    ]}
+  ]
+}

@@ -1,0 +1,204 @@
+package decisionai
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai/decision"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/entities/player"
+)
+
+var (
+	ErrGuard    = errors.New("decisionai: expected this Player's Nest guard and undo transaction")
+	ErrReplay   = errors.New("decisionai: input sequence already committed or staged")
+	ErrSequence = errors.New("decisionai: non-contiguous input sequence")
+)
+
+func guarded(p *player.Player) bool {
+	s := entity.CurrentGuardScope()
+	tx := nest.CurrentRollbackTx()
+	return p != nil && s != nil && s.Guard() != nil && s.Guard().GuardedEntity(p) && tx != nil && tx.Policy() == nest.RollbackUndo
+}
+
+// Frame is sampled by the owner under its lock, never deserialized from a client.
+// Sequence counts INPUTS, starting at 1: two events may have the same logic Tick.
+// Reuse the same Sequence for delivery retries, including ambiguous replies.
+type Frame struct {
+	Sequence, Tick int64
+	NeedsHelp      bool
+}
+
+// Selector can be kept for this Player or recreated from its DAO. No state is
+// committed in this object. Use Tick/Event inside a strict Nest undo handler and
+// return their errors to Nest. No inner goroutine, second timer or callback tick.
+type Selector struct {
+	owner   *player.Player
+	program *decision.Program
+	ctl     *ai.Controller
+	frame   Frame
+	inCall  bool
+	err     error
+}
+
+func NewSelector(p *player.Player) (*Selector, error) {
+	if !guarded(p) {
+		return nil, ErrGuard
+	}
+	prog, err := SampleProgram()
+	if err != nil {
+		return nil, err
+	}
+	return NewSelectorWithProgram(p, prog)
+}
+
+// NewSelectorWithProgram accepts an immutable business-compiled plan using this
+// host vocabulary and single-choice output contract. Wrong-plan saves fail Init.
+func NewSelectorWithProgram(p *player.Player, prog *decision.Program) (*Selector, error) {
+	if !guarded(p) {
+		return nil, ErrGuard
+	}
+	s := &Selector{owner: p, program: prog}
+	report := func(e error) { s.err = errors.Join(s.err, e) }
+	s.ctl = ai.NewController(ai.ControllerHooks{Context: func(now time.Time) *ai.Context { return &ai.Context{Owner: p, Now: now} }, OnError: report})
+	strategy, err := ai.NewDecisionStrategy("aid_selector", prog, ai.DecisionHost{Load: s.load, Input: s.input, Commit: s.commit, OnError: report})
+	if err != nil {
+		return nil, err
+	}
+	if err = s.ctl.SetStrategy(strategy); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+func (s *Selector) load(_ *ai.Context) (int64, *decision.State, error) {
+	if !guarded(s.owner) {
+		return 0, nil, ErrGuard
+	}
+	r := s.owner.Dao().GetAiDecision()
+	v := r.GetVersion()
+	raw := r.GetStateJSON()
+	name := r.GetDesired()
+	if v == 0 && raw == "" && name == "" {
+		return 0, nil, nil
+	}
+	if v <= 0 || len(raw) == 0 || len(raw) > 1<<20 || (name != Watch && name != Assist) {
+		return 0, nil, errors.New("decisionai: invalid selector record")
+	}
+	state, err := s.program.DecodeState([]byte(raw))
+	if err != nil {
+		return 0, nil, err
+	}
+	return v, &state, nil
+}
+func (s *Selector) input(_ *ai.Context, _ time.Time, ev *ai.Event) (decision.Input, error) {
+	if !s.inCall || !guarded(s.owner) {
+		return decision.Input{}, ErrGuard
+	}
+	v := s.owner.Dao().GetAiDecision().GetVersion()
+	if s.frame.Sequence <= v {
+		return decision.Input{}, ErrReplay
+	}
+	if s.frame.Sequence-1 != v {
+		return decision.Input{}, ErrSequence
+	}
+	needs := int64(0)
+	if s.frame.NeedsHelp {
+		needs = 1
+	}
+	in := decision.Input{Now: s.frame.Tick, Fields: map[string]int64{"needs_help": needs}}
+	if ev != nil {
+		if ev.Kind != CallForHelp || ev.Data != nil {
+			return decision.Input{}, errors.New("decisionai: unregistered event or unexpected data")
+		}
+		in.Event = "help"
+	}
+	return in, nil
+}
+func (s *Selector) commit(_ *ai.Context, expected int64, next decision.State, actions []decision.Intent) error {
+	if !s.inCall || !guarded(s.owner) {
+		return ErrGuard
+	}
+	if s.owner.Dao().GetAiDecision().GetVersion() != expected || s.frame.Sequence-1 != expected {
+		return ErrSequence
+	}
+	if len(actions) != 1 || (actions[0].Name != Watch && actions[0].Name != Assist) || actions[0].Arg != 0 {
+		return fmt.Errorf("decisionai: expected one named selection, received %v", actions)
+	}
+	b, err := json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	if len(b) > 1<<20 {
+		return errors.New("decisionai: selector record too large")
+	}
+	// Construct the complete value off-DAO. One generated setter participates in
+	// Nest's Undo + commit. At no point does a failed write launch a behavior.
+	var r db.AiDecisionState
+	r.SetVersion(s.frame.Sequence)
+	r.SetStateJSON(string(b))
+	r.SetDesired(actions[0].Name)
+	s.owner.Dao().SetAiDecision(r)
+	return nil
+}
+func (s *Selector) dispatch(f Frame, ev *ai.Event) error {
+	if !guarded(s.owner) {
+		return ErrGuard
+	}
+	if s.inCall {
+		return errors.New("decisionai: reentrant input")
+	}
+	if f.Sequence < 1 || f.Tick < 0 {
+		return ErrSequence
+	}
+	s.frame, s.inCall, s.err = f, true, nil
+	defer func() { s.inCall = false }()
+	if ev == nil {
+		s.ctl.Tick(time.Time{})
+	} else if !s.ctl.OnEvent(*ev) {
+		return errors.New("decisionai: event was not delivered")
+	}
+	return s.err
+}
+func (s *Selector) Tick(f Frame) error               { return s.dispatch(f, nil) }
+func (s *Selector) Event(f Frame, ev ai.Event) error { return s.dispatch(f, &ev) }
+
+// Choice is a committed desired state, not an action command or an assertion
+// that a switch succeeded. It belongs to exactly this loaded Player instance.
+type Choice struct {
+	owner   *player.Player
+	version int64
+	name    string
+}
+
+func (c Choice) Name() string   { return c.name }
+func (c Choice) Version() int64 { return c.version }
+
+// PublishChoice captures the desired executor; only a successful Nest commit
+// publishes it. Call once at the END of the selecting handler (or in a fresh
+// read-only handler on restore). The sink gets a value, not a guard: hand it
+// back to a later guarded call, do not touch the Player or execute effects here.
+func (s *Selector) PublishChoice(sink func(Choice)) error {
+	if !guarded(s.owner) {
+		return ErrGuard
+	}
+	if sink == nil {
+		return errors.New("decisionai: missing committed choice sink")
+	}
+	version, state, err := s.load(nil)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return errors.New("decisionai: no selection yet")
+	}
+	c := Choice{s.owner, version, s.owner.Dao().GetAiDecision().GetDesired()}
+	if !nest.AfterCommit(func() { sink(c) }) {
+		return ErrGuard
+	}
+	return nil
+}

@@ -1,0 +1,31 @@
+// Package decisionai is an opt-in, server-owned selector/executor example. It does
+// not register a heartbeat, entity component, protocol or actionflow observer.
+package decisionai
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/ai/decision"
+
+const (
+	Watch              = "watch"
+	Assist             = "assist"
+	CallForHelp uint16 = 1 // trusted local signal, no wire payload
+)
+
+func Vocabulary() decision.Registry {
+	return decision.Registry{Events: []string{"help"}, Fields: []string{"needs_help"}, Intents: []string{Watch, Assist}}
+}
+
+// Every accepted input selects EXACTLY ONE named executor. The two tick guards
+// are mutually exclusive; changing the definition to emit two choices is rejected
+// by the host rather than applying a map iteration order or a hidden priority.
+func SampleProgram() (*decision.Program, error) {
+	pick := func(id int64, name string) []decision.Action {
+		return []decision.Action{{ID: id, Kind: "emit", Name: name}}
+	}
+	when := func(value, id int64, name string) decision.Node {
+		return decision.Node{Kind: "all", Children: []decision.Node{{Kind: "check", Test: &decision.Test{Field: "needs_help", Op: "eq", Value: value}}}, Actions: pick(id, name)}
+	}
+	return decision.Compile(decision.Definition{Schema: decision.Schema, Name: "aid_station", Start: "ready", Stages: []decision.Stage{{
+		Name: "ready", Tick: []decision.Node{when(0, 1, Watch), when(1, 2, Assist)},
+		Events: []decision.Listener{{ID: 10, Event: "help", Enabled: true, Body: []decision.Node{{Kind: "do", Actions: pick(3, Assist)}}}},
+	}}}, Vocabulary())
+}

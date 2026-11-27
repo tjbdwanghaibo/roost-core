@@ -1,0 +1,23 @@
+{
+  "Version": 1, "Name": "sentry", "Revision": 1, "TimeDomain": "tick", "Initial": ["watch"],
+  "Variables": [{"Scope": "global", "Name": "acks", "Default": {"Kind": "int"}}],
+  "Stages": [
+    {"ID": "watch", "Triggers": [
+      {"ID": "sight", "Event": "sight", "Conditions": [{"Left": {"EventField": "score"}, "Op": "ge", "Right": {"Literal": {"Kind": "int", "Int": 2}}}],
+       "Actions": [{"Kind": "end", "Name": "watch"}, {"Kind": "start", "Name": "alert"}]},
+      {"ID": "probe", "Event": "probe", "MaxFires": 1, "Conditions": [{"Left": {"EventField": "score"}, "Op": "ge", "Right": {"Literal": {"Kind": "int", "Int": 2}}}],
+       "Actions": [{"Kind": "request", "Name": "signal", "Args": {"channel": {"Literal": {"Kind": "int", "Int": 7}}}}]}
+    ]},
+    {"ID": "alert", "Triggers": [
+      {"ID": "order", "Event": "order", "Conditions": [{"Left": {"EventField": "score"}, "Op": "ge", "Right": {"Literal": {"Kind": "int", "Int": 2}}}],
+       "Actions": [{"Kind": "request", "Name": "signal", "Args": {"channel": {"Literal": {"Kind": "int", "Int": 7}}}}]},
+      {"ID": "arm", "Event": "arm", "Actions": [{"Kind": "timer", "Name": "alarm", "Delay": 2}]},
+      {"ID": "flash", "Event": "timer", "Conditions": [{"Left": {"EventField": "name"}, "Op": "eq", "Right": {"Literal": {"Kind": "string", "Text": "alarm"}}}],
+       "Actions": [{"Kind": "request", "Name": "flash", "Args": {"channel": {"Literal": {"Kind": "int", "Int": 9}}}}]},
+      {"ID": "ack", "Event": "action.done", "Conditions": [
+         {"Left": {"EventField": "name"}, "Op": "eq", "Right": {"Literal": {"Kind": "string", "Text": "signal"}}},
+         {"Left": {"EventField": "success"}, "Op": "eq", "Right": {"Literal": {"Kind": "bool", "Bool": true}}}],
+       "Actions": [{"Kind": "add", "Scope": "global", "Name": "acks", "Value": {"Literal": {"Kind": "int", "Int": 1}}}]}
+    ]}
+  ]
+}

@@ -1,0 +1,12 @@
+name: ai
+summary: 可选的双层 AI：Player 私有决策游标与策略选择、独立行为执行器；不接管怪物或心跳
+needs:
+  mods: [nest]
+  features: [entity, dao]
+entity: Player
+state:
+  - {field: AiDecision, type: AiDecisionState, store: ai_decision, dao: nosync, comment: 服务端私有的决策状态和期望策略，同一事务提交。}
+verify:
+  packages: [./game/modules/decisionai]
+  run: ^TestDecisionAI
+  pass: 6
