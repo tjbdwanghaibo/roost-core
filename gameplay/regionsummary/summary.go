@@ -82,7 +82,7 @@ type Map struct {
 	markers      map[int64]bool // immutable
 	sources      map[int64]*bucket
 	closed       bool
-	cause        error // broken ownership contract: projection fails closed, ordinary AOI stays live
+	cause        error // broken ownership contract: projection fails closed, ordinary AOI stays live (OrdinarySeen falls back to Seen)
 }
 
 // New installs two empty relations on an existing Interest. The caller owns the Interest and
@@ -159,6 +159,12 @@ func (m *Map) OrdinarySeen(observer int64) []int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
+		// 宿主违反所有权契约而失败关闭（cause 非空）时，closeLocked 已撤下两个专用层，
+		// 普通 AOI 仍活着：退回整张 Interest 的查询，场景的 Nearby（附近聊天、AI 候选）不能整图变空。
+		// 宿主自己 Close 后仍返回空：这两个 ViewID 可能已被同号重定义，旧句柄不能把它们当普通来源。
+		if m.cause != nil {
+			return m.interest.Seen(observer)
+		}
 		return nil
 	}
 	return m.interest.SeenWithoutViews(observer, m.detail, m.view)
@@ -257,6 +263,8 @@ func (m *Map) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closeLocked()
+	// 宿主显式关闭：不再沿用失败关闭时的普通查询退路（见 OrdinarySeen）。
+	m.cause = nil
 }
 
 func (m *Map) closeLocked() {

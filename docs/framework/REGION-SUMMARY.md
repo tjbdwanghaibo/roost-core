@@ -29,7 +29,7 @@ return space.SetRegionMode(observer, regionsummary.Off)
 
 - 冻结 1–64 个图内、不相交的半开矩形和 `Public` 允许条件。业务必须允许对所有获准成员公开入选源的**身份、详情和数量**。`DetailProfile` 应由每种入选源的 packer 执行真实白名单（Player 可用 `OnSceneFields`），拒绝 default/self/组合键。需要战争迷雾、动态阵营或只能知道总数时，不启用此方案。
 - 两个非零 ViewID 由本图专用，统计 SubjectID 在整个 Manager（含分线）中预留。按业务授权，不按客户端 LOD 授权。无主视野拒绝；目标视图满时保留原模式。离图解除、再进图重新授权。关闭投影后再关 Interest，等待旧 Remove/退役后才能复用 marker ID。
-- 普通 `Space.Nearby` 排除**仅**由专用层带来的对象。`OrdinarySeen` 与本地图切换、Close 串行，关闭后为空。通用 `SeenWithoutViews` 要求调用方保证查询期间被排除的视图不被移除或同号重定义。
+- 普通 `Space.Nearby` 排除**仅**由专用层带来的对象。`OrdinarySeen` 与本地图切换、Close 串行：宿主显式 Close 后为空；宿主破坏所有权契约（提前移除或同号重定义专用视图、提前关 Interest）使投影失败关闭时，退回整张 Interest 的 `Seen`，附近聊天 / AI 候选不因投影停用而整图变空。通用 `SeenWithoutViews` 要求调用方保证查询期间被排除的视图不被移除或同号重定义。
 
 ## 客户端消费与一致性边界
 
