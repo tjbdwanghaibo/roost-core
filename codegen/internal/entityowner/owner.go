@@ -33,6 +33,8 @@ type Owned struct {
 	Service string
 	// Remote 表示 remote=managed。
 	Remote bool
+	// Shared 表示 ownership=shared（共享 kind，只能写在 remote=managed 上）。
+	Shared bool
 	// Preload 表示 preload=startup。Remote 托管 kind（必须同时声明 service=）：归属服务起服时加载 owner 是本 sid 的
 	// 全部实体并登记路由（联盟服务方案 §2.7“起服预加载”）。本地 kind（维护者 2026-11-13）：加载本服库（dbscope=sid）
 	// 里这个 kind 的全部未删除实体，由 wiring/dataengine.LocalPreloadMod 执行（见 LocalPreloads）。
@@ -156,6 +158,7 @@ func scanFile(path string, all bool) ([]Owned, error) {
 			where := fmt.Sprintf("%s:%d", position.Filename, position.Line)
 			service, declared := params["service"]
 			remote := strings.EqualFold(strings.TrimSpace(params["remote"]), "managed")
+			shared := strings.TrimSpace(params["ownership"]) == "shared"
 			// preload= 是实体类型的显式策略（维护者 2026-11-04：“没有规则就不加载，需要 entity 显示加规则”）。只有一个取值；
 			// 预加载的范围是“所有权记录的 owner 是本 sid 的实体”，所以只对归属某个服务的 Remote 托管 kind 有意义。
 			preload, hasPreload := params["preload"]
@@ -191,7 +194,7 @@ func scanFile(path string, all bool) ([]Owned, error) {
 			if !declared && !hasPreload {
 				if all {
 					if entityName := structAfter(structs, position.Line); entityName != "" {
-						out = append(out, Owned{Entity: entityName, Kind: kindName(params, entityName), Remote: remote, CompanionOf: params["companionOf"],
+						out = append(out, Owned{Entity: entityName, Kind: kindName(params, entityName), Remote: remote, Shared: shared, CompanionOf: params["companionOf"],
 							NoPersist: noPersist, Dir: filepath.Dir(path), Position: where})
 					}
 				}
@@ -212,6 +215,7 @@ func scanFile(path string, all bool) ([]Owned, error) {
 				CompanionOf: params["companionOf"],
 				Service:     service,
 				Remote:      remote,
+				Shared:      shared,
 				Preload:     hasPreload,
 				Order:       order,
 				NoPersist:   noPersist,

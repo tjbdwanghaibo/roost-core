@@ -154,7 +154,7 @@ type Player struct {
 | 参数 / tag | 含义 |
 | --- | --- |
 | `id` / `entityKind` / `category` | 类型编号、kind 表达式、category 表达式；必须与注册的 kind/category 一致 |
-| `companionOf=Archive` | 可选，当前工程 `game/entities/<包>` 中唯一的主实体结构体名。两种实体均需可导出的类型与包内 kind 常量；不要求 Remote。只声明类型对，不会自动创建实例 |
+| `companionOf=Archive` | 可选，当前工程 `game/entities/<包>` 中唯一的主实体结构体名。两种实体均需可导出的类型与包内 kind 常量；不要求 Remote。只声明类型对，不会自动创建实例；任一端不能是 `ownership=shared` |
 | `businessPool=short` | 默认短业务池；`long` 为长业务池。多目标有 long 则整条消息走 long；io 不是业务池 |
 | `remote=managed` | Remote 托管，配套 `RemoteEntityBase`、Remote category 与运行时 Mod；普通实体用 `none` |
 | `noPersist=true` | 声明实体不持久；不代替 DAO 字段逐项表达意图 |
@@ -189,7 +189,7 @@ if err != nil { return err }
 
 创建失败要处理 `err`；这不是 GetOrCreate。新对象沿用主实体的 unique，只换 kind，完整 ID 不相等。子实体仍是独立的实体。只计算地址用 `entity.CompanionID(principal.ID(), journal.EntityKindJournal)`，地址不是访问或挂接授权；普通 `NewJournal` / lifecycle 入口也不是“创建并挂接”的替代。未声明 `companionOf` 的项目不生成配对或 helper。
 
-两端均为普通本地 kind 时，`CreateJournalForPrincipal` 新建并挂接。**任一端为 `remote=managed` 时，创建成功只表示子实体已创建、关系已声明，尚未挂接**（`CompanionDetached: true`）。随后须在覆盖两端且已获相关 Remote 实例独占写许可的 Nest handler 内显式调用 `entity.AttachCompanion(child.ID())`，待事务成功后才生效；不能用直接的 manager 调用、主 ID 或本地存在的对象代替写许可。`ownership=shared` 不能参与这种配对。
+两端均为普通本地 kind 时，`CreateJournalForPrincipal` 新建并挂接。**任一端为 `remote=managed` 时，创建成功只表示子实体已创建、关系已声明，尚未挂接**（`CompanionDetached: true`）。随后须在覆盖两端且已获相关 Remote 实例独占写许可的 Nest handler 内显式调用 `entity.AttachCompanion(child.ID())`，待事务成功后才生效；不能用直接的 manager 调用、主 ID 或本地存在的对象代替写许可。`ownership=shared` 不能参与这种配对：主实体或伴生任一端写了 `ownership=shared`，`roost generate` 在生成期拒绝并指出是哪一端（运行期 `RegisterCompanionKind` 同样拒绝共享 kind）。
 
 ### 实体归属服务
 

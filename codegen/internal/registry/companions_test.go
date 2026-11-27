@@ -17,6 +17,9 @@ func TestCompanionPairValidation(t *testing.T) {
 		{"chain", "companionOf=Third", "companionOf=Archive", "Third", "itself a companion"},
 		{"different services", "service=auth", "service=game companionOf=Archive", "", "incompatible service owners"},
 		{"foreign kind expr", "entityKind=ids.Kind", "companionOf=Archive", "", "package-local kind"},
+		// 共享 kind 运行期 RegisterCompanionKind 一定拒绝：生成期就要报出是哪一端，不能编译通过后起服才失败。
+		{"shared principal", "remote=managed ownership=shared", "companionOf=Archive", "", "Archive is ownership=shared"},
+		{"shared companion", "", "remote=managed ownership=shared companionOf=Archive", "", "Journal is ownership=shared"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
