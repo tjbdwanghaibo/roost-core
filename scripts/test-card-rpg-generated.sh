@@ -75,7 +75,7 @@ rows = {
     'item.csv': ['2001,钻石,0', '2002,尘,0'] + [f'{2100 + i},英雄{i},0' for i in range(1, 7)],
     'gacha_pool.csv': ['2,2,5,2106,false'],
     'gacha_drop.csv': [f'{200 + i},2,{2100 + i},{w}' for i, w in zip(range(1, 7), (27, 27, 26, 7, 7, 6))],
-    'task.csv': ['101,card.won,permanent,1,0,item,2001,10,false'],
+    'task.csv': ['101,card.won,permanent,1,0,item,2001,10,false,,0,'],
 }
 for name, lines in rows.items():
     p = root / 'configs/table' / name

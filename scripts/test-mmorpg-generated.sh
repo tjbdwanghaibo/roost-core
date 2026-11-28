@@ -71,7 +71,7 @@ for name in ('scene', 'trade', 'monster'):
 # （与 handler 的 mmoItemLimit 一致）；201 号永久任务“击杀 1 只怪”（事件 mmo.kill）奖 5 金币。
 for name, lines in {
  'item.csv': ['3001,MMO 材料,1000'],
- 'task.csv': ['201,mmo.kill,permanent,1,0,coins,0,5,false'],
+ 'task.csv': ['201,mmo.kill,permanent,1,0,coins,0,5,false,,0,'],
 }.items():
  p=root/'configs/table'/name
  text=p.read_text()
