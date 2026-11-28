@@ -128,7 +128,7 @@ type moveState struct {
 	stopWhenReached bool
 }
 
-// Move 是实体的移动组件，被动：只提供设定与推进的接口，自己不挂心跳。推进由动作驱动（参考 ssr：action 挂心跳、
+// Move 是实体的移动组件，被动：只提供设定与推进的接口，自己不挂心跳。推进由动作驱动（action 挂心跳、
 // 在心跳里调 move）——MoveTo / Follow 动作在实体 ActionRunner 的心跳里每拍调一次 Advance（所有
 // 控制实体行为的逻辑都经 action，不绕过动作直接驱动组件）。方法只能在实体锁内调用。
 type Move struct {

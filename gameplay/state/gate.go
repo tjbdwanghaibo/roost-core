@@ -13,7 +13,7 @@ type Freezer interface {
 	Recover(group actionflow.ActionGroup) error
 }
 
-// Rule 是一条门控规则：State 生效时按 Mode 冻结 Group，失效时撤销这次冻结（对照 ssr“定身冻结移动组、缴械
+// Rule 是一条门控规则：State 生效时按 Mode 冻结 Group，失效时撤销这次冻结（对照既有项目“定身冻结移动组、缴械
 // 冻结战斗组”）。
 type Rule struct {
 	State ID

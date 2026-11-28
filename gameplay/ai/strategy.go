@@ -42,7 +42,7 @@ type StoppableStrategy interface {
 }
 
 // Event 是投给 AI 的一个游戏事件：Kind 由业务定义（被攻击、看见敌人、状态变化、Buff 生效……），Data 是事件
-// 内容。框架不定义事件词表（ssr 的约 25 个具体事件是玩法词表，不照搬）。
+// 内容。框架不定义事件词表（具体事件属于玩法词表，不照搬）。
 type Event struct {
 	Kind uint16
 	Data any

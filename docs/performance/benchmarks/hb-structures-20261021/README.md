@@ -4,7 +4,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `sched-benchstat.txt` | 对比一：10 遍干净样本合并后的 benchstat（ns/op、B/op、allocs/op、每格 p50 / p99 / max、liveB/reg、ssr map 预分配） |
+| `sched-benchstat.txt` | 对比一：10 遍干净样本合并后的 benchstat（ns/op、B/op、allocs/op、每格 p50 / p99 / max、liveB/reg、既有项目的 map 预分配） |
 | `sched-passes.log` | 对比一每遍的起止、loadavg 与干净 / 作废判定（采到外来 go 构建 / 测试进程即作废） |
 | `phase-distribution.md` | 每格到期数量分布（`HB_DIST_OUT`） |
 | `delivery.jsonl` | 对比二：48 次运行的原始结果（每行一次，含配置） |

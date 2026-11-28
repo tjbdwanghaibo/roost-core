@@ -14,7 +14,7 @@ import (
 // 逻辑（移动、技能、AI 决策……）都经 ActionRunner 下发与收尾，不绕过动作直接驱动组件：组件
 // 只提供推进接口（例如 movement.Move.Advance），由动作在自己的 Tick 里调用。
 //
-// 模型参考 ssr 的 action_list：每个组的当前动作有自己的心跳登记（"actionflow/<组号>"），周期取动作的 TickInterval；
+// 模型：每个组的当前动作有自己的心跳登记（"actionflow/<组号>"），周期取动作的 TickInterval；
 // 组空闲时停，空闲实体不占调度。一拍只 tick 这个组，ActionContext.Elapsed 是这一拍的 Beat.Elapsed（不追帧）。心跳
 // 回调在实体自己的 Nest worker 上、实体锁与事务内执行，所以 runner 仍然只被持实体锁的一方调用（ActionRunner 刻意
 // 无锁的前提不变），动作在 Tick 里对组件（DAO）的修改随这一拍的事务提交或回滚。

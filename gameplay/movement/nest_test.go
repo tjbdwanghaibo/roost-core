@@ -360,7 +360,7 @@ func TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle(t *testing.T) {
 	}
 }
 
-// MoveTo 动作由 runner 的心跳驱动（参考 ssr：action 挂心跳、在心跳里调 move）：移动组挂一个心跳，移动中实体只有
+// MoveTo 动作由 runner 的心跳驱动（action 挂心跳、在心跳里调 move）：移动组挂一个心跳，移动中实体只有
 // 这一个登记（每拍一条消息），每拍动作调 Move.Advance，到达时动作收尾为成功；结束后什么都不跳。新的 MoveTo 取代
 // 旧的：旧的以取消结束、新的从当前位置走到新终点。
 func TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne(t *testing.T) {

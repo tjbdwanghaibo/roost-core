@@ -67,3 +67,6 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
+
+// v1.61.0 误发布了不应公开的文档，改用 v1.61.1。
+retract v1.61.0

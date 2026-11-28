@@ -143,8 +143,8 @@ func (c *Controller) Freeze() {
 	}
 }
 
-// FreezeFor 冻结 d，到时后的第一次 Tick 自动恢复（对照 ssr 的 RecoverDuration）；interrupt 为真时同时经
-// EndActions 钩子结束在途动作（ssr 的 NoInterruptAction 取反）。心跳驱动时冻结期间 AI 心跳照常跳（用来检查到期），
+// FreezeFor 冻结 d，到时后的第一次 Tick 自动恢复；interrupt 为真时同时经
+// EndActions 钩子结束在途动作。心跳驱动时冻结期间 AI 心跳照常跳（用来检查到期），
 // 到期那一拍恢复并照常决策。覆盖之前的 Freeze / FreezeFor；d <= 0 等于立即恢复。
 func (c *Controller) FreezeFor(d time.Duration, interrupt bool) {
 	if c == nil {
@@ -233,8 +233,8 @@ func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.Acti
 	}
 }
 
-// OnEvent 把一个事件交给当前策略（实现了 EventStrategy 的），返回是否送达。冻结、切换中、没有策略时丢弃（对照 ssr：
-// 冻结与手动操作时屏蔽决策）；动作 / 任务结束不受影响，照常送达。策略在 OnEvent 里请求的切换同样延后到回调返回后。
+// OnEvent 把一个事件交给当前策略（实现了 EventStrategy 的），返回是否送达。冻结、切换中、没有策略时丢弃（冻结与手动操作时
+// 屏蔽决策）；动作 / 任务结束不受影响，照常送达。策略在 OnEvent 里请求的切换同样延后到回调返回后。
 // 状态变化要让 AI 知道时，业务在 state 的观察者里调它（例如 Event{Kind: 状态变化, Data: state.Change}）。
 func (c *Controller) OnEvent(ev Event) bool {
 	if !c.ready() {

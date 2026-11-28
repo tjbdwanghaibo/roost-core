@@ -20,7 +20,7 @@ type Change struct {
 // Handle 标识一次 Watch，用于 Unwatch。
 type Handle uint64
 
-// Requirement 是“能否做某个操作”的状态条件（对照 ssr 的 CheckOperation）：All 里的状态必须全部生效，None 里的必须
+// Requirement 是“能否做某个操作”的状态条件：All 里的状态必须全部生效，None 里的必须
 // 全部不生效。
 type Requirement struct {
 	All  []ID
@@ -231,7 +231,7 @@ func (s *Set) Unwatch(h Handle) {
 	}
 }
 
-// Watcher 把一组 Watch 打包，一次 Close 全部撤销（对照 ssr 的 state Agent），给生命周期与状态集合不同的使用方用。
+// Watcher 把一组 Watch 打包，一次 Close 全部撤销，给生命周期与状态集合不同的使用方用。
 type Watcher struct {
 	set     *Set
 	handles []Handle

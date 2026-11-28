@@ -34,7 +34,7 @@ type FollowParam struct {
 // RegisterActions 把 MoveTo 与 Follow 两个动作以业务选定的种类注册进 actionflow 注册表；种类到组的映射在业务的
 // ActionRunnerConfig.GroupForKind 里（通常放进同一个“移动”组，新的移动动作取代旧的）。
 //
-// 移动由动作驱动（参考 ssr）：动作所在组由实体的 actionflow.BeatRunner 按 Period 挂心跳；Start 在实体的 Move 上
+// 移动由动作驱动：动作所在组由实体的 actionflow.BeatRunner 按 Period 挂心跳；Start 在实体的 Move 上
 // 设定这次移动并按 0 时长核对一次（已经到达 / 目标已不在时启动即完成，不挂心跳），之后每拍 Tick 调
 // Move.Advance(ctx.Elapsed)，移动结束即动作结束——Arrived 为成功，Replaced 为取消，
 // 其余（被阻挡、离开场景、目标消失、写位置被拒）为失败，原因是 StopReason。动作被取消（含被同组新动作取代）时

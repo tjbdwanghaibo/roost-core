@@ -38,7 +38,7 @@ const (
 // 某个 Manager 的 Init / Start / Stop 卡住时，这次调用不会返回，之后的 Init / Start / Stop 都排在 opMu 上
 // 等它（State 不受影响）；没有“超时后保留、重试再等”的语义，也就不满足 roost-coding 的三步停机。
 // 需要停机预算的对象不要放进 ManagerGroup：App 的 Mod 实现 app.ModStopperWithContext，服务级单例走
-// manager.Engine（停止入口带 ctx，已套 internal/stopcontract）。截至 2026-10-06 仓内与 cube / ssr 都没有生产调用方，
+// manager.Engine（停止入口带 ctx，已套 internal/stopcontract）。截至 2026-10-06 仓内与下游项目都没有生产调用方，
 // 若要接入有预算的停机，先给它加带 ctx 的停止入口再套契约骨架（N01 Group 留项）。
 type ManagerGroup[C any, R any] struct {
 	opMu sync.Mutex

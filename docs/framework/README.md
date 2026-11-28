@@ -44,7 +44,7 @@ DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTA
 
 [实体 AI 的决策树、行为树与选策接线](AI-DECISIONS.md)：用同一权威输入产生有序意图、复用跨拍执行策略；[与关卡规则逐步对照](AI-DECISION-VS-LEVEL.md)。
 
-[通用 LevelComponent](LEVEL-COMPONENT.md)：借鉴 ssr 的多阶段／ECA 与变量作用域，接入 Nest 事务、宿主时钟和外部动作回执；包含 UGC／PvE 配置与正式生成消费者。
+[通用 LevelComponent](LEVEL-COMPONENT.md)：多阶段／ECA 与变量作用域，接入 Nest 事务、宿主时钟和外部动作回执；包含 UGC／PvE 配置与正式生成消费者。
 
 ## 次核心模块
 

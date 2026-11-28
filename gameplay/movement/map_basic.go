@@ -6,7 +6,7 @@
 //     自己不挂心跳。地面有两层可选判定：MoveConfig.Terrain（二维格子，每进一格问一次能不能站）与
 //     MoveConfig.Surface（带高度的地面，可编辑地形 P3：每进一个地面节点按坡度 / 台阶 / 下落 / 水判定，水里按速度
 //     千分比减速；gameplay/terrain 的 Walker 实现它）。Surface 每拍取一次，返回 nil 时推进与不设时逐位相同。
-//   - MoveTo / Follow 两个 actionflow 动作：移动由动作驱动（参考 ssr：action 挂心跳、在心跳里调 move）。动作所在组
+//   - MoveTo / Follow 两个 actionflow 动作：移动由动作驱动（action 挂心跳、在心跳里调 move）。动作所在组
 //     由实体的 actionflow.BeatRunner 挂心跳（周期取动作的 TickInterval，缺省 DefaultMovePeriod），每拍 Tick 调
 //     Move.Advance(Beat.Elapsed)（不追帧），到达、被打断、被阻挡、目标消失由 actionflow 收尾（RegisterActions）。
 //     所有控制实体行为的逻辑都经动作，不绕过动作直接驱动组件。

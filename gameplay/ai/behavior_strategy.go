@@ -109,7 +109,7 @@ type BehaviorStrategyOptions[C any] struct {
 // BehaviorStrategy 把行为树作为 Strategy 运行，连接树骨架与 Controller / actionflow 执行流程：Tick 驱动当前阶段的树，
 // 动作结束与事件先缓冲、交给下一拍的上下文，树完成后重置，下一拍从根重新求值。
 //
-// 阶段（对照 ssr ai_engine 的 stage）：一个策略可以有若干命名的树（NewStagedStrategy），同一时刻只有当前阶段
+// 阶段：一个策略可以有若干命名的树（NewStagedStrategy），同一时刻只有当前阶段
 // 的树在跑；树里的 SetStage（或 JSON 的 set_stage 叶子）在本拍求值结束后切换，策略外调用 SetStage 立即切换。切换时
 // Reset 旧树（运行中的 TaskflowAction 叶子经 OnInterrupt 收尾）。NewBehaviorStrategy 是只有一个阶段的特例。
 type BehaviorStrategy[C any] struct {

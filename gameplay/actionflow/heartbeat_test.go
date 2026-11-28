@@ -68,7 +68,7 @@ func newBeatRunnerForTest(t *testing.T, groups map[ActionKind]ActionGroup) (*Bea
 	return b, d, e
 }
 
-// 每个组的当前动作按自己的周期挂这个组的心跳（参考 ssr：每个组一个登记），周期按档向下取；不需要周期 tick 的动作
+// 每个组的当前动作按自己的周期挂这个组的心跳（每个组一个登记），周期按档向下取；不需要周期 tick 的动作
 // （TickInterval 0）不挂；组空闲时停，驱动上不再有这个登记。
 func TestEachGroupBeatsAtItsCurrentActionsInterval(t *testing.T) {
 	b, d, _ := newBeatRunnerForTest(t, map[ActionKind]ActionGroup{1: 1, 2: 2, 3: 3})

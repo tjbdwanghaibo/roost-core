@@ -1,6 +1,6 @@
 # D20 心跳调度结构与投递方式压测（2026-10-21）
 
-维护者 2026-10-21 批准（[DESIGN-TODO D20](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制) 决定 ② ⑪，`75006a01`）：投递方式与调度结构由压测决定，维护者经验是 ssr 的方式更好。本轮**只做原型和基准，不实现正式框架、不改框架正式代码**。原型在 [gameplay/heartbeat/internal/bench](../../gameplay/heartbeat/internal/bench/)（`internal`，没有任何生产代码引用）；随仓摘要在 [benchmarks/hb-structures-20261021](benchmarks/hb-structures-20261021/)。
+维护者 2026-10-21 批准（[DESIGN-TODO D20](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制) 决定 ② ⑪，`75006a01`）：投递方式与调度结构由压测决定，维护者经验是既有项目的方式更好。本轮**只做原型和基准，不实现正式框架、不改框架正式代码**。原型在 [gameplay/heartbeat/internal/bench](../../gameplay/heartbeat/internal/bench/)（`internal`，没有任何生产代码引用）；随仓摘要在 [benchmarks/hb-structures-20261021](benchmarks/hb-structures-20261021/)。
 
 已定前提（不比较）：固定 10 档（50ms～60s）、同一实体的多个登记不合并、跳拍打 Warn 并计数、每个登记至多一拍在途。
 
@@ -8,11 +8,11 @@
 
 | 问题 | 结论 | 推荐 |
 | --- | --- | --- |
-| ⑪ 调度结构 | **ssr 的思路（固定档位 + 相位 = hash(实体 ID) 分桶）最快、最省内存**，但 ssr 的写法（4 个跨度环、每格 map、一个登记插多格）不是：改写成“每档一个环、登记只进一格、格是切片 + 下标”（下文 `tier`）后，50 万登记全部 100ms 时每秒收集 2.8～3.9ms（ssr 写法 27.4ms、单层时间轮 14.4ms、最小堆 367ms），撤销 / 改档 11～17ns（ssr 写法 52～141ns、堆 46～74ns），常驻约 50 B/登记（ssr 写法 62～91 B；ssr 生产配置“每格预分配 10000”另有固定约 420 MB）。相位打散在各分布下都接近随机放置的理想值（每格最大 / 平均 ≤ 1.04） | **按档分环（`tier`），分辨率 10ms**（相位 = hash mod 6000）。不用最小堆；单层时间轮可用但没有优势 |
-| ② 投递方式 | 5 万实体、100ms、10ms 分辨率、1 个驱动：100% 移动（50 万次/s）时进程 CPU **X 单目标 Dispatch 4.25 核、Z DispatchBroadcast 1.90 核、Y ssr 式批量 0.77 核**；20% 移动（10 万次/s）时 1.37 / 0.64 / 0.30 核。同时 5000 条/s 业务消息的 P99：无心跳 0.10ms，X 0.50～0.67ms，Y 0.12～0.25ms，Z 0.88～1.24ms（50ms 分辨率下 Z 到 8.3ms）。三种都没有跳拍、没有准入失败；回调间隔 P99 都在 100.5～102.9ms。X 的 CPU 约六成是 worker 每条消息停放 / 唤醒引起的 Go 调度器自旋，另有派发队列锁争用；Y 省下的正是这两项和逐实体的 Nest 收尾 | **默认 X（单目标 Dispatch）**：唯一保持 Nest 全部语义且不引入批内互等的做法，10 万次/s 约 1.4 核。Y 不能原样采用：它绕过目标实体的事务与同步捕获，`QueueMove` 的提交门会挂到承载实体的事务上（§4.1），而移动恰恰依赖这两样。CPU 成为瓶颈时的出路是 Nest 内的“批量心跳作业”（需维护者决定，§6 选项 C），不是 Y 或 Z |
-| ⑦ 驱动数 | ssr 的心跳收集与投递都在 **1 个**全局帧 goroutine 上（§2）。roost 1 个驱动在 50 万次/s 时占 0.70 核（X）/ 0.17 核（Z）/ 0.05 核（Y）；改成 4 个分片后 X 变差：业务 P99 3.6ms、队列峰值 6324、进程 CPU 4.66 核（多个驱动同时争派发队列锁），Y / Z 无收益 | **1 个**，与 ssr 一致；不提供分片配置 |
+| ⑪ 调度结构 | **既有项目的思路（固定档位 + 相位 = hash(实体 ID) 分桶）最快、最省内存**，但既有项目的写法（4 个跨度环、每格 map、一个登记插多格）不是：改写成“每档一个环、登记只进一格、格是切片 + 下标”（下文 `tier`）后，50 万登记全部 100ms 时每秒收集 2.8～3.9ms（既有项目写法 27.4ms、单层时间轮 14.4ms、最小堆 367ms），撤销 / 改档 11～17ns（既有项目写法 52～141ns、堆 46～74ns），常驻约 50 B/登记（既有项目写法 62～91 B；既有项目生产配置“每格预分配 10000”另有固定约 420 MB）。相位打散在各分布下都接近随机放置的理想值（每格最大 / 平均 ≤ 1.04） | **按档分环（`tier`），分辨率 10ms**（相位 = hash mod 6000）。不用最小堆；单层时间轮可用但没有优势 |
+| ② 投递方式 | 5 万实体、100ms、10ms 分辨率、1 个驱动：100% 移动（50 万次/s）时进程 CPU **X 单目标 Dispatch 4.25 核、Z DispatchBroadcast 1.90 核、Y 按组批量 0.77 核**；20% 移动（10 万次/s）时 1.37 / 0.64 / 0.30 核。同时 5000 条/s 业务消息的 P99：无心跳 0.10ms，X 0.50～0.67ms，Y 0.12～0.25ms，Z 0.88～1.24ms（50ms 分辨率下 Z 到 8.3ms）。三种都没有跳拍、没有准入失败；回调间隔 P99 都在 100.5～102.9ms。X 的 CPU 约六成是 worker 每条消息停放 / 唤醒引起的 Go 调度器自旋，另有派发队列锁争用；Y 省下的正是这两项和逐实体的 Nest 收尾 | **默认 X（单目标 Dispatch）**：唯一保持 Nest 全部语义且不引入批内互等的做法，10 万次/s 约 1.4 核。Y 不能原样采用：它绕过目标实体的事务与同步捕获，`QueueMove` 的提交门会挂到承载实体的事务上（§4.1），而移动恰恰依赖这两样。CPU 成为瓶颈时的出路是 Nest 内的“批量心跳作业”（需维护者决定，§6 选项 C），不是 Y 或 Z |
+| ⑦ 驱动数 | 既有项目的心跳收集与投递都在 **1 个**全局帧 goroutine 上（§2）。roost 1 个驱动在 50 万次/s 时占 0.70 核（X）/ 0.17 核（Z）/ 0.05 核（Y）；改成 4 个分片后 X 变差：业务 P99 3.6ms、队列峰值 6324、进程 CPU 4.66 核（多个驱动同时争派发队列锁），Y / Z 无收益 | **1 个**，与既有项目一致；不提供分片配置 |
 
-与维护者“ssr 更好”的经验：**调度结构一致**（固定档 + 相位分桶最好，只是 ssr 的 map 多环写法拖慢了它）；**投递方式在成本上一致、在语义上不一致**——ssr 式批量确实最省 CPU、对业务消息延迟影响最小，但在 roost 里它的代价是放弃 Nest 对心跳实体的事务、Sync 捕获与提交门；ssr 的实体模型没有这一层（worker 按目标散列固定，`TryLock` 只防多目标消息，没有“事务提交后才捕获同步变化”）。详见 §6。
+与维护者“既有项目更好”的经验：**调度结构一致**（固定档 + 相位分桶最好，只是既有项目的 map 多环写法拖慢了它）；**投递方式在成本上一致、在语义上不一致**——按组批量确实最省 CPU、对业务消息延迟影响最小，但在 roost 里它的代价是放弃 Nest 对心跳实体的事务、Sync 捕获与提交门；既有项目的实体模型没有这一层（worker 按目标散列固定，`TryLock` 只防多目标消息，没有“事务提交后才捕获同步变化”）。详见 §6。
 
 ## 1. 环境与命令
 
@@ -22,11 +22,11 @@
 - 正式测量与 profile 分开：profile 在正式测量结束后单独运行，不与任何计数混用。
 
 ```sh
-# 正确性（四种结构与参考规则逐格相同、ssr 多环与按档环逐格相同、相位分布断言）
+# 正确性（四种结构与参考规则逐格相同、既有项目多环与按档环逐格相同、相位分布断言）
 GOWORK=off go test -count=1 -race ./gameplay/heartbeat/...
 # 对比一：调度结构（count=1 跑 10 遍、每遍前等机器安静，再合并给 benchstat）
 GOWORK=off go test -c -o bench.test ./gameplay/heartbeat/internal/bench
-./bench.test -test.run '^$' -test.bench 'BenchmarkSched|BenchmarkSSRMapHint' \
+./bench.test -test.run '^$' -test.bench 'BenchmarkSched|BenchmarkMultiRingMapHint' \
   -test.benchtime=500ms -test.count=1 -test.benchmem        # × 10 遍
 "$(go env GOPATH)/bin/benchstat" pass-*.txt
 # 相位分布表
@@ -38,31 +38,26 @@ HB_DELIVERY=1 HB_MODE=x|y|z|none HB_RES=10ms|50ms HB_ACTIVE=0.2|1 HB_SHARDS=1|4 
 
 脚本（门控、轮转、汇总）在 scratchpad 的 `hbbench/scripts/`，与原始输出一起保存；随仓目录有 benchstat 输出、投递 JSONL 与汇总表。
 
-## 2. ssr 心跳的驱动结构（读源码）
+## 2. 既有项目的心跳驱动结构（读源码）
 
-只读参考 `ssr/kingdom/modules/heartbeat/`、`modules/timer/internal/heartbeat_engine.go`、`framework/matrix/queue_multi.go`、`framework/dispatcher/`、`manager/boot_release_man/internal/system/{on_startup,message_queue}.go`，未复制代码。
+只读参考了一个既有项目的心跳与定时器源码（未复制代码），只记与本轮选择有关的结论：
 
-| 角色 | goroutine 数 | 做什么 |
-| --- | --- | --- |
-| 全局帧 | **1** | `tickFunc`：`time.Tick(50ms)`，帧号 +1，依次调 `CtrlOnTick` 的全部回调（心跳调度器 `heartbeatScheduler.OnTick` 是其中之一），之后同一 goroutine 还做 `Easync`。心跳的“收集到期 ID + 按 64 个一批 `Broadcast` 推进消息队列”都在这个 goroutine 上，**没有独立的心跳驱动 goroutine** |
-| 消息队列节拍 | 1 | `MQTicker`：每 10ms 取出到期的延时消息，并对未在运行的队列 `TrySendSignal`。普通 `push` 只在队列长度凑满 32 条时才唤醒 worker，其余靠这个节拍唤醒 |
-| 消息队列 worker | `max(4, GOMAXPROCS×2/3)` 个队列，每队列 1 个 goroutine；另有 4 个优先级队列 | 消息按目标 ID 散列到固定队列（同一实体总在同一个 goroutine 上）；广播消息按 `Targets[0]` 散列，worker 逐个目标 `CtxTryLock`（先 CAS、再有限自旋），失败把这一个目标的消息 `MoveCopy` 原样重投到队列尾 |
-| 其他 | — | 副本 / 战场（`group_man`）用 `UseTicker` 让成员改由管理实体自己的帧驱动（管理实体用延时消息给自己续拍），不是另一个全局驱动；`dynamicQueue` 构建标签下的按 runner 驱动不是缺省构建 |
+- **驱动**：心跳的收集与投递都在 **1 个**全局帧 goroutine 上（50ms 一帧），与其他帧回调共用；另有一个 10ms 的消息队列节拍负责唤醒。
+- **派发**：消息按目标 ID 散列到固定的 worker 队列，同一实体总在同一个 goroutine 上；多目标消息逐个目标 try-lock。
+- **调度结构**：4 个跨度环（2 / 20 / 200 / 1200 帧），每格一个 map，**生产配置每格预分配容量 10000**（1422 格，本机实测固定约 420 MB，见 §3.4）；实体按（最短档, 相位）插入命中的全部格（最多 5 格），一把全局锁。
 
-调度器本身：4 个环（跨度 2 / 20 / 200 / 1200 帧），每格一个 `map[int64]struct{}`，**生产配置每格预分配容量 10000**（1422 格，本机实测固定约 420 MB，见 §3.4）；实体按（最短档, seed）插入命中的全部格（最多 5 格），一把全局锁。实体频率 = 已登记的最短档，实体内的多个登记在 handler 里按档过滤（ssr 合并，roost 决定 ③ 不合并）。
-
-所以“驱动 goroutine 数参考 ssr”= **1 个**（收集与投递在同一个 goroutine 上，且与其他帧回调共用）。对比二另测 1 个与 4 个分片，看分片有没有收益。
+所以“驱动 goroutine 数参考既有项目”= **1 个**（收集与投递在同一个 goroutine 上，且与其他帧回调共用）。对比二另测 1 个与 4 个分片，看分片有没有收益。
 
 ## 3. 对比一：调度结构（纯数据结构微基准，不经 Nest）
 
 ### 3.1 五个实现
 
-四种结构都实现同一个接口（`Add / Remove / SetTier / Step`），一个驱动 goroutine 独占、不加锁；Step 推进一格，返回本格到期的登记。触发规则统一：首拍是登记后第一个满足 `格号 mod 周期格数 = 相位` 的格，之后每周期一次；相位 = `SplitMix64(实体 ID) mod 最长档格数`，再对本档周期格数取模（与 ssr 的 seed 规则相同，各档按同一相位对齐）。`TestSchedulersMatchReferenceRule` 用 3000 个登记、十档、中途撤销 / 改档、两个周期，逐格核对五个实现与参考规则相同；`TestSSRRingAndTierRingFireIdentically` 核对 ssr 写法与 50ms 按档环逐格相同（两个变异：堆的周期 +1、ssr 少插一格，用例都变红）。
+四种结构都实现同一个接口（`Add / Remove / SetTier / Step`），一个驱动 goroutine 独占、不加锁；Step 推进一格，返回本格到期的登记。触发规则统一：首拍是登记后第一个满足 `格号 mod 周期格数 = 相位` 的格，之后每周期一次；相位 = `SplitMix64(实体 ID) mod 最长档格数`，再对本档周期格数取模（与既有项目的 seed 规则相同，各档按同一相位对齐）。`TestSchedulersMatchReferenceRule` 用 3000 个登记、十档、中途撤销 / 改档、两个周期，逐格核对五个实现与参考规则相同；`TestMultiRingAndTierRingFireIdentically` 核对既有项目写法与 50ms 按档环逐格相同（两个变异：堆的周期 +1、既有项目少插一格，用例都变红）。
 
 | 名字 | 结构 | 来源 |
 | --- | --- | --- |
-| `ssr50` | 50ms 帧；4 个环（跨度 2 / 20 / 200 / 1200 帧），每格 `map[int64]struct{}`；登记插入它所在环里全部命中的格（最多 5 格），撤销同样逐格删；每帧取 4 个环的当前格 | **A：按 ssr 的思路重写**（[ring_ssr.go](../../gameplay/heartbeat/internal/bench/ring_ssr.go)）。map 预分配缺省 0，单独测生产值 10000 |
-| `tier50` / `tier10` | 每档一个环，环长 = 周期格数；登记只进一格（相位 mod 环长），格是切片、句柄记下标，撤销与末尾交换；每格访问 10 个档的当前格 | A 的改写：同一思路、不同存储（[ring_tier.go](../../gameplay/heartbeat/internal/bench/ring_tier.go)）。`tier50` 与 `ssr50` 逐格相同 |
+| `multi50` | 50ms 帧；4 个环（跨度 2 / 20 / 200 / 1200 帧），每格 `map[int64]struct{}`；登记插入它所在环里全部命中的格（最多 5 格），撤销同样逐格删；每帧取 4 个环的当前格 | **A：按既有项目的思路重写**（[ring_multi.go](../../gameplay/heartbeat/internal/bench/ring_multi.go)）。map 预分配缺省 0，单独测生产值 10000 |
+| `tier50` / `tier10` | 每档一个环，环长 = 周期格数；登记只进一格（相位 mod 环长），格是切片、句柄记下标，撤销与末尾交换；每格访问 10 个档的当前格 | A 的改写：同一思路、不同存储（[ring_tier.go](../../gameplay/heartbeat/internal/bench/ring_tier.go)）。`tier50` 与 `multi50` 逐格相同 |
 | `wheel10` | **B：单层时间轮**，10ms 一格、6000 格；取出当前格全部条目放回“当前格 + 周期”；取空的格把切片还给空闲池 | D20 原方案（[wheel.go](../../gameplay/heartbeat/internal/bench/wheel.go)）。第一版每格保留扩容后的数组，5 万个 100ms 登记常驻约 5.9 KB/登记，改为空闲池后约 51 B |
 | `heap10` | **C：二叉最小堆**，按到期格号排序，句柄记堆下标；每格反复取堆顶、加周期后下沉 | [heap.go](../../gameplay/heartbeat/internal/bench/heap.go)，10ms 分辨率与时间轮相同 |
 
@@ -70,7 +65,7 @@ HB_DELIVERY=1 HB_MODE=x|y|z|none HB_RES=10ms|50ms HB_ACTIVE=0.2|1 HB_SHARDS=1|4 
 
 ### 3.2 登记 / 撤销 / 改档（ns/op，10 遍中位数 ± 95% 置信区间）
 
-| 操作 | 登记数 / 分布 | ssr50 | tier50 | tier10 | wheel10 | heap10 |
+| 操作 | 登记数 / 分布 | multi50 | tier50 | tier10 | wheel10 | heap10 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | 登记 | 5 万 / d20mix | 38.2 ±4% | 20.0 ±2% | 19.9 ±2% | 25.9 ±2% | 23.6 ±3% |
 | 登记 | 5 万 / all100 | 27.0 ±2% | 15.7 ±2% | 15.8 ±3% | 24.8 ±2% | 26.9 ±6% |
@@ -85,13 +80,13 @@ HB_DELIVERY=1 HB_MODE=x|y|z|none HB_RES=10ms|50ms HB_ACTIVE=0.2|1 HB_SHARDS=1|4 
 | 改档 | 50 万 / d20mix | 106.4 ±15% | 16.1 ±4% | 16.9 ±5% | 20.2 ±1% | 74.1 ±6% |
 | 改档 | 50 万 / all100 | 75.7 ±9% | 15.6 ±2% | 16.6 ±1% | 18.5 ±1% | 46.5 ±6% |
 
-分配：登记 1 次 / op（句柄对象），ssr50 为 0（句柄是值，map 已有容量）；撤销、改档全部 0。
+分配：登记 1 次 / op（句柄对象），multi50 为 0（句柄是值，map 已有容量）；撤销、改档全部 0。
 
 ### 3.3 每拍收集到期项
 
 `step` 每次推进一个模拟秒（50ms 结构 20 格、10ms 结构 100 格）；ns/op 即“驱动每秒花在收集上的时间”。每格耗时取前 64 个模拟秒的全部格。
 
-| 登记数 / 分布 | 每秒触发 | ssr50 | tier50 | tier10 | wheel10 | heap10 |
+| 登记数 / 分布 | 每秒触发 | multi50 | tier50 | tier10 | wheel10 | heap10 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 5 万 / d20mix 每秒耗时 | 21.5 万 | 942µs | 140µs | 130µs | 487µs | 15.9ms |
 | 5 万 / all100 每秒耗时 | 50 万 | 1.96ms | 255µs | 344µs | 1.26ms | 30.8ms |
@@ -106,20 +101,20 @@ HB_DELIVERY=1 HB_MODE=x|y|z|none HB_RES=10ms|50ms HB_ACTIVE=0.2|1 HB_SHARDS=1|4 
 
 ### 3.4 内存
 
-`build` 建好 n 个登记并预热（时间轮转满一圈）后 GC，量常驻堆增量 / 登记数（含调用方持有的句柄数组：ssr50 每个 24 B 值句柄，其余 8 B 指针）：
+`build` 建好 n 个登记并预热（时间轮转满一圈）后 GC，量常驻堆增量 / 登记数（含调用方持有的句柄数组：multi50 每个 24 B 值句柄，其余 8 B 指针）：
 
-| 登记数 / 分布 | ssr50 | tier50 | tier10 | wheel10 | heap10 |
+| 登记数 / 分布 | multi50 | tier50 | tier10 | wheel10 | heap10 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 5 万 / d20mix | 90.7 B | 50.7 B | 55.7 B | 80.2 B | 65.7 B |
 | 5 万 / all100 | 49.3 B | 50.7 B | 55.2 B | 53.8 B | 65.7 B |
 | 50 万 / d20mix | 80.0 B | 49.1 B | 50.2 B | 78.4 B | 65.3 B |
 | 50 万 / all100 | 62.0 B | 49.6 B | 50.2 B | 50.9 B | 65.3 B |
 
-ssr 多环的 1422 个格：map 不预分配时固定约 80 KB；**按 ssr 生产值每格预分配 10000 时固定约 420 MB**（`BenchmarkSSRMapHint`），与登记数无关。从空建到 n 个登记：50 万 d20mix 时 ssr50 50.9ms，其余 9.6～17.9ms。
+既有项目多环的 1422 个格：map 不预分配时固定约 80 KB；**按既有项目生产值每格预分配 10000 时固定约 420 MB**（`BenchmarkMultiRingMapHint`），与登记数无关。从空建到 n 个登记：50 万 d20mix 时 multi50 50.9ms，其余 9.6～17.9ms。
 
 ### 3.5 每格到期数量的分布（相位打散）
 
-转满一圈（60s）统计每格到期数（[phase-distribution.md](benchmarks/hb-structures-20261021/phase-distribution.md)）。`ssr50` 与 `tier50` 逐格相同、`wheel10` 与 `tier10` / `heap10` 逐格相同（§3.1 的用例），所以只列两类：
+转满一圈（60s）统计每格到期数（[phase-distribution.md](benchmarks/hb-structures-20261021/phase-distribution.md)）。`multi50` 与 `tier50` 逐格相同、`wheel10` 与 `tier10` / `heap10` 逐格相同（§3.1 的用例），所以只列两类：
 
 | 结构 | 分布 | 登记数 | 窗口 | 每窗平均 | 最大 / 平均 | 变异系数 | 随机放置参照 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -135,7 +130,7 @@ ssr 多环的 1422 个格：map 不预分配时固定约 80 KB；**按 ssr 生�
 ### 3.6 对比一结论
 
 - 最小堆淘汰：收集比按档环慢 90～130 倍（50 万全部 100ms 时每秒 367ms，单个驱动约 0.37 核只用于出入堆），撤销 / 改档慢 3～6 倍。
-- ssr 写法的瓶颈是“每格一个 map + 一项占多格”：收集要遍历 map（慢 6～10 倍），撤销 / 改档要逐格删 map（50 万时 75～141ns）。思路本身没有问题：同一触发规则换成切片单格（`tier50`）后全面领先。
+- 既有项目写法的瓶颈是“每格一个 map + 一项占多格”：收集要遍历 map（慢 6～10 倍），撤销 / 改档要逐格删 map（50 万时 75～141ns）。思路本身没有问题：同一触发规则换成切片单格（`tier50`）后全面领先。
 - 单层时间轮与按档环接近，但每次到期要把条目搬到新格（收集比 `tier10` 慢 3.4～3.7 倍），混合档位下常驻多约 30 B/登记，而且依赖空闲池才不至于每格留一块峰值数组。固定档位已定（决定 ⑥），时间轮“任意周期”的长处用不上。
 - 推荐 `tier10`：按档分环、10ms 分辨率。50 万全部 100ms 时每秒收集 3.9ms（单格 p99 57µs），比 `tier50` 每秒多约 1ms，换来五分之一的突发。
 
@@ -145,7 +140,7 @@ ssr 多环的 1422 个格：map 不预分配时固定约 80 KB；**按 ssr 生�
 
 roost Nest 的实体串行有两层：**准入时**按消息声明的全部目标登记同 ID 顺序（`dispatchQueue.admit`，[dispatch_queue.go](../../framework/nest/dispatch_queue.go) `tails`），前驱没完成的作业不会被任何 worker 取走；**执行时** Guard 用阻塞的 `RequireEntity` 取实体锁，在事务里跑 handler，提交时捕获 Sync 变化（`invokeHandlerTransaction`）。所以 Nest 作业之间实体锁基本无争用，也没有“TryLock 失败重投”的需要。实体锁本身支持 `TryLock`（`lock.ReentrantMutex`，Guard 有 `TryRequireEntity`），但 Nest 没有“一条消息带一批互不相干的目标、逐个尝试、忙的跳过”的入口：`DispatchBroadcast` 会等批内全部前驱，`Cast` 只能锁本消息已声明的目标。
 
-所以 ssr 式批量在 roost 里只能这样做（原型 `y` 模式）：驱动把一批（64 个）登记打成一条消息，投给“承载实体”（64 个轮转，消息本身走正式准入）；承载 handler 在快池 worker 上对每个目标直接 `GetMutex().TryLock()`，拿到就执行回调再解锁，拿不到交回驱动下一格重投（handler 内不能 `Dispatch`，ssr 是立即重投到队列尾）。**这绕过了目标实体的 Nest 语义**，风险逐条：
+所以 按组批量在 roost 里只能这样做（原型 `y` 模式）：驱动把一批（64 个）登记打成一条消息，投给“承载实体”（64 个轮转，消息本身走正式准入）；承载 handler 在快池 worker 上对每个目标直接 `GetMutex().TryLock()`，拿到就执行回调再解锁，拿不到交回驱动下一格重投（handler 内不能 `Dispatch`，既有项目是立即重投到队列尾）。**这绕过了目标实体的 Nest 语义**，风险逐条：
 
 1. **没有目标实体的事务**：回调里的修改不回滚、不进 DataEngine 提交；持久字段只能靠之后别的消息顺带落盘。
 2. **Sync 捕获错位**：Nest 在事务提交时只捕获本事务实体的同步变化，目标实体的位置变化要等它下一条 Nest 消息才被捕获。`QueueMove` 取的提交门是 `entity.CurrentSyncMutation()`（[interest_queue.go](../../framework/sync/entitysync/policy/interest_queue.go) `queueFact`），在承载 handler 里拿到的是承载实体的事务：AOI 事实按承载事务提交放行，而目标的同步数据并没有随之捕获。对“心跳推进位置 + `QueueMove`”这个首要用途，这条直接不成立。
@@ -210,7 +205,7 @@ X 的主要开销不是准入本身，而是**每条消息都要唤醒 / 停放�
 
 ## 6. 推荐与需要维护者决定的选项
 
-**调度结构（⑪）**：按档分环（`tier`），10ms 分辨率，1 个驱动。理由见 §3.6、§3.5。这是 ssr 思路的改写，不是 D20 原方案的时间轮。
+**调度结构（⑪）**：按档分环（`tier`），10ms 分辨率，1 个驱动。理由见 §3.6、§3.5。这是既有项目思路的改写，不是 D20 原方案的时间轮。
 
 **投递方式（②）**，三个选项：
 
@@ -218,11 +213,11 @@ X 的主要开销不是准入本身，而是**每条消息都要唤醒 / 停放�
 | --- | --- | --- | --- |
 | A | X：每拍每个到期登记一条单目标 `Dispatch` | CPU 最高：10 万次/s 约 1.4 核、50 万次/s 约 4.3 核（大半是调度器自旋与派发队列锁）；业务 p99 +0.4～0.6ms（10ms 分辨率） | **推荐作为 P1**：语义完整（事务、Sync 捕获、提交门、Remote 投到拥有方都沿用正式链路），无批内互等，实现最简单 |
 | B | Z：每格一次 `DispatchBroadcast` | CPU 约为 A 的 45%；业务 p99 比 A 高（10ms 时 1.2ms，50ms 时 8.3ms），回调越慢越明显（批内 32 个串行、等全部前驱）；广播路径不支持 Remote | 不推荐：省下的 CPU 换来的是业务延迟，而且与决定 ⑩（Remote 托管实体投到拥有方）冲突 |
-| C | 在 Nest 里加“批量心跳作业”：一条作业带一批目标、**不登记同 ID 顺序**；worker 逐个目标检查“该 ID 没有在途 Nest 作业且 `TryRequireEntity` 成功”，成功就在该目标自己的 Guard 作用域 + 事务里执行，失败的交回驱动下一格重投 | 改 Nest（三大块之一）：要定义它与同 ID 顺序、停机排空、Fence、Remote（可能仍需单目标回退）的关系；预计 CPU 接近 Y（省掉的是唤醒与队列锁，逐实体事务仍在） | 不在本轮做。A 在真实负载下 CPU 成为瓶颈时再评估；若维护者希望一开始就按 ssr 的成本做，选 C 并另起 Nest 设计 |
+| C | 在 Nest 里加“批量心跳作业”：一条作业带一批目标、**不登记同 ID 顺序**；worker 逐个目标检查“该 ID 没有在途 Nest 作业且 `TryRequireEntity` 成功”，成功就在该目标自己的 Guard 作用域 + 事务里执行，失败的交回驱动下一格重投 | 改 Nest（三大块之一）：要定义它与同 ID 顺序、停机排空、Fence、Remote（可能仍需单目标回退）的关系；预计 CPU 接近 Y（省掉的是唤醒与队列锁，逐实体事务仍在） | 不在本轮做。A 在真实负载下 CPU 成为瓶颈时再评估；若维护者希望一开始就按既有项目的成本做，选 C 并另起 Nest 设计 |
 
-Y（ssr 式批量绕过 Nest）不作为选项：它省的 CPU 里有一部分来自跳过目标实体的事务与 Sync 捕获，而这正是移动要用的（§4.1 第 2 条）。
+Y（按组批量绕过 Nest）不作为选项：它省的 CPU 里有一部分来自跳过目标实体的事务与 Sync 捕获，而这正是移动要用的（§4.1 第 2 条）。
 
-**驱动数（⑦）**：1 个，与 ssr 相同；不提供分片配置（§5）。
+**驱动数（⑦）**：1 个，与既有项目相同；不提供分片配置（§5）。
 
 **附带观察（不在本轮决定范围）**：Nest 快池在“大量几微秒的短消息”下，Go 调度器自旋与派发队列锁占了一半以上 CPU（§4.4）。这对所有短 handler 都成立，不只是心跳；是否值得优化（例如 worker 取到工作后批量取、减少每条消息的停放 / 唤醒）是另一个问题，这里只记录现象。
 
@@ -241,7 +236,7 @@ Y（ssr 式批量绕过 Nest）不作为选项：它省的 CPU 里有一部分�
 | 文件 | 内容 |
 | --- | --- |
 | [tier.go](../../gameplay/heartbeat/internal/bench/tier.go) | 档位、相位散列、`Scheduler` 接口、首拍规则 |
-| [ring_ssr.go](../../gameplay/heartbeat/internal/bench/ring_ssr.go) / [ring_tier.go](../../gameplay/heartbeat/internal/bench/ring_tier.go) / [wheel.go](../../gameplay/heartbeat/internal/bench/wheel.go) / [heap.go](../../gameplay/heartbeat/internal/bench/heap.go) | 四种结构 |
+| [ring_multi.go](../../gameplay/heartbeat/internal/bench/ring_multi.go) / [ring_tier.go](../../gameplay/heartbeat/internal/bench/ring_tier.go) / [wheel.go](../../gameplay/heartbeat/internal/bench/wheel.go) / [heap.go](../../gameplay/heartbeat/internal/bench/heap.go) | 四种结构 |
 | [workload.go](../../gameplay/heartbeat/internal/bench/workload.go) | 档位分布、ID 形状 |
 | [sched_test.go](../../gameplay/heartbeat/internal/bench/sched_test.go) / [dist_test.go](../../gameplay/heartbeat/internal/bench/dist_test.go) | 正确性、分布 |
 | [sched_bench_test.go](../../gameplay/heartbeat/internal/bench/sched_bench_test.go) | 对比一 |

@@ -21,7 +21,7 @@ type Tier uint8
 const NumTiers = 10
 
 // Periods 是正式实现采用的固定档位：50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s。
-// 都是 50ms 的整数倍，也都整除 60s，ssr 的多环结构依赖这两条。
+// 都是 50ms 的整数倍，也都整除 60s，既有项目的多环结构依赖这两条。
 var Periods = [NumTiers]time.Duration{
 	50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 500 * time.Millisecond,
 	time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second,
@@ -39,11 +39,11 @@ const (
 // Period 返回档位周期。
 func (t Tier) Period() time.Duration { return Periods[t] }
 
-// MaxPeriod 是最长档位，决定 ssr 相位模数（1200 个 50ms 帧）与时间轮长度（6000 个 10ms 格）。
+// MaxPeriod 是最长档位，决定既有项目相位模数（1200 个 50ms 帧）与时间轮长度（6000 个 10ms 格）。
 const MaxPeriod = 60 * time.Second
 
 // PhaseHash 是按实体 ID 计算一次的 64 位散列；各结构按自己的分辨率取模得到相位。
-// 用 SplitMix64（与 Nest 的 worker 散列同一函数），ssr 用的是自己的 Hash64，效果同类。
+// 用 SplitMix64（与 Nest 的 worker 散列同一函数），既有项目用的是自己的 Hash64，效果同类。
 func PhaseHash(entityID int64) uint64 { return misc.Hash64(uint64(entityID)) }
 
 // framesOf 返回周期在分辨率 res 下的格数；周期必须是 res 的整数倍。

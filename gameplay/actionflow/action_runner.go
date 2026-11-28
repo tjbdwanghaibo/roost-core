@@ -59,7 +59,7 @@ type ActionRunnerHooks struct {
 	OnFreeze func(group ActionGroup, frozen bool)
 }
 
-// Conflict 是跨组冲突规则的结论（对照 ssr 的 NeedCancelCurAction 矩阵，这里是业务配置的函数）。
+// Conflict 是跨组冲突规则的结论（这里是业务配置的函数）。
 type Conflict uint8
 
 const (
@@ -391,7 +391,7 @@ const (
 	// FreezePause：暂停——当前动作留在组里但不被 tick，拒绝新动作，队列不推进；解冻后当前动作接着跑。
 	FreezePause FreezeMode = iota
 	// FreezeCancel：打断——取消当前动作（取消状态的 OnEnded，原因 "action group frozen"），其余同 FreezePause；
-	// 排队项保留，解冻后推进。对照 ssr 的 Frozen（定身打断移动）。
+	// 排队项保留，解冻后推进。
 	FreezeCancel
 )
 

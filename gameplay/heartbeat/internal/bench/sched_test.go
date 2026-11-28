@@ -16,7 +16,7 @@ type schedCase struct {
 
 func schedCases() []schedCase {
 	return []schedCase{
-		{"ssr50", func(t *testing.T) { checkScheduler[SSRHandle](t, NewSSRRing(0)) }},
+		{"multi50", func(t *testing.T) { checkScheduler[MultiRingHandle](t, NewMultiRing(0)) }},
 		{"tier50", func(t *testing.T) { checkScheduler[*TierEntry](t, NewTierRing(50*time.Millisecond)) }},
 		{"tier10", func(t *testing.T) { checkScheduler[*TierEntry](t, NewTierRing(10*time.Millisecond)) }},
 		{"wheel10", func(t *testing.T) { checkScheduler[*WheelEntry](t, NewWheel(10*time.Millisecond)) }},
@@ -127,9 +127,9 @@ func head(v []int64) []int64 {
 	return v
 }
 
-// SSRRing 与 50ms TierRing 的触发时刻逐格相同（同一相位规则，只是存储不同）。
-func TestSSRRingAndTierRingFireIdentically(t *testing.T) {
-	a, b := NewSSRRing(0), NewTierRing(50*time.Millisecond)
+// MultiRing 与 50ms TierRing 的触发时刻逐格相同（同一相位规则，只是存储不同）。
+func TestMultiRingAndTierRingFireIdentically(t *testing.T) {
+	a, b := NewMultiRing(0), NewTierRing(50*time.Millisecond)
 	const n = 20000
 	for i := range n {
 		h := PhaseHash(EntityID(int64(i + 1)))
@@ -140,11 +140,11 @@ func TestSSRRingAndTierRingFireIdentically(t *testing.T) {
 	for step := range 2400 {
 		x, y := countSet(a.Step(nil)), countSet(b.Step(nil))
 		if len(x) != len(y) {
-			t.Fatalf("step %d: ssr %d fires, tier ring %d", step, len(x), len(y))
+			t.Fatalf("step %d: multi ring %d fires, tier ring %d", step, len(x), len(y))
 		}
 		for id := range x {
 			if !y[id] {
-				t.Fatalf("step %d: id %d fired only in ssr", step, id)
+				t.Fatalf("step %d: id %d fired only in the multi ring", step, id)
 			}
 		}
 	}

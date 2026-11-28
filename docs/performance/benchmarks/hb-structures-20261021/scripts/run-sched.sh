@@ -10,7 +10,7 @@ while [ $clean -lt 10 ] && [ $pass -lt 16 ]; do
   rm -f $SP/sched/stop
   $S/sampler.sh $SP/sched/pass-$pass.foreign $SP/sched/stop &
   echo "$(date +%T) pass=$pass start load=$(sysctl -n vm.loadavg)" >> $SP/sched/passes.log
-  $SP/bench.test -test.run '^$' -test.bench 'BenchmarkSched|BenchmarkSSRMapHint' -test.benchtime=500ms -test.count=1 -test.benchmem -test.timeout 0 > $SP/sched/pass-$pass.txt 2> $SP/sched/pass-$pass.err
+  $SP/bench.test -test.run '^$' -test.bench 'BenchmarkSched|BenchmarkMultiRingMapHint' -test.benchtime=500ms -test.count=1 -test.benchmem -test.timeout 0 > $SP/sched/pass-$pass.txt 2> $SP/sched/pass-$pass.err
   touch $SP/sched/stop; wait
   if [ -s $SP/sched/pass-$pass.foreign ]; then st=dirty; else st=clean; clean=$((clean+1)); fi
   echo "$(date +%T) pass=$pass end $st" >> $SP/sched/passes.log

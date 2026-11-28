@@ -2,11 +2,11 @@
 
 `gameplay/level` 是实体拥有的通用关卡组件，供 UGC 闯关、合作 PvE 等玩法复用。它提供固定版本定义、多活动阶段、事件／条件／动作、作用域变量、逻辑定时器和外部动作回执。区域资格、物理重生、刷怪与永久奖励由宿主提供，组件自己不写专用检查点或排名状态机。仓库里已有一个真实宿主：物理房间把区域进出变成事实、执行传送 / 检查点 / 重生（[PHYSICS-ROOM-SERVICE §关卡流程](PHYSICS-ROOM-SERVICE.md#关卡流程区域检查点重生与流程视图2026-11-19)）。
 
-## 从 ssr 学什么，如何映射到 core
+## 设计来源与在 core 中的映射
 
-参考仓库 ssr 的 `ssr/kingdom/modules/level/internal/`：`level_state.go` 的生命周期、`level_director_trigger.go` 的多阶段驱动、`level_data.go` 的变量作用域，以及 `trigger/level_trigger_manager.go` 的事件／条件／动作注册。没有直接移植 ssr 的锁、模块和定时器实现，也不兼容其原始配置格式。
+参考一个既有项目副本模块的生命周期、多阶段驱动、变量作用域与事件／条件／动作注册的思路。没有直接移植其锁、模块和定时器实现，也不兼容其原始配置格式。
 
-| ssr 思路 | core 中的实现 | 业务接入 |
+| 参考思路 | core 中的实现 | 业务接入 |
 | --- | --- | --- |
 | Level 生命周期 | `Waiting → Preparing → Running → Finishing → Closing → Closed` | 初始化、开始、结算动作完成后关闭 |
 | 多个活动 Stage | `Definition.Initial`、`start/end` 和阶段 generation | 并行目标、阶段切换、波次重入 |

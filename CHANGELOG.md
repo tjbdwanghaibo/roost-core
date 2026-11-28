@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **撤回 v1.61.0**（2026-11-28）：v1.61.0 误带了不应公开的对照文档与配套的配置导入器（已删除），`go.mod` 声明 `retract v1.61.0`，请改用 v1.61.1。v1.61.1 的功能与 v1.61.0 相同，只少了这部分内容；早先文档与注释里对外部项目的点名一并去掉，心跳调度基准原型改名为 `MultiRing`（`gameplay/heartbeat/internal/bench`，内部包）。
+
 ## [v1.61.0] - 2026-11-28
 
 - **Entity 伴生与对等组**（2026-11-27）：`//roost:entity companionOf=<主实体>` 让一个主实体（如 Player）在同一进程内按类型直取伴生实体（如 ActivityPlayer），两者共用一个本地锁域，仍各自持久与回滚；对等组改为派发时逐个 Try 锁全部成员并纳入同一事务与 Sync。锁由框架持有，旧的 `GetMutex().Lock` / `NewGuardScope` 外部取锁入口收紧。`ownership=shared` 不能参与伴生，`roost generate` 时直接报错；只从内存卸载（`deleteFromDB=false`，不论 reason）保留已脱开伴生的声明，只有真正删档才结束主实体身份；memory 快路径准入后组关系发布复核失败时仍确认同步门，回复 `ErrAfterCommitFailed`。见 [ENTITY-COMPANIONS](docs/framework/ENTITY-COMPANIONS.md)、[ENTITY-PEER-GROUPS](docs/framework/ENTITY-PEER-GROUPS.md)。
@@ -1642,7 +1644,7 @@
 ### 通用 LevelComponent
 
 - 新增 `gameplay/level`：固定版本定义、多活动 Stage、强类型 ECA 与作用域变量、宿主逻辑定时器、提交后动作请求及代际回执；配置和运行预算有界，事务草稿整体发布，支持瞬态／持久 DAO。
-- UGC 闯关与 PvE 波次使用同一组件和两套 JSON；正式生成 Entity／Sender 消费者验证装配、回滚、到期和回执。使用与验证边界见 [Level 手册](docs/framework/LEVEL-COMPONENT.md)。不移植 ssr 旧接口，不将能力测试替身写成实际物理重生或永久发奖。
+- UGC 闯关与 PvE 波次使用同一组件和两套 JSON；正式生成 Entity／Sender 消费者验证装配、回滚、到期和回执。使用与验证边界见 [Level 手册](docs/framework/LEVEL-COMPONENT.md)。不移植旧接口，不将能力测试替身写成实际物理重生或永久发奖。
 
 ### Room 共享索引与多房间测量
 

@@ -29,8 +29,8 @@ var ErrBehaviorClosed = errors.New("actionflow: behavior is closed")
 // ErrOwnerDestroyed 是 Behavior.OnDestroy 结束在途动作与任务的原因（实体卸载、删档或撤销新建）。
 var ErrOwnerDestroyed = errors.New("actionflow: owner entity destroyed")
 
-// Behavior 是实体的行为组件（运行时组件，不带 DAO）：框架提供的 ActionList 默认实现（对照 ssr 的
-// action_list 模块那一层；不叫 Agent，避免与 AI agent 混淆）。一个实体的
+// Behavior 是实体的行为组件（运行时组件，不带 DAO）：框架提供的 ActionList 默认实现（不叫 Agent，
+// 避免与 AI agent 混淆）。一个实体的
 // ActionRunner（可选由心跳驱动，见 BeatRunner）、MissionRunner 与上层观察者（通常是 ai.Controller）按固定顺序接好，
 // 业务不必各自再写一份胶水。接线规则：
 //
@@ -38,7 +38,7 @@ var ErrOwnerDestroyed = errors.New("actionflow: owner entity destroyed")
 //     回调里时（例如任务 Start 里发起的动作启动即失败），任务要等回调返回后才收到，观察者此时会先收到；
 //   - 任务结束：先结束属于它的动作（ActionRunner.ClearMission，取消状态），再交给观察者（Observer.OnMissionEnd）；
 //   - 动作归属任务：任务回调运行期间（含它同步引出的回调）经 CreateAction / EnqueueAction 发起的动作记在当前任务
-//     名下（ssr HasOnProcessTag 的规则），任务结束时一并结束；其余调用方（AI、handler）发起的动作不属于任何任务；
+//     名下（同一规则），任务结束时一并结束；其余调用方（AI、handler）发起的动作不属于任何任务；
 //   - 清场（Clear）：先结束当前任务，再结束全部动作（包说明“清场顺序”）；
 //   - 任务心跳（配置了 Beat 时）：当前任务实现 TickIntervaler 且返回正数时，Behavior 给它登记
 //     "<Beat.Name>/mission"，周期取不大于它的最长档，每拍 MissionRunner.Tick(本拍时间)；任务结束或不再需要时停。

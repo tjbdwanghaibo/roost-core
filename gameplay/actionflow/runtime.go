@@ -46,7 +46,7 @@ const (
 	ReplaceReject
 )
 
-// Replacer 由动作可选实现（对照 ssr 的 CanCancelByNext / TryCancel）：同组的新动作要取代它时先问它。
+// Replacer 由动作可选实现：同组的新动作要取代它时先问它。
 // 只在 Start 取代当前动作时询问；End / EndAll / EndAction / 冻结打断 / 跨组抢占（Conflict 的 PreemptRunning）都是
 // 强制结束，不问。ReplaceBy 只做判断，不改 runner（回调期间的变更照常延后），panic 按 ReplaceAllow 处理并经 OnError
 // 报告。
@@ -76,7 +76,7 @@ type ActionList interface {
 	EnqueueAction(kind ActionKind, param any) (int64, error)
 	CurAction(group ActionGroup) Action
 	EndCurAction(group ActionGroup, force bool, reason ActionReason)
-	// EndAction 按 ID 结束当前或排队中的动作（对照 ssr EndAction）；找不到时返回 ErrActionNotFound。
+	// EndAction 按 ID 结束当前或排队中的动作；找不到时返回 ErrActionNotFound。
 	EndAction(id int64, force bool, reason ActionReason) error
 	EndAllAction(force bool, reason ActionReason)
 	ClearNextActions()

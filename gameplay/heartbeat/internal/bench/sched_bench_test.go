@@ -28,8 +28,8 @@ type benchImpl struct {
 
 func benchImpls() []benchImpl {
 	return []benchImpl{
-		{"ssr50", func(b *testing.B, op string, n int, mix Mix) {
-			runSchedBench[SSRHandle](b, func() Scheduler[SSRHandle] { return NewSSRRing(0) }, op, n, mix)
+		{"multi50", func(b *testing.B, op string, n int, mix Mix) {
+			runSchedBench[MultiRingHandle](b, func() Scheduler[MultiRingHandle] { return NewMultiRing(0) }, op, n, mix)
 		}},
 		{"tier50", func(b *testing.B, op string, n int, mix Mix) {
 			runSchedBench[*TierEntry](b, func() Scheduler[*TierEntry] { return NewTierRing(50 * time.Millisecond) }, op, n, mix)
@@ -60,19 +60,19 @@ func BenchmarkSched(b *testing.B) {
 	}
 }
 
-// BenchmarkSSRMapHint 报告 ssr 生产配置（每格 map 预分配 10000）下 1422 格的固定内存，与登记数无关。
-func BenchmarkSSRMapHint(b *testing.B) {
+// BenchmarkMultiRingMapHint 报告既有项目生产配置（每格 map 预分配 10000）下 1422 格的固定内存，与登记数无关。
+func BenchmarkMultiRingMapHint(b *testing.B) {
 	for _, hint := range []int{0, 10000} {
 		b.Run(fmt.Sprintf("hint=%d", hint), func(b *testing.B) {
-			var keep *SSRRing
+			var keep *MultiRing
 			for b.Loop() {
-				keep = NewSSRRing(hint)
+				keep = NewMultiRing(hint)
 			}
 			b.StopTimer()
 			runtime.GC()
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
-			keep = NewSSRRing(hint)
+			keep = NewMultiRing(hint)
 			runtime.GC()
 			runtime.ReadMemStats(&after)
 			b.ReportMetric(float64(after.HeapAlloc)-float64(before.HeapAlloc), "liveB")

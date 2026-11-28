@@ -12,7 +12,7 @@ import (
 
 // 每格到期数量的分布（检验相位 = hash(实体 ID) 的打散效果）。转满一圈（60s）统计每格到期数：
 // 最大 / 平均、p99 / 平均、变异系数（标准差 / 平均）；“随机放置”的变异系数约为 1/√平均，作参照。
-// 50ms 结构（ssr50，与 tier50 逐格相同）与 10ms 结构（wheel10，与 tier10 / heap10 逐格相同，见
+// 50ms 结构（multi50，与 tier50 逐格相同）与 10ms 结构（wheel10，与 tier10 / heap10 逐格相同，见
 // TestSchedulersMatchReferenceRule）各算一次；10ms 另按 50ms 窗口合并，与 50ms 帧同口径比较。
 //
 // HB_DIST_OUT=<文件> 时把表写到文件（Markdown），否则只做断言。
@@ -32,9 +32,9 @@ func TestPhaseDistribution(t *testing.T) {
 	var rows []distRow
 	for _, n := range sizes {
 		for _, mix := range benchMixes {
-			ssr := NewSSRRing(0)
-			populate[SSRHandle](ssr, n, mix)
-			rows = append(rows, distOf("ssr50", mix, n, collectCounts[SSRHandle](ssr), 1, ssrResolution))
+			multi := NewMultiRing(0)
+			populate[MultiRingHandle](multi, n, mix)
+			rows = append(rows, distOf("multi50", mix, n, collectCounts[MultiRingHandle](multi), 1, multiRingResolution))
 			wheel := NewWheel(10 * time.Millisecond)
 			populate[*WheelEntry](wheel, n, mix)
 			counts := collectCounts[*WheelEntry](wheel)

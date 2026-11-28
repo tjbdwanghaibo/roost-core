@@ -132,7 +132,7 @@ block来源不占普通spatial的MaxVisible，因此总可见数可以超过原�
 
 覆盖集合先复制、排序、去重并完整校验，`AOIConfig.MaxObservedBlocks` 默认1024。非法块或超上限整体拒绝，不截断。更新只改旧/新差集，保持未变覆盖；写阶段结束前不允许observer读取部分结果。Hide/Leave清掉被撤销角色的覆盖和排队事实，同ID重建不能继承被撤销的旧事实。
 
-本机SSR参考是 `aoi_abase_beobserved_entity.go`、`modules/map/block/func_aoi.go` 及 `watcher/wdsync/aoi/entityTheater.go`。借鉴其位置与被观察登记分离、上层去重及跨块锁序；Roost额外保留正式提交、回滚与多来源视图契约。
+借鉴其位置与被观察登记分离、上层去重及跨块锁序；Roost额外保留正式提交、回滚与多来源视图契约。
 
 ## 6. 提交门与内容发布屏障
 

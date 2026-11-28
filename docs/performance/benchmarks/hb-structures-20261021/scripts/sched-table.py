@@ -6,10 +6,10 @@ for line in text:
     m = re.match(r"\s+│\s+(\S.*?)\s+│\s*$", line)
     if m and not m.group(1).endswith(".txt"):
         metric = m.group(1); continue
-    m = re.match(r"(?:Sched/)?(op=\S+|SSRMapHint/\S+)-10\s+(\S+)\s+±\s*(\S+)", line)
+    m = re.match(r"(?:Sched/)?(op=\S+|MultiRingMapHint/\S+)-10\s+(\S+)\s+±\s*(\S+)", line)
     if m and metric:
         data.setdefault(metric, {})[m.group(1)] = (m.group(2), m.group(3))
-impls = ["ssr50", "tier50", "tier10", "wheel10", "heap10"]
+impls = ["multi50", "tier50", "tier10", "wheel10", "heap10"]
 def table(metric, op, title):
     d = data.get(metric, {})
     print("\n**%s**（%s）\n" % (title, metric))
@@ -28,4 +28,4 @@ for op, title in [("add", "登记"), ("remove", "撤销"), ("settier", "改档 1
 table("sec/op", "step", "每模拟秒收集到期项的驱动耗时")
 table("p50-sec/step", "step", "每格耗时 p50"); table("p99-sec/step", "step", "每格耗时 p99"); table("max-sec/step", "step", "每格耗时 max")
 table("liveB/reg", "build", "常驻内存 / 登记"); table("sec/op", "build", "从空建到 n 个登记")
-print("\nssr 每格 map 预分配：", data.get("liveB", {}))
+print("\nmulti 每格 map 预分配：", data.get("liveB", {}))
