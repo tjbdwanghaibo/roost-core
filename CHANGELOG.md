@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **生成物要求的最低 core 提到 v1.61.1**（2026-11-28）：`companionOf` 生成的注册代码与新模块用到 v1.61 新增的 `entity.RegisterCompanionKind`、`CompanionID` 等接口，v1.60.0 编译不了；v1.61.0 已撤回，最低版本直接取 v1.61.1。`framework-compat` 的 minimum 组合同步钉到 v1.61.1。
+
 ## [v1.61.1] - 2026-11-28
 
 - **撤回 v1.61.0**（2026-11-28）：v1.61.0 误带了不应公开的对照文档与配套的配置导入器（已删除），`go.mod` 声明 `retract v1.61.0`，请改用 v1.61.1。v1.61.1 的功能与 v1.61.0 相同，只少了这部分内容；早先文档与注释里对外部项目的点名一并去掉，心跳调度基准原型改名为 `MultiRing`（`gameplay/heartbeat/internal/bench`，内部包）。
